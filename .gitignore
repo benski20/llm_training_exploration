@@ -1,3 +1,4 @@
 __pycache__/
 *.pt
 .pytest_cache/
+results/*.log
