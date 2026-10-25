@@ -1,6 +1,6 @@
 """Train each variant on several seeds, then verify N test points exactly.
 
-    python experiments/run_sweep.py                      # full CPU run (~30 min)
+    python experiments/run_sweep.py                      # full CPU run (~30 min, resumable)
     python experiments/run_sweep.py --seeds 1 --n-verify 10 --time-limit 5   # smoke test
 """
 import argparse
@@ -57,6 +57,12 @@ def main():
     rows = []
     for name in a.variants.split(","):
         for seed in range(a.seeds):
+            ckpt = f"{a.out}/{name}_s{seed}.json"
+            if os.path.exists(ckpt):  # resume: this run already finished
+                with open(ckpt) as f:
+                    rows.append(json.load(f))
+                print(f"{name:11s} s{seed}  (loaded {ckpt})", flush=True)
+                continue
             cfg = replace(TrainConfig(name=name, eps=a.eps, epochs=a.epochs, seed=seed),
                           **VARIANTS[name])
             t0 = time.perf_counter()
@@ -82,6 +88,8 @@ def main():
                 "per_sample": res,
             }
             rows.append(row)
+            with open(ckpt, "w") as f:
+                json.dump(row, f)
             print(f"{name:11s} s{seed}  acc {ev['clean_acc']:.3f}  ibp {ev['ibp_verified_acc']:.3f}  "
                   f"unstable {ev['unstable_mean']:6.1f}  V/F/U {row['verified']:.2f}/"
                   f"{row['falsified']:.2f}/{row['unknown']:.2f}  t_mean {row['verify_time_mean']:.2f}s",
