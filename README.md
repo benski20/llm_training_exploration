@@ -29,7 +29,7 @@ certificate bound to the exact weights that get deployed.
 
 ```
 pip install -e ".[dev]"
-vt prove --spec dyck --length 32 --shared --float --out runs/dyck32   # train → proof → certificate
+vt prove --spec dyck --length 32 --shared --float --out runs/dyck32   # train → proof → certificate (~4.5 min, 4 cores)
 vt check runs/dyck32/model.npz runs/dyck32/certificate.json           # independent re-check
 vt predict runs/dyck32/model.npz "(()(()))()()(())((()))()()(())()"
 ```

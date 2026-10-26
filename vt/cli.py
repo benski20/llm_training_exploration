@@ -30,6 +30,10 @@ def cmd_prove(a):
     torch.set_num_threads(a.threads)
     spec = SPECS[a.spec]()
     V = len(TOKENS[a.spec])
+    tuned = {"lr_decay": (0.92, 0.7), "epochs_first": (200, 60), "epochs_round": (30, 15)}
+    for k, (tied, untied) in tuned.items():
+        if getattr(a, k) is None:
+            setattr(a, k, tied if a.shared else untied)
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
                       ternary_from_round=a.qat_from_round, verify_workers=a.workers, bits=a.bits,
@@ -144,9 +148,11 @@ def main(argv=None):
     p.add_argument("--enumerate-up-to", type=int, default=1 << 16,
                    help="lengths with V^L at most this are decided by enumeration, not MILP")
     p.add_argument("--lr", type=float, default=3e-3)
-    p.add_argument("--lr-decay", type=float, default=0.7, help="per-round lr multiplier")
-    p.add_argument("--epochs-first", type=int, default=60)
-    p.add_argument("--epochs-round", type=int, default=15)
+    # schedule defaults depend on --shared (tuned settings for each family)
+    p.add_argument("--lr-decay", type=float, default=None,
+                   help="per-round lr multiplier (default 0.92 with --shared, else 0.7)")
+    p.add_argument("--epochs-first", type=int, default=None, help="default 200 shared / 60")
+    p.add_argument("--epochs-round", type=int, default=None, help="default 30 shared / 15")
     p.add_argument("--bits", type=int, default=0, help="k-bit uniform weights (with --float)")
     p.add_argument("--qat-from-round", type=int, default=0,
                    help="train float weights for this many rounds before quantising")
