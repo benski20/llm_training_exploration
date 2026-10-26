@@ -1,0 +1,7062 @@
+{
+ "args": {
+  "task": "dyck",
+  "seq_len": 16,
+  "n_samples": 40000,
+  "eps": 0.03,
+  "epochs": 200,
+  "seeds": 3,
+  "n_verify": 60,
+  "time_limit": 20.0,
+  "variants": "baseline,rs,ternary,ternary_rs,ibp",
+  "workers": 4,
+  "out": "results/dyck16"
+ },
+ "rows": [
+  {
+   "variant": "baseline",
+   "seed": 0,
+   "train_s": 23.225707698000008,
+   "clean_acc": 0.9981752038002014,
+   "ibp_verified_acc": 0.007299270015209913,
+   "unstable_mean": 179.21714782714844,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.4666666666666667,
+   "falsified": 0.05,
+   "unknown": 0.48333333333333334,
+   "verify_time_mean": 19.930774850016665,
+   "verify_time_median": 20.029984499500017,
+   "binaries_mean": 181.76666666666668,
+   "config": {
+    "name": "baseline",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 0
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.61868615600001,
+     "unstable": 165,
+     "binaries": 165
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.026228278000005,
+     "unstable": 197,
+     "binaries": 197
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.018791864999997,
+     "unstable": 199,
+     "binaries": 199,
+     "cex_margin": -1.2813965307960489,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02410613699999,
+     "unstable": 151,
+     "binaries": 151
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.263724287000002,
+     "unstable": 164,
+     "binaries": 164
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.034611569000006,
+     "unstable": 179,
+     "binaries": 179
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.037766395000006,
+     "unstable": 175,
+     "binaries": 175
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.058432076999992,
+     "unstable": 207,
+     "binaries": 207
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.272569255000008,
+     "unstable": 141,
+     "binaries": 141
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.030191371000015,
+     "unstable": 185,
+     "binaries": 185
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.037970083999994,
+     "unstable": 166,
+     "binaries": 166
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.029601310999993,
+     "unstable": 173,
+     "binaries": 173
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.26509473600001,
+     "unstable": 218,
+     "binaries": 218,
+     "cex_margin": -7.245230727548587,
+     "cex_linf": 0.03000000000000004
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.033764246000004,
+     "unstable": 179,
+     "binaries": 179
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.983038487000016,
+     "unstable": 185,
+     "binaries": 185
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.091470087999994,
+     "unstable": 183,
+     "binaries": 183
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.03078462800002,
+     "unstable": 195,
+     "binaries": 195
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.020599349999998,
+     "unstable": 152,
+     "binaries": 152
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.048116944999975,
+     "unstable": 186,
+     "binaries": 186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.823242248000014,
+     "unstable": 190,
+     "binaries": 190
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.032636603000014,
+     "unstable": 178,
+     "binaries": 178
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.419935358000004,
+     "unstable": 144,
+     "binaries": 144
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.04567406299998,
+     "unstable": 189,
+     "binaries": 189
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.047652064000005,
+     "unstable": 169,
+     "binaries": 169,
+     "cex_margin": -4.003451535541654,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.030705421999983,
+     "unstable": 167,
+     "binaries": 167
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.020235283000005,
+     "unstable": 174,
+     "binaries": 174
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.03087825899999,
+     "unstable": 187,
+     "binaries": 187
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.03004776800003,
+     "unstable": 172,
+     "binaries": 172
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.034085088000012,
+     "unstable": 221,
+     "binaries": 221
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.06967848300002,
+     "unstable": 182,
+     "binaries": 182
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.879525561999998,
+     "unstable": 135,
+     "binaries": 135
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.037191825000008,
+     "unstable": 196,
+     "binaries": 196
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.024440104999996,
+     "unstable": 182,
+     "binaries": 182
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02441847,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.058618636999995,
+     "unstable": 175,
+     "binaries": 175
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.025040598000032,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.027822437999987,
+     "unstable": 212,
+     "binaries": 212
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.059085417999995,
+     "unstable": 187,
+     "binaries": 187
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.018558289999987,
+     "unstable": 183,
+     "binaries": 183
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02067062599997,
+     "unstable": 205,
+     "binaries": 205
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.068748924999966,
+     "unstable": 213,
+     "binaries": 213
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.025109810999993,
+     "unstable": 186,
+     "binaries": 186
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03215190000003,
+     "unstable": 189,
+     "binaries": 189
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02257632200002,
+     "unstable": 189,
+     "binaries": 189
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.08128012200001,
+     "unstable": 213,
+     "binaries": 213
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.028283087999966,
+     "unstable": 177,
+     "binaries": 177
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.021540905999984,
+     "unstable": 176,
+     "binaries": 176
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03213199100003,
+     "unstable": 165,
+     "binaries": 165
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.029537215999994,
+     "unstable": 173,
+     "binaries": 173
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.057685824999965,
+     "unstable": 209,
+     "binaries": 209
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02260586,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01970615099998,
+     "unstable": 171,
+     "binaries": 171
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.029997490000028,
+     "unstable": 169,
+     "binaries": 169
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.53597307900003,
+     "unstable": 187,
+     "binaries": 187
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.016537712,
+     "unstable": 168,
+     "binaries": 168
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.023149234000016,
+     "unstable": 178,
+     "binaries": 178
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021381494000025,
+     "unstable": 170,
+     "binaries": 170
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.029971509000006,
+     "unstable": 156,
+     "binaries": 156
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.027366446999963,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.035066045999997,
+     "unstable": 213,
+     "binaries": 213
+    }
+   ]
+  },
+  {
+   "variant": "baseline",
+   "seed": 1,
+   "train_s": 9.044975780000016,
+   "clean_acc": 0.9908758997917175,
+   "ibp_verified_acc": 0.0,
+   "unstable_mean": 223.06752014160156,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.31666666666666665,
+   "falsified": 0.1,
+   "unknown": 0.5833333333333334,
+   "verify_time_mean": 19.97567283970001,
+   "verify_time_median": 20.039054498000013,
+   "binaries_mean": 227.16666666666666,
+   "config": {
+    "name": "baseline",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 1
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.048435194000035,
+     "unstable": 224,
+     "binaries": 224
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.028472997999984,
+     "unstable": 236,
+     "binaries": 236
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.073805391999997,
+     "unstable": 248,
+     "binaries": 248,
+     "cex_margin": -9.42394374488234,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.08365720100005,
+     "unstable": 213,
+     "binaries": 213
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.05814115999999,
+     "unstable": 254,
+     "binaries": 254
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.046427612000002,
+     "unstable": 219,
+     "binaries": 219
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01623040200002,
+     "unstable": 245,
+     "binaries": 245
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03831886400002,
+     "unstable": 240,
+     "binaries": 240
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.03801130200003,
+     "unstable": 210,
+     "binaries": 210,
+     "cex_margin": -1.3368149733150272,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.027697088000025,
+     "unstable": 227,
+     "binaries": 227
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.711520827000015,
+     "unstable": 158,
+     "binaries": 158
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02960770699997,
+     "unstable": 201,
+     "binaries": 201
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.168994817999987,
+     "unstable": 236,
+     "binaries": 236,
+     "cex_margin": -0.688181450101589,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.072576185000003,
+     "unstable": 261,
+     "binaries": 261
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.035969058000035,
+     "unstable": 188,
+     "binaries": 188
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.069799984000042,
+     "unstable": 242,
+     "binaries": 242
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.037463348000074,
+     "unstable": 201,
+     "binaries": 201
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.044000120000078,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02661364200003,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.058543859999986,
+     "unstable": 268,
+     "binaries": 268
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.047237720999988,
+     "unstable": 235,
+     "binaries": 235
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.071478392000017,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.039999369000043,
+     "unstable": 197,
+     "binaries": 197
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.030142831000035,
+     "unstable": 202,
+     "binaries": 202,
+     "cex_margin": -2.995061740846488,
+     "cex_linf": 0.030000000000000138
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.053932371000087,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.024637961000053,
+     "unstable": 226,
+     "binaries": 226
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.05321027399998,
+     "unstable": 282,
+     "binaries": 282
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.063659840000014,
+     "unstable": 211,
+     "binaries": 211
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.039790132000007,
+     "unstable": 232,
+     "binaries": 232
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.07079803800002,
+     "unstable": 227,
+     "binaries": 227
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.06782444999999,
+     "unstable": 211,
+     "binaries": 211
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.018768072000057,
+     "unstable": 241,
+     "binaries": 241
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021438883999963,
+     "unstable": 239,
+     "binaries": 239
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019812973999933,
+     "unstable": 259,
+     "binaries": 259
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.10096608899994,
+     "unstable": 259,
+     "binaries": 259
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.024214149000045,
+     "unstable": 217,
+     "binaries": 217
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.05364474600003,
+     "unstable": 223,
+     "binaries": 223,
+     "cex_margin": -6.447206050424606,
+     "cex_linf": 0.030000000000000138
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.026202203000025,
+     "unstable": 228,
+     "binaries": 228
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.027633293000008,
+     "unstable": 237,
+     "binaries": 237
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.020123602000012,
+     "unstable": 211,
+     "binaries": 211,
+     "cex_margin": -2.9804088050357826,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.049734504999947,
+     "unstable": 256,
+     "binaries": 256
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.036871658999985,
+     "unstable": 209,
+     "binaries": 209
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.030767448000006,
+     "unstable": 236,
+     "binaries": 236
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.06205108200004,
+     "unstable": 235,
+     "binaries": 235
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.093640184999913,
+     "unstable": 239,
+     "binaries": 239
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.033698875000027,
+     "unstable": 226,
+     "binaries": 226
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.054921863000004,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02778007300003,
+     "unstable": 222,
+     "binaries": 222
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.036026358999948,
+     "unstable": 231,
+     "binaries": 231
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.027043993000007,
+     "unstable": 219,
+     "binaries": 219
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.041503298000066,
+     "unstable": 209,
+     "binaries": 209
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.155471026999976,
+     "unstable": 225,
+     "binaries": 225
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.032341889999998,
+     "unstable": 223,
+     "binaries": 223
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.024902233000034,
+     "unstable": 232,
+     "binaries": 232
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.064648853999984,
+     "unstable": 242,
+     "binaries": 242
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.022638217999997,
+     "unstable": 203,
+     "binaries": 203
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.052417195999965,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.017844193999963,
+     "unstable": 258,
+     "binaries": 258
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.023912025000072,
+     "unstable": 229,
+     "binaries": 229
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.06235325199998,
+     "unstable": 251,
+     "binaries": 251
+    }
+   ]
+  },
+  {
+   "variant": "baseline",
+   "seed": 2,
+   "train_s": 9.503500239999994,
+   "clean_acc": 1.0,
+   "ibp_verified_acc": 0.014598540030419827,
+   "unstable_mean": 219.3722686767578,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.43333333333333335,
+   "falsified": 0.06666666666666667,
+   "unknown": 0.5,
+   "verify_time_mean": 19.90948364326666,
+   "verify_time_median": 20.029813167999976,
+   "binaries_mean": 222.08333333333334,
+   "config": {
+    "name": "baseline",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 2
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.04619530399998,
+     "unstable": 244,
+     "binaries": 244
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.020797601000027,
+     "unstable": 189,
+     "binaries": 189
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.034718008000027,
+     "unstable": 231,
+     "binaries": 231,
+     "cex_margin": -1.1922178846868956,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.023239026000056,
+     "unstable": 234,
+     "binaries": 234
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.030616965000036,
+     "unstable": 230,
+     "binaries": 230
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.986109475000035,
+     "unstable": 201,
+     "binaries": 201
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.018570261000036,
+     "unstable": 225,
+     "binaries": 225
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.105681039999922,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.113477956999986,
+     "unstable": 201,
+     "binaries": 201
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.054180650000035,
+     "unstable": 200,
+     "binaries": 200
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.029909125000017,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.042838383999992,
+     "unstable": 241,
+     "binaries": 241
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.166154993999953,
+     "unstable": 242,
+     "binaries": 242
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02812040499998,
+     "unstable": 231,
+     "binaries": 231
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.056179960999998,
+     "unstable": 190,
+     "binaries": 190
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.109582531,
+     "unstable": 237,
+     "binaries": 237
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.02402215500001,
+     "unstable": 197,
+     "binaries": 197,
+     "cex_margin": -4.082217737877901,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.0324821239999,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.03364496300003,
+     "unstable": 233,
+     "binaries": 233
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.045597723000014,
+     "unstable": 229,
+     "binaries": 229
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.03478565299997,
+     "unstable": 245,
+     "binaries": 245
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.020141662000015,
+     "unstable": 236,
+     "binaries": 236
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.131847644000004,
+     "unstable": 200,
+     "binaries": 200
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.03493220000007,
+     "unstable": 212,
+     "binaries": 212,
+     "cex_margin": -1.4516532596450613,
+     "cex_linf": 0.030000000000000047
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02766468699997,
+     "unstable": 207,
+     "binaries": 207
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.019056508000062,
+     "unstable": 206,
+     "binaries": 206
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.092885178000074,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.037476502999993,
+     "unstable": 203,
+     "binaries": 203
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02348413499999,
+     "unstable": 217,
+     "binaries": 217
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.023512067999945,
+     "unstable": 202,
+     "binaries": 202
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.05940546399995,
+     "unstable": 235,
+     "binaries": 235
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.017287613000008,
+     "unstable": 230,
+     "binaries": 230
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.031740077999984,
+     "unstable": 252,
+     "binaries": 252
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02159579800002,
+     "unstable": 223,
+     "binaries": 223
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.022058227000002,
+     "unstable": 234,
+     "binaries": 234
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.029484541999977,
+     "unstable": 270,
+     "binaries": 270
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.058756795000022,
+     "unstable": 213,
+     "binaries": 213
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03673974000003,
+     "unstable": 231,
+     "binaries": 231
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.928288506999934,
+     "unstable": 221,
+     "binaries": 221
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.026611727000045,
+     "unstable": 229,
+     "binaries": 229,
+     "cex_margin": -2.7665888994153107,
+     "cex_linf": 0.030000000000000908
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02953511299995,
+     "unstable": 247,
+     "binaries": 247
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.019344950000004,
+     "unstable": 237,
+     "binaries": 237
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021993887000008,
+     "unstable": 225,
+     "binaries": 225
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02790458000004,
+     "unstable": 240,
+     "binaries": 240
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02607983200005,
+     "unstable": 230,
+     "binaries": 230
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.019435455999997,
+     "unstable": 190,
+     "binaries": 190
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.038406189999932,
+     "unstable": 250,
+     "binaries": 250
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.030585378999945,
+     "unstable": 196,
+     "binaries": 196
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.045271227999933,
+     "unstable": 218,
+     "binaries": 218
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.060632709999936,
+     "unstable": 220,
+     "binaries": 220
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.495999916999835,
+     "unstable": 194,
+     "binaries": 194
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01852964800014,
+     "unstable": 223,
+     "binaries": 223
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.028881420999937,
+     "unstable": 238,
+     "binaries": 238
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.017689997999923,
+     "unstable": 214,
+     "binaries": 214
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01863504700009,
+     "unstable": 237,
+     "binaries": 237
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.83747250600004,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.05452506900008,
+     "unstable": 192,
+     "binaries": 192
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.029717210999934,
+     "unstable": 239,
+     "binaries": 239
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03574150899999,
+     "unstable": 207,
+     "binaries": 207
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.03276356399988,
+     "unstable": 231,
+     "binaries": 231
+    }
+   ]
+  },
+  {
+   "variant": "rs",
+   "seed": 0,
+   "train_s": 21.96088527300003,
+   "clean_acc": 0.9981752038002014,
+   "ibp_verified_acc": 0.051094889640808105,
+   "unstable_mean": 18.68065643310547,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.6,
+   "falsified": 0.4,
+   "unknown": 0.0,
+   "verify_time_mean": 1.5867174089333276,
+   "verify_time_median": 1.4885834200000545,
+   "binaries_mean": 17.666666666666668,
+   "config": {
+    "name": "rs",
+    "ternary": false,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 0
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4278469509999923,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.202813777000074,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.517989623999938,
+     "unstable": 15,
+     "binaries": 15,
+     "cex_margin": -5.7311576935545165,
+     "cex_linf": 0.03000000000000058
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.194179202999976,
+     "unstable": 23,
+     "binaries": 23
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5848440600000231,
+     "unstable": 17,
+     "binaries": 17
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00035875699995813193,
+     "unstable": 22,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.2288191989998722,
+     "unstable": 17,
+     "binaries": 17,
+     "cex_margin": -4.937939572292713,
+     "cex_linf": 0.030000000084760843
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.559980312999869,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.5271359900000334,
+     "unstable": 13,
+     "binaries": 13
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.4919515510000565,
+     "unstable": 20,
+     "binaries": 20,
+     "cex_margin": -2.9514003836237106,
+     "cex_linf": 0.030000716567481045
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002425410000341799,
+     "unstable": 15,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.3762839749999785,
+     "unstable": 15,
+     "binaries": 15,
+     "cex_margin": -1.9689272917871516,
+     "cex_linf": 0.030000000000000037
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.6362993760001245,
+     "unstable": 18,
+     "binaries": 18,
+     "cex_margin": -3.2345989197113827,
+     "cex_linf": 0.030000000000001137
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.9694651400000112,
+     "unstable": 17,
+     "binaries": 17,
+     "cex_margin": -7.435610542023557,
+     "cex_linf": 0.030000003086638707
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4309314800000266,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.5182257410001512,
+     "unstable": 18,
+     "binaries": 18,
+     "cex_margin": -1.3543203299003155,
+     "cex_linf": 0.030000002429841244
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.6083710440000232,
+     "unstable": 27,
+     "binaries": 27
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.8537082449997797,
+     "unstable": 12,
+     "binaries": 12,
+     "cex_margin": -2.33984299031186,
+     "cex_linf": 0.030000753689107262
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.2620172859999457,
+     "unstable": 17,
+     "binaries": 17
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.684567897999841,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.1323119940000197,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00040747399998508627,
+     "unstable": 18,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.7478469369998493,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -1.5860676796499051,
+     "cex_linf": 0.03000010747965332
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6999501789998703,
+     "unstable": 14,
+     "binaries": 14,
+     "cex_margin": -5.018553801917499,
+     "cex_linf": 0.030000740738151937
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.9347316399998817,
+     "unstable": 13,
+     "binaries": 13
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.8786229250001725,
+     "unstable": 17,
+     "binaries": 17
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.370192907000046,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.2659989649998806,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4852152890000525,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.947995874000071,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -5.832544618967726,
+     "cex_linf": 0.030000006158489523
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.3637934899998072,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.8212494120000429,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -4.128203639750847,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.88011840199988,
+     "unstable": 22,
+     "binaries": 22,
+     "cex_margin": -5.133217990027772,
+     "cex_linf": 0.03000006975013114
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.069863580000174,
+     "unstable": 31,
+     "binaries": 31
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7881358660001752,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0699726139998802,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.035632605000046,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -5.165637336891616,
+     "cex_linf": 0.03000000000000058
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.0150861900001473,
+     "unstable": 18,
+     "binaries": 18,
+     "cex_margin": -2.3658407365670264,
+     "cex_linf": 0.030000078782024424
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7118497429999024,
+     "unstable": 14,
+     "binaries": 14
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.111702841999886,
+     "unstable": 9,
+     "binaries": 9,
+     "cex_margin": -3.784183498511952,
+     "cex_linf": 0.030000705535753486
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.478715037000029,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -7.054223083268594,
+     "cex_linf": 0.030000020273648564
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.1756385539999883,
+     "unstable": 23,
+     "binaries": 23
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.8476139680001324,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.837965352000083,
+     "unstable": 18,
+     "binaries": 18,
+     "cex_margin": -3.130621144589132,
+     "cex_linf": 0.03000000000002161
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.918154745000038,
+     "unstable": 23,
+     "binaries": 23,
+     "cex_margin": -2.227663884961455,
+     "cex_linf": 0.030000296500975243
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0682871779999914,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.325330580999889,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.0672222309999597,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.388339586000029,
+     "unstable": 17,
+     "binaries": 17
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.3426251949999823,
+     "unstable": 19,
+     "binaries": 19,
+     "cex_margin": -2.0793438462221827,
+     "cex_linf": 0.03000007528711151
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7939294020000034,
+     "unstable": 13,
+     "binaries": 13
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.4870146609998756,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.5506741870001406,
+     "unstable": 17,
+     "binaries": 17,
+     "cex_margin": -4.019696637871741,
+     "cex_linf": 0.030000066055685837
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.762261542000033,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.775592948999929,
+     "unstable": 17,
+     "binaries": 17,
+     "cex_margin": -2.9868286473328367,
+     "cex_linf": 0.030000763143740894
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.8922782509998797,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.5080121910000344,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.5424701009999353,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.9174120780000976,
+     "unstable": 19,
+     "binaries": 19,
+     "cex_margin": -2.720815617072033,
+     "cex_linf": 0.030000949099467288
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.1167956680001225,
+     "unstable": 22,
+     "binaries": 22,
+     "cex_margin": -1.7179107806726077,
+     "cex_linf": 0.03000007646297642
+    }
+   ]
+  },
+  {
+   "variant": "rs",
+   "seed": 1,
+   "train_s": 21.620330041999978,
+   "clean_acc": 0.9981752038002014,
+   "ibp_verified_acc": 0.20802919566631317,
+   "unstable_mean": 30.943429946899414,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.6833333333333333,
+   "falsified": 0.3,
+   "unknown": 0.016666666666666666,
+   "verify_time_mean": 3.94137739233333,
+   "verify_time_median": 2.4370988854999496,
+   "binaries_mean": 25.25,
+   "config": {
+    "name": "rs",
+    "ternary": false,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 1
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0017612149999877147,
+     "unstable": 24,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 10.431556251000075,
+     "unstable": 33,
+     "binaries": 33,
+     "cex_margin": -2.095810026901272,
+     "cex_linf": 0.030000200961206196
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.1204246920001424,
+     "unstable": 36,
+     "binaries": 36,
+     "cex_margin": -1.9303282944507218,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00026130900005227886,
+     "unstable": 34,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.7627950520000013,
+     "unstable": 27,
+     "binaries": 27
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003884770001150173,
+     "unstable": 24,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.41105199399999,
+     "unstable": 32,
+     "binaries": 32,
+     "cex_margin": -2.180168962677466,
+     "cex_linf": 0.030000223680854754
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.0451190289998067,
+     "unstable": 40,
+     "binaries": 40
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.437917571000071,
+     "unstable": 27,
+     "binaries": 27
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.061963604999846,
+     "unstable": 33,
+     "binaries": 33,
+     "cex_margin": -0.8062016565046788,
+     "cex_linf": 0.030000223681306577
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0022551029999249295,
+     "unstable": 28,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.224467946000004,
+     "unstable": 46,
+     "binaries": 46
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 6.031812291000051,
+     "unstable": 38,
+     "binaries": 38,
+     "cex_margin": -2.286098979833466,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 7.200798693000024,
+     "unstable": 43,
+     "binaries": 43,
+     "cex_margin": -1.0871314637813434,
+     "cex_linf": 0.03000000000000025
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002635550001741649,
+     "unstable": 27,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.134154542000033,
+     "unstable": 39,
+     "binaries": 39
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.905655644000035,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.3682303440000396,
+     "unstable": 28,
+     "binaries": 28,
+     "cex_margin": -0.8069526573304477,
+     "cex_linf": 0.030000027595688813
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.7154361979999067,
+     "unstable": 35,
+     "binaries": 35
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00037190700004430255,
+     "unstable": 24,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00024107800004458113,
+     "unstable": 29,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015203800012386637,
+     "unstable": 11,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.941929630999994,
+     "unstable": 28,
+     "binaries": 28
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.9385052509999241,
+     "unstable": 18,
+     "binaries": 18,
+     "cex_margin": -5.888934966406067,
+     "cex_linf": 0.03000002754929425
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.5809554160000516,
+     "unstable": 37,
+     "binaries": 37
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.605210407999948,
+     "unstable": 35,
+     "binaries": 35
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.738749273999929,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00037960500003464404,
+     "unstable": 32,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.18278194999993502,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.4362801999998283,
+     "unstable": 33,
+     "binaries": 33,
+     "cex_margin": -4.29462271090653,
+     "cex_linf": 0.03000022274011649
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00023880100002315885,
+     "unstable": 17,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.348458323000159,
+     "unstable": 28,
+     "binaries": 28,
+     "cex_margin": -2.058452943147988,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.01754761899997,
+     "unstable": 37,
+     "binaries": 37
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.027568501999895,
+     "unstable": 37,
+     "binaries": 37
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.8734349500000462,
+     "unstable": 42,
+     "binaries": 42,
+     "cex_margin": -7.216344694824132,
+     "cex_linf": 0.030000000000000106
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.582139214000108,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 6.988858847999836,
+     "unstable": 41,
+     "binaries": 41,
+     "cex_margin": -0.502338983000306,
+     "cex_linf": 0.030000000000000176
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.088195220999978,
+     "unstable": 34,
+     "binaries": 34
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0088674619998983,
+     "unstable": 25,
+     "binaries": 25
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.4136750580000808,
+     "unstable": 22,
+     "binaries": 22,
+     "cex_margin": -2.9387695074157447,
+     "cex_linf": 0.030000000000000106
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 6.873778173000119,
+     "unstable": 37,
+     "binaries": 37,
+     "cex_margin": -2.863407538751156,
+     "cex_linf": 0.030000028140313505
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.414978377999887,
+     "unstable": 39,
+     "binaries": 39
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4843604860000141,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 8.140417605000039,
+     "unstable": 49,
+     "binaries": 49,
+     "cex_margin": -2.1163259371121974,
+     "cex_linf": 0.03000002162949457
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.2005801630000406,
+     "unstable": 32,
+     "binaries": 32,
+     "cex_margin": -1.7048388880894443,
+     "cex_linf": 0.03000028943223687
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.9990975429998343,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.1673060649998206,
+     "unstable": 40,
+     "binaries": 40
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.826588950000087,
+     "unstable": 34,
+     "binaries": 34
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.9431132569998226,
+     "unstable": 31,
+     "binaries": 31
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.0764751289998458,
+     "unstable": 28,
+     "binaries": 28,
+     "cex_margin": -2.883005323795386,
+     "cex_linf": 0.030000221291470286
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004026999999950931,
+     "unstable": 17,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.401752098000088,
+     "unstable": 31,
+     "binaries": 31
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.42254962800007,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003770120001718169,
+     "unstable": 33,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.5239512830000876,
+     "unstable": 26,
+     "binaries": 26,
+     "cex_margin": -2.9379982220693073,
+     "cex_linf": 0.030000030634361862
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002529399998820736,
+     "unstable": 39,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 17.345764756000108,
+     "unstable": 36,
+     "binaries": 36
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004268220000085421,
+     "unstable": 22,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01504196099995,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.014574323999796,
+     "unstable": 39,
+     "binaries": 39
+    }
+   ]
+  },
+  {
+   "variant": "rs",
+   "seed": 2,
+   "train_s": 22.05395174399996,
+   "clean_acc": 0.9927007555961609,
+   "ibp_verified_acc": 0.11678832024335861,
+   "unstable_mean": 23.098539352416992,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.7666666666666667,
+   "falsified": 0.23333333333333334,
+   "unknown": 0.0,
+   "verify_time_mean": 1.8675965131000036,
+   "verify_time_median": 1.4754912899999226,
+   "binaries_mean": 18.8,
+   "config": {
+    "name": "rs",
+    "ternary": false,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 2
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0016518380000434263,
+     "unstable": 17,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.6243898430000172,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.0302120880000984,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004640009999548056,
+     "unstable": 30,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5946722109999882,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9620757090001462,
+     "unstable": 16,
+     "binaries": 16
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.3634460120001677,
+     "unstable": 26,
+     "binaries": 26,
+     "cex_margin": -2.0943461610700176,
+     "cex_linf": 0.030000000000000127
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002798329999222915,
+     "unstable": 16,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0738358219998645,
+     "unstable": 14,
+     "binaries": 14
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6802354379999542,
+     "unstable": 14,
+     "binaries": 14,
+     "cex_margin": -0.7067631242781012,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025444600009905116,
+     "unstable": 15,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.16462238500003,
+     "unstable": 26,
+     "binaries": 26
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.284341445999871,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.275494492000007,
+     "unstable": 21,
+     "binaries": 21,
+     "cex_margin": -0.08031382187041025,
+     "cex_linf": 0.03000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002396059999227873,
+     "unstable": 17,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.006380924000041,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.6955775320000157,
+     "unstable": 25,
+     "binaries": 25,
+     "cex_margin": -5.135892205581176,
+     "cex_linf": 0.03000000000000003
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.158146816999988,
+     "unstable": 26,
+     "binaries": 26
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9789449980000882,
+     "unstable": 26,
+     "binaries": 26
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.0574831699998413,
+     "unstable": 27,
+     "binaries": 27
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.7392934270001206,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0358055020001302,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.7598584569998366,
+     "unstable": 14,
+     "binaries": 14
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6513649969999733,
+     "unstable": 25,
+     "binaries": 25,
+     "cex_margin": -9.56773208900564,
+     "cex_linf": 0.030000000000000186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.9064235499999995,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.4757675349999317,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.012290738000047,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.3919706740000493,
+     "unstable": 19,
+     "binaries": 19
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0039522100000795,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 8.16640508699993,
+     "unstable": 20,
+     "binaries": 20,
+     "cex_margin": -0.7904143229518743,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7307808339999156,
+     "unstable": 14,
+     "binaries": 14
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.7683819549999953,
+     "unstable": 19,
+     "binaries": 19
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.552068538999947,
+     "unstable": 32,
+     "binaries": 32,
+     "cex_margin": -4.035530607129656,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9122650700001032,
+     "unstable": 30,
+     "binaries": 30
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9796090069999082,
+     "unstable": 18,
+     "binaries": 18
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.5612758230001873,
+     "unstable": 19,
+     "binaries": 19
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.9959259600000223,
+     "unstable": 23,
+     "binaries": 23,
+     "cex_margin": -5.042233123316198,
+     "cex_linf": 0.030000390745968174
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.5543153599999187,
+     "unstable": 26,
+     "binaries": 26
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.683214838999902,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.5901880569999776,
+     "unstable": 24,
+     "binaries": 24,
+     "cex_margin": -5.607066860711977,
+     "cex_linf": 0.03000000000000071
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.2274763010000243,
+     "unstable": 27,
+     "binaries": 27,
+     "cex_margin": -0.11082707585642027,
+     "cex_linf": 0.030000000000000186
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002590349999991304,
+     "unstable": 19,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.559011905999796,
+     "unstable": 23,
+     "binaries": 23
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.6961916309999197,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.611039826000024,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7697943790001318,
+     "unstable": 25,
+     "binaries": 25
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0005523449999600416,
+     "unstable": 45,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.156409672000109,
+     "unstable": 16,
+     "binaries": 16,
+     "cex_margin": -1.9251700084929624,
+     "cex_linf": 0.030000078192421564
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.331841492000194,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.1688822989999608,
+     "unstable": 29,
+     "binaries": 29,
+     "cex_margin": -1.2772179699411952,
+     "cex_linf": 0.030000000000000072
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0430536680000841,
+     "unstable": 16,
+     "binaries": 16
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.3731164040000294,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.7765353610000147,
+     "unstable": 20,
+     "binaries": 20
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004483319999053492,
+     "unstable": 16,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.1260810179999226,
+     "unstable": 26,
+     "binaries": 26,
+     "cex_margin": -0.09662084631237455,
+     "cex_linf": 0.030000078192422674
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002440180001030967,
+     "unstable": 14,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.0158158040001126,
+     "unstable": 11,
+     "binaries": 11,
+     "cex_margin": -0.8253736506202571,
+     "cex_linf": 0.030000000000000186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.3932792370001152,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.7887986639998417,
+     "unstable": 15,
+     "binaries": 15
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.593053161999933,
+     "unstable": 24,
+     "binaries": 24
+    }
+   ]
+  },
+  {
+   "variant": "ternary",
+   "seed": 0,
+   "train_s": 10.879036575999862,
+   "clean_acc": 0.9963503479957581,
+   "ibp_verified_acc": 0.09489051252603531,
+   "unstable_mean": 190.24452209472656,
+   "n_relu": 512,
+   "weight_zero_frac": 0.37037035822868347,
+   "verified": 0.5833333333333334,
+   "falsified": 0.13333333333333333,
+   "unknown": 0.2833333333333333,
+   "verify_time_mean": 13.35925389690001,
+   "verify_time_median": 14.617838880499903,
+   "binaries_mean": 180.85,
+   "config": {
+    "name": "ternary",
+    "ternary": true,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 0
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0015746879998914665,
+     "unstable": 159,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.35376012200004,
+     "unstable": 185,
+     "binaries": 185
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.08139935700001,
+     "unstable": 205,
+     "binaries": 205
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003920290000678506,
+     "unstable": 191,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.362305468999921,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00040034099993135897,
+     "unstable": 148,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019253141000036,
+     "unstable": 226,
+     "binaries": 226
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.699330312000029,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.718780682999977,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.057000358000096,
+     "unstable": 175,
+     "binaries": 175
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0005437419999907434,
+     "unstable": 161,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021821120999903,
+     "unstable": 185,
+     "binaries": 185
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.061120261000042,
+     "unstable": 237,
+     "binaries": 237
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.0213987919999,
+     "unstable": 207,
+     "binaries": 207
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.585179720000042,
+     "unstable": 173,
+     "binaries": 173
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 18.396170138000116,
+     "unstable": 173,
+     "binaries": 173,
+     "cex_margin": -0.9152533555738813,
+     "cex_linf": 0.030000000000006195
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.517224258999931,
+     "unstable": 181,
+     "binaries": 181
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.726927305000117,
+     "unstable": 177,
+     "binaries": 177
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.42514702099993,
+     "unstable": 226,
+     "binaries": 226
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.7612734110000474,
+     "unstable": 175,
+     "binaries": 175
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.09803087399996,
+     "unstable": 215,
+     "binaries": 215
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00043910500016863807,
+     "unstable": 176,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 15.122449461000087,
+     "unstable": 160,
+     "binaries": 160,
+     "cex_margin": -1.4393826723795593,
+     "cex_linf": 0.03000000000000025
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.388240593000091,
+     "unstable": 166,
+     "binaries": 166,
+     "cex_margin": -6.849687374233658,
+     "cex_linf": 0.030000009938692562
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02477237899984,
+     "unstable": 186,
+     "binaries": 186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.516897077999829,
+     "unstable": 212,
+     "binaries": 212
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.225339807000182,
+     "unstable": 189,
+     "binaries": 189
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.383268962000102,
+     "unstable": 223,
+     "binaries": 223
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.760354753000001,
+     "unstable": 202,
+     "binaries": 202
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.51233004300002,
+     "unstable": 182,
+     "binaries": 182
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.05280677199994,
+     "unstable": 162,
+     "binaries": 162
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 13.3660762720001,
+     "unstable": 220,
+     "binaries": 220,
+     "cex_margin": -2.190549398789258,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019219523000174,
+     "unstable": 225,
+     "binaries": 225
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.865569408000056,
+     "unstable": 206,
+     "binaries": 206
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.53949911000018,
+     "unstable": 222,
+     "binaries": 222
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.02219863900018,
+     "unstable": 253,
+     "binaries": 253
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019851245999917,
+     "unstable": 225,
+     "binaries": 225
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021742467999957,
+     "unstable": 190,
+     "binaries": 190
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.196446588000072,
+     "unstable": 181,
+     "binaries": 181
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 10.848082274000035,
+     "unstable": 178,
+     "binaries": 178,
+     "cex_margin": -4.672877063060424,
+     "cex_linf": 0.030000808378458754
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 19.970686063999892,
+     "unstable": 223,
+     "binaries": 223,
+     "cex_margin": -0.9993190246292298,
+     "cex_linf": 0.03000000000000795
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.435551787999884,
+     "unstable": 232,
+     "binaries": 232
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.040110239999876,
+     "unstable": 196,
+     "binaries": 196
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.025659181000037,
+     "unstable": 224,
+     "binaries": 224
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01875684400011,
+     "unstable": 242,
+     "binaries": 242
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.604969651999909,
+     "unstable": 200,
+     "binaries": 200
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.493550443999993,
+     "unstable": 230,
+     "binaries": 230
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 0.13941632600017329,
+     "unstable": 172,
+     "binaries": 172
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.020607463000033,
+     "unstable": 212,
+     "binaries": 212
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.024039479000066,
+     "unstable": 214,
+     "binaries": 214
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.7367427560000124,
+     "unstable": 103,
+     "binaries": 103
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.633279669999865,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.019599339000024,
+     "unstable": 182,
+     "binaries": 182,
+     "cex_margin": -0.7312773384269846,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.067994761000136,
+     "unstable": 194,
+     "binaries": 194
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019204241999887,
+     "unstable": 227,
+     "binaries": 227
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.463148034000142,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.9089298209999,
+     "unstable": 183,
+     "binaries": 183
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.063860029999887,
+     "unstable": 176,
+     "binaries": 176
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.018193634,
+     "unstable": 203,
+     "binaries": 203
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 16.056316420999792,
+     "unstable": 207,
+     "binaries": 207,
+     "cex_margin": -10.604120738448968,
+     "cex_linf": 0.03000000000001048
+    }
+   ]
+  },
+  {
+   "variant": "ternary",
+   "seed": 1,
+   "train_s": 10.123334155000066,
+   "clean_acc": 0.9963503479957581,
+   "ibp_verified_acc": 0.018248174339532852,
+   "unstable_mean": 163.4635009765625,
+   "n_relu": 512,
+   "weight_zero_frac": 0.3672839403152466,
+   "verified": 0.8,
+   "falsified": 0.08333333333333333,
+   "unknown": 0.11666666666666667,
+   "verify_time_mean": 13.080439832949985,
+   "verify_time_median": 13.535505939500013,
+   "binaries_mean": 166.35,
+   "config": {
+    "name": "ternary",
+    "ternary": true,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 1
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.753794800999913,
+     "unstable": 190,
+     "binaries": 190
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.453107339000098,
+     "unstable": 165,
+     "binaries": 165
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.152591550999887,
+     "unstable": 194,
+     "binaries": 194
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.583820494999827,
+     "unstable": 182,
+     "binaries": 182
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.596233839999968,
+     "unstable": 229,
+     "binaries": 229
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.546547549000024,
+     "unstable": 161,
+     "binaries": 161
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.530343099999982,
+     "unstable": 161,
+     "binaries": 161
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.52446433,
+     "unstable": 195,
+     "binaries": 195
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.545052525000074,
+     "unstable": 122,
+     "binaries": 122
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.021420196999998,
+     "unstable": 157,
+     "binaries": 157
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0005993639999815059,
+     "unstable": 126,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.030675586999905,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 18.53990118600018,
+     "unstable": 172,
+     "binaries": 172,
+     "cex_margin": -0.9861253844257374,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02321344500001,
+     "unstable": 186,
+     "binaries": 186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.150191362999976,
+     "unstable": 142,
+     "binaries": 142
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.023292785999956,
+     "unstable": 145,
+     "binaries": 145
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.080260962000011,
+     "unstable": 171,
+     "binaries": 171
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.530271727999889,
+     "unstable": 129,
+     "binaries": 129
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.99286099699998,
+     "unstable": 166,
+     "binaries": 166
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.2230035590000625,
+     "unstable": 108,
+     "binaries": 108
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.844867740999916,
+     "unstable": 247,
+     "binaries": 247
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.780668332000005,
+     "unstable": 194,
+     "binaries": 194
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.871346162999998,
+     "unstable": 157,
+     "binaries": 157
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 9.224184182000045,
+     "unstable": 121,
+     "binaries": 121,
+     "cex_margin": -2.4363955425705184,
+     "cex_linf": 0.030000000000008697
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.956177561000004,
+     "unstable": 158,
+     "binaries": 158
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.892361959000027,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.841893028999948,
+     "unstable": 175,
+     "binaries": 175
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.056221426000093,
+     "unstable": 154,
+     "binaries": 154
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.017850558999953,
+     "unstable": 199,
+     "binaries": 199
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.719819173000133,
+     "unstable": 178,
+     "binaries": 178
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.55158080199999,
+     "unstable": 174,
+     "binaries": 174
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.478225197000029,
+     "unstable": 213,
+     "binaries": 213
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.018781585999932,
+     "unstable": 197,
+     "binaries": 197
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.047138465999979,
+     "unstable": 152,
+     "binaries": 152
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.408511058000158,
+     "unstable": 193,
+     "binaries": 193
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.17578720199981,
+     "unstable": 159,
+     "binaries": 159
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.022727559999794,
+     "unstable": 206,
+     "binaries": 206
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.81224648500006,
+     "unstable": 124,
+     "binaries": 124
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.332373795999956,
+     "unstable": 159,
+     "binaries": 159
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.458919514999934,
+     "unstable": 115,
+     "binaries": 115,
+     "cex_margin": -0.7626911528334803,
+     "cex_linf": 0.030000000000000478
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.04262899100013,
+     "unstable": 212,
+     "binaries": 212
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.112175421000074,
+     "unstable": 229,
+     "binaries": 229
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.02107206200003,
+     "unstable": 235,
+     "binaries": 235,
+     "cex_margin": -0.27676972781815046,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.2247424950001,
+     "unstable": 143,
+     "binaries": 143
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 10.568577844999936,
+     "unstable": 176,
+     "binaries": 176,
+     "cex_margin": -0.7088184034635372,
+     "cex_linf": 0.030000000000000186
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.743268687999944,
+     "unstable": 184,
+     "binaries": 184
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.982304316999944,
+     "unstable": 141,
+     "binaries": 141
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.870005694999918,
+     "unstable": 151,
+     "binaries": 151
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.859459711,
+     "unstable": 134,
+     "binaries": 134
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01759452600004,
+     "unstable": 185,
+     "binaries": 185
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.522103225999899,
+     "unstable": 134,
+     "binaries": 134
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 20.01882439799988,
+     "unstable": 194,
+     "binaries": 194
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.690012842999977,
+     "unstable": 147,
+     "binaries": 147
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.840470463999964,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.432373353000003,
+     "unstable": 139,
+     "binaries": 139
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.692282444999819,
+     "unstable": 135,
+     "binaries": 135
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.992336839000018,
+     "unstable": 158,
+     "binaries": 158
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.20936019099986,
+     "unstable": 159,
+     "binaries": 159
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.155823505999933,
+     "unstable": 163,
+     "binaries": 163
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.017644465000103,
+     "unstable": 206,
+     "binaries": 206
+    }
+   ]
+  },
+  {
+   "variant": "ternary",
+   "seed": 2,
+   "train_s": 10.52710598900012,
+   "clean_acc": 0.9981752038002014,
+   "ibp_verified_acc": 0.043795619159936905,
+   "unstable_mean": 181.50364685058594,
+   "n_relu": 512,
+   "weight_zero_frac": 0.36342594027519226,
+   "verified": 0.65,
+   "falsified": 0.13333333333333333,
+   "unknown": 0.21666666666666667,
+   "verify_time_mean": 13.064627327533344,
+   "verify_time_median": 13.609678925000026,
+   "binaries_mean": 176.65,
+   "config": {
+    "name": "ternary",
+    "ternary": true,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 2
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.71325656099998,
+     "unstable": 183,
+     "binaries": 183
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.75973847299997,
+     "unstable": 150,
+     "binaries": 150
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021440930999916,
+     "unstable": 246,
+     "binaries": 246
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.657116612999971,
+     "unstable": 157,
+     "binaries": 157
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.890965839000046,
+     "unstable": 164,
+     "binaries": 164
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.305107700999997,
+     "unstable": 192,
+     "binaries": 192
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02454425299993,
+     "unstable": 192,
+     "binaries": 192
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.72198252200019,
+     "unstable": 201,
+     "binaries": 201
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.468414223000082,
+     "unstable": 146,
+     "binaries": 146
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.021974540999963,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.000758861999884175,
+     "unstable": 147,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 16.171165325000175,
+     "unstable": 218,
+     "binaries": 218,
+     "cex_margin": -7.927932223423412,
+     "cex_linf": 0.03000000000000047
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 16.41234744999997,
+     "unstable": 236,
+     "binaries": 236,
+     "cex_margin": -4.87436091037443,
+     "cex_linf": 0.03000000000000025
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02274975199998,
+     "unstable": 223,
+     "binaries": 223
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.004544321000139462,
+     "unstable": 140,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.042132702000117,
+     "unstable": 206,
+     "binaries": 206
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.68158146199994,
+     "unstable": 179,
+     "binaries": 179
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.468824953000194,
+     "unstable": 181,
+     "binaries": 181
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.127816879999955,
+     "unstable": 208,
+     "binaries": 208
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.154065452000168,
+     "unstable": 232,
+     "binaries": 232
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.265064123999991,
+     "unstable": 231,
+     "binaries": 231
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.063022151000041,
+     "unstable": 144,
+     "binaries": 144
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 15.936682325999982,
+     "unstable": 171,
+     "binaries": 171
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 8.528092773000026,
+     "unstable": 138,
+     "binaries": 138,
+     "cex_margin": -3.763806179081495,
+     "cex_linf": 0.030000000000031436
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 18.806579150999823,
+     "unstable": 184,
+     "binaries": 184
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.8142661489998773,
+     "unstable": 109,
+     "binaries": 109
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.533800682999981,
+     "unstable": 127,
+     "binaries": 127
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.698790762000044,
+     "unstable": 155,
+     "binaries": 155
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.090263434000008,
+     "unstable": 203,
+     "binaries": 203
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 14.142129510000132,
+     "unstable": 189,
+     "binaries": 189,
+     "cex_margin": -4.684553409826181,
+     "cex_linf": 0.030000000000004374
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.49088185000005,
+     "unstable": 180,
+     "binaries": 180
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.561174029000085,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 20.024676333000116,
+     "unstable": 247,
+     "binaries": 247,
+     "cex_margin": -6.024759487935054,
+     "cex_linf": 0.03000000000000595
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.254138362000049,
+     "unstable": 152,
+     "binaries": 152
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.052321587000051,
+     "unstable": 174,
+     "binaries": 174
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.658183820999966,
+     "unstable": 224,
+     "binaries": 224
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02055869899982,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 11.913491006999948,
+     "unstable": 174,
+     "binaries": 174,
+     "cex_margin": -4.016651971168234,
+     "cex_linf": 0.03000000000000028
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.4350107650000155,
+     "unstable": 158,
+     "binaries": 158
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.8004387440000755,
+     "unstable": 147,
+     "binaries": 147,
+     "cex_margin": -2.9767382600062122,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.029089053000007,
+     "unstable": 241,
+     "binaries": 241
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 14.619319951999842,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 19.51730376200021,
+     "unstable": 232,
+     "binaries": 232
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.01717501799999,
+     "unstable": 224,
+     "binaries": 224
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.019279115000018,
+     "unstable": 216,
+     "binaries": 216
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.348331806999795,
+     "unstable": 134,
+     "binaries": 134
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.37759194499995,
+     "unstable": 240,
+     "binaries": 240
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 16.467758513000035,
+     "unstable": 157,
+     "binaries": 157
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 17.37328284099999,
+     "unstable": 191,
+     "binaries": 191
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.018927966000092,
+     "unstable": 205,
+     "binaries": 205
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.248176568999952,
+     "unstable": 121,
+     "binaries": 121
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 14.70667197900002,
+     "unstable": 177,
+     "binaries": 177,
+     "cex_margin": -2.3957264183123446,
+     "cex_linf": 0.030000002302577045
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.02618002300005,
+     "unstable": 209,
+     "binaries": 209
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004923249998682877,
+     "unstable": 133,
+     "binaries": 0
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.020722143000057,
+     "unstable": 204,
+     "binaries": 204
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00039447600011044415,
+     "unstable": 133,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 13.002291376999892,
+     "unstable": 174,
+     "binaries": 174
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.525889071000165,
+     "unstable": 210,
+     "binaries": 210
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.777865965000046,
+     "unstable": 191,
+     "binaries": 191
+    },
+    {
+     "status": "unknown",
+     "method": "milp",
+     "time": 20.020800675999908,
+     "unstable": 224,
+     "binaries": 224
+    }
+   ]
+  },
+  {
+   "variant": "ternary_rs",
+   "seed": 0,
+   "train_s": 24.990984679999883,
+   "clean_acc": 0.9872262477874756,
+   "ibp_verified_acc": 0.03284671530127525,
+   "unstable_mean": 34.33759307861328,
+   "n_relu": 512,
+   "weight_zero_frac": 0.3989197611808777,
+   "verified": 0.75,
+   "falsified": 0.25,
+   "unknown": 0.0,
+   "verify_time_mean": 1.1755003843333347,
+   "verify_time_median": 1.1843884800000524,
+   "binaries_mean": 33.43333333333333,
+   "config": {
+    "name": "ternary_rs",
+    "ternary": true,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 0
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9182895339999959,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.2961221670000214,
+     "unstable": 37,
+     "binaries": 37,
+     "cex_margin": -0.4890515687422412,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4753361960001712,
+     "unstable": 46,
+     "binaries": 46
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.6617672940001285,
+     "unstable": 36,
+     "binaries": 36
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.18651419000002534,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.6151269360000242,
+     "unstable": 27,
+     "binaries": 27
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.3225194599997394,
+     "unstable": 38,
+     "binaries": 38
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.30988334000039686,
+     "unstable": 35,
+     "binaries": 35
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.5105819969999175,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.2472882009999466,
+     "unstable": 36,
+     "binaries": 36
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004106139999748848,
+     "unstable": 25,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.032254189000014,
+     "unstable": 40,
+     "binaries": 40
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.5937062529999366,
+     "unstable": 32,
+     "binaries": 32,
+     "cex_margin": -1.1687763147799322,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.3252429919998576,
+     "unstable": 39,
+     "binaries": 39
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9784995720001461,
+     "unstable": 38,
+     "binaries": 38
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.004816541999844,
+     "unstable": 35,
+     "binaries": 35,
+     "cex_margin": -1.497559167908574,
+     "cex_linf": 0.030000000000007354
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5159684790000938,
+     "unstable": 30,
+     "binaries": 30
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.2515498800003115,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.21252568199997768,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.13948686899993845,
+     "unstable": 28,
+     "binaries": 28
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.4546192920001886,
+     "unstable": 26,
+     "binaries": 26
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.32802863799997795,
+     "unstable": 25,
+     "binaries": 25
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.1630941399998846,
+     "unstable": 31,
+     "binaries": 31
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6982155509999757,
+     "unstable": 29,
+     "binaries": 29,
+     "cex_margin": -3.0367157779160836,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.4317231750001156,
+     "unstable": 38,
+     "binaries": 38
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.2885925539999334,
+     "unstable": 39,
+     "binaries": 39
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.22245703899989167,
+     "unstable": 22,
+     "binaries": 22
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.5316624469996896,
+     "unstable": 42,
+     "binaries": 42
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.8401377240002148,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.3095445479998489,
+     "unstable": 32,
+     "binaries": 32,
+     "cex_margin": -0.9725213728135467,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.22694126199985476,
+     "unstable": 35,
+     "binaries": 35
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 0.00015145999986998504,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6666586639998968,
+     "unstable": 29,
+     "binaries": 29,
+     "cex_margin": -4.02111587094649,
+     "cex_linf": 0.030000000000002247
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.592461272000037,
+     "unstable": 46,
+     "binaries": 46
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.1481126650000988,
+     "unstable": 38,
+     "binaries": 38
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.6365118700000494,
+     "unstable": 31,
+     "binaries": 31,
+     "cex_margin": -0.39312066895396924,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.073800889999802,
+     "unstable": 34,
+     "binaries": 34
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.8878881800001182,
+     "unstable": 46,
+     "binaries": 46
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.25648673999967286,
+     "unstable": 21,
+     "binaries": 21
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6315283070002806,
+     "unstable": 29,
+     "binaries": 29,
+     "cex_margin": -2.555863990779413,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.7126941300002727,
+     "unstable": 41,
+     "binaries": 41
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5191295310000896,
+     "unstable": 34,
+     "binaries": 34
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.9883095019999928,
+     "unstable": 44,
+     "binaries": 44,
+     "cex_margin": -1.2941125831624687,
+     "cex_linf": 0.030000000000002223
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0038195850002012,
+     "unstable": 31,
+     "binaries": 31
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.20568282000022,
+     "unstable": 34,
+     "binaries": 34,
+     "cex_margin": -1.772401864218553,
+     "cex_linf": 0.030000000000042257
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.2175765239999237,
+     "unstable": 44,
+     "binaries": 44
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.3551188540000112,
+     "unstable": 38,
+     "binaries": 38
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.3318333969996274,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.5305530579998958,
+     "unstable": 35,
+     "binaries": 35,
+     "cex_margin": -1.5821914447474872,
+     "cex_linf": 0.03000000000000025
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.6179262339996967,
+     "unstable": 47,
+     "binaries": 47
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5369849329999852,
+     "unstable": 32,
+     "binaries": 32
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.3374525909998738,
+     "unstable": 39,
+     "binaries": 39,
+     "cex_margin": -0.47401073254830517,
+     "cex_linf": 0.030000000000004245
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7938256410002396,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.34092972700000246,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.7725957420002487,
+     "unstable": 33,
+     "binaries": 33
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.2062656889997925,
+     "unstable": 43,
+     "binaries": 43
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.2130535450000934,
+     "unstable": 44,
+     "binaries": 44
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.17797134500005996,
+     "unstable": 24,
+     "binaries": 24
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6813347590000376,
+     "unstable": 34,
+     "binaries": 34,
+     "cex_margin": -1.1883127173139916,
+     "cex_linf": 0.030000000000024653
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.000458647999949,
+     "unstable": 40,
+     "binaries": 40,
+     "cex_margin": -0.2627373313080783,
+     "cex_linf": 0.030000000000000197
+    }
+   ]
+  },
+  {
+   "variant": "ternary_rs",
+   "seed": 1,
+   "train_s": 25.590443328999754,
+   "clean_acc": 0.9835766553878784,
+   "ibp_verified_acc": 0.06751824915409088,
+   "unstable_mean": 60.81569290161133,
+   "n_relu": 512,
+   "weight_zero_frac": 0.4089506268501282,
+   "verified": 0.8166666666666667,
+   "falsified": 0.18333333333333332,
+   "unknown": 0.0,
+   "verify_time_mean": 2.8758724909166857,
+   "verify_time_median": 2.454591252499995,
+   "binaries_mean": 58.05,
+   "config": {
+    "name": "ternary_rs",
+    "ternary": true,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 1
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7423631950000527,
+     "unstable": 55,
+     "binaries": 55
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.19703889099992,
+     "unstable": 53,
+     "binaries": 53
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.7716449609997653,
+     "unstable": 78,
+     "binaries": 78,
+     "cex_margin": -1.2772379954289406,
+     "cex_linf": 0.03000000000000047
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.2947755160003,
+     "unstable": 56,
+     "binaries": 56
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.7523091670000213,
+     "unstable": 80,
+     "binaries": 80
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00043370799994590925,
+     "unstable": 51,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.900958712999909,
+     "unstable": 74,
+     "binaries": 74
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.689967815000273,
+     "unstable": 89,
+     "binaries": 89
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.1026381859996945,
+     "unstable": 68,
+     "binaries": 68
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.9861832980000145,
+     "unstable": 58,
+     "binaries": 58
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00038258799986579106,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.163347912999598,
+     "unstable": 61,
+     "binaries": 61
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 7.445819707999817,
+     "unstable": 76,
+     "binaries": 76,
+     "cex_margin": -4.106754614162623,
+     "cex_linf": 0.030000000000013904
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.7200728249999884,
+     "unstable": 58,
+     "binaries": 58
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5574782769999729,
+     "unstable": 57,
+     "binaries": 57
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.889315688999886,
+     "unstable": 59,
+     "binaries": 59
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7568498499999805,
+     "unstable": 40,
+     "binaries": 40
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.5053045950003252,
+     "unstable": 53,
+     "binaries": 53,
+     "cex_margin": -0.0035482797288244328,
+     "cex_linf": 0.0300000000000209
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.4398713489999864,
+     "unstable": 63,
+     "binaries": 63
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5919606870002099,
+     "unstable": 60,
+     "binaries": 60
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.43593278899970755,
+     "unstable": 76,
+     "binaries": 76
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.0097675799997887,
+     "unstable": 61,
+     "binaries": 61
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.1046422760000496,
+     "unstable": 65,
+     "binaries": 65,
+     "cex_margin": -1.451732839384257,
+     "cex_linf": 0.03000000000000158
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7906091419999939,
+     "unstable": 48,
+     "binaries": 48
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.1852387550002277,
+     "unstable": 73,
+     "binaries": 73
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5225759150002887,
+     "unstable": 51,
+     "binaries": 51
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.6434427990002405,
+     "unstable": 59,
+     "binaries": 59
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5242420160002439,
+     "unstable": 60,
+     "binaries": 60
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.397587036999994,
+     "unstable": 62,
+     "binaries": 62
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.8993606040003215,
+     "unstable": 56,
+     "binaries": 56,
+     "cex_margin": -1.3469925315061504,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.3594764380000015,
+     "unstable": 29,
+     "binaries": 29
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.4067206960003205,
+     "unstable": 56,
+     "binaries": 56
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 11.323652795999806,
+     "unstable": 81,
+     "binaries": 81
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0506231649997062,
+     "unstable": 67,
+     "binaries": 67
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.3088703160001387,
+     "unstable": 45,
+     "binaries": 45
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.6501899380000395,
+     "unstable": 74,
+     "binaries": 74
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.559712065999975,
+     "unstable": 78,
+     "binaries": 78
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.6249603840001328,
+     "unstable": 55,
+     "binaries": 55
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.49629306799988626,
+     "unstable": 58,
+     "binaries": 58
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0352422360001583,
+     "unstable": 59,
+     "binaries": 59
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.3849101920000066,
+     "unstable": 62,
+     "binaries": 62,
+     "cex_margin": -1.2427699175049964,
+     "cex_linf": 0.030000000000001543
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.315939831999913,
+     "unstable": 87,
+     "binaries": 87
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 1.6824005299999953,
+     "unstable": 73,
+     "binaries": 73,
+     "cex_margin": -0.01136940703288536,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.376193918999888,
+     "unstable": 72,
+     "binaries": 72,
+     "cex_margin": -1.6326370745356913,
+     "cex_linf": 0.030000000421934514
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.059837466999852,
+     "unstable": 66,
+     "binaries": 66,
+     "cex_margin": -1.3476099292640606,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.2497891010002604,
+     "unstable": 54,
+     "binaries": 54
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.134568886000125,
+     "unstable": 72,
+     "binaries": 72
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.659644448999643,
+     "unstable": 62,
+     "binaries": 62,
+     "cex_margin": -0.966892930395594,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.513293039000018,
+     "unstable": 62,
+     "binaries": 62
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.670194701999662,
+     "unstable": 61,
+     "binaries": 61
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00042009100025097723,
+     "unstable": 33,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.83333696300042,
+     "unstable": 48,
+     "binaries": 48
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.345499696999923,
+     "unstable": 51,
+     "binaries": 51
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9278455310000027,
+     "unstable": 53,
+     "binaries": 53
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.92470178900021,
+     "unstable": 81,
+     "binaries": 81
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0006158150004011986,
+     "unstable": 69,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 9.953907809000157,
+     "unstable": 68,
+     "binaries": 68
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.4280287439996755,
+     "unstable": 45,
+     "binaries": 45
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.4693111560000034,
+     "unstable": 55,
+     "binaries": 55
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 4.784052796000196,
+     "unstable": 60,
+     "binaries": 60,
+     "cex_margin": -2.9432593589400824,
+     "cex_linf": 0.030000000000000027
+    }
+   ]
+  },
+  {
+   "variant": "ternary_rs",
+   "seed": 2,
+   "train_s": 25.406950038000105,
+   "clean_acc": 0.9981752038002014,
+   "ibp_verified_acc": 0.09489051252603531,
+   "unstable_mean": 58.667884826660156,
+   "n_relu": 512,
+   "weight_zero_frac": 0.4128086566925049,
+   "verified": 0.8833333333333333,
+   "falsified": 0.11666666666666667,
+   "unknown": 0.0,
+   "verify_time_mean": 3.060353792399989,
+   "verify_time_median": 1.912115173499842,
+   "binaries_mean": 57.81666666666667,
+   "config": {
+    "name": "ternary_rs",
+    "ternary": true,
+    "rs_weight": 0.2,
+    "ibp_weight": 0.0,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 2
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.001700018000065029,
+     "unstable": 33,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.6035758319999331,
+     "unstable": 45,
+     "binaries": 45
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.617306488000395,
+     "unstable": 65,
+     "binaries": 65,
+     "cex_margin": -4.074945318472385,
+     "cex_linf": 0.03000000000000009
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.004428294999798,
+     "unstable": 57,
+     "binaries": 57
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9930948090000129,
+     "unstable": 72,
+     "binaries": 72
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.611236819000169,
+     "unstable": 82,
+     "binaries": 82
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 3.801921508000305,
+     "unstable": 63,
+     "binaries": 63
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.7798736160002591,
+     "unstable": 67,
+     "binaries": 67
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.0356974129999799,
+     "unstable": 56,
+     "binaries": 56
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.66318460399998,
+     "unstable": 53,
+     "binaries": 53
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003827939999609953,
+     "unstable": 83,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.517274716999964,
+     "unstable": 96,
+     "binaries": 96
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.267110759999923,
+     "unstable": 70,
+     "binaries": 70
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.3160458010002,
+     "unstable": 79,
+     "binaries": 79
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00043215599998802645,
+     "unstable": 43,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 12.222641420999935,
+     "unstable": 80,
+     "binaries": 80
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.5413263559998995,
+     "unstable": 55,
+     "binaries": 55,
+     "cex_margin": -3.2726732775742517,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.532583521000106,
+     "unstable": 69,
+     "binaries": 69
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.5746435900000506,
+     "unstable": 60,
+     "binaries": 60
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004674769998018746,
+     "unstable": 41,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.8198020519998863,
+     "unstable": 90,
+     "binaries": 90
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.47902526200005,
+     "unstable": 76,
+     "binaries": 76
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.8300257810001312,
+     "unstable": 48,
+     "binaries": 48
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.3423619689997395,
+     "unstable": 35,
+     "binaries": 35,
+     "cex_margin": -6.164920120797115,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.241457660999913,
+     "unstable": 57,
+     "binaries": 57
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.4061917999997604,
+     "unstable": 54,
+     "binaries": 54
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.4361730259997785,
+     "unstable": 55,
+     "binaries": 55
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.36731435999990936,
+     "unstable": 65,
+     "binaries": 65
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.33146088600005896,
+     "unstable": 47,
+     "binaries": 47
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.441825399999743,
+     "unstable": 63,
+     "binaries": 63
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.06846980199998143,
+     "unstable": 36,
+     "binaries": 36
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.4025107919997026,
+     "unstable": 80,
+     "binaries": 80,
+     "cex_margin": -0.6053197828325674,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.567915870999968,
+     "unstable": 83,
+     "binaries": 83
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.9466057370000271,
+     "unstable": 53,
+     "binaries": 53
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.1379586480002217,
+     "unstable": 88,
+     "binaries": 88
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.553913088999707,
+     "unstable": 90,
+     "binaries": 90
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 4.63257309599976,
+     "unstable": 63,
+     "binaries": 63
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.615532101000099,
+     "unstable": 72,
+     "binaries": 72
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.3074584870000763,
+     "unstable": 42,
+     "binaries": 42
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.46827979699992284,
+     "unstable": 54,
+     "binaries": 54,
+     "cex_margin": -6.103684536093226,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 7.248785871000109,
+     "unstable": 89,
+     "binaries": 89,
+     "cex_margin": -5.457582335551943,
+     "cex_linf": 0.0300000000000002
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.860209771999962,
+     "unstable": 54,
+     "binaries": 54
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.7659017429996311,
+     "unstable": 64,
+     "binaries": 64,
+     "cex_margin": -3.350500913319671,
+     "cex_linf": 0.030000000000000027
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 8.355768057000205,
+     "unstable": 76,
+     "binaries": 76
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.668649868999637,
+     "unstable": 63,
+     "binaries": 63
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.8457373790001839,
+     "unstable": 64,
+     "binaries": 64
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 1.161770443000023,
+     "unstable": 66,
+     "binaries": 66
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.442105223999988,
+     "unstable": 49,
+     "binaries": 49
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.960960168999918,
+     "unstable": 62,
+     "binaries": 62
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.588668724999934,
+     "unstable": 71,
+     "binaries": 71
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.1360458919998564,
+     "unstable": 43,
+     "binaries": 43
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.300777880000169,
+     "unstable": 61,
+     "binaries": 61
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 6.444350294999822,
+     "unstable": 79,
+     "binaries": 79
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003862540002046444,
+     "unstable": 43,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 10.924905180000223,
+     "unstable": 80,
+     "binaries": 80
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00037726400023530005,
+     "unstable": 38,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 2.4445638739998685,
+     "unstable": 49,
+     "binaries": 49
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 0.24476696900001116,
+     "unstable": 43,
+     "binaries": 43
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 5.036641344000145,
+     "unstable": 64,
+     "binaries": 64
+    },
+    {
+     "status": "verified",
+     "method": "milp",
+     "time": 7.70807172800005,
+     "unstable": 72,
+     "binaries": 72
+    }
+   ]
+  },
+  {
+   "variant": "ibp",
+   "seed": 0,
+   "train_s": 23.787615369999912,
+   "clean_acc": 0.9160584211349487,
+   "ibp_verified_acc": 0.8613138794898987,
+   "unstable_mean": 70.92518615722656,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.9166666666666666,
+   "falsified": 0.08333333333333333,
+   "unknown": 0.0,
+   "verify_time_mean": 0.09785636378336827,
+   "verify_time_median": 0.00014884200004416925,
+   "binaries_mean": 2.6166666666666667,
+   "config": {
+    "name": "ibp",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.5,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 0
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0015740080002615287,
+     "unstable": 92,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 5.3528000080405036e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002299249999850872,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017150499979834422,
+     "unstable": 90,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0015779519999341574,
+     "unstable": 75,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00028677199998128344,
+     "unstable": 70,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017155499972432153,
+     "unstable": 66,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00018387899990557344,
+     "unstable": 90,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0015932559999782825,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00026977500010616495,
+     "unstable": 57,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022086999979364919,
+     "unstable": 78,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014482999995379942,
+     "unstable": 64,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0013723980000577285,
+     "unstable": 63,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002361150000069756,
+     "unstable": 80,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001698890000625397,
+     "unstable": 91,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013288699983604602,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022360200000548502,
+     "unstable": 73,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001765910001267912,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001271740002266597,
+     "unstable": 94,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011797999968621298,
+     "unstable": 92,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017745400009516743,
+     "unstable": 85,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001264779998564336,
+     "unstable": 70,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011823900013041566,
+     "unstable": 58,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 2.374517086999731,
+     "unstable": 78,
+     "binaries": 78,
+     "cex_margin": -2.1047730407566916,
+     "cex_linf": 0.030000059022503696
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.000225819000206684,
+     "unstable": 63,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014464900004895753,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014010099994266056,
+     "unstable": 81,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019081400023424067,
+     "unstable": 82,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001474919999964186,
+     "unstable": 62,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011865800024679629,
+     "unstable": 64,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001258610000149929,
+     "unstable": 67,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011775199982366757,
+     "unstable": 98,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00030198200011000154,
+     "unstable": 84,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 3.4819432700001016,
+     "unstable": 79,
+     "binaries": 79,
+     "cex_margin": -0.3058641856671356,
+     "cex_linf": 0.030000059022503467
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 6.773199993403978e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022167500037539867,
+     "unstable": 104,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025971700006266474,
+     "unstable": 77,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014511000017591869,
+     "unstable": 65,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012541200021587429,
+     "unstable": 86,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 2.9891000394854927e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.000275745999715582,
+     "unstable": 77,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001501920000919199,
+     "unstable": 80,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012582799990923377,
+     "unstable": 62,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001353050001853262,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00020528899995042593,
+     "unstable": 73,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013855099996362696,
+     "unstable": 51,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001430689999324386,
+     "unstable": 80,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013520799984689802,
+     "unstable": 48,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00018345800026509096,
+     "unstable": 62,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013338800044948584,
+     "unstable": 81,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011693499982357025,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011507500039442675,
+     "unstable": 58,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00030433100027948967,
+     "unstable": 65,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001380250000693195,
+     "unstable": 69,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011770899982366245,
+     "unstable": 76,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001229790000252251,
+     "unstable": 86,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015514099959546002,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012931800029036822,
+     "unstable": 119,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001178730003630335,
+     "unstable": 58,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001587229999131523,
+     "unstable": 74,
+     "binaries": 0
+    }
+   ]
+  },
+  {
+   "variant": "ibp",
+   "seed": 1,
+   "train_s": 24.410351096999875,
+   "clean_acc": 0.9032846689224243,
+   "ibp_verified_acc": 0.8777372241020203,
+   "unstable_mean": 53.29561996459961,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.9333333333333333,
+   "falsified": 0.06666666666666667,
+   "unknown": 0.0,
+   "verify_time_mean": 0.0002673772666412333,
+   "verify_time_median": 0.0001653159997658804,
+   "binaries_mean": 0.0,
+   "config": {
+    "name": "ibp",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.5,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 1
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.001564599999710481,
+     "unstable": 63,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 0.00010272099962094217,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025312400020993664,
+     "unstable": 44,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015433999988090363,
+     "unstable": 57,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0016568109999752778,
+     "unstable": 58,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00028335199976936565,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001696740000625141,
+     "unstable": 41,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014535499985868228,
+     "unstable": 63,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0015145500001381151,
+     "unstable": 52,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00028754200002367725,
+     "unstable": 45,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004965999996784376,
+     "unstable": 69,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019079000003330293,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022527399960381445,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016440699982922524,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016622499970253557,
+     "unstable": 54,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017907900019054068,
+     "unstable": 52,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022383200030162698,
+     "unstable": 35,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019957800031988882,
+     "unstable": 62,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014699699977427372,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014891799992255983,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002794980000544456,
+     "unstable": 60,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00026042500030598603,
+     "unstable": 69,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016645300001982832,
+     "unstable": 45,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 3.0075999802647857e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00141629700010526,
+     "unstable": 53,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025977800032706,
+     "unstable": 39,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022774699982619495,
+     "unstable": 49,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001301359998251428,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019484100039335317,
+     "unstable": 50,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001330629997937649,
+     "unstable": 50,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015287099995475728,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011996700004601735,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00029066099978081184,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014126599990049726,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 3.14829999297217e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001268490000256861,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001884220000647474,
+     "unstable": 43,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013577600020653335,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011574700010896777,
+     "unstable": 40,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 2.7008999950339785e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017267600014747586,
+     "unstable": 49,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001388249997944513,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012231599976075813,
+     "unstable": 45,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001775890000317304,
+     "unstable": 60,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016803500011519645,
+     "unstable": 46,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00037209099991741823,
+     "unstable": 37,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001556379997964541,
+     "unstable": 56,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014963300009185332,
+     "unstable": 39,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002566519997344585,
+     "unstable": 56,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015168299978540745,
+     "unstable": 49,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012589700008902582,
+     "unstable": 44,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011969500019404222,
+     "unstable": 60,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00020786300001418567,
+     "unstable": 64,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013961300010123523,
+     "unstable": 54,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011752900036299252,
+     "unstable": 55,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011438599995017285,
+     "unstable": 53,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00024451599983876804,
+     "unstable": 52,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013922800008003833,
+     "unstable": 65,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011736799979189527,
+     "unstable": 58,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.000149268999848573,
+     "unstable": 46,
+     "binaries": 0
+    }
+   ]
+  },
+  {
+   "variant": "ibp",
+   "seed": 2,
+   "train_s": 25.522448622999946,
+   "clean_acc": 0.94525545835495,
+   "ibp_verified_acc": 0.9142335653305054,
+   "unstable_mean": 50.266422271728516,
+   "n_relu": 512,
+   "weight_zero_frac": 0.0,
+   "verified": 0.9333333333333333,
+   "falsified": 0.06666666666666667,
+   "unknown": 0.0,
+   "verify_time_mean": 0.010577120366648766,
+   "verify_time_median": 0.00015429750010298449,
+   "binaries_mean": 0.65,
+   "config": {
+    "name": "ibp",
+    "ternary": false,
+    "rs_weight": 0.0,
+    "ibp_weight": 0.5,
+    "eps": 0.03,
+    "epochs": 200,
+    "lr": 0.003,
+    "batch_size": 128,
+    "warmup": 0.5,
+    "d_model": 8,
+    "d_hidden": 16,
+    "n_blocks": 2,
+    "seed": 2
+   },
+   "per_sample": [
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.005908093000016379,
+     "unstable": 112,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "milp",
+     "time": 0.6137434489996849,
+     "unstable": 39,
+     "binaries": 39,
+     "cex_margin": -2.6678298809599292,
+     "cex_linf": 0.030000000000000065
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00026010999999925843,
+     "unstable": 38,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014138699998511584,
+     "unstable": 81,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0017041880000761012,
+     "unstable": 48,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00027480000017021666,
+     "unstable": 71,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00020043700033056666,
+     "unstable": 39,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001785280001058709,
+     "unstable": 74,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0016579479997744784,
+     "unstable": 26,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00031126600015340955,
+     "unstable": 41,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00023328699990088353,
+     "unstable": 84,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001511400000708818,
+     "unstable": 49,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.001823694999984582,
+     "unstable": 29,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0004464709995772864,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003628009999374626,
+     "unstable": 66,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025219600001946674,
+     "unstable": 48,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 7.695499971305253e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019935399996029446,
+     "unstable": 27,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014675200009151013,
+     "unstable": 64,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012184699971840018,
+     "unstable": 93,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0002703199997995398,
+     "unstable": 76,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014691499973196187,
+     "unstable": 119,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015924599983918597,
+     "unstable": 35,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 3.51329999830341e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015234700003929902,
+     "unstable": 36,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011864399994010455,
+     "unstable": 53,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012700999968728865,
+     "unstable": 65,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013616600017485325,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014592599973184406,
+     "unstable": 61,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012210700015202747,
+     "unstable": 49,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014707099990118877,
+     "unstable": 110,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012993100017411052,
+     "unstable": 70,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015117200018721633,
+     "unstable": 44,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.000153234000208613,
+     "unstable": 50,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012804300013158354,
+     "unstable": 57,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00011637800025710021,
+     "unstable": 87,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00027452100039226934,
+     "unstable": 37,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00022495100029118476,
+     "unstable": 47,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001375049996568123,
+     "unstable": 72,
+     "binaries": 0
+    },
+    {
+     "status": "falsified",
+     "method": "clean",
+     "time": 2.9397000162134646e-05,
+     "unstable": 0,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00025468300009379163,
+     "unstable": 51,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013937599987912108,
+     "unstable": 94,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016379499993490754,
+     "unstable": 43,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001658739997765224,
+     "unstable": 29,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00019893499984391383,
+     "unstable": 35,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012345599998297985,
+     "unstable": 59,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00017382699979862082,
+     "unstable": 87,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001376230002279044,
+     "unstable": 22,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003090999998676125,
+     "unstable": 21,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001514379996478965,
+     "unstable": 36,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0001311269998041098,
+     "unstable": 48,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016101300025184173,
+     "unstable": 45,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.0003569460000107938,
+     "unstable": 33,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00016597800004092278,
+     "unstable": 71,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00014624599998569465,
+     "unstable": 48,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013835099980497034,
+     "unstable": 78,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00018929899988506804,
+     "unstable": 28,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00015536099999735598,
+     "unstable": 86,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00013842800035490654,
+     "unstable": 27,
+     "binaries": 0
+    },
+    {
+     "status": "verified",
+     "method": "ibp",
+     "time": 0.00012564500002554269,
+     "unstable": 33,
+     "binaries": 0
+    }
+   ]
+  }
+ ]
+}
