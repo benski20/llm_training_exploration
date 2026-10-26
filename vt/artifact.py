@@ -23,7 +23,18 @@ LIST_KEYS = ("mix", "W1", "b1", "W2", "b2")
 SCALARS = ("L", "V", "d", "h", "C")
 
 
+CLAIMS = {
+    "classifier": ("for every input sequence in V^L, argmax of the model's logits equals "
+                   "the spec label, with logit margin > tau"),
+    "exact-gen-dp": ("at each listed length L: every string the generator emits with "
+                     "probability > 0 is in the spec language (sound), every spec string has "
+                     "probability > 0 (complete), and sampling never reaches a prefix whose "
+                     "next-token scores are all zero (live)"),
+}
+
 VERIFIER_DESCRIPTIONS = {
+    "exact-gen-dp": "dynamic program over (counts, recent tokens, spec DFA state) of the "
+                    "generator, exact integer arithmetic",
     "milp": "symbolic-bounds + exact big-M MILP (HiGHS, floating point)",
     "exact-dp": "dynamic program over (position, token counts, spec state) in exact rational arithmetic",
     "enumeration": "exhaustive enumeration of all inputs (float64 forward pass)",
@@ -113,8 +124,7 @@ def make_certificate(artifact_path, spec_name, result, tau, extra=None):
         "format": "vt-certificate/1",
         "artifact_sha256": sha256_file(artifact_path),
         "spec": spec_name,
-        "claim": ("for every input sequence in V^L, argmax of the model's logits equals "
-                  "the spec label, with logit margin > tau"),
+        "claim": CLAIMS.get(result.get("method"), CLAIMS["classifier"]),
         "tau": tau,
         "status": result["status"],
         "queries": result.get("queries", []),

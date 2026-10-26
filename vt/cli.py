@@ -216,6 +216,76 @@ def cmd_sign(a):
     return 0
 
 
+def _gen_cert(art, spec_name, results, extra):
+    from .artifact import sha256_file
+    ok = all(r["status"] == "proved" for r in results.values())
+    return {"format": "vt-certificate/1", "artifact_sha256": sha256_file(art), "spec": spec_name,
+            "method": "exact-gen-dp", "status": "proved" if ok else "failed",
+            "claim": make_certificate.__globals__["CLAIMS"]["exact-gen-dp"],
+            "lengths": {str(L): r for L, r in results.items()}, **extra}
+
+
+def cmd_gen_train(a):
+    import torch
+    from .gen_train import GenConfig, heldout_nll, train_generator
+    from .gen_verify import read_generator, save_generator, verify_generator
+    torch.set_num_threads(a.threads)
+    spec, name, alphabet, extra = _spec(a)
+    cfg = GenConfig(L=a.length, lengths=tuple(int(v) for v in a.also_lengths.split(",") if v),
+                    d_model=a.d_model, d_hidden=a.d_hidden, window=a.window, steps=a.steps,
+                    lr=a.lr, lam=a.lam, seed=a.seed)
+    os.makedirs(a.out, exist_ok=True)
+    model, rep = train_generator(spec, cfg, len(alphabet),
+                                 log=lambda e: print(json.dumps(e), flush=True))
+    art = os.path.join(a.out, "generator.npz")
+    save_generator(model.export(), art)
+    G, _ = read_generator(art)                     # certify the bytes on disk
+    results = {L: verify_generator(G, spec, L, exact_mass=False) for L in rep["lengths"]}
+    cert = _gen_cert(art, name, results, {**extra, "training": rep["config"],
+                     "heldout_nll_per_token": {str(L): heldout_nll(model, spec, L)
+                                               for L in rep["lengths"]}})
+    write_json(cert, os.path.join(a.out, "certificate.json"))
+    for L, r in results.items():
+        print(f"L={L}: {r['status']} (sound={r['sound']} complete={r['complete']} live={r['live']})")
+    return 0 if cert["status"] == "proved" else 1
+
+
+def cmd_gen_verify(a):
+    from .gen_verify import read_generator, verify_generator
+    spec, name, _, extra = _spec(a)
+    G, _ = read_generator(a.artifact)
+    results = {int(L): verify_generator(G, spec, int(L), exact_mass=a.exact_mass)
+               for L in a.lengths.split(",")}
+    for L, r in results.items():
+        print(json.dumps({"L": L, **{k: r[k] for k in ("status", "sound", "complete", "live",
+                                                      "p_violation", "time")}}))
+    if a.certificate:
+        write_json(_gen_cert(a.artifact, name, results, extra), a.certificate)
+    return 0 if all(r["status"] == "proved" for r in results.values()) else 1
+
+
+def cmd_gen_sample(a):
+    """Sample only after re-proving, at the requested length, that the
+    generator cannot emit a string outside the pinned spec."""
+    import torch
+    from .gen_verify import load_generator_model, read_generator, verify_generator
+    spec, name, alphabet, _ = _spec(a)
+    G, digest = read_generator(a.artifact)
+    r = verify_generator(G, spec, a.length, exact_mass=False)
+    if not (r["sound"] and r["live"]):
+        print(f"refusing to sample: not proved sound and live for {name} at L={a.length}",
+              file=sys.stderr)
+        return 1
+    m = load_generator_model(G)
+    x = m.sample(a.n, a.length, eps=0.0, generator=torch.Generator().manual_seed(a.seed))
+    for row in x.tolist():
+        if spec.label(row) != 1:                     # cannot happen given the proof
+            print("internal error: proved generator emitted an invalid string", file=sys.stderr)
+            return 2
+        print("".join(alphabet[v] for v in row))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="vt")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -277,6 +347,28 @@ def main(argv=None):
     p.add_argument("--max-concurrency", type=int, default=64)
     p.add_argument("--deadline", type=float, default=30.0, help="max seconds per connection")
     p.set_defaults(fn=cmd_serve)
+    p = sub.add_parser("gen-train", help="train a count-state generator and certify its support")
+    p.add_argument("--spec", default="dyck", choices=SPECS)
+    p.add_argument("--length", type=int, default=16)
+    p.add_argument("--also-lengths", default="")
+    p.add_argument("--out", required=True)
+    p.add_argument("--d-model", type=int, default=8); p.add_argument("--d-hidden", type=int, default=32)
+    p.add_argument("--window", type=int, default=1)
+    p.add_argument("--steps", type=int, default=3000); p.add_argument("--lr", type=float, default=1e-2)
+    p.add_argument("--lam", type=float, default=10.0, help="support-hinge weight")
+    p.add_argument("--seed", type=int, default=0); p.add_argument("--threads", type=int, default=os.cpu_count())
+    p.set_defaults(fn=cmd_gen_train)
+    p = sub.add_parser("gen-verify", help="exactly verify a generator's support at given lengths")
+    p.add_argument("artifact"); p.add_argument("--lengths", required=True)
+    p.add_argument("--spec", default="dyck", choices=SPECS)
+    p.add_argument("--exact-mass", action="store_true", help="also compute the exact P(violation)")
+    p.add_argument("--certificate")
+    p.set_defaults(fn=cmd_gen_verify)
+    p = sub.add_parser("gen-sample", help="sample from a generator, after re-proving it at that length")
+    p.add_argument("artifact"); p.add_argument("--length", type=int, required=True)
+    p.add_argument("-n", type=int, default=10); p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--spec", default="dyck", choices=SPECS)
+    p.set_defaults(fn=cmd_gen_sample)
     p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
     p.add_argument("private"); p.add_argument("public")
     p.set_defaults(fn=cmd_keygen)
@@ -292,7 +384,7 @@ def main(argv=None):
     for name, sp_ in sub.choices.items():
         if name not in ("keygen",):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
-        if name not in ("predict", "keygen"):
+        if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample"):
             if name == "serve":
                 sp_.add_argument("--workers", type=int, default=os.cpu_count())
                 continue
