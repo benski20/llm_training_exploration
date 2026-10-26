@@ -38,7 +38,16 @@ from vt.pcr import ConformalJudge  # noqa: E402
 BLOCK = 200
 
 
+NAMES = "multi"          # "multi": names like P123; "single": one byte per person (easier lookup)
+
+
+def pname(p):
+    return f"P{p}" if NAMES == "multi" else chr(0xA0 + p)
+
+
 def example(rng, kmin, kmax, n_people=1000):
+    if NAMES == "single":
+        n_people = 90
     k = rng.randint(kmin, kmax)
     ppl = rng.sample(range(n_people), k + 1)
     asked, others = ppl[0], ppl[1:]
@@ -49,15 +58,15 @@ def example(rng, kmin, kmax, n_people=1000):
         facts.insert(rng.randint(0, len(facts)), (asked, year))
         if len(facts) > k:                       # keep k facts in total
             facts.pop(next(i for i, (p, _) in enumerate(facts) if p != asked))
-    ctx = "; ".join(f"P{p} born {y}" for p, y in facts)
-    prompt = f"{ctx}. Q P{asked} born? A "
+    ctx = "; ".join(f"{pname(p)} born {y}" for p, y in facts)
+    prompt = f"{ctx}. Q {pname(asked)} born? A "
     return prompt, (str(year) if present else "unknown"), present
 
 
 def encode(prompts, answers):
     xs, ys, pos = [], [], []
     for p, a in zip(prompts, answers):
-        b = list((p + a + ".\n").encode())[:BLOCK + 1]
+        b = list((p + a + ".\n").encode("latin-1"))[:BLOCK + 1]
         b += [10] * (BLOCK + 1 - len(b))
         xs.append(b[:-1]); ys.append(b[1:]); pos.append(len(p) - 2)     # index of 'A'
     return torch.tensor(xs), torch.tensor(ys), torch.tensor(pos)
@@ -106,7 +115,7 @@ def run(model, ch, prompts, force=None):
     model.eval()
     outs, scores, feats = [], [], []
     for p in prompts:
-        x = torch.tensor([list(p.encode())])
+        x = torch.tensor([list(p.encode("latin-1"))])
         pos = len(p) - 2
         for t in range(8):
             if force is not None:
@@ -141,7 +150,10 @@ def main():
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="results/grounding_by_design.json")
+    ap.add_argument("--names", default="multi", choices=["multi", "single"])
     a = ap.parse_args()
+    global NAMES
+    NAMES = a.names
     torch.set_num_threads(os.cpu_count())
     rng = random.Random(1000 + a.seed)
     sets = {"in_dist": [example(rng, 1, 4) for _ in range(a.n_test)],
@@ -152,7 +164,7 @@ def main():
     for by_design in (False, True):
         t0 = time.time()
         model, ch = train(by_design, a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
-        r = {"train_s": time.time() - t0}
+        r = {"train_s": time.time() - t0, "names": NAMES}
         _, _, Fp = run(model, ch, [e[0] for e in sets["probe_fit"]])
         probe, _ = fit_probe(Fp, np.array([e[2] for e in sets["probe_fit"]], dtype=int))
         # conformal release gate on the monitor: bad = calibration examples whose fact is absent
