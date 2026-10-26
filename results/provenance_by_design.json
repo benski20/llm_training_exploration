@@ -1,0 +1,20 @@
+{
+ "names": "single",
+ "train_s": 1502.313829421997,
+ "in_dist": {
+  "raw_accuracy": 0.4225,
+  "raw_hallucinated": 0.31797235023041476,
+  "raw_wrong_attribution": 0.15300546448087432,
+  "released_false": 0,
+  "released_accuracy": 0.4225,
+  "withheld_frac": 0.2425
+ },
+ "shift": {
+  "raw_accuracy": 0.0,
+  "raw_hallucinated": 1.0,
+  "raw_wrong_attribution": 1.0,
+  "released_false": 0,
+  "released_accuracy": 0.0,
+  "withheld_frac": 1.0
+ }
+}

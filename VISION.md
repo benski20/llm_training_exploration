@@ -131,6 +131,41 @@ shift (13% of hallucinations passed for the baseline, against a 5% target),
 as the exchangeability assumption predicts. Base capability is low at this
 scale, so these numbers are suggestive, not conclusive.
 
+### Replication and provenance by architecture
+
+With single-byte names (`results/grounding_by_design_v2_single.json`), the
+pattern held, and the channel became causal in both directions:
+
+| in-distribution | post-hoc probe | built-in channel |
+|---|---|---|
+| accuracy | 29% | 43% |
+| hallucinated | 47% | 29% |
+| detects "fact absent" / flags own errors (AUROC) | 0.53 / 0.15 | 0.66 / 0.71 |
+| conformal gate (α=0.05): hallucinations passed, correct answers kept | 0.5%, 0% | 1.8%, 44% |
+| force "absent" → abstain; force "present" → answer | — | 100%, 79% |
+
+**Provenance by architecture** (`experiments/provenance_by_design.py`): a
+pointer head, with fact-bearing tokens (digits) removed from the vocabulary
+path, so a year can only be copied from the context. Every copy's source is
+checked exactly against the asked entity.
+
+| | in-distribution | under shift |
+|---|---|---|
+| raw accuracy / invented / wrong-person copy | 42% / 32% / 15% | 0% / 100% / 100% |
+| **false answers released** | **0** | **0** |
+| correct answers released | 42% (all) | 0% |
+
+The two mechanisms complement each other. The channel is a cheap,
+general-purpose statistical monitor and control knob, whose guarantee depends
+on calibration matching deployment. Provenance gives a
+distribution-independent guarantee for the classes of content routed through
+it: under shift the model fails completely, yet nothing false is released.
+(The first provenance run released 2 false answers because of a gap in the
+check, now fixed and covered by a test.) The direction this points to is
+**route as much content as possible through checkable paths (copy from
+sources, solvers, exact checkers), and monitor the rest with designed-in
+channels.**
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
