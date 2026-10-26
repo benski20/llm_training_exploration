@@ -16,7 +16,7 @@ from .artifact import load_artifact, make_certificate, save_artifact, sha256_fil
 from .global_verify import SPECS, exhaustive_check, verify_global
 from .verify import np_forward
 
-TOKENS = {"dyck": "()"}
+TOKENS = {"dyck": "()", "sorted": "abcd"}
 
 
 def _encode(spec_name, text):
@@ -29,12 +29,13 @@ def cmd_prove(a):
     from .cegis import CegisConfig, cegis
     torch.set_num_threads(a.threads)
     spec = SPECS[a.spec]()
+    V = len(TOKENS[a.spec])
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
                       ternary_from_round=a.qat_from_round,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
-    model, res = cegis(spec, cfg, log=lambda e: print(json.dumps(e), flush=True))
+    model, res = cegis(spec, cfg, V=V, log=lambda e: print(json.dumps(e), flush=True))
     art = os.path.join(a.out, "model.npz")
     save_artifact(model.export(), art)
     write_json(res, os.path.join(a.out, "history.json"))

@@ -114,3 +114,29 @@ def test_symbolic_bounds_sound_and_tighter():
                       (np.zeros(2 * L), np.ones(2 * L)))
     width = lambda bb: sum((u - l).sum() for l, u in bb["z"])
     assert width(B) < 0.8 * width(ibp)
+
+
+def test_sorted_spec_agrees_with_enumeration():
+    from vt.global_verify import SortedSpec, exhaustive_check
+    spec, L, V = SortedSpec(4), 5, 4
+    seqs = np.array(list(itertools.product(range(V), repeat=L)))
+    assert all(spec.label(s) == y for s, y in zip(seqs, spec.label_batch(seqs)))
+    X = torch.tensor(np.eye(V, dtype=np.float32)[seqs])
+    Y = torch.tensor(spec.label_batch(seqs))
+    outcomes = set()
+    for steps in (5, 400):
+        torch.manual_seed(0)
+        model = MixerNet(L, V, 6, 12, 1, 2)
+        opt = torch.optim.Adam(model.parameters(), 1e-2)
+        w = torch.where(Y == 1, 20.0, 1.0)
+        for _ in range(steps):
+            loss = (torch.nn.functional.cross_entropy(model(X), Y, reduction="none") * w).mean()
+            opt.zero_grad(); loss.backward(); opt.step()
+        P = model.export()
+        n_err, _, _ = exhaustive_check(P, spec)
+        r = verify_global(P, spec, time_limit=60)
+        outcomes.add(r["status"])
+        assert (r["status"] == "proved") == (n_err == 0)
+        for c in r["counterexamples"]:
+            assert spec.label(c["seq"]) == c["label"] != c["pred"] or abs(c["margin"]) <= 1e-4
+    assert outcomes == {"proved", "counterexample"}, outcomes

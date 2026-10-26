@@ -84,7 +84,44 @@ class DyckSpec:
             m.row(depth(L - 1) + [(g[L], -big)], 2.0 - big, np.inf)
 
 
-SPECS = {"dyck": DyckSpec}
+class SortedSpec:
+    """Tokens 0..V-1; label 1 iff the sequence is non-decreasing."""
+    n_classes = 2
+
+    def __init__(self, V=4):
+        self.V = V
+
+    def label(self, seq):
+        return int(all(a <= b for a, b in zip(seq[:-1], seq[1:])))
+
+    def label_batch(self, seqs):
+        return (np.diff(seqs, axis=1) >= 0).all(1).astype(np.int64)
+
+    def sample(self, n, L, rng):
+        k = n // 3
+        uni = rng.integers(0, self.V, size=(k, L))
+        srt = np.sort(rng.integers(0, self.V, size=(k, L)), axis=1)
+        near = np.sort(rng.integers(0, self.V, size=(n - 2 * k, L)), axis=1)
+        i = rng.integers(L, size=len(near))
+        near[np.arange(len(near)), i] = rng.integers(0, self.V, size=len(near))
+        return np.concatenate([uni, srt, near])
+
+    def encode_not_label(self, m, x, L, c):
+        V = self.V
+        val = lambda t: [(x[t * V + v], float(v)) for v in range(1, V)]
+        neg = lambda e: [(i, -w) for i, w in e]
+        if c == 0:  # sorted: v_{t+1} - v_t >= 0 for all t
+            for t in range(L - 1):
+                m.row(val(t + 1) + neg(val(t)), 0.0, np.inf)
+        else:       # unsorted: some t with v_t - v_{t+1} >= 1
+            g = m.vars([0.0] * (L - 1), [1.0] * (L - 1), integer=True)
+            m.row([(gi, 1.0) for gi in g], 1.0, np.inf)
+            big = float(V)  # v_t - v_{t+1} >= -(V-1), so >= 1 - big when g = 0
+            for t in range(L - 1):
+                m.row(val(t) + neg(val(t + 1)) + [(g[t], -big)], 1.0 - big, np.inf)
+
+
+SPECS = {"dyck": DyckSpec, "sorted": SortedSpec}
 
 
 def global_bounds(P):
