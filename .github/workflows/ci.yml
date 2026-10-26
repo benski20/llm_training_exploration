@@ -1,5 +1,7 @@
 name: ci
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,6 +29,11 @@ jobs:
           mkdir t && cp results/cegis/exact_dyck_L2-64/certificate_L16.json t/
           python3 -c "import shutil; shutil.copy('results/cegis/exact_dyck_L2-64/model_L8.npz', 't/model_L16.npz')"
           ! docker run --rm -v $PWD/t:/models:ro vt-serve /models/model_L16.npz /models/certificate_L16.json
+      - name: refuse a forged certificate (self-written "proved" for an unproved model)
+        run: |
+          mkdir f && cp results/unverified_guard_dyck16.npz f/m.npz
+          python3 -c "import hashlib,json; h=hashlib.sha256(open('f/m.npz','rb').read()).hexdigest(); json.dump({'artifact_sha256':h,'status':'proved','spec':'dyck','tau':1e-4,'method':'milp'}, open('f/c.json','w'))"
+          ! docker run --rm -v $PWD/f:/models:ro vt-serve /models/m.npz /models/c.json --verify-time 60
   security:
     runs-on: ubuntu-latest
     steps:

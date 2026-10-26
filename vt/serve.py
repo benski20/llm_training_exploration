@@ -1,12 +1,18 @@
-"""Minimal HTTP inference server with a verification gate.
+"""HTTP inference server with a verification gate.
 
-    vt serve model.npz certificate.json --port 8000
+    vt serve model.npz certificate.json --spec dyck --port 8000
     curl localhost:8000/health
     curl -X POST localhost:8000/predict -d '{"inputs": ["(())()"]}'
 
-The server refuses to start unless the artifact's SHA-256 matches a
-certificate whose status is "proved" (or --allow-unverified is given), and it
-serves exactly the forward pass that was verified (numpy float64).
+Trust model: the certificate is NOT trusted on its own word (anyone can write
+JSON). Before serving, the gate
+  1. reads the artifact once and hashes exactly those bytes (no TOCTOU),
+  2. requires the certificate to name a consistent spec, matching the spec the
+     operator pinned (--spec / --spec-file) when one is given,
+  3. re-proves the artifact against that spec with vt's own verifier,
+unless the certificate carries a valid Ed25519 signature from a key the
+operator trusts (--trusted-key), which is the fast path for large models.
+It then serves exactly the forward pass that was verified (numpy float64).
 """
 import json
 import threading
@@ -15,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
 
-from .artifact import load_artifact, sha256_file
+from .artifact import ArtifactError, read_artifact, signature_valid
 from .verify import np_forward_batch
 
 
@@ -23,31 +29,105 @@ class GateError(RuntimeError):
     pass
 
 
-def load_gated(artifact, certificate=None, allow_unverified=False):
-    digest = sha256_file(artifact)
-    cert = None
-    if certificate:
-        with open(certificate) as f:
-            cert = json.load(f)
-        if cert.get("artifact_sha256") != digest:
-            raise GateError("artifact hash does not match certificate")
-        if cert.get("status") != "proved" and not allow_unverified:
-            raise GateError(f"certificate status is {cert.get('status')!r}, not 'proved'")
-    elif not allow_unverified:
-        raise GateError("no certificate given (use --allow-unverified to serve anyway)")
-    return load_artifact(artifact), digest, cert
+def resolve_cert_spec(cert, pinned=None):
+    """Return (spec, name, alphabet) for a certificate, refusing inconsistent ones.
+
+    pinned: optional (spec, name, alphabet) chosen by the operator. Built-in spec
+    names are self-describing (re-verification uses vt's own implementation of
+    that spec); an embedded DFA must be pinned by the operator, because otherwise
+    the certificate itself would be deciding what "correct" means."""
+    from .cli import TOKENS
+    from .dfaspec import DFASpec
+    from .global_verify import SPECS
+    name = cert.get("spec")
+    dfa = cert.get("spec_dfa")
+    if dfa is not None:
+        if name != "dfa:" + dfa.get("name", "dfa"):
+            raise GateError(f"certificate names spec {name!r} but embeds DFA {dfa.get('name')!r}")
+        if pinned is None or not isinstance(pinned[0], DFASpec):
+            raise GateError("certificate uses a DFA spec: pin it with --spec-file")
+        if pinned[0].canonical() != DFASpec(dfa).canonical():
+            raise GateError("certificate DFA differs from the pinned spec")
+        return pinned
+    if name not in SPECS:
+        raise GateError(f"unknown spec {name!r}")
+    if pinned is not None and pinned[1] != name:
+        raise GateError(f"certificate is for spec {name!r}, not the pinned {pinned[1]!r}")
+    return SPECS[name](), name, TOKENS[name]
+
+
+def load_gated(artifact, certificate=None, allow_unverified=False, pinned=None,
+               trusted_key=None, verify_time=600.0, workers=1):
+    """Returns (P, digest, cert, info). Raises GateError unless the artifact is
+    proved (re-verified here, or signed by trusted_key)."""
+    try:
+        P, digest = read_artifact(artifact)
+    except (ArtifactError, OSError) as e:
+        raise GateError(f"cannot load artifact: {e}") from None
+    if not certificate:
+        if not allow_unverified:
+            raise GateError("no certificate given (use --allow-unverified to serve anyway)")
+        return P, digest, None, {"verified": False, "how": "unverified"}
+    with open(certificate) as f:
+        cert = json.load(f)
+    if cert.get("artifact_sha256") != digest:
+        raise GateError("artifact hash does not match certificate")
+    if cert.get("status") != "proved":
+        if allow_unverified:
+            return P, digest, cert, {"verified": False, "how": "unverified"}
+        raise GateError(f"certificate status is {cert.get('status')!r}, not 'proved'")
+    spec, name, alphabet = resolve_cert_spec(cert, pinned)
+    if trusted_key and signature_valid(cert, trusted_key):
+        return P, digest, cert, {"verified": True, "how": "signature", "spec": name,
+                                 "alphabet": alphabet}
+    if trusted_key:
+        raise GateError("certificate signature missing or not from the trusted key")
+    from .global_verify import verify_auto
+    method = "exact" if cert.get("method") == "exact-dp" else "auto"
+    out = verify_auto(P, spec, method=method, tau=float(cert.get("tau", 1e-4)),
+                      time_limit=verify_time, workers=workers)
+    if out["status"] != "proved":
+        raise GateError(f"re-verification failed: {out['status']}")
+    return P, digest, cert, {"verified": True, "how": f"re-verified ({out['method']})",
+                             "spec": name, "alphabet": alphabet}
+
+
+def json_depth_ok(body, limit=8):
+    """Cheap pre-parse check that JSON nesting stays shallow (json.loads recursion
+    and memory amplification guard). Strings are skipped."""
+    depth, in_str, esc = 0, False, False
+    for b in body:
+        if in_str:
+            if esc:
+                esc = False
+            elif b == 0x5C:
+                esc = True
+            elif b == 0x22:
+                in_str = False
+        elif b == 0x22:
+            in_str = True
+        elif b in (0x5B, 0x7B):
+            depth += 1
+            if depth > limit:
+                return False
+        elif b in (0x5D, 0x7D):
+            depth -= 1
+    return True
 
 
 def make_server(P, digest, cert, alphabet, host="127.0.0.1", port=8000, max_batch=1024,
-                max_body=1 << 20, timeout=10.0):
-    """max_body: request size cap in bytes (413 above it); timeout: per-connection
-    socket timeout, so slow or idle clients cannot hold a worker thread."""
+                max_body=1 << 20, timeout=10.0, deadline=30.0, max_concurrency=64, gate=None):
+    """max_body: request size cap (413). timeout: per socket operation. deadline:
+    hard cap on a whole connection, so trickling clients are cut off.
+    max_concurrency: connections handled at once; beyond it clients get 503
+    immediately instead of spawning unbounded threads."""
     L, V = P["L"], P["V"]
     stats = {"requests": 0, "predictions": 0, "errors_4xx": 0, "latency_s_total": 0.0}
     lock = threading.Lock()
     info = {"status": "ok", "artifact_sha256": digest, "length": L, "alphabet": alphabet,
-            "verified": bool(cert and cert.get("status") == "proved"),
-            "spec": cert.get("spec") if cert else None,
+            "verified": bool(gate and gate.get("verified")),
+            "how": gate.get("how") if gate else None,
+            "spec": (gate or {}).get("spec") or (cert.get("spec") if cert else None),
             "method": cert.get("method") if cert else None}
 
     class Handler(BaseHTTPRequestHandler):
@@ -57,6 +137,23 @@ def make_server(P, digest, cert, alphabet, host="127.0.0.1", port=8000, max_batc
         def setup(self):
             super().setup()
             self.request.settimeout(timeout)
+            sock = self.request
+
+            def cut():
+                try:
+                    sock.shutdown(2)
+                except OSError:
+                    pass
+            self._deadline = threading.Timer(deadline, cut)
+            self._deadline.daemon = True
+            self._deadline.start()
+
+        def finish(self):
+            self._deadline.cancel()
+            try:
+                super().finish()
+            except OSError:
+                pass
 
         def _send(self, code, obj):
             body = json.dumps(obj).encode()
@@ -96,7 +193,10 @@ def make_server(P, digest, cert, alphabet, host="127.0.0.1", port=8000, max_batc
                 self.close_connection = True
                 return self._send(413, {"error": f"body must be at most {max_body} bytes"})
             try:
-                req = json.loads(self.rfile.read(n).decode("utf-8"))
+                body = self.rfile.read(n)
+                if not json_depth_ok(body):
+                    raise ValueError("JSON nested too deeply")
+                req = json.loads(body.decode("utf-8"))
                 if not isinstance(req, dict):
                     raise ValueError("body must be a JSON object")
                 inputs = req["inputs"]
@@ -107,7 +207,7 @@ def make_server(P, digest, cert, alphabet, host="127.0.0.1", port=8000, max_batc
                     if not isinstance(s, str) or len(s) != L or any(ch not in alphabet for ch in s):
                         raise ValueError(f"each input must be a string of length {L} over {alphabet!r}")
                     seqs.append([alphabet.index(ch) for ch in s])
-            except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
+            except (ValueError, KeyError, TypeError, UnicodeDecodeError, RecursionError) as e:
                 return self._send(400, {"error": str(e)[:200]})
             logits = np_forward_batch(P, np.eye(V)[np.array(seqs)])
             preds = logits.argmax(1)
@@ -117,8 +217,26 @@ def make_server(P, digest, cert, alphabet, host="127.0.0.1", port=8000, max_batc
                 stats["predictions"] += len(inputs)
                 stats["latency_s_total"] += time.perf_counter() - t0
 
+    slots = threading.BoundedSemaphore(max_concurrency)
+
     class Server(ThreadingHTTPServer):
         daemon_threads = True
         request_queue_size = 512   # the default (5) drops bursts into 1 s SYN retries
+
+        def process_request(self, request, client_address):
+            if not slots.acquire(blocking=False):
+                try:
+                    request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n"
+                                    b"Retry-After: 1\r\n\r\n")
+                finally:
+                    self.shutdown_request(request)
+                return
+            super().process_request(request, client_address)
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                slots.release()
 
     return Server((host, port), Handler)

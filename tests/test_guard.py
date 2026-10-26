@@ -29,3 +29,19 @@ def test_unproved_guard_refused_by_default(tmp_path):
     with pytest.raises(GateError):
         Guard(art, None)
     assert Guard(art, None, alphabet="()", allow_unverified=True).proved is False
+
+
+def test_zip_bomb_and_shape_checks(tmp_path):
+    import zipfile
+    from vt.artifact import ArtifactError, read_artifact
+    bomb = str(tmp_path / "bomb.npz")
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("meta.npy", b"0" * 10_000_000)
+    with pytest.raises(ArtifactError, match="compressed"):
+        read_artifact(bomb)
+    P = hand_built_dyck(6)
+    P["W1"][0] = np.zeros((5, 5))
+    bad = str(tmp_path / "bad.npz")
+    save_artifact(P, bad)
+    with pytest.raises(ArtifactError, match="shape"):
+        read_artifact(bad)

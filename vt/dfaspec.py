@@ -39,6 +39,11 @@ class DFASpec:
         for s in d["accept"]:
             self.accept[self.index[s]] = True
 
+    def canonical(self):
+        """Semantics-defining content (state names, transitions, accepting set)."""
+        return (self.alphabet, tuple(self.states), self.start, tuple(map(tuple, self.T.tolist())),
+                tuple(self.accept.tolist()))
+
     @classmethod
     def load(cls, path):
         with open(path) as f:

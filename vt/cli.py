@@ -116,25 +116,39 @@ def cmd_verify(a):
     return 0 if out["status"] == "proved" else 1
 
 
+def _pinned(a):
+    """The operator's spec, if they chose one explicitly (--spec or --spec-file)."""
+    if getattr(a, "spec_file", None) or getattr(a, "spec", None):
+        return _spec(a)[:3]
+    return None
+
+
 def cmd_check(a):
+    from .artifact import ArtifactError, read_artifact
+    from .serve import GateError, resolve_cert_spec
     with open(a.certificate) as f:
         cert = json.load(f)
-    digest = sha256_file(a.artifact)
-    ok = True
-    if digest != cert["artifact_sha256"]:
+    try:
+        P, digest = read_artifact(a.artifact)          # hash and load the same bytes
+    except ArtifactError as e:
+        print(f"FAIL: {e}"); return 1
+    if digest != cert.get("artifact_sha256"):
         print("FAIL: artifact hash does not match certificate"); return 1
-    if cert["status"] != "proved":
-        print(f"FAIL: certificate status is {cert['status']}"); return 1
-    P = load_artifact(a.artifact)
-    spec, _ = _spec_from_cert(cert)
+    if cert.get("status") != "proved":
+        print(f"FAIL: certificate status is {cert.get('status')}"); return 1
+    try:
+        spec, name, _ = resolve_cert_spec(cert, _pinned(a))
+    except GateError as e:
+        print(f"FAIL: {e}"); return 1
+    ok = True
     method = a.verifier if a.verifier != "auto" else (
         "exact" if cert.get("method") == "exact-dp" else "auto")
-    out = verify_auto(P, spec, method=method, tau=cert["tau"], time_limit=a.verify_time,
+    out = verify_auto(P, spec, method=method, tau=float(cert["tau"]), time_limit=a.verify_time,
                       workers=a.workers)
-    print(f"re-verification: {out['status']} via {out['method']} ({out['time']:.1f}s)")
+    print(f"re-verification against {name}: {out['status']} via {out['method']} ({out['time']:.1f}s)")
     ok &= out["status"] == "proved"
     if a.exhaustive:
-        n_err, min_margin, first = exhaustive_check(P, spec, cert["tau"])
+        n_err, min_margin, first = exhaustive_check(P, spec, float(cert["tau"]))
         print(f"exhaustive: {n_err} errors over {P['V'] ** P['L']} inputs, "
               f"min margin {min_margin:.4f}" + (f", first error {first}" if first else ""))
         ok &= n_err == 0
@@ -160,18 +174,45 @@ def cmd_predict(a):
 
 def cmd_serve(a):
     from .serve import GateError, load_gated, make_server
+    pinned = _pinned(a)
     try:
-        P, digest, cert = load_gated(a.artifact, a.certificate, a.allow_unverified)
+        P, digest, cert, gate = load_gated(a.artifact, a.certificate, a.allow_unverified, pinned,
+                                           a.trusted_key, a.verify_time, a.workers)
     except GateError as e:
         print(f"refusing to serve: {e}", file=sys.stderr)
         return 1
-    alphabet = _spec_from_cert(cert)[1] if cert else _spec(a)[2]
-    srv = make_server(P, digest, cert, alphabet, a.host, a.port)
-    print(f"serving {a.artifact} (sha256 {digest[:16]}...) on http://{a.host}:{srv.server_port}")
+    alphabet = gate.get("alphabet") or (pinned[2] if pinned else TOKENS["dyck"])
+    srv = make_server(P, digest, cert, alphabet, a.host, a.port, gate=gate,
+                      max_concurrency=a.max_concurrency, deadline=a.deadline)
+    print(f"serving {a.artifact} (sha256 {digest[:16]}..., {gate['how']}) "
+          f"on http://{a.host}:{srv.server_port}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def cmd_keygen(a):
+    from .artifact import generate_keypair
+    generate_keypair(a.private, a.public)
+    print(f"wrote {a.private} (keep secret) and {a.public}")
+    return 0
+
+
+def cmd_sign(a):
+    """Sign a certificate after re-verifying it, so a signature always means
+    'the signer's own verifier proved this artifact'."""
+    from .artifact import sign_certificate
+    if cmd_check(argparse.Namespace(artifact=a.artifact, certificate=a.certificate, spec=a.spec,
+                                    spec_file=a.spec_file, verifier="auto", exhaustive=False,
+                                    verify_time=a.verify_time, workers=a.workers)) != 0:
+        print("not signing: re-verification failed", file=sys.stderr)
+        return 1
+    with open(a.certificate) as f:
+        cert = json.load(f)
+    write_json(sign_certificate(cert, a.key), a.out or a.certificate)
+    print(f"signed {a.out or a.certificate}")
     return 0
 
 
@@ -220,25 +261,41 @@ def main(argv=None):
     p.add_argument("--verify-time", type=float, default=300.0)
     p.add_argument("--certificate", help="write a certificate JSON here")
     p.set_defaults(fn=cmd_verify)
-    p = sub.add_parser("check", help="check a certificate against an artifact")
+    p = sub.add_parser("check", help="re-verify an artifact against its certificate")
     p.add_argument("artifact"); p.add_argument("certificate")
+    p.add_argument("--spec", default=None, choices=SPECS, help="pin the expected spec")
     p.add_argument("--exhaustive", action="store_true", help="also enumerate all inputs (small L)")
     p.add_argument("--verify-time", type=float, default=300.0)
     p.set_defaults(fn=cmd_check)
-    p = sub.add_parser("serve", help="HTTP inference server, gated on a proved certificate")
+    p = sub.add_parser("serve", help="HTTP inference server; re-proves the artifact before serving")
     p.add_argument("artifact"); p.add_argument("certificate", nargs="?")
-    p.add_argument("--spec", default="dyck", choices=SPECS)
+    p.add_argument("--spec", default=None, choices=SPECS, help="pin the expected spec")
     p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8000)
     p.add_argument("--allow-unverified", action="store_true")
+    p.add_argument("--trusted-key", help="Ed25519 public key: accept its signature instead of re-proving")
+    p.add_argument("--verify-time", type=float, default=600.0)
+    p.add_argument("--max-concurrency", type=int, default=64)
+    p.add_argument("--deadline", type=float, default=30.0, help="max seconds per connection")
     p.set_defaults(fn=cmd_serve)
+    p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
+    p.add_argument("private"); p.add_argument("public")
+    p.set_defaults(fn=cmd_keygen)
+    p = sub.add_parser("sign", help="re-verify, then sign a certificate")
+    p.add_argument("artifact"); p.add_argument("certificate"); p.add_argument("--key", required=True)
+    p.add_argument("--out"); p.add_argument("--spec", default=None, choices=SPECS)
+    p.add_argument("--verify-time", type=float, default=600.0)
+    p.set_defaults(fn=cmd_sign)
     p = sub.add_parser("predict", help="run the deployed artifact")
     p.add_argument("artifact"); p.add_argument("inputs", nargs="+")
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
-        if name != "check":
+        if name not in ("keygen",):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
-        if name not in ("predict", "serve"):
+        if name not in ("predict", "keygen"):
+            if name == "serve":
+                sp_.add_argument("--workers", type=int, default=os.cpu_count())
+                continue
             sp_.add_argument("--verifier", default="auto", choices=["auto", "exact", "milp"],
                              help="exact rational DP when the structure allows (auto), or MILP")
             sp_.add_argument("--workers", type=int, default=os.cpu_count(),

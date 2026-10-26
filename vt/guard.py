@@ -18,15 +18,23 @@ from .verify import np_forward_batch
 
 
 class Guard:
-    def __init__(self, artifact, certificate, alphabet=None, allow_unverified=False):
-        self.P, self.digest, self.cert = load_gated(artifact, certificate, allow_unverified)
-        if alphabet is None:
-            from .cli import TOKENS
-            c = self.cert or {}
-            alphabet = c["spec_dfa"]["alphabet"] if "spec_dfa" in c else TOKENS[c.get("spec", "dyck")]
-        self.alphabet = alphabet
+    """spec / spec_file pin what "correct" means; the artifact is re-proved
+    against it on load (or accepted via a trusted signature)."""
+
+    def __init__(self, artifact, certificate, spec=None, spec_file=None, alphabet=None,
+                 allow_unverified=False, trusted_key=None, verify_time=600.0):
+        pinned = None
+        if spec or spec_file:
+            from .cli import _spec
+            import argparse
+            pinned = _spec(argparse.Namespace(spec=spec, spec_file=spec_file))[:3]
+        self.P, self.digest, self.cert, self.gate = load_gated(
+            artifact, certificate, allow_unverified, pinned, trusted_key, verify_time)
+        self.alphabet = alphabet or self.gate.get("alphabet") or (pinned[2] if pinned else None)
+        if self.alphabet is None:
+            raise ValueError("pass alphabet= for an unverified guard")
         self.L = self.P["L"]
-        self.proved = bool(self.cert and self.cert.get("status") == "proved")
+        self.proved = bool(self.gate.get("verified"))
 
     def accepts(self, strings):
         """True where the guard predicts label 1. Strings of the wrong length or

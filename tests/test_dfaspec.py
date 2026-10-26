@@ -41,6 +41,8 @@ def test_prove_check_predict_with_spec_file(tmp_path):
                  "--rounds", "10", "--threads", "1", "--workers", "1", "--n-train", "4000"]) == 0
     cert = json.load(open(f"{out}/certificate.json"))
     assert cert["spec"] == "dfa:no_bb" and cert["method"] == "exact-dp" and "spec_dfa" in cert
-    # check needs no spec file: the DFA is embedded in the certificate
-    assert main(["check", f"{out}/model.npz", f"{out}/certificate.json", "--exhaustive"]) == 0
+    # the DFA is embedded, but the operator must pin it: a certificate can't define "correct"
+    assert main(["check", f"{out}/model.npz", f"{out}/certificate.json"]) == 1
+    assert main(["check", f"{out}/model.npz", f"{out}/certificate.json", "--spec-file", spec,
+                 "--exhaustive"]) == 0
     assert main(["predict", f"{out}/model.npz", "--spec-file", spec, "abababababab", "abbaaaaaaaaa"]) == 0

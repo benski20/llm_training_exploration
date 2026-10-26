@@ -73,7 +73,7 @@ pip install -e ".[dev]"
 vt prove --spec dyck --length 64 --also-lengths $(seq -s, 2 2 62) --uniform --float --out runs/dyck64  # exact proofs, ~4 min
 vt prove --spec dyck --length 32 --shared --float --out runs/dyck32   # MILP proof (~4.5 min, 4 cores)
 vt check runs/dyck64/model.npz runs/dyck64/certificate.json           # independent re-check
-vt serve runs/dyck64/model.npz runs/dyck64/certificate.json --port 8000
+vt serve runs/dyck64/model.npz runs/dyck64/certificate.json --spec dyck --port 8000   # re-proves on startup
 curl -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())((()))()()(())()(()(()))()()(())((()))()()(())()"]}'
 ```
 
@@ -209,7 +209,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ## Use
 
 ```bash
-pip install -e ".[dev]"; pytest -q        # 50 tests, about 2 minutes on CPU; CI runs them on every push
+pip install -e ".[dev]"; pytest -q        # 57 tests, about 2 minutes on CPU; CI runs them on every push
 
 vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths $(seq -s, 2 2 30)]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
@@ -251,6 +251,41 @@ interruption.
   * Specs that need periodic counting, such as `mod3_a`: training collapses
     to a constant even at width 32, the known parity/modular-counting
     difficulty.
+
+## Security model
+
+The **verifier code is the root of trust, not the certificate.** A
+certificate is just JSON, so `vt serve`, `vt check` and `Guard` never accept
+one on its own word. Before serving, they:
+1. read the artifact once and hash exactly those bytes, so the file can't be
+   swapped between hashing and loading (no TOCTOU);
+2. reject compressed or oversized zip members and validate every array shape;
+3. require the certificate's spec to be consistent (an embedded DFA must
+   match its name), and require it to match the spec the operator pinned
+   (`--spec`, `--spec-file`). A certificate can't decide what "correct"
+   means; DFA specs must always be pinned;
+4. **re-prove the artifact** against that spec with vt's own verifier. With
+   exact certificates this takes seconds.
+
+The optional fast path is a certificate signed with Ed25519 (`vt keygen`,
+`vt sign`, `--trusted-key`). `vt sign` re-verifies before it signs, so a
+signature means "the signer's verifier proved this artifact".
+
+The server limits:
+* body size (413), and requests without a Content-Length get 411;
+* JSON nesting, checked before parsing;
+* concurrent connections (503 beyond `--max-concurrency`);
+* time per socket operation and per connection (`--deadline`), so
+  trickling clients are cut off.
+
+An independent review of the serving path found seven issues: a forgeable
+certificate, a hash/load TOCTOU, a spec swap via an embedded DFA, unbounded
+threads and slow-client holding, a `RecursionError` on deep JSON, a zip-bomb
+risk, and image/CI pinning. All have been fixed, and each has a regression
+test. CI runs `bandit` and `pip-audit`. The Docker image pins the base image
+by digest and the dependencies by version. The CI token is read-only. CI also
+checks that the container refuses both a tampered artifact and a forged
+certificate.
 
 ## Soundness and trust
 

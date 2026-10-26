@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from vt.cli import TOKENS  # noqa: E402
 from vt.serve import load_gated, make_server  # noqa: E402
 
 
@@ -26,9 +25,8 @@ def main():
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--batch", type=int, default=32)
     a = ap.parse_args()
-    P, digest, cert = load_gated(a.artifact, a.certificate)
-    alphabet = cert["spec_dfa"]["alphabet"] if "spec_dfa" in cert else TOKENS[cert["spec"]]
-    srv = make_server(P, digest, cert, alphabet, port=0)
+    P, digest, cert, gate = load_gated(a.artifact, a.certificate)
+    srv = make_server(P, digest, cert, gate["alphabet"], port=0, gate=gate)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_port}/predict"
     rng = np.random.default_rng(0)
