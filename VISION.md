@@ -92,6 +92,45 @@ weights. Deployment re-proves them; it never trusts JSON.
    global certificates. That is the path from "verified formats" to
    "verified judgements".
 
+## The semantic layer: interpretability by design
+
+Truthfulness, reasoning correctness, harmlessness and tone have no formal
+definition to prove against. The approach here is to **build the model so its
+internals carry the verification signals**, rather than reverse-engineering
+them afterwards with an atlas.
+
+* **Named epistemic channels** (`vt/epistemic.py`): reserved residual-stream
+  slices such as `grounded` or `checked`. Each is trained against a signal
+  computable at training time: the fact is present in context or memory, the
+  step passes a solver, the span was copied from a source.
+* **Causal role by intervention training**: values are written into the
+  channel during training, and the model must act on them (abstain when
+  `grounded` is forced low). The readout then reflects what the model uses,
+  not a correlate it can route around. At inference the channel is a monitor,
+  a steering knob, and the input to a conformally calibrated release gate.
+* **Provenance by architecture (next)**: route factual content through an
+  explicit memory, so a factual token produced without a memory read is
+  structurally visible.
+* **Formal checks where they exist**: arithmetic, logic, code and formats go
+  through the exact kernel (`vt/pcr`, `vt/exact.py`).
+
+First result on grounded answering (`experiments/grounding_by_design.py`, a
+0.8M-parameter byte-level GPT, CPU; `results/grounding_by_design_v1_bytenames.json`):
+
+| in-distribution | post-hoc probe (baseline) | built-in channel |
+|---|---|---|
+| accuracy | 16% | 37% |
+| hallucinated when the fact was absent | 76% | 30% |
+| detects "fact absent" (AUROC) | 0.54 | 0.76 |
+| forcing "absent" causes abstention | — | 98% |
+
+Failures: both models collapse when contexts are longer than in training (the
+channel drops to chance), and the by-design model over-abstains (53% false
+abstentions). The conformal gate's bound held in-distribution but not under
+shift (13% of hallucinations passed for the baseline, against a 5% target),
+as the exchangeability assumption predicts. Base capability is low at this
+scale, so these numbers are suggestive, not conclusive.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
