@@ -45,6 +45,7 @@ def cmd_prove(a):
                       lengths=tuple(int(v) for v in a.also_lengths.split(",") if v), tau=a.tau,
                       n_train=a.n_train, enumerate_up_to=a.enumerate_up_to,
                       uniform=a.uniform, verifier=a.verifier, window=a.window,
+                      init=a.init,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -178,6 +179,7 @@ def main(argv=None):
     p.add_argument("--epochs-round", type=int, default=None, help="default 30 shared / 15")
     p.add_argument("--uniform", action="store_true",
                    help="uniform causal mixing: exactly verifiable at any length (implies --shared)")
+    p.add_argument("--init", default="", help="warm-start a tied model from an artifact (.npz)")
     p.add_argument("--window", type=int, default=1,
                    help="with --uniform: free kernel taps for the last WINDOW offsets")
     p.add_argument("--bits", type=int, default=0, help="k-bit uniform weights (with --float)")

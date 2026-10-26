@@ -17,19 +17,30 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from vt.artifact import load_artifact  # noqa: E402
-from vt.global_verify import SPECS, verify_global  # noqa: E402
+from vt.global_verify import SPECS, verify_auto  # noqa: E402
 
 
 def truncate(P, L2):
-    """The same weight-tied model at length L2 <= L."""
+    """The same weight-tied model at length L2. L2 <= L works for any tied
+    model; L2 > L (extension) needs a uniform tail, i.e. the kernel's last
+    diagonals are already constant, so the continuation is unambiguous."""
     L, d, C = P["L"], P["d"], P["C"]
     W = P["W_out"].reshape(C, L, d)
     pool = W[:, 0]
     last = W[:, -1] - pool
-    if not (np.allclose(W[:, :-1], pool[:, None]) and
-            all(np.allclose(np.diag(M, -k), np.diag(M, -k)[0]) for M in P["mix"] for k in range(L))):
+    if not (np.array_equal(W[:, :-1], np.broadcast_to(pool[:, None], W[:, :-1].shape)) and
+            all(np.all(np.diag(M, -k) == np.diag(M, -k)[0]) for M in P["mix"] for k in range(L))):
         raise ValueError("artifact is not weight-tied")
-    Q = dict(P, L=L2, mix=[M[:L2, :L2] for M in P["mix"]])
+    mixes = []
+    for M in P["mix"]:
+        kern = [np.diag(M, -k)[0] for k in range(L)]
+        if L2 > L:
+            if L < 3 or kern[-1] != kern[-2]:
+                raise ValueError("kernel has no uniform tail; cannot extend")
+            kern = kern + [kern[-1]] * (L2 - L)
+        off = np.arange(L2)[:, None] - np.arange(L2)[None, :]
+        mixes.append(np.where(off >= 0, np.array(kern[:L2])[np.clip(off, 0, None)], 0.0))
+    Q = dict(P, L=L2, mix=mixes)
     Wn = np.tile(pool, (1, L2)).reshape(C, L2, d)
     Wn[:, -1] += last
     Q["W_out"] = Wn.reshape(C, L2 * d)
@@ -51,10 +62,11 @@ def main():
     rows = []
     for L2 in range(lo, hi + 1, step):
         t0 = time.perf_counter()
-        r = verify_global(truncate(P, L2), spec, time_limit=a.time_limit, workers=a.workers)
-        rows.append({"L": L2, "status": r["status"], "time": time.perf_counter() - t0,
+        r = verify_auto(truncate(P, L2), spec, time_limit=a.time_limit, workers=a.workers)
+        rows.append({"L": L2, "status": r["status"], "method": r["method"],
+                     "min_margin": r.get("min_margin"), "time": time.perf_counter() - t0,
                      "counterexamples": r["counterexamples"][:3]})
-        print(f"L={L2:3d}  {r['status']:15s} {rows[-1]['time']:7.1f}s", flush=True)
+        print(f"L={L2:4d}  {r['status']:15s} {r['method']:9s} {rows[-1]['time']:7.1f}s", flush=True)
     out = a.out or os.path.join(os.path.dirname(a.artifact), "length_generalization.json")
     with open(out, "w") as f:
         json.dump({"artifact": a.artifact, "spec": a.spec, "rows": rows}, f, indent=1)

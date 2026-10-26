@@ -165,6 +165,27 @@ class MixerNet(nn.Module):
         }
 
     @torch.no_grad()
+    def load_tied_artifact(self, P):
+        """Initialise a weight-tied model from an exported artifact of any length
+        (the tied parameters do not depend on L)."""
+        if not self.shared or len(P["mix"]) != self.n_blocks:
+            raise ValueError("load_tied_artifact needs a weight-tied model with matching blocks")
+        t = lambda a: torch.as_tensor(np.asarray(a), dtype=torch.float32)
+        L, d, C = P["L"], P["d"], P["C"]
+        self.W_in.copy_(t(P["W_in"])); self.b_in.copy_(t(P["b_in"]))
+        for i in range(self.n_blocks):
+            M = np.asarray(P["mix"][i])
+            kern = [np.diag(M, -k)[0] for k in range(L)]
+            n_k = self.mix[i].numel()
+            vals = kern[:n_k] + [kern[-1]] * max(0, n_k - L)
+            self.mix[i].copy_(t(vals[:n_k]))
+            self.W1[i].copy_(t(P["W1"][i])); self.b1[i].copy_(t(P["b1"][i]))
+            self.W2[i].copy_(t(P["W2"][i])); self.b2[i].copy_(t(P["b2"][i]))
+        W = np.asarray(P["W_out"]).reshape(C, L, d)
+        self.W_pool.copy_(t(W[:, 0])); self.W_last.copy_(t(W[:, -1] - W[:, 0]))
+        self.b_out.copy_(t(P["b_out"]))
+
+    @torch.no_grad()
     def weight_zero_frac(self):
         mats = [self.W_in, *self.W1, *self.W2] + ([self.W_pool, self.W_last] if self.shared else [self.W_out])
         qs = [self.w(m) for m in mats] + [self.w(m) for m in self.mix]

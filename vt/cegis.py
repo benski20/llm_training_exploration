@@ -35,6 +35,7 @@ class CegisConfig:
     tau: float = 1e-4            # required logit margin (same as the certificate's claim)
     uniform: bool = False        # uniform causal mixing (exactly verifiable, any length)
     window: int = 1              # with uniform: free kernel offsets < window
+    init: str = ""                # warm-start a tied model from this artifact (.npz)
     verifier: str = "auto"       # auto | exact | milp
     ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
@@ -146,6 +147,9 @@ def cegis(spec, cfg, V=2, log=print):
                      spec.n_classes, ternary=cfg.ternary, causal=cfg.causal,
                      shared=cfg.shared, uniform=cfg.uniform,
                      window=cfg.window)
+    if cfg.init:
+        from .artifact import load_artifact
+        model.load_tied_artifact(load_artifact(cfg.init))
     n_each = max(1000, cfg.n_train // len(lengths))
     base = {L: spec.sample(n_each, L, rng) for L in lengths}
     cex = {L: np.zeros((0, L), dtype=np.int64) for L in lengths}
