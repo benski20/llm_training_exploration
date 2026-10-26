@@ -28,10 +28,15 @@ def np_forward(P, x):
 
 def np_ibp(P, x, eps):
     """Bounds on every intermediate vector (flattened position-major)."""
-    L = P["L"]
     W = P["W_in"]
     c, r = x @ W.T + P["b_in"], np.full_like(x, eps) @ np.abs(W).T
-    out = {"in": (x.reshape(-1) - eps, x.reshape(-1) + eps), "s": [], "z": []}
+    return ibp_from_s0(P, c, r, (x.reshape(-1) - eps, x.reshape(-1) + eps))
+
+
+def ibp_from_s0(P, c, r, in_bounds):
+    """IBP from a box (centre c, radius r, shape (L, d)) on the embedded input."""
+    L = P["L"]
+    out = {"in": in_bounds, "s": [], "z": []}
     out["s"].append((c - r, c + r))
     for M, W1, b1, W2, b2 in zip(P["mix"], P["W1"], P["b1"], P["W2"], P["b2"]):
         IM = np.eye(L) + M
@@ -110,9 +115,19 @@ class _MILP:
 def milp_min_margin(P, x, y, j, eps, bounds, time_limit):
     """Minimise logit_y - logit_j over the eps-ball. Returns scipy result,
     the input-variable indices, and the number of binary variables."""
-    L, d = P["L"], P["d"]
     m = _MILP()
     xi = m.vars(*bounds["in"])
+    s, n_bin = encode_network(m, P, xi, bounds)
+    coef = P["W_out"][y] - P["W_out"][j]
+    const = P["b_out"][y] - P["b_out"][j]
+    res = m.solve(s, coef, time_limit)
+    return res, const, xi, n_bin
+
+
+def encode_network(m, P, xi, bounds):
+    """Add the exact MILP encoding of the network on input variables `xi`.
+    Returns the indices of the final flattened state and the binary count."""
+    L, d = P["L"], P["d"]
     s = m.vars(*bounds["s"][0])
     m.eq(s, [(sp.kron(sp.eye(L), P["W_in"]), xi)], np.tile(P["b_in"], L))
     k = 1
@@ -140,10 +155,7 @@ def milp_min_margin(P, x, y, j, eps, bounds, time_limit):
         s2 = m.vars(*bounds["s"][k]); k += 1
         m.eq(s2, [(sp.eye(L * d), s), (sp.kron(sp.eye(L), W2), a)], np.tile(b2, L))
         s = s2
-    coef = P["W_out"][y] - P["W_out"][j]
-    const = P["b_out"][y] - P["b_out"][j]
-    res = m.solve(s, coef, time_limit)
-    return res, const, xi, n_bin
+    return s, n_bin
 
 
 def verify(P, x, y, eps, time_limit=30.0):
@@ -184,3 +196,12 @@ def verify(P, x, y, eps, time_limit=30.0):
         else:
             status = "unknown"
     return {"status": status, "method": "milp", "time": time.perf_counter() - t0, **info}
+
+
+def np_forward_batch(P, X):
+    """Batched float64 forward pass, X of shape (N, L, V)."""
+    s = X @ P["W_in"].T + P["b_in"]
+    for M, W1, b1, W2, b2 in zip(P["mix"], P["W1"], P["b1"], P["W2"], P["b2"]):
+        s = s + np.einsum("ij,njd->nid", M, s)
+        s = s + relu(s @ W1.T + b1) @ W2.T + b2
+    return s.reshape(len(X), -1) @ P["W_out"].T + P["b_out"]

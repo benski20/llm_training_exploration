@@ -22,11 +22,13 @@ def ternarize(w):
 
 class MixerNet(nn.Module):
     def __init__(self, seq_len, vocab, d_model=8, d_hidden=16, n_blocks=2,
-                 n_classes=2, ternary=False):
+                 n_classes=2, ternary=False, causal=False):
         super().__init__()
         L, V, d, h = seq_len, vocab, d_model, d_hidden
         self.L, self.V, self.d, self.h, self.C = L, V, d, h, n_classes
         self.n_blocks, self.ternary = n_blocks, ternary
+        # causal: position t mixes only positions <= t, as in a decoder LM
+        self.register_buffer("mask", torch.tril(torch.ones(L, L)) if causal else torch.ones(L, L), persistent=False)
         self.W_in = nn.Parameter(torch.randn(d, V) / math.sqrt(V))
         self.b_in = nn.Parameter(torch.zeros(d))
         self.mix = nn.ParameterList(
@@ -43,10 +45,13 @@ class MixerNet(nn.Module):
     def w(self, p):
         return ternarize(p) if self.ternary else p
 
+    def mixw(self, i):
+        return self.w(self.mix[i] * self.mask) * self.mask
+
     def forward(self, x):
         s = x @ self.w(self.W_in).T + self.b_in
         for i in range(self.n_blocks):
-            s = s + torch.einsum("ij,bjd->bid", self.w(self.mix[i]), s)
+            s = s + torch.einsum("ij,bjd->bid", self.mixw(i), s)
             z = s @ self.w(self.W1[i]).T + self.b1[i]
             s = s + F.relu(z) @ self.w(self.W2[i]).T + self.b2[i]
         return s.flatten(1) @ self.w(self.W_out).T + self.b_out
@@ -62,7 +67,7 @@ class MixerNet(nn.Module):
         eye = torch.eye(self.L, device=x.device)
         pre = []
         for i in range(self.n_blocks):
-            IM = eye + self.w(self.mix[i])
+            IM = eye + self.mixw(i)
             c = torch.einsum("ij,bjd->bid", IM, c)
             r = torch.einsum("ij,bjd->bid", IM.abs(), r)
             W1 = self.w(self.W1[i])
@@ -92,7 +97,7 @@ class MixerNet(nn.Module):
         return {
             "L": self.L, "V": self.V, "d": self.d, "h": self.h, "C": self.C,
             "W_in": f(self.W_in), "b_in": g(self.b_in),
-            "mix": [f(m) for m in self.mix],
+            "mix": [self.mixw(i).detach().double().numpy() for i in range(self.n_blocks)],
             "W1": [f(m) for m in self.W1], "b1": [g(m) for m in self.b1],
             "W2": [f(m) for m in self.W2], "b2": [g(m) for m in self.b2],
             "W_out": f(self.W_out), "b_out": g(self.b_out),
@@ -100,6 +105,6 @@ class MixerNet(nn.Module):
 
     @torch.no_grad()
     def weight_zero_frac(self):
-        mats = [self.W_in, self.W_out, *self.mix, *self.W1, *self.W2]
-        qs = [self.w(m) for m in mats]
+        mats = [self.W_in, self.W_out, *self.W1, *self.W2]
+        qs = [self.w(m) for m in mats] + [self.mixw(i)[self.mask.bool()] for i in range(self.n_blocks)]
         return float(sum((q == 0).sum() for q in qs) / sum(q.numel() for q in qs))
