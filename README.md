@@ -258,6 +258,28 @@ become checkable, and labels every guarantee with its strength:
   wrong arithmetic from 406 to 0, and harmful responses from 102 to 0, with
   all correct content kept.
 
+* **Glass-box LM** (`vt/glassbox.py`): a transformer built to be read
+  mechanistically. It has an evidence stream (an exact account of how
+  content was mixed from each input position and memory read), a starved core
+  with a product-key memory as the only fact store, and a self-knowledge
+  variable k trained on the model's own correctness that alone drives
+  abstention.
+
+  On a synthetic knowledge world (`experiments/glassbox_world.py`, six
+  versions):
+  * the explicit memory answers facts it was never asked about 3-4x better
+    than a matched GPT;
+  * k matches or beats post-hoc probes, by more under shift, but only reaches
+    0.66-0.75 AUROC;
+  * placing the read after the last attention block makes the memory record
+    causal (64% of answers follow a patched read);
+  * hallucinations turned out to be reads that fall onto heavily used "hub"
+    slots;
+  * abstention on never-seen facts was not learned.
+
+  `experiments/glassbox_chat.py` runs the same comparison as a general chat
+  model (Alpaca, WikiText-2 and a fact world in natural language).
+
 Limits, measured: these are small CPU models on synthetic tasks. Under
 distribution shift the base model's capability collapsed, and statistical
 bounds hold only when calibration matches deployment. See VISION.md for the
@@ -273,7 +295,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ## Use
 
 ```bash
-pip install -e ".[dev]"; pytest -q        # 99 tests, about 3 minutes on CPU; CI runs them on every push
+pip install -e ".[dev]"; pytest -q        # 115 tests, about 4 minutes on CPU; CI runs them on every push
 
 vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths $(seq -s, 2 2 30)]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
