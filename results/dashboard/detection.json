@@ -758,5 +758,125 @@
 "split": "Long context",
 "readout": "Memory head agreement",
 "auroc": 0.5773641661966535
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.698813754180602
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.7256088001672241
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.6859453386287625
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.43721258361204013
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory familiarity",
+"auroc": 0.43440374163879597
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.6328125
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.7419763513513513
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.6608952702702703
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.36296452702702703
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory familiarity",
+"auroc": 0.2924408783783784
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.7566143806266462
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.7844740600961854
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.7180091991980186
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.46538506899398513
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory familiarity",
+"auroc": 0.5015528560757951
 }
 ]

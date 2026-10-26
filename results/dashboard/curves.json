@@ -805,6 +805,20 @@
 "qa_loss": 1.7568
 },
 {
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 5500,
+"loss": 4.2748,
+"qa_loss": 2.0079
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 5999,
+"loss": 4.0318,
+"qa_loss": 1.8345
+},
+{
 "run": "v8-baseline",
 "title": "v8 fresh entities, GPT",
 "step": 0,
@@ -838,6 +852,13 @@
 "step": 2000,
 "loss": 4.6218,
 "qa_loss": 2.8073
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 2500,
+"loss": 3.8572,
+"qa_loss": 2.4141
 },
 {
 "run": "chat-glassbox",

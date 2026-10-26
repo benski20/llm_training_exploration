@@ -100,11 +100,11 @@
 "experiment": "v8",
 "title": "v8 fresh entities, glass-box",
 "model": "glassbox",
-"status": "running",
-"step": 5000,
+"status": "done",
+"step": 6000,
 "total_steps": 6000,
-"progress": 0.8335,
-"last_loss": 3.9899,
+"progress": 1.0,
+"last_loss": 4.0318,
 "note": "abstention taught on never-seen entities"
 },
 {
@@ -113,10 +113,10 @@
 "title": "v8 fresh entities, GPT",
 "model": "baseline",
 "status": "running",
-"step": 2000,
+"step": 2500,
 "total_steps": 6000,
-"progress": 0.3335,
-"last_loss": 4.6218,
+"progress": 0.41683333333333333,
+"last_loss": 3.8572,
 "note": "same data for the matched GPT"
 },
 {

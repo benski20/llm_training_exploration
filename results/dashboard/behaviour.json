@@ -262,5 +262,38 @@
 "hallucination_fresh": null,
 "ctx_acc": 0.01,
 "mem_acc": 0.035
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "In distribution",
+"accuracy": 0.4583333333333333,
+"hallucination": 0.7,
+"hallucination_fresh": 0.24166666666666667,
+"ctx_acc": 0.5666666666666667,
+"mem_acc": 0.625
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Held-out relations",
+"accuracy": 0.09666666666666666,
+"hallucination": 0.8083333333333333,
+"hallucination_fresh": 0.7666666666666667,
+"ctx_acc": 0.016666666666666666,
+"mem_acc": 0.041666666666666664
+},
+{
+"run": "v8-glassbox",
+"experiment": "v8",
+"model": "glassbox",
+"split": "Long context",
+"accuracy": 0.3883333333333333,
+"hallucination": 0.9166666666666666,
+"hallucination_fresh": 0.55,
+"ctx_acc": 0.5416666666666666,
+"mem_acc": 0.8333333333333334
 }
 ]
