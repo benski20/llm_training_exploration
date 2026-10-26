@@ -11,3 +11,4 @@ build/
 *.pt
 results/**/*.log
 data/wikitext-2/
+data/alpaca/

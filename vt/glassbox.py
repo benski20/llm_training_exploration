@@ -45,6 +45,9 @@ class GBConfig:
     mem_keys: int = 128            # product keys per half: mem_keys**2 slots
     mem_topk: int = 8
     fixed_embed: bool = True       # starve the core: embeddings cannot store facts
+    mlp_ratio: int = 0             # 0: no MLPs (fully starved core); >0: small MLP core for language skill
+    track_evidence: bool = True    # the evidence stream is read-only: it can be skipped while training
+    sharpness: bool = False        # per-token k sets the next-token distribution's sharpness
 
 
 def alibi_bias(T, n_head, device=None):
@@ -72,9 +75,27 @@ class ConvexAttention(nn.Module):
         u = torch.einsum("bhtk,hkd->bhtd", a @ v, self.o)        # each head's output, in model space
         pi = self.mix(z).softmax(-1)                             # (B, T, H + 1)
         x = pi[..., :1] * x + (pi[..., 1:].transpose(1, 2)[..., None] * u).sum(1)
-        e = pi[..., :1] * e + (pi[..., 1:].transpose(1, 2)[..., None] * (a @ e[:, None])).sum(1)
+        if e is not None:
+            e = pi[..., :1] * e + (pi[..., 1:].transpose(1, 2)[..., None] * (a @ e[:, None])).sum(1)
         self.last_attn = a
         return x, e
+
+
+class ConvexMLP(nn.Module):
+    """Per-position transform: it moves no information between positions, so the
+    evidence is unchanged."""
+
+    def __init__(self, c):
+        super().__init__()
+        self.ln = nn.LayerNorm(c.n_embd)
+        self.fc = nn.Linear(c.n_embd, c.mlp_ratio * c.n_embd)
+        self.out = nn.Linear(c.mlp_ratio * c.n_embd, c.n_embd)
+        self.gate = nn.Linear(c.n_embd, 1)
+
+    def forward(self, x, e):
+        z = self.ln(x)
+        b = torch.sigmoid(self.gate(z))
+        return (1 - b) * x + b * self.out(F.gelu(self.fc(z))), e
 
 
 class PKMemory(nn.Module):
@@ -114,8 +135,9 @@ class PKMemory(nn.Module):
         self.trace = tr
         b = torch.sigmoid(self.gate(z))
         x = (1 - b) * x + b * r
-        e = (1 - b) * e
-        e[..., -1:] = e[..., -1:] + b                              # the last source is "memory"
+        if e is not None:
+            e = (1 - b) * e
+            e[..., -1:] = e[..., -1:] + b                          # the last source is "memory"
         tr["gate"] = b.squeeze(-1)
         return x, e
 
@@ -128,26 +150,43 @@ class GlassBoxLM(nn.Module):
         nn.init.normal_(self.embed.weight, 0.0, 1.0)
         self.embed.weight.requires_grad_(not c.fixed_embed)
         self.attn = nn.ModuleList([ConvexAttention(c) for _ in range(c.n_layer)])
+        if c.mlp_ratio:
+            self.mlp = nn.ModuleList([ConvexMLP(c) for _ in range(c.n_layer)])
         self.mem = PKMemory(c)
         self.ln_f = nn.LayerNorm(c.n_embd)
         self.head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
         self.know = nn.Linear(c.n_embd, 1)                         # self-knowledge variable k
         self.alpha = nn.Parameter(torch.tensor(1.0))
         self.beta = nn.Parameter(torch.tensor(0.0))
+        if c.sharpness:
+            self.sharp_a = nn.Parameter(torch.tensor(0.0))
+            self.sharp_b = nn.Parameter(torch.tensor(1.0))
 
-    def forward(self, idx):
-        """Returns logits (B, T, V), k (B, T), evidence (B, T, T + 1) and hidden states per block."""
+    def forward(self, idx, evidence=None):
+        """Returns logits (B, T, V), k (B, T), evidence (B, T, T + 1) or None, and hidden
+        states per block. With `sharpness`, logits are scaled by a fixed increasing
+        function of k, so the model's commitment to its next token flows through k."""
         B, T = idx.shape
+        track = self.config.track_evidence if evidence is None else evidence
         x = self.embed(idx)
-        e = torch.cat([torch.eye(T).expand(B, T, T), torch.zeros(B, T, 1)], -1)
+        e = torch.cat([torch.eye(T).expand(B, T, T), torch.zeros(B, T, 1)], -1) if track else None
         hs = []
         for i, blk in enumerate(self.attn):
             x, e = blk(x, e)
             if i == self.config.mem_layer:
                 x, e = self.mem(x, e)
+            if self.config.mlp_ratio:
+                x, e = self.mlp[i](x, e)
             hs.append(x)
         z = self.ln_f(x)
-        return self.head(z), self.know(z).squeeze(-1), e, hs
+        logits, k = self.head(z), self.know(z).squeeze(-1)
+        if self.config.sharpness:
+            logits = logits * self.temperature(k)[..., None]
+        return logits, k, e, hs
+
+    def temperature(self, k):
+        """Inverse temperature, increasing in k."""
+        return F.softplus(F.softplus(self.sharp_a) * k + self.sharp_b) + 0.05
 
     def abstain_logit(self, k):
         return self.beta - F.softplus(self.alpha) * k
