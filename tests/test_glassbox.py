@@ -65,3 +65,11 @@ def test_familiarity_is_zero_for_unused_slots():
     m(x)
     fam = m.mem.familiarity()
     assert float(fam[0, 2]) > 0 and float(m.mem.usage.sum()) > 0
+
+
+def test_null_slot_weights_sum_to_one():
+    torch.manual_seed(0)
+    m = GlassBoxLM(GBConfig(vocab_size=50, block_size=16, n_embd=32, mem_keys=8, mem_topk=4, null_slot=True))
+    m(torch.randint(0, 50, (2, 5)))
+    tr = m.mem.trace
+    assert torch.allclose(tr["weights"].sum(-1) + tr["null"], torch.ones(2, 5), atol=1e-5)

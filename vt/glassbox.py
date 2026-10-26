@@ -51,6 +51,7 @@ class GBConfig:
     mem_evidence: str = "pooled"   # "pooled": one memory source; "per_position": each read is a source
     mem2_layer: int = -1           # optional second (late) memory read, after this block's attention
     mem_value_init: float = 1.0    # std of initial memory values; 0: unwritten memory reads as empty
+    null_slot: bool = False        # a learned "nothing stored" option in every read (value 0)
 
 
 def alibi_bias(T, n_head, device=None):
@@ -113,6 +114,8 @@ class PKMemory(nn.Module):
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
         nn.init.normal_(self.values.weight, 0.0, c.mem_value_init)
         self.gate = nn.Linear(c.n_embd, 1)
+        if c.null_slot:
+            self.null = nn.Parameter(torch.tensor(0.0))
         self.lscale = nn.Parameter(torch.tensor(1.0))   # affine map of the match score, for calibration
         self.lbias = nn.Parameter(torch.tensor(0.0))
         self.patch = None              # (mask (B, T), read (B, d) or (B, T, d)): interchange interventions
@@ -139,8 +142,14 @@ class PKMemory(nn.Module):
         idx = (i1[..., :, None] * self.n + i2[..., None, :]).flatten(-2)
         best, j = s.topk(self.topk, -1)
         idx = idx.gather(-1, j)
-        w = best.softmax(-1)
-        return (w[..., None] * self.values(idx)).sum(-2), dict(slots=idx, weights=w, match=best[..., 0])
+        tr = dict(slots=idx, match=best[..., 0])
+        if hasattr(self, "null"):
+            wn = torch.cat([best, self.null.expand(best.shape[:-1])[..., None]], -1).softmax(-1)
+            w, tr["null"] = wn[..., :-1], wn[..., -1]                # weight on "nothing stored"
+        else:
+            w = best.softmax(-1)
+        tr["weights"] = w
+        return (w[..., None] * self.values(idx)).sum(-2), tr
 
     def forward(self, x, e):
         z = self.ln(x)

@@ -134,12 +134,14 @@ MEM_EVIDENCE, IIT_POS = "pooled", "answer"        # v1 settings; v2: "per_positi
 MEM2 = -1                                          # v3: late memory read after block 3, match supervised
 MEM_INIT = 1.0                                     # v4: 0.0, absence as the default state of memory
 MEM_LAYER = 2                                      # v5: 3, memory after the last attention block
+NULL_SLOT = False                                  # v6: a "nothing stored" option in every read
 
 
 class Glass:
     def __init__(self):
         self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
-                                     mem2_layer=MEM2, mem_value_init=MEM_INIT, mem_layer=MEM_LAYER))
+                                     mem2_layer=MEM2, mem_value_init=MEM_INIT, mem_layer=MEM_LAYER,
+                                     null_slot=NULL_SLOT))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -288,6 +290,8 @@ def collect(model, qs, bs=100):
                 if MEM2 >= 0:
                     r["match2"] = float(model.m.mem2.trace["match"][j, q[1]])
                 r["familiarity"] = float(model.m.mem.familiarity()[j, q[1]])
+                if NULL_SLOT:
+                    r["not_null"] = 1 - float(model.m.mem.trace["null"][j, q[1]])
             rows.append(r)
     return rows
 
@@ -313,6 +317,8 @@ def readout_aurocs(rows, probe, layer):
         d["evidence_support"] = auroc(np.array([r["mem_mass"] + r["ctx_mass"] for r in rows]), y)
         d["memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
         d["memory_familiarity"] = auroc(np.array([r["familiarity"] for r in rows]), y)
+        if "not_null" in rows[0]:
+            d["memory_not_null"] = auroc(np.array([r["not_null"] for r in rows]), y)
         if "match2" in rows[0]:
             d["late_memory_match"] = auroc(np.array([r["match2"] for r in rows]), y)
     return d
@@ -388,12 +394,13 @@ def main():
     ap.add_argument("--mem2-layer", type=int, default=-1)
     ap.add_argument("--mem-init", type=float, default=1.0)
     ap.add_argument("--mem-layer", type=int, default=2)
+    ap.add_argument("--null-slot", action="store_true")
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER
-    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER = (a.mem_evidence, a.iit_positions, a.mem2_layer,
-                                                        a.mem_init, a.mem_layer)
+    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT
+    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT = (
+        a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init, a.mem_layer, a.null_slot)
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
