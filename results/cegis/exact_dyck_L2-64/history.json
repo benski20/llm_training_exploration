@@ -1,0 +1,340 @@
+{
+ "status": "proved",
+ "rounds": 1,
+ "history": [
+  {
+   "round": 0,
+   "n_cex_total": 0,
+   "sampled_errors": 0,
+   "errors_by_length": {
+    "2": 0,
+    "4": 0,
+    "6": 0,
+    "8": 0,
+    "10": 0,
+    "12": 0,
+    "14": 0,
+    "16": 0,
+    "18": 0,
+    "20": 0,
+    "22": 0,
+    "24": 0,
+    "26": 0,
+    "28": 0,
+    "30": 0,
+    "32": 0,
+    "34": 0,
+    "36": 0,
+    "38": 0,
+    "40": 0,
+    "42": 0,
+    "44": 0,
+    "46": 0,
+    "48": 0,
+    "50": 0,
+    "52": 0,
+    "54": 0,
+    "56": 0,
+    "58": 0,
+    "60": 0,
+    "62": 0,
+    "64": 0
+   },
+   "verify": {
+    "64": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 1.1392930970032467,
+     "unstable": null
+    },
+    "62": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 1.2707939069987333,
+     "unstable": null
+    },
+    "60": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 1.0689103889999387,
+     "unstable": null
+    },
+    "58": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.7780719350012077,
+     "unstable": null
+    },
+    "56": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.9273934359989653,
+     "unstable": null
+    },
+    "54": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.7708719370020845,
+     "unstable": null
+    },
+    "52": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.760060908000014,
+     "unstable": null
+    },
+    "50": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.6363071520027006,
+     "unstable": null
+    },
+    "48": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.5795593750008265,
+     "unstable": null
+    },
+    "46": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.6474194459988212,
+     "unstable": null
+    },
+    "44": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.5386351689994626,
+     "unstable": null
+    },
+    "42": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.47386482499859994,
+     "unstable": null
+    },
+    "40": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.4048238309987937,
+     "unstable": null
+    },
+    "38": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.5867311299989524,
+     "unstable": null
+    },
+    "36": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.36017246300252737,
+     "unstable": null
+    },
+    "34": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.28771053600212326,
+     "unstable": null
+    },
+    "32": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.2570872180003789,
+     "unstable": null
+    },
+    "30": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.25843042800261173,
+     "unstable": null
+    },
+    "28": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.22626664799827267,
+     "unstable": null
+    },
+    "26": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.20595727999898372,
+     "unstable": null
+    },
+    "24": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.13521070999922813,
+     "unstable": null
+    },
+    "22": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.14232176499717752,
+     "unstable": null
+    },
+    "20": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.09208657899944228,
+     "unstable": null
+    },
+    "18": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.07572938099838211,
+     "unstable": null
+    },
+    "16": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.06017828800031566,
+     "unstable": null
+    },
+    "14": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.04607809400113183,
+     "unstable": null
+    },
+    "12": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.03344470400043065,
+     "unstable": null
+    },
+    "10": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.024720133002119837,
+     "unstable": null
+    },
+    "8": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.01538251799865975,
+     "unstable": null
+    },
+    "6": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.00888660900091054,
+     "unstable": null
+    },
+    "4": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.004275871000572806,
+     "unstable": null
+    },
+    "2": {
+     "status": "proved",
+     "method": "exact-dp",
+     "time": 0.001468149999709567,
+     "unstable": null
+    }
+   },
+   "elapsed": 236.55126998299966
+  }
+ ],
+ "lengths": [
+  2,
+  4,
+  6,
+  8,
+  10,
+  12,
+  14,
+  16,
+  18,
+  20,
+  22,
+  24,
+  26,
+  28,
+  30,
+  32,
+  34,
+  36,
+  38,
+  40,
+  42,
+  44,
+  46,
+  48,
+  50,
+  52,
+  54,
+  56,
+  58,
+  60,
+  62,
+  64
+ ],
+ "config": {
+  "L": 64,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": false,
+  "bits": 0,
+  "shared": true,
+  "lengths": [
+   2,
+   4,
+   6,
+   8,
+   10,
+   12,
+   14,
+   16,
+   18,
+   20,
+   22,
+   24,
+   26,
+   28,
+   30,
+   32,
+   34,
+   36,
+   38,
+   40,
+   42,
+   44,
+   46,
+   48,
+   50,
+   52,
+   54,
+   56,
+   58,
+   60,
+   62
+  ],
+  "enumerate_up_to": 65536,
+  "tau": 0.0001,
+  "uniform": true,
+  "verifier": "auto",
+  "ternary_from_round": 0,
+  "n_train": 20000,
+  "rounds": 30,
+  "epochs_first": 200,
+  "epochs_round": 30,
+  "lr": 0.03,
+  "lr_decay": 0.92,
+  "lr_min": 0.0001,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 300.0,
+  "verify_workers": 4,
+  "collect_all_cex": false,
+  "verify_time_start": 60.0,
+  "cex_per_call": 20,
+  "seed": 0
+ },
+ "elapsed": 236.55126998299966
+}
