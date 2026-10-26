@@ -1,0 +1,52 @@
+{
+ "format": "vt-certificate/1",
+ "artifact_sha256": "e1871bb297c14156afb52b443d42b96a69d556e829ca80a2ca6d6d806dee7224",
+ "spec": "dyck",
+ "claim": "for every input sequence in V^L, argmax of the model's logits equals the spec label, with logit margin > tau",
+ "tau": 0.0001,
+ "status": "proved",
+ "queries": [
+  {
+   "class": 0,
+   "milp_status": 2,
+   "binaries": 146,
+   "time": 8.423938256999918,
+   "result": "infeasible"
+  },
+  {
+   "class": 1,
+   "milp_status": 2,
+   "binaries": 146,
+   "time": 62.66334783599996,
+   "result": "infeasible"
+  }
+ ],
+ "verifier": {
+  "method": "symbolic-bounds + exact big-M MILP (HiGHS)",
+  "scipy": "1.18.1",
+  "numpy": "2.5.3",
+  "python": "3.13.17"
+ },
+ "created": "2026-10-26T02:33:04Z",
+ "training": {
+  "L": 16,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": false,
+  "ternary_from_round": 0,
+  "n_train": 20000,
+  "rounds": 10,
+  "epochs_first": 60,
+  "epochs_round": 15,
+  "lr": 0.003,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 300.0,
+  "seed": 0
+ },
+ "cegis_rounds": 1
+}

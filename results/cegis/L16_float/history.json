@@ -1,0 +1,36 @@
+{
+ "status": "proved",
+ "rounds": 1,
+ "history": [
+  {
+   "round": 0,
+   "n_cex_total": 0,
+   "sampled_errors": 0,
+   "verify_status": "proved",
+   "verify_time": 62.946850170999824,
+   "unstable": 114,
+   "elapsed": 992.051386735
+  }
+ ],
+ "config": {
+  "L": 16,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": false,
+  "ternary_from_round": 0,
+  "n_train": 20000,
+  "rounds": 10,
+  "epochs_first": 60,
+  "epochs_round": 15,
+  "lr": 0.003,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 300.0,
+  "seed": 0
+ },
+ "elapsed": 992.051386735
+}

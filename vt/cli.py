@@ -35,7 +35,13 @@ def cmd_prove(a):
                       ternary_from_round=a.qat_from_round,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
-    model, res = cegis(spec, cfg, V=V, log=lambda e: print(json.dumps(e), flush=True))
+    progress = open(os.path.join(a.out, "progress.jsonl"), "a")
+
+    def log(e):
+        print(json.dumps(e), flush=True)
+        progress.write(json.dumps(e) + "\n"); progress.flush()
+
+    model, res = cegis(spec, cfg, V=V, log=log)
     art = os.path.join(a.out, "model.npz")
     save_artifact(model.export(), art)
     write_json(res, os.path.join(a.out, "history.json"))

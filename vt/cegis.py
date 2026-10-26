@@ -71,6 +71,20 @@ def _falsify(model, spec, cfg, V, rng):
     return np.unique(seqs[bad], axis=0)
 
 
+@torch.no_grad()
+def _neighbourhood(model, spec, seeds, V, rng, n=50000):
+    """Errors cluster: sample 1-3 token mutations of verifier counterexamples
+    and keep every one the model gets wrong."""
+    L = seeds.shape[1]
+    base = seeds[rng.integers(len(seeds), size=n)].copy()
+    k = rng.integers(1, 4, size=n)
+    for j in range(3):
+        rows = np.flatnonzero(k > j)
+        base[rows, rng.integers(L, size=len(rows))] = rng.integers(V, size=len(rows))
+    pred = model(_onehot(base, V)).argmax(1).numpy()
+    return np.unique(base[pred != spec.label_batch(base)], axis=0)
+
+
 def _mutants(seqs, V):
     out = [seqs]
     for t in range(seqs.shape[1]):
@@ -111,6 +125,11 @@ def cegis(spec, cfg, V=2, log=print):
             found = np.array([c["seq"] for c in res["counterexamples"]], dtype=np.int64)
             if len(found) == 0:  # timeout: no new information; train more
                 found = np.zeros((0, cfg.L), dtype=np.int64)
+            else:
+                near = _neighbourhood(model, spec, found, V, rng)
+                entry["neighbourhood_errors"] = int(len(near))
+                if len(near):
+                    found = np.concatenate([found, near])
         if len(found):
             new = _mutants(found[:500], V)
             cex = np.unique(np.concatenate([cex, new]), axis=0)

@@ -4,3 +4,5 @@ __pycache__/
 results/*.log
 data/*.txt
 runs/*/ckpt.pt
+runs_*.log
+results_*.log
