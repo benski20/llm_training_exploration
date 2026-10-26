@@ -286,6 +286,24 @@ def cmd_gen_sample(a):
     return 0
 
 
+def cmd_respond(a):
+    from .pcr import PlanError, respond
+    try:
+        with open(a.plan) as f:
+            plan = json.load(f)
+        with open(a.kb) as f:
+            kb = json.load(f)
+        with open(a.policy) as f:
+            policy = json.load(f)
+        out = respond(plan, kb, policy, seed=a.seed)
+    except (PlanError, json.JSONDecodeError) as e:
+        print(f"rejected plan: {e}", file=sys.stderr)
+        return 1
+    print(out["text"])
+    print(json.dumps(out["guarantees"], indent=1, default=str))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="vt")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -369,6 +387,10 @@ def main(argv=None):
     p.add_argument("-n", type=int, default=10); p.add_argument("--seed", type=int, default=0)
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_gen_sample)
+    p = sub.add_parser("respond", help="plan -> check -> realize, with a guarantee report")
+    p.add_argument("plan"); p.add_argument("--kb", required=True); p.add_argument("--policy", required=True)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(fn=cmd_respond)
     p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
     p.add_argument("private"); p.add_argument("public")
     p.set_defaults(fn=cmd_keygen)
@@ -382,9 +404,9 @@ def main(argv=None):
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
-        if name not in ("keygen",):
+        if name not in ("keygen", "respond"):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
-        if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample"):
+        if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample", "respond"):
             if name == "serve":
                 sp_.add_argument("--workers", type=int, default=os.cpu_count())
                 continue

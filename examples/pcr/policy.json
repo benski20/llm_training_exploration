@@ -1,0 +1,10 @@
+{"allowed_topics": ["arithmetic", "history_of_computing", "science"],
+ "denied_purposes": ["harm", "weapons", "self_harm", "harassment"],
+ "tones": ["neutral", "warm"],
+ "banned_words": ["stupid", "idiot", "obviously"],
+ "max_sentence_words": 30,
+ "no_shouting": true,
+ "relation_templates": {"born_in": "{subject} was born in {object}.",
+                        "designed_by": "The {subject} was designed by {object}.",
+                        "field": "{subject} worked in {object}.",
+                        "boils_at_sea_level_celsius": "At sea level, {subject} boils at {object} degrees Celsius."}}

@@ -1,0 +1,23 @@
+{
+ "simulated_planner_rates": {
+  "hallucinate": 0.15,
+  "unsupported": 0.1,
+  "arith": 0.2,
+  "harmful": 0.05
+ },
+ "n": 2000,
+ "released_errors": {
+  "direct": {
+   "false_claims": 932,
+   "wrong_arith": 406,
+   "harmful_released": 102
+  },
+  "pcr": {
+   "false_claims": 0,
+   "wrong_arith": 0,
+   "harmful_released": 0
+  }
+ },
+ "kept_true_claims": 1.0,
+ "kept_correct_answers": 1.0
+}

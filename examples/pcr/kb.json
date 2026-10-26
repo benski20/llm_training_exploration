@@ -1,0 +1,4 @@
+[{"subject": "Ada Lovelace", "relation": "born_in", "object": "1815"},
+ {"subject": "Ada Lovelace", "relation": "field", "object": "mathematics"},
+ {"subject": "Analytical Engine", "relation": "designed_by", "object": "Charles Babbage"},
+ {"subject": "water", "relation": "boils_at_sea_level_celsius", "object": "100"}]
