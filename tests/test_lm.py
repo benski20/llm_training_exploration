@@ -57,3 +57,26 @@ def test_mlp_worst_case_is_sound_and_exact():
     # every maximum of a piecewise-linear function on a box is attained at a
     # vertex of some linear region; corners sampled above usually find it
     assert r["max"] - max(samples) < 0.05 * abs(r["max"]) + 1e-6
+
+
+def test_ddp_two_process_training_runs(tmp_path):
+    """The multi-process (torchrun / DDP, gloo on CPU) training path works end to end."""
+    import json
+    import shutil
+    import subprocess
+    import sys
+    if shutil.which("torchrun") is None:
+        import pytest
+        pytest.skip("torchrun not available")
+    data = tmp_path / "d.txt"
+    data.write_bytes(b"to be or not to be, that is the question. " * 400)
+    root = os.path.join(os.path.dirname(__file__), "..")
+    env = dict(os.environ, OMP_NUM_THREADS="1")
+    subprocess.run(["torchrun", "--standalone", "--nproc_per_node", "2",
+                    os.path.join(root, "experiments", "train_lm.py"), "--data", str(data),
+                    "--out", str(tmp_path / "run"), "--preset", "tiny", "--block-size", "32",
+                    "--batch-size", "4", "--grad-accum", "2", "--steps", "6", "--eval-every", "3",
+                    "--eval-iters", "1", "--ternary", "--margin-weight", "0.5"],
+                   check=True, env=env, cwd=root, capture_output=True, timeout=600)
+    m = json.load(open(tmp_path / "run" / "metrics.json"))
+    assert m["final"]["step"] == 6 and m["final"]["loss"] < 6.0
