@@ -53,3 +53,15 @@ def test_per_position_memory_evidence():
     assert torch.allclose(e.sum(-1), torch.ones(2, 7), atol=1e-5)
     future = torch.triu(torch.ones(7, 7, dtype=torch.bool), 1)
     assert float(e[..., 7:][:, future].abs().max()) < 1e-7        # no credit to future memory reads
+
+
+def test_familiarity_is_zero_for_unused_slots():
+    m = _m()
+    x = torch.randint(0, 50, (2, 6))
+    m(x)
+    assert float(m.mem.familiarity().abs().max()) == 0.0              # nothing stored yet
+    mask = torch.zeros(2, 6, dtype=torch.bool); mask[0, 2] = True
+    m.mem.accumulate(mask)
+    m(x)
+    fam = m.mem.familiarity()
+    assert float(fam[0, 2]) > 0 and float(m.mem.usage.sum()) > 0

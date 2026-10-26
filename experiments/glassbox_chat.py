@@ -211,7 +211,7 @@ def train(model, stream, steps, block, bs, log, ckpt):
     if os.path.exists(ckpt):
         st = torch.load(ckpt)
         missing, unexpected = model.m.load_state_dict(st["model"], strict=False)
-        assert not unexpected and all(k.endswith(("lscale", "lbias")) for k in missing), (missing, unexpected)
+        assert not unexpected and all(k.endswith(("lscale", "lbias", "usage")) for k in missing), (missing, unexpected)
         if not missing:
             opt.load_state_dict(st["opt"])
         step = st["step"]

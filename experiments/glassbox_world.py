@@ -133,12 +133,13 @@ def qa_set(world, rng, n, rels, kmin, kmax, test):
 MEM_EVIDENCE, IIT_POS = "pooled", "answer"        # v1 settings; v2: "per_position", "all"
 MEM2 = -1                                          # v3: late memory read after block 3, match supervised
 MEM_INIT = 1.0                                     # v4: 0.0, absence as the default state of memory
+MEM_LAYER = 2                                      # v5: 3, memory after the last attention block
 
 
 class Glass:
     def __init__(self):
         self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
-                                     mem2_layer=MEM2, mem_value_init=MEM_INIT))
+                                     mem2_layer=MEM2, mem_value_init=MEM_INIT, mem_layer=MEM_LAYER))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -189,6 +190,10 @@ def stmt_loss(model, world, rng, n):
     x = pad(seqs)
     logits = model.m(x)[0] if isinstance(model, Glass) else model.run(x)[0]
     bi, ti, yi = zip(*[(b, t, vidx(y)) for b, ps in enumerate(tgt) for t, y in ps])
+    if isinstance(model, Glass):                       # slots read while storing a stated fact
+        mask = torch.zeros(x.shape, dtype=torch.bool)
+        mask[list(bi), list(ti)] = True
+        model.m.mem.accumulate(mask)
     lv = F.log_softmax(logits[list(bi), list(ti)][:, VALUES], -1)
     return F.nll_loss(lv, torch.tensor(yi))
 
@@ -282,6 +287,7 @@ def collect(model, qs, bs=100):
                 r["ctx_mass"] = float(e[j, :ctx_end].sum())
                 if MEM2 >= 0:
                     r["match2"] = float(model.m.mem2.trace["match"][j, q[1]])
+                r["familiarity"] = float(model.m.mem.familiarity()[j, q[1]])
             rows.append(r)
     return rows
 
@@ -306,6 +312,7 @@ def readout_aurocs(rows, probe, layer):
         d["k_builtin"] = auroc(np.array([r["k"] for r in rows]), y)
         d["evidence_support"] = auroc(np.array([r["mem_mass"] + r["ctx_mass"] for r in rows]), y)
         d["memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
+        d["memory_familiarity"] = auroc(np.array([r["familiarity"] for r in rows]), y)
         if "match2" in rows[0]:
             d["late_memory_match"] = auroc(np.array([r["match2"] for r in rows]), y)
     return d
@@ -380,11 +387,13 @@ def main():
     ap.add_argument("--iit-positions", default="answer", choices=["answer", "all"])
     ap.add_argument("--mem2-layer", type=int, default=-1)
     ap.add_argument("--mem-init", type=float, default=1.0)
+    ap.add_argument("--mem-layer", type=int, default=2)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT
-    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT = a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init
+    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER
+    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER = (a.mem_evidence, a.iit_positions, a.mem2_layer,
+                                                        a.mem_init, a.mem_layer)
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
@@ -401,7 +410,7 @@ def main():
         model = Glass() if kind == "glassbox" else Base()
         if os.path.exists(ckpt):
             missing, unexpected = model.m.load_state_dict(torch.load(ckpt), strict=False)
-            assert not unexpected and all(k.endswith(("lscale", "lbias")) for k in missing), (missing, unexpected)
+            assert not unexpected and all(k.endswith(("lscale", "lbias", "usage")) for k in missing), (missing, unexpected)
         else:
             model = train(kind, world, a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
             torch.save(model.m.state_dict(), ckpt)

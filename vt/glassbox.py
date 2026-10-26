@@ -117,6 +117,18 @@ class PKMemory(nn.Module):
         self.lbias = nn.Parameter(torch.tensor(0.0))
         self.patch = None              # (mask (B, T), read (B, d) or (B, T, d)): interchange interventions
         self.trace = None
+        self.register_buffer("usage", torch.zeros(self.n * self.n))   # read mass per slot while storing
+
+    @torch.no_grad()
+    def accumulate(self, mask):
+        """Add the last forward's read weights at positions `mask` (B, T) to the slot-usage counts."""
+        slots, w = self.trace["slots"][mask], self.trace["weights"][mask]
+        self.usage.index_add_(0, slots.flatten(), w.flatten())
+
+    def familiarity(self):
+        """Per position of the last forward: usage-weighted read, log(1 + usage). Not trained:
+        a read landing on slots that were never used to store anything scores 0."""
+        return (self.trace["weights"] * torch.log1p(self.usage[self.trace["slots"]])).sum(-1)
 
     def read(self, z):
         q1, q2 = self.q(z).chunk(2, -1)
