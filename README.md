@@ -13,7 +13,7 @@ certificate bound to the exact weights that get deployed.
   2³² = 4.3 billion inputs**. The proof took 119 s; brute force would take
   about 49 core-hours. Untied, position-specific models of the same size
   never got there, after 25+ counterexample-guided rounds across float,
-  causal, 4-bit and 6-bit variants. A single weight-tied model trained jointly on lengths 2–32 is proved at **every even length from 2 to 30**: up to 16 by exhaustive enumeration, 18–30 by MILP in 5–273 s each. Length 32 is still in progress.
+  causal, 4-bit and 6-bit variants. **One weight-tied model is proved correct at every even length from 2 to 30**, with 15 certificates (`results/cegis/L2-30_shared`). Lengths up to 16 are proved by exhaustive enumeration and 18–30 by MILP in 9–106 s each, 40 minutes end to end. At L=22 the MILP proof was independently confirmed by brute force over all 4.2M inputs.
 * **Test accuracy is not correctness.** Five standard training recipes all
   reach ≥ 99% held-out accuracy at length 16. Every one of them is wrong on
   80–4,749 of the 65,536 possible inputs.
@@ -65,10 +65,12 @@ vt predict runs/dyck32/model.npz "(()(()))()()(())((()))()()(())()"
 | causal, **4-bit** QAT | 16 | 6.6e4 | **proved** in round 3 (11 s verify, 45 s total); min margin 1.67 |
 | **weight-tied**, float | 16 | 6.6e4 | **proved** in round 1 (17 s verify) |
 | **weight-tied**, float | 32 | **4.3e9** | **proved in round 0** (119 s proof, 230 s total) |
-| **weight-tied, multi-length** (one model) | 2–30 | up to 1.1e9 | **proved at every even length 2–30**, for two consecutive rounds; L=32: counterexample, then solver timeout (in progress) |
+| **weight-tied, multi-length** (one model) | 2–30 | up to 1.1e9 | **proved at all 15 even lengths in round 2** (2–16 enumeration, 18–30 MILP in 9–106 s); 15 certificates; L=22 also confirmed by brute force |
+| weight-tied, multi-length 2–32 | 2–32 | 4.3e9 | 2–30 proved in 3 consecutive rounds; L=32 hit the 600 s limit in the joint model (the single-length L=32 model is proved) |
 | dense / causal, float | 32 | 4.3e9 | not proved: 25 rounds × 4 attempts plateau at 1–14 rare errors per round |
 | causal, 4-bit / 6-bit QAT | 32 | 4.3e9 | not proved: 4-bit too coarse (thousands of errors); 6-bit plateaus like float |
 | ternary QAT (dense or causal) | 16 | 6.6e4 | not proved: the STE oscillates (hundreds of errors per round) |
+| sortedness (V=4), weight-tied | 16 | 4.3e9 | not proved: a jump at the last position conflicts with the last-position head (d=4, h=8); the wider model's proofs were too slow to finish here |
 | weight-tied, float | 64 | 1.8e19 | not converged (d=4, h=8 is likely too small at this length) |
 | hand-built integer net | 128 | 3.4e38 | proved in 52 s (L=32: 0.7 s, L=64: 4.5 s) |
 

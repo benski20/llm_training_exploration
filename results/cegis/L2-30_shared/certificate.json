@@ -1,0 +1,202 @@
+{
+ "format": "vt-certificate/1",
+ "artifact_sha256": "d61c44e1effb9c61b8aca284fbac43476766629ce0b7666c08cd6440e3c0308e",
+ "spec": "dyck",
+ "claim": "for every input sequence in V^L, argmax of the model's logits equals the spec label, with logit margin > tau",
+ "tau": 0.0001,
+ "status": "proved",
+ "queries": [
+  {
+   "class": 1,
+   "case": 2,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 3.2452335540001513
+  },
+  {
+   "class": 1,
+   "case": 4,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 3.475755281000602
+  },
+  {
+   "class": 1,
+   "case": 8,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 3.3326210569975956
+  },
+  {
+   "class": 1,
+   "case": 6,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 5.124473630003195
+  },
+  {
+   "class": 1,
+   "case": 10,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 4.731392811998376
+  },
+  {
+   "class": 1,
+   "case": 12,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 3.381643364999036
+  },
+  {
+   "class": 1,
+   "case": 14,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 3.56164692299717
+  },
+  {
+   "class": 1,
+   "case": 0,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 15.687875937001081
+  },
+  {
+   "class": 1,
+   "case": 16,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 6.730060599998978
+  },
+  {
+   "class": 1,
+   "case": 20,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 11.819651526999223
+  },
+  {
+   "class": 1,
+   "case": 18,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 18.217453450000903
+  },
+  {
+   "class": 1,
+   "case": 22,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 19.693288164999103
+  },
+  {
+   "class": 1,
+   "case": 26,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 8.07343787300124
+  },
+  {
+   "class": 1,
+   "case": 24,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 14.906200010998873
+  },
+  {
+   "class": 1,
+   "case": 28,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 10.27451278800072
+  },
+  {
+   "class": 1,
+   "case": 30,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 13.052031093997357
+  },
+  {
+   "class": 0,
+   "case": null,
+   "milp_status": 2,
+   "binaries": 270,
+   "result": "infeasible",
+   "time": 106.22698749900155
+  }
+ ],
+ "verifier": {
+  "method": "symbolic-bounds + exact big-M MILP (HiGHS)",
+  "scipy": "1.18.1",
+  "numpy": "2.5.3",
+  "python": "3.13.17"
+ },
+ "created": "2026-10-26T09:05:06Z",
+ "length": 30,
+ "method": "milp",
+ "training": {
+  "L": 30,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": false,
+  "bits": 0,
+  "shared": true,
+  "lengths": [
+   2,
+   4,
+   6,
+   8,
+   10,
+   12,
+   14,
+   16,
+   18,
+   20,
+   22,
+   24,
+   26,
+   28
+  ],
+  "enumerate_up_to": 65536,
+  "tau": 0.0001,
+  "ternary_from_round": 0,
+  "n_train": 20000,
+  "rounds": 20,
+  "epochs_first": 200,
+  "epochs_round": 30,
+  "lr": 0.003,
+  "lr_decay": 0.92,
+  "lr_min": 0.0001,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 900.0,
+  "verify_workers": 4,
+  "collect_all_cex": false,
+  "verify_time_start": 60.0,
+  "cex_per_call": 20,
+  "seed": 0
+ },
+ "cegis_rounds": 3
+}

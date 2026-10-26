@@ -5,7 +5,8 @@
 | L16_float | dyck | 16 | 6.55e+04 | dense | float | proved | 1 | 1 | 63 | 992 | `e1871bb297c1` |
 | L16_shared | dyck | 16 | 6.55e+04 | tied (Toeplitz) | float | proved | 2 | 1 | 17 | 710 | `fca91d71729d` |
 | L16_shared_v1_fastdecay | dyck | 16 | 6.55e+04 | tied (Toeplitz) | float | not_proved | 15 | 0 | - | 94 |  |
-| L2-32_shared | dyck | 32 | 4.29e+09 | tied (Toeplitz) | float | stopped | 3 | 2 | 1174 | 2868 |  |
+| L2-30_shared | dyck | 2..30 | 1.07e+09 | tied (Toeplitz) | float | proved | 3 | 3 | 254 | 2415 | `d61c44e1effb` |
+| L2-32_shared_v1_L32timeout | dyck | 32 | 4.29e+09 | tied (Toeplitz) | float | stopped | 4 | 3 | 1810 | 5714 |  |
 | L24_float_v1_nocases | dyck | 24 | 1.68e+07 | dense | float | stopped | 6 | 2 | 601 | 1532 |  |
 | L24_float_v2_firstcex | dyck | 24 | 1.68e+07 | dense | float | stopped | 6 | 2 | 271 | 575 |  |
 | L24_float_v3_allcex | dyck | 24 | 1.68e+07 | dense | float | stopped | 5 | 1 | 1497 | 2195 |  |
@@ -19,5 +20,5 @@
 | L32_float_v3_1cex | dyck | 32 | 4.29e+09 | dense | float | stopped | 7 | 3 | 269 | 822 |  |
 | L32_shared | dyck | 32 | 4.29e+09 | tied (Toeplitz) | float | proved | 1 | 1 | 119 | 230 | `59b734b3a876` |
 | L64_shared_v1_noconverge | dyck | 64 | 1.84e+19 | tied (Toeplitz) | float | stopped | 4 | 0 | - | 237 |  |
-| sorted_L16_shared | sorted | 16 | 4.29e+09 | tied (Toeplitz) | float | running | 6 | 4 | 39 | 1097 |  |
 | sorted_L16_shared_v1_small | sorted | 16 | 4.29e+09 | tied (Toeplitz) | float | not_proved | 30 | 13 | 20 | 687 |  |
+| sorted_L16_shared_v2_wide | sorted | 16 | 4.29e+09 | tied (Toeplitz) | float | stopped | 6 | 4 | 39 | 1097 |  |
