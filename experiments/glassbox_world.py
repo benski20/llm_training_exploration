@@ -132,12 +132,13 @@ def qa_set(world, rng, n, rels, kmin, kmax, test):
 
 MEM_EVIDENCE, IIT_POS = "pooled", "answer"        # v1 settings; v2: "per_position", "all"
 MEM2 = -1                                          # v3: late memory read after block 3, match supervised
+MEM_INIT = 1.0                                     # v4: 0.0, absence as the default state of memory
 
 
 class Glass:
     def __init__(self):
         self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
-                                     mem2_layer=MEM2))
+                                     mem2_layer=MEM2, mem_value_init=MEM_INIT))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -378,11 +379,12 @@ def main():
     ap.add_argument("--mem-evidence", default="pooled", choices=["pooled", "per_position"])
     ap.add_argument("--iit-positions", default="answer", choices=["answer", "all"])
     ap.add_argument("--mem2-layer", type=int, default=-1)
+    ap.add_argument("--mem-init", type=float, default=1.0)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS, MEM2
-    MEM_EVIDENCE, IIT_POS, MEM2 = a.mem_evidence, a.iit_positions, a.mem2_layer
+    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT
+    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT = a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)

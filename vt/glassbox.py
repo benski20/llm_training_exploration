@@ -50,6 +50,7 @@ class GBConfig:
     sharpness: bool = False        # per-token k sets the next-token distribution's sharpness
     mem_evidence: str = "pooled"   # "pooled": one memory source; "per_position": each read is a source
     mem2_layer: int = -1           # optional second (late) memory read, after this block's attention
+    mem_value_init: float = 1.0    # std of initial memory values; 0: unwritten memory reads as empty
 
 
 def alibi_bias(T, n_head, device=None):
@@ -110,7 +111,7 @@ class PKMemory(nn.Module):
         self.k1 = nn.Parameter(torch.randn(self.n, dk) / math.sqrt(dk))
         self.k2 = nn.Parameter(torch.randn(self.n, dk) / math.sqrt(dk))
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
-        nn.init.normal_(self.values.weight, 0.0, 1.0)
+        nn.init.normal_(self.values.weight, 0.0, c.mem_value_init)
         self.gate = nn.Linear(c.n_embd, 1)
         self.lscale = nn.Parameter(torch.tensor(1.0))   # affine map of the match score, for calibration
         self.lbias = nn.Parameter(torch.tensor(0.0))
