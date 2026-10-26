@@ -1,0 +1,29 @@
+{
+ "gpt_final_loss": 0.46419647336006165,
+ "samples": 20000,
+ "raw_invalid": 2343,
+ "raw_invalid_frac": 0.11715,
+ "guards": {
+  "proved": {
+   "certified": true,
+   "accepted": 17657,
+   "leaks": 0,
+   "false_rejects": 0,
+   "worst_case_all_inputs": {
+    "invalid_accepted": 0,
+    "valid_rejected": 0
+   }
+  },
+  "unverified (99.6% test acc)": {
+   "certified": false,
+   "accepted": 17658,
+   "leaks": 1,
+   "false_rejects": 0,
+   "worst_case_all_inputs": {
+    "invalid_accepted": 647,
+    "valid_rejected": 0
+   }
+  }
+ },
+ "elapsed_s": 762.2714850902557
+}

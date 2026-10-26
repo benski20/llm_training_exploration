@@ -50,10 +50,23 @@ certificate bound to the exact weights that get deployed.
   extra LM loss. It costs O(params) per step, so it scales to any model size.
   Ternary (BitNet b1.58) weights compose with it. The trainer is tested with
   2-process DDP (`torchrun`) and runs at the `gpt2-124m` preset.
+* **Proved components give guarantees about GPT outputs.** A GPT can't be
+  proved, but what it emits can be. A small GPT trained on bracket strings
+  produced 11.7% invalid strings (2,343 of 20,000 samples). Filtering with
+  the *proved* guard (`vt/guard.py`) passed 0 invalid strings and rejected 0
+  valid ones, and its certificate rules out leaks on every one of the 2¹⁶
+  inputs. An *unverified* guard with 99.6% held-out accuracy leaked an
+  invalid string in the same sample; over all inputs it accepts 647 invalid
+  strings (`experiments/guarded_generation.py`).
 * **Deployment is gated on proofs.** Certificates bind each verdict to the
   SHA-256 of the exact weights. `vt check` re-verifies independently, and
   `vt serve` refuses to serve an artifact without a matching "proved"
-  certificate.
+  certificate. The server is hardened: body-size cap, socket timeouts,
+  strict parsing, fuzz-tested, no 5xx on 300 random bodies. On 4 cores it
+  handles **392 req/s, i.e. 12.6k sequences/s, with p99 latency of 83 ms**
+  (`experiments/bench_serve.py`). It ships as a torch-free, non-root Docker
+  image with a healthcheck. CI builds the image, serves a certified model,
+  and checks that a tampered one is refused.
 
 ```
 pip install -e ".[dev]"
@@ -87,6 +100,7 @@ curl -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())((()))()()(
 | CEGIS loop | `vt/cegis.py` | Hard-family sampling (deep nesting, single shallow dips), neighbourhood search around verifier counterexamples, per-round cosine-annealed lr, time-limit escalation (60 s × 4ⁿ), QAT schedule, and multi-length training for weight-tied models. Short lengths are decided by exhaustive enumeration, which is itself a complete proof. |
 | **Exact verifier** | `vt/exact.py` | For one-block models whose causal kernel is free on the last `w` offsets and constant beyond, position t's output depends only on (its token, the last w−1 tokens, the counts of older tokens). The margin is additive over positions. A DP over (counts, recent tokens, spec DFA state) computes the **exact** worst-case margin over all V^L inputs, in Python big-int arithmetic at scale 2^K (float64 weights are dyadic). Counterexamples are reconstructed by back-pointers and re-checked with an exact rational forward pass. It is polynomial in L for fixed V and w. `--verifier auto` uses it whenever the structure allows. |
 | User specs | `vt/dfaspec.py` | `DFASpec`: any regular language from JSON (`specs/*.json`). It validates completeness. The sampler mixes uniform strings, uniformly random *accepted* strings (via suffix-acceptance counts) and one-token near misses. |
+| Guards | `vt/guard.py` | `Guard(artifact, certificate)`: accept or reject candidate outputs with a proved classifier; refuses unproved guards unless told otherwise. |
 | Serving | `vt/serve.py` | `vt serve`: a threaded HTTP server with `/health` and `/predict`, input validation, and a gate that refuses unproved or tampered artifacts. |
 | Artifacts | `vt/artifact.py`, `vt/cli.py` | The certificate binds the verdict to the SHA-256 of the float64 `.npz`. `vt predict` runs that file through the forward pass the verifier encoded, so the proved artifact is exactly what is deployed. Change any weight, even by 1e-9, and `vt check` fails. |
 
@@ -195,7 +209,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ## Use
 
 ```bash
-pip install -e ".[dev]"; pytest -q        # 44 tests, about 1.5 minutes on CPU; CI runs them on every push
+pip install -e ".[dev]"; pytest -q        # 50 tests, about 2 minutes on CPU; CI runs them on every push
 
 vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths $(seq -s, 2 2 30)]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
@@ -215,6 +229,28 @@ Reproduce: `experiments/run_sweep.py` (local robustness),
 `experiments/lm_sweep.sh` and `verify_lm_blocks.py` (GPT),
 `experiments/length_generalization.py`. Each one resumes after an
 interruption.
+
+## Scope: what this is and isn't
+
+* **It is** a working system for training small sequence models that come
+  with machine-checked global-correctness certificates. Those certificates
+  are exact for the windowed-uniform architecture class, which is what
+  `--uniform` trains. Certified artifacts can be deployed and served under a
+  proof gate, and used as proved guards around unverified generators such as
+  GPTs.
+* **It isn't** a proof that a large language model is correct. No current
+  method proves end-to-end properties of billion-parameter networks. Here
+  the GPT side gets a cheap, scalable *verification-friendliness* recipe
+  (margin loss + ternary weights; exact per-block checks) plus output
+  guarantees via proved guards.
+* **Not done in this environment:**
+  * GPU-scale training: CPU only; the code paths are tested with DDP on
+    CPU and at the gpt2-124m preset.
+  * Exact proofs for multi-block or arbitrary mixing: these get labelled MILP
+    certificates instead.
+  * Specs that need periodic counting, such as `mod3_a`: training collapses
+    to a constant even at width 32, the known parity/modular-counting
+    difficulty.
 
 ## Soundness and trust
 
