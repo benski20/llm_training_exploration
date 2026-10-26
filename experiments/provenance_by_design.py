@@ -39,7 +39,7 @@ DIGITS = torch.tensor([ord(c) for c in "0123456789"])
 class PointerGPT(nn.Module):
     def __init__(self, block):
         super().__init__()
-        self.gpt = GPT(GPTConfig(block_size=block, n_layer=4, n_head=4, n_embd=128))
+        self.gpt = GPT(GPTConfig(block_size=block, n_layer=4, n_head=4, n_embd=128, pos_encoding=G.POS))
         d = 128
         self.q, self.k = nn.Linear(d, d, bias=False), nn.Linear(d, d, bias=False)
         self.gate = nn.Linear(d, 1)
@@ -129,9 +129,10 @@ def main():
     ap.add_argument("--n-test", type=int, default=400)
     ap.add_argument("--names", default="single", choices=["multi", "single"])
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--pos", default="learned", choices=["learned", "alibi"])
     ap.add_argument("--out", default="results/provenance_by_design.json")
     a = ap.parse_args()
-    G.NAMES = a.names
+    G.NAMES, G.POS = a.names, a.pos
     torch.set_num_threads(os.cpu_count())
     t0 = time.time()
     ckpt = a.out.replace(".json", ".pt")
@@ -142,7 +143,7 @@ def main():
         m = train(a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
         torch.save(m.state_dict(), ckpt)
     rng = random.Random(1000 + a.seed)
-    res = {"names": a.names, "train_s": time.time() - t0}
+    res = {"names": a.names, "pos": a.pos, "train_s": time.time() - t0}
     for name, (kmin, kmax) in {"in_dist": (1, 4), "shift": (6, 8)}.items():
         data = [G.example(rng, kmin, kmax) for _ in range(a.n_test)]
         prompts = [d[0] for d in data]

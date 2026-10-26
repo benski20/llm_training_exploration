@@ -80,3 +80,14 @@ def test_ddp_two_process_training_runs(tmp_path):
                    check=True, env=env, cwd=root, capture_output=True, timeout=600)
     m = json.load(open(tmp_path / "run" / "metrics.json"))
     assert m["final"]["step"] == 6 and m["final"]["loss"] < 6.0
+
+
+def test_alibi_is_causal_and_runs_past_training_length():
+    torch.manual_seed(0)
+    m = GPT(GPTConfig(block_size=16, n_layer=2, n_head=2, n_embd=16, pos_encoding="alibi"))
+    x = torch.randint(0, 256, (2, 40))                     # longer than block_size: no position table
+    a, _ = m(x)
+    x2 = x.clone(); x2[:, 30:] = 0
+    b, _ = m(x2)
+    assert torch.allclose(a[:, :30], b[:, :30], atol=1e-5)  # causal
+    assert m.wpe is None

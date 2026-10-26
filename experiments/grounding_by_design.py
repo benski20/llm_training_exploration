@@ -39,6 +39,8 @@ BLOCK = 200
 
 
 NAMES = "multi"          # "multi": names like P123; "single": one byte per person (easier lookup)
+POS = "learned"          # position encoding: "learned" or "alibi"
+FLIP = (0.3, 0.7)        # intervention training: P(batch), P(present example in that batch)
 
 
 def pname(p):
@@ -75,7 +77,7 @@ def encode(prompts, answers):
 def train(by_design, steps, seed, log):
     torch.manual_seed(seed)
     rng = random.Random(seed)
-    model = GPT(GPTConfig(block_size=BLOCK, n_layer=4, n_head=4, n_embd=128))
+    model = GPT(GPTConfig(block_size=BLOCK, n_layer=4, n_head=4, n_embd=128, pos_encoding=POS))
     ch = Channel(model)
     opt = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=0.01)
     for i in range(steps):
@@ -87,8 +89,8 @@ def train(by_design, steps, seed, log):
         present = torch.tensor([b[2] for b in batch])
         flip = torch.zeros(32, dtype=torch.bool)
         ch.write = None
-        if by_design and rng.random() < 0.3:
-            flip = present & (torch.rand(32) < 0.7)
+        if by_design and rng.random() < FLIP[0]:
+            flip = present & (torch.rand(32) < FLIP[1])
             answers = ["unknown" if f else a for a, f in zip(answers, flip.tolist())]
         x, y, pos = encode(prompts, answers)
         if flip.any():
@@ -151,9 +153,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="results/grounding_by_design.json")
     ap.add_argument("--names", default="multi", choices=["multi", "single"])
+    ap.add_argument("--pos", default="learned", choices=["learned", "alibi"])
+    ap.add_argument("--flip", default="0.3,0.7", help="intervention rates: P(batch),P(example)")
     a = ap.parse_args()
-    global NAMES
-    NAMES = a.names
+    global NAMES, POS, FLIP
+    NAMES, POS = a.names, a.pos
+    FLIP = tuple(float(v) for v in a.flip.split(","))
     torch.set_num_threads(os.cpu_count())
     rng = random.Random(1000 + a.seed)
     sets = {"in_dist": [example(rng, 1, 4) for _ in range(a.n_test)],
@@ -164,7 +169,7 @@ def main():
     for by_design in (False, True):
         t0 = time.time()
         model, ch = train(by_design, a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
-        r = {"train_s": time.time() - t0, "names": NAMES}
+        r = {"train_s": time.time() - t0, "names": NAMES, "pos": POS, "flip": FLIP}
         _, _, Fp = run(model, ch, [e[0] for e in sets["probe_fit"]])
         probe, _ = fit_probe(Fp, np.array([e[2] for e in sets["probe_fit"]], dtype=int))
         # conformal release gate on the monitor: bad = calibration examples whose fact is absent

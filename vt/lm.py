@@ -28,6 +28,7 @@ from .model import ternarize
 class GPTConfig:
     vocab_size: int = 256          # byte-level: works on any text
     block_size: int = 128
+    pos_encoding: str = "learned"  # "learned" (absolute) or "alibi" (relative; extrapolates to longer inputs)
     n_layer: int = 4
     n_head: int = 4
     n_embd: int = 128
@@ -54,6 +55,10 @@ class Attention(nn.Module):
     def __init__(self, c):
         super().__init__()
         self.n_head = c.n_head
+        self.alibi = c.pos_encoding == "alibi"
+        if self.alibi:
+            slopes = torch.tensor([2 ** (-8 * (i + 1) / c.n_head) for i in range(c.n_head)])
+            self.register_buffer("slopes", slopes, persistent=False)
         self.qkv = BitLinear(c.n_embd, 3 * c.n_embd, ternary=c.ternary)
         self.proj = BitLinear(c.n_embd, c.n_embd, ternary=c.ternary)
         self.dropout = c.dropout
@@ -62,8 +67,15 @@ class Attention(nn.Module):
         B, T, C = x.shape
         q, k, v = self.qkv(x).split(C, dim=2)
         q, k, v = (t.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) for t in (q, k, v))
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True,
-                                           dropout_p=self.dropout if self.training else 0.0)
+        drop = self.dropout if self.training else 0.0
+        if self.alibi:
+            i = torch.arange(T, device=x.device)
+            dist = (i[:, None] - i[None, :]).float()
+            bias = -self.slopes[:, None, None] * dist
+            bias = bias.masked_fill(dist < 0, float("-inf"))
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=bias.to(q.dtype), dropout_p=drop)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True, dropout_p=drop)
         return self.proj(y.transpose(1, 2).contiguous().view(B, T, C))
 
 
@@ -99,7 +111,7 @@ class GPT(nn.Module):
         super().__init__()
         self.config = c
         self.wte = nn.Embedding(c.vocab_size, c.n_embd)
-        self.wpe = nn.Embedding(c.block_size, c.n_embd)
+        self.wpe = nn.Embedding(c.block_size, c.n_embd) if c.pos_encoding == "learned" else None
         self.blocks = nn.ModuleList([Block(c) for _ in range(c.n_layer)])
         self.ln_f = nn.RMSNorm(c.n_embd)
         self.head = BitLinear(c.n_embd, c.vocab_size, ternary=c.ternary)
@@ -119,7 +131,9 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None):
         T = idx.shape[1]
-        x = self.wte(idx) + self.wpe(torch.arange(T, device=idx.device))
+        x = self.wte(idx)
+        if self.wpe is not None:
+            x = x + self.wpe(torch.arange(T, device=idx.device))
         for b in self.blocks:
             x = b(x)
         logits = self.head(self.ln_f(x))
