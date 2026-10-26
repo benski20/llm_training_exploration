@@ -52,6 +52,10 @@ PAD, FT, CT, QT, QM, SEMI, UNKNOWN = range(7)
 BASE = 7
 VOCAB = BASE + N_ENT + N_REL + N_REL * N_VAL
 BLOCK = 64
+FRESH = 0          # v8: size of a pool of entity tokens re-randomised every step (never memorisable)
+
+
+def fresh(i): return VOCAB + i
 
 
 def ent(i): return BASE + i
@@ -88,7 +92,10 @@ class World:
         return seq, pos
 
     def question(self, rng, kind, rels, kmin, kmax, test):
-        """kind: ctx | mem | absent. Returns (tokens, '?' index, gold token, kind)."""
+        """kind: ctx | mem | absent | ctx_fresh | absent_fresh. Returns (tokens, '?' index,
+        gold token, kind). *_fresh questions are about an entity token from the fresh pool."""
+        if kind.endswith("_fresh"):
+            return self.fresh_question(rng, kind, rels, kmin, kmax)
         pool = {"mem": self.by["known_heldout" if test else "known_qa"],
                 "absent": self.by["unk_test" if test else "unk_train"]}
         if kind == "ctx":
@@ -117,6 +124,35 @@ class World:
         seq += [QT, ent(e), rel(r), QM]
         return seq, len(seq) - 1, gold, kind
 
+    def fresh_question(self, rng, kind, rels, kmin, kmax):
+        f, r = fresh(rng.randrange(FRESH)), rng.choice(rels)
+        facts = []
+        for _ in range(rng.randint(kmin, kmax)):
+            e2 = f if rng.random() < 0.3 else ent(rng.randrange(N_ENT))
+            r2 = rng.choice([x for x in rels if x != r]) if e2 == f else rng.choice(rels)
+            facts.append((e2, r2, rng.randrange(N_VAL)))
+        gold = UNKNOWN
+        if kind == "ctx_fresh":
+            v = rng.randrange(N_VAL)
+            facts.insert(rng.randint(0, len(facts)), (f, r, v))
+            gold = val(r, v)
+        seq = []
+        for e2, r2, v2 in facts:
+            seq += [CT, e2, rel(r2), val(r2, v2), SEMI]
+        seq += [QT, f, rel(r), QM]
+        return seq, len(seq) - 1, gold, kind
+
+
+@torch.no_grad()
+def refresh(model, gen):
+    """Give the fresh entity tokens new random identities."""
+    if not FRESH:
+        return
+    if isinstance(model, Glass):
+        model.m.embed.weight[VOCAB:] = torch.randn(FRESH, model.m.embed.weight.shape[1], generator=gen)
+    else:
+        model.m.wte.weight[VOCAB:] = 0.02 * torch.randn(FRESH, model.m.wte.weight.shape[1], generator=gen)
+
 
 def pad(seqs):
     T = max(len(s) for s in seqs)
@@ -124,8 +160,8 @@ def pad(seqs):
 
 
 def qa_set(world, rng, n, rels, kmin, kmax, test):
-    kinds = ["ctx", "mem", "absent"]
-    return [world.question(rng, kinds[i % 3], rels, kmin, kmax, test) for i in range(n)]
+    kinds = ["ctx", "mem", "absent"] + (["absent_fresh", "ctx_fresh"] if FRESH else [])
+    return [world.question(rng, kinds[i % len(kinds)], rels, kmin, kmax, test) for i in range(n)]
 
 
 # ---------------------------------------------------------------- model wrappers
@@ -140,7 +176,7 @@ MEM_HEADS = 1                                      # v7: 4 independent memory he
 
 class Glass:
     def __init__(self):
-        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
+        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB + FRESH, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
                                      mem2_layer=MEM2, mem_value_init=MEM_INIT, mem_layer=MEM_LAYER,
                                      null_slot=NULL_SLOT, mem_heads=MEM_HEADS))
 
@@ -162,7 +198,7 @@ class Glass:
 
 class Base:
     def __init__(self):
-        self.m = GPT(GPTConfig(vocab_size=VOCAB, block_size=BLOCK, n_layer=4, n_head=4, n_embd=128,
+        self.m = GPT(GPTConfig(vocab_size=VOCAB + FRESH, block_size=BLOCK, n_layer=4, n_head=4, n_embd=128,
                                mlp_ratio=16, pos_encoding="alibi"))
         self._hs = []
         for blk in self.m.blocks:
@@ -206,10 +242,12 @@ def train(kind, world, steps, seed, log):
     rng = random.Random(seed)
     model = Glass() if kind == "glassbox" else Base()
     opt = torch.optim.AdamW(model.parameters(), lr=2e-3, weight_decay=0.01)
+    fgen = torch.Generator().manual_seed(seed + 1)
     for step in range(steps):
         lr = 2e-3 * min(1, (step + 1) / 200) * 0.5 * (1 + math.cos(math.pi * step / steps))
         for g in opt.param_groups:
             g["lr"] = lr
+        refresh(model, fgen)
         qs = qa_set(world, rng, 64, QA_RELS, 0, 4, test=False)
         x, qpos = pad([q[0] for q in qs]), torch.tensor([q[1] for q in qs])
         gold = torch.tensor([q[2] for q in qs])
@@ -301,11 +339,14 @@ def collect(model, qs, bs=100):
 
 def behaviour(rows):
     d = {}
-    for kind in ("ctx", "mem", "absent"):
+    for kind in sorted({r["kind"] for r in rows}):
         rs = [r for r in rows if r["kind"] == kind]
         d[f"{kind}_acc"] = float(np.mean([r["out"] == r["gold"] for r in rs]))
     rs = [r for r in rows if r["kind"] == "absent"]
     d["hallucination_rate"] = float(np.mean([r["out"] != UNKNOWN for r in rs]))
+    rs = [r for r in rows if r["kind"] == "absent_fresh"]
+    if rs:
+        d["hallucination_rate_fresh_entities"] = float(np.mean([r["out"] != UNKNOWN for r in rs]))
     d["accuracy"] = float(np.mean([r["out"] == r["gold"] for r in rows]))
     return d
 
@@ -401,12 +442,14 @@ def main():
     ap.add_argument("--mem-layer", type=int, default=2)
     ap.add_argument("--null-slot", action="store_true")
     ap.add_argument("--mem-heads", type=int, default=1)
+    ap.add_argument("--fresh", type=int, default=0, help="pool of re-randomised entity tokens (v8)")
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS
-    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS = (
-        a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init, a.mem_layer, a.null_slot, a.mem_heads)
+    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS, FRESH
+    MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS, FRESH = (
+        a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init, a.mem_layer, a.null_slot, a.mem_heads,
+        a.fresh)
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
@@ -428,6 +471,7 @@ def main():
             model = train(kind, world, a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
             torch.save(model.m.state_dict(), ckpt)
         model.m.eval()
+        refresh(model, torch.Generator().manual_seed(4242))     # test identities never seen in training
         r = {"train_s": time.time() - t0, "params": sum(p.numel() for p in model.parameters())}
         _, L, probe = fit_best_probe(collect(model, probe_fit), collect(model, probe_val))
         r["probe_layer"] = L
