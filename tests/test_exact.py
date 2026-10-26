@@ -99,3 +99,20 @@ def test_windowed_kernel_exact_matches_enumeration(window):
         assert r["window"] == window
         assert (r["status"] == "proved") == (n_err == 0)
         assert abs(r["min_margin_float"] - min_margin) < 1e-9
+
+
+def test_warm_start_and_extension_preserve_the_function():
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "experiments"))
+    from length_generalization import truncate
+    torch.manual_seed(0)
+    m = MixerNet(10, 2, 4, 8, 1, 2, uniform=True)
+    P = m.export()
+    big = MixerNet(20, 2, 4, 8, 1, 2, uniform=True)
+    big.load_tied_artifact(P)
+    x = np.eye(2)[[0, 1, 1, 0, 0, 0, 1, 1, 0, 1]]
+    assert np.allclose(np_forward(big.export(10), x), np_forward(P, x), atol=1e-6)
+    y = np.eye(2)[[0, 1] * 8]
+    ext = truncate(P, 16)                     # extend the artifact itself
+    assert np.allclose(np_forward(ext, y), np_forward(big.export(16), y), atol=1e-6)
