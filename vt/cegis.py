@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .global_verify import verify_global
+from .global_verify import verify_auto, verify_global
 from .model import MixerNet
 
 
@@ -33,6 +33,8 @@ class CegisConfig:
     lengths: tuple = ()          # extra lengths (< L) to train and prove at too; needs shared
     enumerate_up_to: int = 1 << 16  # lengths with V^L at most this are checked exhaustively
     tau: float = 1e-4            # required logit margin (same as the certificate's claim)
+    uniform: bool = False        # uniform causal mixing (exactly verifiable, any length)
+    verifier: str = "auto"       # auto | exact | milp
     ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
     rounds: int = 20
@@ -141,7 +143,7 @@ def cegis(spec, cfg, V=2, log=print):
         raise ValueError("cfg.L must be the largest length")
     model = MixerNet(cfg.L, V, cfg.d_model, cfg.d_hidden, cfg.n_blocks,
                      spec.n_classes, ternary=cfg.ternary, causal=cfg.causal,
-                     shared=cfg.shared)
+                     shared=cfg.shared, uniform=cfg.uniform)
     n_each = max(1000, cfg.n_train // len(lengths))
     base = {L: spec.sample(n_each, L, rng) for L in lengths}
     cex = {L: np.zeros((0, L), dtype=np.int64) for L in lengths}
@@ -167,14 +169,15 @@ def cegis(spec, cfg, V=2, log=print):
         if entry["sampled_errors"] == 0:
             per_length, all_proved = {}, True
             # enumerated lengths are already proved (complete check above)
+            exact_ok = cfg.uniform and cfg.verifier != "milp"
             for L in lengths:
-                if V ** L <= cfg.enumerate_up_to:
+                if V ** L <= cfg.enumerate_up_to and not exact_ok:
                     per_length[L] = {"status": "proved", "method": "enumeration"}
             # longest first: it is the most likely to fail, and a failure skips the rest
             for L in sorted([L for L in lengths if L not in per_length], reverse=True):
                 res = _verify_escalating(model.export(L), spec, cfg)
-                per_length[L] = {"status": res["status"], "method": "milp", "time": res["time"],
-                                 "unstable": res["unstable"]}
+                per_length[L] = {"status": res["status"], "method": res["method"],
+                                 "time": res["time"], "unstable": res.get("unstable")}
                 if res["status"] != "proved":
                     all_proved = False
                     if res["status"] == "unknown":
@@ -207,8 +210,9 @@ def cegis(spec, cfg, V=2, log=print):
 def _verify_escalating(P, spec, cfg):
     limit = min(cfg.verify_time_start, cfg.verify_time)
     while True:
-        res = verify_global(P, spec, time_limit=limit, workers=cfg.verify_workers,
-                            stop_on_cex=not cfg.collect_all_cex, n_solutions=cfg.cex_per_call)
+        res = verify_auto(P, spec, method=cfg.verifier, tau=cfg.tau, time_limit=limit,
+                          workers=cfg.verify_workers, stop_on_cex=not cfg.collect_all_cex,
+                          n_solutions=cfg.cex_per_call)
         if res["status"] != "unknown" or limit >= cfg.verify_time:
             res["limit"] = limit
             return res

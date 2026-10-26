@@ -21,6 +21,13 @@ LIST_KEYS = ("mix", "W1", "b1", "W2", "b2")
 SCALARS = ("L", "V", "d", "h", "C")
 
 
+VERIFIER_DESCRIPTIONS = {
+    "milp": "symbolic-bounds + exact big-M MILP (HiGHS, floating point)",
+    "exact-dp": "dynamic program over (position, token counts, spec state) in exact rational arithmetic",
+    "enumeration": "exhaustive enumeration of all inputs (float64 forward pass)",
+}
+
+
 def save_artifact(P, path):
     arrays = {k: np.asarray(P[k]) for k in ("W_in", "b_in", "W_out", "b_out")}
     for k in LIST_KEYS:
@@ -60,11 +67,12 @@ def make_certificate(artifact_path, spec_name, result, tau, extra=None):
                   "the spec label, with logit margin > tau"),
         "tau": tau,
         "status": result["status"],
-        "queries": result["queries"],
-        "verifier": {"method": "symbolic-bounds + exact big-M MILP (HiGHS)",
+        "queries": result.get("queries", []),
+        "verifier": {"method": VERIFIER_DESCRIPTIONS.get(result.get("method", "milp"), result.get("method")),
                      "scipy": scipy.__version__, "numpy": np.__version__,
                      "python": platform.python_version()},
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        **({"min_margin": result["min_margin"]} if "min_margin" in result else {}),
         **(extra or {}),
     }
 

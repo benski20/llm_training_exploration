@@ -13,7 +13,7 @@ import sys
 import numpy as np
 
 from .artifact import load_artifact, make_certificate, save_artifact, sha256_file, write_json
-from .global_verify import SPECS, exhaustive_check, verify_global
+from .global_verify import SPECS, exhaustive_check, verify_auto, verify_global
 from .verify import np_forward
 
 TOKENS = {"dyck": "()", "sorted": "abcd"}
@@ -33,7 +33,10 @@ def cmd_prove(a):
     tuned = {"lr_decay": (0.92, 0.7), "epochs_first": (200, 60), "epochs_round": (30, 15)}
     for k, (tied, untied) in tuned.items():
         if getattr(a, k) is None:
-            setattr(a, k, tied if a.shared else untied)
+            setattr(a, k, tied if (a.shared or a.uniform) else untied)
+    if a.lr is None:
+        a.lr = 3e-2 if a.uniform else 3e-3
+    a.shared = a.shared or a.uniform
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
                       ternary_from_round=a.qat_from_round, verify_workers=a.workers, bits=a.bits,
@@ -41,6 +44,7 @@ def cmd_prove(a):
                       epochs_first=a.epochs_first, epochs_round=a.epochs_round,
                       lengths=tuple(int(v) for v in a.also_lengths.split(",") if v), tau=a.tau,
                       n_train=a.n_train, enumerate_up_to=a.enumerate_up_to,
+                      uniform=a.uniform, verifier=a.verifier,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -63,13 +67,13 @@ def cmd_prove(a):
     ok = True
     for L, art in arts.items():
         P = load_artifact(art)
-        if V ** L <= cfg.enumerate_up_to:
+        if V ** L <= cfg.enumerate_up_to and not (a.uniform and a.verifier != "milp"):
             n_err, min_margin, _ = exhaustive_check(P, spec, a.tau)
             out = {"status": "proved" if n_err == 0 else "counterexample", "queries": [],
                    "method": "enumeration", "min_margin": min_margin, "time": 0.0}
         else:
-            out = verify_global(P, spec, tau=a.tau, time_limit=a.verify_time, workers=a.workers)
-            out["method"] = "milp"
+            out = verify_auto(P, spec, method=a.verifier, tau=a.tau, time_limit=a.verify_time,
+                              workers=a.workers)
         cert = make_certificate(art, a.spec, out, a.tau, {"length": L, "method": out["method"],
                                                           "training": res["config"],
                                                           "cegis_rounds": res["rounds"]})
@@ -83,11 +87,12 @@ def cmd_prove(a):
 
 def cmd_verify(a):
     P = load_artifact(a.artifact)
-    out = verify_global(P, SPECS[a.spec](), tau=a.tau, time_limit=a.verify_time,
-                       workers=a.workers)
-    print(json.dumps({k: out[k] for k in ("status", "time", "unstable", "counterexamples")}))
+    out = verify_auto(P, SPECS[a.spec](), method=a.verifier, tau=a.tau,
+                      time_limit=a.verify_time, workers=a.workers)
+    print(json.dumps({k: out.get(k) for k in ("status", "method", "time", "counterexamples")}))
     if a.certificate:
-        write_json(make_certificate(a.artifact, a.spec, out, a.tau), a.certificate)
+        write_json(make_certificate(a.artifact, a.spec, out, a.tau,
+                                    {"length": P["L"], "method": out["method"]}), a.certificate)
     return 0 if out["status"] == "proved" else 1
 
 
@@ -102,9 +107,11 @@ def cmd_check(a):
         print(f"FAIL: certificate status is {cert['status']}"); return 1
     P = load_artifact(a.artifact)
     spec = SPECS[cert["spec"]]()
-    out = verify_global(P, spec, tau=cert["tau"], time_limit=a.verify_time,
-                       workers=a.workers)
-    print(f"re-verification: {out['status']} ({out['time']:.1f}s)")
+    method = a.verifier if a.verifier != "auto" else (
+        "exact" if cert.get("method") == "exact-dp" else "auto")
+    out = verify_auto(P, spec, method=method, tau=cert["tau"], time_limit=a.verify_time,
+                      workers=a.workers)
+    print(f"re-verification: {out['status']} via {out['method']} ({out['time']:.1f}s)")
     ok &= out["status"] == "proved"
     if a.exhaustive:
         n_err, min_margin, first = exhaustive_check(P, spec, cert["tau"])
@@ -147,12 +154,14 @@ def main(argv=None):
     p.add_argument("--n-train", type=int, default=20000)
     p.add_argument("--enumerate-up-to", type=int, default=1 << 16,
                    help="lengths with V^L at most this are decided by enumeration, not MILP")
-    p.add_argument("--lr", type=float, default=3e-3)
+    p.add_argument("--lr", type=float, default=None, help="default 3e-2 with --uniform, else 3e-3")
     # schedule defaults depend on --shared (tuned settings for each family)
     p.add_argument("--lr-decay", type=float, default=None,
                    help="per-round lr multiplier (default 0.92 with --shared, else 0.7)")
     p.add_argument("--epochs-first", type=int, default=None, help="default 200 shared / 60")
     p.add_argument("--epochs-round", type=int, default=None, help="default 30 shared / 15")
+    p.add_argument("--uniform", action="store_true",
+                   help="uniform causal mixing: exactly verifiable at any length (implies --shared)")
     p.add_argument("--bits", type=int, default=0, help="k-bit uniform weights (with --float)")
     p.add_argument("--qat-from-round", type=int, default=0,
                    help="train float weights for this many rounds before quantising")
@@ -179,6 +188,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
         if name != "predict":
+            sp_.add_argument("--verifier", default="auto", choices=["auto", "exact", "milp"],
+                             help="exact rational DP when the structure allows (auto), or MILP")
             sp_.add_argument("--workers", type=int, default=os.cpu_count(),
                              help="MILP cases solved in parallel")
     a = ap.parse_args(argv)

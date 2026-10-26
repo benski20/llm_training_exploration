@@ -50,6 +50,15 @@ class DyckSpec:
         else:
             m.row(depth(L - 1), 2.0, np.inf)
 
+    def dfa(self, L):
+        """(init, step, label) over states (depth,) or "dead" (went negative)."""
+        def step(q, v):
+            if q == "dead":
+                return q
+            depth = q + (1 if v == 0 else -1)
+            return "dead" if depth < 0 or depth > L else depth
+        return 0, step, lambda q: int(q == 0)
+
     def label_batch(self, seqs):
         depth = np.cumsum(1 - 2 * seqs, axis=1)
         return ((depth.min(1) >= 0) & (depth[:, -1] == 0)).astype(np.int64)
@@ -134,6 +143,12 @@ class SortedSpec:
 
     def label(self, seq):
         return int(all(a <= b for a, b in zip(seq[:-1], seq[1:])))
+
+    def dfa(self, L):
+        """States: the maximum token so far, or "dead" after a descent."""
+        def step(q, v):
+            return "dead" if q == "dead" or v < q else v
+        return 0, step, lambda q: int(q != "dead")
 
     def label_batch(self, seqs):
         return (np.diff(seqs, axis=1) >= 0).all(1).astype(np.int64)
@@ -317,3 +332,18 @@ def exhaustive_check(P, spec, tau=1e-4, chunk=1 << 16):
         n_err += int(bad.sum())
         min_margin = min(min_margin, float(margin.min()))
     return n_err, min_margin, first
+
+
+def verify_auto(P, spec, method="auto", tau=1e-4, time_limit=600.0, workers=1, **kw):
+    """Exact DP verification when the artifact's structure allows it (or when
+    method="exact"); otherwise the MILP verifier. Adds "method" to the result."""
+    from .exact import StructureError, verify_exact
+    if method in ("auto", "exact"):
+        try:
+            return verify_exact(P, spec, tau=tau)
+        except StructureError:
+            if method == "exact":
+                raise
+    out = verify_global(P, spec, tau=tau, time_limit=time_limit, workers=workers, **kw)
+    out["method"] = "milp"
+    return out

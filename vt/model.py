@@ -30,7 +30,8 @@ def ternarize(w):
 
 class MixerNet(nn.Module):
     def __init__(self, seq_len, vocab, d_model=8, d_hidden=16, n_blocks=2,
-                 n_classes=2, ternary=False, causal=False, bits=None, shared=False):
+                 n_classes=2, ternary=False, causal=False, bits=None, shared=False,
+                 uniform=False):
         super().__init__()
         L, V, d, h = seq_len, vocab, d_model, d_hidden
         self.L, self.V, self.d, self.h, self.C = L, V, d, h, n_classes
@@ -41,14 +42,22 @@ class MixerNet(nn.Module):
         # shared: weight-tied across positions. Mixing is causal Toeplitz,
         # M[t, j] = m[t - j] (relative position), and the readout is a pooled
         # per-position head plus a last-position head. Same weights for any L.
+        # uniform (implies shared): the kernel is m[0] on the diagonal and one
+        # value m[1] for every earlier position, i.e. causal sum attention with
+        # equal weights. Position t then depends only on its token and the
+        # token counts of its prefix, which is what the exact verifier
+        # (vt/exact.py) exploits.
+        self.uniform = uniform
+        shared = shared or uniform
         self.shared = shared
         if shared:
             causal = True
             off = torch.arange(L)[:, None] - torch.arange(L)[None, :]
             self.register_buffer("offset", off.clamp(min=0), persistent=False)
             self.register_buffer("mask", (off >= 0).float(), persistent=False)
+            n_k = 2 if uniform else L
             self.mix = nn.ParameterList(
-                [nn.Parameter(torch.randn(L) * 0.3 / math.sqrt(L)) for _ in range(n_blocks)])
+                [nn.Parameter(torch.randn(n_k) * 0.3 / math.sqrt(L)) for _ in range(n_blocks)])
         else:
             self.mix = nn.ParameterList(
                 [nn.Parameter(torch.randn(L, L) * 0.3 / math.sqrt(L)) for _ in range(n_blocks)])
@@ -77,7 +86,10 @@ class MixerNet(nn.Module):
     def mixw(self, i, L=None):
         L = L or self.L
         if self.shared:
-            return self.w(self.mix[i])[self.offset[:L, :L]] * self.mask[:L, :L]
+            k = self.w(self.mix[i])
+            if self.uniform:
+                k = torch.cat([k[:1], k[1:2].expand(self.L - 1)])
+            return k[self.offset[:L, :L]] * self.mask[:L, :L]
         assert L == self.L, "only weight-tied models run at other lengths"
         return self.w(self.mix[i] * self.mask) * self.mask
 

@@ -61,3 +61,15 @@ def test_prove_multi_length_end_to_end(tmp_path):
         assert c["method"] == ("milp" if L == 10 else "enumeration")
         art = f"{out}/model.npz" if L == 10 else f"{out}/model_L{L}.npz"
         assert main(["check", art, f"{out}/{cert}", "--exhaustive", "--workers", "1"]) == 0
+
+
+def test_prove_uniform_gives_exact_certificates(tmp_path):
+    out = str(tmp_path / "u")
+    code = main(["prove", "--out", out, "--length", "12", "--also-lengths", "4,8", "--float",
+                 "--uniform", "--rounds", "10", "--threads", "1", "--workers", "1",
+                 "--n-train", "4000"])
+    assert code == 0
+    for cert in ("certificate.json", "certificate_L4.json", "certificate_L8.json"):
+        c = json.load(open(f"{out}/{cert}"))
+        assert c["status"] == "proved" and c["method"] == "exact-dp" and "min_margin" in c
+    assert main(["check", f"{out}/model.npz", f"{out}/certificate.json", "--workers", "1"]) == 0
