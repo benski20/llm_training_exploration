@@ -22,7 +22,16 @@ certificate bound to the exact weights that get deployed.
     minutes.
   * The verifier itself proves a structured Dyck network on **2¹⁰²⁴ inputs in
     40 s**.
-  LONG_EXACT_PLACEHOLDER
+  * With a **length curriculum** (warm-start from the proved 2–64 model and
+    extend), one model is proved exactly at **every even length 2–128**: 64
+    certificates; L=128 is 3.4×10³⁸ inputs; 414 s. Training 2–128 from
+    scratch did not converge. A third stage extends it to **every even length 2–256**: 128 certificates; L=256 is 1.2×10⁷⁷ inputs; exact min margin 3.45; 39 min. That model is also proved beyond its training range, out to L=274.
+  * **Provable length generalisation.** The 2–64 model is proved exactly out
+    to L=78, past anything it was trained on. The verifier also pins the
+    first failure: L=80, nesting depth 40.
+* **Your own specs.** Any regular language, given as a JSON DFA
+  (`--spec-file`), is trained and exactly proved the same way. The DFA is
+  embedded in the certificate.
 * **Weight tying is what makes learned networks provable at all.** With
   general weight-tied (Toeplitz) mixing and the MILP verifier, a learned
   Dyck-1 model is proved on all 2³² inputs in 119 s; brute force would take
@@ -74,6 +83,7 @@ curl -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())((()))()()(
 | Case splitting | `vt/global_verify.py` | Each "label ≠ c" region is split into disjoint, tightly constrained cases. For Dyck: the depth first reaches −1 at even position k, or never dips but ends at ≥ 2. Cases solve in parallel, with early exit on a counterexample. Dyck-16 proof time: 63 s → about 12 s on 4 workers. No-good cuts can collect several counterexamples per case. |
 | CEGIS loop | `vt/cegis.py` | Hard-family sampling (deep nesting, single shallow dips), neighbourhood search around verifier counterexamples, per-round cosine-annealed lr, time-limit escalation (60 s × 4ⁿ), QAT schedule, and multi-length training for weight-tied models. Short lengths are decided by exhaustive enumeration, which is itself a complete proof. |
 | **Exact verifier** | `vt/exact.py` | For one-block models whose causal kernel is free on the last `w` offsets and constant beyond, position t's output depends only on (its token, the last w−1 tokens, the counts of older tokens). The margin is additive over positions. A DP over (counts, recent tokens, spec DFA state) computes the **exact** worst-case margin over all V^L inputs, in Python big-int arithmetic at scale 2^K (float64 weights are dyadic). Counterexamples are reconstructed by back-pointers and re-checked with an exact rational forward pass. It is polynomial in L for fixed V and w. `--verifier auto` uses it whenever the structure allows. |
+| User specs | `vt/dfaspec.py` | `DFASpec`: any regular language from JSON (`specs/*.json`). It validates completeness. The sampler mixes uniform strings, uniformly random *accepted* strings (via suffix-acceptance counts) and one-token near misses. |
 | Serving | `vt/serve.py` | `vt serve`: a threaded HTTP server with `/health` and `/predict`, input validation, and a gate that refuses unproved or tampered artifacts. |
 | Artifacts | `vt/artifact.py`, `vt/cli.py` | The certificate binds the verdict to the SHA-256 of the float64 `.npz`. `vt predict` runs that file through the forward pass the verifier encoded, so the proved artifact is exactly what is deployed. Change any weight, even by 1e-9, and `vt check` fails. |
 
@@ -82,6 +92,13 @@ curl -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())((()))()()(
 | model | L | inputs | outcome |
 |---|---|---|---|
 | **uniform (w=1), one model, exact** | 2–64 (even) | up to **1.8e19** | **proved exactly at all 32 lengths in round 0** (4 min); 32 certificates (`exact_dyck_L2-64`) |
+| **uniform, curriculum (init from 2–64), one model, exact** | 2–128 (even) | up to **3.4e38** | **proved exactly at all 64 lengths in round 1** (414 s) (`exact_dyck_L2-128_curriculum`) |
+| **uniform, curriculum (init from 2–128), one model, exact** | 2–256 (even) | up to **1.2e77** | **proved exactly at all 128 lengths in round 2** (39 min) (`exact_dyck_L2-256_curriculum`) |
+| uniform, 2–256 model *evaluated beyond training* | 258–400 | — | exactly **proved at 258–274**; first counterexample at L=276 |
+| uniform, 2–64 model *evaluated beyond training* | 66–256 | — | exactly **proved at 66–78**; first counterexample at L=80 (depth-40 nesting) |
+| uniform, 2–128 from scratch | 2–128 | 3.4e38 | not converged (errors at every length); fixed by the curriculum |
+| **user DFA `no_bb`** (no two consecutive b), window 2 | 4–24 | 1.7e7 | **proved exactly at all 6 lengths in round 0** (15 s) |
+| user DFA `mod3_a` (#a ≡ 0 mod 3), uniform | 4–24 | 1.7e7 | not proved: the readout must be periodic in a count up to L, which an 8-unit ReLU MLP can't represent (~2L/3 kinks needed) |
 | **sortedness, window 2, one model, exact** | 2–32 (even) | up to **1.8e19** | **proved exactly at all 16 lengths in round 0** (194 s) (`exact_sorted_w2_L2-32`) |
 | sortedness, window 2, exact | 2–16 | 4.3e9 | not proved: the same configuration with a different data draw got stuck (2,014 errors after 30 rounds; optimisation, not representability) |
 | sortedness, uniform w=1 | 2–16 | 4.3e9 | not proved: without a previous-token tap it can't compare neighbours; this motivated windowed kernels |
@@ -175,7 +192,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ## Use
 
 ```bash
-pip install -e ".[dev]"; pytest -q        # 40 tests, about 1.5 minutes on CPU; CI runs them on every push
+pip install -e ".[dev]"; pytest -q        # 44 tests, about 1.5 minutes on CPU; CI runs them on every push
 
 vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths 2,4,...,30]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
@@ -191,7 +208,7 @@ assert verify_global(model.export(), DyckSpec(), workers=4)["status"] == "proved
 
 Reproduce: `experiments/run_sweep.py` (local robustness),
 `experiments/cegis_sweep.sh`, `kbit_runs.sh` and `shared_runs.sh` (MILP proofs),
-`experiments/exact_runs.sh` and `exact_sorted_runs.sh` (exact proofs),
+`experiments/exact_runs.sh`, `exact_sorted_runs.sh` and `exact_curriculum.sh` (exact proofs),
 `experiments/lm_sweep.sh` and `verify_lm_blocks.py` (GPT),
 `experiments/length_generalization.py`. Each one resumes after an
 interruption.

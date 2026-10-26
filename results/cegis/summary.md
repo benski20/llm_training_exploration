@@ -20,5 +20,12 @@
 | L32_float_v3_1cex | dyck | 32 | 4.29e+09 | dense | float | stopped | 7 | 3 | 269 | 822 |  |
 | L32_shared | dyck | 32 | 4.29e+09 | tied (Toeplitz) | float | proved | 1 | 1 | 119 | 230 | `59b734b3a876` |
 | L64_shared_v1_noconverge | dyck | 64 | 1.84e+19 | tied (Toeplitz) | float | stopped | 4 | 0 | - | 237 |  |
+| exact_dyck_L2-128_curriculum | dyck | 2..128 | 3.40e+38 | tied (Toeplitz) | float | proved | 2 | 2 | 15 | 414 | `f86bb350f72a` |
+| exact_dyck_L2-128_v1_noconverge | dyck | 128 | 3.40e+38 | dense | float | stopped | 1 | 0 | - | 1532 |  |
+| exact_dyck_L2-256_curriculum | dyck | 2..256 | 1.16e+77 | tied (Toeplitz) | float | proved | 3 | 2 | 117 | 2326 | `85cddf9871bf` |
+| exact_dyck_L2-64 | dyck | 2..64 | 1.84e+19 | tied (Toeplitz) | float | proved | 1 | 1 | 13 | 237 | `22e935d843df` |
+| exact_sorted_L2-16_v1_uniform_w1 | dyck | 16 | 6.55e+04 | dense | float | stopped | 23 | 0 | - | 610 |  |
+| exact_sorted_w2_L2-16 | dyck | 2..16 | 6.55e+04 | tied (Toeplitz) | float | not_proved | 30 | 0 | - | 672 |  |
+| exact_sorted_w2_L2-32 | dyck | 2..32 | 4.29e+09 | tied (Toeplitz) | float | proved | 1 | 1 | 140 | 194 | `6365e8325a48` |
 | sorted_L16_shared_v1_small | sorted | 16 | 4.29e+09 | tied (Toeplitz) | float | not_proved | 30 | 13 | 20 | 687 |  |
 | sorted_L16_shared_v2_wide | sorted | 16 | 4.29e+09 | tied (Toeplitz) | float | stopped | 6 | 4 | 39 | 1097 |  |
