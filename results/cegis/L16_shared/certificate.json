@@ -1,0 +1,126 @@
+{
+ "format": "vt-certificate/1",
+ "artifact_sha256": "fca91d71729dd5a9056d94b234472a2e68db39c8953f95210a1a3a6a6f009a69",
+ "spec": "dyck",
+ "claim": "for every input sequence in V^L, argmax of the model's logits equals the spec label, with logit margin > tau",
+ "tau": 0.0001,
+ "status": "proved",
+ "queries": [
+  {
+   "class": 1,
+   "case": 4,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 2.5730576230016595
+  },
+  {
+   "class": 1,
+   "case": 2,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 4.288849322998431
+  },
+  {
+   "class": 1,
+   "case": 6,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 2.2055913519980095
+  },
+  {
+   "class": 1,
+   "case": 8,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 1.1399735470004089
+  },
+  {
+   "class": 1,
+   "case": 10,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 1.9515317260011216
+  },
+  {
+   "class": 1,
+   "case": 12,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 1.4416662519979582
+  },
+  {
+   "class": 1,
+   "case": 0,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 7.400361847001477
+  },
+  {
+   "class": 1,
+   "case": 14,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 1.7026760400003695
+  },
+  {
+   "class": 0,
+   "case": null,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 9.74229787800141
+  },
+  {
+   "class": 1,
+   "case": 16,
+   "milp_status": 2,
+   "binaries": 155,
+   "result": "infeasible",
+   "time": 9.074951757000235
+  }
+ ],
+ "verifier": {
+  "method": "symbolic-bounds + exact big-M MILP (HiGHS)",
+  "scipy": "1.18.1",
+  "numpy": "2.5.3",
+  "python": "3.13.17"
+ },
+ "created": "2026-10-26T06:26:59Z",
+ "training": {
+  "L": 16,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": false,
+  "bits": 0,
+  "shared": true,
+  "ternary_from_round": 0,
+  "n_train": 20000,
+  "rounds": 15,
+  "epochs_first": 200,
+  "epochs_round": 30,
+  "lr": 0.003,
+  "lr_decay": 0.92,
+  "lr_min": 0.0001,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 300.0,
+  "verify_workers": 4,
+  "collect_all_cex": false,
+  "verify_time_start": 60.0,
+  "cex_per_call": 20,
+  "seed": 0
+ },
+ "cegis_rounds": 2
+}

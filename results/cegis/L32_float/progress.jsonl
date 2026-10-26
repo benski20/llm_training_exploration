@@ -4,3 +4,4 @@
 {"round": 3, "n_cex_total": 9593, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "counterexample", "verify_time": 60.680415271999664, "unstable": 247, "verifier_cex": 1, "slowest_case": 60.05957468699853, "neighbourhood_errors": 2, "elapsed": 309.1718239340007}
 {"round": 4, "n_cex_total": 9657, "sampled_errors": 1, "elapsed": 315.3737088809994}
 {"round": 5, "n_cex_total": 9690, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "counterexample", "verify_time": 239.46360976600045, "unstable": 248, "verifier_cex": 1, "slowest_case": 60.123285133000536, "neighbourhood_errors": 27, "elapsed": 561.2761854689998}
+{"round": 6, "n_cex_total": 10422, "sampled_errors": 0, "verify_limit": 240.0, "verify_status": "counterexample", "verify_time": 266.0972419990012, "unstable": 248, "verifier_cex": 1, "slowest_case": 240.0284859020012, "neighbourhood_errors": 1, "elapsed": 1075.3384887800003}

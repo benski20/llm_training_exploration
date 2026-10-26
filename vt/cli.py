@@ -33,6 +33,8 @@ def cmd_prove(a):
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
                       ternary_from_round=a.qat_from_round, verify_workers=a.workers, bits=a.bits,
+                      shared=a.shared, lr=a.lr, lr_decay=a.lr_decay,
+                      epochs_first=a.epochs_first, epochs_round=a.epochs_round,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -118,6 +120,12 @@ def main(argv=None):
     p.add_argument("--n-blocks", type=int, default=1)
     p.add_argument("--float", action="store_true", help="float weights instead of ternary")
     p.add_argument("--causal", action="store_true")
+    p.add_argument("--shared", action="store_true",
+                   help="weight-tied across positions: Toeplitz causal mixing + pooled readout")
+    p.add_argument("--lr", type=float, default=3e-3)
+    p.add_argument("--lr-decay", type=float, default=0.7, help="per-round lr multiplier")
+    p.add_argument("--epochs-first", type=int, default=60)
+    p.add_argument("--epochs-round", type=int, default=15)
     p.add_argument("--bits", type=int, default=0, help="k-bit uniform weights (with --float)")
     p.add_argument("--qat-from-round", type=int, default=0,
                    help="train float weights for this many rounds before quantising")

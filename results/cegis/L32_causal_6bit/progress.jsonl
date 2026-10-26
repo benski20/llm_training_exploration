@@ -1,0 +1,20 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 1467, "elapsed": 21.10545091200038}
+{"round": 1, "n_cex_total": 16486, "sampled_errors": 1240, "elapsed": 31.385870103000343}
+{"round": 2, "n_cex_total": 32950, "sampled_errors": 511, "elapsed": 45.339097607999065}
+{"round": 3, "n_cex_total": 49414, "sampled_errors": 13, "elapsed": 105.76300699700005}
+{"round": 4, "n_cex_total": 49843, "sampled_errors": 11, "elapsed": 123.61092965100033}
+{"round": 5, "n_cex_total": 50206, "sampled_errors": 3, "elapsed": 140.72833404300036}
+{"round": 6, "n_cex_total": 50305, "sampled_errors": 6, "elapsed": 160.32597408000038}
+{"round": 7, "n_cex_total": 50501, "sampled_errors": 12, "elapsed": 178.76435576900076}
+{"round": 8, "n_cex_total": 50895, "sampled_errors": 15, "elapsed": 196.44885614099985}
+{"round": 9, "n_cex_total": 51390, "sampled_errors": 33, "elapsed": 215.61625519900008}
+{"round": 10, "n_cex_total": 52477, "sampled_errors": 2, "elapsed": 234.26106243399954}
+{"round": 11, "n_cex_total": 52543, "sampled_errors": 2, "elapsed": 252.37971722399925}
+{"round": 12, "n_cex_total": 52609, "sampled_errors": 5, "elapsed": 271.1485581479992}
+{"round": 13, "n_cex_total": 52774, "sampled_errors": 8, "elapsed": 289.47221133699895}
+{"round": 14, "n_cex_total": 53038, "sampled_errors": 1, "elapsed": 308.11751020200063}
+{"round": 15, "n_cex_total": 53071, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "counterexample", "verify_time": 60.61328392699943, "unstable": 210, "verifier_cex": 1, "slowest_case": 60.03119259199957, "neighbourhood_errors": 34, "elapsed": 388.2600946970015}
+{"round": 16, "n_cex_total": 53985, "sampled_errors": 2, "elapsed": 408.40878541799975}
+{"round": 17, "n_cex_total": 54051, "sampled_errors": 7, "elapsed": 427.6766289679981}
+{"round": 18, "n_cex_total": 54282, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "counterexample", "verify_time": 299.9275582650007, "unstable": 210, "verifier_cex": 2, "slowest_case": 60.068894133997674, "neighbourhood_errors": 18, "elapsed": 747.3977062679987}
+{"round": 19, "n_cex_total": 54830, "sampled_errors": 2, "elapsed": 766.9338873929992}

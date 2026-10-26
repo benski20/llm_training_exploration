@@ -40,7 +40,12 @@ def main():
         if os.path.exists(cert):
             with open(cert) as f:
                 sha = "`" + json.load(f)["artifact_sha256"][:12] + "`"
-        mixing = "causal" if (cfg and cfg.get("causal")) or "causal" in name else "dense"
+        if (cfg and cfg.get("shared")) or "shared" in name:
+            mixing = "tied (Toeplitz)"
+        elif (cfg and cfg.get("causal")) or "causal" in name:
+            mixing = "causal"
+        else:
+            mixing = "dense"
         if cfg and cfg.get("bits"):
             weights = f"{cfg['bits']}-bit"
         elif cfg and cfg.get("ternary"):

@@ -275,6 +275,7 @@ def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=Tr
                 out["queries"].append(q)
                 if stop_on_cex and q["result"] == "counterexample":
                     pool.terminate()
+                    pool.join()
                     break
     else:
         for job in jobs:

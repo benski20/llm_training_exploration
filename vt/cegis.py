@@ -29,6 +29,7 @@ class CegisConfig:
     ternary: bool = True
     causal: bool = False
     bits: int = 0                # k-bit uniform weights instead of float (0 = off)
+    shared: bool = False         # weight-tied across positions (Toeplitz mixing, pooled readout)
     ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
     rounds: int = 20
@@ -108,7 +109,8 @@ def cegis(spec, cfg, V=2, log=print):
     torch.manual_seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
     model = MixerNet(cfg.L, V, cfg.d_model, cfg.d_hidden, cfg.n_blocks,
-                     spec.n_classes, ternary=cfg.ternary, causal=cfg.causal)
+                     spec.n_classes, ternary=cfg.ternary, causal=cfg.causal,
+                     shared=cfg.shared)
     base = spec.sample(cfg.n_train, cfg.L, rng)
     cex = np.zeros((0, cfg.L), dtype=np.int64)
     history = []

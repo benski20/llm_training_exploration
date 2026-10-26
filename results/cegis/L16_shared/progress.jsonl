@@ -1,0 +1,2 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 8, "elapsed": 687.0011952610002}
+{"round": 1, "n_cex_total": 123, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "proved", "verify_time": 16.676894476000598, "unstable": 123, "verifier_cex": 0, "slowest_case": 9.463770623999153, "elapsed": 710.1233259019973}
