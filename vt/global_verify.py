@@ -223,8 +223,11 @@ def _query(P, spec, c, k, tau, bounds, time_limit):
         m.row([(si, w) for si, w in zip(s, coef) if w != 0], -tau - const, np.inf)
     if hasattr(spec, "encode_case"):
         spec.encode_case(m, x, L, c, k)
-    else:
+    elif hasattr(spec, "encode_not_label"):
         spec.encode_not_label(m, x, L, c)
+    else:
+        raise ValueError(f"{type(spec).__name__} has no MILP encoding; use an exactly "
+                         "verifiable model (--uniform) and the exact verifier")
     res = m.solve(s[:1], [0.0], time_limit)  # pure feasibility
     return res, x, n_bin + L * V, m, s
 

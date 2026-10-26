@@ -19,8 +19,24 @@ from .verify import np_forward
 TOKENS = {"dyck": "()", "sorted": "abcd"}
 
 
-def _encode(spec_name, text):
-    alphabet = TOKENS[spec_name]
+def _spec(a):
+    """(spec, name, alphabet, extra certificate fields) from --spec / --spec-file."""
+    if getattr(a, "spec_file", None):
+        from .dfaspec import DFASpec
+        with open(a.spec_file) as f:
+            d = json.load(f)
+        return DFASpec(d), "dfa:" + d.get("name", "dfa"), d["alphabet"], {"spec_dfa": d}
+    return SPECS[a.spec](), a.spec, TOKENS[a.spec], {}
+
+
+def _spec_from_cert(cert):
+    if "spec_dfa" in cert:
+        from .dfaspec import DFASpec
+        return DFASpec(cert["spec_dfa"]), cert["spec_dfa"]["alphabet"]
+    return SPECS[cert["spec"]](), TOKENS[cert["spec"]]
+
+
+def _encode(alphabet, text):
     return np.array([alphabet.index(ch) for ch in text])
 
 
@@ -28,8 +44,8 @@ def cmd_prove(a):
     import torch
     from .cegis import CegisConfig, cegis
     torch.set_num_threads(a.threads)
-    spec = SPECS[a.spec]()
-    V = len(TOKENS[a.spec])
+    spec, spec_name, alphabet, spec_extra = _spec(a)
+    V = len(alphabet)
     tuned = {"lr_decay": (0.92, 0.7), "epochs_first": (200, 60), "epochs_round": (30, 15)}
     for k, (tied, untied) in tuned.items():
         if getattr(a, k) is None:
@@ -75,9 +91,10 @@ def cmd_prove(a):
         else:
             out = verify_auto(P, spec, method=a.verifier, tau=a.tau, time_limit=a.verify_time,
                               workers=a.workers)
-        cert = make_certificate(art, a.spec, out, a.tau, {"length": L, "method": out["method"],
-                                                          "training": res["config"],
-                                                          "cegis_rounds": res["rounds"]})
+        cert = make_certificate(art, spec_name, out, a.tau, {"length": L, "method": out["method"],
+                                                             "training": res["config"],
+                                                             "cegis_rounds": res["rounds"],
+                                                             **spec_extra})
         name = "certificate.json" if L == a.length else f"certificate_L{L}.json"
         write_json(cert, os.path.join(a.out, name))
         ok &= out["status"] == "proved"
@@ -88,12 +105,14 @@ def cmd_prove(a):
 
 def cmd_verify(a):
     P = load_artifact(a.artifact)
-    out = verify_auto(P, SPECS[a.spec](), method=a.verifier, tau=a.tau,
+    spec, spec_name, _, spec_extra = _spec(a)
+    out = verify_auto(P, spec, method=a.verifier, tau=a.tau,
                       time_limit=a.verify_time, workers=a.workers)
     print(json.dumps({k: out.get(k) for k in ("status", "method", "time", "counterexamples")}))
     if a.certificate:
-        write_json(make_certificate(a.artifact, a.spec, out, a.tau,
-                                    {"length": P["L"], "method": out["method"]}), a.certificate)
+        write_json(make_certificate(a.artifact, spec_name, out, a.tau,
+                                    {"length": P["L"], "method": out["method"], **spec_extra}),
+                   a.certificate)
     return 0 if out["status"] == "proved" else 1
 
 
@@ -107,7 +126,7 @@ def cmd_check(a):
     if cert["status"] != "proved":
         print(f"FAIL: certificate status is {cert['status']}"); return 1
     P = load_artifact(a.artifact)
-    spec = SPECS[cert["spec"]]()
+    spec, _ = _spec_from_cert(cert)
     method = a.verifier if a.verifier != "auto" else (
         "exact" if cert.get("method") == "exact-dp" else "auto")
     out = verify_auto(P, spec, method=method, tau=cert["tau"], time_limit=a.verify_time,
@@ -125,14 +144,17 @@ def cmd_check(a):
 
 def cmd_predict(a):
     P = load_artifact(a.artifact)
-    spec_name = a.spec
+    spec, _, alphabet, _ = _spec(a)
     for text in a.inputs:
-        seq = _encode(spec_name, text)
+        if any(ch not in alphabet for ch in text):
+            print(f"{text}: symbols must be from {alphabet!r}", file=sys.stderr)
+            return 2
+        seq = _encode(alphabet, text)
         if len(seq) != P["L"]:
             print(f"{text}: length {len(seq)} != model length {P['L']}", file=sys.stderr)
             return 2
         logits = np_forward(P, np.eye(P["V"])[seq])
-        print(f"{text}\t{int(np.argmax(logits))}\t(spec: {SPECS[spec_name]().label(seq)})")
+        print(f"{text}\t{int(np.argmax(logits))}\t(spec: {spec.label(seq)})")
     return 0
 
 
@@ -143,7 +165,8 @@ def cmd_serve(a):
     except GateError as e:
         print(f"refusing to serve: {e}", file=sys.stderr)
         return 1
-    srv = make_server(P, digest, cert, TOKENS[a.spec], a.host, a.port)
+    alphabet = _spec_from_cert(cert)[1] if cert else _spec(a)[2]
+    srv = make_server(P, digest, cert, alphabet, a.host, a.port)
     print(f"serving {a.artifact} (sha256 {digest[:16]}...) on http://{a.host}:{srv.server_port}")
     try:
         srv.serve_forever()
@@ -213,6 +236,8 @@ def main(argv=None):
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
+        if name != "check":
+            sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
         if name not in ("predict", "serve"):
             sp_.add_argument("--verifier", default="auto", choices=["auto", "exact", "milp"],
                              help="exact rational DP when the structure allows (auto), or MILP")

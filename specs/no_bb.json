@@ -1,0 +1,3 @@
+{"name": "no_bb", "alphabet": "ab", "start": "ok", "accept": ["ok", "last_b"],
+ "delta": {"ok": {"a": "ok", "b": "last_b"}, "last_b": {"a": "ok", "b": "dead"},
+           "dead": {"a": "dead", "b": "dead"}}}
