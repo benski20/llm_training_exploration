@@ -1,0 +1,258 @@
+{
+ "format": "vt-certificate/1",
+ "artifact_sha256": "361dbc9f7944d8be4150a127bd25278b6a0b6691d552d6c50daf067abec8ef52",
+ "spec": "dfa:no_bb",
+ "method": "exact-gen-dp",
+ "status": "proved",
+ "claim": "at each listed length L: every string the generator emits with probability > 0 is in the spec language (sound), every spec string has probability > 0 (complete), and sampling never reaches a prefix whose next-token scores are all zero (live)",
+ "lengths": {
+  "2": {
+   "method": "exact-gen-dp",
+   "length": 2,
+   "states": 7,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.001707788003841415,
+   "status": "proved"
+  },
+  "4": {
+   "method": "exact-gen-dp",
+   "length": 4,
+   "states": 28,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.0021427710016723722,
+   "status": "proved"
+  },
+  "6": {
+   "method": "exact-gen-dp",
+   "length": 6,
+   "states": 71,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.0029228670027805492,
+   "status": "proved"
+  },
+  "8": {
+   "method": "exact-gen-dp",
+   "length": 8,
+   "states": 136,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.003926818993932102,
+   "status": "proved"
+  },
+  "10": {
+   "method": "exact-gen-dp",
+   "length": 10,
+   "states": 223,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.005264792998787016,
+   "status": "proved"
+  },
+  "12": {
+   "method": "exact-gen-dp",
+   "length": 12,
+   "states": 332,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.0069200889993226156,
+   "status": "proved"
+  },
+  "14": {
+   "method": "exact-gen-dp",
+   "length": 14,
+   "states": 463,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.009059720003278926,
+   "status": "proved"
+  },
+  "16": {
+   "method": "exact-gen-dp",
+   "length": 16,
+   "states": 616,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.011599707999266684,
+   "status": "proved"
+  },
+  "18": {
+   "method": "exact-gen-dp",
+   "length": 18,
+   "states": 791,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.014371052995556965,
+   "status": "proved"
+  },
+  "20": {
+   "method": "exact-gen-dp",
+   "length": 20,
+   "states": 988,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.018255173999932595,
+   "status": "proved"
+  },
+  "22": {
+   "method": "exact-gen-dp",
+   "length": 22,
+   "states": 1207,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.021326447997125797,
+   "status": "proved"
+  },
+  "24": {
+   "method": "exact-gen-dp",
+   "length": 24,
+   "states": 1448,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.025084823995712213,
+   "status": "proved"
+  },
+  "26": {
+   "method": "exact-gen-dp",
+   "length": 26,
+   "states": 1711,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.029022460999840405,
+   "status": "proved"
+  },
+  "28": {
+   "method": "exact-gen-dp",
+   "length": 28,
+   "states": 1996,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.03373939500306733,
+   "status": "proved"
+  },
+  "30": {
+   "method": "exact-gen-dp",
+   "length": 30,
+   "states": 2303,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.038805010000942275,
+   "status": "proved"
+  },
+  "32": {
+   "method": "exact-gen-dp",
+   "length": 32,
+   "states": 2632,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.04490291899855947,
+   "status": "proved"
+  }
+ },
+ "spec_dfa": {
+  "name": "no_bb",
+  "alphabet": "ab",
+  "start": "ok",
+  "accept": [
+   "ok",
+   "last_b"
+  ],
+  "delta": {
+   "ok": {
+    "a": "ok",
+    "b": "last_b"
+   },
+   "last_b": {
+    "a": "ok",
+    "b": "dead"
+   },
+   "dead": {
+    "a": "dead",
+    "b": "dead"
+   }
+  }
+ },
+ "training": {
+  "L": 32,
+  "lengths": [
+   2,
+   4,
+   6,
+   8,
+   10,
+   12,
+   14,
+   16,
+   18,
+   20,
+   22,
+   24,
+   26,
+   28,
+   30
+  ],
+  "d_model": 8,
+  "d_hidden": 32,
+  "window": 2,
+  "steps": 3000,
+  "lr": 0.01,
+  "batch": 256,
+  "n_data": 20000,
+  "margin": 0.5,
+  "lam": 10.0,
+  "eps": 0.001,
+  "seed": 0
+ },
+ "heldout_nll_per_token": {
+  "2": 0.5500363111495972,
+  "4": 0.5206338167190552,
+  "6": 0.5075116157531738,
+  "8": 0.5012850761413574,
+  "10": 0.49744200706481934,
+  "12": 0.49471428990364075,
+  "14": 0.4927271902561188,
+  "16": 0.4914107024669647,
+  "18": 0.49014145135879517,
+  "20": 0.4892043471336365,
+  "22": 0.48844432830810547,
+  "24": 0.4879642724990845,
+  "26": 0.4874957203865051,
+  "28": 0.48705214262008667,
+  "30": 0.4866292178630829,
+  "32": 0.48627030849456787
+ }
+}

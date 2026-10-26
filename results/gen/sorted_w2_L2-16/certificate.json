@@ -1,0 +1,131 @@
+{
+ "format": "vt-certificate/1",
+ "artifact_sha256": "4a90dc118980fee100621c98e418b6ef6768cd98aa6387579ba746be10995017",
+ "spec": "sorted",
+ "method": "exact-gen-dp",
+ "status": "failed",
+ "claim": "at each listed length L: every string the generator emits with probability > 0 is in the spec language (sound), every spec string has probability > 0 (complete), and sampling never reaches a prefix whose next-token scores are all zero (live)",
+ "lengths": {
+  "2": {
+   "method": "exact-gen-dp",
+   "length": 2,
+   "states": 21,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.002176509005948901,
+   "status": "proved"
+  },
+  "4": {
+   "method": "exact-gen-dp",
+   "length": 4,
+   "states": 260,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.004143576996284537,
+   "status": "proved"
+  },
+  "6": {
+   "method": "exact-gen-dp",
+   "length": 6,
+   "states": 1240,
+   "sound": true,
+   "complete": true,
+   "live": true,
+   "p_violation": null,
+   "time": 0.012968228998943232,
+   "status": "proved"
+  },
+  "8": {
+   "method": "exact-gen-dp",
+   "length": 8,
+   "states": 3725,
+   "sound": true,
+   "complete": false,
+   "live": true,
+   "p_violation": null,
+   "time": 0.03279836200090358,
+   "status": "failed"
+  },
+  "10": {
+   "method": "exact-gen-dp",
+   "length": 10,
+   "states": 8751,
+   "sound": true,
+   "complete": false,
+   "live": true,
+   "p_violation": null,
+   "time": 0.2100177930042264,
+   "status": "failed"
+  },
+  "12": {
+   "method": "exact-gen-dp",
+   "length": 12,
+   "states": 17626,
+   "sound": true,
+   "complete": false,
+   "live": true,
+   "p_violation": null,
+   "time": 0.15223877100652317,
+   "status": "failed"
+  },
+  "14": {
+   "method": "exact-gen-dp",
+   "length": 14,
+   "states": 31930,
+   "sound": true,
+   "complete": false,
+   "live": true,
+   "p_violation": null,
+   "time": 0.30889142800151603,
+   "status": "failed"
+  },
+  "16": {
+   "method": "exact-gen-dp",
+   "length": 16,
+   "states": 53515,
+   "sound": true,
+   "complete": false,
+   "live": true,
+   "p_violation": null,
+   "time": 0.7040456649992848,
+   "status": "failed"
+  }
+ },
+ "training": {
+  "L": 16,
+  "lengths": [
+   2,
+   4,
+   6,
+   8,
+   10,
+   12,
+   14
+  ],
+  "d_model": 8,
+  "d_hidden": 32,
+  "window": 2,
+  "steps": 4000,
+  "lr": 0.01,
+  "batch": 256,
+  "n_data": 20000,
+  "margin": 0.5,
+  "lam": 10.0,
+  "eps": 0.001,
+  "seed": 0
+ },
+ "heldout_nll_per_token": {
+  "2": 1.151256799697876,
+  "4": 0.8583415746688843,
+  "6": 0.679881751537323,
+  "8": 0.5694364309310913,
+  "10": Infinity,
+  "12": 0.4389776289463043,
+  "14": Infinity,
+  "16": Infinity
+ }
+}
