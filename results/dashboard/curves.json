@@ -1,0 +1,1010 @@
+[
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 0,
+"loss": 14.3644,
+"qa_loss": 4.9686
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 500,
+"loss": 9.5381,
+"qa_loss": 3.3846
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 1000,
+"loss": 8.7514,
+"qa_loss": 3.3725
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 1500,
+"loss": 7.6859,
+"qa_loss": 2.9874
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 2000,
+"loss": 5.7236,
+"qa_loss": 2.0635
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 2500,
+"loss": 4.6909,
+"qa_loss": 1.9717
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 3000,
+"loss": 3.8727,
+"qa_loss": 1.4188
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 3500,
+"loss": 4.243,
+"qa_loss": 1.8848
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 4000,
+"loss": 3.9945,
+"qa_loss": 1.7171
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 4500,
+"loss": 3.7417,
+"qa_loss": 1.4596
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 5000,
+"loss": 3.2434,
+"qa_loss": 1.1116
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 5500,
+"loss": 3.213,
+"qa_loss": 1.107
+},
+{
+"run": "v1-glassbox",
+"title": "v1 glass-box",
+"step": 5999,
+"loss": 3.8946,
+"qa_loss": 1.4649
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 0,
+"loss": 11.9906,
+"qa_loss": 5.987
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 500,
+"loss": 6.7873,
+"qa_loss": 2.9229
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 1000,
+"loss": 5.4789,
+"qa_loss": 2.6129
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 1500,
+"loss": 4.717,
+"qa_loss": 2.5126
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 2000,
+"loss": 4.4666,
+"qa_loss": 2.7506
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 2500,
+"loss": 3.7732,
+"qa_loss": 2.3689
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 3000,
+"loss": 3.1492,
+"qa_loss": 2.102
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 3500,
+"loss": 2.3992,
+"qa_loss": 1.5939
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 4000,
+"loss": 2.1692,
+"qa_loss": 1.5857
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 4500,
+"loss": 1.6553,
+"qa_loss": 1.2984
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 5000,
+"loss": 2.1638,
+"qa_loss": 1.8537
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 5500,
+"loss": 1.5698,
+"qa_loss": 1.3135
+},
+{
+"run": "v1-baseline",
+"title": "v1 GPT baseline",
+"step": 5999,
+"loss": 1.5896,
+"qa_loss": 1.3508
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 0,
+"loss": 14.3647,
+"qa_loss": 4.9686
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 500,
+"loss": 10.2583,
+"qa_loss": 3.4201
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 1000,
+"loss": 9.3346,
+"qa_loss": 3.3651
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 1500,
+"loss": 9.2563,
+"qa_loss": 3.2514
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 2000,
+"loss": 9.1269,
+"qa_loss": 3.1744
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 2500,
+"loss": 9.0604,
+"qa_loss": 3.1876
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 3000,
+"loss": 9.0487,
+"qa_loss": 3.1661
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 3500,
+"loss": 9.1733,
+"qa_loss": 3.2463
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 4000,
+"loss": 8.8826,
+"qa_loss": 3.2267
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 4500,
+"loss": 8.8868,
+"qa_loss": 3.1776
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 5000,
+"loss": 8.7376,
+"qa_loss": 3.1295
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 5500,
+"loss": 8.5321,
+"qa_loss": 3.1355
+},
+{
+"run": "v2-glassbox",
+"title": "v2 all-position patching",
+"step": 5999,
+"loss": 8.8979,
+"qa_loss": 3.2117
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 0,
+"loss": 16.9519,
+"qa_loss": 4.9303
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 500,
+"loss": 9.5824,
+"qa_loss": 3.4167
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 1000,
+"loss": 9.3402,
+"qa_loss": 3.3555
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 1500,
+"loss": 9.1276,
+"qa_loss": 3.3008
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 2000,
+"loss": 8.5629,
+"qa_loss": 2.9931
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 2500,
+"loss": 7.9229,
+"qa_loss": 2.8822
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 3000,
+"loss": 7.7075,
+"qa_loss": 2.7245
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 3500,
+"loss": 6.7839,
+"qa_loss": 2.6211
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 4000,
+"loss": 6.252,
+"qa_loss": 2.3364
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 4500,
+"loss": 5.672,
+"qa_loss": 2.2136
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 5000,
+"loss": 5.4152,
+"qa_loss": 1.9548
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 5500,
+"loss": 5.3304,
+"qa_loss": 2.0345
+},
+{
+"run": "v3-glassbox",
+"title": "v3 late memory",
+"step": 5999,
+"loss": 6.2224,
+"qa_loss": 2.612
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 0,
+"loss": 14.3561,
+"qa_loss": 4.8226
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 500,
+"loss": 9.0539,
+"qa_loss": 3.3284
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 1000,
+"loss": 5.7313,
+"qa_loss": 2.3025
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 1500,
+"loss": 4.3434,
+"qa_loss": 1.6199
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 2000,
+"loss": 3.6973,
+"qa_loss": 1.1826
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 2500,
+"loss": 3.6933,
+"qa_loss": 1.5308
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 3000,
+"loss": 3.3577,
+"qa_loss": 1.0435
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 3500,
+"loss": 3.6816,
+"qa_loss": 1.3498
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 4000,
+"loss": 3.2653,
+"qa_loss": 1.119
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 4500,
+"loss": 3.2515,
+"qa_loss": 1.0293
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 5000,
+"loss": 3.1876,
+"qa_loss": 0.9592
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 5500,
+"loss": 2.5998,
+"qa_loss": 0.5429
+},
+{
+"run": "v4-glassbox",
+"title": "v4 zero-init memory",
+"step": 5999,
+"loss": 3.5946,
+"qa_loss": 1.2769
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 0,
+"loss": 14.3261,
+"qa_loss": 4.8014
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 500,
+"loss": 9.5338,
+"qa_loss": 3.3732
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 1000,
+"loss": 9.4037,
+"qa_loss": 3.4596
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 1500,
+"loss": 9.222,
+"qa_loss": 3.2469
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 2000,
+"loss": 9.1762,
+"qa_loss": 3.2054
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 2500,
+"loss": 8.9312,
+"qa_loss": 3.1862
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 3000,
+"loss": 8.3618,
+"qa_loss": 2.9094
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 3500,
+"loss": 7.878,
+"qa_loss": 3.0759
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 4000,
+"loss": 6.2648,
+"qa_loss": 2.5296
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 4500,
+"loss": 5.3305,
+"qa_loss": 2.024
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 5000,
+"loss": 4.1107,
+"qa_loss": 1.5101
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 5500,
+"loss": 4.3474,
+"qa_loss": 1.6502
+},
+{
+"run": "v5-glassbox",
+"title": "v5 memory after last block",
+"step": 5999,
+"loss": 5.1275,
+"qa_loss": 2.3274
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 0,
+"loss": 14.3261,
+"qa_loss": 4.8014
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 500,
+"loss": 9.5467,
+"qa_loss": 3.3915
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 1000,
+"loss": 10.8669,
+"qa_loss": 4.2847
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 1500,
+"loss": 9.1465,
+"qa_loss": 3.2312
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 2000,
+"loss": 8.9236,
+"qa_loss": 3.1698
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 2500,
+"loss": 8.4384,
+"qa_loss": 3.1042
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 3000,
+"loss": 7.143,
+"qa_loss": 2.4858
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 3500,
+"loss": 5.6356,
+"qa_loss": 2.3784
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 4000,
+"loss": 4.2798,
+"qa_loss": 2.1501
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 4500,
+"loss": 4.2468,
+"qa_loss": 1.9616
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 5000,
+"loss": 2.8417,
+"qa_loss": 1.2796
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 5500,
+"loss": 3.3169,
+"qa_loss": 1.4451
+},
+{
+"run": "v6-glassbox",
+"title": "v6 null slot",
+"step": 5999,
+"loss": 3.5321,
+"qa_loss": 1.8509
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 0,
+"loss": 14.5063,
+"qa_loss": 5.0157
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 500,
+"loss": 9.6036,
+"qa_loss": 3.3944
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 1000,
+"loss": 9.3441,
+"qa_loss": 3.3491
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 1500,
+"loss": 9.2174,
+"qa_loss": 3.2421
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 2000,
+"loss": 9.2231,
+"qa_loss": 3.1893
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 2500,
+"loss": 9.0723,
+"qa_loss": 3.1912
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 3000,
+"loss": 9.0194,
+"qa_loss": 3.1739
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 3500,
+"loss": 9.1798,
+"qa_loss": 3.2543
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 4000,
+"loss": 8.944,
+"qa_loss": 3.2268
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 4500,
+"loss": 8.9509,
+"qa_loss": 3.2398
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 5000,
+"loss": 8.9326,
+"qa_loss": 3.2184
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 5500,
+"loss": 8.7441,
+"qa_loss": 3.1612
+},
+{
+"run": "v7-glassbox",
+"title": "v7 memory heads",
+"step": 5999,
+"loss": 9.1776,
+"qa_loss": 3.2462
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 0,
+"loss": 13.9503,
+"qa_loss": 4.3028
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 500,
+"loss": 9.1903,
+"qa_loss": 3.0508
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 1000,
+"loss": 8.5245,
+"qa_loss": 2.8893
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 1500,
+"loss": 6.6001,
+"qa_loss": 2.9196
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 2000,
+"loss": 5.07,
+"qa_loss": 2.4246
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 2500,
+"loss": 4.3623,
+"qa_loss": 2.1534
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 3000,
+"loss": 4.2846,
+"qa_loss": 1.9819
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 3500,
+"loss": 4.1712,
+"qa_loss": 1.8125
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 4000,
+"loss": 4.5395,
+"qa_loss": 2.2128
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 4500,
+"loss": 3.7218,
+"qa_loss": 1.6337
+},
+{
+"run": "v8-glassbox",
+"title": "v8 fresh entities, glass-box",
+"step": 5000,
+"loss": 3.9899,
+"qa_loss": 1.7568
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 0,
+"loss": 12.0258,
+"qa_loss": 5.9941
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 500,
+"loss": 6.8898,
+"qa_loss": 3.0247
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 1000,
+"loss": 5.6737,
+"qa_loss": 2.772
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 1500,
+"loss": 4.8252,
+"qa_loss": 2.6683
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 2000,
+"loss": 4.6218,
+"qa_loss": 2.8073
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 250,
+"loss": 5.0099,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 500,
+"loss": 4.5317,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 750,
+"loss": 3.7536,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 1000,
+"loss": 3.7613,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 1250,
+"loss": 3.7351,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 1500,
+"loss": 3.4976,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 1750,
+"loss": 3.561,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 2000,
+"loss": 3.9309,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 2250,
+"loss": 3.6924,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 2500,
+"loss": 3.4895,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 2750,
+"loss": 3.3117,
+"qa_loss": null
+},
+{
+"run": "chat-glassbox",
+"title": "Chat glass-box",
+"step": 3000,
+"loss": 3.3986,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 250,
+"loss": 4.4204,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 500,
+"loss": 4.0665,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 750,
+"loss": 3.3827,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 1000,
+"loss": 3.3651,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 1250,
+"loss": 3.3315,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 1500,
+"loss": 3.1009,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 1750,
+"loss": 3.1838,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 2000,
+"loss": 3.4609,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 2250,
+"loss": 3.2666,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 2500,
+"loss": 3.0532,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 2750,
+"loss": 2.8241,
+"qa_loss": null
+},
+{
+"run": "chat-baseline",
+"title": "Chat GPT baseline",
+"step": 3000,
+"loss": 2.9336,
+"qa_loss": null
+}
+]

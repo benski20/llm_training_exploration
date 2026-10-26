@@ -1,0 +1,292 @@
+<style>
+  .gx { font-family: var(--font-anthropic-sans); display: grid; gap: var(--cds-gap-xl); }
+  .gx h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .gx h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; }
+  .gx-lede { color: var(--color-fg-muted); margin: var(--cds-gap-xs) 0 0; max-width: 70ch; }
+  .gx-grid { display: grid; gap: var(--cds-gap-md); grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+  .gx-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); display: grid; gap: var(--cds-gap-sm); align-content: start; min-width: 0; }
+  .gx-note { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); margin: 0; }
+  .gx-tablebox { overflow: auto; max-height: 30rem; }
+  .gx table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: var(--cds-font-size-body); }
+  .gx th { text-align: left; font-weight: var(--cds-font-weight-medium); color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); padding: var(--cds-pad-xs) var(--cds-pad-sm); position: sticky; top: 0; background: var(--color-panel); border-bottom: 1px solid var(--color-border-line); }
+  .gx td { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: middle; }
+  .gx td.num, .gx th.num { text-align: right; }
+  .gx-pill { display: inline-block; padding: 0 var(--cds-pad-sm); border-radius: 999px; font-size: var(--cds-font-size-caption); border: 1px solid currentColor; white-space: nowrap; }
+  .gx-pill[data-s="running"] { color: var(--color-warn); }
+  .gx-pill[data-s="done"] { color: var(--color-ok); }
+  .gx-pill[data-s="collapsed"], .gx-pill[data-s="stopped"] { color: var(--color-bad); }
+  .gx-bar { height: 0.5rem; border-radius: 999px; background: var(--cds-chart-grid); min-width: 5rem; overflow: hidden; }
+  .gx-bar > span { display: block; height: 100%; border-radius: 999px; background: var(--cds-chart-muted); }
+  .gx-bar[data-s="running"] > span { background: var(--color-warn); }
+  .gx-chart { position: relative; min-height: 14rem; }
+  .gx-small { position: relative; min-height: 7.5rem; }
+  .gx-multiples { display: grid; gap: var(--cds-gap-md); grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); }
+  .gx-multiples h3 { font-size: var(--cds-font-size-caption); font-weight: var(--cds-font-weight-medium); margin: 0; display: flex; gap: var(--cds-gap-xs); align-items: center; justify-content: space-between; }
+  .gx-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); white-space: nowrap; z-index: 2; }
+  .gx-tip .t { color: var(--cds-text-secondary); }
+  .gx-controls { display: flex; gap: var(--cds-gap-sm); align-items: center; flex-wrap: wrap; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .gx select { font: inherit; color: var(--color-fg); background: var(--color-bg); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: 2px var(--cds-pad-xs); }
+  .gx-legend { display: flex; gap: var(--cds-gap-md); flex-wrap: wrap; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .gx-legend i { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.3rem; vertical-align: middle; }
+  .gx-fail { display: flex; align-items: center; justify-content: center; gap: var(--cds-gap-xs); color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); min-height: inherit; }
+  .gx-fail::before { content: ""; width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--color-bad); }
+  [data-dash-source-state=empty] { color: transparent; }
+  [data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+</style>
+
+<div class="gx">
+  <header>
+    <h1>Glass-box Experiments</h1>
+    <p class="gx-lede" id="gx-takeaway" data-source="runs">—</p>
+  </header>
+
+  <section class="gx-card" id="runs">
+    <h2>Runs</h2>
+    <p class="gx-note">Every training run in the interpretability-by-design series. Progress is training steps; evaluation follows the last step.</p>
+    <div class="gx-tablebox">
+      <table data-source="runs" data-row-key="run" id="gx-runs">
+        <thead><tr>
+          <th data-field="title">Run</th><th data-field="status">Status</th><th data-field="progress">Progress</th>
+          <th data-field="step" class="num">Step</th><th data-field="last_loss" class="num">Last loss</th><th data-field="note">What changed</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="gx-card" id="curves">
+    <h2>Training loss</h2>
+    <p class="gx-note">Total training loss per logged step, one shared scale. Runs still training are listed first.</p>
+    <div class="gx-multiples dash-skeleton" id="gx-multiples" data-source="curves runs"></div>
+  </section>
+
+  <div class="gx-grid">
+    <section class="gx-card" id="hallucination">
+      <h2>Hallucination on never-seen facts</h2>
+      <p class="gx-note">Share of questions about facts never stated that were answered instead of "unknown", in distribution. Lower is better.</p>
+      <div class="gx-legend" id="gx-hleg"></div>
+      <div class="gx-chart dash-skeleton" id="gx-halluc" data-source="behaviour"></div>
+    </section>
+
+    <section class="gx-card" id="detection">
+      <h2>Detecting wrong answers</h2>
+      <p class="gx-note">AUROC for "the model's answer is wrong", from the built-in variable k and the best post-hoc linear probe. 0.5 is chance.</p>
+      <div class="gx-controls">
+        <label for="gx-split">Test set</label>
+        <select id="gx-split">
+          <option>In distribution</option><option>Long context</option><option>Held-out relations</option>
+        </select>
+      </div>
+      <div class="gx-legend" id="gx-dleg"></div>
+      <div class="gx-chart dash-skeleton" id="gx-detect" data-source="detection"></div>
+    </section>
+  </div>
+
+  <section class="gx-card" id="chat">
+    <h2>Chat models on held-out text</h2>
+    <p class="gx-note">Matched-size glass-box and GPT trained on Alpaca, WikiText-2 and the fact world. AUROC columns detect "top prediction wrong" per token.</p>
+    <div class="gx-tablebox">
+      <table data-source="chat" data-row-key="model,split" id="gx-chat">
+        <thead><tr>
+          <th data-field="name">Model</th><th data-field="split">Text</th><th data-field="bits_per_token" class="num">Bits per token</th>
+          <th data-field="top1_acc" class="num">Top-1</th><th data-field="auroc_msp" class="num">Softmax confidence</th>
+          <th data-field="auroc_probe" class="num">Post-hoc probe</th><th data-field="auroc_k" class="num">Built-in k</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+  const f2 = d3.format('.2f'), pct = d3.format('.0%'), int = d3.format(',');
+  const failed = (el) => { el.replaceChildren(); const d = document.createElement('div'); d.className = 'gx-fail'; d.textContent = 'Failed to load'; el.append(d); };
+  const statusOrder = { running: 0, stopped: 1, done: 2, collapsed: 3 };
+  window.gxShared = { num, f2, pct, int, failed, statusOrder };
+
+  function axisClean(g) { g.attr('font-size', null).attr('font-family', null); g.selectAll('text').attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)'); g.selectAll('line').attr('stroke', 'var(--cds-chart-grid)'); g.select('.domain').attr('stroke', 'var(--cds-chart-axis)'); }
+  window.gxAxisClean = axisClean;
+
+  dash.onData(() => {
+    const r = dash.data('runs');
+    const take = document.getElementById('gx-takeaway');
+    const body = document.querySelector('#gx-runs tbody');
+    if (r.status !== 'ok') { body.replaceChildren(); if (r.status === 'error') take.textContent = 'Run status failed to load.'; return; }
+    const rows = r.data.map((d) => ({ ...d, step: num(d.step), total_steps: num(d.total_steps), progress: num(d.progress), last_loss: num(d.last_loss) }))
+      .sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+    const live = rows.filter((d) => d.status === 'running');
+    take.textContent = live.length
+      ? `${live.length} training now: ${live.map((d) => `${d.title} at ${pct(d.progress)}`).join(', ')}. ${rows.length - live.length} finished.`
+      : `No runs training. ${rows.length} finished or stopped.`;
+    body.replaceChildren(...rows.map((d) => {
+      const tr = document.createElement('tr');
+      tr.dataset.key = d.run;
+      const cell = (text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; if (text !== undefined) td.textContent = text; tr.append(td); return td; };
+      cell(d.title);
+      const p = document.createElement('span'); p.className = 'gx-pill'; p.dataset.s = d.status; p.textContent = d.status; cell().append(p);
+      const bar = document.createElement('div'); bar.className = 'gx-bar'; bar.dataset.s = d.status;
+      const fill = document.createElement('span'); fill.style.width = `${Math.round(100 * (d.progress ?? 0))}%`; bar.append(fill);
+      const wrapP = document.createElement('div'); wrapP.style.cssText = 'display:flex;gap:var(--cds-gap-xs);align-items:center';
+      const lab = document.createElement('span'); lab.textContent = pct(d.progress ?? 0); lab.style.fontSize = 'var(--cds-font-size-caption)';
+      wrapP.append(bar, lab); cell().append(wrapP);
+      cell(int(d.step), 'num');
+      cell(d.last_loss === null ? '—' : f2(d.last_loss), 'num');
+      cell(d.note);
+      return tr;
+    }));
+  });
+</script>
+
+<script>
+  const { num: n2, f2: fmt2, failed: fail2, statusOrder: so2, int: int2 } = window.gxShared;
+  dash.onData(() => {
+    const box = document.getElementById('gx-multiples');
+    const c = dash.data('curves'), r = dash.data('runs');
+    if (c.status === 'error' || r.status === 'error') { box.classList.remove('dash-skeleton'); fail2(box); return; }
+    if (c.status !== 'ok' || r.status !== 'ok') return;
+    box.classList.remove('dash-skeleton');
+    const status = new Map(r.data.map((d) => [d.run, d.status]));
+    const pts = c.data.map((d) => ({ run: d.run, title: d.title, step: n2(d.step), loss: n2(d.loss) })).filter((d) => d.loss !== null);
+    const byRun = d3.groups(pts, (d) => d.run).sort((a, b) => (so2[status.get(a[0])] ?? 9) - (so2[status.get(b[0])] ?? 9));
+    const yMax = d3.max(pts, (d) => d.loss) || 1;
+    const xMax = d3.max(pts, (d) => d.step) || 1;
+    box.replaceChildren();
+    byRun.forEach(([run, rows], i) => {
+      const wrap = document.createElement('div');
+      const h = document.createElement('h3');
+      const name = document.createElement('span'); name.textContent = rows[0].title;
+      const last = document.createElement('span'); last.style.color = 'var(--color-fg-muted)'; last.textContent = fmt2(rows[rows.length - 1].loss);
+      h.append(name, last);
+      const chart = document.createElement('div'); chart.className = 'gx-small';
+      wrap.append(h, chart); box.append(wrap);
+      const W = chart.clientWidth || 240, H = 120, m = { t: 6, r: 6, b: 18, l: 28 };
+      const x = d3.scaleLinear([0, xMax], [m.l, W - m.r]);
+      const y = d3.scaleLinear([0, yMax], [H - m.b, m.t]).nice();
+      const svg = d3.select(chart).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+      svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(3).tickFormat(d3.format('~s')).tickSizeOuter(0)).call(window.gxAxisClean);
+      svg.append('g').attr('transform', `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(3).tickSize(-(W - m.l - m.r))).call(window.gxAxisClean).call((g) => g.select('.domain').remove());
+      const color = status.get(run) === 'running' ? 'var(--color-warn)' : (status.get(run) === 'collapsed' ? 'var(--cds-chart-status-critical)' : dash.colors[0]);
+      svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', color).attr('stroke-width', 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round')
+        .attr('d', d3.line((d) => x(d.step), (d) => y(d.loss)));
+      const end = rows[rows.length - 1];
+      svg.append('circle').attr('cx', x(end.step)).attr('cy', y(end.loss)).attr('r', 3).attr('fill', color);
+      const dot = svg.append('circle').attr('r', 3).attr('fill', color).attr('opacity', 0);
+      const tip = document.createElement('div'); tip.className = 'gx-tip'; tip.hidden = true; chart.append(tip);
+      svg.append('rect').attr('x', m.l).attr('y', m.t).attr('width', W - m.l - m.r).attr('height', H - m.t - m.b).attr('fill', 'transparent')
+        .on('mousemove', (ev) => {
+          const [px] = d3.pointer(ev); const s = x.invert(px);
+          const d = rows[d3.minIndex(rows, (q) => Math.abs(q.step - s))];
+          dot.attr('cx', x(d.step)).attr('cy', y(d.loss)).attr('opacity', 1);
+          tip.hidden = false;
+          tip.replaceChildren(Object.assign(document.createElement('div'), { className: 't', textContent: `Step ${int2(d.step)}` }), Object.assign(document.createElement('div'), { textContent: `Loss ${fmt2(d.loss)}` }));
+          const left = Math.min(chart.clientWidth - tip.offsetWidth, Math.max(0, (x(d.step) / W) * chart.clientWidth + 8));
+          tip.style.left = `${left}px`; tip.style.top = '0px';
+        })
+        .on('mouseleave', () => { tip.hidden = true; dot.attr('opacity', 0); });
+    });
+  });
+</script>
+
+<script>
+  const { num: n3, pct: pct3, failed: fail3 } = window.gxShared;
+  dash.onData(() => {
+    const el = document.getElementById('gx-halluc');
+    const b = dash.data('behaviour');
+    if (b.status === 'error') { el.classList.remove('dash-skeleton'); fail3(el); return; }
+    if (b.status !== 'ok') return;
+    el.classList.remove('dash-skeleton');
+    const rows = b.data.filter((d) => d.split === 'In distribution').map((d) => ({
+      run: d.run, label: `${d.experiment} ${d.model === 'glassbox' ? 'glass-box' : 'GPT'}`,
+      seen: n3(d.hallucination), fresh: n3(d.hallucination_fresh) }));
+    const series = [{ key: 'seen', name: 'Never-stated facts', color: dash.colors[0] }, { key: 'fresh', name: 'Never-seen entities', color: dash.colors[1] }]
+      .filter((s) => rows.some((d) => d[s.key] !== null));
+    const leg = document.getElementById('gx-hleg');
+    leg.replaceChildren(...series.map((s) => { const sp = document.createElement('span'); const i = document.createElement('i'); i.style.background = s.color; sp.append(i, s.name); return sp; }));
+    el.replaceChildren();
+    const W = el.clientWidth || 360, band = 22, m = { t: 4, r: 40, b: 20, l: 0 };
+    const tmp = d3.select(el).append('svg').attr('width', 0).attr('height', 0);
+    const widest = d3.max(rows, (d) => { const t = tmp.append('text').style('font-size', 'var(--cds-font-size-caption)').text(d.label); const w = t.node().getComputedTextLength(); t.remove(); return w; }) || 60;
+    tmp.remove(); m.l = widest + 10;
+    const H = m.t + m.b + rows.length * band * Math.max(1, series.length);
+    const y = d3.scaleBand(rows.map((d) => d.run), [m.t, H - m.b]).paddingInner(0.25);
+    const ys = d3.scaleBand(series.map((s) => s.key), [0, y.bandwidth()]).padding(0.1);
+    const x = d3.scaleLinear([0, 1], [m.l, W - m.r]);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(4).tickFormat(d3.format('.0%')).tickSize(-(H - m.t - m.b))).call(window.gxAxisClean).call((g) => g.select('.domain').remove());
+    svg.append('g').selectAll('text').data(rows).join('text').attr('x', m.l - 8).attr('y', (d) => y(d.run) + y.bandwidth() / 2).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .attr('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)').text((d) => d.label);
+    series.forEach((s) => {
+      const data = rows.filter((d) => d[s.key] !== null);
+      svg.append('g').selectAll('rect').data(data).join('rect').attr('x', m.l).attr('y', (d) => y(d.run) + ys(s.key)).attr('height', ys.bandwidth())
+        .attr('width', (d) => Math.max(1, x(d[s.key]) - m.l)).attr('rx', 3).attr('fill', s.color);
+      svg.append('g').selectAll('text').data(data).join('text').attr('x', (d) => x(d[s.key]) + 4).attr('y', (d) => y(d.run) + ys(s.key) + ys.bandwidth() / 2).attr('dy', '0.35em')
+        .attr('fill', 'var(--color-fg-muted)').style('font-size', 'var(--cds-font-size-caption)').text((d) => pct3(d[s.key]));
+    });
+  });
+</script>
+
+<script>
+  const { num: n4, f2: f24, failed: fail4 } = window.gxShared;
+  const sel = document.getElementById('gx-split');
+  sel.addEventListener('change', () => dash.setParams({ split: sel.value }));
+  dash.onData(() => {
+    const el = document.getElementById('gx-detect');
+    const d = dash.data('detection');
+    sel.value = dash.params().split || 'In distribution';
+    if (d.status === 'error') { el.classList.remove('dash-skeleton'); fail4(el); return; }
+    if (d.status !== 'ok') return;
+    el.classList.remove('dash-skeleton');
+    const split = sel.value;
+    const keep = ['Built-in k', 'Post-hoc probe'];
+    const rows = d.data.filter((r) => r.split === split && keep.includes(r.readout)).map((r) => ({ ...r, auroc: n4(r.auroc), label: `${r.experiment} ${r.model === 'glassbox' ? 'glass-box' : 'GPT'}` }));
+    const runs = [...new Set(rows.map((r) => r.run))];
+    const colors = { 'Built-in k': dash.colors[0], 'Post-hoc probe': dash.colors[2] };
+    const leg = document.getElementById('gx-dleg');
+    leg.replaceChildren(...keep.map((k) => { const sp = document.createElement('span'); const i = document.createElement('i'); i.style.background = colors[k]; sp.append(i, k); return sp; }));
+    el.replaceChildren();
+    if (!rows.length) { const p = document.createElement('p'); p.className = 'gx-note'; p.textContent = 'No finished run has this test set with enough correct answers to score.'; el.append(p); return; }
+    const W = el.clientWidth || 360, band = 24, m = { t: 4, r: 16, b: 20, l: 0 };
+    const labels = new Map(rows.map((r) => [r.run, r.label]));
+    const tmp = d3.select(el).append('svg').attr('width', 0).attr('height', 0);
+    const widest = d3.max(runs, (r) => { const t = tmp.append('text').style('font-size', 'var(--cds-font-size-caption)').text(labels.get(r)); const w = t.node().getComputedTextLength(); t.remove(); return w; }) || 60;
+    tmp.remove(); m.l = widest + 10;
+    const H = m.t + m.b + runs.length * band;
+    const y = d3.scalePoint(runs, [m.t + band / 2, H - m.b - band / 2]);
+    const x = d3.scaleLinear([0.3, 1], [m.l, W - m.r]);
+    const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    svg.append('g').attr('transform', `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(4).tickFormat(d3.format('.1f')).tickSize(-(H - m.t - m.b))).call(window.gxAxisClean).call((g) => g.select('.domain').remove());
+    svg.append('line').attr('x1', x(0.5)).attr('x2', x(0.5)).attr('y1', m.t).attr('y2', H - m.b).attr('stroke', 'var(--cds-chart-reference)').attr('stroke-dasharray', '3 3');
+    svg.append('g').selectAll('text').data(runs).join('text').attr('x', m.l - 8).attr('y', (r) => y(r)).attr('dy', '0.35em').attr('text-anchor', 'end')
+      .attr('fill', 'var(--color-fg)').style('font-size', 'var(--cds-font-size-caption)').text((r) => labels.get(r));
+    const tip = document.createElement('div'); tip.className = 'gx-tip'; tip.hidden = true; el.append(tip);
+    svg.append('g').selectAll('circle').data(rows).join('circle').attr('cx', (r) => x(Math.max(0.3, r.auroc))).attr('cy', (r) => y(r.run)).attr('r', 5)
+      .attr('fill', (r) => colors[r.readout])
+      .on('mouseenter', (ev, r) => {
+        tip.hidden = false;
+        tip.replaceChildren(Object.assign(document.createElement('div'), { className: 't', textContent: r.label }), Object.assign(document.createElement('div'), { textContent: `${r.readout}: ${f24(r.auroc)}` }));
+        const left = Math.min(el.clientWidth - tip.offsetWidth, (x(r.auroc) / W) * el.clientWidth + 8);
+        tip.style.left = `${Math.max(0, left)}px`; tip.style.top = `${(y(r.run) / H) * el.clientHeight - 30}px`;
+      })
+      .on('mouseleave', () => { tip.hidden = true; });
+  });
+</script>
+
+<script>
+  const { num: n5, f2: f25, pct: pct5 } = window.gxShared;
+  dash.onData(() => {
+    const c = dash.data('chat');
+    const body = document.querySelector('#gx-chat tbody');
+    if (c.status !== 'ok') { body.replaceChildren(); return; }
+    body.replaceChildren(...c.data.map((d) => {
+      const tr = document.createElement('tr');
+      tr.dataset.key = `${encodeURIComponent(d.model)},${encodeURIComponent(d.split)}`;
+      const cell = (text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text; tr.append(td); };
+      cell(d.name); cell(d.split);
+      cell(f25(n5(d.bits_per_token)), 'num'); cell(pct5(n5(d.top1_acc)), 'num');
+      cell(f25(n5(d.auroc_msp)), 'num'); cell(f25(n5(d.auroc_probe)), 'num');
+      cell(d.auroc_k === null || d.auroc_k === undefined ? '—' : f25(n5(d.auroc_k)), 'num');
+      return tr;
+    }));
+  });
+</script>

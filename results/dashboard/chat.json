@@ -1,0 +1,42 @@
+[
+{
+"model": "glassbox",
+"name": "Glass-box",
+"split": "Alpaca",
+"bits_per_token": 5.898884077674765,
+"top1_acc": 0.2642251674237812,
+"auroc_msp": 0.8152724737324392,
+"auroc_probe": 0.7503577050658302,
+"auroc_k": 0.7350235942633708
+},
+{
+"model": "glassbox",
+"name": "Glass-box",
+"split": "WikiText-2",
+"bits_per_token": 5.970806043691737,
+"top1_acc": 0.27772516123212915,
+"auroc_msp": 0.8293630920265256,
+"auroc_probe": 0.7876466291902982,
+"auroc_k": 0.7745187327932354
+},
+{
+"model": "baseline",
+"name": "GPT",
+"split": "Alpaca",
+"bits_per_token": 5.089125750776763,
+"top1_acc": 0.33821945394089825,
+"auroc_msp": 0.8228560715484169,
+"auroc_probe": 0.7115861568379009,
+"auroc_k": null
+},
+{
+"model": "baseline",
+"name": "GPT",
+"split": "WikiText-2",
+"bits_per_token": 5.43987104275623,
+"top1_acc": 0.317773869120101,
+"auroc_msp": 0.841977408007041,
+"auroc_probe": 0.692842468162593,
+"auroc_k": null
+}
+]

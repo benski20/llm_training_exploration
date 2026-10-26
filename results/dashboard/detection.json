@@ -1,0 +1,762 @@
+[
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.6858361391694725
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6897755331088664
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.5360381593714927
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.44656565656565655
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.6964882943143813
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.4230769230769231
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.431438127090301
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.8854515050167224
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.7244150661568816
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.7042280210899444
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.4039303987247941
+},
+{
+"run": "v1-glassbox",
+"experiment": "v1",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.48658469975811214
+},
+{
+"run": "v1-baseline",
+"experiment": "v1",
+"model": "baseline",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6785901998768602
+},
+{
+"run": "v1-baseline",
+"experiment": "v1",
+"model": "baseline",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.5726210350584308
+},
+{
+"run": "v1-baseline",
+"experiment": "v1",
+"model": "baseline",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.6260611826697893
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.723292469352014
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6481067697324717
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.5392837731747087
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.3649374962256175
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.645124716553288
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.5814909297052154
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.36295351473922904
+},
+{
+"run": "v2-glassbox",
+"experiment": "v2",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.4723639455782313
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.6664799739498535
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6299055682188213
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.6323933572126343
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.43779876261803974
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Late memory match",
+"auroc": 0.6621686746987951
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.8070222460466363
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.8369069954435808
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.481841329402305
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.4791610828196194
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Late memory match",
+"auroc": 0.7717770034843205
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.5627775846753948
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.593519484030433
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.47454266918987115
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.5132275132275133
+},
+{
+"run": "v3-glassbox",
+"experiment": "v3",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Late memory match",
+"auroc": 0.6051185004956294
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.6596777777777778
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6217444444444444
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.5668666666666666
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.44826666666666665
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.5908180043161032
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.6184616175110472
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.648160517932381
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.34413215496865684
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.684921875
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.603671875
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.43168526785714284
+},
+{
+"run": "v4-glassbox",
+"experiment": "v4",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.498515625
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.7501768033946252
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.733468882602546
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.3711103253182461
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.43613608809860577
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory familiarity",
+"auroc": 0.3414704990907254
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.52
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.5356725146198831
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.3632748538011696
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.4527485380116959
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory familiarity",
+"auroc": 0.4760818713450292
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.7209030324443524
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.7257642027802483
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.3342024147467684
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.4122979081129156
+},
+{
+"run": "v5-glassbox",
+"experiment": "v5",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory familiarity",
+"auroc": 0.3195579868175782
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.7088181786976968
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.675842973031728
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.4281284682891109
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.4917790821405279
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory familiarity",
+"auroc": 0.4155425119280541
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory not null",
+"auroc": 0.4842847172164441
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Built-in k",
+"auroc": 0.6972502805836139
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.691358024691358
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Evidence support",
+"auroc": 0.20454545454545456
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory match",
+"auroc": 0.4054433221099888
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory familiarity",
+"auroc": 0.26318742985409654
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Held-out relations",
+"readout": "Memory not null",
+"auroc": 0.4556677890011223
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.6973209196275888
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.6463770383699746
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.4221256049446189
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.5336254205273216
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory familiarity",
+"auroc": 0.45392361770853124
+},
+{
+"run": "v6-glassbox",
+"experiment": "v6",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory not null",
+"auroc": 0.536509036447564
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Built-in k",
+"auroc": 0.526344762503932
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.5881566530355458
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Evidence support",
+"auroc": 0.6334539163258887
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory match",
+"auroc": 0.5191097829506134
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory familiarity",
+"auroc": 0.34720037747719407
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "In distribution",
+"readout": "Memory head agreement",
+"auroc": 0.6427335640138409
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Built-in k",
+"auroc": 0.6003008084226358
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.5237826659146456
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Evidence support",
+"auroc": 0.426207933822147
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory match",
+"auroc": 0.48486557623613463
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory familiarity",
+"auroc": 0.5108103026884753
+},
+{
+"run": "v7-glassbox",
+"experiment": "v7",
+"model": "glassbox",
+"split": "Long context",
+"readout": "Memory head agreement",
+"auroc": 0.5773641661966535
+}
+]
