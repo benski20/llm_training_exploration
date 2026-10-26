@@ -44,6 +44,7 @@ class CegisConfig:
     verify_workers: int = 1
     collect_all_cex: bool = False  # run every case instead of stopping at the first counterexample
     verify_time_start: float = 60.0  # escalate x4 up to verify_time while undecided
+    cex_per_call: int = 20           # distinct counterexamples per verifier call (no-good cuts)
     seed: int = 0
 
 
@@ -126,7 +127,8 @@ def cegis(spec, cfg, V=2, log=print):
             while True:
                 res = verify_global(model.export(), spec, time_limit=limit,
                                     workers=cfg.verify_workers,
-                                    stop_on_cex=not cfg.collect_all_cex)
+                                    stop_on_cex=not cfg.collect_all_cex,
+                                    n_solutions=cfg.cex_per_call)
                 if res["status"] != "unknown" or limit >= cfg.verify_time:
                     break
                 limit = min(4 * limit, cfg.verify_time)

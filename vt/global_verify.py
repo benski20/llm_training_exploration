@@ -211,27 +211,40 @@ def _query(P, spec, c, k, tau, bounds, time_limit):
     else:
         spec.encode_not_label(m, x, L, c)
     res = m.solve(s[:1], [0.0], time_limit)  # pure feasibility
-    return res, x, n_bin + L * V
+    return res, x, n_bin + L * V, m, s
 
 
 def _run_case(args):
-    P, spec, c, k, tau, bounds, time_limit = args
+    P, spec, c, k, tau, bounds, time_limit, n_solutions = args
     t0 = time.perf_counter()
-    res, x, n_bin = _query(P, spec, c, k, tau, bounds, time_limit)
+    res, x, n_bin, m, s = _query(P, spec, c, k, tau, bounds, time_limit)
     q = {"class": c, "case": k, "milp_status": int(res.status), "binaries": n_bin}
-    if res.x is not None:
+    cexs = []
+    while res.x is not None:
         onehot = np.round(res.x[x]).reshape(P["L"], P["V"])
         seq = onehot.argmax(1)
         logits = np_forward(P, onehot)
         true = spec.label(seq)
         # a genuine counterexample: wrong prediction, or right but inside the tau margin
         margin = logits[c] - np.delete(logits, c).max()
-        if true != c and margin >= -tau:
-            q["result"] = "counterexample"
-            q["cex"] = {"seq": seq.tolist(), "label": true,
-                        "pred": int(np.argmax(logits)), "margin": float(margin)}
-        else:
-            q["result"] = "spurious"
+        if not (true != c and margin >= -tau):
+            q.setdefault("result", "spurious")
+            break
+        cexs.append({"seq": seq.tolist(), "label": true,
+                     "pred": int(np.argmax(logits)), "margin": float(margin)})
+        left = time_limit - (time.perf_counter() - t0)
+        if len(cexs) >= n_solutions or left < 1.0:
+            break
+        # no-good cut: exclude exactly this input, then look for another
+        on = [x[t * P["V"] + int(v)] for t, v in enumerate(seq)]
+        m.row([(i, 1.0) for i in on], -np.inf, P["L"] - 1.0)
+        res = m.solve(s[:1], [0.0], left)
+    if cexs:
+        q["result"] = "counterexample"
+        q["cex"] = cexs[0]
+        q["cexs"] = cexs
+    elif "result" in q:
+        pass
     elif res.status == 2:  # infeasible: no bad input in this case
         q["result"] = "infeasible"
     else:
@@ -240,9 +253,11 @@ def _run_case(args):
     return q
 
 
-def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=True):
+def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=True,
+                  n_solutions=1):
     """Prove global correctness, splitting each class query into the spec's
-    disjoint cases (solved in parallel when workers > 1).
+    disjoint cases (solved in parallel when workers > 1). A case that finds a
+    counterexample keeps searching (with no-good cuts) for up to n_solutions.
 
     Returns {"status": proved|counterexample|unknown, "counterexamples": [...], ...}."""
     t0 = time.perf_counter()
@@ -252,7 +267,7 @@ def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=Tr
     jobs = []
     for c in range(spec.n_classes):
         cases = spec.cases(c, P["L"]) if hasattr(spec, "cases") else [None]
-        jobs += [(P, spec, c, k, tau, bounds, time_limit) for k in cases]
+        jobs += [(P, spec, c, k, tau, bounds, time_limit, n_solutions) for k in cases]
     if workers > 1:
         import multiprocessing as mp
         with mp.get_context("spawn").Pool(workers) as pool:
@@ -267,7 +282,7 @@ def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=Tr
             out["queries"].append(q)
             if stop_on_cex and q["result"] == "counterexample":
                 break
-    out["counterexamples"] = [q["cex"] for q in out["queries"] if "cex" in q]
+    out["counterexamples"] = [c for q in out["queries"] for c in q.get("cexs", [])]
     results = {q["result"] for q in out["queries"]}
     if "counterexample" in results:
         out["status"] = "counterexample"

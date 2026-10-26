@@ -149,3 +149,12 @@ def test_parallel_cases_match_sequential():
     r = verify_global(P, DyckSpec(), workers=2)
     assert r["status"] == "counterexample"
     assert all(c["pred"] != c["label"] for c in r["counterexamples"])
+
+
+def test_no_good_cuts_return_distinct_real_counterexamples():
+    P = hand_built_dyck(10)
+    P["W_out"][1, (10 - 1) * 3 + 2] = 0.0
+    r = verify_global(P, DyckSpec(), n_solutions=5)
+    seqs = [tuple(c["seq"]) for c in r["counterexamples"]]
+    assert len(seqs) == 5 and len(set(seqs)) == 5
+    assert all(DyckSpec().label(s) != c["pred"] for s, c in zip(seqs, r["counterexamples"]))
