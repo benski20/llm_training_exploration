@@ -1,0 +1,33 @@
+{
+ "pos": "alibi",
+ "aux": 0.5,
+ "layer": 1,
+ "answer_only": true,
+ "train_s": 1503.6365838050842,
+ "threshold": 1.0802587270736694,
+ "slope": 0.1903853863477707,
+ "in_dist": {
+  "raw_accuracy": 0.575,
+  "released_false": 0,
+  "coverage": 0.43169398907103823,
+  "correct_abstain": 0.45622119815668205,
+  "false_abstain": 0.22404371584699453,
+  "withheld_frac": 0.4525,
+  "auroc_channel_present": 0.6707713228072826,
+  "ece_p_answer_vs_present": 0.07447088688611983,
+  "force_low_abstains": 1.0,
+  "force_high_answers": 0.9825
+ },
+ "shift": {
+  "raw_accuracy": 0.475,
+  "released_false": 0,
+  "coverage": 0.02617801047120419,
+  "correct_abstain": 0.6698564593301436,
+  "false_abstain": 0.6178010471204188,
+  "withheld_frac": 0.3425,
+  "auroc_channel_present": 0.5698539542573712,
+  "ece_p_answer_vs_present": 0.1166972518712282,
+  "force_low_abstains": 1.0,
+  "force_high_answers": 1.0
+ }
+}

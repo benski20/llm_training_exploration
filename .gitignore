@@ -10,3 +10,4 @@ results_*.log
 build/
 *.pt
 results/**/*.log
+data/wikitext-2/
