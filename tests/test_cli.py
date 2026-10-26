@@ -39,3 +39,10 @@ def test_check_rejects_tampered_or_wrong_model(tmp_path):
     # a fresh certificate for the broken model must not claim a proof
     assert main(["verify", art, "--certificate", cert]) == 1
     assert json.load(open(cert))["status"] == "counterexample"
+
+
+def test_package_api():
+    import vt
+    assert callable(vt.train_until_proved) and vt.CegisConfig().L == 16
+    P = hand_built_dyck(8)
+    assert vt.verify_global(P, vt.DyckSpec())["status"] == "proved"

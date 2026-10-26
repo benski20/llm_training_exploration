@@ -6,4 +6,4 @@ run() { name=$1; shift
   echo "== $name"; python3 -m vt prove --out results/cegis/$name "$@" --threads 1 --workers 2 2>&1 | grep --line-buffered -v Highs
 }
 run L16_causal_4bit --length 16 --float --causal --bits 4 --qat-from-round 1 --rounds 15 --verify-time 300
-run L32_causal_4bit --length 32 --float --causal --bits 4 --qat-from-round 1 --rounds 30 --verify-time 600
+run L32_causal_6bit --length 32 --float --causal --bits 6 --qat-from-round 3 --rounds 30 --verify-time 600

@@ -23,8 +23,8 @@ def load(run):
 
 
 def main():
-    lines = ["| run | L | inputs | status | rounds | verifier calls | last verify (s) | total (s) | certificate |",
-             "|---|---|---|---|---|---|---|---|---|"]
+    lines = ["| run | L | inputs | mixing | weights | status | rounds | verifier calls | last verify (s) | total (s) | certificate |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for run in sorted(glob.glob(os.path.join(ROOT, "*"))):
         r = load(run)
         if r is None:
@@ -40,7 +40,14 @@ def main():
         if os.path.exists(cert):
             with open(cert) as f:
                 sha = "`" + json.load(f)["artifact_sha256"][:12] + "`"
-        lines.append(f"| {name} | {L} | {V ** L:.2e} | {status} | {len(rows)} | {len(calls)} | "
+        mixing = "causal" if (cfg and cfg.get("causal")) or "causal" in name else "dense"
+        if cfg and cfg.get("bits"):
+            weights = f"{cfg['bits']}-bit"
+        elif cfg and cfg.get("ternary"):
+            weights = "ternary"
+        else:
+            weights = next((w for w in ("4bit", "6bit", "ternary") if w in name), "float").replace("bit", "-bit")
+        lines.append(f"| {name} | {L} | {V ** L:.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
                      f"{last} | {elapsed:.0f} | {sha} |")
     text = "\n".join(lines)
     print(text)
