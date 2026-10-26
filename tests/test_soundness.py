@@ -67,3 +67,18 @@ def test_kbit_export_matches_torch_and_is_on_grid():
     W = P["W1"][0]
     step = np.abs(W).max() / 7
     assert np.allclose(W / step, np.round(W / step), atol=1e-6)
+
+
+def test_shared_model_is_toeplitz_and_exports_exactly():
+    torch.manual_seed(0)
+    m = MixerNet(seq_len=6, vocab=2, d_model=4, d_hidden=6, n_blocks=1, n_classes=2, shared=True)
+    P = m.export()
+    M = P["mix"][0]
+    assert np.allclose(np.triu(M, 1), 0)                       # causal
+    for k in range(6):                                          # constant along diagonals
+        assert np.allclose(np.diag(M, -k), np.diag(M, -k)[0])
+    W = P["W_out"].reshape(2, 6, 4)
+    assert np.allclose(W[:, :-1], W[:, :1])                     # shared readout
+    x = _x()
+    ref = m(torch.tensor(x[None], dtype=torch.float32))[0].detach().numpy()
+    assert np.allclose(np_forward(P, x), ref, atol=1e-5)

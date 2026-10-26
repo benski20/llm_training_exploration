@@ -32,9 +32,16 @@ def main():
         status, rows, cfg, elapsed = r
         name = os.path.basename(run)
         L = cfg["L"] if cfg else int(name.split("_")[0][1:])
+        if cfg and cfg.get("lengths"):
+            L = f"{min(cfg['lengths'])}..{cfg['L']}"
         V = 2
-        calls = [e for e in rows if "verify_status" in e]
-        last = f"{calls[-1]['verify_time']:.0f}" if calls else "-"
+        calls = [e for e in rows if "verify_status" in e or "verify" in e]
+
+        def vtime(e):
+            if "verify_time" in e:
+                return e["verify_time"]
+            return sum(v.get("time", 0.0) for v in e["verify"].values())
+        last = f"{vtime(calls[-1]):.0f}" if calls else "-"
         cert = os.path.join(run, "certificate.json")
         sha = ""
         if os.path.exists(cert):
@@ -52,7 +59,7 @@ def main():
             weights = "ternary"
         else:
             weights = next((w for w in ("4bit", "6bit", "ternary") if w in name), "float").replace("bit", "-bit")
-        lines.append(f"| {name} | {L} | {V ** L:.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
+        lines.append(f"| {name} | {L} | {V ** (cfg['L'] if cfg else L):.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
                      f"{last} | {elapsed:.0f} | {sha} |")
     text = "\n".join(lines)
     print(text)

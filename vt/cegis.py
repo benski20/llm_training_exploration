@@ -30,6 +30,9 @@ class CegisConfig:
     causal: bool = False
     bits: int = 0                # k-bit uniform weights instead of float (0 = off)
     shared: bool = False         # weight-tied across positions (Toeplitz mixing, pooled readout)
+    lengths: tuple = ()          # extra lengths (< L) to train and prove at too; needs shared
+    enumerate_up_to: int = 1 << 16  # lengths with V^L at most this are checked exhaustively
+    tau: float = 1e-4            # required logit margin (same as the certificate's claim)
     ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
     rounds: int = 20
@@ -54,16 +57,22 @@ def _onehot(seqs, V):
     return torch.from_numpy(np.eye(V, dtype=np.float32)[seqs])
 
 
-def _fit(model, X, Y, W, epochs, cfg, lr):
+def _fit(model, datasets, epochs, cfg, lr):
+    """datasets: list of (X, Y, W), one per length; batches are interleaved."""
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    n = len(X)
-    steps = epochs * ((n + cfg.batch_size - 1) // cfg.batch_size)
+    nb = [(len(X) + cfg.batch_size - 1) // cfg.batch_size for X, _, _ in datasets]
     # anneal to zero within the round: the round ends at a settled point
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, steps))
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs * sum(nb)))
     for _ in range(epochs):
-        perm = torch.randperm(n)
-        for i in range(0, n, cfg.batch_size):
-            idx = perm[i:i + cfg.batch_size]
+        perms = [torch.randperm(len(X)) for X, _, _ in datasets]
+        order = torch.randperm(sum(nb)).tolist()
+        owner = [k for k, n in enumerate(nb) for _ in range(n)]
+        start = [0] * len(datasets)
+        for o in order:
+            k = owner[o]
+            X, Y, W = datasets[k]
+            idx = perms[k][start[k]:start[k] + cfg.batch_size]
+            start[k] += cfg.batch_size
             logits = model(X[idx])
             y, w = Y[idx], W[idx]
             ce = F.cross_entropy(logits, y, reduction="none")
@@ -75,11 +84,20 @@ def _fit(model, X, Y, W, epochs, cfg, lr):
 
 
 @torch.no_grad()
-def _falsify(model, spec, cfg, V, rng):
-    seqs = spec.sample(cfg.falsify_samples, cfg.L, rng)
-    pred = model(_onehot(seqs, V)).argmax(1).numpy()
-    bad = pred != spec.label_batch(seqs)
-    return np.unique(seqs[bad], axis=0)
+def _falsify(model, spec, cfg, V, rng, L):
+    if V ** L <= cfg.enumerate_up_to:
+        seqs = _all_seqs(L, V)
+    else:
+        seqs = spec.sample(cfg.falsify_samples, L, rng)
+    bad = []
+    for i in range(0, len(seqs), 1 << 16):
+        chunk = seqs[i:i + (1 << 16)]
+        logits = model(_onehot(chunk, V))
+        y = torch.from_numpy(spec.label_batch(chunk))
+        true = logits[torch.arange(len(y)), y]
+        logits[torch.arange(len(y)), y] = -float("inf")
+        bad.append((true - logits.max(1).values <= cfg.tau).numpy())
+    return np.unique(seqs[np.concatenate(bad)], axis=0)
 
 
 @torch.no_grad()
@@ -96,6 +114,11 @@ def _neighbourhood(model, spec, seeds, V, rng, n=50000):
     return np.unique(base[pred != spec.label_batch(base)], axis=0)
 
 
+def _all_seqs(L, V):
+    idx = np.arange(V ** L)
+    return (idx[:, None] // V ** np.arange(L)[::-1]) % V
+
+
 def _mutants(seqs, V):
     out = [seqs]
     for t in range(seqs.shape[1]):
@@ -106,60 +129,84 @@ def _mutants(seqs, V):
 
 
 def cegis(spec, cfg, V=2, log=print):
+    """Train until every length in {cfg.L} ∪ cfg.lengths is proved (or rounds run out).
+    Lengths with V^L <= cfg.enumerate_up_to are decided by exhaustive enumeration,
+    the rest by the MILP verifier."""
     torch.manual_seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
+    lengths = sorted(set(cfg.lengths) | {cfg.L})
+    if len(lengths) > 1 and not cfg.shared:
+        raise ValueError("multiple lengths need a weight-tied (shared) model")
+    if max(lengths) != cfg.L:
+        raise ValueError("cfg.L must be the largest length")
     model = MixerNet(cfg.L, V, cfg.d_model, cfg.d_hidden, cfg.n_blocks,
                      spec.n_classes, ternary=cfg.ternary, causal=cfg.causal,
                      shared=cfg.shared)
-    base = spec.sample(cfg.n_train, cfg.L, rng)
-    cex = np.zeros((0, cfg.L), dtype=np.int64)
+    n_each = max(1000, cfg.n_train // len(lengths))
+    base = {L: spec.sample(n_each, L, rng) for L in lengths}
+    cex = {L: np.zeros((0, L), dtype=np.int64) for L in lengths}
     history = []
     t0 = time.perf_counter()
     for rnd in range(cfg.rounds):
-        seqs = np.concatenate([base, cex])
         quant_on = rnd >= cfg.ternary_from_round
         model.ternary = cfg.ternary and quant_on
         model.bits = cfg.bits if (cfg.bits and quant_on) else None
-        X, Y = _onehot(seqs, V), torch.from_numpy(spec.label_batch(seqs))
-        W = torch.cat([torch.ones(len(base)), torch.full((len(cex),), cfg.cex_weight)])
+        datasets = []
+        for L in lengths:
+            seqs = np.concatenate([base[L], cex[L]])
+            W = torch.cat([torch.ones(len(base[L])), torch.full((len(cex[L]),), cfg.cex_weight)])
+            datasets.append((_onehot(seqs, V), torch.from_numpy(spec.label_batch(seqs)), W))
         first = rnd == 0 or ((cfg.ternary or cfg.bits) and rnd == cfg.ternary_from_round)
         lr = cfg.lr if first else max(cfg.lr_min, cfg.lr * cfg.lr_decay ** rnd)
-        _fit(model, X, Y, W, cfg.epochs_first if first else cfg.epochs_round, cfg, lr)
-        found = _falsify(model, spec, cfg, V, rng)
-        entry = {"round": rnd, "n_cex_total": int(len(cex)), "sampled_errors": int(len(found))}
-        if len(found) == 0:
-            limit = min(cfg.verify_time_start, cfg.verify_time)
-            while True:
-                res = verify_global(model.export(), spec, time_limit=limit,
-                                    workers=cfg.verify_workers,
-                                    stop_on_cex=not cfg.collect_all_cex,
-                                    n_solutions=cfg.cex_per_call)
-                if res["status"] != "unknown" or limit >= cfg.verify_time:
-                    break
-                limit = min(4 * limit, cfg.verify_time)
-            entry["verify_limit"] = limit
-            entry.update(verify_status=res["status"], verify_time=res["time"],
-                         unstable=res["unstable"], verifier_cex=len(res["counterexamples"]),
-                         slowest_case=max(q["time"] for q in res["queries"]))
-            if res["status"] == "proved" and quant_on:
+        _fit(model, datasets, cfg.epochs_first if first else cfg.epochs_round, cfg, lr)
+        found = {L: _falsify(model, spec, cfg, V, rng, L) for L in lengths}
+        entry = {"round": rnd, "n_cex_total": int(sum(len(c) for c in cex.values())),
+                 "sampled_errors": int(sum(len(f) for f in found.values()))}
+        if len(lengths) > 1:
+            entry["errors_by_length"] = {str(L): int(len(found[L])) for L in lengths}
+        if entry["sampled_errors"] == 0:
+            per_length, all_proved = {}, True
+            # enumerated lengths are already proved (complete check above)
+            for L in lengths:
+                if V ** L <= cfg.enumerate_up_to:
+                    per_length[L] = {"status": "proved", "method": "enumeration"}
+            for L in [L for L in lengths if L not in per_length]:
+                res = _verify_escalating(model.export(L), spec, cfg)
+                per_length[L] = {"status": res["status"], "method": "milp", "time": res["time"],
+                                 "unstable": res["unstable"]}
+                if res["status"] != "proved":
+                    all_proved = False
+                    seqs = np.array([c["seq"] for c in res["counterexamples"]], dtype=np.int64)
+                    if len(seqs):
+                        near = _neighbourhood(model, spec, seqs, V, rng)
+                        entry["neighbourhood_errors"] = int(len(near))
+                        found[L] = np.concatenate([seqs, near]) if len(near) else seqs
+                    break  # train on what we found before verifying longer lengths
+            entry["verify"] = {str(L): v for L, v in per_length.items()}
+            if all_proved and quant_on:
                 entry["elapsed"] = time.perf_counter() - t0
                 history.append(entry)
                 log(entry)
                 return model, {"status": "proved", "rounds": rnd + 1, "history": history,
-                               "config": asdict(cfg), "elapsed": entry["elapsed"]}
-            found = np.array([c["seq"] for c in res["counterexamples"]], dtype=np.int64)
-            if len(found) == 0:  # timeout: no new information; train more
-                found = np.zeros((0, cfg.L), dtype=np.int64)
-            else:
-                near = _neighbourhood(model, spec, found, V, rng)
-                entry["neighbourhood_errors"] = int(len(near))
-                if len(near):
-                    found = np.concatenate([found, near])
-        if len(found):
-            new = _mutants(found[:500], V)
-            cex = np.unique(np.concatenate([cex, new]), axis=0)
+                               "lengths": lengths, "config": asdict(cfg),
+                               "elapsed": entry["elapsed"]}
+        for L in lengths:
+            if len(found[L]):
+                new = _mutants(found[L][:500], V)
+                cex[L] = np.unique(np.concatenate([cex[L], new]), axis=0)
         entry["elapsed"] = time.perf_counter() - t0
         history.append(entry)
         log(entry)
     return model, {"status": "not_proved", "rounds": cfg.rounds, "history": history,
-                   "config": asdict(cfg), "elapsed": time.perf_counter() - t0}
+                   "lengths": lengths, "config": asdict(cfg), "elapsed": time.perf_counter() - t0}
+
+
+def _verify_escalating(P, spec, cfg):
+    limit = min(cfg.verify_time_start, cfg.verify_time)
+    while True:
+        res = verify_global(P, spec, time_limit=limit, workers=cfg.verify_workers,
+                            stop_on_cex=not cfg.collect_all_cex, n_solutions=cfg.cex_per_call)
+        if res["status"] != "unknown" or limit >= cfg.verify_time:
+            res["limit"] = limit
+            return res
+        limit = min(4 * limit, cfg.verify_time)

@@ -46,3 +46,18 @@ def test_package_api():
     assert callable(vt.train_until_proved) and vt.CegisConfig().L == 16
     P = hand_built_dyck(8)
     assert vt.verify_global(P, vt.DyckSpec())["status"] == "proved"
+
+
+def test_prove_multi_length_end_to_end(tmp_path):
+    out = str(tmp_path / "run")
+    # force the MILP path for L=10 (2^10 > 512); shorter lengths are enumerated
+    code = main(["prove", "--out", out, "--length", "10", "--also-lengths", "4,6", "--float",
+                 "--shared", "--rounds", "8", "--threads", "1", "--workers", "1",
+                 "--n-train", "4000", "--enumerate-up-to", "512"])
+    assert code == 0
+    for L, cert in [(4, "certificate_L4.json"), (6, "certificate_L6.json"), (10, "certificate.json")]:
+        c = json.load(open(f"{out}/{cert}"))
+        assert c["status"] == "proved" and c["length"] == L
+        assert c["method"] == ("milp" if L == 10 else "enumeration")
+        art = f"{out}/model.npz" if L == 10 else f"{out}/model_L{L}.npz"
+        assert main(["check", art, f"{out}/{cert}", "--exhaustive", "--workers", "1"]) == 0

@@ -74,27 +74,31 @@ class MixerNet(nn.Module):
             return ternarize(p)
         return quantize(p, self.bits) if self.bits else p
 
-    def mixw(self, i):
+    def mixw(self, i, L=None):
+        L = L or self.L
         if self.shared:
-            return self.w(self.mix[i])[self.offset] * self.mask
+            return self.w(self.mix[i])[self.offset[:L, :L]] * self.mask[:L, :L]
+        assert L == self.L, "only weight-tied models run at other lengths"
         return self.w(self.mix[i] * self.mask) * self.mask
 
-    def wout(self):
+    def wout(self, L=None):
         """Effective (C, L*d) readout, position-major like the flattened state."""
+        L = L or self.L
         if self.shared:
-            W = self.w(self.W_pool).repeat(1, self.L)
+            W = self.w(self.W_pool).repeat(1, L)
             last = torch.zeros_like(W)
             last[:, -self.d:] = self.w(self.W_last)
             return W + last
         return self.w(self.W_out)
 
     def forward(self, x):
+        L = x.shape[1]  # weight-tied models accept any length <= self.L
         s = x @ self.w(self.W_in).T + self.b_in
         for i in range(self.n_blocks):
-            s = s + torch.einsum("ij,bjd->bid", self.mixw(i), s)
+            s = s + torch.einsum("ij,bjd->bid", self.mixw(i, L), s)
             z = s @ self.w(self.W1[i]).T + self.b1[i]
             s = s + F.relu(z) @ self.w(self.W2[i]).T + self.b2[i]
-        return s.flatten(1) @ self.wout().T + self.b_out
+        return s.flatten(1) @ self.wout(L).T + self.b_out
 
     def ibp(self, x, eps):
         """Interval bounds over the L-inf ball of radius eps around x.
@@ -130,17 +134,19 @@ class MixerNet(nn.Module):
         return lb, pre
 
     @torch.no_grad()
-    def export(self):
-        """Numpy float64 copy of the deployed (quantised, if ternary) weights."""
+    def export(self, length=None):
+        """Numpy float64 copy of the deployed (quantised, if ternary) weights,
+        at `length` (weight-tied models only) or the training length."""
+        L = length or self.L
         f = lambda t: self.w(t).detach().double().numpy()
         g = lambda t: t.detach().double().numpy()
         return {
-            "L": self.L, "V": self.V, "d": self.d, "h": self.h, "C": self.C,
+            "L": L, "V": self.V, "d": self.d, "h": self.h, "C": self.C,
             "W_in": f(self.W_in), "b_in": g(self.b_in),
-            "mix": [self.mixw(i).detach().double().numpy() for i in range(self.n_blocks)],
+            "mix": [self.mixw(i, L).detach().double().numpy() for i in range(self.n_blocks)],
             "W1": [f(m) for m in self.W1], "b1": [g(m) for m in self.b1],
             "W2": [f(m) for m in self.W2], "b2": [g(m) for m in self.b2],
-            "W_out": self.wout().detach().double().numpy(), "b_out": g(self.b_out),
+            "W_out": self.wout(L).detach().double().numpy(), "b_out": g(self.b_out),
         }
 
     @torch.no_grad()

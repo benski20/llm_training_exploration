@@ -35,6 +35,8 @@ def cmd_prove(a):
                       ternary_from_round=a.qat_from_round, verify_workers=a.workers, bits=a.bits,
                       shared=a.shared, lr=a.lr, lr_decay=a.lr_decay,
                       epochs_first=a.epochs_first, epochs_round=a.epochs_round,
+                      lengths=tuple(int(v) for v in a.also_lengths.split(",") if v), tau=a.tau,
+                      n_train=a.n_train, enumerate_up_to=a.enumerate_up_to,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -44,21 +46,35 @@ def cmd_prove(a):
         progress.write(json.dumps(e) + "\n"); progress.flush()
 
     model, res = cegis(spec, cfg, V=V, log=log)
-    art = os.path.join(a.out, "model.npz")
-    save_artifact(model.export(), art)
     write_json(res, os.path.join(a.out, "history.json"))
+    lengths = res["lengths"]
+    arts = {L: os.path.join(a.out, "model.npz" if L == a.length else f"model_L{L}.npz")
+            for L in lengths}
+    for L, art in arts.items():
+        save_artifact(model.export(L), art)
     if res["status"] != "proved":
-        print(f"not proved after {res['rounds']} rounds; artifact saved without certificate")
+        print(f"not proved after {res['rounds']} rounds; artifact(s) saved without certificate")
         return 1
-    # re-verify the saved artifact itself, so the certificate binds to the file on disk
-    P = load_artifact(art)
-    out = verify_global(P, spec, tau=a.tau, time_limit=a.verify_time, workers=a.workers)
-    cert = make_certificate(art, a.spec, out, a.tau, {"training": res["config"],
-                                                      "cegis_rounds": res["rounds"]})
-    write_json(cert, os.path.join(a.out, "certificate.json"))
-    print(f"{out['status']}: {art} sha256={cert['artifact_sha256'][:16]}... "
-          f"({out['time']:.1f}s verify, {res['elapsed']:.0f}s total)")
-    return 0 if out["status"] == "proved" else 1
+    # re-verify each saved artifact itself, so certificates bind to the files on disk
+    ok = True
+    for L, art in arts.items():
+        P = load_artifact(art)
+        if V ** L <= cfg.enumerate_up_to:
+            n_err, min_margin, _ = exhaustive_check(P, spec, a.tau)
+            out = {"status": "proved" if n_err == 0 else "counterexample", "queries": [],
+                   "method": "enumeration", "min_margin": min_margin, "time": 0.0}
+        else:
+            out = verify_global(P, spec, tau=a.tau, time_limit=a.verify_time, workers=a.workers)
+            out["method"] = "milp"
+        cert = make_certificate(art, a.spec, out, a.tau, {"length": L, "method": out["method"],
+                                                          "training": res["config"],
+                                                          "cegis_rounds": res["rounds"]})
+        name = "certificate.json" if L == a.length else f"certificate_L{L}.json"
+        write_json(cert, os.path.join(a.out, name))
+        ok &= out["status"] == "proved"
+        print(f"L={L}: {out['status']} ({out['method']}) {art} sha256={cert['artifact_sha256'][:16]}...")
+    print(f"total {res['elapsed']:.0f}s")
+    return 0 if ok else 1
 
 
 def cmd_verify(a):
@@ -114,6 +130,8 @@ def main(argv=None):
     p = sub.add_parser("prove", help="train with counterexample guidance until proved")
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.add_argument("--length", type=int, default=16)
+    p.add_argument("--also-lengths", default="",
+                   help="comma-separated shorter lengths to train and prove too (needs --shared)")
     p.add_argument("--out", required=True)
     p.add_argument("--d-model", type=int, default=4)
     p.add_argument("--d-hidden", type=int, default=8)
@@ -122,6 +140,9 @@ def main(argv=None):
     p.add_argument("--causal", action="store_true")
     p.add_argument("--shared", action="store_true",
                    help="weight-tied across positions: Toeplitz causal mixing + pooled readout")
+    p.add_argument("--n-train", type=int, default=20000)
+    p.add_argument("--enumerate-up-to", type=int, default=1 << 16,
+                   help="lengths with V^L at most this are decided by enumeration, not MILP")
     p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--lr-decay", type=float, default=0.7, help="per-round lr multiplier")
     p.add_argument("--epochs-first", type=int, default=60)
