@@ -216,12 +216,30 @@ What this shows:
   answer position never changed the answer. One sweep showed the causal read
   is at the *entity* token (59% of answers follow a patched read there), so the
   model taught itself an entity lookup.
+* **Placing the only memory read after the last attention block makes the read
+  causal by construction** (v5). Patching it makes the answer follow the
+  patched fact 64% of the time (v1: 0%), and k reaches 0.75 AUROC (probe 0.73).
+* **A mechanistic account of this model's hallucinations** (v5). An untrained
+  readout of slot usage turned out *inverted* (AUROC 0.34): wrong answers read
+  the most heavily used slots. A query for a fact that was never stored has
+  nowhere to land, so the top-k read falls onto hub slots holding other facts,
+  and the model reports one of them with confidence.
 * **Negative results:**
   * patch training at all question positions collapsed learning (v2);
   * a late memory read for (entity, relation) lost capability (v3);
   * the label-free evidence and memory-match readouts do not detect errors;
-  * no version learned to abstain on facts it never saw, because absence is not
-    represented in the memory.
+  * a learned "nothing stored" null slot in the read stays unused (v6, AUROC
+    0.48), because nothing in training rewards reading it;
+  * no version learned to abstain on facts it never saw (hallucination 73-89%).
+    Absence is taught only on specific (entity, relation) pairs, which the
+    model memorises one by one.
+
+| version | k / probe AUROC, in-dist | k / probe, long context | hallucination |
+|---|---|---|---|
+| v1 | 0.69 / 0.69 | 0.72 / 0.70 | 73% |
+| v4 zero-init memory | 0.66 / 0.62 | 0.69 / 0.60 | 87% |
+| v5 memory after last block | 0.75 / 0.73 | 0.72 / 0.73 | 79% |
+| v6 + null slot | 0.71 / 0.68 | 0.70 / 0.65 | 77% |
 
 ## Product wedge
 
