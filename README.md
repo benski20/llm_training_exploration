@@ -199,7 +199,71 @@ Global proofs (track 1) apply to small, weight-tied, piecewise-linear modules.
 Such modules could serve as verified components alongside an LM, for
 example a bracket or format checker.
 
-## 3. Earlier result: local robustness (`results/dyck16`)
+## 3. Certified generators
+
+`vt gen-train` trains a generator and proves its support exactly: it never
+emits an invalid string (sound), it can emit every valid one (complete), and
+it never gets stuck (live). Count-state generators (`vt/gen.py`) use
+relu-normalised probabilities, so invalid continuations get *exactly* zero
+mass. A softmax generator can never be sound. The support loss covers every
+live state of the enumerable product graph, not a sample of it.
+
+* Dyck-1: proved at all 32 lengths 2–64 (`results/gen/dyck_L2-64`).
+* `no_bb`, a JSON DFA: proved at all 16 lengths 2–32.
+* Sortedness, window 2: proved at only 3 of 8 lengths.
+
+The verifier also computes the exact violation probability of unsound
+generators, as a rational. Two extensions:
+
+* **Beyond regular languages.** Counter-automaton specs
+  (`vt/counterspec.py`, `specs/anbn.json`, `specs/anbncn.json`). A learned
+  network is proved exactly to recognise aⁿbⁿcⁿ, which is not context-free.
+* **Typed nesting.** Stack-state models (`vt/stack.py`) for Dyck-k with
+  bounded depth, the JSON-nesting milestone. Their exact verifiers agree with
+  brute force; a Dyck-2 generator is certified at L = 4, 8, 12.
+
+## 4. The semantic layer: truthfulness, reasoning, harm, tone
+
+These properties have no formal definition, so vt designs the model so they
+become checkable, and labels every guarantee with its strength:
+
+* **Interpretability by design** (`vt/epistemic.py`). Named
+  residual-stream channels, such as "grounded", are trained on signals
+  computable during training. Intervention training makes them causally
+  load-bearing. On grounded answering, the built-in channel beats a post-hoc
+  probe of the same model:
+
+  | measure | post-hoc probe | built-in channel |
+  |---|---|---|
+  | accuracy | 29% | 43% |
+  | hallucinated | 47% | 29% |
+  | flags its own errors (AUROC) | 0.15 | 0.71 |
+
+  The channel is causal in both directions (`results/grounding_by_design_v2_single.json`).
+* **Provenance by architecture** (`experiments/provenance_by_design.py`).
+  Fact-bearing tokens can only be copied from context, and every copy's
+  source is checked exactly. **0 false answers released, both in-distribution
+  and under distribution shift**, with every correct answer kept.
+* **Plan → Check → Realize** (`vt/pcr`, `vt respond`). A planner emits a
+  structured plan:
+  * claims are checked against a knowledge base;
+  * reasoning steps are evaluated exactly by a whitelist interpreter, never
+    `eval`;
+  * the declared intent is checked against policy;
+  * a realizer states only checked items in an approved register;
+  * an independent verifier confirms the text is in the licensed language;
+  * subjective properties use conformally calibrated judges (`vt/pcr/judge.py`).
+
+  With a simulated noisy planner, false claims released fell from 932 to 0,
+  wrong arithmetic from 406 to 0, and harmful responses from 102 to 0, with
+  all correct content kept.
+
+Limits, measured: these are small CPU models on synthetic tasks. Under
+distribution shift the base model's capability collapsed, and statistical
+bounds hold only when calibration matches deployment. See VISION.md for the
+roadmap.
+
+## 5. Earlier result: local robustness (`results/dyck16`)
 
 Exact local-robustness verification (ε = 0.03) of 512-ReLU Dyck models, 3
 seeds. The ReLU-stability loss cuts unstable neurons from 207 to 24 and the
@@ -209,7 +273,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ## Use
 
 ```bash
-pip install -e ".[dev]"; pytest -q        # 57 tests, about 2 minutes on CPU; CI runs them on every push
+pip install -e ".[dev]"; pytest -q        # 99 tests, about 3 minutes on CPU; CI runs them on every push
 
 vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths $(seq -s, 2 2 30)]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
