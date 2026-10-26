@@ -52,14 +52,15 @@ U = ord("u")
 
 
 class VerifiableLM(nn.Module):
-    def __init__(self, block):
+    def __init__(self, block, layer=LAYER):
         super().__init__()
+        self.layer = layer
         self.ptr = PointerGPT(block)
         self.alpha = nn.Parameter(torch.tensor(1.0))
         self.beta = nn.Parameter(torch.tensor(0.0))
         self.write = None                  # (mask (B,T) bool, value) to overwrite the channel
         self._s = None
-        self.ptr.gpt.blocks[LAYER].register_forward_hook(self._hook)
+        self.ptr.gpt.blocks[layer].register_forward_hook(self._hook)
 
     def _hook(self, mod, inp, out):
         if self.write is not None:
@@ -96,17 +97,22 @@ def batch(rng, n, kmin, kmax):
     return data, x, y, pos + 1                                            # decision = the position after 'A'
 
 
-def train(steps, seed, log, aux_w):
+def train(steps, seed, log, aux_w, layer, answer_only):
     torch.manual_seed(seed)
     rng = random.Random(seed)
-    m = VerifiableLM(G.BLOCK)
+    m = VerifiableLM(G.BLOCK, layer)
     opt = torch.optim.AdamW(m.parameters(), lr=2e-3, weight_decay=0.01)
     for i in range(steps):
         for gr in opt.param_groups:
             gr["lr"] = 2e-3 * 0.5 * (1 + math.cos(math.pi * i / steps))
         data, x, y, dpos = batch(rng, 32, 1, 4)
         logp, _, s, _ = m(x, dpos)
-        loss_lm = F.nll_loss(logp.reshape(-1, 256), y.reshape(-1))
+        tok = F.nll_loss(logp.reshape(-1, 256), y.reshape(-1), reduction="none").view(y.shape)
+        if answer_only:                    # supervise the answer and its terminator, not the random context
+            w = (torch.arange(y.shape[1])[None, :] >= dpos[:, None]).float()
+            loss_lm = (tok * w).sum() / w.sum()
+        else:
+            loss_lm = tok.mean()
         present = torch.tensor([d[2] for d in data])
         loss_aux = F.smooth_l1_loss(s, torch.where(present, KAPPA, -KAPPA))
         loss = loss_lm + aux_w * loss_aux
@@ -191,6 +197,8 @@ def main():
     ap.add_argument("--n-test", type=int, default=400)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--aux", type=float, default=0.5, help="weight of the channel supervision")
+    ap.add_argument("--layer", type=int, default=LAYER, help="block whose output carries the channel")
+    ap.add_argument("--answer-only", action="store_true", help="LM loss on answer tokens only")
     ap.add_argument("--pos", default="alibi", choices=["learned", "alibi"])
     ap.add_argument("--out", default="results/verifiable_lm.json")
     a = ap.parse_args()
@@ -199,13 +207,14 @@ def main():
     t0 = time.time()
     ckpt = a.out.replace(".json", ".pt")
     if os.path.exists(ckpt):
-        m = VerifiableLM(G.BLOCK)
+        m = VerifiableLM(G.BLOCK, a.layer)
         m.load_state_dict(torch.load(ckpt))
     else:
-        m = train(a.steps, a.seed, lambda e: print(json.dumps(e), flush=True), a.aux)
+        m = train(a.steps, a.seed, lambda e: print(json.dumps(e), flush=True), a.aux, a.layer,
+                  a.answer_only)
         os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
         torch.save(m.state_dict(), ckpt)
-    res = {"pos": a.pos, "aux": a.aux, "train_s": time.time() - t0,
+    res = {"pos": a.pos, "aux": a.aux, "layer": a.layer, "answer_only": a.answer_only, "train_s": time.time() - t0,
            "threshold": (m.beta / F.softplus(m.alpha)).item(), "slope": F.softplus(m.alpha).item()}
     rng = random.Random(1000 + a.seed)
     for name, (kmin, kmax) in {"in_dist": (1, 4), "shift": (6, 8)}.items():
