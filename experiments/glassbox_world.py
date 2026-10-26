@@ -131,11 +131,13 @@ def qa_set(world, rng, n, rels, kmin, kmax, test):
 # ---------------------------------------------------------------- model wrappers
 
 MEM_EVIDENCE, IIT_POS = "pooled", "answer"        # v1 settings; v2: "per_position", "all"
+MEM2 = -1                                          # v3: late memory read after block 3, match supervised
 
 
 class Glass:
     def __init__(self):
-        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE))
+        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
+                                     mem2_layer=MEM2))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -212,6 +214,10 @@ def train(kind, world, steps, seed, log):
             nll = torch.where(is_unk, -F.logsigmoid(d), -(F.logsigmoid(-d) + lv.gather(1, gidx[:, None]).squeeze(1)))
             correct = ((lv.argmax(-1) == gidx) & ~is_unk).float()           # the model's own correctness
             aux = F.binary_cross_entropy_with_logits(k, correct)
+            if MEM2 >= 0:                   # a late lookup that misses should mean "I will be wrong"
+                m2 = model.m.mem2.trace["match"][torch.arange(64), qpos]
+                aux = aux + F.binary_cross_entropy_with_logits(model.m.mem2.lscale * m2 + model.m.mem2.lbias,
+                                                               correct)
             # interchange intervention: B's memory read at A's '?' must make A answer B's value
             pa = []
             while len(pa) < 16:
@@ -273,6 +279,8 @@ def collect(model, qs, bs=100):
                     r["mem_mass"] = float(e[j, -1])
                     r["match"] = float(match[q[1]])
                 r["ctx_mass"] = float(e[j, :ctx_end].sum())
+                if MEM2 >= 0:
+                    r["match2"] = float(model.m.mem2.trace["match"][j, q[1]])
             rows.append(r)
     return rows
 
@@ -297,6 +305,8 @@ def readout_aurocs(rows, probe, layer):
         d["k_builtin"] = auroc(np.array([r["k"] for r in rows]), y)
         d["evidence_support"] = auroc(np.array([r["mem_mass"] + r["ctx_mass"] for r in rows]), y)
         d["memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
+        if "match2" in rows[0]:
+            d["late_memory_match"] = auroc(np.array([r["match2"] for r in rows]), y)
     return d
 
 
@@ -367,11 +377,12 @@ def main():
     ap.add_argument("--n-test", type=int, default=600)
     ap.add_argument("--mem-evidence", default="pooled", choices=["pooled", "per_position"])
     ap.add_argument("--iit-positions", default="answer", choices=["answer", "all"])
+    ap.add_argument("--mem2-layer", type=int, default=-1)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS
-    MEM_EVIDENCE, IIT_POS = a.mem_evidence, a.iit_positions
+    global MEM_EVIDENCE, IIT_POS, MEM2
+    MEM_EVIDENCE, IIT_POS, MEM2 = a.mem_evidence, a.iit_positions, a.mem2_layer
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
@@ -387,7 +398,8 @@ def main():
         ckpt = a.out.replace(".json", f".{kind}.pt")
         model = Glass() if kind == "glassbox" else Base()
         if os.path.exists(ckpt):
-            model.m.load_state_dict(torch.load(ckpt))
+            missing, unexpected = model.m.load_state_dict(torch.load(ckpt), strict=False)
+            assert not unexpected and all(k.endswith(("lscale", "lbias")) for k in missing), (missing, unexpected)
         else:
             model = train(kind, world, a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
             torch.save(model.m.state_dict(), ckpt)

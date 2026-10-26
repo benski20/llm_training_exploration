@@ -210,7 +210,11 @@ def train(model, stream, steps, block, bs, log, ckpt):
     step = 0
     if os.path.exists(ckpt):
         st = torch.load(ckpt)
-        model.m.load_state_dict(st["model"]); opt.load_state_dict(st["opt"]); step = st["step"]
+        missing, unexpected = model.m.load_state_dict(st["model"], strict=False)
+        assert not unexpected and all(k.endswith(("lscale", "lbias")) for k in missing), (missing, unexpected)
+        if not missing:
+            opt.load_state_dict(st["opt"])
+        step = st["step"]
     g = torch.Generator().manual_seed(step)
     t0 = time.time()
     while step < steps:

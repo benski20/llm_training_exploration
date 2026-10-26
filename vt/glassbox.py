@@ -49,6 +49,7 @@ class GBConfig:
     track_evidence: bool = True    # the evidence stream is read-only: it can be skipped while training
     sharpness: bool = False        # per-token k sets the next-token distribution's sharpness
     mem_evidence: str = "pooled"   # "pooled": one memory source; "per_position": each read is a source
+    mem2_layer: int = -1           # optional second (late) memory read, after this block's attention
 
 
 def alibi_bias(T, n_head, device=None):
@@ -111,6 +112,8 @@ class PKMemory(nn.Module):
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
         nn.init.normal_(self.values.weight, 0.0, 1.0)
         self.gate = nn.Linear(c.n_embd, 1)
+        self.lscale = nn.Parameter(torch.tensor(1.0))   # affine map of the match score, for calibration
+        self.lbias = nn.Parameter(torch.tensor(0.0))
         self.patch = None              # (mask (B, T), read (B, d) or (B, T, d)): interchange interventions
         self.trace = None
 
@@ -159,6 +162,8 @@ class GlassBoxLM(nn.Module):
         if c.mlp_ratio:
             self.mlp = nn.ModuleList([ConvexMLP(c) for _ in range(c.n_layer)])
         self.mem = PKMemory(c)
+        if c.mem2_layer >= 0:
+            self.mem2 = PKMemory(c)
         self.ln_f = nn.LayerNorm(c.n_embd)
         self.head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
         self.know = nn.Linear(c.n_embd, 1)                         # self-knowledge variable k
@@ -182,6 +187,8 @@ class GlassBoxLM(nn.Module):
             x, e = blk(x, e)
             if i == self.config.mem_layer:
                 x, e = self.mem(x, e)
+            if i == self.config.mem2_layer:
+                x, e = self.mem2(x, e)
             if self.config.mlp_ratio:
                 x, e = self.mlp[i](x, e)
             hs.append(x)
