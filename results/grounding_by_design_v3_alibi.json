@@ -1,0 +1,76 @@
+{
+ "baseline": {
+  "train_s": 1879.7834956645966,
+  "names": "single",
+  "pos": "alibi",
+  "flip": [
+   0.15,
+   0.5
+  ],
+  "in_dist": {
+   "accuracy": 0.3575,
+   "hallucinated": 0.3548387096774194,
+   "wrong_year": 0.5846994535519126,
+   "false_abstain": 0.3989071038251366,
+   "auroc_grounding": 0.48966281382992116,
+   "auroc_own_errors": 0.5289855072463768,
+   "gated_hallucination_rate": 0.06451612903225806,
+   "gated_kept_correct": 0.3333333333333333
+  },
+  "shift": {
+   "accuracy": 0.4125,
+   "hallucinated": 0.2105263157894737,
+   "wrong_year": 0.2617801047120419,
+   "false_abstain": 0.7382198952879581,
+   "auroc_grounding": 0.5010897066559784,
+   "auroc_own_errors": null,
+   "gated_hallucination_rate": 0.004784688995215311,
+   "gated_kept_correct": 0.0
+  },
+  "conformal": {
+   "judge": "judge",
+   "type": "split-conformal (exchangeability)",
+   "bound": "P(a bad output passes) <= 0.05",
+   "calibration_n": 193
+  }
+ },
+ "by_design": {
+  "train_s": 1986.1519770622253,
+  "names": "single",
+  "pos": "alibi",
+  "flip": [
+   0.15,
+   0.5
+  ],
+  "in_dist": {
+   "accuracy": 0.39,
+   "hallucinated": 0.28110599078341014,
+   "wrong_year": 0.633879781420765,
+   "false_abstain": 0.366120218579235,
+   "auroc_grounding": 0.741557754778273,
+   "auroc_own_errors": null,
+   "gated_hallucination_rate": 0.09216589861751152,
+   "gated_kept_correct": 0.0,
+   "force_absent_on_present_abstains": 1.0,
+   "force_present_on_absent_answers": 0.06912442396313365
+  },
+  "shift": {
+   "accuracy": 0.4375,
+   "hallucinated": 0.1626794258373206,
+   "wrong_year": 0.36649214659685864,
+   "false_abstain": 0.6335078534031414,
+   "auroc_grounding": 0.6800521055136651,
+   "auroc_own_errors": null,
+   "gated_hallucination_rate": 0.014354066985645933,
+   "gated_kept_correct": 0.0,
+   "force_absent_on_present_abstains": 1.0,
+   "force_present_on_absent_answers": 0.004784688995215311
+  },
+  "conformal": {
+   "judge": "judge",
+   "type": "split-conformal (exchangeability)",
+   "bound": "P(a bad output passes) <= 0.05",
+   "calibration_n": 193
+  }
+ }
+}
