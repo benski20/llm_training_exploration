@@ -55,19 +55,39 @@ class DyckSpec:
         return ((depth.min(1) >= 0) & (depth[:, -1] == 0)).astype(np.int64)
 
     def sample(self, n, L, rng):
-        """A mix that covers easy and hard regions of the input space."""
-        k = n // 4
+        """A mix that covers easy regions and the spec's edge cases: one-token
+        flips, single shallow dips below zero (an adjacent '()' -> ')(' swap at
+        a depth-0 boundary), and deep nesting."""
+        k = n // 6
         uni = rng.integers(0, 2, size=(k, L))
-        perm = np.argsort(rng.random((k, L)), axis=1) >= L // 2   # equal counts
+        perm = (np.argsort(rng.random((k, L)), axis=1) >= L // 2).astype(np.int64)
         bal = self._balanced(k, L, rng)
-        flip = self._balanced(n - 3 * k, L, rng)
-        i = rng.integers(L, size=len(flip))
-        flip[np.arange(len(flip)), i] ^= 1
-        return np.concatenate([uni, perm.astype(np.int64), bal, flip])
+        deep = self._balanced(k, L, rng, p_close=0.3)
+        flip = self._balanced(k, L, rng)
+        i = rng.integers(L, size=k)
+        flip[np.arange(k), i] ^= 1
+        dip = self._swap_dips(self._balanced(n - 5 * k, L, rng), rng)
+        return np.concatenate([uni, perm, bal, deep, flip, dip])
 
     @staticmethod
-    def _balanced(n, L, rng):
-        """Uniform-ish balanced strings via random walks conditioned to stay >= 0."""
+    def _swap_dips(seqs, rng):
+        """Swap one adjacent '()' pair, preferring pairs that start at depth 0,
+        which makes the depth dip to exactly -1 once."""
+        out = seqs.copy()
+        depth = np.cumsum(1 - 2 * seqs, axis=1)
+        before = np.concatenate([np.zeros((len(seqs), 1), dtype=np.int64), depth[:, :-1]], 1)
+        pair = (seqs[:, :-1] == 0) & (seqs[:, 1:] == 1)
+        score = pair * (1.0 + 4.0 * (before[:, :-1] == 0)) * rng.random(pair.shape)
+        j = score.argmax(1)
+        ok = pair[np.arange(len(seqs)), j]
+        r = np.flatnonzero(ok)
+        out[r, j[r]], out[r, j[r] + 1] = 1, 0
+        return out
+
+    @staticmethod
+    def _balanced(n, L, rng, p_close=0.5):
+        """Balanced strings via random walks conditioned to stay >= 0
+        (p_close < 0.5 gives deeper nesting)."""
         out = np.zeros((n, L), dtype=np.int64)
         depth = np.zeros(n, dtype=np.int64)
         for t in range(L):
@@ -75,7 +95,7 @@ class DyckSpec:
             must_close = depth >= left          # need all remaining to be ')'
             can_close = depth > 0
             close = np.where(must_close, True,
-                             np.where(can_close, rng.random(n) < 0.5, False))
+                             np.where(can_close, rng.random(n) < p_close, False))
             out[:, t] = close
             depth += np.where(close, -1, 1)
         return out
@@ -235,7 +255,7 @@ def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=Tr
         jobs += [(P, spec, c, k, tau, bounds, time_limit) for k in cases]
     if workers > 1:
         import multiprocessing as mp
-        with mp.get_context("fork").Pool(workers) as pool:
+        with mp.get_context("spawn").Pool(workers) as pool:
             for q in pool.imap_unordered(_run_case, jobs):
                 out["queries"].append(q)
                 if stop_on_cex and q["result"] == "counterexample":

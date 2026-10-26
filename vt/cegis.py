@@ -34,6 +34,8 @@ class CegisConfig:
     epochs_first: int = 60
     epochs_round: int = 15
     lr: float = 3e-3
+    lr_decay: float = 0.7        # per-round lr multiplier, so later rounds fine-tune
+    lr_min: float = 1e-4
     batch_size: int = 256
     margin: float = 1.0          # hinge target on the logit margin
     cex_weight: float = 5.0
@@ -49,9 +51,12 @@ def _onehot(seqs, V):
     return torch.from_numpy(np.eye(V, dtype=np.float32)[seqs])
 
 
-def _fit(model, X, Y, W, epochs, cfg):
-    opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+def _fit(model, X, Y, W, epochs, cfg, lr):
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
     n = len(X)
+    steps = epochs * ((n + cfg.batch_size - 1) // cfg.batch_size)
+    # anneal to zero within the round: the round ends at a settled point
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, steps))
     for _ in range(epochs):
         perm = torch.randperm(n)
         for i in range(0, n, cfg.batch_size):
@@ -63,7 +68,7 @@ def _fit(model, X, Y, W, epochs, cfg):
             other[torch.arange(len(y)), y] = -float("inf")
             margin = logits[torch.arange(len(y)), y] - other.max(1).values
             loss = (w * (ce + F.relu(cfg.margin - margin))).sum() / w.sum()
-            opt.zero_grad(); loss.backward(); opt.step()
+            opt.zero_grad(); loss.backward(); opt.step(); sched.step()
 
 
 @torch.no_grad()
@@ -112,7 +117,8 @@ def cegis(spec, cfg, V=2, log=print):
         X, Y = _onehot(seqs, V), torch.from_numpy(spec.label_batch(seqs))
         W = torch.cat([torch.ones(len(base)), torch.full((len(cex),), cfg.cex_weight)])
         first = rnd == 0 or (cfg.ternary and rnd == cfg.ternary_from_round)
-        _fit(model, X, Y, W, cfg.epochs_first if first else cfg.epochs_round, cfg)
+        lr = cfg.lr if first else max(cfg.lr_min, cfg.lr * cfg.lr_decay ** rnd)
+        _fit(model, X, Y, W, cfg.epochs_first if first else cfg.epochs_round, cfg, lr)
         found = _falsify(model, spec, cfg, V, rng)
         entry = {"round": rnd, "n_cex_total": int(len(cex)), "sampled_errors": int(len(found))}
         if len(found) == 0:

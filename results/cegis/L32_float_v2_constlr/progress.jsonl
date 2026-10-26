@@ -1,0 +1,25 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 764, "elapsed": 18.230974737998622}
+{"round": 1, "n_cex_total": 16496, "sampled_errors": 124, "elapsed": 26.217108842000016}
+{"round": 2, "n_cex_total": 20588, "sampled_errors": 3, "elapsed": 35.06159512599879}
+{"round": 3, "n_cex_total": 20687, "sampled_errors": 2, "elapsed": 44.209760638999796}
+{"round": 4, "n_cex_total": 20753, "sampled_errors": 14, "elapsed": 53.65386731899889}
+{"round": 5, "n_cex_total": 21215, "sampled_errors": 3, "elapsed": 62.74589981799909}
+{"round": 6, "n_cex_total": 21314, "sampled_errors": 13, "elapsed": 72.59030111599895}
+{"round": 7, "n_cex_total": 21743, "sampled_errors": 4, "elapsed": 81.95536142999845}
+{"round": 8, "n_cex_total": 21875, "sampled_errors": 3, "elapsed": 90.9293782879995}
+{"round": 9, "n_cex_total": 21974, "sampled_errors": 2, "elapsed": 100.45461551599874}
+{"round": 10, "n_cex_total": 22040, "sampled_errors": 1, "elapsed": 109.99460800899942}
+{"round": 11, "n_cex_total": 22073, "sampled_errors": 11, "elapsed": 119.50999569399937}
+{"round": 12, "n_cex_total": 22436, "sampled_errors": 2, "elapsed": 129.3262796179988}
+{"round": 13, "n_cex_total": 22502, "sampled_errors": 14, "elapsed": 138.937168896}
+{"round": 14, "n_cex_total": 22964, "sampled_errors": 1, "elapsed": 149.51371000699874}
+{"round": 15, "n_cex_total": 22997, "sampled_errors": 9, "elapsed": 159.52582430499933}
+{"round": 16, "n_cex_total": 23294, "sampled_errors": 13, "elapsed": 168.52975102599885}
+{"round": 17, "n_cex_total": 23723, "sampled_errors": 2, "elapsed": 179.5471701509996}
+{"round": 18, "n_cex_total": 23789, "sampled_errors": 3, "elapsed": 189.87507468299918}
+{"round": 19, "n_cex_total": 23888, "sampled_errors": 5, "elapsed": 200.31454314999974}
+{"round": 20, "n_cex_total": 24053, "sampled_errors": 1, "elapsed": 210.80028279399994}
+{"round": 21, "n_cex_total": 24086, "sampled_errors": 0, "verify_limit": 240.0, "verify_status": "counterexample", "verify_time": 237.4181002059995, "unstable": 256, "verifier_cex": 1, "slowest_case": 237.34992358800082, "neighbourhood_errors": 32, "elapsed": 759.5078161699985}
+{"round": 22, "n_cex_total": 24941, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "counterexample", "verify_time": 57.843865918999654, "unstable": 256, "verifier_cex": 1, "slowest_case": 57.77443768900048, "neighbourhood_errors": 23, "elapsed": 827.7711223810002}
+{"round": 23, "n_cex_total": 25567, "sampled_errors": 2, "elapsed": 837.318280423}
+{"round": 24, "n_cex_total": 25633, "sampled_errors": 1, "elapsed": 847.9008264969998}
