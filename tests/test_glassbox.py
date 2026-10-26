@@ -41,3 +41,15 @@ def test_memory_patch_and_starved_core():
     m(x)
     m.mem.patch = None
     assert torch.allclose(m.mem.trace["read"][:, 5], r.flip(0))
+
+
+def test_per_position_memory_evidence():
+    torch.manual_seed(0)
+    m = GlassBoxLM(GBConfig(vocab_size=50, block_size=16, n_embd=32, mem_keys=8, mem_topk=4,
+                            mem_evidence="per_position"))
+    x = torch.randint(0, 50, (2, 7))
+    _, _, e, _ = m(x)
+    assert e.shape == (2, 7, 14)
+    assert torch.allclose(e.sum(-1), torch.ones(2, 7), atol=1e-5)
+    future = torch.triu(torch.ones(7, 7, dtype=torch.bool), 1)
+    assert float(e[..., 7:][:, future].abs().max()) < 1e-7        # no credit to future memory reads

@@ -1,0 +1,88 @@
+{
+ "glassbox": {
+  "train_s": 3017.8118286132812,
+  "params": 2577816,
+  "probe_layer": 3,
+  "in_dist": {
+   "ctx_acc": 0.47,
+   "mem_acc": 0.78,
+   "absent_acc": 0.27,
+   "hallucination_rate": 0.73,
+   "accuracy": 0.5066666666666667,
+   "auroc": {
+    "probe_best_layer": 0.6897755331088664,
+    "k_builtin": 0.6858361391694725,
+    "evidence_support": 0.5360381593714927,
+    "memory_match": 0.44656565656565655
+   }
+  },
+  "held_relations": {
+   "ctx_acc": 0.0,
+   "mem_acc": 0.01,
+   "absent_acc": 0.29,
+   "hallucination_rate": 0.71,
+   "accuracy": 0.1,
+   "auroc": {
+    "probe_best_layer": 0.4230769230769231,
+    "k_builtin": 0.6964882943143813,
+    "evidence_support": 0.431438127090301,
+    "memory_match": 0.8854515050167224
+   }
+  },
+  "long_context": {
+   "ctx_acc": 0.45,
+   "mem_acc": 0.885,
+   "absent_acc": 0.175,
+   "hallucination_rate": 0.825,
+   "accuracy": 0.5033333333333333,
+   "auroc": {
+    "probe_best_layer": 0.7042280210899444,
+    "k_builtin": 0.7244150661568816,
+    "evidence_support": 0.4039303987247941,
+    "memory_match": 0.48658469975811214
+   }
+  },
+  "causal": {
+   "memory_patch_follows": 0.0,
+   "memory_patch_n": 70,
+   "corrupt_evidence_top_changes_answer": 0.06862745098039216,
+   "corrupt_random_context_changes_answer": 0.0196078431372549,
+   "corrupt_n": 102
+  }
+ },
+ "baseline": {
+  "train_s": 1104.7657899856567,
+  "params": 2730880,
+  "probe_layer": 3,
+  "in_dist": {
+   "ctx_acc": 0.43,
+   "mem_acc": 0.25,
+   "absent_acc": 0.345,
+   "hallucination_rate": 0.655,
+   "accuracy": 0.3416666666666667,
+   "auroc": {
+    "probe_best_layer": 0.6785901998768602
+   }
+  },
+  "held_relations": {
+   "ctx_acc": 0.0,
+   "mem_acc": 0.005,
+   "absent_acc": 0.265,
+   "hallucination_rate": 0.735,
+   "accuracy": 0.09,
+   "auroc": {
+    "probe_best_layer": 0.5726210350584308
+   }
+  },
+  "long_context": {
+   "ctx_acc": 0.27,
+   "mem_acc": 0.23,
+   "absent_acc": 0.265,
+   "hallucination_rate": 0.735,
+   "accuracy": 0.255,
+   "auroc": {
+    "probe_best_layer": 0.6260611826697893
+   }
+  }
+ }
+}

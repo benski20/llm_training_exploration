@@ -48,6 +48,7 @@ class GBConfig:
     mlp_ratio: int = 0             # 0: no MLPs (fully starved core); >0: small MLP core for language skill
     track_evidence: bool = True    # the evidence stream is read-only: it can be skipped while training
     sharpness: bool = False        # per-token k sets the next-token distribution's sharpness
+    mem_evidence: str = "pooled"   # "pooled": one memory source; "per_position": each read is a source
 
 
 def alibi_bias(T, n_head, device=None):
@@ -110,7 +111,7 @@ class PKMemory(nn.Module):
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
         nn.init.normal_(self.values.weight, 0.0, 1.0)
         self.gate = nn.Linear(c.n_embd, 1)
-        self.patch = None              # (mask (B, T) bool, read (B, d)) for interchange interventions
+        self.patch = None              # (mask (B, T), read (B, d) or (B, T, d)): interchange interventions
         self.trace = None
 
     def read(self, z):
@@ -130,14 +131,19 @@ class PKMemory(nn.Module):
         r, tr = self.read(z)
         if self.patch is not None:
             mask, val = self.patch
-            r = torch.where(mask[..., None], val[:, None, :].expand_as(r), r)
+            val = val[:, None, :].expand_as(r) if val.dim() == 2 else val
+            r = torch.where(mask[..., None], val, r)
         tr["read"] = r
         self.trace = tr
         b = torch.sigmoid(self.gate(z))
         x = (1 - b) * x + b * r
         if e is not None:
+            T = x.shape[1]
             e = (1 - b) * e
-            e[..., -1:] = e[..., -1:] + b                          # the last source is "memory"
+            if e.shape[-1] == 2 * T:                               # sources T..2T-1: the read at each position
+                e[..., T:] = e[..., T:] + b * torch.eye(T)
+            else:
+                e[..., -1:] = e[..., -1:] + b                      # the last source is "memory"
         tr["gate"] = b.squeeze(-1)
         return x, e
 
@@ -169,7 +175,8 @@ class GlassBoxLM(nn.Module):
         B, T = idx.shape
         track = self.config.track_evidence if evidence is None else evidence
         x = self.embed(idx)
-        e = torch.cat([torch.eye(T).expand(B, T, T), torch.zeros(B, T, 1)], -1) if track else None
+        n_mem = T if self.config.mem_evidence == "per_position" else 1
+        e = torch.cat([torch.eye(T).expand(B, T, T), torch.zeros(B, T, n_mem)], -1) if track else None
         hs = []
         for i, blk in enumerate(self.attn):
             x, e = blk(x, e)

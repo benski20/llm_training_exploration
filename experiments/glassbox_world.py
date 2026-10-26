@@ -130,9 +130,12 @@ def qa_set(world, rng, n, rels, kmin, kmax, test):
 
 # ---------------------------------------------------------------- model wrappers
 
+MEM_EVIDENCE, IIT_POS = "pooled", "answer"        # v1 settings; v2: "per_position", "all"
+
+
 class Glass:
     def __init__(self):
-        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK))
+        self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB, block_size=BLOCK, mem_evidence=MEM_EVIDENCE))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -220,8 +223,9 @@ def train(kind, world, steps, seed, log):
                 xa = pad([[QT, ent(e), rel(r), QM] for (e, r), _ in pa])
                 xb = pad([[QT, ent(e), rel(r), QM] for _, (e, r) in pa])
                 model.m(xb)
-                rb = model.m.mem.trace["read"][:, 3].detach()
-                mask = torch.zeros(xa.shape, dtype=torch.bool); mask[:, 3] = True
+                rb = model.m.mem.trace["read"].detach()
+                mask = torch.zeros(xa.shape, dtype=torch.bool)
+                mask[:, 3 if IIT_POS == "answer" else slice(None)] = True
                 model.m.mem.patch = (mask, rb)
                 la = F.log_softmax(model.m(xa)[0][:, 3][:, VALUES], -1)
                 model.m.mem.patch = None
@@ -259,9 +263,16 @@ def collect(model, qs, bs=100):
             if k is not None:
                 ctx_end = len(q[0]) - 4                                     # context = tokens before 'Q'
                 r["k"] = float(k[j])
-                r["mem_mass"] = float(e[j, -1])
+                T = x.shape[1]
+                match = model.m.mem.trace["match"][j]
+                if e.shape[-1] == 2 * T:                                   # evidence per memory read
+                    w = e[j, T:]
+                    r["mem_mass"] = float(w.sum())
+                    r["match"] = float((w * match).sum() / w.sum().clamp_min(1e-9))
+                else:
+                    r["mem_mass"] = float(e[j, -1])
+                    r["match"] = float(match[q[1]])
                 r["ctx_mass"] = float(e[j, :ctx_end].sum())
-                r["match"] = float(model.m.mem.trace["match"][j, q[1]])
             rows.append(r)
     return rows
 
@@ -315,8 +326,8 @@ def causal_checks(model, world, rng, n=200):
         ob, *_ = model.answer(xb, torch.tensor([3]))
         if int(ob[0]) != val(rb, world.value[eb][rb]):
             continue
-        rbv = m.mem.trace["read"][:, 3]
-        m.mem.patch = (torch.tensor([[False, False, False, True]]), rbv)
+        rbv = m.mem.trace["read"]
+        m.mem.patch = (torch.tensor([[IIT_POS != "answer"] * 3 + [True]]), rbv)
         oa, *_ = model.answer(xa, torch.tensor([3]))
         m.mem.patch = None
         tot += 1
@@ -354,9 +365,14 @@ def main():
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-test", type=int, default=600)
+    ap.add_argument("--mem-evidence", default="pooled", choices=["pooled", "per_position"])
+    ap.add_argument("--iit-positions", default="answer", choices=["answer", "all"])
+    ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    torch.set_num_threads(os.cpu_count())
+    global MEM_EVIDENCE, IIT_POS
+    MEM_EVIDENCE, IIT_POS = a.mem_evidence, a.iit_positions
+    torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
     probe_fit = qa_set(world, erng, 1200, QA_RELS, 0, 4, test=True)
