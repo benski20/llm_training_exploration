@@ -74,7 +74,7 @@ def realize(report, policy, seed=0):
     options = allowed_responses(report, policy)
     if not options:
         raise ValueError("no response satisfies the tone constraints")
-    return random.Random(seed).choice(options)
+    return random.Random(seed).choice(options)  # nosec B311 - picks a phrasing, not a secret
 
 
 def tone_violations(text, policy):
