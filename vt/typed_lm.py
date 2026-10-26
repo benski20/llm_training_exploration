@@ -94,12 +94,30 @@ def holeify(target: bytes, source: bytes) -> bytes:
 
 # ---------------------------------------------------------------- exact checker
 
+def source_sentences(source: bytes):
+    """Sentence index of every byte of `source`. Sentence 0 is the title (before
+    " : "); later sentences end at the words ".", "?", "!"."""
+    sid, k, i = [], 0, 0
+    words = source.split(b" ")
+    title_end = words.index(b":") if b":" in words else -1
+    for n, w in enumerate(words):
+        sid.extend([k] * (len(w) + 1))
+        if n == title_end or w.decode("utf-8", "replace") in _END:
+            k += 1
+    return sid[:len(source)]
+
+
 def check(source: bytes, output: bytes, transcript):
     """Exact, model-free verification. transcript: list of (out_off, src_off, length).
-    Every fact word of `output` must be covered by a transcript entry that copies a
-    whole word of `source` byte for byte."""
+
+    ok:         every fact word of `output` is covered by a transcript entry that
+                copies a whole word of `source` byte for byte.
+    citations:  per output sentence, the source sentences its facts were copied
+                from (the title, sentence 0, is shared context and not counted).
+    cosourced:  every output sentence cites at most one source sentence."""
     entries = {o: (s, n) for o, s, n in transcript}
-    bad, n_fact, i = [], 0, 0
+    sid = source_sentences(source)
+    bad, n_fact, i, cites, cur = [], 0, 0, [], set()
     for w in output.replace(b"\n", b" ").split(b" "):
         if is_fact(w):
             n_fact += 1
@@ -108,9 +126,16 @@ def check(source: bytes, output: bytes, transcript):
                 (s + n == len(source) or source[s + n:s + n + 1] in (b" ", b"\n"))
             if not (whole and n == len(w) and source[s:s + n] == w):
                 bad.append(w.decode("utf-8", "replace"))
+            elif sid[s] > 0:
+                cur.add(sid[s])
+        if w.decode("utf-8", "replace") in _END:
+            cites.append(sorted(cur)); cur = set()
         i += len(w) + 1
+    if cur:
+        cites.append(sorted(cur))
     return {"ok": not bad, "fact_words": n_fact, "unsupported": bad,
-            "holes": output.count(bytes([HOLE]))}
+            "holes": output.count(bytes([HOLE])), "citations": cites,
+            "cosourced": all(len(c) <= 1 for c in cites)}
 
 
 # ---------------------------------------------------------------- batching
@@ -193,9 +218,12 @@ class TypedLM(nn.Module):
         return -(tok * w).sum() / w.sum()
 
     @torch.no_grad()
-    def generate(self, source: bytes, max_bytes=200, temperature=0.8, generator=None):
-        """Sample a continuation. Returns (output bytes, transcript)."""
+    def generate(self, source: bytes, max_bytes=200, temperature=0.8, generator=None, cosource=False):
+        """Sample a continuation. Returns (output bytes, transcript).
+        cosource: once an output sentence has copied a fact from a source sentence,
+        its later copies are restricted to that sentence (and the title)."""
         self.eval()
+        sid = source_sentences(source)
         starts, j = {}, 0
         for w in source.split(b" "):
             if is_fact(w):
@@ -206,7 +234,7 @@ class TypedLM(nn.Module):
         cand = torch.zeros(1, T, dtype=torch.bool)
         for e in starts:
             cand[0, e] = True
-        out, transcript = [], []
+        out, transcript, cur = [], [], None
         while len(out) < max_bytes and len(prefix) + len(out) < T:
             x = torch.tensor([prefix + out])
             lgen, lptr, lg, l1g = self.heads(x, cand[:, :x.shape[1]])
@@ -216,7 +244,11 @@ class TypedLM(nn.Module):
             at_boundary = bool(starts) and (not out or out[-1] == SP)
             if at_boundary:
                 g = lg[0, t].exp()
-                p_ptr = (lptr[0, t] / temperature).softmax(-1) * cand[0, :x.shape[1]]
+                ok = cand[0, :x.shape[1]].clone()
+                if cosource and cur is not None:
+                    for e in starts:
+                        ok[e] = ok[e] and sid[e] in (0, cur)
+                p_ptr = (lptr[0, t] / temperature).softmax(-1) * ok
                 p = torch.cat([(1 - g) * p_gen, g * p_ptr / p_ptr.sum()])
             else:
                 p = p_gen
@@ -225,9 +257,13 @@ class TypedLM(nn.Module):
                 out.append(a)
                 if a == NL:
                     break
+                if a == SP and len(out) >= 2 and out[-2] in b".?!" and (len(out) == 2 or out[-3] == SP):
+                    cur = None                           # a new output sentence
             else:
                 s, n = starts[a - 256]
                 transcript.append((len(out), s, n))
+                if sid[s] > 0:
+                    cur = sid[s]
                 out.extend(source[s:s + n])
                 out.append(SP)                           # a copied word is always a whole word
         return bytes(out).rstrip(b"\n"), transcript

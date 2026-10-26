@@ -150,13 +150,14 @@ def evaluate(model, exs, block, typed, bs=16):
     return {"bpb": nll / nbytes / math.log(2), "fact_top1": hit / max(1, tot), "fact_positions": tot}
 
 
-def sample_eval(model, exs, n, seed):
+def sample_eval(model, exs, n, seed, **kw):
     g = torch.Generator().manual_seed(seed)
-    unsup = facts = holes = words = ok = 0
+    unsup = facts = holes = words = ok = cos = 0
     shown = []
     for k, (src, tgt) in enumerate(exs[:n]):
-        out, tr = model.generate(src, generator=g)
+        out, tr = model.generate(src, generator=g, **kw)
         c = TL.check(src, out, tr)
+        cos += c["ok"] and c["cosourced"]
         have = TL.fact_words(src)
         ws = out.split()
         facts += sum(TL.is_fact(w) for w in ws)
@@ -167,11 +168,11 @@ def sample_eval(model, exs, n, seed):
         if k < 6:
             shown.append({"source": TL.render(src), "output": TL.render(out),
                           "reference": TL.render(tgt), "check_ok": c["ok"],
-                          "unsupported": c["unsupported"][:10]})
+                          "citations": c["citations"], "unsupported": c["unsupported"][:10]})
     return {"n": n, "fact_words_per_100_words": 100 * facts / max(1, words),
             "unsupported_fact_frac": unsup / max(1, facts),
             "holes_per_100_words": 100 * holes / max(1, words),
-            "check_pass": ok / n, "examples": shown}
+            "check_pass": ok / n, "check_and_cosourced": cos / n, "examples": shown}
 
 
 def main():
@@ -232,6 +233,9 @@ def main():
     print(json.dumps(res["valid"]), flush=True)
     res["samples"] = sample_eval(model, va, a.n_samples, a.seed)
     print(json.dumps({k: v for k, v in res["samples"].items() if k != "examples"}), flush=True)
+    if a.model == "typed":
+        res["samples_cosource"] = sample_eval(model, va, a.n_samples, a.seed, cosource=True)
+        print(json.dumps({k: v for k, v in res["samples_cosource"].items() if k != "examples"}), flush=True)
     json.dump(res, open(a.out, "w"), indent=1)
 
 

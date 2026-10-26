@@ -60,3 +60,25 @@ def test_training_loss_is_a_proper_nll():
     loss = m.loss(x, y, meta)
     loss.backward()
     assert all(p.grad is None or torch.isfinite(p.grad).all() for p in m.parameters())
+
+
+def test_citations_and_cosourcing():
+    src = b"Ada : she met Babbage in 1833 . she wrote notes in 1843 ."
+    out = b"Babbage met Ada in 1843 ."
+    tr = [(0, src.index(b"Babbage"), 7), (12, 0, 3), (19, src.index(b"1843"), 4)]
+    c = TL.check(src, out, tr)
+    assert c["ok"] and c["citations"] == [[1, 2]] and not c["cosourced"]     # mixes two source sentences
+    out2 = b"Ada wrote in 1843 . Babbage met her in 1833 ."
+    tr2 = [(0, 0, 3), (13, src.index(b"1843"), 4), (20, src.index(b"Babbage"), 7), (39, src.index(b"1833"), 4)]
+    c2 = TL.check(src, out2, tr2)
+    assert c2["ok"] and c2["citations"] == [[2], [1]] and c2["cosourced"]
+
+
+def test_cosource_decoding_never_mixes_sentences():
+    m = _model()
+    src = TL.normalize("Ada : she met Babbage in 1833 . she wrote notes in 1843 on the Engine .", set())
+    g = torch.Generator().manual_seed(1)
+    for _ in range(40):
+        out, tr = m.generate(src, max_bytes=80, temperature=2.0, generator=g, cosource=True)
+        c = TL.check(src, out, tr)
+        assert c["ok"] and c["cosourced"], (out, c)
