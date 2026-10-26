@@ -1,0 +1,48 @@
+{
+ "glassbox": {
+  "train_s": 1442.6568083763123,
+  "params": 2577816,
+  "probe_layer": 2,
+  "in_dist": {
+   "ctx_acc": 0.09,
+   "mem_acc": 0.045,
+   "absent_acc": 0.2,
+   "hallucination_rate": 0.8,
+   "accuracy": 0.11166666666666666,
+   "auroc": {
+    "probe_best_layer": 0.6481067697324717,
+    "k_builtin": 0.723292469352014,
+    "evidence_support": 0.5392837731747087,
+    "memory_match": 0.3649374962256175
+   }
+  },
+  "held_relations": {
+   "ctx_acc": 0.0,
+   "mem_acc": 0.0,
+   "absent_acc": 0.225,
+   "hallucination_rate": 0.775,
+   "accuracy": 0.075,
+   "auroc": {}
+  },
+  "long_context": {
+   "ctx_acc": 0.035,
+   "mem_acc": 0.025,
+   "absent_acc": 0.025,
+   "hallucination_rate": 0.975,
+   "accuracy": 0.028333333333333332,
+   "auroc": {
+    "probe_best_layer": 0.5814909297052154,
+    "k_builtin": 0.645124716553288,
+    "evidence_support": 0.36295351473922904,
+    "memory_match": 0.4723639455782313
+   }
+  },
+  "causal": {
+   "memory_patch_follows": 0.6666666666666666,
+   "memory_patch_n": 3,
+   "corrupt_evidence_top_changes_answer": 0.4444444444444444,
+   "corrupt_random_context_changes_answer": 0.0,
+   "corrupt_n": 18
+  }
+ }
+}
