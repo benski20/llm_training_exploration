@@ -135,6 +135,22 @@ def cmd_predict(a):
     return 0
 
 
+def cmd_serve(a):
+    from .serve import GateError, load_gated, make_server
+    try:
+        P, digest, cert = load_gated(a.artifact, a.certificate, a.allow_unverified)
+    except GateError as e:
+        print(f"refusing to serve: {e}", file=sys.stderr)
+        return 1
+    srv = make_server(P, digest, cert, TOKENS[a.spec], a.host, a.port)
+    print(f"serving {a.artifact} (sha256 {digest[:16]}...) on http://{a.host}:{srv.server_port}")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="vt")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -184,12 +200,18 @@ def main(argv=None):
     p.add_argument("--exhaustive", action="store_true", help="also enumerate all inputs (small L)")
     p.add_argument("--verify-time", type=float, default=300.0)
     p.set_defaults(fn=cmd_check)
+    p = sub.add_parser("serve", help="HTTP inference server, gated on a proved certificate")
+    p.add_argument("artifact"); p.add_argument("certificate", nargs="?")
+    p.add_argument("--spec", default="dyck", choices=SPECS)
+    p.add_argument("--host", default="127.0.0.1"); p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--allow-unverified", action="store_true")
+    p.set_defaults(fn=cmd_serve)
     p = sub.add_parser("predict", help="run the deployed artifact")
     p.add_argument("artifact"); p.add_argument("inputs", nargs="+")
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
-        if name != "predict":
+        if name not in ("predict", "serve"):
             sp_.add_argument("--verifier", default="auto", choices=["auto", "exact", "milp"],
                              help="exact rational DP when the structure allows (auto), or MILP")
             sp_.add_argument("--workers", type=int, default=os.cpu_count(),
