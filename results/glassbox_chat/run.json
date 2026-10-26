@@ -166,5 +166,139 @@
     "prompt_mass": 0.503592457001408
    }
   ]
+ },
+ "baseline": {
+  "train_s": 3243.073891401291,
+  "params": 6008256,
+  "probe_layer": 4,
+  "tokens_alpaca": {
+   "tokens": 21353,
+   "top1_acc": 0.33821945394089825,
+   "bits_per_token": 5.089125750776763,
+   "auroc_msp": 0.8228560715484169,
+   "auroc_probe": 0.7115861568379009
+  },
+  "tokens_wikitext": {
+   "tokens": 22173,
+   "top1_acc": 0.317773869120101,
+   "bits_per_token": 5.43987104275623,
+   "auroc_msp": 0.841977408007041,
+   "auroc_probe": 0.692842468162593
+  },
+  "chat_probe_layer": 5,
+  "chat_facts": {
+   "ctx_right": 0.0,
+   "mem_right": 0.03,
+   "absent_right": 0.3,
+   "hallucination_rate": 0.7,
+   "auroc_msp": 0.7791397117239813,
+   "auroc_neg_nll": 0.7474747474747475,
+   "auroc_probe": 0.630461922596754,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Mives's native language is Nerapu."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I don't know Pukiku's employer."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Tonzaki's pet."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " I don't know Bedi's home planet."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I don't know Naveto's employer."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Refuren's pet."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.32,
+   "hallucination_rate": 0.68,
+   "auroc_msp": 0.9232742537313433,
+   "auroc_neg_nll": 0.8984375,
+   "auroc_probe": 0.6800373134328358,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Mives's home planet is Gura."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Budoful's native language is Nurroru."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Nisinu's home planet."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Kufen's native language is Nerapu."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Faba's home planet is Gigu."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Vabi's home planet is Gura."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The article discusses the importance of the importance of the importance of the importance of the importance of the importance of the environment.",
+    "msp": 0.39718436390161516,
+    "nll": 1.5210457899421455
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The article discusses the importance of the importance of the importance of the importance of the importance of the importance of the environment. It is important to be a great way to stay connected with our lives and the world.",
+    "msp": 0.34035564153346903,
+    "nll": 1.6352375178099718
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The average temperature of the square is 6.",
+    "msp": 0.2351123686465952,
+    "nll": 1.6953767935434978
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Increase the waterfalls of water and water.",
+    "msp": 0.3407191236813863,
+    "nll": 1.5275395358602206
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " The story follows the story of a young girl who is a young girl who is a young girl who is a young girl who is a young girl who is a young girl who is a young girl who is a young girl who is a young",
+    "msp": 0.2625285383934776,
+    "nll": 1.5609391406178474
+   }
+  ]
  }
 }

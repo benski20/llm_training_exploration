@@ -241,6 +241,34 @@ What this shows:
 | v5 memory after last block | 0.75 / 0.73 | 0.72 / 0.73 | 79% |
 | v6 + null slot | 0.71 / 0.68 | 0.70 / 0.65 | 77% |
 
+v7, an ensemble memory with solo-head training, collapsed (8% accuracy).
+
+**As a general chat model** (`experiments/glassbox_chat.py`; 6.1M vs 6.0M
+parameters; Alpaca, WikiText-2 and the fact world in natural language;
+`results/glassbox_chat/run.json`):
+
+| held-out Alpaca / WikiText tokens | GPT | glass-box |
+|---|---|---|
+| bits per token | **5.09 / 5.44** | 5.90 / 5.97 |
+| top-1 accuracy | **34% / 32%** | 26% / 28% |
+| "top prediction wrong" AUROC: the model's own softmax confidence | **0.82 / 0.84** | 0.82 / 0.83 |
+| post-hoc probe (best layer) | 0.71 / 0.69 | **0.75 / 0.79** |
+| built-in k | — | 0.74 / 0.77 |
+| label-free memory / evidence readouts | — | 0.46-0.52 |
+
+Verdict at this scale:
+* The glass-box model is **more linearly readable**: post-hoc probes gain 4-10
+  AUROC points.
+* That gain does not translate into better hallucination detection. In both
+  models the plain softmax confidence beats every internal readout.
+* The design costs about 0.5-0.8 bits per token of capability.
+* Both models are too weak to answer the chat fact questions (at most 5%
+  correct), so those numbers mostly measure abstention.
+
+The thesis "design for interpretability, get more accurate hallucination
+detection" is **not supported** by these experiments. The memory-as-knowledge
+store and the mechanistic diagnoses are the parts worth carrying forward.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
