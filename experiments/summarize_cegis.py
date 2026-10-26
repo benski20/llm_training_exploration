@@ -1,0 +1,52 @@
+"""Summarise results/cegis/*/ into a markdown table (stdout and summary.md)."""
+import glob
+import json
+import os
+import time
+
+ROOT = os.path.join(os.path.dirname(__file__), "..", "results", "cegis")
+
+
+def load(run):
+    hist = os.path.join(run, "history.json")
+    if os.path.exists(hist):
+        with open(hist) as f:
+            h = json.load(f)
+        return h["status"], h["history"], h["config"], h["elapsed"]
+    prog = os.path.join(run, "progress.jsonl")
+    if os.path.exists(prog):
+        with open(prog) as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        stale = time.time() - os.path.getmtime(prog) > 1800
+        return ("stopped" if stale else "running"), rows, None, rows[-1]["elapsed"] if rows else 0.0
+    return None
+
+
+def main():
+    lines = ["| run | L | inputs | status | rounds | verifier calls | last verify (s) | total (s) | certificate |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for run in sorted(glob.glob(os.path.join(ROOT, "*"))):
+        r = load(run)
+        if r is None:
+            continue
+        status, rows, cfg, elapsed = r
+        name = os.path.basename(run)
+        L = cfg["L"] if cfg else int(name.split("_")[0][1:])
+        V = 2
+        calls = [e for e in rows if "verify_status" in e]
+        last = f"{calls[-1]['verify_time']:.0f}" if calls else "-"
+        cert = os.path.join(run, "certificate.json")
+        sha = ""
+        if os.path.exists(cert):
+            with open(cert) as f:
+                sha = "`" + json.load(f)["artifact_sha256"][:12] + "`"
+        lines.append(f"| {name} | {L} | {V ** L:.2e} | {status} | {len(rows)} | {len(calls)} | "
+                     f"{last} | {elapsed:.0f} | {sha} |")
+    text = "\n".join(lines)
+    print(text)
+    with open(os.path.join(ROOT, "summary.md"), "w") as f:
+        f.write(text + "\n")
+
+
+if __name__ == "__main__":
+    main()

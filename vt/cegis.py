@@ -40,6 +40,8 @@ class CegisConfig:
     falsify_samples: int = 200000
     verify_time: float = 300.0
     verify_workers: int = 1
+    collect_all_cex: bool = False  # run every case instead of stopping at the first counterexample
+    verify_time_start: float = 60.0  # escalate x4 up to verify_time while undecided
     seed: int = 0
 
 
@@ -114,10 +116,18 @@ def cegis(spec, cfg, V=2, log=print):
         found = _falsify(model, spec, cfg, V, rng)
         entry = {"round": rnd, "n_cex_total": int(len(cex)), "sampled_errors": int(len(found))}
         if len(found) == 0:
-            res = verify_global(model.export(), spec, time_limit=cfg.verify_time,
-                                workers=cfg.verify_workers)
+            limit = min(cfg.verify_time_start, cfg.verify_time)
+            while True:
+                res = verify_global(model.export(), spec, time_limit=limit,
+                                    workers=cfg.verify_workers,
+                                    stop_on_cex=not cfg.collect_all_cex)
+                if res["status"] != "unknown" or limit >= cfg.verify_time:
+                    break
+                limit = min(4 * limit, cfg.verify_time)
+            entry["verify_limit"] = limit
             entry.update(verify_status=res["status"], verify_time=res["time"],
-                         unstable=res["unstable"])
+                         unstable=res["unstable"], verifier_cex=len(res["counterexamples"]),
+                         slowest_case=max(q["time"] for q in res["queries"]))
             if res["status"] == "proved" and model.ternary == cfg.ternary:
                 entry["elapsed"] = time.perf_counter() - t0
                 history.append(entry)
