@@ -6,3 +6,4 @@ data/*.txt
 runs/*/ckpt.pt
 runs_*.log
 results_*.log
+*.egg-info/
