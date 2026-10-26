@@ -1,0 +1,170 @@
+{
+ "glassbox": {
+  "train_s": 8299.212250471115,
+  "params": 6101930,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21353,
+   "top1_acc": 0.2642251674237812,
+   "bits_per_token": 5.898884077674765,
+   "auroc_msp": 0.8152724737324392,
+   "auroc_probe": 0.7503577050658302,
+   "auroc_k": 0.7350235942633708,
+   "auroc_memory_match": 0.521384360740801,
+   "auroc_prompt_mass": 0.48988562485578135
+  },
+  "tokens_wikitext": {
+   "tokens": 22173,
+   "top1_acc": 0.27772516123212915,
+   "bits_per_token": 5.970806043691737,
+   "auroc_msp": 0.8293630920265256,
+   "auroc_probe": 0.7876466291902982,
+   "auroc_k": 0.7745187327932354,
+   "auroc_memory_match": 0.4573831045249577,
+   "auroc_prompt_mass": 0.5007428789812896
+  },
+  "chat_probe_layer": 5,
+  "chat_facts": {
+   "ctx_right": 0.02,
+   "mem_right": 0.05,
+   "absent_right": 0.36,
+   "hallucination_rate": 0.64,
+   "auroc_msp": 0.8544928060808976,
+   "auroc_neg_nll": 0.8545832956293548,
+   "auroc_k_mean": 0.8306035652882092,
+   "auroc_k_min": 0.8351280427110669,
+   "auroc_memory_match": 0.5754230386390372,
+   "auroc_prompt_mass": 0.5424848430006334,
+   "auroc_probe": 0.7257261786263687,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Muroso's native language is Nerapu."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I don't know Pukuvi's employer."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Bulma's pet is Kusnir."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Bedi's home planet is Nufe."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Tovar's employer is Kezu."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Riveri's pet."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.36,
+   "hallucination_rate": 0.64,
+   "auroc_msp": 0.9197180134680135,
+   "auroc_neg_nll": 0.9108796296296297,
+   "auroc_k_mean": 0.8743686868686869,
+   "auroc_k_min": 0.8408038720538721,
+   "auroc_memory_match": 0.4685395622895623,
+   "auroc_prompt_mass": 0.521780303030303,
+   "auroc_probe": 0.7304292929292929,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Mives's pet is Folulan."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Budoful's favorite food is Raru."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Nisinu's favorite food."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Kulni's favorite food is Rassingu."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Fipufen's pet is Kusnir."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Vubo's favorite food is Raru."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The main difference between the US and the US is the most important to the US economy, with the most important information, and the most important impact of the healthcare industry. The internet has also been used to detect the data and the data to",
+    "msp": 0.167221851220044,
+    "nll": 2.1953732329420745,
+    "k": -0.8355475741749009,
+    "k_min": -1.8993433713912964,
+    "match": 10.978338321050009,
+    "prompt_mass": 0.5271880819151799
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The Power of the United States is the most important to the world's world. It is a major impact on the world, and the world is the most important part of the world. It is also important to be more than the world",
+    "msp": 0.21262855300058922,
+    "nll": 1.8746755629157026,
+    "k": -0.8248980599455535,
+    "k_min": -1.8769192695617676,
+    "match": 11.150613387425741,
+    "prompt_mass": 0.5323509505639473
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The main difference between the United States and the United States is the most important to the United States.",
+    "msp": 0.30643782382830975,
+    "nll": 1.6276448957622052,
+    "k": -0.6475024864077568,
+    "k_min": -2.131513833999634,
+    "match": 11.110204458236694,
+    "prompt_mass": 0.64272790402174
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Are is a great way to help you stay in your own.",
+    "msp": 0.2528056458515279,
+    "nll": 1.9588422957698213,
+    "k": -0.7289989840458421,
+    "k_min": -1.4454859495162964,
+    "match": 11.673827956704532,
+    "prompt_mass": 0.7029505599947536
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " Once upon a time, there was a young girl who had a great way to go. He was a great way to take a magical day, and he was a great way to go. He was a great way to take a magical day",
+    "msp": 0.2894016553958257,
+    "nll": 1.6652218846914668,
+    "k": -0.4564050359961887,
+    "k_min": -1.1556164026260376,
+    "match": 10.858188589413961,
+    "prompt_mass": 0.503592457001408
+   }
+  ]
+ }
+}
