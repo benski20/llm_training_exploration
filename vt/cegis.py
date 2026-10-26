@@ -34,6 +34,7 @@ class CegisConfig:
     enumerate_up_to: int = 1 << 16  # lengths with V^L at most this are checked exhaustively
     tau: float = 1e-4            # required logit margin (same as the certificate's claim)
     uniform: bool = False        # uniform causal mixing (exactly verifiable, any length)
+    window: int = 1              # with uniform: free kernel offsets < window
     verifier: str = "auto"       # auto | exact | milp
     ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
@@ -143,7 +144,8 @@ def cegis(spec, cfg, V=2, log=print):
         raise ValueError("cfg.L must be the largest length")
     model = MixerNet(cfg.L, V, cfg.d_model, cfg.d_hidden, cfg.n_blocks,
                      spec.n_classes, ternary=cfg.ternary, causal=cfg.causal,
-                     shared=cfg.shared, uniform=cfg.uniform)
+                     shared=cfg.shared, uniform=cfg.uniform,
+                     window=cfg.window)
     n_each = max(1000, cfg.n_train // len(lengths))
     base = {L: spec.sample(n_each, L, rng) for L in lengths}
     cex = {L: np.zeros((0, L), dtype=np.int64) for L in lengths}

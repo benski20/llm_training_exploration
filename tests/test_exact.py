@@ -78,3 +78,24 @@ def test_rejects_non_uniform_models():
     torch.manual_seed(0)
     with pytest.raises(StructureError):
         verify_exact(MixerNet(6, 2, 4, 6, 1, 2, shared=True).export(), DyckSpec())
+
+
+@pytest.mark.parametrize("window", [2, 3])
+def test_windowed_kernel_exact_matches_enumeration(window):
+    spec, V, L = SortedSpec(3), 3, 6
+    seqs = np.array(list(itertools.product(range(V), repeat=L)))
+    X = torch.tensor(np.eye(V, dtype=np.float32)[seqs])
+    Y = torch.tensor(spec.label_batch(seqs))
+    for steps in (3, 800):
+        torch.manual_seed(window)
+        m = MixerNet(L, V, 4, 8, 1, 2, uniform=True, window=window)
+        opt = torch.optim.Adam(m.parameters(), 3e-2)
+        for _ in range(steps):
+            loss = torch.nn.functional.cross_entropy(m(X), Y)
+            opt.zero_grad(); loss.backward(); opt.step()
+        P = m.export()
+        n_err, min_margin, _ = exhaustive_check(P, spec)
+        r = verify_exact(P, spec)
+        assert r["window"] == window
+        assert (r["status"] == "proved") == (n_err == 0)
+        assert abs(r["min_margin_float"] - min_margin) < 1e-9

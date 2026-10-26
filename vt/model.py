@@ -31,7 +31,7 @@ def ternarize(w):
 class MixerNet(nn.Module):
     def __init__(self, seq_len, vocab, d_model=8, d_hidden=16, n_blocks=2,
                  n_classes=2, ternary=False, causal=False, bits=None, shared=False,
-                 uniform=False):
+                 uniform=False, window=1):
         super().__init__()
         L, V, d, h = seq_len, vocab, d_model, d_hidden
         self.L, self.V, self.d, self.h, self.C = L, V, d, h, n_classes
@@ -47,7 +47,9 @@ class MixerNet(nn.Module):
         # equal weights. Position t then depends only on its token and the
         # token counts of its prefix, which is what the exact verifier
         # (vt/exact.py) exploits.
-        self.uniform = uniform
+        # window w >= 1 (with uniform): kernel offsets 0..w-1 are free and every
+        # offset >= w shares one value (local convolution + global sum attention).
+        self.uniform, self.window = uniform, window
         shared = shared or uniform
         self.shared = shared
         if shared:
@@ -55,7 +57,7 @@ class MixerNet(nn.Module):
             off = torch.arange(L)[:, None] - torch.arange(L)[None, :]
             self.register_buffer("offset", off.clamp(min=0), persistent=False)
             self.register_buffer("mask", (off >= 0).float(), persistent=False)
-            n_k = 2 if uniform else L
+            n_k = window + 1 if uniform else L
             self.mix = nn.ParameterList(
                 [nn.Parameter(torch.randn(n_k) * 0.3 / math.sqrt(L)) for _ in range(n_blocks)])
         else:
@@ -88,7 +90,8 @@ class MixerNet(nn.Module):
         if self.shared:
             k = self.w(self.mix[i])
             if self.uniform:
-                k = torch.cat([k[:1], k[1:2].expand(self.L - 1)])
+                w = self.window
+                k = torch.cat([k[:w], k[w:w + 1].expand(max(0, self.L - w))])[:self.L]
             return k[self.offset[:L, :L]] * self.mask[:L, :L]
         assert L == self.L, "only weight-tied models run at other lengths"
         return self.w(self.mix[i] * self.mask) * self.mask
