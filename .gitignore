@@ -9,3 +9,4 @@ results_*.log
 *.egg-info/
 build/
 *.pt
+results/**/*.log
