@@ -25,7 +25,10 @@ certificate bound to the exact weights that get deployed.
   * With a **length curriculum** (warm-start from the proved 2–64 model and
     extend), one model is proved exactly at **every even length 2–128**: 64
     certificates; L=128 is 3.4×10³⁸ inputs; 414 s. Training 2–128 from
-    scratch did not converge. A third stage extends it to **every even length 2–256**: 128 certificates; L=256 is 1.2×10⁷⁷ inputs; exact min margin 3.45; 39 min. That model is also proved beyond its training range, out to L=274.
+    scratch did not converge. A third stage extends it to **every even
+    length 2–256**: 128 certificates; L=256 is 1.2×10⁷⁷ inputs; exact min
+    margin 3.45; 39 min. That model is also proved beyond its training
+    range, out to L=274.
   * **Provable length generalisation.** The 2–64 model is proved exactly out
     to L=78, past anything it was trained on. The verifier also pins the
     first failure: L=80, nesting depth 40.
@@ -54,7 +57,7 @@ certificate bound to the exact weights that get deployed.
 
 ```
 pip install -e ".[dev]"
-vt prove --spec dyck --length 64 --also-lengths 2,4,...,62 --uniform --float --out runs/dyck64   # exact proofs
+vt prove --spec dyck --length 64 --also-lengths $(seq -s, 2 2 62) --uniform --float --out runs/dyck64  # exact proofs, ~4 min
 vt prove --spec dyck --length 32 --shared --float --out runs/dyck32   # MILP proof (~4.5 min, 4 cores)
 vt check runs/dyck64/model.npz runs/dyck64/certificate.json           # independent re-check
 vt serve runs/dyck64/model.npz runs/dyck64/certificate.json --port 8000
@@ -194,7 +197,7 @@ Ternary + stability verifies 82% of points with no timeouts.
 ```bash
 pip install -e ".[dev]"; pytest -q        # 44 tests, about 1.5 minutes on CPU; CI runs them on every push
 
-vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths 2,4,...,30]
+vt prove   --spec dyck --length 32 --shared --float --out runs/d32 [--also-lengths $(seq -s, 2 2 30)]
 vt verify  model.npz --spec dyck --certificate cert.json --workers 4
 vt check   model.npz cert.json [--exhaustive]
 vt predict model.npz "(()())()(())(())"
