@@ -140,3 +140,12 @@ def test_sorted_spec_agrees_with_enumeration():
         for c in r["counterexamples"]:
             assert spec.label(c["seq"]) == c["label"] != c["pred"] or abs(c["margin"]) <= 1e-4
     assert outcomes == {"proved", "counterexample"}, outcomes
+
+
+def test_parallel_cases_match_sequential():
+    P = hand_built_dyck(12)
+    assert verify_global(P, DyckSpec(), workers=2)["status"] == "proved"
+    P["W_out"][1, (12 - 1) * 3 + 2] = 0.0
+    r = verify_global(P, DyckSpec(), workers=2)
+    assert r["status"] == "counterexample"
+    assert all(c["pred"] != c["label"] for c in r["counterexamples"])

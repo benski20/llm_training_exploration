@@ -32,7 +32,7 @@ def cmd_prove(a):
     V = len(TOKENS[a.spec])
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
-                      ternary_from_round=a.qat_from_round,
+                      ternary_from_round=a.qat_from_round, verify_workers=a.workers,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -50,7 +50,7 @@ def cmd_prove(a):
         return 1
     # re-verify the saved artifact itself, so the certificate binds to the file on disk
     P = load_artifact(art)
-    out = verify_global(P, spec, tau=a.tau, time_limit=a.verify_time)
+    out = verify_global(P, spec, tau=a.tau, time_limit=a.verify_time, workers=a.workers)
     cert = make_certificate(art, a.spec, out, a.tau, {"training": res["config"],
                                                       "cegis_rounds": res["rounds"]})
     write_json(cert, os.path.join(a.out, "certificate.json"))
@@ -61,7 +61,8 @@ def cmd_prove(a):
 
 def cmd_verify(a):
     P = load_artifact(a.artifact)
-    out = verify_global(P, SPECS[a.spec](), tau=a.tau, time_limit=a.verify_time)
+    out = verify_global(P, SPECS[a.spec](), tau=a.tau, time_limit=a.verify_time,
+                       workers=a.workers)
     print(json.dumps({k: out[k] for k in ("status", "time", "unstable", "counterexamples")}))
     if a.certificate:
         write_json(make_certificate(a.artifact, a.spec, out, a.tau), a.certificate)
@@ -79,7 +80,8 @@ def cmd_check(a):
         print(f"FAIL: certificate status is {cert['status']}"); return 1
     P = load_artifact(a.artifact)
     spec = SPECS[cert["spec"]]()
-    out = verify_global(P, spec, tau=cert["tau"], time_limit=a.verify_time)
+    out = verify_global(P, spec, tau=cert["tau"], time_limit=a.verify_time,
+                       workers=a.workers)
     print(f"re-verification: {out['status']} ({out['time']:.1f}s)")
     ok &= out["status"] == "proved"
     if a.exhaustive:
@@ -139,6 +141,10 @@ def main(argv=None):
     p.add_argument("artifact"); p.add_argument("inputs", nargs="+")
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
+    for name, sp_ in sub.choices.items():
+        if name != "predict":
+            sp_.add_argument("--workers", type=int, default=os.cpu_count(),
+                             help="MILP cases solved in parallel")
     a = ap.parse_args(argv)
     return a.fn(a)
 

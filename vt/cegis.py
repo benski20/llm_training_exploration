@@ -39,6 +39,7 @@ class CegisConfig:
     cex_weight: float = 5.0
     falsify_samples: int = 200000
     verify_time: float = 300.0
+    verify_workers: int = 1
     seed: int = 0
 
 
@@ -113,7 +114,8 @@ def cegis(spec, cfg, V=2, log=print):
         found = _falsify(model, spec, cfg, V, rng)
         entry = {"round": rnd, "n_cex_total": int(len(cex)), "sampled_errors": int(len(found))}
         if len(found) == 0:
-            res = verify_global(model.export(), spec, time_limit=cfg.verify_time)
+            res = verify_global(model.export(), spec, time_limit=cfg.verify_time,
+                                workers=cfg.verify_workers)
             entry.update(verify_status=res["status"], verify_time=res["time"],
                          unstable=res["unstable"])
             if res["status"] == "proved" and model.ternary == cfg.ternary:

@@ -29,6 +29,27 @@ class DyckSpec:
                 return 0
         return int(depth == 0)
 
+    def cases(self, c, L):
+        """Disjoint cases covering 'label != c'. For c=1 (unbalanced): the depth
+        first reaches -1 at an even position k, or never goes negative but ends >= 2."""
+        return [None] if c == 0 else [k for k in range(0, L, 2)] + [L]
+
+    def encode_case(self, m, x, L, c, k):
+        if k is None:
+            return self.encode_not_label(m, x, L, c)
+        def depth(t):
+            e = []
+            for j in range(t + 1):
+                e += [(x[2 * j], 1.0), (x[2 * j + 1], -1.0)]
+            return e
+        last = k if k < L else L - 1
+        for t in range(last):
+            m.row(depth(t), 0.0, np.inf)
+        if k < L:
+            m.row(depth(k), -1.0, -1.0)
+        else:
+            m.row(depth(L - 1), 2.0, np.inf)
+
     def label_batch(self, seqs):
         depth = np.cumsum(1 - 2 * seqs, axis=1)
         return ((depth.min(1) >= 0) & (depth[:, -1] == 0)).astype(np.int64)
@@ -106,6 +127,20 @@ class SortedSpec:
         near[np.arange(len(near)), i] = rng.integers(0, self.V, size=len(near))
         return np.concatenate([uni, srt, near])
 
+    def cases(self, c, L):
+        """For c=1 (unsorted): the first descent is at position k."""
+        return [None] if c == 0 else list(range(L - 1))
+
+    def encode_case(self, m, x, L, c, k):
+        if k is None:
+            return self.encode_not_label(m, x, L, c)
+        V = self.V
+        val = lambda t: [(x[t * V + v], float(v)) for v in range(1, V)]
+        neg = lambda e: [(i, -w) for i, w in e]
+        for t in range(k):
+            m.row(val(t + 1) + neg(val(t)), 0.0, np.inf)
+        m.row(val(k) + neg(val(k + 1)), 1.0, np.inf)
+
     def encode_not_label(self, m, x, L, c):
         V = self.V
         val = lambda t: [(x[t * V + v], float(v)) for v in range(1, V)]
@@ -137,7 +172,7 @@ def global_bounds(P):
     return symbolic_bounds(P, OneHot(L, P["V"]), ibp)
 
 
-def _query(P, spec, c, tau, bounds, time_limit):
+def _query(P, spec, c, k, tau, bounds, time_limit):
     L, V, C = P["L"], P["V"], P["C"]
     m = _MILP()
     x = m.vars(*bounds["in"], integer=True)
@@ -151,47 +186,74 @@ def _query(P, spec, c, tau, bounds, time_limit):
         coef = P["W_out"][c] - P["W_out"][j]
         const = P["b_out"][c] - P["b_out"][j]
         m.row([(si, w) for si, w in zip(s, coef) if w != 0], -tau - const, np.inf)
-    spec.encode_not_label(m, x, L, c)
+    if hasattr(spec, "encode_case"):
+        spec.encode_case(m, x, L, c, k)
+    else:
+        spec.encode_not_label(m, x, L, c)
     res = m.solve(s[:1], [0.0], time_limit)  # pure feasibility
     return res, x, n_bin + L * V
 
 
-def verify_global(P, spec, tau=1e-4, time_limit=600.0):
-    """Returns {"status": proved|counterexample|unknown, "counterexamples": [...], ...}."""
+def _run_case(args):
+    P, spec, c, k, tau, bounds, time_limit = args
+    t0 = time.perf_counter()
+    res, x, n_bin = _query(P, spec, c, k, tau, bounds, time_limit)
+    q = {"class": c, "case": k, "milp_status": int(res.status), "binaries": n_bin}
+    if res.x is not None:
+        onehot = np.round(res.x[x]).reshape(P["L"], P["V"])
+        seq = onehot.argmax(1)
+        logits = np_forward(P, onehot)
+        true = spec.label(seq)
+        # a genuine counterexample: wrong prediction, or right but inside the tau margin
+        margin = logits[c] - np.delete(logits, c).max()
+        if true != c and margin >= -tau:
+            q["result"] = "counterexample"
+            q["cex"] = {"seq": seq.tolist(), "label": true,
+                        "pred": int(np.argmax(logits)), "margin": float(margin)}
+        else:
+            q["result"] = "spurious"
+    elif res.status == 2:  # infeasible: no bad input in this case
+        q["result"] = "infeasible"
+    else:
+        q["result"] = "timeout"
+    q["time"] = time.perf_counter() - t0
+    return q
+
+
+def verify_global(P, spec, tau=1e-4, time_limit=600.0, workers=1, stop_on_cex=True):
+    """Prove global correctness, splitting each class query into the spec's
+    disjoint cases (solved in parallel when workers > 1).
+
+    Returns {"status": proved|counterexample|unknown, "counterexamples": [...], ...}."""
     t0 = time.perf_counter()
     bounds = global_bounds(P)
     unstable = int(sum(((l < 0) & (u > 0)).sum() for l, u in bounds["z"]))
     out = {"status": "proved", "counterexamples": [], "queries": [], "unstable": unstable}
+    jobs = []
     for c in range(spec.n_classes):
-        left = max(1.0, time_limit - (time.perf_counter() - t0))
-        res, x, n_bin = _query(P, spec, c, tau, bounds, left)
-        q = {"class": c, "milp_status": int(res.status), "binaries": n_bin,
-             "time": None}
-        if res.x is not None:
-            onehot = np.round(res.x[x]).reshape(P["L"], P["V"])
-            seq = onehot.argmax(1)
-            logits = np_forward(P, onehot)
-            pred = int(np.argmax(logits))
-            true = spec.label(seq)
-            # a genuine counterexample: wrong prediction, or right but inside the tau margin
-            margin = logits[c] - np.delete(logits, c).max()
-            if true != c and margin >= -tau:
-                out["counterexamples"].append({"seq": seq.tolist(), "label": true,
-                                               "pred": pred, "margin": float(margin)})
-                q["result"] = "counterexample"
-            else:
-                q["result"] = "spurious"
-        elif res.status == 2:  # infeasible: no bad input for this class
-            q["result"] = "infeasible"
-        else:
-            q["result"] = "timeout"
-        q["time"] = time.perf_counter() - t0
-        out["queries"].append(q)
+        cases = spec.cases(c, P["L"]) if hasattr(spec, "cases") else [None]
+        jobs += [(P, spec, c, k, tau, bounds, time_limit) for k in cases]
+    if workers > 1:
+        import multiprocessing as mp
+        with mp.get_context("fork").Pool(workers) as pool:
+            for q in pool.imap_unordered(_run_case, jobs):
+                out["queries"].append(q)
+                if stop_on_cex and q["result"] == "counterexample":
+                    pool.terminate()
+                    break
+    else:
+        for job in jobs:
+            q = _run_case(job)
+            out["queries"].append(q)
+            if stop_on_cex and q["result"] == "counterexample":
+                break
+    out["counterexamples"] = [q["cex"] for q in out["queries"] if "cex" in q]
     results = {q["result"] for q in out["queries"]}
     if "counterexample" in results:
         out["status"] = "counterexample"
-    elif results != {"infeasible"}:
+    elif results != {"infeasible"} or len(out["queries"]) < len(jobs):
         out["status"] = "unknown"
+    out["cases"] = len(jobs)
     out["time"] = time.perf_counter() - t0
     return out
 

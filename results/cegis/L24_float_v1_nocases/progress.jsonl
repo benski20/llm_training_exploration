@@ -1,0 +1,6 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 130, "elapsed": 13.563548062000336}
+{"round": 1, "n_cex_total": 3204, "sampled_errors": 2, "elapsed": 17.851298517000032}
+{"round": 2, "n_cex_total": 3254, "sampled_errors": 6, "elapsed": 22.312254944000415}
+{"round": 3, "n_cex_total": 3404, "sampled_errors": 0, "verify_status": "unknown", "verify_time": 601.0947870729997, "unstable": 192, "elapsed": 627.9907088609998}
+{"round": 4, "n_cex_total": 3404, "sampled_errors": 0, "verify_status": "unknown", "verify_time": 601.1060463940003, "unstable": 192, "elapsed": 1233.758952782}
+{"round": 5, "n_cex_total": 3404, "sampled_errors": 1, "elapsed": 1532.367430581001}
