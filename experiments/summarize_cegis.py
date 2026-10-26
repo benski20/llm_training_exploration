@@ -24,18 +24,20 @@ def load(run):
 
 
 def main():
-    lines = ["| run | L | inputs | mixing | weights | status | rounds | verifier calls | last verify (s) | total (s) | certificate |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines = ["| run | spec | L | inputs | mixing | weights | status | rounds | verifier calls | last verify (s) | total (s) | certificate |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for run in sorted(glob.glob(os.path.join(ROOT, "*"))):
         r = load(run)
         if r is None:
             continue
         status, rows, cfg, elapsed = r
         name = os.path.basename(run)
-        L = cfg["L"] if cfg else int(re.findall(r"\d+", name.split("_")[0])[-1])
+        mt = re.search(r"L(\d+)(?:-(\d+))?", name)
+        L = cfg["L"] if cfg else int(mt.group(2) or mt.group(1))
+        spec = "sorted" if name.startswith("sorted") else "dyck"
+        V = 4 if spec == "sorted" else 2
         if cfg and cfg.get("lengths"):
             L = f"{min(cfg['lengths'])}..{cfg['L']}"
-        V = 2
         calls = [e for e in rows if "verify_status" in e or "verify" in e]
 
         def vtime(e):
@@ -60,7 +62,7 @@ def main():
             weights = "ternary"
         else:
             weights = next((w for w in ("4bit", "6bit", "ternary") if w in name), "float").replace("bit", "-bit")
-        lines.append(f"| {name} | {L} | {V ** (cfg['L'] if cfg else int(L)):.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
+        lines.append(f"| {name} | {spec} | {L} | {float(V) ** (cfg['L'] if cfg else int(L)):.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
                      f"{last} | {elapsed:.0f} | {sha} |")
     text = "\n".join(lines)
     print(text)
