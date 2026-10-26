@@ -28,6 +28,7 @@ class CegisConfig:
     n_blocks: int = 1
     ternary: bool = True
     causal: bool = False
+    ternary_from_round: int = 0  # train float before this round, then quantise (QAT)
     n_train: int = 20000
     rounds: int = 20
     epochs_first: int = 60
@@ -90,16 +91,18 @@ def cegis(spec, cfg, V=2, log=print):
     t0 = time.perf_counter()
     for rnd in range(cfg.rounds):
         seqs = np.concatenate([base, cex])
+        model.ternary = cfg.ternary and rnd >= cfg.ternary_from_round
         X, Y = _onehot(seqs, V), torch.from_numpy(spec.label_batch(seqs))
         W = torch.cat([torch.ones(len(base)), torch.full((len(cex),), cfg.cex_weight)])
-        _fit(model, X, Y, W, cfg.epochs_first if rnd == 0 else cfg.epochs_round, cfg)
+        first = rnd == 0 or (cfg.ternary and rnd == cfg.ternary_from_round)
+        _fit(model, X, Y, W, cfg.epochs_first if first else cfg.epochs_round, cfg)
         found = _falsify(model, spec, cfg, V, rng)
         entry = {"round": rnd, "n_cex_total": int(len(cex)), "sampled_errors": int(len(found))}
         if len(found) == 0:
             res = verify_global(model.export(), spec, time_limit=cfg.verify_time)
             entry.update(verify_status=res["status"], verify_time=res["time"],
                          unstable=res["unstable"])
-            if res["status"] == "proved":
+            if res["status"] == "proved" and model.ternary == cfg.ternary:
                 entry["elapsed"] = time.perf_counter() - t0
                 history.append(entry)
                 log(entry)
