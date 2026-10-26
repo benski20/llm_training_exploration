@@ -25,3 +25,10 @@ def test_rejects_wrong_entity_noncontiguous_or_partial_copies():
     assert not provenance_ok(P, "P7", [None] * 4)                      # generated, not copied
     q = P.index("Q P7")
     assert not provenance_ok(P, "P7", src(q))                          # copied from the question
+
+
+def test_output_must_equal_the_copied_span():
+    s = src(P.index("1777"))
+    assert provenance_ok(P, "P7", s, output="1777")
+    assert not provenance_ok(P, "P7", s, output="1778")      # emitted digit differs from its source
+    assert not provenance_ok(P, "P7", s, output="1777x")     # extra characters

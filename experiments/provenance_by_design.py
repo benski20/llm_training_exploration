@@ -81,13 +81,20 @@ def train(steps, seed, log):
     return m
 
 
-def provenance_ok(prompt, asked, sources):
+def provenance_ok(prompt, asked, sources, output=None):
     """Exact check: the copied digits are, in order, the year of a fact
-    'NAME born YYYY' in the prompt whose NAME is the asked entity."""
+    'NAME born YYYY' in the prompt whose NAME is the asked entity, and the
+    released output is exactly that span (every emitted digit equals the
+    character at its recorded source position)."""
     if len(sources) != 4 or any(s is None for s in sources):
         return False
     j = sources[0]
     if sources != [j, j + 1, j + 2, j + 3]:
+        return False
+    span = prompt[j:j + 4]
+    if not (span.isdigit() and len(span) == 4):
+        return False
+    if output is not None and output != span:
         return False
     head = prompt[:j]
     if not head.endswith(" born "):
@@ -127,7 +134,13 @@ def main():
     G.NAMES = a.names
     torch.set_num_threads(os.cpu_count())
     t0 = time.time()
-    m = train(a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
+    ckpt = a.out.replace(".json", ".pt")
+    if os.path.exists(ckpt):
+        m = PointerGPT(G.BLOCK)
+        m.load_state_dict(torch.load(ckpt))
+    else:
+        m = train(a.steps, a.seed, lambda e: print(json.dumps(e), flush=True))
+        torch.save(m.state_dict(), ckpt)
     rng = random.Random(1000 + a.seed)
     res = {"names": a.names, "train_s": time.time() - t0}
     for name, (kmin, kmax) in {"in_dist": (1, 4), "shift": (6, 8)}.items():
@@ -145,7 +158,7 @@ def main():
             if o == "unknown":
                 rel["released_correct"] += int(not present)
                 continue
-            if provenance_ok(prompt, asked, s):
+            if provenance_ok(prompt, asked, s, output=o):
                 rel["released_correct" if o == ans else "released_false"] += 1
             else:
                 rel["withheld"] += 1
