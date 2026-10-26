@@ -27,7 +27,8 @@ answers in advance:
   patch (interchange intervention) makes the read causally sufficient.
 """
 import math
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, replace
 
 import torch
 import torch.nn as nn
@@ -52,6 +53,9 @@ class GBConfig:
     mem2_layer: int = -1           # optional second (late) memory read, after this block's attention
     mem_value_init: float = 1.0    # std of initial memory values; 0: unwritten memory reads as empty
     null_slot: bool = False        # a learned "nothing stored" option in every read (value 0)
+    mem_heads: int = 1             # >1: independent memory heads (each 1/4 of the slots); their
+                                   # agreement is a label-free signal that the fact was stored
+    solo_p: float = 0.5            # training: P(the read comes from one random head alone)
 
 
 def alibi_bias(T, n_head, device=None):
@@ -173,6 +177,61 @@ class PKMemory(nn.Module):
         return x, e
 
 
+class EnsembleMemory(nn.Module):
+    """Independent product-key memories read in parallel. Training sometimes uses one
+    random head's read alone, so every head must store every fact; a stored fact is
+    then retrieved consistently, while a query for something never stored lands on
+    unrelated slots in each head. `trace["agreement"]` is the mean pairwise cosine of
+    the heads' reads."""
+
+    def __init__(self, c):
+        super().__init__()
+        sub = replace(c, mem_keys=max(2, c.mem_keys // 2))
+        self.heads = nn.ModuleList([PKMemory(sub) for _ in range(c.mem_heads)])
+        self.ln = nn.LayerNorm(c.n_embd)
+        self.gate = nn.Linear(c.n_embd, 1)
+        self.solo_p = c.solo_p
+        self.patch = None
+        self.trace = None
+
+    def forward(self, x, e):
+        z = self.ln(x)
+        outs = [h.read(z) for h in self.heads]
+        R = torch.stack([o[0] for o in outs], -2)                  # (B, T, H, d)
+        if self.training and random.random() < self.solo_p:   # nosec B311 - training noise
+            r = R[..., random.randrange(R.shape[-2]), :]       # nosec B311
+        else:
+            r = R.mean(-2)
+        if self.patch is not None:
+            mask, val = self.patch
+            val = val[:, None, :].expand_as(r) if val.dim() == 2 else val
+            r = torch.where(mask[..., None], val, r)
+        U = F.normalize(R, dim=-1)
+        H = R.shape[-2]
+        agree = ((U @ U.transpose(-1, -2)).sum((-1, -2)) - H) / (H * (H - 1))
+        b = torch.sigmoid(self.gate(z))
+        x = (1 - b) * x + b * r
+        if e is not None:
+            T = x.shape[1]
+            e = (1 - b) * e
+            if e.shape[-1] == 2 * T:
+                e[..., T:] = e[..., T:] + b * torch.eye(T)
+            else:
+                e[..., -1:] = e[..., -1:] + b
+        self.trace = {"read": r, "agreement": agree, "gate": b.squeeze(-1),
+                      "match": torch.stack([o[1]["match"] for o in outs], -1).mean(-1), "heads": [o[1] for o in outs]}
+        return x, e
+
+    @torch.no_grad()
+    def accumulate(self, mask):
+        for h, tr in zip(self.heads, self.trace["heads"]):
+            h.usage.index_add_(0, tr["slots"][mask].flatten(), tr["weights"][mask].flatten())
+
+    def familiarity(self):
+        return torch.stack([(tr["weights"] * torch.log1p(h.usage[tr["slots"]])).sum(-1)
+                            for h, tr in zip(self.heads, self.trace["heads"])], -1).mean(-1)
+
+
 class GlassBoxLM(nn.Module):
     def __init__(self, c: GBConfig):
         super().__init__()
@@ -183,7 +242,7 @@ class GlassBoxLM(nn.Module):
         self.attn = nn.ModuleList([ConvexAttention(c) for _ in range(c.n_layer)])
         if c.mlp_ratio:
             self.mlp = nn.ModuleList([ConvexMLP(c) for _ in range(c.n_layer)])
-        self.mem = PKMemory(c)
+        self.mem = EnsembleMemory(c) if c.mem_heads > 1 else PKMemory(c)
         if c.mem2_layer >= 0:
             self.mem2 = PKMemory(c)
         self.ln_f = nn.LayerNorm(c.n_embd)

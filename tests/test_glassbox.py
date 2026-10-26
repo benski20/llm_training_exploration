@@ -73,3 +73,18 @@ def test_null_slot_weights_sum_to_one():
     m(torch.randint(0, 50, (2, 5)))
     tr = m.mem.trace
     assert torch.allclose(tr["weights"].sum(-1) + tr["null"], torch.ones(2, 5), atol=1e-5)
+
+
+def test_ensemble_memory_agreement_and_patch():
+    torch.manual_seed(0)
+    m = GlassBoxLM(GBConfig(vocab_size=50, block_size=16, n_embd=32, mem_keys=8, mem_topk=4, mem_heads=3))
+    m.eval()
+    x = torch.randint(0, 50, (2, 5))
+    _, _, e, _ = m(x)
+    a = m.mem.trace["agreement"]
+    assert a.shape == (2, 5) and float(a.abs().max()) <= 1 + 1e-5
+    assert torch.allclose(e.sum(-1), torch.ones(2, 5), atol=1e-5)
+    r = m.mem.trace["read"][:, 4].clone()
+    mask = torch.zeros(2, 5, dtype=torch.bool); mask[:, 4] = True
+    m.mem.patch = (mask, r.flip(0)); m(x); m.mem.patch = None
+    assert torch.allclose(m.mem.trace["read"][:, 4], r.flip(0))
