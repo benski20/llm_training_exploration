@@ -23,7 +23,8 @@ def dyck(n, length=16, seed=0):
     with equal counts whose prefix depth goes negative (so counting alone does
     not solve the task), half are balanced strings with one token flipped.
     """
-    assert length % 2 == 0
+    if length % 2:
+        raise ValueError("Dyck strings need an even length")
     rng = np.random.default_rng(seed)
     base = np.array([0] * (length // 2) + [1] * (length // 2))
     seqs, labels = [], []

@@ -81,5 +81,6 @@ def symbolic_bounds(P, dom, ibp=None):
         Al, cl, Au, cu = Al + dAl, cl + dcl, Au + dAu, cu + dcu
         out["s"].append(tighten("s", k, *_conc(dom, Al, cl, Au, cu))); k += 1
     out["final_sym"] = (Al, cl, Au, cu)
-    assert Al.shape[1] == n
+    if Al.shape[1] != n:
+        raise RuntimeError("symbolic bounds have the wrong input dimension")
     return out

@@ -27,3 +27,13 @@ jobs:
           mkdir t && cp results/cegis/exact_dyck_L2-64/certificate_L16.json t/
           python3 -c "import shutil; shutil.copy('results/cegis/exact_dyck_L2-64/model_L8.npz', 't/model_L16.npz')"
           ! docker run --rm -v $PWD/t:/models:ro vt-serve /models/model_L16.npz /models/certificate_L16.json
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install bandit pip-audit
+      - run: bandit -r vt                     # static analysis of the package
+      - run: printf 'numpy\nscipy\n' > serve-reqs.txt && pip-audit -r serve-reqs.txt   # serving image deps

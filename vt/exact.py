@@ -179,7 +179,8 @@ def verify_exact(P, spec, tau=1e-4, max_states=20_000_000, max_window=4):
         logits = exact_forward(P, seq)
         y = pair[0]
         margin = logits[y] - max(logits[j] for j in range(C) if j != y)
-        assert spec.label(seq) == y and margin == worst_q, "exact DP inconsistent with forward pass"
+        if not (spec.label(seq) == y and margin == worst_q):
+            raise RuntimeError("exact DP inconsistent with the exact forward pass")
         out["status"] = "counterexample"
         out["counterexamples"] = [{"seq": [int(v) for v in seq], "label": int(y),
                                    "pred": int(np.argmax([float(l) for l in logits])),

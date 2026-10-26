@@ -93,7 +93,8 @@ class MixerNet(nn.Module):
                 w = self.window
                 k = torch.cat([k[:w], k[w:w + 1].expand(max(0, self.L - w))])[:self.L]
             return k[self.offset[:L, :L]] * self.mask[:L, :L]
-        assert L == self.L, "only weight-tied models run at other lengths"
+        if L != self.L:
+            raise ValueError("only weight-tied models run at other lengths")
         return self.w(self.mix[i] * self.mask) * self.mask
 
     def wout(self, L=None):
