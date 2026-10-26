@@ -56,3 +56,74 @@ def test_gate_refuses_tampered_or_missing_certificate(proved, tmp_path):
     with pytest.raises(GateError):
         load_gated(art, cert)
     assert main(["serve", art, cert, "--port", "0"]) == 1
+
+
+@pytest.fixture
+def server(proved):
+    P, digest, cert = load_gated(*proved)
+    srv = make_server(P, digest, cert, "()", port=0, max_body=4096, timeout=1.0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv, f"http://127.0.0.1:{srv.server_port}"
+    srv.shutdown()
+
+
+def _raw(port, payload):
+    import socket
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(payload)
+        data = b""
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    return data
+
+
+def test_limits_and_malformed_requests(server):
+    srv, base = server
+    port = srv.server_port
+    big = json.dumps({"inputs": ["(()())()"] * 2000}).encode()
+    assert b" 413 " in _raw(port, b"POST /predict HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(big) + big)
+    assert b" 411 " in _raw(port, b"POST /predict HTTP/1.1\r\nHost: x\r\n\r\n")
+    for body in [b"\xff\xfe", b"[]", b"null", b'{"inputs": "(())(())"}', b'{"inputs": [1,2]}', b"{" * 100]:
+        r = _raw(port, b"POST /predict HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        assert b" 400 " in r, (body, r[:80])
+    assert _req(base + "/health")[0] == 200            # still alive
+
+
+def test_fuzz_never_crashes(server):
+    import random
+    srv, base = server
+    rng = random.Random(0)
+    for _ in range(300):
+        body = bytes(rng.randrange(256) for _ in range(rng.randrange(0, 200)))
+        r = _raw(srv.server_port, b"POST /predict HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n"
+                 % len(body) + body)
+        assert r.split(b" ")[1] in (b"200", b"400"), r[:60]
+    assert _req(base + "/health")[0] == 200
+
+
+def test_slow_client_does_not_block_others(server):
+    import socket
+    srv, base = server
+    idle = socket.create_connection(("127.0.0.1", srv.server_port))   # sends nothing
+    try:
+        assert _req(base + "/predict", {"inputs": ["(()())()"]})[0] == 200
+    finally:
+        idle.close()
+
+
+def test_concurrent_load(server):
+    from concurrent.futures import ThreadPoolExecutor
+    srv, base = server
+    inputs = ["(()())()", "())(()()", "(((())))", "()()()()"]
+    want = [1, 0, 1, 1]
+
+    def one(_):
+        code, r = _req(base + "/predict", {"inputs": inputs})
+        return code == 200 and [p["label"] for p in r["predictions"]] == want
+    with ThreadPoolExecutor(16) as ex:
+        assert all(ex.map(one, range(400)))
+    m = _req(base + "/metrics")[1]
+    assert m["predictions"] >= 1600

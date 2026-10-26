@@ -11,3 +11,19 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev]"
       - run: pytest -q
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t vt-serve .
+      - name: serve a certified artifact and query it
+        run: |
+          docker run -d --name vtsrv -p 8000:8000 -v $PWD/results/cegis/exact_dyck_L2-64:/models:ro \
+            vt-serve /models/model_L16.npz /models/certificate_L16.json
+          for i in $(seq 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())"]}' | grep '"label": 1'
+      - name: refuse a tampered artifact
+        run: |
+          mkdir t && cp results/cegis/exact_dyck_L2-64/certificate_L16.json t/
+          python3 -c "import shutil; shutil.copy('results/cegis/exact_dyck_L2-64/model_L8.npz', 't/model_L16.npz')"
+          ! docker run --rm -v $PWD/t:/models:ro vt-serve /models/model_L16.npz /models/certificate_L16.json

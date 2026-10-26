@@ -1,0 +1,1 @@
+{"L": 64, "batch": 32, "concurrency": 16, "requests": 2000, "requests_per_s": 392.4, "sequences_per_s": 12556.5, "p50_ms": 36.8, "p99_ms": 82.7}
