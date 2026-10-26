@@ -166,6 +166,63 @@ check, now fixed and covered by a test.) The direction this points to is
 sources, solvers, exact checkers), and monitor the rest with designed-in
 channels.**
 
+### What did not generalise
+
+* **Channel v3 (ALiBi, `results/grounding_by_design_v3_alibi.json`).** ALiBi
+  removed the collapse under longer contexts, but neither model learned the
+  lookup: almost no correct years were produced in either condition.
+* **Typed generation (`vt/typed_lm.py`).** On WikiText-2 the vocabulary path
+  cannot emit names or numbers, so they can only be whole-word copies, checked
+  exactly. The guarantee holds by construction, but it rests on a hand-written
+  rule: a capitalised word or a digit counts as a fact. That misses lowercase
+  facts and relations, so the line was stopped (at step 1750 of 4000).
+
+## Glass-box models: built to be read (`vt/glassbox.py`)
+
+The goal here is to build a transformer whose internals can be read accurately,
+instead of training a standard model and reverse-engineering it:
+
+* an **evidence stream**: convex residual mixing, so a distribution over
+  sources (input positions and memory reads) is an exact account of how each
+  position's content was mixed;
+* a **starved core**: fixed embeddings and no MLPs, so a product-key
+  **memory** is the only fact store, with every read logged;
+* a **self-knowledge variable k**: trained on the model's own correctness, and
+  the only input to the answer/abstain decision (or, for open text, to the
+  sharpness of the next-token distribution);
+* **counterfactual memory patching** during training.
+
+Synthetic knowledge world (`experiments/glassbox_world.py`): 1000 entities x 8
+relations, against a GPT with matched parameter counts and post-hoc linear
+probes on every layer (best layer chosen on in-distribution data).
+
+| | GPT | glass-box v1 | v4 (zero-init memory) |
+|---|---|---|---|
+| unasked memory facts answered, in-dist / long context | 25% / 23% | 78% / 89% | **82% / 94%** |
+| context facts answered, in-dist / long context | 43% / 27% | 47% / 45% | **59% / 58%** |
+| hallucination on never-seen facts | 66% | 73% | 87% |
+| "my answer is wrong" AUROC in-dist: built-in k / post-hoc probe | — / 0.68 | 0.69 / 0.69 | 0.66 / 0.62 |
+| same, long contexts | — / 0.63 | 0.72 / 0.70 | 0.69 / 0.60 |
+
+What this shows:
+
+* **The explicit memory is a clear capability win.** It answers questions it
+  was never asked about stated facts 3-4x better than the GPT, and holds up on
+  longer contexts.
+* **The built-in readout k matches or beats post-hoc probes, more so under
+  shift.** At 0.66-0.72 AUROC, though, this is not yet accurate
+  interpretability.
+* **The explicit interface made diagnosis cheap.** Patching memory reads at the
+  answer position never changed the answer. One sweep showed the causal read
+  is at the *entity* token (59% of answers follow a patched read there), so the
+  model taught itself an entity lookup.
+* **Negative results:**
+  * patch training at all question positions collapsed learning (v2);
+  * a late memory read for (entity, relation) lost capability (v3);
+  * the label-free evidence and memory-match readouts do not detect errors;
+  * no version learned to abstain on facts it never saw, because absence is not
+    represented in the memory.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
