@@ -37,17 +37,21 @@ def resolve_cert_spec(cert, pinned=None):
     that spec); an embedded DFA must be pinned by the operator, because otherwise
     the certificate itself would be deciding what "correct" means."""
     from .cli import TOKENS
-    from .dfaspec import DFASpec
+    from .counterspec import spec_from_def
     from .global_verify import SPECS
     name = cert.get("spec")
     dfa = cert.get("spec_dfa")
     if dfa is not None:
         if name != "dfa:" + dfa.get("name", "dfa"):
             raise GateError(f"certificate names spec {name!r} but embeds DFA {dfa.get('name')!r}")
-        if pinned is None or not isinstance(pinned[0], DFASpec):
-            raise GateError("certificate uses a DFA spec: pin it with --spec-file")
-        if pinned[0].canonical() != DFASpec(dfa).canonical():
-            raise GateError("certificate DFA differs from the pinned spec")
+        if pinned is None or not hasattr(pinned[0], "canonical"):
+            raise GateError("certificate uses a spec file: pin it with --spec-file")
+        try:
+            same = pinned[0].canonical() == spec_from_def(dfa).canonical()
+        except (ValueError, KeyError, TypeError):
+            same = False
+        if not same:
+            raise GateError("certificate spec differs from the pinned spec")
         return pinned
     if name not in SPECS:
         raise GateError(f"unknown spec {name!r}")

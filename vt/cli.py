@@ -22,17 +22,17 @@ TOKENS = {"dyck": "()", "sorted": "abcd"}
 def _spec(a):
     """(spec, name, alphabet, extra certificate fields) from --spec / --spec-file."""
     if getattr(a, "spec_file", None):
-        from .dfaspec import DFASpec
+        from .counterspec import spec_from_def
         with open(a.spec_file) as f:
             d = json.load(f)
-        return DFASpec(d), "dfa:" + d.get("name", "dfa"), d["alphabet"], {"spec_dfa": d}
+        return spec_from_def(d), "dfa:" + d.get("name", "dfa"), d["alphabet"], {"spec_dfa": d}
     return SPECS[a.spec](), a.spec, TOKENS[a.spec], {}
 
 
 def _spec_from_cert(cert):
     if "spec_dfa" in cert:
-        from .dfaspec import DFASpec
-        return DFASpec(cert["spec_dfa"]), cert["spec_dfa"]["alphabet"]
+        from .counterspec import spec_from_def
+        return spec_from_def(cert["spec_dfa"]), cert["spec_dfa"]["alphabet"]
     return SPECS[cert["spec"]](), TOKENS[cert["spec"]]
 
 
