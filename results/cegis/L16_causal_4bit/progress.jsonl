@@ -1,0 +1,4 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 2, "elapsed": 12.2843711229998}
+{"round": 1, "n_cex_total": 32, "sampled_errors": 3, "elapsed": 25.720979591000287}
+{"round": 2, "n_cex_total": 79, "sampled_errors": 2, "elapsed": 29.761859821001053}
+{"round": 3, "n_cex_total": 108, "sampled_errors": 0, "verify_limit": 60.0, "verify_status": "proved", "verify_time": 10.896344691000195, "unstable": 128, "verifier_cex": 0, "slowest_case": 4.255231121000179, "elapsed": 44.597836345999895}

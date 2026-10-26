@@ -1,0 +1,64 @@
+{
+ "status": "proved",
+ "rounds": 4,
+ "history": [
+  {
+   "round": 0,
+   "n_cex_total": 0,
+   "sampled_errors": 2,
+   "elapsed": 12.2843711229998
+  },
+  {
+   "round": 1,
+   "n_cex_total": 32,
+   "sampled_errors": 3,
+   "elapsed": 25.720979591000287
+  },
+  {
+   "round": 2,
+   "n_cex_total": 79,
+   "sampled_errors": 2,
+   "elapsed": 29.761859821001053
+  },
+  {
+   "round": 3,
+   "n_cex_total": 108,
+   "sampled_errors": 0,
+   "verify_limit": 60.0,
+   "verify_status": "proved",
+   "verify_time": 10.896344691000195,
+   "unstable": 128,
+   "verifier_cex": 0,
+   "slowest_case": 4.255231121000179,
+   "elapsed": 44.597836345999895
+  }
+ ],
+ "config": {
+  "L": 16,
+  "d_model": 4,
+  "d_hidden": 8,
+  "n_blocks": 1,
+  "ternary": false,
+  "causal": true,
+  "bits": 4,
+  "ternary_from_round": 1,
+  "n_train": 20000,
+  "rounds": 15,
+  "epochs_first": 60,
+  "epochs_round": 15,
+  "lr": 0.003,
+  "lr_decay": 0.7,
+  "lr_min": 0.0001,
+  "batch_size": 256,
+  "margin": 1.0,
+  "cex_weight": 5.0,
+  "falsify_samples": 200000,
+  "verify_time": 300.0,
+  "verify_workers": 2,
+  "collect_all_cex": false,
+  "verify_time_start": 60.0,
+  "cex_per_call": 20,
+  "seed": 0
+ },
+ "elapsed": 44.597836345999895
+}

@@ -55,3 +55,15 @@ def test_milp_agrees_with_sampling(model, eps):
         else:
             assert r["cex_linf"] <= eps + 1e-6
             assert r["cex_margin"] <= 1e-6
+
+
+def test_kbit_export_matches_torch_and_is_on_grid():
+    torch.manual_seed(0)
+    m = MixerNet(seq_len=6, vocab=2, d_model=4, d_hidden=6, n_blocks=1, n_classes=2, bits=4)
+    P = m.export()
+    x = _x()
+    ref = m(torch.tensor(x[None], dtype=torch.float32))[0].detach().numpy()
+    assert np.allclose(np_forward(P, x), ref, atol=1e-5)
+    W = P["W1"][0]
+    step = np.abs(W).max() / 7
+    assert np.allclose(W / step, np.round(W / step), atol=1e-6)

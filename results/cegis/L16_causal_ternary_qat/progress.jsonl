@@ -1,0 +1,12 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 2, "elapsed": 12.521474263001437}
+{"round": 1, "n_cex_total": 32, "sampled_errors": 788, "elapsed": 25.865646940999795}
+{"round": 2, "n_cex_total": 4383, "sampled_errors": 569, "elapsed": 30.317521433000366}
+{"round": 3, "n_cex_total": 7992, "sampled_errors": 681, "elapsed": 35.38653229100055}
+{"round": 4, "n_cex_total": 8962, "sampled_errors": 666, "elapsed": 40.44768620100149}
+{"round": 5, "n_cex_total": 10074, "sampled_errors": 234, "elapsed": 45.61507378300121}
+{"round": 6, "n_cex_total": 10538, "sampled_errors": 89, "elapsed": 50.39447387200016}
+{"round": 7, "n_cex_total": 10717, "sampled_errors": 846, "elapsed": 55.9536563340007}
+{"round": 8, "n_cex_total": 11462, "sampled_errors": 162, "elapsed": 61.37775357800092}
+{"round": 9, "n_cex_total": 11725, "sampled_errors": 429, "elapsed": 66.98098754900093}
+{"round": 10, "n_cex_total": 12473, "sampled_errors": 386, "elapsed": 72.35742529300114}
+{"round": 11, "n_cex_total": 12661, "sampled_errors": 177, "elapsed": 78.01500362800107}

@@ -32,7 +32,7 @@ def cmd_prove(a):
     V = len(TOKENS[a.spec])
     cfg = CegisConfig(L=a.length, d_model=a.d_model, d_hidden=a.d_hidden, n_blocks=a.n_blocks,
                       ternary=not a.float, causal=a.causal, rounds=a.rounds,
-                      ternary_from_round=a.qat_from_round, verify_workers=a.workers,
+                      ternary_from_round=a.qat_from_round, verify_workers=a.workers, bits=a.bits,
                       verify_time=a.verify_time, seed=a.seed)
     os.makedirs(a.out, exist_ok=True)
     progress = open(os.path.join(a.out, "progress.jsonl"), "a")
@@ -118,6 +118,7 @@ def main(argv=None):
     p.add_argument("--n-blocks", type=int, default=1)
     p.add_argument("--float", action="store_true", help="float weights instead of ternary")
     p.add_argument("--causal", action="store_true")
+    p.add_argument("--bits", type=int, default=0, help="k-bit uniform weights (with --float)")
     p.add_argument("--qat-from-round", type=int, default=0,
                    help="train float weights for this many rounds before quantising")
     p.add_argument("--rounds", type=int, default=20)

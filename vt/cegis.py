@@ -28,7 +28,8 @@ class CegisConfig:
     n_blocks: int = 1
     ternary: bool = True
     causal: bool = False
-    ternary_from_round: int = 0  # train float before this round, then quantise (QAT)
+    bits: int = 0                # k-bit uniform weights instead of float (0 = off)
+    ternary_from_round: int = 0  # train float before this round, then quantise (QAT; also for bits)
     n_train: int = 20000
     rounds: int = 20
     epochs_first: int = 60
@@ -114,10 +115,12 @@ def cegis(spec, cfg, V=2, log=print):
     t0 = time.perf_counter()
     for rnd in range(cfg.rounds):
         seqs = np.concatenate([base, cex])
-        model.ternary = cfg.ternary and rnd >= cfg.ternary_from_round
+        quant_on = rnd >= cfg.ternary_from_round
+        model.ternary = cfg.ternary and quant_on
+        model.bits = cfg.bits if (cfg.bits and quant_on) else None
         X, Y = _onehot(seqs, V), torch.from_numpy(spec.label_batch(seqs))
         W = torch.cat([torch.ones(len(base)), torch.full((len(cex),), cfg.cex_weight)])
-        first = rnd == 0 or (cfg.ternary and rnd == cfg.ternary_from_round)
+        first = rnd == 0 or ((cfg.ternary or cfg.bits) and rnd == cfg.ternary_from_round)
         lr = cfg.lr if first else max(cfg.lr_min, cfg.lr * cfg.lr_decay ** rnd)
         _fit(model, X, Y, W, cfg.epochs_first if first else cfg.epochs_round, cfg, lr)
         found = _falsify(model, spec, cfg, V, rng)
@@ -136,7 +139,7 @@ def cegis(spec, cfg, V=2, log=print):
             entry.update(verify_status=res["status"], verify_time=res["time"],
                          unstable=res["unstable"], verifier_cex=len(res["counterexamples"]),
                          slowest_case=max(q["time"] for q in res["queries"]))
-            if res["status"] == "proved" and model.ternary == cfg.ternary:
+            if res["status"] == "proved" and quant_on:
                 entry["elapsed"] = time.perf_counter() - t0
                 history.append(entry)
                 log(entry)

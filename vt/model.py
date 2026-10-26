@@ -14,6 +14,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def quantize(w, bits):
+    """Symmetric uniform k-bit grid with absmax scale (straight-through)."""
+    n = 2 ** (bits - 1) - 1
+    scale = w.abs().max().clamp(min=1e-8) / n
+    q = (w / scale).round().clamp(-n, n) * scale
+    return w + (q - w).detach()
+
+
 def ternarize(w):
     scale = w.abs().mean().clamp(min=1e-8)
     q = (w / scale).round().clamp(-1, 1) * scale
@@ -22,11 +30,12 @@ def ternarize(w):
 
 class MixerNet(nn.Module):
     def __init__(self, seq_len, vocab, d_model=8, d_hidden=16, n_blocks=2,
-                 n_classes=2, ternary=False, causal=False):
+                 n_classes=2, ternary=False, causal=False, bits=None):
         super().__init__()
         L, V, d, h = seq_len, vocab, d_model, d_hidden
         self.L, self.V, self.d, self.h, self.C = L, V, d, h, n_classes
         self.n_blocks, self.ternary = n_blocks, ternary
+        self.bits = bits  # k-bit uniform weights (used when ternary is False)
         # causal: position t mixes only positions <= t, as in a decoder LM
         self.register_buffer("mask", torch.tril(torch.ones(L, L)) if causal else torch.ones(L, L), persistent=False)
         self.W_in = nn.Parameter(torch.randn(d, V) / math.sqrt(V))
@@ -43,7 +52,9 @@ class MixerNet(nn.Module):
         self.b_out = nn.Parameter(torch.zeros(n_classes))
 
     def w(self, p):
-        return ternarize(p) if self.ternary else p
+        if self.ternary:
+            return ternarize(p)
+        return quantize(p, self.bits) if self.bits else p
 
     def mixw(self, i):
         return self.w(self.mix[i] * self.mask) * self.mask
