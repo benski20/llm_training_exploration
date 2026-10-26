@@ -3,7 +3,10 @@
     # CPU toy run
     python experiments/train_lm.py --data input.txt --out runs/lm_base
     python experiments/train_lm.py --data input.txt --out runs/lm_tern_margin --ternary --margin-weight 0.1
-    # multi-GPU: torchrun --nproc_per_node 8 experiments/train_lm.py --data corpus.txt --n-layer 12 --n-embd 768 ...
+    # GPT-2-small scale on pre-tokenised data (nanoGPT .bin format, GPT-2 BPE ids as uint16):
+    torchrun --nproc_per_node 8 experiments/train_lm.py --data fineweb_train.bin --dtype uint16 \
+        --preset gpt2-124m --block-size 1024 --batch-size 16 --grad-accum 4 --steps 20000 \
+        --lr 6e-4 --ternary --margin-weight 0.5 --compile
 
 Data is any text/byte file, read via np.memmap (no size limit). Training
 resumes from <out>/ckpt.pt. Final metrics go to <out>/metrics.json.
@@ -22,6 +25,11 @@ import torch.distributed as dist
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from vt.lm import GPT, GPTConfig  # noqa: E402
+
+
+# (n_layer, n_head, n_embd); gpt2-* match the GPT-2 family sizes
+PRESETS = {"tiny": (4, 4, 128), "small": (6, 6, 384), "gpt2-124m": (12, 12, 768),
+           "gpt2-350m": (24, 16, 1024), "gpt2-774m": (36, 20, 1280)}
 
 
 def get_batch(data, block, batch, device, gen):
@@ -63,7 +71,18 @@ def main():
     ap.add_argument("--eval-every", type=int, default=500)
     ap.add_argument("--eval-iters", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--preset", choices=PRESETS, help="model size preset (overrides --n-*)")
+    ap.add_argument("--dtype", default="uint8", choices=["uint8", "uint16"],
+                    help="uint8: raw bytes (vocab 256); uint16: pre-tokenised ids, e.g. GPT-2 BPE")
+    ap.add_argument("--vocab-size", type=int, default=None,
+                    help="defaults to 256 for uint8, 50304 for uint16")
+    ap.add_argument("--grad-accum", type=int, default=1)
+    ap.add_argument("--compile", action="store_true")
     a = ap.parse_args()
+    if a.preset:
+        a.n_layer, a.n_head, a.n_embd = PRESETS[a.preset]
+    if a.vocab_size is None:
+        a.vocab_size = 256 if a.dtype == "uint8" else 50304
 
     ddp = "WORLD_SIZE" in os.environ
     if ddp:
@@ -77,11 +96,11 @@ def main():
         torch.cuda.set_device(device)
     os.makedirs(a.out, exist_ok=True)
 
-    raw = np.memmap(a.data, dtype=np.uint8, mode="r")
+    raw = np.memmap(a.data, dtype=np.dtype(a.dtype), mode="r")
     split = int(0.9 * len(raw))
     train_data, val_data = raw[:split], raw[split:]
 
-    cfg = GPTConfig(block_size=a.block_size, n_layer=a.n_layer, n_head=a.n_head,
+    cfg = GPTConfig(vocab_size=a.vocab_size, block_size=a.block_size, n_layer=a.n_layer, n_head=a.n_head,
                     n_embd=a.n_embd, ternary=a.ternary, margin_eps=a.margin_eps,
                     margin_weight=a.margin_weight)
     torch.manual_seed(a.seed)
@@ -96,6 +115,8 @@ def main():
         if master:
             print(f"resumed at step {step}")
     raw_model = model
+    if a.compile:
+        model = torch.compile(model)
     if ddp:
         model = torch.nn.parallel.DistributedDataParallel(model)
     amp = torch.autocast("cuda", dtype=torch.bfloat16) if device.startswith("cuda") else torch.autocast("cpu", enabled=False)
@@ -111,15 +132,18 @@ def main():
     while step < a.steps:
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
-        x, y = get_batch(train_data, a.block_size, a.batch_size, device, gen)
-        with amp:
-            _, loss = model(x, y)
-            total = loss
-            if a.margin_weight:
-                # ramp the regulariser in so early learning is unconstrained
-                total = loss + a.margin_weight * min(1.0, step / (0.3 * a.steps)) * raw_model.margin_loss()
         opt.zero_grad(set_to_none=True)
-        total.backward()
+        for micro in range(a.grad_accum):
+            x, y = get_batch(train_data, a.block_size, a.batch_size, device, gen)
+            if ddp:
+                model.require_backward_grad_sync = micro == a.grad_accum - 1
+            with amp:
+                _, loss = model(x, y)
+                total = loss
+                if a.margin_weight:
+                    # ramp the regulariser in so early learning is unconstrained
+                    total = loss + a.margin_weight * min(1.0, step / (0.3 * a.steps)) * raw_model.margin_loss()
+            (total / a.grad_accum).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         step += 1
@@ -137,6 +161,7 @@ def main():
             json.dump({"args": vars(a), "config": asdict(cfg), "final": final, "log": log,
                        "params": sum(p.numel() for p in raw_model.parameters())}, f, indent=1)
         raw_model.eval()
+    if master and a.dtype == "uint8":
         prompt = torch.tensor([list(b"ROMEO:\n")], device=device)
         sample = raw_model.generate(prompt, 200, temperature=0.8, top_k=20)[0].tolist()
         with open(os.path.join(a.out, "sample.txt"), "wb") as f:
