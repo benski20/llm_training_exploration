@@ -108,8 +108,10 @@ def train(steps, seed, log, aux_w, layer, answer_only):
         data, x, y, dpos = batch(rng, 32, 1, 4)
         logp, _, s, _ = m(x, dpos)
         tok = F.nll_loss(logp.reshape(-1, 256), y.reshape(-1), reduction="none").view(y.shape)
-        if answer_only:                    # supervise the answer and its terminator, not the random context
-            w = (torch.arange(y.shape[1])[None, :] >= dpos[:, None]).float()
+        if answer_only:                    # supervise the answer and its ".\n" terminator only
+            t = torch.arange(y.shape[1])[None, :]
+            end = dpos + torch.tensor([len(d[1]) + 1 for d in data])
+            w = ((t >= dpos[:, None]) & (t <= end[:, None])).float()
             loss_lm = (tok * w).sum() / w.sum()
         else:
             loss_lm = tok.mean()
