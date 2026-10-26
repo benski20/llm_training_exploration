@@ -170,12 +170,15 @@ def cegis(spec, cfg, V=2, log=print):
             for L in lengths:
                 if V ** L <= cfg.enumerate_up_to:
                     per_length[L] = {"status": "proved", "method": "enumeration"}
-            for L in [L for L in lengths if L not in per_length]:
+            # longest first: it is the most likely to fail, and a failure skips the rest
+            for L in sorted([L for L in lengths if L not in per_length], reverse=True):
                 res = _verify_escalating(model.export(L), spec, cfg)
                 per_length[L] = {"status": res["status"], "method": "milp", "time": res["time"],
                                  "unstable": res["unstable"]}
                 if res["status"] != "proved":
                     all_proved = False
+                    if res["status"] == "unknown":
+                        break
                     seqs = np.array([c["seq"] for c in res["counterexamples"]], dtype=np.int64)
                     if len(seqs):
                         near = _neighbourhood(model, spec, seqs, V, rng)

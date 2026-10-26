@@ -1,0 +1,256 @@
+{
+ "artifact": "results/cegis/L32_shared/model.npz",
+ "spec": "dyck",
+ "rows": [
+  {
+   "L": 2,
+   "status": "counterexample",
+   "time": 0.0074112000002060086,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 3.6309811447882514
+    }
+   ]
+  },
+  {
+   "L": 4,
+   "status": "counterexample",
+   "time": 0.013183487000787864,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 3.957213002430769
+    }
+   ]
+  },
+  {
+   "L": 6,
+   "status": "counterexample",
+   "time": 0.019465080000372836,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      0,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 5.2239308564420215
+    }
+   ]
+  },
+  {
+   "L": 8,
+   "status": "counterexample",
+   "time": 0.02195971899709548,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 6.083178350433169
+    }
+   ]
+  },
+  {
+   "L": 10,
+   "status": "counterexample",
+   "time": 0.028650547999859555,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 7.799331607401056
+    }
+   ]
+  },
+  {
+   "L": 12,
+   "status": "counterexample",
+   "time": 0.028086092999728862,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 9.849597631149575
+    }
+   ]
+  },
+  {
+   "L": 14,
+   "status": "counterexample",
+   "time": 0.0369341199984774,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 9.37329867340101
+    }
+   ]
+  },
+  {
+   "L": 16,
+   "status": "counterexample",
+   "time": 0.07343024999863701,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      1,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 11.579354816452677
+    }
+   ]
+  },
+  {
+   "L": 18,
+   "status": "counterexample",
+   "time": 0.05807295300110127,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      1,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      1,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 11.301644495168961
+    }
+   ]
+  },
+  {
+   "L": 20,
+   "status": "counterexample",
+   "time": 0.08570588099973975,
+   "counterexamples": [
+    {
+     "seq": [
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1,
+      0,
+      1
+     ],
+     "label": 1,
+     "pred": 0,
+     "margin": 13.899178019312913
+    }
+   ]
+  }
+ ]
+}

@@ -2,6 +2,7 @@
 import glob
 import json
 import os
+import re
 import time
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "results", "cegis")
@@ -31,7 +32,7 @@ def main():
             continue
         status, rows, cfg, elapsed = r
         name = os.path.basename(run)
-        L = cfg["L"] if cfg else int(name.split("_")[0][1:])
+        L = cfg["L"] if cfg else int(re.findall(r"\d+", name.split("_")[0])[-1])
         if cfg and cfg.get("lengths"):
             L = f"{min(cfg['lengths'])}..{cfg['L']}"
         V = 2
@@ -59,7 +60,7 @@ def main():
             weights = "ternary"
         else:
             weights = next((w for w in ("4bit", "6bit", "ternary") if w in name), "float").replace("bit", "-bit")
-        lines.append(f"| {name} | {L} | {V ** (cfg['L'] if cfg else L):.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
+        lines.append(f"| {name} | {L} | {V ** (cfg['L'] if cfg else int(L)):.2e} | {mixing} | {weights} | {status} | {len(rows)} | {len(calls)} | "
                      f"{last} | {elapsed:.0f} | {sha} |")
     text = "\n".join(lines)
     print(text)

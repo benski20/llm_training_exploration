@@ -1,0 +1,4 @@
+{"round": 0, "n_cex_total": 0, "sampled_errors": 35786, "elapsed": 65.21594309300053}
+{"round": 1, "n_cex_total": 32500, "sampled_errors": 20985, "elapsed": 91.21110247899924}
+{"round": 2, "n_cex_total": 65000, "sampled_errors": 20076, "elapsed": 137.82211860499956}
+{"round": 3, "n_cex_total": 97500, "sampled_errors": 22062, "elapsed": 236.75835949099928}

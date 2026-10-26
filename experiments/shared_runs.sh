@@ -7,4 +7,5 @@ run() { name=$1; shift
 }
 run L16_shared --length 16 --float --shared --lr-decay 0.92 --epochs-first 200 --epochs-round 30 --rounds 15 --verify-time 300
 run L32_shared --length 32 --float --shared --lr-decay 0.92 --epochs-first 200 --epochs-round 30 --rounds 30 --verify-time 600
-run L64_shared --length 64 --float --shared --lr-decay 0.92 --epochs-first 200 --epochs-round 30 --rounds 30 --verify-time 900
+# run L64_shared --length 64 --float --shared --lr-decay 0.92 --epochs-first 200 --epochs-round 30 --rounds 30 --verify-time 900
+run L2-32_shared --length 32 --also-lengths 2,4,6,8,10,12,14,16,18,20,22,24,26,28,30 --float --shared --lr-decay 0.92 --epochs-first 200 --epochs-round 30 --rounds 40 --verify-time 600
