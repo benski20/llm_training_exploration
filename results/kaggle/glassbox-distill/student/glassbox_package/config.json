@@ -1,0 +1,12 @@
+{
+ "vocab_size": 16384,
+ "block_size": 512,
+ "n_layer": 12,
+ "n_head": 10,
+ "n_embd": 640,
+ "n_features": 4096,
+ "k_active": 32,
+ "mem_layer": 11,
+ "mem_keys": 256,
+ "mem_topk": 16
+}

@@ -83,28 +83,43 @@ def load(a, mark_unsure=False):
     chat_docs = [(f"User: {x['prompt']}\nAssistant:", " " + x["response"]) for x in train]
     if a.smoke:
         wiki = ["The cat sat on the mat. It was a sunny day in the town."] * 50
+    elif a.wiki_file:                                           # local text, one paragraph per line
+        wiki = [ln.strip() for ln in open(a.wiki_file) if len(ln.strip()) > 80]
     else:
         from datasets import load_dataset
         w = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train")
         wiki = [x["text"] for x in w if len(x["text"]) > 80]
-    def stream(docs, offset):
+    def stream(docs, offset, chunk=20000):
         """docs: texts, or (prompt, reply) pairs; with mark_unsure (Glassbox-3 students only),
-        <unsure> goes before every abstaining reply."""
-        ids, doc = [], []
+        <unsure> goes before every abstaining reply. Tokenized in chunks into int32 arrays:
+        holding every Encoding object or Python-list token at once runs out of memory."""
         pairs = isinstance(docs[0], tuple)
-        flat = [t for d in docs for t in d] if pairs else docs
-        encs = tok.encode_batch(flat)
-        for n in range(len(docs)):
-            if pairs:
-                p, r = encs[2 * n].ids, encs[2 * n + 1].ids
-                one = p + ([UNSURE] if mark_unsure and any(mk in docs[n][1].lower() for mk in ABSTAIN) else []) + r
-            else:
-                one = encs[n].ids
-            ids += one + [0]
-            doc += [offset + n] * (len(one) + 1)
-        return torch.tensor(ids, dtype=torch.long), torch.tensor(doc, dtype=torch.long)
+        parts = []
+        for c0 in range(0, len(docs), chunk):
+            sub = docs[c0:c0 + chunk]
+            flat = [t for d in sub for t in d] if pairs else sub
+            encs = tok.encode_batch(flat)
+            for n in range(len(sub)):
+                if pairs:
+                    p, r = encs[2 * n].ids, encs[2 * n + 1].ids
+                    mark = [UNSURE] if mark_unsure and any(mk in sub[n][1].lower() for mk in ABSTAIN) else []
+                    one = p + mark + r
+                else:
+                    one = encs[n].ids
+                parts.append(np.asarray(one + [0], dtype=np.int32))
+            del encs
+        lengths = np.fromiter((len(x) for x in parts), dtype=np.int64, count=len(parts))
+        ids = torch.from_numpy(np.concatenate(parts))
+        doc = torch.from_numpy(np.repeat(np.arange(offset, offset + len(parts), dtype=np.int32), lengths))
+        return ids, doc
+    cache = os.path.join(a.out, f"streams{'_unsure' if mark_unsure else ''}.pt")
+    if os.path.exists(cache):                                  # built once by the parent process
+        chat, wikis = torch.load(cache)
+    else:
+        chat, wikis = stream(chat_docs, 0), stream(wiki, 10_000_000)    # wiki documents: ids >= 1e7
+        torch.save((chat, wikis), cache)
     sc_prompts = [x["prompt"] for x in train if x["kind"] == "trivia"]
-    return tok, stream(chat_docs, 0), stream(wiki, 10_000_000), ev, sc_prompts    # wiki documents: ids >= 1e7
+    return tok, chat, wikis, ev, sc_prompts
 
 
 def batch(chat, wiki, bs, block, g, p_chat=0.6):
@@ -114,7 +129,7 @@ def batch(chat, wiki, bs, block, g, p_chat=0.6):
         src, doc = chat if torch.rand(1, generator=g).item() < p_chat else wiki
         i = int(torch.randint(len(src) - block - 1, (1,), generator=g))
         xs.append(src[i:i + block]); ys.append(src[i + 1:i + block + 1]); ds.append(doc[i:i + block])
-    return torch.stack(xs), torch.stack(ys), torch.stack(ds)
+    return torch.stack(xs).long(), torch.stack(ys).long(), torch.stack(ds).long()
 
 
 # ---------------------------------------------------------------- models
@@ -251,8 +266,19 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
                     right = (logits.argmax(-1) == y).float()
                     aux = F.binary_cross_entropy_with_logits(k.float(), right)
                     gate = m.trace["mem"]["gate"].float()
-                    loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
-                    info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
+                    if a.temp_train == "decoupled" and kind == "glassbox":
+                        # LM loss on the raw logits, as a GPT's; the k-set temperature learns separately
+                        # as calibration of the (detached) raw logits. Coupled training lets a model that
+                        # is still mostly wrong flatten its own logits and stall (the first GPU run).
+                        raw = m.trace["raw_logits"].float()
+                        lm = F.cross_entropy(raw.flatten(0, 1), y.flatten())
+                        cal = F.cross_entropy((raw.detach() * m.temperature(k.float())[..., None]).flatten(0, 1),
+                                              y.flatten())
+                        loss = lm + cal + 0.2 * aux + a.mem_l1 * gate.mean()
+                    else:
+                        loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
+                    info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4),
+                            "temp": round(m.temperature(k.float()).mean().item(), 4)}
                     m.record_writers(docs.to(device))         # which training document wrote each memory slot
                 if kind == "glassbox3":
                     m.record_features()
@@ -585,6 +611,9 @@ def main():
     ap.add_argument("--sc-prompts", type=int, default=16)
     ap.add_argument("--sc-k", type=int, default=5)
     ap.add_argument("--sc-agree", type=float, default=0.6)
+    ap.add_argument("--temp-train", default="decoupled", choices=["decoupled", "coupled"],
+                    help="Glassbox-2: train the k temperature as calibration (decoupled) or through the LM loss")
+    ap.add_argument("--wiki-file", default=None, help="local text instead of WikiText-103 (CPU reproductions)")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
@@ -592,6 +621,8 @@ def main():
         a.n_features, a.k_active = 64, 4
     os.makedirs(a.out, exist_ok=True)
     kinds = a.models.split(",")
+    for mark in sorted({k == "glassbox3" for k in kinds}):      # tokenize once, before the students start
+        load(argparse.Namespace(**vars(a)), mark_unsure=mark)
     n_gpu = torch.cuda.device_count()
     if n_gpu >= 2 and len(kinds) == 2:                               # one student per GPU, in parallel
         import torch.multiprocessing as mp

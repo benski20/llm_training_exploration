@@ -1,0 +1,252 @@
+{
+ "kind": "glassbox",
+ "config": {
+  "vocab_size": 16384,
+  "block_size": 512,
+  "n_layer": 12,
+  "n_head": 10,
+  "n_embd": 640,
+  "n_features": 4096,
+  "k_active": 32,
+  "mem_layer": 11,
+  "mem_keys": 256,
+  "mem_topk": 16
+ },
+ "steps": 14309,
+ "params": 145764886,
+ "tokens": {
+  "tokens": 11293,
+  "top1_agreement": 0.020012397060125742,
+  "bits_per_token": 10.806058873141803,
+  "auroc_softmax": 0.5209624243645503,
+  "auroc_probe_middle": 0.4880418624772204,
+  "auroc_probe_last": 0.46909971525007377,
+  "auroc_k": 0.5371082489518788,
+  "certified_memory_free_tokens": 1.0,
+  "top1_when_certified": 0.020012397060125742
+ },
+ "inspect": {
+  "attribution_max_abs_error": 1.5513828429902787e-05,
+  "features_exactly_sparse": true,
+  "memory_slots_with_writer": 0.945770263671875
+ },
+ "qa": {
+  "trivia_eval": {
+   "n": 500,
+   "accuracy": 0.0,
+   "abstention": 0.0,
+   "hallucination": 1.0,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.0,
+   "auroc_true_msp": null,
+   "release_msp": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_k_min": null,
+   "release_k_min": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_consistency": null,
+   "release_consistency": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "samples": [
+    {
+     "q": "Who was the man behind The Chipmunks?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who was the next British Prime Minister after Arthur Balfour?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What claimed the life of singer Kathleen Ferrier?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Rita Coolidge sang the title song for which Bond film?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_absent_eval": {
+   "n": 200,
+   "accuracy": 0.0,
+   "abstention": 0.0,
+   "hallucination": 1.0,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.0,
+   "samples": [
+    {
+     "q": "What instrument does Ralvo play?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "I read that Banmeta was born in Nurseka. Sistu's favorite food is Peropo. What pet does Zova have?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Biruser plays the Vezus. What instrument does Metinve play?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Nibuvu's favorite food is Vepun. What instrument does Mupun play?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What is Davin's favorite food?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Nallokar's home town is Zalfafo. What pet does Fersi have?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_ctx_eval": {
+   "n": 200,
+   "accuracy": 0.0,
+   "abstention": 0.0,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.0,
+   "samples": [
+    {
+     "q": "I read that Banan's favorite food is Foduto. What is Banan's favorite food?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Fimarun plays the Nesnedar. My friend told me that Feszarbu works for Gazu. Fact: Tupa was born in Nafol. Where does Feszarbu work?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Pape plays the Veril. My friend told me that Vusnan's favorite food is Topena. What instrument does Pape play?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Fact: Namon has a pet called Simo. Povuszi was born in Tetekus. What is the name of Namon's pet?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Fact: Ralku's home town is Fovas. Ziga has a pet called Fuspel. I read that Domil's favorite food is Kubus. What is Domil's favorite food?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Rolgovo's birthplace is Kizi. Fact: Bupo has a pet called Gifupa. What pet does Bupo have?",
+     "a": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "certificate_soundness_violations": 0
+ },
+ "samples": [
+  {
+   "prompt": "Compare the two items and provide an opinion.\nAn apple and an orange.",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Explain what \"normalization\" means in the context of database design.",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Display the result of the following math problem.\n(5 + 5) \u00d7 2 + 6",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Describe a process of using a GPT model to generate natural language text.",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "What is a way that computer programming can be beneficial to the economy?",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Identify three countries in South America",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Estimate the following multiplication problem.\n27 x 4",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  },
+  {
+   "prompt": "Convert 48 fl. oz. to liters.",
+   "reply": "the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+{
+ "format": "vt-glassbox2-chat/1",
+ "files": {
+  "weights.pt": "f4e99e99cc2dc9e3fbf14b6cb853f29d829bc3588cdea4faf94a690058dc90c5",
+  "config.json": "72d545fd90cda221bf848af293f42f8b1dc995acac2122eacb851b1f65dd45ef",
+  "tokenizer.json": "fc0b04b83eb6e59a763bf45dfd40292c39a4ab784961903a28b57ce68603aa81"
+ },
+ "package_sha256": "e24a9c686ae40df61560fdd403411cb57f8e019130865fa03822eff3f89a4d70"
+}
