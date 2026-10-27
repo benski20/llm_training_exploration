@@ -1,0 +1,198 @@
+{
+ "glassbox2": {
+  "train_s": 580.2735486030579,
+  "params": 8020202,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21892,
+   "top1_acc": 0.31057007125890734,
+   "bits_per_token": 5.2364305876684005,
+   "auroc_msp": 0.8194400580011323,
+   "auroc_probe": 0.755669206949662,
+   "auroc_k": 0.7512673568796733,
+   "auroc_memory_match": 0.47753784846448954,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.31057007125890734,
+   "top1_acc_uncertified": null
+  },
+  "tokens_wikitext": {
+   "tokens": 22678,
+   "top1_acc": 0.3024958109180704,
+   "bits_per_token": 5.473272342013572,
+   "auroc_msp": 0.8394976734258901,
+   "auroc_probe": 0.7904933100165992,
+   "auroc_k": 0.7871258782941676,
+   "auroc_memory_match": 0.4274737843406062,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.3024958109180704,
+   "top1_acc_uncertified": null
+  },
+  "chat_probe_layer": 4,
+  "chat_facts": {
+   "ctx_right": 0.016666666666666666,
+   "mem_right": 0.0,
+   "absent_right": 0.2,
+   "absent_fresh_right": 0.7666666666666667,
+   "ctx_fresh_right": 0.016666666666666666,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.2,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.8,
+   "hallucination_rate_fresh_names": 0.23333333333333334,
+   "over_refusal_rate": 0.17777777777777778,
+   "auroc_msp": 0.8229166666666666,
+   "auroc_neg_nll": 0.8686111111111111,
+   "auroc_k_mean": 0.8381944444444445,
+   "auroc_k_min": 0.9127083333333333,
+   "auroc_memory_match": 0.5891666666666666,
+   "auroc_probe": 0.8307638888888889,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Gonnipe has a pet called Gepi."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Molma's home planet is Ruso."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Lura's pet."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I don't know Vebuko's favorite food."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Mikilil's pet is Gepi."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Naru's native language is Baldira."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.48333333333333334,
+   "absent_fresh_right": 0.4666666666666667,
+   "ctx_fresh_right": 0.0,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.19,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.5166666666666667,
+   "hallucination_rate_fresh_names": 0.5333333333333333,
+   "over_refusal_rate": 0.29444444444444445,
+   "auroc_msp": 0.8133708757490434,
+   "auroc_neg_nll": 0.8517796548985633,
+   "auroc_k_mean": 0.8125045123095805,
+   "auroc_k_min": 0.9126416865208288,
+   "auroc_memory_match": 0.5188073063316728,
+   "auroc_probe": 0.7686087647101292,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " I don't know Gonnipe's favorite food."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I'm not sure. I have no information about Kolkiku's home planet."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Bugeler's favorite food is Lirasdo."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": false,
+     "out": " Babo's favorite food is Susfe."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Bagon's favorite food is Kemi."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Zaras's native language is Baldira."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The article discusses the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance",
+    "msp": 0.3866937017689149,
+    "nll": 1.5783145965251606,
+    "k": -0.15338802337646484,
+    "k_min": -1.6848695278167725,
+    "match": 9.601869136095047,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The Civil War of the United States is the United States, and the United States, with the United States, and the United States. The United States has a majority of the United States, and the United States, with the United",
+    "msp": 0.33964760166903335,
+    "nll": 1.3934533689171076,
+    "k": -0.34034578781574965,
+    "k_min": -1.5974204540252686,
+    "match": 9.747492770353952,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The average temperature of the area of the area is 1.",
+    "msp": 0.30031491598735255,
+    "nll": 1.4734525009989738,
+    "k": -0.6297637851287922,
+    "k_min": -1.726732611656189,
+    "match": 9.818037192026773,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Practice:",
+    "msp": 0.3610459922679833,
+    "nll": 1.5705938653222151,
+    "k": -0.16924087064606802,
+    "k_min": -1.8567395210266113,
+    "match": 11.07667487008231,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " Once upon a time, there was a young girl named the woman who had a great way to explore the world. He was a great way to explore the world, and he was a great way to explore the world. He was a",
+    "msp": 0.3502706443347658,
+    "nll": 1.3842706332604091,
+    "k": -0.025521542333687346,
+    "k_min": -1.2089678049087524,
+    "match": 10.050670742988586,
+    "reply_memory_free": true
+   }
+  ]
+ }
+}

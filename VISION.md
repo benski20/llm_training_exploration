@@ -303,6 +303,29 @@ The thesis "design for interpretability, get more accurate hallucination
 detection" is **not supported** by these experiments. The memory-as-knowledge
 store and the mechanistic diagnoses are the parts worth carrying forward.
 
+**Glassbox-2.1** (memory after the last layer, 32 active features;
+`results/glassbox2_1_chat/`, compared by `experiments/chat_compare.py`):
+
+| | Glassbox-2.1 | GPT |
+|---|---|---|
+| bits per token, Alpaca | 5.24 (+5%) | **4.99** |
+| flags its own wrong chat answers (best signal) | **0.913** (built-in k_min) | 0.849 (post-hoc probe) |
+| same, held-out relations | **0.913** | 0.906 (softmax) |
+| hallucination: unstated facts / made-up names | 80% / 23% | **70% / 5%** |
+| fact given in the message, answered | 2% | **18%** |
+| over-refusal | 18% | 17% |
+
+For the first time a signal built into the model detects its errors better
+than a probe fitted to the GPT after training. The model does not act on that
+knowledge, though: it hallucinates more, not less. Its memory-free
+certificates (100% of tokens) are trivial, because every memory gate was
+closed and frozen. This exposed a design bug: `clamp(v, 0, 1)` has zero
+gradient once saturated, so the gates freeze at 0 or 1, depending on the
+initialization. The fix is a straight-through gradient: the forward value is
+unchanged, so exact zeros and the certificates stay exact, and the gradient is
+1 for every gate. Glassbox-3 is the attempt to make the model act on what it
+knows.
+
 **Glassbox-3: epistemic uncertainty that shapes what the model says**
 (`vt/glassbox3.py`). The memory and provenance checks depend on what the model
 happened to store, and that is brittle for a general chatbot. Glassbox-3 adds
