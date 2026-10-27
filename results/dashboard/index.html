@@ -82,6 +82,23 @@
     </section>
   </div>
 
+  <section class="gx-card" id="kaggle">
+    <h2>Retrofitted Qwen2.5-1.5B on a Kaggle GPU</h2>
+    <p class="gx-note">The untouched base model against the tuned one (LoRA, self-checked abstention, made-up-name training, confidence head k). Accuracy counts a correct answer, or a refusal where refusing is right. AUROC columns flag wrong TriviaQA answers.</p>
+    <p class="gx-note" id="gx-kaggle-wait" hidden>The run is still training. Results appear here when it finishes.</p>
+    <div class="gx-tablebox">
+      <table data-source="kaggle" data-row-key="key" id="gx-kaggle">
+        <thead><tr>
+          <th data-field="model">Model</th><th data-field="set">Questions</th><th data-field="accuracy" class="num">Accuracy</th>
+          <th data-field="hallucination" class="num">Hallucination</th><th data-field="abstention" class="num">Abstained</th>
+          <th data-field="auroc_softmax" class="num">Softmax confidence</th><th data-field="auroc_k" class="num">Built-in k</th>
+          <th data-field="auroc_probe" class="num">Post-hoc probe</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
   <section class="gx-card" id="chat">
     <h2>Chat models on held-out text</h2>
     <p class="gx-note">Matched-size glass-box and GPT trained on Alpaca, WikiText-2 and the fact world. AUROC columns detect "top prediction wrong" per token.</p>
@@ -128,9 +145,9 @@
       const bar = document.createElement('div'); bar.className = 'gx-bar'; bar.dataset.s = d.status;
       const fill = document.createElement('span'); fill.style.width = `${Math.round(100 * (d.progress ?? 0))}%`; bar.append(fill);
       const wrapP = document.createElement('div'); wrapP.style.cssText = 'display:flex;gap:var(--cds-gap-xs);align-items:center';
-      const lab = document.createElement('span'); lab.textContent = pct(d.progress ?? 0); lab.style.fontSize = 'var(--cds-font-size-caption)';
+      const lab = document.createElement('span'); lab.textContent = d.progress === null ? 'on GPU' : pct(d.progress); lab.style.fontSize = 'var(--cds-font-size-caption)';
       wrapP.append(bar, lab); cell().append(wrapP);
-      cell(int(d.step), 'num');
+      cell(d.step === null ? '—' : int(d.step), 'num');
       cell(d.last_loss === null ? '—' : f2(d.last_loss), 'num');
       cell(d.note);
       return tr;
@@ -269,6 +286,26 @@
         tip.style.left = `${Math.max(0, left)}px`; tip.style.top = `${(y(r.run) / H) * el.clientHeight - 30}px`;
       })
       .on('mouseleave', () => { tip.hidden = true; });
+  });
+</script>
+
+<script>
+  const { num: n6, f2: f26, pct: pct6 } = window.gxShared;
+  dash.onData(() => {
+    const k = dash.data('kaggle');
+    const body = document.querySelector('#gx-kaggle tbody');
+    const wait = document.getElementById('gx-kaggle-wait');
+    if (k.status !== 'ok') { body.replaceChildren(); return; }
+    wait.hidden = k.data.length > 0;
+    const show = (v, f) => (v === null || v === undefined ? '—' : f(n6(v)));
+    body.replaceChildren(...k.data.map((d) => {
+      const tr = document.createElement('tr'); tr.dataset.key = d.key;
+      const cell = (text, cls) => { const td = document.createElement('td'); if (cls) td.className = cls; td.textContent = text; tr.append(td); };
+      cell(d.model); cell(d.set); cell(show(d.accuracy, pct6), 'num'); cell(show(d.hallucination, pct6), 'num');
+      cell(show(d.abstention, pct6), 'num'); cell(show(d.auroc_softmax, f26), 'num'); cell(show(d.auroc_k, f26), 'num');
+      cell(show(d.auroc_probe, f26), 'num');
+      return tr;
+    }));
   });
 </script>
 

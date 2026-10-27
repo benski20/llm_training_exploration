@@ -18,7 +18,7 @@ import sys
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 DIR = os.path.join(ROOT, "results", "dashboard")
 STATE = os.path.join(DIR, "state.json")
-FILES = ["runs", "curves", "behaviour", "detection", "chat"]
+FILES = ["runs", "curves", "behaviour", "detection", "chat", "kaggle"]
 
 
 def sha(path):

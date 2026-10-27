@@ -79,6 +79,45 @@ def running(log):
                for line in ps.splitlines())
 
 
+KAGGLE_LOG = "results/kaggle/launch.log"
+KAGGLE_RESULTS = "results/kaggle/verifiable-chat-retrofit/results.json"
+
+
+def kaggle_rows():
+    """The Kaggle GPU retrofit: its status from the launcher's log, and its results once downloaded."""
+    log = os.path.join(ROOT, KAGGLE_LOG)
+    res = os.path.join(ROOT, KAGGLE_RESULTS)
+    if not os.path.exists(log):
+        return None, []
+    text = open(log).read()
+    lines = [ln for ln in text.splitlines() if "status" in ln]
+    last = lines[-1] if lines else ""
+    if os.path.exists(res):
+        status = "done"
+    elif "did not complete" in text or "ERROR" in last or "CANCEL" in last:
+        status = "stopped"
+    else:
+        status = "running"
+    run = {"run": "kaggle-retrofit", "experiment": "kaggle", "title": "Kaggle retrofit: Qwen2.5-1.5B",
+           "model": "qwen-retrofit", "status": status, "step": None, "total_steps": None,
+           "progress": 1.0 if status == "done" else None, "last_loss": None,
+           "note": "LoRA + self-knowledge on a Kaggle T4 GPU" + (f" ({last.split()[0]} UTC check)" if last else "")}
+    rows = []
+    if os.path.exists(res):
+        r = json.load(open(res))
+        for model in ("base", "tuned"):
+            for sname, label in (("trivia", "TriviaQA"), ("fictitious_absent", "Made-up names"),
+                                 ("fictitious_in_context", "Made-up names, fact given")):
+                d = r.get(model, {}).get(sname)
+                if not d:
+                    continue
+                rows.append({"key": f"{model}/{sname}", "model": "Base" if model == "base" else "Tuned",
+                             "set": label, "accuracy": d.get("accuracy"), "hallucination": d.get("hallucination_rate"),
+                             "abstention": d.get("abstention_rate"), "auroc_softmax": d.get("auroc_softmax"),
+                             "auroc_k": d.get("auroc_k_mean"), "auroc_probe": d.get("auroc_probe_last_layer")})
+    return run, rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/dashboard")
@@ -131,12 +170,15 @@ def main():
                 if key in r.get("auroc", {}):
                     detection.append({"run": run_id, "experiment": exp, "model": model, "split": name,
                                       "readout": label, "auroc": r["auroc"][key]})
+    krun, kaggle = kaggle_rows()
+    if krun:
+        runs.append(krun)
     for name, rows in (("runs", runs), ("curves", curves), ("behaviour", behaviour), ("detection", detection),
-                       ("chat", chat)):
+                       ("chat", chat), ("kaggle", kaggle)):
         json.dump(rows, open(os.path.join(out, f"{name}.json"), "w"), indent=0)
     json.dump({"exported_at": now}, open(os.path.join(out, "exported_at.json"), "w"))
     print(json.dumps({"exported_at": now, "runs": len(runs), "curves": len(curves), "behaviour": len(behaviour),
-                      "detection": len(detection), "chat": len(chat)}))
+                      "detection": len(detection), "chat": len(chat), "kaggle": len(kaggle)}))
 
 
 if __name__ == "__main__":

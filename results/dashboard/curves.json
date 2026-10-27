@@ -1127,6 +1127,20 @@
 "qa_loss": null
 },
 {
+"run": "chat2-glassbox",
+"title": "Chat v2 glass-box",
+"step": 2000,
+"loss": 3.2988,
+"qa_loss": null
+},
+{
+"run": "chat2-glassbox",
+"title": "Chat v2 glass-box",
+"step": 2250,
+"loss": 3.2114,
+"qa_loss": null
+},
+{
 "run": "chat2-baseline",
 "title": "Chat v2 GPT baseline",
 "step": 250,
@@ -1145,6 +1159,20 @@
 "title": "Chat v2 GPT baseline",
 "step": 750,
 "loss": 3.4139,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 1000,
+"loss": 3.4213,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 1250,
+"loss": 3.1183,
 "qa_loss": null
 }
 ]
