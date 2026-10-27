@@ -40,7 +40,7 @@
 "auroc_k": null
 },
 {
-"model": "glassbox-2",
+"model": "glassbox-chat2",
 "name": "Glass-box v2",
 "split": "Alpaca",
 "bits_per_token": 5.59699727303781,
@@ -50,7 +50,7 @@
 "auroc_k": 0.7367263788327779
 },
 {
-"model": "glassbox-2",
+"model": "glassbox-chat2",
 "name": "Glass-box v2",
 "split": "WikiText-2",
 "bits_per_token": 5.72265168539872,
@@ -60,7 +60,7 @@
 "auroc_k": 0.7762117659162004
 },
 {
-"model": "glassbox2-2",
+"model": "glassbox2-g2",
 "name": "Glassbox-2",
 "split": "Alpaca",
 "bits_per_token": 5.465378719958524,
@@ -70,7 +70,7 @@
 "auroc_k": 0.738534400607264
 },
 {
-"model": "glassbox2-2",
+"model": "glassbox2-g2",
 "name": "Glassbox-2",
 "split": "WikiText-2",
 "bits_per_token": 5.637271001617523,
@@ -80,8 +80,8 @@
 "auroc_k": 0.781200790578002
 },
 {
-"model": "glassbox2-1",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.1",
+"name": "Glassbox-2.1",
 "split": "Alpaca",
 "bits_per_token": 5.2364305876684005,
 "top1_acc": 0.31057007125890734,
@@ -90,8 +90,8 @@
 "auroc_k": 0.7512673568796733
 },
 {
-"model": "glassbox2-1",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.1",
+"name": "Glassbox-2.1",
 "split": "WikiText-2",
 "bits_per_token": 5.473272342013572,
 "top1_acc": 0.3024958109180704,
@@ -100,7 +100,7 @@
 "auroc_k": 0.7871258782941676
 },
 {
-"model": "glassbox3-3",
+"model": "glassbox3-g3",
 "name": "Glassbox-3",
 "split": "Alpaca",
 "bits_per_token": 5.808739179204654,
@@ -110,7 +110,7 @@
 "auroc_k": 0.7249661015589272
 },
 {
-"model": "glassbox3-3",
+"model": "glassbox3-g3",
 "name": "Glassbox-3",
 "split": "WikiText-2",
 "bits_per_token": 5.861678955233796,
@@ -120,8 +120,8 @@
 "auroc_k": 0.7673569257301301
 },
 {
-"model": "glassbox2-2",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.2",
+"name": "Glassbox-2.2",
 "split": "Alpaca",
 "bits_per_token": 5.242364383503756,
 "top1_acc": 0.3150922711492783,
@@ -130,8 +130,8 @@
 "auroc_k": 0.7550057135060461
 },
 {
-"model": "glassbox2-2",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.2",
+"name": "Glassbox-2.2",
 "split": "WikiText-2",
 "bits_per_token": 5.480243531833738,
 "top1_acc": 0.30575888526325073,
@@ -140,8 +140,8 @@
 "auroc_k": 0.7895721689811721
 },
 {
-"model": "glassbox2-3",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.3",
+"name": "Glassbox-2.3",
 "split": "Alpaca",
 "bits_per_token": 5.073001574709787,
 "top1_acc": 0.3302119495706194,
@@ -150,8 +150,8 @@
 "auroc_k": 0.7507722326021589
 },
 {
-"model": "glassbox2-3",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.3",
+"name": "Glassbox-2.3",
 "split": "WikiText-2",
 "bits_per_token": 5.4237155363211995,
 "top1_acc": 0.3097715847958374,
@@ -160,8 +160,8 @@
 "auroc_k": 0.7834147377294906
 },
 {
-"model": "glassbox2-4",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.4",
+"name": "Glassbox-2.4",
 "split": "Alpaca",
 "bits_per_token": 5.2057927517276,
 "top1_acc": 0.316142883245021,
@@ -170,8 +170,8 @@
 "auroc_k": 0.7423857776530074
 },
 {
-"model": "glassbox2-4",
-"name": "Glassbox-2",
+"model": "glassbox2-g2.4",
+"name": "Glassbox-2.4",
 "split": "WikiText-2",
 "bits_per_token": 5.508655192361052,
 "top1_acc": 0.30134932533733133,
@@ -180,7 +180,7 @@
 "auroc_k": 0.7797763451184903
 },
 {
-"model": "baseline-2",
+"model": "baseline-chat2",
 "name": "GPT v2",
 "split": "Alpaca",
 "bits_per_token": 4.985180504674769,
@@ -190,7 +190,7 @@
 "auroc_k": null
 },
 {
-"model": "baseline-2",
+"model": "baseline-chat2",
 "name": "GPT v2",
 "split": "WikiText-2",
 "bits_per_token": 5.302717366352521,

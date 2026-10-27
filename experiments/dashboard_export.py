@@ -66,6 +66,10 @@ RUNS = [
     ("g2.4", "Glassbox-2.4: in-model feature reconstruction (SAE) objective", "results/glassbox2_4_chat/glassbox2.log",
      "results/glassbox2_4_chat/glassbox2.json", "glassbox2", 3000,
      "2.3 plus a train-only readout: features must reconstruct their own input"),
+    ("g2.4s1", "Glassbox-2.4, seed 1 (replicate)", "results/glassbox2_4_s1_chat/glassbox2.log",
+     "results/glassbox2_4_s1_chat/glassbox2.json", "glassbox2", 3000, "is the hallucination gain real?"),
+    ("gpt-s1", "GPT baseline, seed 1 (replicate)", "results/baseline_s1_chat/baseline.log",
+     "results/baseline_s1_chat/baseline.json", "baseline", 3000, "second seed of the matched GPT"),
     ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
      "baseline", 3000, "same chat data for the matched GPT"),
 ]
@@ -208,12 +212,13 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp in ("chat", "chat2", "chat3", "g2", "g2.1", "g2.2", "g2.3", "g2.4", "g3"):
+        if exp in ("chat", "chat2", "chat3", "g2", "g2.1", "g2.2", "g2.3", "g2.4", "g2.4s1", "gpt-s1", "g3"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
-                chat.append({"model": model if exp == "chat" else f"{model}-{exp[-1]}",
+                chat.append({"model": model if exp == "chat" else f"{model}-{exp}",
                              "name": {"glassbox": "Glass-box", "glassbox2": "Glassbox-2", "glassbox3": "Glassbox-3"}.get(model, "GPT")
-                             + {"chat2": " v2", "chat3": " v3"}.get(exp, ""),
+                             + {"chat2": " v2", "chat3": " v3", "g2.1": ".1", "g2.2": ".2", "g2.3": ".3", "g2.4": ".4",
+                                "g2.4s1": ".4 seed 1", "gpt-s1": " seed 1"}.get(exp, ""),
                              "split": name,
                              "bits_per_token": r["bits_per_token"],
                              "top1_acc": r["top1_acc"], "auroc_msp": r["auroc_msp"], "auroc_probe": r["auroc_probe"],

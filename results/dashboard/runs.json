@@ -264,6 +264,30 @@
 "note": "2.3 plus a train-only readout: features must reconstruct their own input"
 },
 {
+"run": "g2.4s1-glassbox2",
+"experiment": "g2.4s1",
+"title": "Glassbox-2.4, seed 1 (replicate)",
+"model": "glassbox2",
+"status": "running",
+"step": 1000,
+"total_steps": 3000,
+"progress": 0.33366666666666667,
+"last_loss": 3.5094,
+"note": "is the hallucination gain real?"
+},
+{
+"run": "gpt-s1-baseline",
+"experiment": "gpt-s1",
+"title": "GPT baseline, seed 1 (replicate)",
+"model": "baseline",
+"status": "running",
+"step": 1250,
+"total_steps": 3000,
+"progress": 0.417,
+"last_loss": 3.1286,
+"note": "second seed of the matched GPT"
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "title": "Chat v2 GPT baseline",
@@ -321,7 +345,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (12:51:04 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (13:20:32 UTC check)"
+},
+{
+"run": "kaggle-distill-g24",
+"experiment": "kaggle",
+"title": "Kaggle: Glassbox-2.4 student (in-model SAE objective), best checkpoint",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "146M Glassbox-2.4; compared with the final run's GPT student (13:22:58 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
