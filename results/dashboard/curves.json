@@ -1295,6 +1295,76 @@
 "qa_loss": null
 },
 {
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 250,
+"loss": 4.9258,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 500,
+"loss": 3.9537,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 750,
+"loss": 3.5964,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 1000,
+"loss": 3.5583,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 1250,
+"loss": 3.2376,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 1500,
+"loss": 3.284,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 1750,
+"loss": 3.208,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 2000,
+"loss": 3.1364,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 2250,
+"loss": 3.0439,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 2500,
+"loss": 2.9951,
+"qa_loss": null
+},
+{
 "run": "chat2-baseline",
 "title": "Chat v2 GPT baseline",
 "step": 250,

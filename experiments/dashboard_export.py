@@ -132,6 +132,34 @@ def kaggle_rows():
     return run, rows
 
 
+# id, title, launcher log, result file (present once downloaded), note
+DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)", "results/kaggle/distill_data.log",
+            "results/kaggle/glassbox-distill/data/stats.json", "chat replies, TriviaQA self-check, made-up names; tokenizer"),
+           ("kaggle-distill-train", "Kaggle kernel 2: Glassbox-3 vs GPT students", "results/kaggle/distill_train.log",
+            "results/kaggle/glassbox-distill/glassbox3.json", "students trained from scratch on the teacher data")]
+
+
+def distill_rows():
+    rows = []
+    for rid, title, log, res, note in DISTILL:
+        lp = os.path.join(ROOT, log)
+        if not os.path.exists(lp):
+            continue
+        text = open(lp).read()
+        st = [ln for ln in text.splitlines() if "has status" in ln]
+        last = st[-1] if st else ""
+        if os.path.exists(os.path.join(ROOT, res)) or "COMPLETE" in last:
+            status = "done"
+        elif "ERROR" in last or "CANCEL" in last or "did not complete" in text:
+            status = "stopped"
+        else:
+            status = "running"
+        rows.append({"run": rid, "experiment": "kaggle", "title": title, "model": "kaggle", "status": status,
+                     "step": None, "total_steps": None, "progress": 1.0 if status == "done" else None,
+                     "last_loss": None, "note": note + (f" ({last.split()[0]} UTC check)" if last else "")})
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/dashboard")
@@ -198,6 +226,7 @@ def main():
     krun, kaggle = kaggle_rows()
     if krun:
         runs.append(krun)
+    runs += distill_rows()
     for name, rows in (("runs", runs), ("curves", curves), ("behaviour", behaviour), ("detection", detection),
                        ("chat", chat), ("kaggle", kaggle)):
         json.dump(rows, open(os.path.join(out, f"{name}.json"), "w"), indent=0)
