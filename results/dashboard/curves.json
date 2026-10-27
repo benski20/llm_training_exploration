@@ -1743,6 +1743,20 @@
 "qa_loss": null
 },
 {
+"run": "g2.4s1-glassbox2",
+"title": "Glassbox-2.4, seed 1 (replicate)",
+"step": 1250,
+"loss": 3.1995,
+"qa_loss": null
+},
+{
+"run": "g2.4s1-glassbox2",
+"title": "Glassbox-2.4, seed 1 (replicate)",
+"step": 1500,
+"loss": 3.2142,
+"qa_loss": null
+},
+{
 "run": "gpt-s1-baseline",
 "title": "GPT baseline, seed 1 (replicate)",
 "step": 250,
@@ -1775,6 +1789,34 @@
 "title": "GPT baseline, seed 1 (replicate)",
 "step": 1250,
 "loss": 3.1286,
+"qa_loss": null
+},
+{
+"run": "gpt-s1-baseline",
+"title": "GPT baseline, seed 1 (replicate)",
+"step": 1500,
+"loss": 3.1671,
+"qa_loss": null
+},
+{
+"run": "gpt-s1-baseline",
+"title": "GPT baseline, seed 1 (replicate)",
+"step": 1750,
+"loss": 3.0611,
+"qa_loss": null
+},
+{
+"run": "gpt-s1-baseline",
+"title": "GPT baseline, seed 1 (replicate)",
+"step": 2000,
+"loss": 2.9558,
+"qa_loss": null
+},
+{
+"run": "gpt-s1-baseline",
+"title": "GPT baseline, seed 1 (replicate)",
+"step": 2250,
+"loss": 2.9264,
 "qa_loss": null
 },
 {

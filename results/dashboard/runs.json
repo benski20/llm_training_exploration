@@ -269,10 +269,10 @@
 "title": "Glassbox-2.4, seed 1 (replicate)",
 "model": "glassbox2",
 "status": "running",
-"step": 1000,
+"step": 1500,
 "total_steps": 3000,
-"progress": 0.33366666666666667,
-"last_loss": 3.5094,
+"progress": 0.5003333333333333,
+"last_loss": 3.2142,
 "note": "is the hallucination gain real?"
 },
 {
@@ -281,10 +281,10 @@
 "title": "GPT baseline, seed 1 (replicate)",
 "model": "baseline",
 "status": "running",
-"step": 1250,
+"step": 2250,
 "total_steps": 3000,
-"progress": 0.417,
-"last_loss": 3.1286,
+"progress": 0.7503333333333333,
+"last_loss": 2.9264,
 "note": "second seed of the matched GPT"
 },
 {
@@ -345,7 +345,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (13:20:32 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (13:38:40 UTC check)"
 },
 {
 "run": "kaggle-distill-g24",
@@ -357,7 +357,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "146M Glassbox-2.4; compared with the final run's GPT student (13:22:58 UTC check)"
+"note": "146M Glassbox-2.4; compared with the final run's GPT student (13:38:06 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
