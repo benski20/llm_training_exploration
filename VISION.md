@@ -550,6 +550,11 @@ were no certificate soundness violations. Neither model knows trivia at this
 size and data, and neither has a signal that can release answers under an
 error bound. On this data the GPT abstains more, hallucinates less and uses
 given facts better: the CPU context-use advantage of 2.3 did not carry over.
+Its built-in features are also less token-specific than at CPU scale. Median
+purity is 0.30 / 0.25 (middle / last layer, 4,096 features) against 0.45-0.55
+on CPU, with 7-9% of units at purity >= 0.8
+(`experiments/package_features.py`, 60k local tokens). Whether the in-model
+SAE objective (2.4) rescues this at scale is what the next run tests.
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
