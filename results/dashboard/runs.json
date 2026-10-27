@@ -309,7 +309,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "both fixes; the debug run showed both students learning at full size (10:28:31 UTC check)"
+"note": "both fixes; the debug run showed both students learning at full size (10:46:38 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -321,6 +321,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (10:29:04 UTC check)"
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (10:46:50 UTC check)"
 }
 ]
