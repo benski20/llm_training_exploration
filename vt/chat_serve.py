@@ -38,6 +38,8 @@ from .serve import HardenedHandler, bounded_server
 
 FILES = ("weights.pt", "config.json", "tokenizer.json")
 ABSTAIN_MARKERS = ("don't know", "not sure", "no information")
+REFUSAL_MARKERS = ABSTAIN_MARKERS + ("does not exist", "did not exist", "doesn't exist", "no such", "fictional",
+                                     "not aware of", "i cannot", "i can't", "unable to")
 MAX_MESSAGE_CHARS = 2000
 MAX_HISTORY_TURNS = 8
 MAX_NEW_TOKENS = 128
@@ -284,6 +286,11 @@ class CorrectnessResponder:
     def reply(self, message, history=(), max_new_tokens=64, threshold=None):
         r = self.head.answer(self.model, self.tok, message)
         th = self.threshold if threshold is None else threshold
+        if any(m in r["reply"].lower() for m in REFUSAL_MARKERS):     # the model itself declines: the
+            return {"text": r["reply"], "answer": None, "p_correct": None, "threshold": th,   # head judges
+                    "answer_withheld": False, "abstained": True,                          # answers only
+                    "evidence": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in r["evidence"].items()},
+                    "tokens": [], "low_confidence_spans": []}
         withheld = r["p_correct"] < th
         text = (f"I'm not sure. My best guess is: {r['reply']}" if withheld else r["reply"])
         return {"text": text, "answer": r["reply"], "p_correct": round(r["p_correct"], 4), "threshold": th,

@@ -157,6 +157,9 @@ def test_correctness_backend_withholds_below_threshold(tmp_path):
     assert 0 <= out["p_correct"] <= 1 and out["answer_withheld"] and out["text"].startswith("I'm not sure")
     assert "probe_logit" in out["evidence"] and "entity_p" in out["evidence"]
     assert not r.reply("Who wrote Hamlet?", threshold=0.0)["answer_withheld"]
+    r.head.answer = lambda *a_: {"reply": "That country does not exist.", "p_correct": 0.1, "evidence": {}}
+    ref = r.reply("Who ruled Zanthoria?")                    # a refusal is passed through, not judged
+    assert ref["abstained"] and not ref["answer_withheld"] and ref["p_correct"] is None
     with open(d / "correctness_heads.pt", "ab") as f:
         f.write(b"x")
     with pytest.raises(PackageError):

@@ -231,7 +231,8 @@ def cmd_chat(a):
         return 0
     print(r["text"])
     if "p_correct" in r:                                  # a correctness-head package
-        print(f"[P(correct) {r['p_correct']:.2f}; evidence: {json.dumps(r['evidence'])}]")
+        pc = "n/a (the model declined)" if r["p_correct"] is None else f"{r['p_correct']:.2f}"
+        print(f"[P(correct) {pc}; evidence: {json.dumps(r['evidence'])}]")
         return 0
     flagged = ", ".join(repr(s["text"].strip()) for s in r["low_confidence_spans"]) or "none"
     print(f"[min confidence {r.get('min_confidence', 1):.2f}; low-confidence spans: {flagged}; "

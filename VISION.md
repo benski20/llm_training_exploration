@@ -763,9 +763,11 @@ reply on CPU:
 All four wrong or unanswerable questions are withheld, and both right answers
 are released. The Lloyd Webber case shows the internals catching an error
 the output probability would pass: the model is 64% sure of its first token,
-but the hidden-state probe reads it as a guess. One rough edge: the made-up
-country gets a correct refusal ("did not exist") that is still withheld,
-because the head was trained to judge answers, not refusals.
+but the hidden-state probe reads it as a guess. One rough edge, now fixed: the made-up
+country got a correct refusal ("did not exist") that was still withheld,
+because the head was trained to judge answers, not refusals. The responder
+now passes the model's own refusals through as abstentions, with no
+P(correct).
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
