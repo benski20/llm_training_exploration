@@ -2,12 +2,14 @@
 # Glassbox-2 distillation on Kaggle GPUs: kernel 1 (teacher data), then kernel 2 (students).
 #   KAGGLE_API_TOKEN=... KAGGLE_USERNAME=... bash kaggle/distill/launch.sh
 # DATA_HOURS / STUDENT_HOURS set the time budgets; SKIP_DATA=1 reuses an existing kernel 1 output.
+# TRAIN_SLUG / MODELS / OUT pick the student kernel's name, its students and the local output directory.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 : "${KAGGLE_API_TOKEN:?set KAGGLE_API_TOKEN}"; : "${KAGGLE_USERNAME:?set KAGGLE_USERNAME}"
 U=$KAGGLE_USERNAME
 DATA_HOURS=${DATA_HOURS:-2.0}; STUDENT_HOURS=${STUDENT_HOURS:-9.0}
-OUT=results/kaggle/glassbox-distill
+TRAIN_SLUG=${TRAIN_SLUG:-glassbox-distill-train}; MODELS=${MODELS:-glassbox,baseline}
+OUT=${OUT:-results/kaggle/glassbox-distill}
 
 wait_for() {
   while true; do
@@ -41,9 +43,9 @@ if [ "${DATA_ONLY:-0}" = 1 ]; then
   echo "data kernel done"; exit 0
 fi
 python3 kaggle/distill/bundle.py "$S2/train_student.py" kaggle/distill/train_student.py --data /kaggle/input \
-    --hours "$STUDENT_HOURS"
-push "$S2" glassbox-distill-train "Glassbox distill train" train_student.py "[\"$U/glassbox-distill-data\"]"
-wait_for "$U/glassbox-distill-train" || true
+    --hours "$STUDENT_HOURS" --models "$MODELS"
+push "$S2" "$TRAIN_SLUG" "$TRAIN_SLUG" train_student.py "[\"$U/glassbox-distill-data\"]"
+wait_for "$U/$TRAIN_SLUG" || true
 mkdir -p "$OUT"
-kaggle kernels output "$U/glassbox-distill-train" -p "$OUT" --force --file-pattern '(\.json|\.log)$'
+kaggle kernels output "$U/$TRAIN_SLUG" -p "$OUT" --force --file-pattern '(\.json|\.log)$'
 echo "outputs in $OUT"

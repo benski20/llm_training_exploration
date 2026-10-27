@@ -141,8 +141,11 @@ def kaggle_rows():
 # id, title, launcher log, result file (present once downloaded), note
 DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)", "results/kaggle/distill_data.log",
             "results/kaggle/glassbox-distill/data/distill/stats.json", "chat replies, TriviaQA self-check, made-up names; tokenizer"),
-           ("kaggle-distill-train", "Kaggle kernel 2: Glassbox-3 vs GPT students", "results/kaggle/distill_train.log",
-            "results/kaggle/glassbox-distill/glassbox3.json", "students trained from scratch on the teacher data")]
+           ("kaggle-distill-train", "Kaggle kernel 2: Glassbox-2 vs GPT students", "results/kaggle/distill_train.log",
+            "results/kaggle/glassbox-distill/glassbox.json", "students trained from scratch on the teacher data"),
+           ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
+            "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/glassbox.json",
+            "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
 
 
 def distill_rows():

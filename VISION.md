@@ -418,6 +418,11 @@ certificate soundness). Changing only this:
 | over-refusal | 17% | 16% | 16% |
 | best built-in error detector (AUROC) | 0.849 (probe) | **0.920** | 0.805 |
 
+On 1,500 new questions (95% intervals), Glassbox-2.3 against the GPT:
+hallucination 73% [68-78] vs 75% on unstated facts and 10% [7-14] vs 4% on
+made-up names; over-refusal 13% vs 13%; given facts answered 24% [20-29] vs
+16% [12-21].
+
 The exactly attributable model is now within 2% of the GPT on language. It
 uses facts given in the message better than the GPT does. Error detection
 fell below the GPT's probe, so part of the earlier detection gain came from
