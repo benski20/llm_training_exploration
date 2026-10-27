@@ -381,6 +381,26 @@ answers at chance (AUROC about 0.5). Diagnosis:
   residual stream, a phantom training signal on every token. It is fixed:
   saturated gates now update only their own weights.
 
+**Selective answering** (`experiments/selective_answering.py`). A reply is
+withheld when the model's own signal falls below a threshold. The threshold
+is calibrated on separate questions with over-refusal capped at 27%, and the
+GPT gets the same rule with each of its own signals. The rule barely helps
+either model:
+
+| | hallucination (unstated facts) | made-up names | over-refusal (test) |
+|---|---|---|---|
+| GPT, no rule / post-hoc probe | 70% / 60% | 5% / 5% | 17% / 28% |
+| Glassbox-2.1, no rule / built-in k_min | 80% / 70% | 23% / 13% | 18% / 36% |
+
+At 8M parameters the glass-box models answer about 1% of the answerable
+questions (the GPT 11%), so a signal has little real knowledge to separate
+from guessing. A high AUROC does not change that. This question needs models
+that know things. That is the Kaggle run: Glassbox-2 (with the fixed gate)
+against a GPT student, on 28,672 replies from Qwen2.5-1.5B-Instruct plus
+6,000 made-up-name items, 4 GPU-hours each. It is evaluated on TriviaQA
+(accuracy, hallucination, error-bounded release of answers by each signal)
+and on made-up names.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
