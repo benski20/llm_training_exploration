@@ -597,7 +597,7 @@ def respond(model, tok, prompt, block, max_new=24):
                      unsure_emitted=any(i >= V for i in ids[P:]))
     if "free" in ro:                                # every reply token provably made without memory
         feats["reply_memory_free"] = bool(all(bool(ro["free"][0, t]) for t in span))
-        feats["ids"] = x
+    feats["ids"] = x
     text = dec(ids[P:]).split("\n")[0]
     return ("<unsure>" + text if any(i >= V for i in ids[P:]) else text), feats
 
