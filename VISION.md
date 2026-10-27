@@ -303,6 +303,41 @@ The thesis "design for interpretability, get more accurate hallucination
 detection" is **not supported** by these experiments. The memory-as-knowledge
 store and the mechanistic diagnoses are the parts worth carrying forward.
 
+**Glassbox-3: epistemic uncertainty that shapes what the model says**
+(`vt/glassbox3.py`). The memory and provenance checks depend on what the model
+happened to store, and that is brittle for a general chatbot. Glassbox-3 adds
+a mechanism that needs no store and no labels about which facts are known:
+
+* **Epinet** (Osband et al.). A small network reads the final features, with
+  the gradient stopped, plus a random index z. It adds a fixed random prior
+  network that is linear in z. Trained to predict the next token, its learnt
+  part cancels the prior where the data constrains the prediction. Where the
+  data does not, the prior survives and predictions differ across z. The
+  epistemic uncertainty u is the mutual information between the next token
+  and z, computed over a fixed set of indices, so u is deterministic. The base
+  model, and its exact attribution, are untouched.
+* **Uncertainty in the output, by construction.** u raises the logit of a
+  dedicated `<unsure>` token by an explicit term `softplus(c)·u`. It also lowers
+  the commitment k that sets the sharpness of every next-token distribution.
+  A sharp, committed token therefore requires low epistemic uncertainty. That
+  is a property of the architecture, not of a detector fitted afterwards.
+* **Self-consistency replay.** During training the model samples several
+  answers to factual prompts. Where its own answers disagree, it is trained to
+  answer `<unsure>` plus a hedge. The supervision comes from the model's
+  disagreement, not from labels.
+* **Feature novelty.** Hashed counts of which exactly-sparse features fire
+  together in training. Rare co-activation at inference is a label-free
+  "unfamiliar territory" signal, and it names the features involved.
+
+Pre-registered tests for the CPU pilot (same chat-v2 data, against the GPT's
+70% / 5% hallucination and 16.7% over-refusal):
+
+* hallucination below half the GPT's, on both unstated facts and made-up names;
+* over-refusal within about 10 points of the GPT's;
+* u (or `<unsure>`) flags wrong answers better than the GPT's post-hoc probe
+  (0.85);
+* language within about 10% of the GPT (at most 5.48 bits per token).
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
