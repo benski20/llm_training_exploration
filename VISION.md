@@ -521,10 +521,20 @@ On 1,500 new questions (95% intervals), Glassbox-2.4 against the GPT:
 hallucination on unstated facts 64% [58-69] vs 75% [70-80]; on made-up names
 6% [4-10] vs 4% [2-6]; over-refusal 13% vs 13%; facts given in the message
 answered 37% [31-42] vs 16% [12-21]. On held-out relations: 54% vs 65% and
-17% vs 25%. This is the first glass-box model whose hallucination advantage
-exceeds the evaluation noise, at the same over-refusal. It is one training
-run per model, and 2.1 and 2.2 showed that small changes can move these
-numbers a lot. Second seeds of both models are being trained to check.
+17% vs 25%. A second seed of each model did not reproduce the hallucination gap:
+
+| | GPT seed 0 / 1 | Glassbox-2.4 seed 0 / 1 |
+|---|---|---|
+| hallucination, unstated facts | 75% / 74% | 64% / 71% |
+| hallucination, made-up names | 4% / 5% | 6% / 9% |
+| over-refusal | 13% / 10% | 13% / 12% |
+| fact given in the message, answered | 16% / 22% | **37% / 30%** |
+| bits per token | 4.985 / 4.98 | 5.206 / 5.214 |
+
+The hallucination advantage on unstated facts is at most about 7 points on
+average. That is the same size as the seed-to-seed spread, so it is not
+robust. Better use of facts given in the message does replicate. Glassbox-2.4
+is slightly worse on made-up names. The language cost is a steady +4.5%.
 
 The built-in features now match post-hoc SAE latents on this measure. They are
 also the model's exact computation, where the SAE misses 7-10% of the GPT's.
