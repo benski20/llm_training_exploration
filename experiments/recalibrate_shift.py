@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--n-fit", type=int, default=200)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--out", default="results/recalibrate_shift.json")
+    ap.add_argument("--partial", default="results/recalibrate_shift_rows.json", help="per-question rows, resumable")
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
     from datasets import load_dataset
@@ -42,11 +43,16 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=torch.float32, attn_implementation="eager").eval()
     head = CorrectnessHead.from_state(torch.load(a.heads, weights_only=True)[a.variant])
     nq = load_dataset("google-research-datasets/nq_open", split="validation").select(range(a.n))
-    rows, t0 = [], time.time()
+    rows = json.load(open(a.partial)) if os.path.exists(a.partial) else []      # resume after a restart
+    t0 = time.time()
     for i, x in enumerate(nq):
+        if i < len(rows):
+            continue
         q = x["question"][0].upper() + x["question"][1:] + "?"
         r = head.answer(model, tok, q)
         rows.append({"q": q, "reply": r["reply"], "right": is_right(r["reply"], x["answer"]), "z": r["logit"]})
+        if (i + 1) % 10 == 0:
+            json.dump(rows, open(a.partial, "w"))
         if (i + 1) % 25 == 0:
             print(json.dumps({"done": i + 1, "acc": float(np.mean([r_["right"] for r_ in rows])),
                               "s": round(time.time() - t0)}), flush=True)
