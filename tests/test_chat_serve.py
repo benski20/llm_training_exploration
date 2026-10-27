@@ -108,3 +108,24 @@ def test_hf_backend_on_a_retrofitted_checkpoint(tmp_path):
         f.write(" ")
     with pytest.raises(PackageError):
         load_responder(str(d))
+
+
+def test_glassbox3_package_reports_certificates_uncertainty_and_unsure(package, tmp_path):
+    from vt.chat_serve import export_glassbox2_package, load_responder
+    from vt.glassbox3 import G3Config, Glassbox3
+    tok_path = os.path.join(package, "tokenizer.json")
+    V = Tokenizer.from_file(tok_path).get_vocab_size()
+    cfg = dict(vocab_size=V + 1, block_size=64, n_layer=2, n_head=2, n_embd=32, n_features=64, k_active=4,
+               mem_layer=1, mem_keys=4, mem_topk=2, unsure_id=V)
+    torch.manual_seed(0)
+    m = Glassbox3(G3Config(**cfg))
+    with torch.no_grad():
+        m.c_unsure.fill_(50.0)                 # make <unsure> win wherever u > 0
+    export_glassbox2_package(m, cfg, tok_path, str(tmp_path / "g3"))
+    r = load_responder(str(tmp_path / "g3")).reply("hello", max_new_tokens=6)
+    assert r["tokens"] and r["unsure"] and r["abstained"]
+    assert r["tokens"][0]["token"] == "<unsure>"
+    for t in r["tokens"]:
+        assert 0 <= t["confidence"] <= 1 and t["u"] >= 0 and len(t["features"]) == 3
+        assert t["memory_free"] in (True, False)
+    assert r["certified_memory_free"] == all(t["memory_free"] for t in r["tokens"])

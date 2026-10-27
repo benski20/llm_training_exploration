@@ -54,6 +54,9 @@ RUNS = [
     ("g2.1", "Glassbox-2.1 pilot: memory after the last layer", "results/glassbox2_1_chat/glassbox2.log",
      "results/glassbox2_1_chat/glassbox2.json", "glassbox2", 3000,
      "a token is provably memory-free when its own gate is 0; 32 active features"),
+    ("g3", "Glassbox-3 pilot: epistemic uncertainty and <unsure>", "results/glassbox3_chat/glassbox3.log",
+     "results/glassbox3_chat/glassbox3.json", "glassbox3", 3000,
+     "epinet uncertainty raises an explicit <unsure> token; self-consistency replay"),
     ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
      "baseline", 3000, "same chat data for the matched GPT"),
 ]
@@ -159,16 +162,26 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp in ("chat", "chat2", "chat3", "g2", "g2.1"):
+        if exp in ("chat", "chat2", "chat3", "g2", "g2.1", "g3"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
                 chat.append({"model": model if exp == "chat" else f"{model}-{exp[-1]}",
-                             "name": {"glassbox": "Glass-box", "glassbox2": "Glassbox-2"}.get(model, "GPT")
+                             "name": {"glassbox": "Glass-box", "glassbox2": "Glassbox-2", "glassbox3": "Glassbox-3"}.get(model, "GPT")
                              + {"chat2": " v2", "chat3": " v3"}.get(exp, ""),
                              "split": name,
                              "bits_per_token": r["bits_per_token"],
                              "top1_acc": r["top1_acc"], "auroc_msp": r["auroc_msp"], "auroc_probe": r["auroc_probe"],
                              "auroc_k": r.get("auroc_k")})
+            for split, name in (("chat_facts", "Chat facts"), ("chat_facts_held_relations", "Chat, held-out relations")):
+                r = result.get(split)
+                if not r:
+                    continue
+                kinds = [k[:-6] for k in r if k.endswith("_right") and isinstance(r[k], float)]
+                behaviour.append({"run": run_id, "experiment": exp, "model": model, "split": name,
+                                  "accuracy": sum(r[f"{k}_right"] for k in kinds) / len(kinds),
+                                  "hallucination": r.get("hallucination_rate"),
+                                  "hallucination_fresh": r.get("hallucination_rate_fresh_names"),
+                                  "ctx_acc": r.get("ctx_right"), "mem_acc": r.get("mem_right")})
             continue
         for split, name in SPLITS.items():
             r = result.get(split)

@@ -40,9 +40,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "vtpkg"))                    # Kaggle: bundled modules
 sys.path.insert(0, os.path.join(HERE, "..", ".."))                 # repository checkout
 from vt.glassbox2 import G2Config, Glassbox2  # noqa: E402
+from vt.glassbox3 import G3Config, Glassbox3  # noqa: E402
 from vt.lm import GPT, GPTConfig  # noqa: E402
 
 ABSTAIN = ("don't know", "not sure", "no information", "do not know")
+UNSURE = 1                                   # the tokenizer's <unsure> token (kernel 1)
+GLASS = ("glassbox", "glassbox3")
+HEDGE = "I'm not sure. I don't know the answer to that."
 
 
 def log(**kw):
@@ -74,7 +78,7 @@ def load(a):
     tok = Tokenizer.from_file(os.path.join(a.data, "tokenizer.json"))
     train = [json.loads(l) for l in open(os.path.join(a.data, "train.jsonl"))]
     ev = [json.loads(l) for l in open(os.path.join(a.data, "eval.jsonl"))]
-    chat_docs = [chat_text(x["prompt"], x["response"]) for x in train]
+    chat_docs = [(f"User: {x['prompt']}\nAssistant:", " " + x["response"]) for x in train]
     if a.smoke:
         wiki = ["The cat sat on the mat. It was a sunny day in the town."] * 50
     else:
@@ -82,12 +86,23 @@ def load(a):
         w = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train")
         wiki = [x["text"] for x in w if len(x["text"]) > 80]
     def stream(docs, offset):
+        """docs: texts, or (prompt, reply) pairs; <unsure> goes before every abstaining reply
+        (only a Glassbox-3 student has a learnt use for it; for the others it is one more token)."""
         ids, doc = [], []
-        for n, enc in enumerate(tok.encode_batch(docs)):
-            ids += enc.ids + [0]
-            doc += [offset + n] * (len(enc.ids) + 1)
+        pairs = isinstance(docs[0], tuple)
+        flat = [t for d in docs for t in d] if pairs else docs
+        encs = tok.encode_batch(flat)
+        for n in range(len(docs)):
+            if pairs:
+                p, r = encs[2 * n].ids, encs[2 * n + 1].ids
+                one = p + ([UNSURE] if any(mk in docs[n][1].lower() for mk in ABSTAIN) else []) + r
+            else:
+                one = encs[n].ids
+            ids += one + [0]
+            doc += [offset + n] * (len(one) + 1)
         return torch.tensor(ids, dtype=torch.long), torch.tensor(doc, dtype=torch.long)
-    return tok, stream(chat_docs, 0), stream(wiki, 10_000_000), ev     # wiki documents: ids >= 1e7
+    sc_prompts = [x["prompt"] for x in train if x["kind"] == "trivia"]
+    return tok, stream(chat_docs, 0), stream(wiki, 10_000_000), ev, sc_prompts    # wiki documents: ids >= 1e7
 
 
 def batch(chat, wiki, bs, block, g, p_chat=0.6):
@@ -103,10 +118,13 @@ def batch(chat, wiki, bs, block, g, p_chat=0.6):
 # ---------------------------------------------------------------- models
 
 def make(kind, a, V):
-    if kind == "glassbox":
+    if kind in GLASS:
         cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
-                   n_features=a.n_features, k_active=a.k_active, mem_layer=a.layers // 2, mem_keys=a.mem_keys,
+                   n_features=a.n_features, k_active=a.k_active, mem_layer=a.layers - 1, mem_keys=a.mem_keys,
                    mem_topk=min(16, a.mem_keys))
+        if kind == "glassbox3":
+            cfg.update(unsure_id=UNSURE)
+            return Glassbox3(G3Config(**cfg)), cfg
         return Glassbox2(G2Config(**cfg)), cfg
     cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
                mlp_ratio=a.base_mlp, pos_encoding="alibi")
@@ -115,7 +133,7 @@ def make(kind, a, V):
 
 def forward(kind, m, x):
     """logits, k (or None), hidden states per block."""
-    if kind == "glassbox":
+    if kind in GLASS:
         logits, k = m(x)
         return logits, k, m.trace["hs"]
     hs = []
@@ -126,7 +144,61 @@ def forward(kind, m, x):
     return logits, None, hs
 
 
-def train(kind, a, V, chat, wiki, device, log_fn):
+def same(a, b):
+    return bool(a) and bool(b) and (a in b or b in a)
+
+
+@torch.no_grad()
+def sample_replies(m, tok, prompt, device, block, k, max_new=24):
+    """k sampled replies to one prompt (normalized text; "<unsure>" if the reply starts with it)."""
+    ids = tok.encode(f"User: {prompt}\nAssistant:").ids[-(block - max_new):]
+    x = torch.tensor([ids] * k, device=device)
+    outs, done = [[] for _ in range(k)], [False] * k
+    for _ in range(max_new):
+        lg = m(x)[0][:, -1].float()
+        nxt = torch.multinomial(F.softmax(lg, -1), 1)
+        for j in range(k):
+            t = int(nxt[j])
+            if done[j]:
+                continue
+            if t in (0, UNSURE) or "\n" in tok.decode(outs[j] + [t]):
+                done[j] = True
+                if t == UNSURE and not outs[j]:
+                    outs[j] = None
+                continue
+            outs[j].append(t)
+        if all(done):
+            break
+        x = torch.cat([x, nxt], 1)
+    return ["<unsure>" if o is None else norm(tok.decode(o)) for o in outs]
+
+
+def self_consistency_batch(m, tok, prompts, rng, a, device):
+    """Self-consistency replay: prompts whose sampled replies disagree (largest group of
+    agreeing replies below a.sc_agree of them) become training examples prompt + <unsure> + hedge.
+    No label says which prompts those are: the model's own disagreement does."""
+    m.eval()
+    seqs, P = [], []
+    for p in rng.sample(prompts, a.sc_prompts):
+        outs = sample_replies(m, tok, p, device, a.block, a.sc_k)
+        top = max(sum(same(o, q) for q in outs) for o in outs)
+        if top / len(outs) < a.sc_agree:
+            ids = tok.encode(f"User: {p}\nAssistant:").ids
+            seqs.append(ids + [UNSURE] + tok.encode(" " + HEDGE).ids + [0])
+            P.append(len(ids))
+    m.train()
+    if not seqs:
+        return None, 0.0
+    L = max(map(len, seqs))
+    x = torch.zeros(len(seqs), L - 1, dtype=torch.long)
+    y = torch.full((len(seqs), L - 1), -100, dtype=torch.long)
+    for i, (sq, p) in enumerate(zip(seqs, P)):
+        x[i, :len(sq) - 1] = torch.tensor(sq[:-1])
+        y[i, p - 1:len(sq) - 1] = torch.tensor(sq[p:])          # loss on the reply only
+    return (x.to(device), y.to(device)), len(seqs) / a.sc_prompts
+
+
+def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
     torch.manual_seed(0)
     m, cfg = make(kind, a, V)
     m.to(device)
@@ -138,6 +210,7 @@ def train(kind, a, V, chat, wiki, device, log_fn):
     t0 = time.time()
     budget = a.hours * 3600
     step, total = 0, None
+    sc_rng, sc_rate = random.Random(3), None
     while True:
         el = time.time() - t0
         if total is None and step == 50:                              # fix the schedule from measured speed
@@ -157,12 +230,25 @@ def train(kind, a, V, chat, wiki, device, log_fn):
             lm = F.cross_entropy(logits.float().flatten(0, 1), y.flatten())
             loss = lm
             info = {}
-            if kind == "glassbox":
+            if kind in GLASS:
                 right = (logits.argmax(-1) == y).float()
                 aux = F.binary_cross_entropy_with_logits(k.float(), right)
                 gate = m.trace["mem"]["gate"].float()
                 loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
                 info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
+                m.record_writers(docs.to(device))         # which training document wrote each memory slot
+            if kind == "glassbox3":
+                m.record_features()
+                epi = m.epi_loss(y)
+                loss = loss + epi
+                info.update(epi=round(epi.item(), 4), u=round(m.trace["u"].float().mean().item(), 4))
+                if (total and step >= a.sc_start * total and step % a.sc_every == 0 and sc_prompts):
+                    xy, sc_rate = self_consistency_batch(m, tok, sc_prompts, sc_rng, a, device)
+                    if xy is not None:
+                        lg, _ = m(xy[0])
+                        loss = loss + F.cross_entropy(lg.float().flatten(0, 1), xy[1].flatten(), ignore_index=-100)
+                if sc_rate is not None:
+                    info["sc_disagree"] = round(sc_rate, 3)
         if not torch.isfinite(loss):
             raise SystemExit(f"non-finite loss at step {step}")
         opt.zero_grad(set_to_none=True)
@@ -170,8 +256,6 @@ def train(kind, a, V, chat, wiki, device, log_fn):
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         scaler.step(opt); scaler.update()
-        if kind == "glassbox":
-            m.record_writers(docs.to(device))             # which training document wrote each memory slot
         step += 1
         if step % 200 == 0:
             log_fn(phase="train", kind=kind, step=step, total=total, lm=round(lm.item(), 4),
@@ -213,11 +297,13 @@ def token_eval(kind, m, tok, items, device, block):
         x, y = torch.tensor([ids[:-1]], device=device), torch.tensor(ids[1:], device=device)
         logits, k, hs = forward(kind, m, x)
         lp = F.log_softmax(logits[0].float(), -1)
-        free = m.memory_free()[0] if kind == "glassbox" else None
+        free = m.memory_free()[0] if kind in GLASS else None
+        u = m.trace["u"][0] if kind == "glassbox3" else None
         for t in range(P - 1, len(ids) - 1):
             rows.append({"ok": int(lp[t].argmax() == y[t]), "nll": -float(lp[t, y[t]]),
                          "msp": float(lp[t].max().exp()), "k": float(k[0, t]) if k is not None else None,
                          "free": bool(free[t]) if free is not None else None,
+                         "u": float(u[t]) if u is not None else None,
                          "h": [hs[j][0, t].float().cpu().numpy() for j in (len(hs) // 2, len(hs) - 1)]})
     return rows
 
@@ -234,6 +320,8 @@ def token_metrics(rows):
         d[f"auroc_probe_{name}"] = auroc(pr([r["h"][li] for r in test]), y)
     if test[0]["k"] is not None:
         d["auroc_k"] = auroc([r["k"] for r in test], y)
+    if test[0]["u"] is not None:
+        d["auroc_neg_u"] = auroc([-r["u"] for r in test], y)
     if test[0]["free"] is not None:
         free = np.array([r["free"] for r in test])
         d["certified_memory_free_tokens"] = float(free.mean())
@@ -254,12 +342,17 @@ def reply(kind, m, tok, prompt, device, block, max_new=48):
         if nxt == 0 or "\n" in tok.decode(out + [nxt]):
             break
         out.append(nxt)
-    free = None
-    if kind == "glassbox" and out:
+    free, sig = None, {}
+    if kind in GLASS and out:
         x = torch.tensor([ids + out], device=device)
         m(x)
         free = bool(m.memory_free()[0, P - 1:P - 1 + len(out)].all())
-    return tok.decode(out).strip(), free, (ids + out), P
+        if kind == "glassbox3":                      # epistemic signals where the reply starts
+            sig = {"u_first": float(m.trace["u"][0, P - 1]), "novelty_first": float(m.novelty()[0, P - 1]),
+                   "unsure": UNSURE in out}
+    text = tok.decode(out).strip()                   # <unsure> is a special token: not decoded
+    reply.signals = sig
+    return ("<unsure> " + text if sig.get("unsure") else text), free, (ids + out), P
 
 
 @torch.no_grad()
@@ -342,14 +435,15 @@ def qa_eval(kind, m, tok, items, device, block):
         rows = []
         for it in [x for x in items if x["kind"] == name]:
             text, free, seq, P = reply(kind, m, tok, it["prompt"], device, block)
-            abst = any(mk in text.lower() for mk in ABSTAIN)
+            abst = any(mk in text.lower() for mk in ABSTAIN + ("<unsure>",))
+            sig = dict(reply.signals) if kind == "glassbox3" else {}
             if name == "trivia_eval":
                 right = (not abst) and any(norm(al) and norm(al) in norm(text) for al in it["aliases"])
             elif name == "fictitious_absent_eval":
                 right = abst
             else:
                 right = (not abst) and it["gold"] in text
-            row = {"right": right, "abst": abst, "free": free, "q": it["prompt"], "a": text}
+            row = {"right": right, "abst": abst, "free": free, "q": it["prompt"], "a": text, **sig}
             if name == "trivia_eval":
                 sc = reply_scores(kind, m, tok, it["prompt"], seq, P, device) if not abst else {}
                 row.update({k_: sc.get(k_) for k_ in ("msp", "k_min", "consistency")})
@@ -362,7 +456,14 @@ def qa_eval(kind, m, tok, items, device, block):
              "abstention": float(np.mean([r["abst"] for r in rows]))}
         if name != "fictitious_ctx_eval":
             d["hallucination"] = float(np.mean([(not r["abst"]) and not r["right"] for r in rows]))
-        if kind == "glassbox":
+        if kind == "glassbox3" and rows[0].get("u_first") is not None:
+            d["unsure_emitted"] = float(np.mean([bool(r.get("unsure")) for r in rows]))
+            d["u_first_mean"] = float(np.mean([r.get("u_first", 0.0) for r in rows]))
+            if name == "trivia_eval":                    # does low u mean a right reply (abstentions included)?
+                d["auroc_right_neg_u_first"] = auroc([-r.get("u_first", 0.0) for r in rows], [r["right"] for r in rows])
+                d["auroc_right_neg_novelty"] = auroc([-r.get("novelty_first", 0.0) for r in rows],
+                                                     [r["right"] for r in rows])
+        if kind in GLASS:
             d["certified_memory_free_replies"] = float(np.mean([bool(r["free"]) for r in rows]))
             c = [r for r in rows if r["free"]]
             d["accuracy_when_certified"] = float(np.mean([r["right"] for r in c])) if c else None
@@ -377,7 +478,7 @@ def qa_eval(kind, m, tok, items, device, block):
                                           for al in (0.2, 0.5)]
         d["samples"] = [{"q": r["q"], "a": r["a"], "right": r["right"], "certified": r["free"]} for r in rows[:6]]
         out[name] = d
-    if kind == "glassbox":
+    if kind in GLASS:
         out["certificate_soundness_violations"] = soundness(m, cert_seqs[:30], device)
     return out
 
@@ -411,22 +512,24 @@ def save_package(m, cfg, tok_path, out):
     for n, b in blobs.items():
         open(os.path.join(out, n), "wb").write(b)
     files = {n: sha(b) for n, b in blobs.items()}
-    json.dump({"format": "vt-glassbox2-chat/1", "files": files,
+    fmt = "vt-glassbox3-chat/1" if isinstance(m, Glassbox3) else "vt-glassbox2-chat/1"
+    json.dump({"format": fmt, "files": files,
                "package_sha256": sha("".join(files[n] for n in ("weights.pt", "config.json", "tokenizer.json")).encode())},
               open(os.path.join(out, "manifest.json"), "w"), indent=1)
 
 
 def run(kind, a, device):
-    tok, chat, wiki, ev = load(a)
+    tok, chat, wiki, ev, sc_prompts = load(a)
     V = tok.get_vocab_size()
-    log(phase="data", kind=kind, chat_tokens=len(chat), wiki_tokens=len(wiki), device=device)
-    m, cfg, steps = train(kind, a, V, chat, wiki, device, log)
+    log(phase="data", kind=kind, chat_tokens=len(chat[0]), wiki_tokens=len(wiki[0]), device=device,
+        unsure_marked=int((chat[0] == UNSURE).sum()), sc_prompts=len(sc_prompts))
+    m, cfg, steps = train(kind, a, V, chat, wiki, device, log, tok, sc_prompts)
     gen_eval = [x for x in ev if x["kind"] == "instruction"][:a.n_token_eval]
     res = {"kind": kind, "config": cfg, "steps": steps,
            "params": sum(p.numel() for p in m.parameters() if p.requires_grad),
            "tokens": token_metrics(token_eval(kind, m, tok, gen_eval, device, a.block))}
     log(phase="eval_tokens", kind=kind, **res["tokens"])
-    if kind == "glassbox":                               # inspectability checks on the trained model
+    if kind in GLASS:                                    # inspectability checks on the trained model
         res["inspect"] = inspect(m, tok, gen_eval[:5], device)
         log(phase="inspect", **res["inspect"])
     res["qa"] = qa_eval(kind, m, tok, ev, device, a.block)
@@ -435,7 +538,7 @@ def run(kind, a, device):
     res["samples"] = [{"prompt": x["prompt"], "reply": reply(kind, m, tok, x["prompt"], device, a.block)[0]}
                       for x in gen_eval[:8]]
     json.dump(res, open(os.path.join(a.out, f"{kind}.json"), "w"), indent=1, default=float)
-    if kind == "glassbox":
+    if kind in GLASS:
         save_package(m, cfg, os.path.join(a.data, "tokenizer.json"), os.path.join(a.out, "glassbox_package"))
     log(phase="done", kind=kind)
 
@@ -458,6 +561,11 @@ def main():
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=6e-4)
     ap.add_argument("--n-token-eval", type=int, default=300)
+    ap.add_argument("--sc-start", type=float, default=0.3, help="Glassbox-3: replay from this share of training")
+    ap.add_argument("--sc-every", type=int, default=20)
+    ap.add_argument("--sc-prompts", type=int, default=16)
+    ap.add_argument("--sc-k", type=int, default=5)
+    ap.add_argument("--sc-agree", type=float, default=0.6)
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:

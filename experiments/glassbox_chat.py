@@ -45,6 +45,7 @@ from interp_by_design import auroc, fit_probe  # noqa: E402
 from typed_wikitext import articles  # noqa: E402
 from vt.glassbox import GBConfig, GlassBoxLM, memory_free_positions  # noqa: E402
 from vt.glassbox2 import G2Config, Glassbox2  # noqa: E402
+from vt.glassbox3 import G3Config, Glassbox3  # noqa: E402
 from vt.lm import GPT, GPTConfig  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -225,6 +226,22 @@ def corpus(world, rng, al_train, n_qa=40000, stmt_reps=8):
     return docs
 
 
+def unsure_stream(stream, tok):
+    """The training token stream with <unsure> (id V) inserted where an abstention answer begins,
+    so Glassbox-3 trains on exactly the tokens the other models see, plus the marker."""
+    V, cue = tok.get_vocab_size(), tok.encode("Assistant:").ids
+    starts = [tok.encode(" " + t.split("{")[0].rstrip()).ids for t in DONT]
+    s = stream.tolist()
+    out, last, n = [], 0, 0
+    for i in range(len(s) - 16):
+        if s[i:i + len(cue)] == cue and any(s[i + len(cue):i + len(cue) + len(d)] == d for d in starts):
+            j = i + len(cue)
+            out += s[last:j] + [V]
+            last, n = j, n + 1
+    out += s[last:]
+    return torch.tensor(out, dtype=torch.long), n
+
+
 def train_tokenizer(docs, path, vocab=4096):
     tok = Tokenizer(models.BPE())
     tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
@@ -304,6 +321,95 @@ class Glass2:
                     "free": self.m.memory_free()}, tr["hs"]
 
 
+class Glass3(Glass2):
+    """Glassbox-3: Glassbox-2 plus an epinet whose epistemic uncertainty u raises an explicit
+    <unsure> token (id V, one past the tokenizer) and lowers the commitment k; trained with
+    self-consistency replay: prompts on which the model's own sampled answers disagree are
+    trained to <unsure> + a hedge. No label says which prompts those are."""
+
+    HEDGE = " I'm not sure."
+
+    def __init__(self, V, block, mem_l1, mem_layer, k_active, attn_topk, sc=None):
+        self.mem_l1, self.V = mem_l1, V
+        self.m = Glassbox3(G3Config(vocab_size=V + 1, block_size=block, n_layer=6, n_head=4, n_embd=192,
+                                    n_features=1024, k_active=k_active, mem_layer=mem_layer, mem_keys=128,
+                                    mem_topk=8, attn_topk=attn_topk, unsure_id=V))
+        self.sc = sc                     # self-consistency replay: dict(tok, world, start, every, prompts, k)
+        self.sc_rng = random.Random(77)
+        self.sc_last = 0.0
+
+    def loss(self, x, y):
+        total, info = super().loss(x, y)
+        self.m.record_features()
+        epi = self.m.epi_loss(y)
+        info.update(epi=epi.item(), u=self.m.trace["u"].mean().item(), sc_disagree=self.sc_last)
+        return total + epi, info
+
+    @torch.no_grad()
+    def _sample(self, ids, k, max_new=16):
+        """k sampled replies (token lists) to one prompt."""
+        tok, V = self.sc["tok"], self.V
+        x = torch.tensor([ids] * k)
+        out = [[] for _ in range(k)]
+        done = [False] * k
+        for _ in range(max_new):
+            logits, _ = self.m(x)
+            nxt = torch.multinomial(F.softmax(logits[:, -1].float(), -1), 1)
+            for j in range(k):
+                t = int(nxt[j])
+                if done[j]:
+                    continue
+                if t == 0 or t == V or "\n" in tok.decode(out[j] + [t]):
+                    done[j] = True
+                    if t == V:
+                        out[j] = [V]
+                    continue
+                out[j].append(t)
+            if all(done):
+                break
+            x = torch.cat([x, nxt], 1)
+        return out
+
+    def replay(self, step):
+        sc = self.sc
+        if not sc or step < sc["start"] or step % sc["every"]:
+            return None
+        tok, rng = sc["tok"], self.sc_rng
+        self.m.eval()
+        seqs, P = [], []
+        n_dis = 0
+        for _ in range(sc["prompts"]):
+            prompt = sc["world"].question(rng, rng.choice(sc["world"].KINDS), QA_RELS, test=False)[0]
+            ids = tok.encode(prompt).ids
+            outs = [tok.decode(o).strip().lower() if self.V not in o else "<unsure>" for o in self._sample(ids, sc["k"])]
+            top = max(outs.count(o) for o in outs)
+            if top / len(outs) < sc["agree"]:                    # its own answers disagree: teach <unsure>
+                n_dis += 1
+                seqs.append(ids + [self.V] + tok.encode(self.HEDGE).ids + [0])
+                P.append(len(ids))
+        self.m.train()
+        self.sc_last = n_dis / sc["prompts"]
+        info = {"sc_disagree": self.sc_last}
+        if not seqs:
+            return None, info
+        L = max(map(len, seqs))
+        x = torch.zeros(len(seqs), L - 1, dtype=torch.long)
+        y = torch.full((len(seqs), L - 1), -100, dtype=torch.long)
+        for i, (sq, p) in enumerate(zip(seqs, P)):
+            x[i, :len(sq) - 1] = torch.tensor(sq[:-1])
+            y[i, p - 1:len(sq) - 1] = torch.tensor(sq[p:])       # loss on the reply only
+        logits, _ = self.m(x)
+        loss = F.cross_entropy(logits.flatten(0, 1), y.flatten(), ignore_index=-100)
+        return loss, info
+
+    @torch.no_grad()
+    def readouts(self, x, evidence=True):
+        lp, ro, hs = super().readouts(x, evidence)
+        tr = self.m.trace
+        ro.update(u=tr["u"], novelty=self.m.novelty(), p_unsure=lp[..., self.V].exp())
+        return lp, ro, hs
+
+
 class Base:
     def __init__(self, V, block):
         self.m = GPT(GPTConfig(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
@@ -350,6 +456,11 @@ def train(model, stream, steps, block, bs, log, ckpt):
         x = torch.stack([stream[i:i + block] for i in ix.tolist()])
         y = torch.stack([stream[i + 1:i + block + 1] for i in ix.tolist()])
         loss, info = model.loss(x, y)
+        extra = model.replay(step) if hasattr(model, "replay") else None
+        if extra is not None:
+            if extra[0] is not None:
+                loss = loss + extra[0]
+            info.update(extra[1])
         opt.zero_grad(); loss.backward()
         torch.nn.utils.clip_grad_norm_(model.params(), 1.0)
         opt.step(); step += 1
@@ -385,6 +496,8 @@ def token_rows(model, tok, pairs, block):
                     r.update(mem_mass=float(ro["mem_mass"][0, t]), prompt_mass=float(ro["e"][0, t, :P].sum()))
             if "free" in ro:
                 r["memory_free"] = bool(ro["free"][0, t])
+            if "u" in ro:
+                r.update(u=float(ro["u"][0, t]), novelty=float(ro["novelty"][0, t]))
             rows.append(r)
     return rows
 
@@ -411,6 +524,9 @@ def token_metrics(rows, probe, L):
         d["auroc_memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
         if "prompt_mass" in rows[0]:
             d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
+    if "u" in rows[0]:
+        d["auroc_neg_u"] = auroc(-np.array([r["u"] for r in rows]), y)
+        d["auroc_neg_novelty"] = auroc(-np.array([r["novelty"] for r in rows]), y)
     if "memory_free" in rows[0]:
         free = np.array([r["memory_free"] for r in rows])
         d["certified_memory_free_tokens"] = float(free.mean())
@@ -423,6 +539,8 @@ def token_metrics(rows, probe, L):
 def respond(model, tok, prompt, block, max_new=24):
     ids = tok.encode(prompt).ids
     P = len(ids)
+    V = tok.get_vocab_size()                    # ids >= V are special: Glassbox-3's <unsure>
+    dec = lambda t: tok.decode([i for i in t if i < V])  # noqa: E731
     for i in range(max_new):
         lp, _, _ = model.readouts(torch.tensor([ids[-block:]]), evidence=False)
         if i == 0:
@@ -431,7 +549,7 @@ def respond(model, tok, prompt, block, max_new=24):
         if nxt == 0:
             break
         ids.append(nxt)
-        if "\n" in tok.decode(ids[P:]):
+        if "\n" in dec(ids[P:]):
             break
     x = torch.tensor([ids[-block:]])
     lp, ro, hs = model.readouts(x)
@@ -447,10 +565,17 @@ def respond(model, tok, prompt, block, max_new=24):
                      match=float(np.mean([float(ro["match"][0, t]) for t in span])))
         if "e" in ro:
             feats["prompt_mass"] = float(np.mean([float(ro["e"][0, t, :P - off].sum()) for t in span]))
+    if "u" in ro:                                   # epistemic uncertainty where the reply starts
+        feats.update(u_first=float(ro["u"][0, P - 1 - off]),
+                     u_mean=float(np.mean([float(ro["u"][0, t]) for t in span])),
+                     novelty_first=float(ro["novelty"][0, P - 1 - off]),
+                     p_unsure_first=float(ro["p_unsure"][0, P - 1 - off]),
+                     unsure_emitted=any(i >= V for i in ids[P:]))
     if "free" in ro:                                # every reply token provably made without memory
         feats["reply_memory_free"] = bool(all(bool(ro["free"][0, t]) for t in span))
         feats["ids"] = x
-    return tok.decode(ids[P:]).split("\n")[0], feats
+    text = dec(ids[P:]).split("\n")[0]
+    return ("<unsure>" + text if any(i >= V for i in ids[P:]) else text), feats
 
 
 def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
@@ -459,7 +584,7 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
     for i in range(n):
         prompt, _, gold, kind = world.question(rng, kinds[i % len(kinds)], rels, test=True)
         out, f = respond(model, tok, prompt, block)
-        abst = any(m in out.lower() for m in ABSTAIN_MARKERS)
+        abst = any(m in out.lower() for m in ABSTAIN_MARKERS + ("<unsure>",))
         right = abst if gold is None else (not abst and gold in out)
         rows.append({"kind": kind, "right": right, "abstained": abst, "out": out, **f})
     d = {f"{k}_right": float(np.mean([r["right"] for r in rows if r["kind"] == k])) for k in kinds}
@@ -475,6 +600,8 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
                                                              if r["kind"] == "absent_fresh"]))
     answerable = [r for r in rows if r["kind"] in ("ctx", "mem", "ctx_fresh")]
     d["over_refusal_rate"] = float(np.mean([r["abstained"] for r in answerable]))
+    if "unsure_emitted" in rows[0]:
+        d["unsure_emitted"] = {k: float(np.mean([r["unsure_emitted"] for r in rows if r["kind"] == k])) for k in kinds}
     y = np.array([r["right"] for r in rows], dtype=int)
     if 0 < y.sum() < len(y):
         d["auroc_msp"] = auroc(np.array([r["msp"] for r in rows]), y)
@@ -485,6 +612,9 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
             d["auroc_memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
             if "prompt_mass" in rows[0]:
                 d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
+        if "u_first" in rows[0]:
+            for key in ("u_first", "u_mean", "novelty_first", "p_unsure_first"):
+                d[f"auroc_neg_{key}"] = auroc(-np.array([r[key] for r in rows]), y)
         if probe is not None:
             d["auroc_probe"] = auroc(probe[1](np.stack([r["h"][probe[0]] for r in rows])), y)
     d["examples"] = [{k: r[k] for k in ("kind", "right", "out")} for r in rows[:6]]
@@ -546,6 +676,11 @@ def main():
     ap.add_argument("--g2-k-active", type=int, default=16)
     ap.add_argument("--g2-attn-topk", type=int, default=0)
     ap.add_argument("--g2-mem-l1", type=float, default=0.002)
+    ap.add_argument("--sc-every", type=int, default=25, help="Glassbox-3: self-consistency replay period")
+    ap.add_argument("--sc-start", type=int, default=1000)
+    ap.add_argument("--sc-prompts", type=int, default=8)
+    ap.add_argument("--sc-k", type=int, default=4)
+    ap.add_argument("--sc-agree", type=float, default=0.75)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--data-dir", default=None, help="tokenizer and token stream (default: next to --out)")
     ap.add_argument("--prepare-only", action="store_true")
@@ -582,12 +717,24 @@ def main():
     for kind in a.models.split(","):
         if kind in res:
             continue
-        model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
-                 Glass2(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk)
-                 if kind == "glassbox2" else Base(V, a.block))
+        train_stream = stream
+        if kind == "glassbox3":
+            up = os.path.join(data_dir, "stream_unsure.pt")
+            if not os.path.exists(up):
+                train_stream, n_uns = unsure_stream(stream, tok)
+                torch.save(train_stream, up)
+                print(json.dumps({"unsure_marked_answers": n_uns, "train_tokens": len(train_stream)}), flush=True)
+            train_stream = torch.load(up)
+            model = Glass3(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk,
+                           sc=dict(tok=tok, world=world, start=a.sc_start, every=a.sc_every, prompts=a.sc_prompts,
+                                   k=a.sc_k, agree=a.sc_agree) if a.sc_every else None)
+        else:
+            model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
+                     Glass2(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk)
+                     if kind == "glassbox2" else Base(V, a.block))
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
-        train(model, stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)
+        train(model, train_stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)
         model.m.eval()
         r = {"train_s": time.time() - t0, "params": sum(p.numel() for p in model.params())}
         _, L, probe = best_probe(token_rows(model, tok, al_fit, a.block), token_rows(model, tok, al_sel, a.block))

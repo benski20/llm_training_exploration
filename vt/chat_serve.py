@@ -32,6 +32,8 @@ import torch
 import torch.nn.functional as F
 
 from .glassbox import GBConfig, GlassBoxLM
+from .glassbox2 import G2Config, Glassbox2
+from .glassbox3 import G3Config, Glassbox3
 from .serve import HardenedHandler, bounded_server
 
 FILES = ("weights.pt", "config.json", "tokenizer.json")
@@ -73,6 +75,25 @@ def export_package(ckpt, tokenizer, out, config):
     return manifest
 
 
+def export_glassbox2_package(model, config, tokenizer, out):
+    """Write a servable package for a Glassbox-2 or Glassbox-3 model (as the Kaggle student
+    trainer does): vt-glassbox2-chat/1 or vt-glassbox3-chat/1."""
+    os.makedirs(out, exist_ok=True)
+    buf = io.BytesIO()
+    torch.save({k: v.cpu() for k, v in model.state_dict().items()}, buf)
+    blobs = {"weights.pt": buf.getvalue(), "config.json": json.dumps(config, indent=1).encode(),
+             "tokenizer.json": open(tokenizer, "rb").read()}
+    for name, b in blobs.items():
+        with open(os.path.join(out, name), "wb") as f:
+            f.write(b)
+    fmt = "vt-glassbox3-chat/1" if isinstance(model, Glassbox3) else "vt-glassbox2-chat/1"
+    manifest = {"format": fmt, "files": {n: _sha(b) for n, b in blobs.items()},
+                "package_sha256": _sha(b"".join(_sha(blobs[n]).encode() for n in FILES))}
+    with open(os.path.join(out, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=1)
+    return manifest
+
+
 def load_package(path, max_bytes=1 << 30):
     """Returns (model, tokenizer, manifest). Each file is read once and the bytes
     that are used are the bytes that were hashed."""
@@ -93,7 +114,12 @@ def load_package(path, max_bytes=1 << 30):
             raise PackageError(f"{name} does not match the manifest")
         blobs[name] = b
     config = json.loads(blobs["config.json"])
-    model = GlassBoxLM(GBConfig(**config))
+    builders = {"vt-glassbox-chat/1": lambda c: GlassBoxLM(GBConfig(**c)),
+                "vt-glassbox2-chat/1": lambda c: Glassbox2(G2Config(**c)),
+                "vt-glassbox3-chat/1": lambda c: Glassbox3(G3Config(**c))}
+    if manifest.get("format") not in builders:
+        raise PackageError(f"unknown package format {manifest.get('format')!r}")
+    model = builders[manifest["format"]](config)
     model.load_state_dict(torch.load(io.BytesIO(blobs["weights.pt"]), map_location="cpu", weights_only=True))
     model.eval()
     tok = Tokenizer.from_str(blobs["tokenizer.json"].decode("utf-8"))
@@ -150,6 +176,62 @@ class GlassboxResponder:
 
     def reply(self, message, history=(), max_new_tokens=64, threshold=0.5):
         return reply(self.model, self.tok, message, history, max_new_tokens, threshold)
+
+
+@torch.no_grad()
+def reply_g2(model, tok, message, history=(), max_new_tokens=64, threshold=0.5):
+    """Glassbox-2/3 turn. Per token: confidence sigmoid(k), whether it is certified memory-free
+    (exact: its output provably does not depend on memory content), the most active
+    features at the last layer, and for Glassbox-3 the epistemic uncertainty u. The reply says
+    whether the model emitted its <unsure> token."""
+    block, V = model.config.block_size, tok.get_vocab_size()
+    unsure_id = getattr(model.config, "unsure_id", None)
+    special = lambda t: t >= V or t == unsure_id        # noqa: E731
+    text_of = lambda ts: tok.decode([t for t in ts if not special(t)])   # noqa: E731
+    ids = tok.encode(render_prompt(message, history)).ids[-(block - max_new_tokens):]
+    P, out = len(ids), []
+    for i in range(max_new_tokens):
+        lg = model(torch.tensor([ids + out]))[0][0, -1]
+        if i == 0:
+            lg[0] = -float("inf")
+        nxt = int(lg.argmax())
+        if nxt == 0:
+            break
+        out.append(nxt)
+        if "\n" in text_of(out):
+            break
+    if not out:
+        return {"text": "", "tokens": [], "low_confidence_spans": [], "abstained": False}
+    model(torch.tensor([ids + out]))
+    tr = model.trace
+    k = tr.get("k_eff", None)
+    k = k if k is not None else model.know(tr["z_f"]).squeeze(-1)
+    free = model.memory_free()[0]
+    fi, fv = model.active_features(model.config.n_layer - 1)
+    tokens = []
+    for j, t in enumerate(out):
+        pos = P - 1 + j
+        r = {"token": "<unsure>" if special(t) else tok.decode([t]),
+             "confidence": round(float(torch.sigmoid(k[0, pos])), 4),
+             "memory_free": bool(free[pos]),
+             "features": [[int(a), round(float(b), 3)] for a, b in zip(fi[0, pos, :3], fv[0, pos, :3])]}
+        if "u" in tr:
+            r["u"] = round(float(tr["u"][0, pos]), 4)
+        tokens.append(r)
+    rep = _report(text_of(out).split("\n")[0].strip(), tokens, threshold)
+    rep["unsure"] = any(special(t) for t in out)
+    rep["abstained"] = rep["abstained"] or rep["unsure"]
+    rep["certified_memory_free"] = all(r["memory_free"] for r in tokens)
+    return rep
+
+
+class Glassbox2Responder(GlassboxResponder):
+    def __init__(self, model, tok, manifest):
+        super().__init__(model, tok, manifest)
+        self.signals = ["confidence", "memory_free", "features"] + (["u", "unsure"] if isinstance(model, Glassbox3) else [])
+
+    def reply(self, message, history=(), max_new_tokens=64, threshold=0.5):
+        return reply_g2(self.model, self.tok, message, history, max_new_tokens, threshold)
 
 
 HF_SYSTEM = "You are a helpful assistant. Answer briefly. If you are not sure, say that you don't know."
@@ -272,6 +354,8 @@ def load_responder(path):
         return HFResponder(path)
     if fmt == "vt-glassbox-chat/1":
         return GlassboxResponder(*load_package(path))
+    if fmt in ("vt-glassbox2-chat/1", "vt-glassbox3-chat/1"):
+        return Glassbox2Responder(*load_package(path))
     raise PackageError(f"unknown package format {fmt!r}")
 
 

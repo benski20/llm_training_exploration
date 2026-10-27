@@ -30,21 +30,36 @@ class G3Config(G2Config):
     unsure_id: int = 1
     epi_index: int = 8
     epi_hidden: int = 64
-    prior_scale: float = 1.0
+    prior_scale: float = 0.5
     epi_samples: int = 4
     pair_buckets: int = 1 << 16
 
 
-def _mlp(d_in, h, d_out):
-    return nn.Sequential(nn.Linear(d_in, h), nn.ReLU(), nn.Linear(h, d_out))
+class _IndexNet(nn.Module):
+    """delta(phi, z) = G(phi, z) z with G an MLP output reshaped to (d, index): linear in the
+    index, as in Osband et al., so all of its output varies with z."""
+
+    def __init__(self, d, n_index, h):
+        super().__init__()
+        self.d, self.n = d, n_index
+        self.net = nn.Sequential(nn.Linear(d + n_index, h), nn.ReLU(), nn.Linear(h, d * n_index))
+
+    def forward(self, h):
+        z = h[..., self.d:]
+        return (self.net(h).view(*h.shape[:-1], self.d, self.n) @ z[..., None]).squeeze(-1)
 
 
 class Glassbox3(Glassbox2):
     def __init__(self, c: G3Config):
         super().__init__(c)
         d = c.n_embd
-        self.epi = _mlp(d + c.epi_index, c.epi_hidden, d)
-        self.prior = _mlp(d + c.epi_index, c.epi_hidden, d)
+        self.epi = _IndexNet(d, c.epi_index, c.epi_hidden)
+        self.prior = _IndexNet(d, c.epi_index, c.epi_hidden)
+        with torch.no_grad():                          # unit-RMS prior output: prior_scale is its size
+            g = torch.Generator().manual_seed(0)       # relative to the (RMS-normalized) features
+            r = self.prior(torch.randn(4096, d + c.epi_index, generator=g)).pow(2).mean().sqrt()
+            self.prior.net[-1].weight /= r
+            self.prior.net[-1].bias /= r
         for p in self.prior.parameters():
             p.requires_grad_(False)
         self.c_unsure = nn.Parameter(torch.tensor(1.0))
@@ -79,7 +94,8 @@ class Glassbox3(Glassbox2):
         raw_scaled, k = super().forward(idx)
         tr = self.trace
         phi, raw = tr["z_f"], tr["raw_logits"]
-        u = self.uncertainty(phi, u_samples).detach()
+        with torch.no_grad():                          # u is a fixed input to the output layer
+            u = self.uncertainty(phi, u_samples)
         k_eff = k - F.softplus(self.c_k) * u
         logits = raw * self.temperature(k_eff)[..., None]
         bump = torch.zeros_like(logits)
