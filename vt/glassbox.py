@@ -56,6 +56,8 @@ class GBConfig:
     mem_heads: int = 1             # >1: independent memory heads (each 1/4 of the slots); their
                                    # agreement is a label-free signal that the fact was stored
     solo_p: float = 0.5            # training: P(the read comes from one random head alone)
+    mem_gate: str = "sigmoid"      # "hard": clamp(w.z + c, 0, 1), exactly 0 when memory is not used,
+                                   # which certifies exact independence from memory content
 
 
 def alibi_bias(T, n_head, device=None):
@@ -118,6 +120,9 @@ class PKMemory(nn.Module):
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
         nn.init.normal_(self.values.weight, 0.0, c.mem_value_init)
         self.gate = nn.Linear(c.n_embd, 1)
+        self.hard = c.mem_gate == "hard"
+        if self.hard:
+            nn.init.constant_(self.gate.bias, 0.5)               # start open; the L1 penalty closes it
         if c.null_slot:
             self.null = nn.Parameter(torch.tensor(0.0))
         self.lscale = nn.Parameter(torch.tensor(1.0))   # affine map of the match score, for calibration
@@ -125,6 +130,10 @@ class PKMemory(nn.Module):
         self.patch = None              # (mask (B, T), read (B, d) or (B, T, d)): interchange interventions
         self.trace = None
         self.register_buffer("usage", torch.zeros(self.n * self.n))   # read mass per slot while storing
+
+    def gate_value(self, z):
+        g = self.gate(z)
+        return g.clamp(0, 1) if self.hard else torch.sigmoid(g)
 
     @torch.no_grad()
     def accumulate(self, mask):
@@ -164,7 +173,7 @@ class PKMemory(nn.Module):
             r = torch.where(mask[..., None], val, r)
         tr["read"] = r
         self.trace = tr
-        b = torch.sigmoid(self.gate(z))
+        b = self.gate_value(z)
         x = (1 - b) * x + b * r
         if e is not None:
             T = x.shape[1]
@@ -285,3 +294,15 @@ class GlassBoxLM(nn.Module):
 
     def abstain_logit(self, k):
         return self.beta - F.softplus(self.alpha) * k
+
+
+@torch.no_grad()
+def memory_free_positions(model, idx):
+    """Exact certificate for hard-gated memory: True at position t when the memory gate is
+    exactly 0 at every position <= t, so the output at t provably does not depend on any
+    memory content (gates are computed before the read; causal attention only looks back)."""
+    if model.config.mem_gate != "hard" or model.config.mem2_layer >= 0 or model.config.mem_heads > 1:
+        raise ValueError("exact certificates need a single hard-gated memory")
+    model(idx, evidence=False)
+    closed = model.mem.trace["gate"] == 0
+    return closed.int().cumprod(-1).bool()

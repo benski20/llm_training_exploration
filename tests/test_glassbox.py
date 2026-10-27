@@ -88,3 +88,22 @@ def test_ensemble_memory_agreement_and_patch():
     mask = torch.zeros(2, 5, dtype=torch.bool); mask[:, 4] = True
     m.mem.patch = (mask, r.flip(0)); m(x); m.mem.patch = None
     assert torch.allclose(m.mem.trace["read"][:, 4], r.flip(0))
+
+
+def test_hard_gate_zero_means_exactly_no_memory_dependence():
+    from vt.glassbox import memory_free_positions
+    torch.manual_seed(0)
+    m = GlassBoxLM(GBConfig(vocab_size=50, block_size=16, n_embd=32, mem_keys=8, mem_topk=4, mem_gate="hard"))
+    m.eval()
+    with torch.no_grad():
+        m.mem.gate.bias.fill_(-100.0)                       # every gate closed
+    x = torch.randint(0, 50, (2, 6))
+    assert memory_free_positions(m, x).all()
+    base, _, _, _ = m(x)
+    with torch.no_grad():
+        m.mem.values.weight.normal_(0, 10)                  # any memory content at all
+    other, _, _, _ = m(x)
+    assert torch.equal(base, other)
+    with torch.no_grad():
+        m.mem.gate.weight.zero_(); m.mem.gate.bias.fill_(0.5)     # every gate open
+    assert not memory_free_positions(m, x).any()

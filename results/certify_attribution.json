@@ -1,0 +1,97 @@
+{
+ "v4_zero_memory": {
+  "absent": {
+   "n": 50,
+   "right": 0.12,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 1.0,
+   "undetermined": 0.0,
+   "right_when_certified": null
+  },
+  "ctx": {
+   "n": 50,
+   "right": 0.68,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 1.0,
+   "undetermined": 0.0,
+   "right_when_certified": null
+  },
+  "mem": {
+   "n": 50,
+   "right": 0.9,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 1.0,
+   "undetermined": 0.0,
+   "right_when_certified": null
+  }
+ },
+ "v5_memory_after_last_block": {
+  "absent": {
+   "n": 50,
+   "right": 0.2,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 1.0,
+   "undetermined": 0.0,
+   "right_when_certified": null
+  },
+  "ctx": {
+   "n": 50,
+   "right": 0.46,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.96,
+   "undetermined": 0.04,
+   "right_when_certified": null
+  },
+  "mem": {
+   "n": 50,
+   "right": 0.52,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.96,
+   "undetermined": 0.04,
+   "right_when_certified": null
+  }
+ },
+ "chat_v2": {
+  "absent": {
+   "n": 12,
+   "right": 0.25,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.0,
+   "undetermined": 1.0,
+   "right_when_certified": null
+  },
+  "absent_fresh": {
+   "n": 12,
+   "right": 0.8333333333333334,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.0,
+   "undetermined": 1.0,
+   "right_when_certified": null
+  },
+  "ctx": {
+   "n": 12,
+   "right": 0.16666666666666666,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.0,
+   "undetermined": 1.0,
+   "right_when_certified": null
+  },
+  "ctx_fresh": {
+   "n": 12,
+   "right": 0.4166666666666667,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.0,
+   "undetermined": 1.0,
+   "right_when_certified": null
+  },
+  "mem": {
+   "n": 12,
+   "right": 0.0,
+   "certified_memory_free": 0.0,
+   "memory_dependent": 0.0,
+   "undetermined": 1.0,
+   "right_when_certified": null
+  },
+  "certified_token_fraction": 0.0
+ }
+}

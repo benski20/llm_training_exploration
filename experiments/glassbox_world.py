@@ -171,6 +171,7 @@ MEM2 = -1                                          # v3: late memory read after 
 MEM_INIT = 1.0                                     # v4: 0.0, absence as the default state of memory
 MEM_LAYER = 2                                      # v5: 3, memory after the last attention block
 NULL_SLOT = False                                  # v6: a "nothing stored" option in every read
+HARD_GATE = 0.0                                    # v9: >0: hard memory gate with this L1 weight
 MEM_HEADS = 1                                      # v7: 4 independent memory heads, agreement readout
 
 
@@ -178,7 +179,8 @@ class Glass:
     def __init__(self):
         self.m = GlassBoxLM(GBConfig(vocab_size=VOCAB + FRESH, block_size=BLOCK, mem_evidence=MEM_EVIDENCE,
                                      mem2_layer=MEM2, mem_value_init=MEM_INIT, mem_layer=MEM_LAYER,
-                                     null_slot=NULL_SLOT, mem_heads=MEM_HEADS))
+                                     null_slot=NULL_SLOT, mem_heads=MEM_HEADS,
+                                     mem_gate="hard" if HARD_GATE > 0 else "sigmoid"))
 
     def parameters(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -285,6 +287,9 @@ def train(kind, world, steps, seed, log):
                 yb = torch.tensor([vidx(val(r, world.value[e][r])) for _, (e, r) in pa])
                 iit = F.nll_loss(la, yb)
             loss = loss + nll.mean() + 0.5 * aux + 0.5 * iit
+            if HARD_GATE > 0:                       # read memory only where it is needed
+                model.m(x)
+                loss = loss + HARD_GATE * model.m.mem.trace["gate"][x != PAD].mean()
             logs = {"qa": round(nll.mean().item(), 4), "aux": round(aux.item(), 4), "iit": round(iit.item(), 4)}
         else:
             logits, _ = model.run(x)
@@ -443,13 +448,15 @@ def main():
     ap.add_argument("--null-slot", action="store_true")
     ap.add_argument("--mem-heads", type=int, default=1)
     ap.add_argument("--fresh", type=int, default=0, help="pool of re-randomised entity tokens (v8)")
+    ap.add_argument("--hard-gate", type=float, default=0.0, help="L1 weight of a hard memory gate (v9)")
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--out", default="results/glassbox/run.json")
     a = ap.parse_args()
-    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS, FRESH
+    global MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS, FRESH, HARD_GATE
     MEM_EVIDENCE, IIT_POS, MEM2, MEM_INIT, MEM_LAYER, NULL_SLOT, MEM_HEADS, FRESH = (
         a.mem_evidence, a.iit_positions, a.mem2_layer, a.mem_init, a.mem_layer, a.null_slot, a.mem_heads,
         a.fresh)
+    HARD_GATE = a.hard_gate
     torch.set_num_threads(a.threads)
     world = World(1234)
     erng = random.Random(99)
