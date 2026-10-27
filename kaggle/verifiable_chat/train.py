@@ -224,6 +224,10 @@ def batches(rows, bs, rng, pad_id):
 
 
 def train_lora(model, khead, rows, a, device, pad_id):
+    import importlib.util
+    if importlib.util.find_spec("torchao") is not None:    # Kaggle ships a torchao that new peft rejects
+        import subprocess
+        subprocess.call([sys.executable, "-m", "pip", "uninstall", "-y", "-q", "torchao"])
     try:
         from peft import LoraConfig, get_peft_model
     except ImportError:                                  # Kaggle images may not ship peft

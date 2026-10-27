@@ -1,0 +1,53 @@
+{
+ "status": "failed at LoRA setup: peft rejected Kaggle's torchao 0.10.0",
+ "measured_before_failure": [
+  {
+   "phase": "start",
+   "model": "Qwen/Qwen2.5-1.5B-Instruct",
+   "device": "cuda",
+   "gpu": "Tesla T4"
+  },
+  {
+   "phase": "self_label",
+   "n": 8000,
+   "base_train_accuracy": 0.41575,
+   "s": 478
+  },
+  {
+   "phase": "eval",
+   "model": "base",
+   "set": "trivia",
+   "n": 1000,
+   "accuracy": 0.416,
+   "abstention_rate": 0.001,
+   "hallucination_rate": 0.583,
+   "precision_when_answering": 0.4164164164164164,
+   "auroc_softmax": 0.7434935347671197,
+   "auroc_probe_middle_layer": 0.7742528697717377,
+   "auroc_probe_last_layer": 0.7907293178519593
+  },
+  {
+   "phase": "eval",
+   "model": "base",
+   "set": "fictitious_absent",
+   "n": 333,
+   "accuracy": 0.04504504504504504,
+   "abstention_rate": 0.04504504504504504,
+   "hallucination_rate": 0.954954954954955
+  },
+  {
+   "phase": "eval",
+   "model": "base",
+   "set": "fictitious_in_context",
+   "n": 333,
+   "accuracy": 0.8168168168168168,
+   "abstention_rate": 0.03003003003003003
+  },
+  {
+   "phase": "sft_data",
+   "examples": 13980,
+   "kept_answers": 3326,
+   "not_sure": 4674
+  }
+ ]
+}
