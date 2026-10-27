@@ -1,0 +1,36 @@
+Model: Glassbox-2.4
+Prompt: "User: What is Keti's home planet?\nAssistant: Keti's home planet is Pulnunpu.\nUser: Foruger comes from the planet Vindo. I read that Pusos speaks Ragada natively. Fact: Rassingu comes from the planet Sitinfe. What language does Pusos speak natively?\nAssistant:"
+Reply:  " Pusos's native language is Biden."
+
+Key token: ' Biden' (confidence 0.97; made without stored memory: True, proved by a closed gate)
+
+Exact decomposition of its score (5.655; the parts sum to it exactly):
+   +2.994  input token ' language' (position 60)
+   +1.346  input token ' is' (position 61)
+   +0.746  input token ' Pusos' (position 50)
+   +0.681  input token ' Pusos' (position 57)
+   +0.619  input token ' native' (position 59)
+   +0.094  input token ' speak' (position 51)
+   +0.083  input token ' language' (position 48)
+   +0.080  input token ' Pusos' (position 32)
+   -0.246  input token '?' (position 53)  (argues against)
+   -0.185  input token ' What' (position 47)  (argues against)
+   -0.081  bias 0  (argues against)
+
+Why ' Biden' and not ' Rag'? Exact decomposition of the score gap (+0.798):
+   +0.620  input token ' language' (position 60)  (favours ' Biden')
+   +0.192  input token ' is' (position 61)  (favours ' Biden')
+   +0.154  input token ' What' (position 47)  (favours ' Biden')
+   +0.126  input token ' native' (position 59)  (favours ' Biden')
+   +0.113  input token ' language' (position 48)  (favours ' Biden')
+   -0.112  input token ' Keti' (position 4)  (favours ' Rag')
+   +0.093  input token ' Pusos' (position 50)  (favours ' Biden')
+   -0.079  input token 'Assistant' (position 55)  (favours ' Rag')
+
+Strongest active features at the last layer (32 of 1024 active):
+  feature 1015  activation  2.02  fires most on: 'is', 'speaks', ':'
+  feature  169  activation  1.98  fires most on: 'is', 'speaks', 'language'
+  feature  388  activation  1.84  fires most on: ':', 're', 'pos'
+  feature  843  activation  1.82  fires most on: 'learn', 'clear', 'song'
+  feature  814  activation  1.79  fires most on: 'Assistant', 'don', 'friend'
+  feature  578  activation  1.61  fires most on: 'r', ':', 'pl'
