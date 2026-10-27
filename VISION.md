@@ -695,6 +695,57 @@ tested on TriviaQA validation and, without refitting, on NQ-open (a different
 dataset). The library returns, for a question, the reply, P(correct) and its
 evidence.
 
+**Result** (`results/kaggle/qwen-correctness/correctness/results.json`; Kaggle
+T4, 3.2 h, float32, since float16 Qwen2.5 overflows into NaN replies). AUROC for
+right versus wrong, and the error rate among the 25% most confident answers.
+Everything is fitted on TriviaQA train and nothing on NQ-open:
+
+| | Qwen2.5-1.5B TriviaQA | 1.5B NQ-open | Qwen2.5-0.5B TriviaQA | 0.5B NQ-open |
+|---|---|---|---|---|
+| accuracy (answer everything) | 40.1% | 20.2% | 21.6% | 12.2% |
+| first-token softmax | 0.719 / 36% | 0.637 / 70% | 0.685 / 62% | 0.603 / 82% |
+| best output probability (entity / min / mean) | 0.735 / 35% | 0.703 / 60% | 0.707 / 60% | 0.707 / 77% |
+| sampling consistency (6 samples) | 0.792 / 27% | 0.652 / 68% | 0.687 / 64% | 0.563 / 84% |
+| exact grounding (one number, unfitted) | 0.712 / 36% | 0.654 / 64% | 0.707 / 58% | 0.689 / 77% |
+| entity probe, 500 / 2,000 / 6,000 answers | 0.781 / 0.824 / 0.830 | 0.698 / 0.733 / 0.740 | 0.749 / 0.761 / 0.782 | 0.686 / 0.709 / 0.754 |
+| stack: probe + output | 0.846 / 21% | 0.772 / 58% | 0.793 / 51% | 0.768 / 71% |
+| stack: + grounding | 0.846 / 21% | 0.781 / 55% | 0.801 / 48% | **0.786** / 70% |
+| stack: + consistency | 0.858 / 18% | 0.776 / 57% | 0.800 / 49% | 0.763 / 72% |
+| **stack: all** | **0.859 / 18%** | **0.783 / 55%** | **0.807 / 46%** | 0.781 / 71% |
+| calibration error (ECE) of the full stack | 0.035 | 0.192 | 0.028 | 0.081 |
+
+What this establishes:
+
+- **The ceiling was data, not the method.** The same entity probe goes from
+  0.781 to 0.830 (1.5B) and from 0.749 to 0.782 (0.5B) with 6,000 fitting
+  answers instead of 500. Within each model the full stack beats the model's
+  own probability by 0.10-0.14 AUROC. For the 1.5B model, it cuts the error among
+  the most confident quarter of answers from 35% to 18%: answering only those, it
+  is right 82% of the time against 40% when answering everything.
+- **It survives a dataset shift in ranking, not in calibration.** On NQ-open,
+  never seen in fitting, the stack still ranks answers clearly better than any
+  output signal (0.78 against 0.70). Its probabilities, though, are too
+  confident there (ECE 0.19 for 1.5B), because NQ's base rate (20%) is half
+  TriviaQA's. A new domain needs a small labelled sample to recalibrate the
+  threshold, not new training.
+- **Exact grounding pays where the shift is.** Unfitted, it matches the output
+  probability. In the stack it adds most out of domain (0.5B on NQ: 0.768 to
+  0.786; 1.5B on NQ: 0.772 to 0.781) and nothing in domain for 1.5B. Attribution
+  stays exact at both sizes (error 6e-5).
+- **Sampling consistency is strong only when the model knows enough.** For 1.5B
+  on TriviaQA it is the best single unfitted signal (0.792); for 0.5B and on NQ it
+  is weak. A probe trained to imitate it is worse than the plain probe.
+  Concatenating all ten layers overfits (0.75 against 0.83 for the best single
+  layer, 23 of 28).
+- **Bigger models are easier to read.** The 1.5B model's internals separate
+  right from wrong better than the 0.5B model's (0.859 against 0.807).
+
+The trained heads (`*_heads.pt`, 50-85 KB) are served by
+`vt.chat_serve.CorrectnessResponder`. Each reply carries P(correct) and its
+evidence, and the answer is withheld below a threshold:
+`vt chat-export --hf-dir <model dir> --heads <model>_heads.pt --variant all`,
+then `vt chat` / `vt chat-serve`.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the

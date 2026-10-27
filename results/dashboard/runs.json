@@ -376,12 +376,12 @@
 "experiment": "kaggle",
 "title": "Kaggle: correctness estimator at scale (Qwen2.5 0.5B / 1.5B / 3B)",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (21:58:14 UTC check)"
+"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (22:16:22 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",

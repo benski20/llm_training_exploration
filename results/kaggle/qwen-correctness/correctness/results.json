@@ -1,0 +1,741 @@
+{
+ "config": {
+  "out": "/kaggle/working/correctness",
+  "models": "Qwen/Qwen2.5-1.5B-Instruct,Qwen/Qwen2.5-0.5B-Instruct",
+  "n_train": 8000,
+  "n_stack": 2000,
+  "n_test": 1000,
+  "k": 6,
+  "gen_batch": 48,
+  "feat_batch": 8,
+  "budget_min": 200,
+  "dtype": "float32",
+  "smoke": false
+ },
+ "Qwen/Qwen2.5-1.5B-Instruct": {
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "layers": [
+   7,
+   9,
+   11,
+   14,
+   16,
+   18,
+   20,
+   23,
+   25,
+   27
+  ],
+  "accuracy": {
+   "train": 0.422625,
+   "trivia_val": 0.401,
+   "nq": 0.202
+  },
+  "attribution_max_abs_error": 6.522331386804581e-05,
+  "unfitted": {
+   "trivia_val": {
+    "first_p": {
+     "auroc": 0.7191453752929863,
+     "error_at_50pct": 0.44599999999999995,
+     "error_at_25pct": 0.364
+    },
+    "entity_p": {
+     "auroc": 0.7351404460468195,
+     "error_at_50pct": 0.42400000000000004,
+     "error_at_25pct": 0.348
+    },
+    "min_lp": {
+     "auroc": 0.7221595427125009,
+     "error_at_50pct": 0.45599999999999996,
+     "error_at_25pct": 0.276
+    },
+    "mean_lp": {
+     "auroc": 0.7082710585805936,
+     "error_at_50pct": 0.45599999999999996,
+     "error_at_25pct": 0.36
+    },
+    "consistency": {
+     "auroc": 0.7920890594881744,
+     "error_at_50pct": 0.39,
+     "error_at_25pct": 0.268
+    },
+    "question_signed": {
+     "auroc": 0.7123634985990782,
+     "error_at_50pct": 0.43200000000000005,
+     "error_at_25pct": 0.356
+    },
+    "question_share": {
+     "auroc": 0.6597113226949322,
+     "error_at_50pct": 0.478,
+     "error_at_25pct": 0.43600000000000005
+    },
+    "template_signed": {
+     "auroc": 0.6244572208876806,
+     "error_at_50pct": 0.53,
+     "error_at_25pct": 0.4
+    }
+   },
+   "nq": {
+    "first_p": {
+     "auroc": 0.6365728678130971,
+     "error_at_50pct": 0.744,
+     "error_at_25pct": 0.704
+    },
+    "entity_p": {
+     "auroc": 0.6762264572321894,
+     "error_at_50pct": 0.714,
+     "error_at_25pct": 0.6759999999999999
+    },
+    "min_lp": {
+     "auroc": 0.6730501997568178,
+     "error_at_50pct": 0.734,
+     "error_at_25pct": 0.624
+    },
+    "mean_lp": {
+     "auroc": 0.7026166902404526,
+     "error_at_50pct": 0.71,
+     "error_at_25pct": 0.604
+    },
+    "consistency": {
+     "auroc": 0.6519268468200203,
+     "error_at_50pct": 0.726,
+     "error_at_25pct": 0.6799999999999999
+    },
+    "question_signed": {
+     "auroc": 0.6539182113700092,
+     "error_at_50pct": 0.74,
+     "error_at_25pct": 0.644
+    },
+    "question_share": {
+     "auroc": 0.6407479093774039,
+     "error_at_50pct": 0.738,
+     "error_at_25pct": 0.648
+    },
+    "template_signed": {
+     "auroc": 0.6150648899476414,
+     "error_at_50pct": 0.746,
+     "error_at_25pct": 0.6799999999999999
+    }
+   }
+  },
+  "probe_auroc_by_layer_on_stack_split": {
+   "7": 0.6914585084633974,
+   "9": 0.7330754811840765,
+   "11": 0.7473524380633877,
+   "14": 0.7704630312447208,
+   "16": 0.7963757054517167,
+   "18": 0.7452443020137555,
+   "20": 0.8099895705937276,
+   "23": 0.8142463059569005,
+   "25": 0.802557480595336,
+   "27": 0.8001731827695283
+  },
+  "probe_layer": 23,
+  "probe_by_train_size": {
+   "500": {
+    "trivia_val": {
+     "auroc": 0.7813729449331596,
+     "error_at_50pct": 0.398,
+     "error_at_25pct": 0.252
+    },
+    "nq": {
+     "auroc": 0.6978150822601057,
+     "error_at_50pct": 0.708,
+     "error_at_25pct": 0.632
+    }
+   },
+   "2000": {
+    "trivia_val": {
+     "auroc": 0.8244538903159464,
+     "error_at_50pct": 0.364,
+     "error_at_25pct": 0.20399999999999996
+    },
+    "nq": {
+     "auroc": 0.7332440010918385,
+     "error_at_50pct": 0.69,
+     "error_at_25pct": 0.624
+    }
+   },
+   "6000": {
+    "trivia_val": {
+     "auroc": 0.8304281033642937,
+     "error_at_50pct": 0.364,
+     "error_at_25pct": 0.16800000000000004
+    },
+    "nq": {
+     "auroc": 0.739832253902082,
+     "error_at_50pct": 0.6759999999999999,
+     "error_at_25pct": 0.632
+    }
+   }
+  },
+  "multi_layer_probe": {
+   "trivia_val": {
+    "auroc": 0.7524427662063539,
+    "error_at_50pct": 0.41000000000000003,
+    "error_at_25pct": 0.28400000000000003
+   },
+   "nq": {
+    "auroc": 0.6774547755527432,
+    "error_at_50pct": 0.708,
+    "error_at_25pct": 0.636
+   }
+  },
+  "consistency_probe": {
+   "trivia_val": {
+    "auroc": 0.7672013622038393,
+    "error_at_50pct": 0.406,
+    "error_at_25pct": 0.28
+   },
+   "nq": {
+    "auroc": 0.6866485520732525,
+    "error_at_50pct": 0.72,
+    "error_at_25pct": 0.6599999999999999
+   }
+  },
+  "stacked": {
+   "probe+output": {
+    "trivia_val": {
+     "auroc": 0.84562800011657,
+     "error_at_50pct": 0.356,
+     "error_at_25pct": 0.21199999999999997,
+     "ece": 0.037967087063007054
+    },
+    "nq": {
+     "auroc": 0.7715079778654557,
+     "error_at_50pct": 0.6699999999999999,
+     "error_at_25pct": 0.5760000000000001,
+     "ece": 0.2076129136290401
+    }
+   },
+   "probe+output+grounding": {
+    "trivia_val": {
+     "auroc": 0.8458486504939654,
+     "error_at_50pct": 0.348,
+     "error_at_25pct": 0.20799999999999996,
+     "ece": 0.03012537200935183
+    },
+    "nq": {
+     "auroc": 0.7807637906647807,
+     "error_at_50pct": 0.6699999999999999,
+     "error_at_25pct": 0.552,
+     "ece": 0.19178993460629135
+    }
+   },
+   "probe+output+consistency": {
+    "trivia_val": {
+     "auroc": 0.8583924162881611,
+     "error_at_50pct": 0.34199999999999997,
+     "error_at_25pct": 0.18000000000000005,
+     "ece": 0.03298548276163639
+    },
+    "nq": {
+     "auroc": 0.7756333904067099,
+     "error_at_50pct": 0.6579999999999999,
+     "error_at_25pct": 0.5720000000000001,
+     "ece": 0.20573790288716554
+    }
+   },
+   "all": {
+    "trivia_val": {
+     "auroc": 0.8587004941735811,
+     "error_at_50pct": 0.34199999999999997,
+     "error_at_25pct": 0.18000000000000005,
+     "ece": 0.03523517888598144
+    },
+    "nq": {
+     "auroc": 0.7826186754013748,
+     "error_at_50pct": 0.6619999999999999,
+     "error_at_25pct": 0.548,
+     "ece": 0.19188404311891646
+    }
+   }
+  },
+  "examples": [
+   {
+    "q": "Who was the man behind The Chipmunks?",
+    "reply": "Bob Mosher",
+    "right": 0,
+    "p_correct": 0.175,
+    "consistency": 0.0,
+    "entity_p": 0.4,
+    "top_question_token": " Chip",
+    "question_share": 0.178
+   },
+   {
+    "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+    "reply": "The Phantom of the Opera",
+    "right": 0,
+    "p_correct": 0.164,
+    "consistency": 0.3333333333333333,
+    "entity_p": 0.642,
+    "top_question_token": "ber",
+    "question_share": 0.223
+   },
+   {
+    "q": "Who was the next British Prime Minister after Arthur Balfour?",
+    "reply": "David Lloyd George was the next British Prime Minister after Arthur Balfour.",
+    "right": 0,
+    "p_correct": 0.277,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.351,
+    "top_question_token": " B",
+    "question_share": 0.108
+   },
+   {
+    "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+    "reply": "The Pointer Sisters had a 1978 hit with \"Kiss Me All Over\".",
+    "right": 0,
+    "p_correct": 0.062,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.151,
+    "top_question_token": " hit",
+    "question_share": 0.147
+   },
+   {
+    "q": "What claimed the life of singer Kathleen Ferrier?",
+    "reply": "Kathleen Ferrier died from cancer in 1968 at the age of 42.",
+    "right": 1,
+    "p_correct": 0.173,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.964,
+    "top_question_token": " singer",
+    "question_share": 0.006
+   },
+   {
+    "q": "Rita Coolidge sang the title song for which Bond film?",
+    "reply": "Goldfinger",
+    "right": 0,
+    "p_correct": 0.092,
+    "consistency": 0.3333333333333333,
+    "entity_p": 0.136,
+    "top_question_token": " Bond",
+    "question_share": 0.248
+   },
+   {
+    "q": "What was the last US state to reintroduce alcohol after prohibition?",
+    "reply": "Maine reintroduced alcohol in 1969.",
+    "right": 0,
+    "p_correct": 0.197,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.185,
+    "top_question_token": " state",
+    "question_share": 0.155
+   },
+   {
+    "q": "Which actress was voted Miss Greenwich Village in 1942?",
+    "reply": "The actress who was voted Miss Greenwich Village in 1942 was Doris Day.",
+    "right": 0,
+    "p_correct": 0.085,
+    "consistency": 0.6666666666666666,
+    "entity_p": 0.042,
+    "top_question_token": " Miss",
+    "question_share": 0.061
+   },
+   {
+    "q": "What is the Japanese share index called?",
+    "reply": "The Nikkei 225 is the most widely followed stock market index in Japan, representing the performance of all",
+    "right": 1,
+    "p_correct": 0.626,
+    "consistency": 0.6666666666666666,
+    "entity_p": 0.285,
+    "top_question_token": " Japanese",
+    "question_share": 0.166
+   },
+   {
+    "q": "What was the name of Michael Jackson's autobiography written in 1988?",
+    "reply": "\"Type-O Negative\"",
+    "right": 0,
+    "p_correct": 0.263,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.31,
+    "top_question_token": " Jackson",
+    "question_share": 0.165
+   },
+   {
+    "q": "In which decade did stereo records first go on sale?",
+    "reply": "1948",
+    "right": 0,
+    "p_correct": 0.463,
+    "consistency": 0.5,
+    "entity_p": 0.725,
+    "top_question_token": " stereo",
+    "question_share": 0.096
+   },
+   {
+    "q": "In what year's Olympics were electric timing devices and a public-address system used for the first time?",
+    "reply": "1908",
+    "right": 0,
+    "p_correct": 0.418,
+    "consistency": 0.6666666666666666,
+    "entity_p": 0.699,
+    "top_question_token": " year",
+    "question_share": 0.03
+   }
+  ],
+  "seconds": 8696
+ },
+ "Qwen/Qwen2.5-0.5B-Instruct": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "layers": [
+   6,
+   8,
+   10,
+   12,
+   14,
+   15,
+   17,
+   19,
+   21,
+   23
+  ],
+  "accuracy": {
+   "train": 0.216625,
+   "trivia_val": 0.216,
+   "nq": 0.122
+  },
+  "attribution_max_abs_error": 5.799904465675354e-05,
+  "unfitted": {
+   "trivia_val": {
+    "first_p": {
+     "auroc": 0.6849903155706727,
+     "error_at_50pct": 0.696,
+     "error_at_25pct": 0.624
+    },
+    "entity_p": {
+     "auroc": 0.6980761054421769,
+     "error_at_50pct": 0.6859999999999999,
+     "error_at_25pct": 0.62
+    },
+    "min_lp": {
+     "auroc": 0.7069987717309146,
+     "error_at_50pct": 0.6839999999999999,
+     "error_at_25pct": 0.6
+    },
+    "mean_lp": {
+     "auroc": 0.647764314058957,
+     "error_at_50pct": 0.728,
+     "error_at_25pct": 0.64
+    },
+    "consistency": {
+     "auroc": 0.6867500472411187,
+     "error_at_50pct": 0.7,
+     "error_at_25pct": 0.64
+    },
+    "question_signed": {
+     "auroc": 0.7066149376417233,
+     "error_at_50pct": 0.6659999999999999,
+     "error_at_25pct": 0.5800000000000001
+    },
+    "question_share": {
+     "auroc": 0.6573660714285714,
+     "error_at_50pct": 0.708,
+     "error_at_25pct": 0.632
+    },
+    "template_signed": {
+     "auroc": 0.6173056027966742,
+     "error_at_50pct": 0.72,
+     "error_at_25pct": 0.656
+    }
+   },
+   "nq": {
+    "first_p": {
+     "auroc": 0.602869786026364,
+     "error_at_50pct": 0.842,
+     "error_at_25pct": 0.8240000000000001
+    },
+    "entity_p": {
+     "auroc": 0.6675940102318981,
+     "error_at_50pct": 0.8200000000000001,
+     "error_at_25pct": 0.808
+    },
+    "min_lp": {
+     "auroc": 0.7073453078905112,
+     "error_at_50pct": 0.812,
+     "error_at_25pct": 0.768
+    },
+    "mean_lp": {
+     "auroc": 0.6634583068822585,
+     "error_at_50pct": 0.83,
+     "error_at_25pct": 0.784
+    },
+    "consistency": {
+     "auroc": 0.5632398521229321,
+     "error_at_50pct": 0.866,
+     "error_at_25pct": 0.836
+    },
+    "question_signed": {
+     "auroc": 0.6887953246947235,
+     "error_at_50pct": 0.8200000000000001,
+     "error_at_25pct": 0.772
+    },
+    "question_share": {
+     "auroc": 0.664662608760596,
+     "error_at_50pct": 0.8280000000000001,
+     "error_at_25pct": 0.784
+    },
+    "template_signed": {
+     "auroc": 0.6499215803428059,
+     "error_at_50pct": 0.8280000000000001,
+     "error_at_25pct": 0.812
+    }
+   }
+  },
+  "probe_auroc_by_layer_on_stack_split": {
+   "6": 0.702215727124716,
+   "8": 0.6862229993142452,
+   "10": 0.7172211421223021,
+   "12": 0.7415574605908509,
+   "14": 0.7606281107240149,
+   "15": 0.7592247057271392,
+   "17": 0.7538778486729268,
+   "19": 0.7633769287757466,
+   "21": 0.754633193717733,
+   "23": 0.7514653838849092
+  },
+  "probe_layer": 19,
+  "probe_by_train_size": {
+   "500": {
+    "trivia_val": {
+     "auroc": 0.7488425925925926,
+     "error_at_50pct": 0.6619999999999999,
+     "error_at_25pct": 0.56
+    },
+    "nq": {
+     "auroc": 0.6861439934276858,
+     "error_at_50pct": 0.8200000000000001,
+     "error_at_25pct": 0.784
+    }
+   },
+   "2000": {
+    "trivia_val": {
+     "auroc": 0.7608772675736961,
+     "error_at_50pct": 0.6639999999999999,
+     "error_at_25pct": 0.5680000000000001
+    },
+    "nq": {
+     "auroc": 0.7086616378505546,
+     "error_at_50pct": 0.8220000000000001,
+     "error_at_25pct": 0.78
+    }
+   },
+   "6000": {
+    "trivia_val": {
+     "auroc": 0.7822715891912321,
+     "error_at_50pct": 0.652,
+     "error_at_25pct": 0.544
+    },
+    "nq": {
+     "auroc": 0.7544624519212816,
+     "error_at_50pct": 0.804,
+     "error_at_25pct": 0.732
+    }
+   }
+  },
+  "multi_layer_probe": {
+   "trivia_val": {
+    "auroc": 0.6825633030990174,
+    "error_at_50pct": 0.698,
+    "error_at_25pct": 0.6
+   },
+   "nq": {
+    "auroc": 0.6790768886067441,
+    "error_at_50pct": 0.8160000000000001,
+    "error_at_25pct": 0.8
+   }
+  },
+  "consistency_probe": {
+   "trivia_val": {
+    "auroc": 0.572745417611489,
+    "error_at_50pct": 0.752,
+    "error_at_25pct": 0.728
+   },
+   "nq": {
+    "auroc": 0.5214160349527615,
+    "error_at_50pct": 0.862,
+    "error_at_25pct": 0.896
+   }
+  },
+  "stacked": {
+   "probe+output": {
+    "trivia_val": {
+     "auroc": 0.7925878684807256,
+     "error_at_50pct": 0.648,
+     "error_at_25pct": 0.508,
+     "ece": 0.02307354542426764
+    },
+    "nq": {
+     "auroc": 0.7677937936442735,
+     "error_at_50pct": 0.804,
+     "error_at_25pct": 0.708,
+     "ece": 0.10483613050729035
+    }
+   },
+   "probe+output+grounding": {
+    "trivia_val": {
+     "auroc": 0.8009672619047619,
+     "error_at_50pct": 0.648,
+     "error_at_25pct": 0.484,
+     "ece": 0.019582798293791715
+    },
+    "nq": {
+     "auroc": 0.7863157698196348,
+     "error_at_50pct": 0.792,
+     "error_at_25pct": 0.7,
+     "ece": 0.08362961253803225
+    }
+   },
+   "probe+output+consistency": {
+    "trivia_val": {
+     "auroc": 0.8000460600907029,
+     "error_at_50pct": 0.646,
+     "error_at_25pct": 0.492,
+     "ece": 0.02139405561983586
+    },
+    "nq": {
+     "auroc": 0.7627151872736099,
+     "error_at_50pct": 0.804,
+     "error_at_25pct": 0.72,
+     "ece": 0.10116203327663244
+    }
+   },
+   "all": {
+    "trivia_val": {
+     "auroc": 0.806588955026455,
+     "error_at_50pct": 0.64,
+     "error_at_25pct": 0.46399999999999997,
+     "ece": 0.027891466391272844
+    },
+    "nq": {
+     "auroc": 0.7812371634489712,
+     "error_at_50pct": 0.796,
+     "error_at_25pct": 0.712,
+     "ece": 0.08054464623797687
+    }
+   }
+  },
+  "examples": [
+   {
+    "q": "Who was the man behind The Chipmunks?",
+    "reply": "The Chipmunks were created by Jim Henson and Don Knotts.",
+    "right": 0,
+    "p_correct": 0.187,
+    "consistency": 0.3333333333333333,
+    "entity_p": 0.164,
+    "top_question_token": "unks",
+    "question_share": 0.134
+   },
+   {
+    "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+    "reply": "\"Rent\" was premiered in the US on 10th December 1993.",
+    "right": 0,
+    "p_correct": 0.083,
+    "consistency": 0.5,
+    "entity_p": 0.123,
+    "top_question_token": " musical",
+    "question_share": 0.117
+   },
+   {
+    "q": "Who was the next British Prime Minister after Arthur Balfour?",
+    "reply": "Vernon Markham was the next British Prime Minister after Arthur Balfour.",
+    "right": 0,
+    "p_correct": 0.135,
+    "consistency": 0.6666666666666666,
+    "entity_p": 0.092,
+    "top_question_token": " British",
+    "question_share": 0.074
+   },
+   {
+    "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+    "reply": "The Beatles had a 70s No. 1 hit with \"I Want to Hold Your Hand.\"",
+    "right": 0,
+    "p_correct": 0.102,
+    "consistency": 0.0,
+    "entity_p": 0.196,
+    "top_question_token": "1",
+    "question_share": 0.123
+   },
+   {
+    "q": "What claimed the life of singer Kathleen Ferrier?",
+    "reply": "Kathleen Ferrier was claimed to have died in an accident while driving on the highway near her home in 1",
+    "right": 0,
+    "p_correct": 0.023,
+    "consistency": 0.0,
+    "entity_p": 0.094,
+    "top_question_token": " singer",
+    "question_share": 0.003
+   },
+   {
+    "q": "Rita Coolidge sang the title song for which Bond film?",
+    "reply": "The title song for the Bond film \"Goldeneye\" was sung by Rita Coolidge.",
+    "right": 0,
+    "p_correct": 0.253,
+    "consistency": 0.3333333333333333,
+    "entity_p": 0.731,
+    "top_question_token": "ita",
+    "question_share": 0.058
+   },
+   {
+    "q": "What was the last US state to reintroduce alcohol after prohibition?",
+    "reply": "Alcohol was reintroduced in South Dakota after prohibition ended.",
+    "right": 0,
+    "p_correct": 0.123,
+    "consistency": 0.0,
+    "entity_p": 0.352,
+    "top_question_token": " state",
+    "question_share": 0.14
+   },
+   {
+    "q": "Which actress was voted Miss Greenwich Village in 1942?",
+    "reply": "The actress who was voted Miss Greenwich Village in 1942 was Betty Grable.",
+    "right": 0,
+    "p_correct": 0.038,
+    "consistency": 0.5,
+    "entity_p": 0.037,
+    "top_question_token": " Greenwich",
+    "question_share": 0.066
+   },
+   {
+    "q": "What is the Japanese share index called?",
+    "reply": "Nikkei 225",
+    "right": 1,
+    "p_correct": 0.277,
+    "consistency": 0.16666666666666666,
+    "entity_p": 0.241,
+    "top_question_token": " index",
+    "question_share": 0.038
+   },
+   {
+    "q": "What was the name of Michael Jackson's autobiography written in 1988?",
+    "reply": "\"Thriller\"",
+    "right": 0,
+    "p_correct": 0.338,
+    "consistency": 0.3333333333333333,
+    "entity_p": 0.577,
+    "top_question_token": " Jackson",
+    "question_share": 0.148
+   },
+   {
+    "q": "In which decade did stereo records first go on sale?",
+    "reply": "The decade in which stereo records first went on sale was the 1950s.",
+    "right": 0,
+    "p_correct": 0.245,
+    "consistency": 0.6666666666666666,
+    "entity_p": 0.938,
+    "top_question_token": " decade",
+    "question_share": 0.053
+   },
+   {
+    "q": "In what year's Olympics were electric timing devices and a public-address system used for the first time?",
+    "reply": "1936 Summer Olympics",
+    "right": 0,
+    "p_correct": 0.322,
+    "consistency": 0.8333333333333334,
+    "entity_p": 0.836,
+    "top_question_token": " year",
+    "question_share": 0.059
+   }
+  ],
+  "seconds": 2827
+ }
+}
