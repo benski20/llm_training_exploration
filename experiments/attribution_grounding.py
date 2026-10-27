@@ -80,6 +80,27 @@ def main():
            "mean_by_outcome": {lab: {s: float(np.mean([r[s] for r in rows if r["right"] == v]))
                                      for s in ("top_source_share", "conversation_share", "bias_share")}
                                for lab, v in (("right", True), ("hallucinated", False))}}
+    # grounding proper: answers to questions whose fact is in the conversation vs hallucinations
+    # (memorised facts legitimately do not come from the conversation, so they are left out)
+    g = [r for r in rows if r["kind"] in ("ctx", "ctx_fresh") and r["right"] or r["kind"].startswith("absent")]
+    yg = np.array([r["right"] for r in g], dtype=int)
+    res["grounding_subset"] = {"n": len(g), "grounded_right": int(yg.sum()),
+                               "auroc": {s: C.auroc(np.array([r[s] for r in g]), yg)
+                                         for s in ("top_source_share", "conversation_share", "msp", "neg_nll",
+                                                   "k_min")}}
+    # does attribution add to confidence? logistic fit on one half, AUROC on the other
+    from interp_by_design import fit_probe
+    for name_, sub, ys in (("all_answered", rows, y), ("grounding_subset", g, yg)):
+        half = len(sub) // 2
+        def feats(rs, cols):
+            return np.array([[r[c] for c in cols] for r in rs], dtype=float)
+        out = {}
+        for label, cols in (("neg_nll", ["neg_nll"]), ("neg_nll+attribution", ["neg_nll", "top_source_share",
+                                                                               "conversation_share", "bias_share"])):
+            pr, _ = fit_probe(feats(sub[:half], cols), ys[:half])
+            out[label] = C.auroc(pr(feats(sub[half:], cols)), ys[half:])
+        res.setdefault("combined_heldout_auroc", {})[name_] = out
+    json.dump(rows, open(a.out.replace(".json", f"_{a.model}_rows.json"), "w"))
     print(json.dumps(res, indent=1))
     allres = json.load(open(a.out)) if os.path.exists(a.out) else {}
     allres[a.model] = res

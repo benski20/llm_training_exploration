@@ -1,0 +1,27 @@
+{
+ "glassbox2_3": {
+  "model": "Glassbox-2.3",
+  "answered": 1053,
+  "answered_right": 145,
+  "auroc": {
+   "top_source_share": 0.6480328117879386,
+   "conversation_share": 0.6326978581193985,
+   "msp": 0.6340270393437643,
+   "neg_nll": 0.7023849308825764,
+   "k_min": 0.5716922375816497
+  },
+  "auroc_neg_bias_share": 0.6132842169223758,
+  "mean_by_outcome": {
+   "right": {
+    "top_source_share": 0.13759270545456004,
+    "conversation_share": 0.5035597277972798,
+    "bias_share": 0.005800682242001462
+   },
+   "hallucinated": {
+    "top_source_share": 0.10884652189752682,
+    "conversation_share": 0.385919063095427,
+    "bias_share": 0.009004061784113098
+   }
+  }
+ }
+}
