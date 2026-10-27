@@ -78,21 +78,13 @@ def steps_of(log, model):
     return out
 
 
-def running(log):
-    if "v9_hard_gate" in log:                        # both v9 runs share the script name; match the L1 value
-        stem = os.path.basename(log).replace(".log", "").replace("v9_hard_gate_", "")
-        try:
-            ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, check=False).stdout
-        except OSError:
-            return False
-        return any("--hard-gate " + stem in line for line in ps.splitlines())
+def running(res):
+    """A training process is running for this run if its command line names the run's result file."""
     try:
         ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, check=False).stdout
     except OSError:
         return False
-    stem = os.path.basename(log).replace(".log", "")
-    return any("python3" in line and (stem in line or (stem == "run" and os.path.dirname(log) in line))
-               for line in ps.splitlines())
+    return any(line.startswith("python3") and res in line for line in ps.splitlines())
 
 
 KAGGLE_LOG = "results/kaggle/launch.log"
@@ -148,7 +140,7 @@ def main():
         result = json.load(open(path)).get(model) if os.path.exists(path) else None
         if result is not None:
             status = "collapsed" if "collapsed" in note else "done"
-        elif st and running(log):
+        elif st and running(res):
             status = "running"
         elif st:
             status = "stopped"
