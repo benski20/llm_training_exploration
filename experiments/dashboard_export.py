@@ -36,6 +36,10 @@ RUNS = [
      6000, "abstention taught on never-seen entities"),
     ("v8", "v8 fresh entities, GPT", f"{G}/v8_fresh_baseline.log", f"{G}/v8_fresh_baseline.json", "baseline", 6000,
      "same data for the matched GPT"),
+    ("v9-0.02", "v9 hard memory gate, L1 0.02", f"{G}/v9_hard_gate_0.02.log", f"{G}/v9_hard_gate_0.02.json", "glassbox",
+     6000, "gate exactly 0 when memory is unused: exact memory-free certificates"),
+    ("v9-0.1", "v9 hard memory gate, L1 0.1", f"{G}/v9_hard_gate_0.1.log", f"{G}/v9_hard_gate_0.1.json", "glassbox",
+     6000, "stronger push to close the memory gate"),
     ("chat", "Chat glass-box", "results/glassbox_chat/run.log", "results/glassbox_chat/run.json", "glassbox", 3000,
      "Alpaca + WikiText-2 + fact world"),
     ("chat", "Chat GPT baseline", "results/glassbox_chat/run.log", "results/glassbox_chat/run.json", "baseline", 3000,
@@ -70,6 +74,13 @@ def steps_of(log, model):
 
 
 def running(log):
+    if "v9_hard_gate" in log:                        # both v9 runs share the script name; match the L1 value
+        stem = os.path.basename(log).replace(".log", "").replace("v9_hard_gate_", "")
+        try:
+            ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, check=False).stdout
+        except OSError:
+            return False
+        return any("--hard-gate " + stem in line for line in ps.splitlines())
     try:
         ps = subprocess.run(["ps", "-eo", "args"], capture_output=True, text=True, check=False).stdout
     except OSError:

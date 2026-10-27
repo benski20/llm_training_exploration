@@ -38,5 +38,25 @@
 "auroc_msp": 0.841977408007041,
 "auroc_probe": 0.692842468162593,
 "auroc_k": null
+},
+{
+"model": "glassbox-v2",
+"name": "Glass-box v2",
+"split": "Alpaca",
+"bits_per_token": 5.59699727303781,
+"top1_acc": 0.28234058103416776,
+"auroc_msp": 0.8162069324265484,
+"auroc_probe": 0.7485064698640633,
+"auroc_k": 0.7367263788327779
+},
+{
+"model": "glassbox-v2",
+"name": "Glass-box v2",
+"split": "WikiText-2",
+"bits_per_token": 5.72265168539872,
+"top1_acc": 0.28335832083958024,
+"auroc_msp": 0.8338190500856453,
+"auroc_probe": 0.785503389695091,
+"auroc_k": 0.7762117659162004
 }
 ]

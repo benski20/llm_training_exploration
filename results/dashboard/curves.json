@@ -910,6 +910,20 @@
 "qa_loss": 1.8882
 },
 {
+"run": "v9-0.02-glassbox",
+"title": "v9 hard memory gate, L1 0.02",
+"step": 0,
+"loss": 14.326,
+"qa_loss": 4.8251
+},
+{
+"run": "v9-0.1-glassbox",
+"title": "v9 hard memory gate, L1 0.1",
+"step": 0,
+"loss": 14.3763,
+"qa_loss": 4.8251
+},
+{
 "run": "chat-glassbox",
 "title": "Chat glass-box",
 "step": 250,
@@ -1141,6 +1155,27 @@
 "qa_loss": null
 },
 {
+"run": "chat2-glassbox",
+"title": "Chat v2 glass-box",
+"step": 2500,
+"loss": 3.1858,
+"qa_loss": null
+},
+{
+"run": "chat2-glassbox",
+"title": "Chat v2 glass-box",
+"step": 2750,
+"loss": 3.1698,
+"qa_loss": null
+},
+{
+"run": "chat2-glassbox",
+"title": "Chat v2 glass-box",
+"step": 3000,
+"loss": 3.0099,
+"qa_loss": null
+},
+{
 "run": "chat2-baseline",
 "title": "Chat v2 GPT baseline",
 "step": 250,
@@ -1173,6 +1208,34 @@
 "title": "Chat v2 GPT baseline",
 "step": 1250,
 "loss": 3.1183,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 1500,
+"loss": 3.1643,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 1750,
+"loss": 3.0492,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 2000,
+"loss": 3.2158,
+"qa_loss": null
+},
+{
+"run": "chat2-baseline",
+"title": "Chat v2 GPT baseline",
+"step": 2250,
+"loss": 2.7809,
 "qa_loss": null
 }
 ]

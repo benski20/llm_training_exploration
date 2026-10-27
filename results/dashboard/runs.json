@@ -120,6 +120,30 @@
 "note": "same data for the matched GPT"
 },
 {
+"run": "v9-0.02-glassbox",
+"experiment": "v9-0.02",
+"title": "v9 hard memory gate, L1 0.02",
+"model": "glassbox",
+"status": "running",
+"step": 0,
+"total_steps": 6000,
+"progress": 0.00016666666666666666,
+"last_loss": 14.326,
+"note": "gate exactly 0 when memory is unused: exact memory-free certificates"
+},
+{
+"run": "v9-0.1-glassbox",
+"experiment": "v9-0.1",
+"title": "v9 hard memory gate, L1 0.1",
+"model": "glassbox",
+"status": "running",
+"step": 0,
+"total_steps": 6000,
+"progress": 0.00016666666666666666,
+"last_loss": 14.3763,
+"note": "stronger push to close the memory gate"
+},
+{
 "run": "chat-glassbox",
 "experiment": "chat",
 "title": "Chat glass-box",
@@ -148,11 +172,11 @@
 "experiment": "chat2",
 "title": "Chat v2 glass-box",
 "model": "glassbox",
-"status": "running",
-"step": 2250,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.7503333333333333,
-"last_loss": 3.2114,
+"progress": 1.0,
+"last_loss": 3.0099,
 "note": "chatbot-style dialogues, made-up names, zero-init memory"
 },
 {
@@ -161,10 +185,10 @@
 "title": "Chat v2 GPT baseline",
 "model": "baseline",
 "status": "running",
-"step": 1250,
+"step": 2250,
 "total_steps": 3000,
-"progress": 0.417,
-"last_loss": 3.1183,
+"progress": 0.7503333333333333,
+"last_loss": 2.7809,
 "note": "same chat data for the matched GPT"
 },
 {
@@ -172,11 +196,11 @@
 "experiment": "kaggle",
 "title": "Kaggle retrofit: Qwen2.5-1.5B",
 "model": "qwen-retrofit",
-"status": "running",
+"status": "stopped",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "LoRA + self-knowledge on a Kaggle T4 GPU (00:27:21 UTC check)"
+"note": "LoRA + self-knowledge on a Kaggle T4 GPU (00:37:25 UTC check)"
 }
 ]
