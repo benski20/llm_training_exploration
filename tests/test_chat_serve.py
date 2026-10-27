@@ -164,3 +164,34 @@ def test_correctness_backend_withholds_below_threshold(tmp_path):
         f.write(b"x")
     with pytest.raises(PackageError):
         load_responder(str(d))
+
+
+def test_claims_backend_scores_every_claim_in_a_multiturn_reply(tmp_path):
+    pytest.importorskip("transformers")
+    import numpy as np
+    from transformers import AutoTokenizer, Qwen2Config, Qwen2ForCausalLM
+    from vt.chat_serve import ClaimResponder, export_claims_package, load_responder
+    from vt.correctness import Probe
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2))
+    d = tmp_path / "model"
+    m.save_pretrained(d); tok.save_pretrained(d)
+    rng = np.random.default_rng(0)
+    probe = Probe().fit(rng.normal(size=(60, 32)).astype(np.float32), rng.integers(0, 2, 60).astype(np.float32))
+    stack = Probe().fit(rng.normal(size=(60, 4)).astype(np.float32), rng.integers(0, 2, 60).astype(np.float32))
+    torch.save({"layer": 1, "probe": probe.state_dict(), "stacker": stack.state_dict(),
+                "output_keys": ["claim_p", "word_min_lp", "reply_mean_lp"]}, tmp_path / "h.pt")
+    export_claims_package(str(d), str(tmp_path / "h.pt"))
+    r = load_responder(str(d))
+    assert isinstance(r, ClaimResponder)
+    msgs = [{"role": "system", "content": "x"}, {"role": "user", "content": "Who wrote Hamlet?"},
+            {"role": "assistant", "content": "Shakespeare."}, {"role": "user", "content": "And Faust?"}]
+    reply = tok("Goethe wrote Faust in 1808, not Shakespeare.").input_ids
+    got = r.score(msgs, reply)
+    words = [w for _, w, _ in got]
+    assert "Goethe" in words and not any(w.startswith("Shakespeare") or w.startswith("Faust") for w in words)
+    assert all(0 <= p <= 1 for _, _, p in got)
+    out = r.reply("Who wrote Faust?", history=[("Who wrote Hamlet?", "Shakespeare.")], max_new_tokens=8)
+    assert set(out) >= {"text", "claims", "reply_p_correct", "flagged_claims"}

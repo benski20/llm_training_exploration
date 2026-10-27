@@ -405,6 +405,79 @@ class HFResponder:
         return _report(self.tok.decode(new, skip_special_tokens=True).strip(), tokens, threshold)
 
 
+def export_claims_package(model_dir, head, threshold=0.5):
+    """Pin a Hugging Face model directory plus a claim-level correctness head (kaggle/claims writes
+    <model>_claims_head.pt): copies it in as claims_head.pt and writes manifest.json."""
+    import shutil
+    shutil.copyfile(head, os.path.join(model_dir, "claims_head.pt"))
+    return _hash_dir(model_dir, ("config.json", "claims_head.pt"), "vt-claims-chat/1", {"threshold": float(threshold)})
+
+
+class ClaimResponder:
+    """Any conversation, any reply: generates the reply, then one forward pass over conversation +
+    reply scores every claim in it (each name, number or date the reply asserts that the
+    conversation did not already contain) with the trained claim probe (vt/claims.py,
+    kaggle/claims/run.py). Returns each claim with P(correct) and a flag below the threshold, and
+    the reply's risk (its least likely claim). History (multi-turn) is part of the conversation."""
+
+    def __init__(self, path, max_bytes=8 << 30):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from .correctness import Probe
+        with _VerifiedStage(path, max_bytes) as st:
+            dev = "cuda" if torch.cuda.is_available() else "cpu"
+            self.tok = AutoTokenizer.from_pretrained(st.dir)
+            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa (eager overflows)
+                st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32,
+                attn_implementation="sdpa").to(dev).eval()
+            head = torch.load(os.path.join(st.dir, "claims_head.pt"), map_location="cpu", weights_only=True)
+            self.manifest = st.manifest
+        self.layer, self.keys = head["layer"], head["output_keys"]
+        self.probe, self.stacker = Probe.from_state(head["probe"]), Probe.from_state(head["stacker"])
+        self.threshold = self.manifest.get("threshold", 0.5)
+        self.signals = ["claims", "p_correct"]
+        if self.tok.pad_token is None:
+            self.tok.pad_token = self.tok.eos_token
+
+    def score(self, messages, reply_ids):
+        """Claims of a given reply to a conversation: [(token index, word, P(correct))]."""
+        import numpy as np
+        from .claims import claim_features, claim_tokens, prompt_of
+        context = " ".join(m["content"] for m in messages if m["role"] != "system")
+        js = claim_tokens(self.tok, reply_ids, context)
+        if not js:
+            return []
+        p = self.tok(prompt_of(self.tok, messages)).input_ids
+        rows = claim_features(self.model, self.tok, [p], [reply_ids], [js], [self.layer], batch=1)[0]
+        h = torch.stack([r["h"][0] for r in rows]).float().numpy()
+        z = self.stacker.logit(np.column_stack([self.probe.logit(h)] + [[r[k] for r in rows] for k in self.keys]))
+        words = []
+        for j in js:
+            k = j + 1
+            while k < len(reply_ids) and not self.tok.decode(reply_ids[k:k + 1])[:1].isspace() and \
+                    self.tok.decode(reply_ids[k:k + 1]) not in (",", ".", "\n"):
+                k += 1
+            words.append(self.tok.decode(reply_ids[j:k]).strip())
+        return [(j, w, float(1 / (1 + np.exp(-zz)))) for j, w, zz in zip(js, words, z)]
+
+    def reply(self, message, history=(), max_new_tokens=256, threshold=None):
+        from .claims import prompt_of
+        from .correctness import generate
+        msgs = [{"role": "system", "content": HF_SYSTEM}]
+        for u, a_ in history:
+            msgs += [{"role": "user", "content": u}, {"role": "assistant", "content": a_}]
+        msgs.append({"role": "user", "content": message})
+        r = generate(self.model, self.tok, [prompt_of(self.tok, msgs)], max_new_tokens=max_new_tokens, batch=1)[0]
+        text = self.tok.decode(r, skip_special_tokens=True).strip()
+        th = self.threshold if threshold is None else threshold
+        claims = [{"token": j, "text": w, "p_correct": round(pc, 4), "flagged": pc < th} for j, w, pc in self.score(msgs, r)]
+        risk = min((c["p_correct"] for c in claims), default=None)
+        return {"text": text, "claims": claims, "reply_p_correct": risk, "threshold": th,
+                "flagged_claims": [c["text"] for c in claims if c["flagged"]],
+                "abstained": any(m in text.lower() for m in REFUSAL_MARKERS),
+                "tokens": [], "low_confidence_spans": [{"text": c["text"], "start_token": c["token"]}
+                                                       for c in claims if c["flagged"]]}
+
+
 def _report(text, tokens, threshold):
     spans, cur = [], None
     for j, r in enumerate(tokens):
@@ -431,6 +504,8 @@ def load_responder(path):
         return HFResponder(path)
     if fmt == "vt-correctness-chat/1":
         return CorrectnessResponder(path)
+    if fmt == "vt-claims-chat/1":
+        return ClaimResponder(path)
     if fmt == "vt-glassbox-chat/1":
         return GlassboxResponder(*load_package(path))
     if fmt in ("vt-glassbox2-chat/1", "vt-glassbox3-chat/1"):

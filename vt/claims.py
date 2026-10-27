@@ -161,3 +161,51 @@ def build(fmt, qa, rng, k=3):
 def make_items(fmt, pool, n, seed):
     rng = random.Random(seed)
     return [build(fmt, pool, rng) for _ in range(n)]
+
+
+def prompt_of(tok, messages):
+    return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+
+def claim_features(model, tok, prompt_ids, reply_ids, positions, layers, batch=8):
+    """One forward pass per conversation (batched, left-padded). For each requested claim position j
+    (an index into the reply) returns the hidden states (len(layers), d) at the position that predicts
+    it, and output signals: the claim token's probability, the least likely token in its word, and the
+    reply's mean token log-probability. positions: list (per item) of lists of reply indices."""
+    import torch
+    import torch.nn.functional as F
+    dev = next(model.parameters()).device
+    pad = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
+    out = []
+    for i in range(0, len(prompt_ids), batch):
+        P_, R_, J_ = prompt_ids[i:i + batch], reply_ids[i:i + batch], positions[i:i + batch]
+        seqs = [p + (r or [int(tok.eos_token_id)]) for p, r in zip(P_, R_)]
+        M = max(len(s) for s in seqs)
+        ids = torch.full((len(seqs), M), pad, dtype=torch.long)
+        mask = torch.zeros((len(seqs), M), dtype=torch.long)
+        for b, s in enumerate(seqs):
+            ids[b, M - len(s):] = torch.tensor(s)
+            mask[b, M - len(s):] = 1
+        ids, mask = ids.to(dev), mask.to(dev)
+        with torch.no_grad():
+            o = model(input_ids=ids, attention_mask=mask, position_ids=(mask.cumsum(-1) - 1).clamp(min=0),
+                      output_hidden_states=True)
+        hs = torch.stack([o.hidden_states[L + 1] for L in layers], 1)              # (B, nL, M, d)
+        for b, (p, r, js) in enumerate(zip(P_, R_, J_)):
+            r = r or [int(tok.eos_token_id)]
+            off = M - len(seqs[b]) + len(p) - 1                                    # predicts r[0]
+            with torch.no_grad():
+                lp = F.log_softmax(o.logits[b, off:off + len(r)].float(), -1)
+                tl = lp[torch.arange(len(r), device=dev), torch.tensor(r, device=dev)].cpu()
+            starts = word_starts(tok, r) + [len(r)]
+            rows = []
+            for j in js:
+                end = next((s for s in starts if s > j), len(r))
+                rows.append({"h": hs[b, :, off + j].half().cpu(), "claim_p": float(tl[j].exp()),
+                             "word_min_lp": float(tl[j:end].min()), "reply_mean_lp": float(tl.mean()),
+                             "position": j / max(1, len(r))})
+            out.append(rows)
+    return out
+
+
+OUTPUT_KEYS = ["claim_p", "word_min_lp", "reply_mean_lp"]

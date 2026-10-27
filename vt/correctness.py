@@ -86,9 +86,31 @@ def ece(p, y, bins=10):
     return float(tot)
 
 
-def report(scores, y, prob=None):
-    out = {"auroc": auroc(scores, y), "error_at_50pct": error_at(scores, y, 0.5),
-           "error_at_25pct": error_at(scores, y, 0.25)}
+def auroc_ci(scores, y, n=1000, seed=0):
+    """95% bootstrap interval of the AUROC (resampling items)."""
+    scores, y = np.asarray(scores, float), np.asarray(y)
+    rng = np.random.default_rng(seed)
+    vals = []
+    for _ in range(n):
+        i = rng.integers(len(y), size=len(y))
+        a = auroc(scores[i], y[i])
+        if a is not None:
+            vals.append(a)
+    return [float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))] if vals else None
+
+
+def aurc(scores, y):
+    """Area under the risk-coverage curve: mean error over all coverages, most confident first (lower is better)."""
+    y = np.asarray(y, float)[np.argsort(-np.asarray(scores, float), kind="mergesort")]
+    return float(np.mean(np.cumsum(1 - y) / np.arange(1, len(y) + 1)))
+
+
+def report(scores, y, prob=None, ci=False):
+    out = {"n": int(len(y)), "positives": int(np.sum(y)), "auroc": auroc(scores, y),
+           "error_at_50pct": error_at(scores, y, 0.5), "error_at_25pct": error_at(scores, y, 0.25),
+           "aurc": aurc(scores, y)}
+    if ci:
+        out["auroc_ci"] = auroc_ci(scores, y)
     if prob is not None:
         out["ece"] = ece(prob, y)
     return out
