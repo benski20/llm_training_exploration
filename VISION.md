@@ -282,6 +282,23 @@ GPT writes better. Chat v3, a hard memory gate with an L1 penalty of 0.05,
 closed every gate by step 750: the model gave up memory entirely, so its
 certificates were trivial. It was stopped.
 
+**Glassbox-2 CPU pilot** (`vt/glassbox2.py`, `results/glassbox2_chat/`): exact
+sparse features, exact attribution, a logged hard-gated memory. Same chat data,
+8.0M parameters. Go/no-go tests fixed before the results:
+
+* G1, language within 15% of the GPT: **pass**, 5.47 vs 4.99 bits/token (+9.6%).
+* G2, verification value: **fail**. k flags wrong chat answers at 0.81 against
+  the GPT probe's 0.85, and 0% of chat replies are certified memory-free.
+* G3, soundness: pass, but on chat it is vacuous (no certified replies).
+* G4, inspectability: **pass**. On the trained model, attribution matches the
+  logits to within 3e-6, and the features are exactly sparse.
+
+It also answered given facts worse (0% vs 28%) and over-refused 44% of the time.
+Diagnosis: memory gates open on 2.4% of tokens, but softmax attention gives
+every earlier token a nonzero weight, so one open gate taints everything after
+it. Next: exactly sparse attention, so each token's dependency set is exact
+and small.
+
 The thesis "design for interpretability, get more accurate hallucination
 detection" is **not supported** by these experiments. The memory-as-knowledge
 store and the mechanistic diagnoses are the parts worth carrying forward.
