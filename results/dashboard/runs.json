@@ -418,5 +418,17 @@
 "progress": 1.0,
 "last_loss": null,
 "note": "no lift: every detector 0.70-0.76 with 500 fitting answers"
+},
+{
+"run": "recalibrate-shift",
+"experiment": "qwen",
+"title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
+"model": "qwen",
+"status": "running",
+"step": 25,
+"total_steps": 600,
+"progress": 0.041666666666666664,
+"last_loss": null,
+"note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 }
 ]

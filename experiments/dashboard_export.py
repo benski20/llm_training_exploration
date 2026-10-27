@@ -194,7 +194,10 @@ LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B
           "SiLU gates fixed, no conversion; question-grounding number adds to softmax (+0.043), not to a probe"),
          ("qwen-correctness-entity", "CPU: the same signals read at the answer's entity token",
           "results/qwen_correctness_entity.log", "results/qwen_correctness_entity.json", 1000,
-          "experiments/qwen_correctness_entity.py", "no lift: every detector 0.70-0.76 with 500 fitting answers")]
+          "experiments/qwen_correctness_entity.py", "no lift: every detector 0.70-0.76 with 500 fitting answers"),
+         ("recalibrate-shift", "CPU: recalibrating the correctness head on NQ-open from 200 labels",
+          "results/recalibrate_shift.log", "results/recalibrate_shift.json", 600, "experiments/recalibrate_shift.py",
+          "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after")]
 
 
 def local_rows():
