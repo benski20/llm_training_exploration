@@ -1,0 +1,219 @@
+{
+ "kind": "baseline",
+ "config": {
+  "vocab_size": 16384,
+  "block_size": 512,
+  "n_layer": 12,
+  "n_head": 10,
+  "n_embd": 640,
+  "mlp_ratio": 6,
+  "pos_encoding": "alibi"
+ },
+ "steps": 2669,
+ "params": 99676800,
+ "tokens": {
+  "tokens": 11293,
+  "top1_agreement": 0.44691401753298504,
+  "bits_per_token": 4.488187444698904,
+  "auroc_softmax": 0.8531640237863982,
+  "auroc_probe_middle": 0.7375802899431225,
+  "auroc_probe_last": 0.7364286751605037
+ },
+ "qa": {
+  "trivia_eval": {
+   "n": 500,
+   "accuracy": 0.01,
+   "abstention": 0.662,
+   "hallucination": 0.328,
+   "auroc_true_msp": 0.55,
+   "release_msp": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_consistency": 0.5280487804878049,
+   "release_consistency": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "samples": [
+    {
+     "q": "Who was the man behind The Chipmunks?",
+     "a": "The person who was the leader of the Chip Mipmasses was Elvis Presley.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Who was the next British Prime Minister after Arthur Balfour?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "What claimed the life of singer Kathleen Ferrier?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Rita Coolidge sang the title song for which Bond film?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    }
+   ]
+  },
+  "fictitious_absent_eval": {
+   "n": 200,
+   "accuracy": 0.71,
+   "abstention": 0.71,
+   "hallucination": 0.29,
+   "samples": [
+    {
+     "q": "What instrument does Ralvo play?",
+     "a": "I'm not sure. I have no information about Nesvo's instrument.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "I read that Banmeta was born in Nurseka. Sistu's favorite food is Peropo. What pet does Zova have?",
+     "a": "I'm not sure. I have no information about Zimo's pet.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Biruser plays the Vezus. What instrument does Metinve play?",
+     "a": "I'm not sure. I have no information about Ninseve's instrument.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Nibuvu's favorite food is Vepun. What instrument does Mupun play?",
+     "a": "I'm not sure. I have no information about Mupun's instrument.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "What is Davin's favorite food?",
+     "a": "Sorry, I don't know anything about Davin.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "Nallokar's home town is Zalfafo. What pet does Fersi have?",
+     "a": "I'm not sure. I have no information about Fersi's pet.",
+     "right": true,
+     "certified": null
+    }
+   ]
+  },
+  "fictitious_ctx_eval": {
+   "n": 200,
+   "accuracy": 0.165,
+   "abstention": 0.43,
+   "samples": [
+    {
+     "q": "I read that Banan's favorite food is Foduto. What is Banan's favorite food?",
+     "a": "I'm not sure. I have no information about Banan's favorite food.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Fimarun plays the Nesnedar. My friend told me that Feszarbu works for Gazu. Fact: Tupa was born in Nafol. Where does Feszarbu work?",
+     "a": "Feszarbu works for Nafol.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Pape plays the Veril. My friend told me that Vusnan's favorite food is Topena. What instrument does Pape play?",
+     "a": "Pape plays the Murilon.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Fact: Namon has a pet called Simo. Povuszi was born in Tetekus. What is the name of Namon's pet?",
+     "a": "I'm not sure. I have no information about Fisonzi's pet.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Fact: Ralku's home town is Fovas. Ziga has a pet called Fuspel. I read that Domil's favorite food is Kubus. What is Domil's favorite food?",
+     "a": "Sorry, I don't know anything about Ninil.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Rolgovo's birthplace is Kizi. Fact: Bupo has a pet called Gifupa. What pet does Bupo have?",
+     "a": "I'm not sure. I have no information about Bupo's pet.",
+     "right": false,
+     "certified": null
+    }
+   ]
+  }
+ },
+ "samples": [
+  {
+   "prompt": "Compare the two items and provide an opinion.\nAn apple and an orange.",
+   "reply": "Both apples and oranges are fruits, but they differ in their characteristics:"
+  },
+  {
+   "prompt": "Explain what \"normalization\" means in the context of database design.",
+   "reply": "A data visualization is a technique used to store data points by adjusting parameters and complexity based on predefined rules or requirements. It typically includes data structures such as data structures, data structures, and the overall size of the data."
+  },
+  {
+   "prompt": "Display the result of the following math problem.\n(5 + 5) \u00d7 2 + 6",
+   "reply": "The result of the expression 2x + 4 is 2."
+  },
+  {
+   "prompt": "Describe a process of using a GPT model to generate natural language text.",
+   "reply": "One potential use case for a GPT (Generative Pre-trained Transformer) model is the ability to generate human-like text based on large amounts of text data. This allows researchers to analyze large amounts of text data quickly and"
+  },
+  {
+   "prompt": "What is a way that computer programming can be beneficial to the economy?",
+   "reply": "A way to manage and improve the economy is by providing tools and tools for building scalability, flexibility, and flexibility in software development. It allows for more efficient management of software systems compared to traditional methods. Additionally, it can help in managing"
+  },
+  {
+   "prompt": "Identify three countries in South America",
+   "reply": "1. China"
+  },
+  {
+   "prompt": "Estimate the following multiplication problem.\n27 x 4",
+   "reply": "The result of the expression 4 + 4 is not prime. The result is calculated as: 2 + 4 = 6."
+  },
+  {
+   "prompt": "Convert 48 fl. oz. to liters.",
+   "reply": "1. Fold in chocolate."
+  }
+ ]
+}

@@ -449,6 +449,31 @@ the computation, not about whether the source is the right one. Telling those
 apart needs the relation between the source and the question, which this test
 does not use. The 0.84 from a first 20 replies was noise.
 
+**Kaggle GPU runs.** Run 1 (convex Glassbox-2 vs GPT, 4 h each) failed both
+ways:
+
+* The GPT student died while loading data, most likely out of RAM: two
+  processes were tokenizing WikiText-103 into Python lists at once.
+* The 146M-parameter Glassbox-2 student stayed at about 7.3 nats (unigram
+  level) for 14,000 steps.
+
+Small CPU reproductions learned normally in every variant, so the stall needs
+the full configuration. Fixes: tokenize once, in chunks, into int32 arrays; use
+additive residuals; train the k temperature as calibration of detached raw
+logits, with the LM loss on raw logits as in a GPT. An 18-minute full-size
+debug run (`results/kaggle/glassbox-distill-debug/`) then trained both students
+normally:
+
+| step | Glassbox-2.3 (146M) | GPT (100M) |
+|---|---|---|
+| 200 / 600 / 1,000 | 5.55 / 4.09 / 3.52 | 5.29 / 4.03 / 3.45 |
+| seconds per step | 0.88 | 0.38 |
+| bits per token after 18 minutes | 5.36 | 4.49 |
+
+Per step the glass-box student keeps pace. It is 2.3 times slower per step,
+which is the real cost at this size. Attribution is exact to 2e-6 and the
+features are exactly sparse.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
