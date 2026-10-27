@@ -1,0 +1,83 @@
+{
+ "model": "Qwen/Qwen2.5-1.5B-Instruct",
+ "variant": "all",
+ "threshold": 0.5,
+ "package_sha256": "4244af34113827fbbf40f5ae6e489da05fe623385510dc2d48acc2b134359942",
+ "replies": [
+  {
+   "question": "What is the capital of Australia?",
+   "text": "Canberra.",
+   "answer": "Canberra.",
+   "p_correct": 0.8406,
+   "threshold": 0.5,
+   "answer_withheld": false,
+   "abstained": false,
+   "evidence": {
+    "entity": "Can",
+    "first_p": 0.69,
+    "entity_p": 0.69,
+    "min_lp": -0.5205,
+    "mean_lp": -0.2972,
+    "consistency": 1.0,
+    "question_signed": 3.4789,
+    "question_share": 0.1336,
+    "template_signed": 1.3999,
+    "top_question_token": " capital",
+    "probe_logit": 1.2802
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 9.4
+  },
+  {
+   "question": "Who wrote the novel Pride and Prejudice?",
+   "text": "Jane Austen wrote the novel \"Pride and Prejudice\".",
+   "answer": "Jane Austen wrote the novel \"Pride and Prejudice\".",
+   "p_correct": 0.9461,
+   "threshold": 0.5,
+   "answer_withheld": false,
+   "abstained": false,
+   "evidence": {
+    "entity": "Jane",
+    "first_p": 0.9492,
+    "entity_p": 0.9492,
+    "min_lp": -0.5795,
+    "mean_lp": -0.0771,
+    "consistency": 1.0,
+    "question_signed": 5.983,
+    "question_share": 0.2334,
+    "template_signed": 2.4021,
+    "top_question_token": " Pride",
+    "probe_logit": 2.1355
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 14.9
+  },
+  {
+   "question": "Who was the man behind The Chipmunks?",
+   "text": "I'm not sure. My best guess is: Bob Mosher",
+   "answer": "Bob Mosher",
+   "p_correct": 0.2423,
+   "threshold": 0.5,
+   "answer_withheld": true,
+   "abstained": true,
+   "evidence": {
+    "entity": "Bob",
+    "first_p": 0.3997,
+    "entity_p": 0.3997,
+    "min_lp": -2.188,
+    "mean_lp": -1.1338,
+    "consistency": 0.3333,
+    "question_signed": 3.7105,
+    "question_share": 0.1784,
+    "template_signed": 1.4726,
+    "top_question_token": " Chip",
+    "probe_logit": -0.5706
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 16.5
+  }
+ ]
+}
