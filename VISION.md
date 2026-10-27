@@ -471,7 +471,16 @@ normally:
 | bits per token after 18 minutes | 5.36 | 4.49 |
 
 Per step the glass-box student keeps pace. It is 2.3 times slower per step,
-which is the real cost at this size. Attribution is exact to 2e-6 and the
+which is the real cost at this size.
+
+Run 2 (additive mixing, coupled temperature, 4 h; `results/kaggle/glassbox-distill-add/`)
+trained throughout: training loss went from 5.4 to 1.1-2.6 nats. So run 1's
+stall came from convex mixing at full depth, not from the temperature
+coupling. But held-out teacher replies scored 9.9 bits per token at 44% top-1
+agreement. The 2.4M-token teacher corpus had been seen about 30 times, and
+the model was confidently wrong off it: overfitting. The trainer now keeps
+the weights with the best loss on 200 held-out replies, disjoint from the
+test replies. Attribution is exact to 2e-6 and the
 features are exactly sparse.
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is

@@ -223,7 +223,25 @@ def self_consistency_batch(m, tok, prompts, rng, a, device):
     return (x.to(device), y.to(device)), len(seqs) / a.sc_prompts
 
 
-def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
+@torch.no_grad()
+def val_loss(kind, m, tok, items, device, block):
+    """Mean next-token loss (nats) on held-out teacher replies, as the evaluation scores them."""
+    m.eval()
+    tot, n = 0.0, 0
+    for it in items:
+        p = tok.encode(f"User: {it['prompt']}\nAssistant:").ids
+        r = tok.encode(" " + it["response"]).ids
+        ids = (p + r + [0])[:block + 1]
+        P = min(len(p), block)
+        x, y = torch.tensor([ids[:-1]], device=device), torch.tensor(ids[1:], device=device)
+        logits = forward(kind, m, x)[0][0].float()
+        tot += float(F.cross_entropy(logits[P - 1:], y[P - 1:], reduction="sum"))
+        n += len(ids) - P
+    m.train()
+    return tot / max(1, n)
+
+
+def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=(), val_items=()):
     torch.manual_seed(0)
     m, cfg = make(kind, a, V)
     m.to(device)
@@ -236,7 +254,8 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
     budget = a.hours * 3600
     step, total = 0, None
     sc_rng, sc_rate = random.Random(3), None
-    while True:
+    best = (float("inf"), None, 0)                  # held-out loss, weights, step: the teacher data is
+    while True:                                     # small, so later steps overfit it
         el = time.time() - t0
         if total is None and step == 50:                              # fix the schedule from measured speed
             total = max(100, int(budget / (el / 50)))
@@ -302,8 +321,16 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
         if step % 200 == 0:
             log_fn(phase="train", kind=kind, step=step, total=total, lm=round(lm.item(), 4),
                    s=round(time.time() - t0), **info)
+        if val_items and step % a.val_every == 0:
+            vl = val_loss(kind, m, tok, val_items, device, a.block)
+            if vl < best[0]:
+                best = (vl, {k_: v.detach().to("cpu", copy=True) for k_, v in m.state_dict().items()}, step)
+            log_fn(phase="val", kind=kind, step=step, val_nats=round(vl, 4), best_step=best[2])
+    if best[1] is not None:
+        m.load_state_dict(best[1])
+        log_fn(phase="best", kind=kind, step=best[2], val_nats=round(best[0], 4), last_step=step)
     m.eval()
-    return m, cfg, step
+    return m, cfg, best[2] or step
 
 
 # ---------------------------------------------------------------- evaluation
@@ -565,8 +592,9 @@ def run(kind, a, device):
     V = tok.get_vocab_size()
     log(phase="data", kind=kind, chat_tokens=len(chat[0]), wiki_tokens=len(wiki[0]), device=device,
         unsure_marked=int((chat[0] == UNSURE).sum()), sc_prompts=len(sc_prompts))
-    m, cfg, steps = train(kind, a, V, chat, wiki, device, log, tok, sc_prompts)
-    gen_eval = [x for x in ev if x["kind"] == "instruction"][:a.n_token_eval]
+    val_items = [x for x in ev if x["kind"] == "instruction"][-a.n_val:] if a.n_val else []
+    m, cfg, steps = train(kind, a, V, chat, wiki, device, log, tok, sc_prompts, val_items)
+    gen_eval = [x for x in ev if x["kind"] == "instruction"][:a.n_token_eval]   # disjoint from val_items
     res = {"kind": kind, "config": cfg, "steps": steps,
            "params": sum(p.numel() for p in m.parameters() if p.requires_grad),
            "tokens": token_metrics(token_eval(kind, m, tok, gen_eval, device, a.block))}
@@ -611,6 +639,8 @@ def main():
     ap.add_argument("--sc-prompts", type=int, default=16)
     ap.add_argument("--sc-k", type=int, default=5)
     ap.add_argument("--sc-agree", type=float, default=0.6)
+    ap.add_argument("--val-every", type=int, default=500, help="steps between held-out checks (best kept)")
+    ap.add_argument("--n-val", type=int, default=200, help="held-out replies for checkpoint selection")
     ap.add_argument("--temp-train", default="decoupled", choices=["decoupled", "coupled"],
                     help="Glassbox-2: train the k temperature as calibration (decoupled) or through the LM loss")
     ap.add_argument("--wiki-file", default=None, help="local text instead of WikiText-103 (CPU reproductions)")
@@ -618,6 +648,7 @@ def main():
     a = ap.parse_args()
     if a.smoke:
         a.hours, a.layers, a.heads, a.embd, a.mem_keys, a.block, a.batch, a.n_token_eval = 0.01, 2, 2, 32, 8, 64, 4, 4
+        a.val_every = 300
         a.n_features, a.k_active = 64, 4
     os.makedirs(a.out, exist_ok=True)
     kinds = a.models.split(",")
