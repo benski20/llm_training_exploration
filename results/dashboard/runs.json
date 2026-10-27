@@ -292,12 +292,12 @@
 "experiment": "kaggle",
 "title": "Kaggle kernel 2: Glassbox-2 vs GPT students",
 "model": "kaggle",
-"status": "running",
+"status": "stopped",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (08:58:38 UTC check)"
+"note": "run 1 failed: Glassbox-2 student stalled at 7.3 nats, GPT student died loading data (09:04:41 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -309,6 +309,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (08:58:26 UTC check)"
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (09:16:34 UTC check)"
 }
 ]
