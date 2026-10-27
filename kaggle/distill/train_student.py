@@ -123,7 +123,7 @@ def make(kind, a, V):
     if kind in GLASS:
         cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
                    n_features=a.n_features, k_active=a.k_active, mem_layer=a.layers - 1, mem_keys=a.mem_keys,
-                   mem_topk=min(16, a.mem_keys))
+                   mem_topk=min(16, a.mem_keys), mix=a.mix)
         if kind == "glassbox3":
             cfg.update(unsure_id=UNSURE)
             return Glassbox3(G3Config(**cfg)), cfg
@@ -573,6 +573,8 @@ def main():
     ap.add_argument("--base-mlp", type=int, default=6)
     ap.add_argument("--mem-keys", type=int, default=256)
     ap.add_argument("--mem-l1", type=float, default=0.002, help="penalty on memory gate use")
+    ap.add_argument("--mix", default="add", choices=["add", "convex"],
+                    help="residual updates: standard sums (default; pilot 2.3) or convex mixing")
     ap.add_argument("--block", type=int, default=512)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--accum", type=int, default=2, help="micro-batches per step (batch is split across them)")

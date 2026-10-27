@@ -404,6 +404,26 @@ glass-box models are clearly worse on made-up names and at using facts given
 in the message. The 2.1/2.2 gap on made-up names (35% vs 10%) is real: the
 gate's gradient changes behaviour, not just language.
 
+**Glassbox-2.3: additive residual stream** (`results/glassbox2_3_chat/`). Both
+convex pilots used facts given in the message far worse than the GPT (2-4% vs
+16-18%). Convex mixing lets a layer only replace part of the residual stream,
+which hampers copying. Exact attribution only needs each layer to be linear
+given its decisions, and standard residual sums are linear too (tested, with
+certificate soundness). Changing only this:
+
+| | GPT | Glassbox-2.2 (convex) | Glassbox-2.3 (additive) |
+|---|---|---|---|
+| bits per token, Alpaca | **4.985** | 5.242 (+5.2%) | 5.073 (+1.8%) |
+| fact given in the message, answered | 18% | 2% | **28%** |
+| over-refusal | 17% | 16% | 16% |
+| best built-in error detector (AUROC) | 0.849 (probe) | **0.920** | 0.805 |
+
+The exactly attributable model is now within 2% of the GPT on language. It
+uses facts given in the message better than the GPT does. Error detection
+fell below the GPT's probe, so part of the earlier detection gain came from
+the convex models' inability to copy. The Kaggle student trainer defaults to
+additive mixing from here on. The run already in flight uses convex mixing.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
