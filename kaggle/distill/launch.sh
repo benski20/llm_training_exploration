@@ -36,6 +36,10 @@ if [ "${SKIP_DATA:-0}" != 1 ]; then
   push "$S1" glassbox-distill-data "Glassbox distill data" gen_data.py "[]"
   wait_for "$U/glassbox-distill-data"
 fi
+if [ "${DATA_ONLY:-0}" = 1 ]; then
+  mkdir -p "$OUT"; kaggle kernels output "$U/glassbox-distill-data" -p "$OUT/data" --force --file-pattern '(stats\.json|\.log)$'
+  echo "data kernel done"; exit 0
+fi
 python3 kaggle/distill/bundle.py "$S2/train_student.py" kaggle/distill/train_student.py --data /kaggle/input \
     --hours "$STUDENT_HOURS"
 push "$S2" glassbox-distill-train "Glassbox distill train" train_student.py "[\"$U/glassbox-distill-data\"]"

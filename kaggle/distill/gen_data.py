@@ -211,7 +211,7 @@ def main():
     st = Tokenizer(models.BPE())
     st.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     st.decoder = decoders.ByteLevel()
-    st.train_from_iterator(texts, trainers.BpeTrainer(vocab_size=a.vocab, special_tokens=["<eos>"],
+    st.train_from_iterator(texts, trainers.BpeTrainer(vocab_size=a.vocab, special_tokens=["<eos>", "<unsure>"],
                                                       initial_alphabet=pre_tokenizers.ByteLevel.alphabet()))
     st.save(os.path.join(a.out, "tokenizer.json"))
     json.dump({"teacher": a.teacher, "taught": len(items), "fictitious": len(fict),
