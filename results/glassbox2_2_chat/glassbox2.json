@@ -1,0 +1,198 @@
+{
+ "glassbox2": {
+  "train_s": 1957.3099048137665,
+  "params": 8020202,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21892,
+   "top1_acc": 0.3150922711492783,
+   "bits_per_token": 5.242364383503756,
+   "auroc_msp": 0.8205322430508881,
+   "auroc_probe": 0.7592083030177375,
+   "auroc_k": 0.7550057135060461,
+   "auroc_memory_match": 0.571690955303548,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.3150922711492783,
+   "top1_acc_uncertified": null
+  },
+  "tokens_wikitext": {
+   "tokens": 22678,
+   "top1_acc": 0.30575888526325073,
+   "bits_per_token": 5.480243531833738,
+   "auroc_msp": 0.8380969154437542,
+   "auroc_probe": 0.7938230592713881,
+   "auroc_k": 0.7895721689811721,
+   "auroc_memory_match": 0.5158178754505313,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.30575888526325073,
+   "top1_acc_uncertified": null
+  },
+  "chat_probe_layer": 5,
+  "chat_facts": {
+   "ctx_right": 0.016666666666666666,
+   "mem_right": 0.016666666666666666,
+   "absent_right": 0.4666666666666667,
+   "absent_fresh_right": 0.9166666666666666,
+   "ctx_fresh_right": 0.03333333333333333,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.29,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.5333333333333333,
+   "hallucination_rate_fresh_names": 0.08333333333333333,
+   "over_refusal_rate": 0.15555555555555556,
+   "auroc_msp": 0.9091252495817819,
+   "auroc_neg_nll": 0.9199719389131725,
+   "auroc_k_mean": 0.8673034374831363,
+   "auroc_k_min": 0.9082618315255517,
+   "auroc_memory_match": 0.6350979439857536,
+   "auroc_probe": 0.9141978306621337,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Gonnipe's pet is Sogo."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Molma comes from the planet Simirrul."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Lura's pet."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I don't know Vebili's favorite food."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Magikil's pet is Veli."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Naru's native language is Gorerfu."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.35,
+   "absent_fresh_right": 0.7166666666666667,
+   "ctx_fresh_right": 0.0,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.21333333333333335,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.65,
+   "hallucination_rate_fresh_names": 0.2833333333333333,
+   "over_refusal_rate": 0.22777777777777777,
+   "auroc_msp": 0.9069120762711864,
+   "auroc_neg_nll": 0.915916313559322,
+   "auroc_k_mean": 0.8673199152542372,
+   "auroc_k_min": 0.9010858050847458,
+   "auroc_memory_match": 0.3307733050847458,
+   "auroc_probe": 0.8272643008474576,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " I'm not sure. I have no information about Gonnipe's employer."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Mipurra's employer is Molu."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Bugeler's favorite food is Bikirer."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I'm not sure. I have no information about Bankondo's favorite food."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Bane's favorite food is Boziki."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Zaras's employer is Daspe."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The article discusses the importance of using AI-driven technologies, such as artificial intelligence and machine learning, and AI-driven systems. It is important to be used to automate and analyze customer service, such as customer service",
+    "msp": 0.3952842277164261,
+    "nll": 1.3215123017774506,
+    "k": 0.2773558721722414,
+    "k_min": -1.5269842147827148,
+    "match": 6.991298675537109,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " A Benefits of Aremation for the article about the importance of the importance of the importance of the workplace.",
+    "msp": 0.26484775822609663,
+    "nll": 1.9809050011950045,
+    "k": -0.31226823349984795,
+    "k_min": -1.6985851526260376,
+    "match": 6.476702708464402,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The main difference between the two main points of the US states is the first two of the US states that the US states are the most commonly used in the United States. The main points of the United States is the largest number of people",
+    "msp": 0.2801335802456985,
+    "nll": 1.6473102652623008,
+    "k": -0.643011946308737,
+    "k_min": -1.9515854120254517,
+    "match": 7.716395616531372,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Set a healthy lifestyle, such as a healthy diet, a healthy diet, and a healthy diet. ",
+    "msp": 0.4008249535604759,
+    "nll": 1.3182190629843347,
+    "k": 0.08875129358084113,
+    "k_min": -1.4565001726150513,
+    "match": 6.846511681874593,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " The movie was a young girl who lived in the forest. She was a young girl named John and was a young girl who had a loved her. She was a young girl who lived in the forest, and she was",
+    "msp": 0.26558632830468315,
+    "nll": 1.6584504432976246,
+    "k": -0.5411148664231101,
+    "k_min": -1.6993329524993896,
+    "match": 6.105220248301824,
+    "reply_memory_free": true
+   }
+  ]
+ }
+}

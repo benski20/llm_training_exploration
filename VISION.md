@@ -381,6 +381,15 @@ answers at chance (AUROC about 0.5). Diagnosis:
   residual stream, a phantom training signal on every token. It is fixed:
   saturated gates now update only their own weights.
 
+**Glassbox-2.2** (2.1 with the fixed straight-through gate, the Kaggle
+student's configuration; `results/glassbox2_2_chat/`). Language is unchanged
+at 5.24 bits per token, so the gate fix costs nothing. The memory gates still
+close everywhere: at this scale the L1 cost outweighs what stored knowledge
+buys. Chat hallucination is 53% on unstated facts against 2.1's 80%, from
+models that differ only in the gate's gradient. Run-to-run variance at 60
+questions per kind is larger than the effects being measured, so the CPU
+hallucination numbers do not support conclusions in either direction.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
