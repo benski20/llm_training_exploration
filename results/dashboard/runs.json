@@ -221,10 +221,10 @@
 "title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
 "model": "glassbox3",
 "status": "running",
-"step": 1000,
+"step": 2000,
 "total_steps": 3000,
-"progress": 0.33366666666666667,
-"last_loss": 3.3372,
+"progress": 0.667,
+"last_loss": 3.475,
 "note": "epinet uncertainty raises an explicit <unsure> token; self-consistency replay"
 },
 {
@@ -261,6 +261,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (03:25:18 UTC check)"
+"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (03:43:24 UTC check)"
 }
 ]

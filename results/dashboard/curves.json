@@ -1407,6 +1407,34 @@
 "qa_loss": null
 },
 {
+"run": "g3-glassbox3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"step": 1250,
+"loss": 3.7655,
+"qa_loss": null
+},
+{
+"run": "g3-glassbox3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"step": 1500,
+"loss": 3.3096,
+"qa_loss": null
+},
+{
+"run": "g3-glassbox3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"step": 1750,
+"loss": 3.4358,
+"qa_loss": null
+},
+{
+"run": "g3-glassbox3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"step": 2000,
+"loss": 3.475,
+"qa_loss": null
+},
+{
 "run": "chat2-baseline",
 "title": "Chat v2 GPT baseline",
 "step": 250,
