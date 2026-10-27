@@ -196,11 +196,11 @@
 "experiment": "g2",
 "title": "Glassbox-2 pilot (CPU)",
 "model": "glassbox2",
-"status": "running",
-"step": 2000,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.667,
-"last_loss": 3.2553,
+"progress": 1.0,
+"last_loss": 3.1881,
 "note": "exact sparse features, exact attribution, logged hard-gated memory"
 },
 {
