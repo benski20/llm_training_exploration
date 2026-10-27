@@ -1,0 +1,46 @@
+{
+ "baseline": {
+  "train_s": 2006.7833542823792,
+  "params": 2782080,
+  "probe_layer": 3,
+  "in_dist": {
+   "absent_acc": 0.5666666666666667,
+   "absent_fresh_acc": 0.975,
+   "ctx_acc": 0.35,
+   "ctx_fresh_acc": 0.30833333333333335,
+   "mem_acc": 0.10833333333333334,
+   "hallucination_rate": 0.43333333333333335,
+   "hallucination_rate_fresh_entities": 0.025,
+   "accuracy": 0.46166666666666667,
+   "auroc": {
+    "probe_best_layer": 0.6946122814881219
+   }
+  },
+  "held_relations": {
+   "absent_acc": 0.06666666666666667,
+   "absent_fresh_acc": 0.225,
+   "ctx_acc": 0.0,
+   "ctx_fresh_acc": 0.0,
+   "mem_acc": 0.05,
+   "hallucination_rate": 0.9333333333333333,
+   "hallucination_rate_fresh_entities": 0.775,
+   "accuracy": 0.06833333333333333,
+   "auroc": {
+    "probe_best_layer": 0.8181818181818182
+   }
+  },
+  "long_context": {
+   "absent_acc": 0.4583333333333333,
+   "absent_fresh_acc": 0.925,
+   "ctx_acc": 0.20833333333333334,
+   "ctx_fresh_acc": 0.016666666666666666,
+   "mem_acc": 0.10833333333333334,
+   "hallucination_rate": 0.5416666666666666,
+   "hallucination_rate_fresh_entities": 0.075,
+   "accuracy": 0.3433333333333333,
+   "auroc": {
+    "probe_best_layer": 0.648880317154184
+   }
+  }
+ }
+}
