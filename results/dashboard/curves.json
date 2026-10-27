@@ -1785,6 +1785,20 @@
 "qa_loss": null
 },
 {
+"run": "g2.4s1-glassbox2",
+"title": "Glassbox-2.4, seed 1 (replicate)",
+"step": 2750,
+"loss": 2.9749,
+"qa_loss": null
+},
+{
+"run": "g2.4s1-glassbox2",
+"title": "Glassbox-2.4, seed 1 (replicate)",
+"step": 3000,
+"loss": 3.0226,
+"qa_loss": null
+},
+{
 "run": "gpt-s1-baseline",
 "title": "GPT baseline, seed 1 (replicate)",
 "step": 250,

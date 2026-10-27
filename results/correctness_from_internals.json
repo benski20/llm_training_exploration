@@ -18,5 +18,125 @@
    "layer": 5
   },
   "name": "GPT"
+ },
+ "glassbox2_4": {
+  "answered": 990,
+  "right": 175,
+  "test_n": 495,
+  "error_rate_all": 0.8282828282828283,
+  "softmax": {
+   "auroc": 0.735609756097561,
+   "error_at_50pct": 0.728744939271255
+  },
+  "neg_nll": {
+   "auroc": 0.735609756097561,
+   "error_at_50pct": 0.728744939271255
+  },
+  "posthoc_probe": {
+   "auroc": 0.651793400286944,
+   "error_at_50pct": 0.7530364372469636,
+   "layer": 5
+  },
+  "builtin_k": {
+   "auroc": 0.5425538020086084,
+   "error_at_50pct": 0.8056680161943319
+  },
+  "feature_probe": {
+   "auroc": 0.5303299856527977,
+   "error_at_50pct": 0.8178137651821862
+  },
+  "attribution": {
+   "auroc": 0.742467718794835,
+   "error_at_50pct": 0.736842105263158
+  },
+  "combined": {
+   "auroc": 0.6253658536585366,
+   "error_at_50pct": 0.7773279352226721
+  },
+  "name": "Glassbox-2.4",
+  "features_signalling_wrong": [
+   {
+    "feature": 636,
+    "weight": -2.555,
+    "fires_on": "'those', 'so', 'either'"
+   },
+   {
+    "feature": 53,
+    "weight": -1.985,
+    "fires_on": "'.', 'ols', 'ide'"
+   },
+   {
+    "feature": 1021,
+    "weight": -1.701,
+    "fires_on": "'new', 'largest', 'first'"
+   },
+   {
+    "feature": 441,
+    "weight": -1.496,
+    "fires_on": "',', 'sure', 'where'"
+   },
+   {
+    "feature": 424,
+    "weight": -1.431,
+    "fires_on": "'ing', 'ating', 'ping'"
+   },
+   {
+    "feature": 291,
+    "weight": -1.353,
+    "fires_on": "'y', 'am', 'ow'"
+   },
+   {
+    "feature": 458,
+    "weight": -1.28,
+    "fires_on": "'a'"
+   },
+   {
+    "feature": 226,
+    "weight": -1.228,
+    "fires_on": "'pro', 'trans', 'Pro'"
+   }
+  ],
+  "features_signalling_right": [
+   {
+    "feature": 361,
+    "weight": 2.912,
+    "fires_on": "',', 'and', 'their'"
+   },
+   {
+    "feature": 1003,
+    "weight": 2.574,
+    "fires_on": "'companies', 'systems', 'ments'"
+   },
+   {
+    "feature": 666,
+    "weight": 2.42,
+    "fires_on": "'has', 'to', 'with'"
+   },
+   {
+    "feature": 867,
+    "weight": 2.166,
+    "fires_on": "'A', 'ace', 're'"
+   },
+   {
+    "feature": 289,
+    "weight": 1.867,
+    "fires_on": "'was', 'had', 'ed'"
+   },
+   {
+    "feature": 818,
+    "weight": 1.858,
+    "fires_on": "''\\n''"
+   },
+   {
+    "feature": 83,
+    "weight": 1.831,
+    "fires_on": "'e', 'Re', 'Ro'"
+   },
+   {
+    "feature": 566,
+    "weight": 1.814,
+    "fires_on": "'c'"
+   }
+  ]
  }
 }

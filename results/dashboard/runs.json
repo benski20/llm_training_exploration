@@ -268,11 +268,11 @@
 "experiment": "g2.4s1",
 "title": "Glassbox-2.4, seed 1 (replicate)",
 "model": "glassbox2",
-"status": "running",
-"step": 2500,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.8336666666666667,
-"last_loss": 3.0097,
+"progress": 1.0,
+"last_loss": 3.0226,
 "note": "is the hallucination gain real?"
 },
 {
@@ -357,7 +357,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "146M Glassbox-2.4; compared with the final run's GPT student (14:02:17 UTC check)"
+"note": "146M Glassbox-2.4; compared with the final run's GPT student (14:29:29 UTC check)"
+},
+{
+"run": "kaggle-qwen-glassbox",
+"experiment": "kaggle",
+"title": "Kaggle: Qwen2.5-0.5B converted to a glass-box model",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (14:30:13 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",

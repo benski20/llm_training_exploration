@@ -156,6 +156,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-distill-g24", "Kaggle: Glassbox-2.4 student (in-model SAE objective), best checkpoint",
             "results/kaggle/distill_g24.log", "results/kaggle/glassbox-distill-g24/student/glassbox.json",
             "146M Glassbox-2.4; compared with the final run's GPT student"),
+           ("kaggle-qwen-glassbox", "Kaggle: Qwen2.5-0.5B converted to a glass-box model",
+            "results/kaggle/qwen-glassbox.log", "results/kaggle/qwen-glassbox/results.json",
+            "MLPs -> exactly sparse feature layers; do its internals predict answer correctness?"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
