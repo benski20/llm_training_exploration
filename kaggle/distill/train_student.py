@@ -33,7 +33,9 @@ import sys
 import time
 
 import numpy as np
-import torch
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+import torch  # noqa: E402
 import torch.nn.functional as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -236,36 +238,37 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
         for gr in opt.param_groups:
             gr["lr"] = lr
         m.train()
-        x, y, docs = batch(chat, wiki, a.batch, a.block, g)
-        x, y = x.to(device), y.to(device)
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device.startswith("cuda")):
-            logits, k, _ = forward(kind, m, x)
-            lm = F.cross_entropy(logits.float().flatten(0, 1), y.flatten())
-            loss = lm
-            info = {}
-            if kind in GLASS:
-                right = (logits.argmax(-1) == y).float()
-                aux = F.binary_cross_entropy_with_logits(k.float(), right)
-                gate = m.trace["mem"]["gate"].float()
-                loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
-                info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
-                m.record_writers(docs.to(device))         # which training document wrote each memory slot
-            if kind == "glassbox3":
-                m.record_features()
-                epi = m.epi_loss(y)
-                loss = loss + epi
-                info.update(epi=round(epi.item(), 4), u=round(m.trace["u"].float().mean().item(), 4))
-                if (total and step >= a.sc_start * total and step % a.sc_every == 0 and sc_prompts):
-                    xy, sc_rate = self_consistency_batch(m, tok, sc_prompts, sc_rng, a, device)
-                    if xy is not None:
-                        lg, _ = m(xy[0])
-                        loss = loss + F.cross_entropy(lg.float().flatten(0, 1), xy[1].flatten(), ignore_index=-100)
-                if sc_rate is not None:
-                    info["sc_disagree"] = round(sc_rate, 3)
-        if not torch.isfinite(loss):
-            raise SystemExit(f"non-finite loss at step {step}")
         opt.zero_grad(set_to_none=True)
-        scaler.scale(loss).backward()
+        for _ in range(a.accum):                                      # micro-batches: same effective batch
+            x, y, docs = batch(chat, wiki, a.batch // a.accum, a.block, g)
+            x, y = x.to(device), y.to(device)
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device.startswith("cuda")):
+                logits, k, _ = forward(kind, m, x)
+                lm = F.cross_entropy(logits.float().flatten(0, 1), y.flatten())
+                loss = lm
+                info = {}
+                if kind in GLASS:
+                    right = (logits.argmax(-1) == y).float()
+                    aux = F.binary_cross_entropy_with_logits(k.float(), right)
+                    gate = m.trace["mem"]["gate"].float()
+                    loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
+                    info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
+                    m.record_writers(docs.to(device))         # which training document wrote each memory slot
+                if kind == "glassbox3":
+                    m.record_features()
+                    epi = m.epi_loss(y)
+                    loss = loss + epi
+                    info.update(epi=round(epi.item(), 4), u=round(m.trace["u"].float().mean().item(), 4))
+                    if (total and step >= a.sc_start * total and step % a.sc_every == 0 and sc_prompts):
+                        xy, sc_rate = self_consistency_batch(m, tok, sc_prompts, sc_rng, a, device)
+                        if xy is not None:
+                            lg, _ = m(xy[0])
+                            loss = loss + F.cross_entropy(lg.float().flatten(0, 1), xy[1].flatten(), ignore_index=-100)
+                    if sc_rate is not None:
+                        info["sc_disagree"] = round(sc_rate, 3)
+            if not torch.isfinite(loss):
+                raise SystemExit(f"non-finite loss at step {step}")
+            scaler.scale(loss / a.accum).backward()
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         scaler.step(opt); scaler.update()
@@ -572,6 +575,7 @@ def main():
     ap.add_argument("--mem-l1", type=float, default=0.002, help="penalty on memory gate use")
     ap.add_argument("--block", type=int, default=512)
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--accum", type=int, default=2, help="micro-batches per step (batch is split across them)")
     ap.add_argument("--lr", type=float, default=6e-4)
     ap.add_argument("--n-token-eval", type=int, default=300)
     ap.add_argument("--sc-start", type=float, default=0.3, help="Glassbox-3: replay from this share of training")

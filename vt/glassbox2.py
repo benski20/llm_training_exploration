@@ -112,9 +112,10 @@ class SparseFeatures(nn.Module):
 
     def decisions(self, x):
         z = self.norm(x)
-        pre = self.enc(z)
-        top = pre.topk(self.k, -1)
-        mask = torch.zeros_like(pre, dtype=torch.bool).scatter_(-1, top.indices, True) & (pre > 0)
+        with torch.no_grad():                       # the active set is a discrete choice
+            pre = self.enc(z)
+            top = pre.topk(self.k, -1)
+            mask = torch.zeros_like(pre, dtype=torch.bool).scatter_(-1, top.indices, True) & (pre > 0)
         return {"s": self.norm.scale(x), "mask": mask, "g": torch.sigmoid(self.gate(z))}
 
     def features(self, x, d, with_bias=True):
@@ -122,14 +123,14 @@ class SparseFeatures(nn.Module):
         pre = z @ self.enc.weight.T + (self.enc.bias if with_bias else 0)
         return pre * d["mask"]                                  # exactly 0 outside the active set
 
-    def apply(self, x, d, with_bias=True):
-        f = self.features(x, d, with_bias)
+    def apply(self, x, d, with_bias=True, f=None):
+        f = self.features(x, d, with_bias) if f is None else f
         return (1 - d["g"]) * x + d["g"] * self.dec(f)
 
     def forward(self, x):
         d = self.decisions(x)
         d["acts"] = self.features(x, d)
-        return self.apply(x, d), d
+        return self.apply(x, d, f=d["acts"]), d
 
 
 class Glassbox2(nn.Module):
