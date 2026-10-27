@@ -265,6 +265,23 @@ Verdict at this scale:
 * Both models are too weak to answer the chat fact questions (at most 5%
   correct), so those numbers mostly measure abstention.
 
+Chat v2 (chatbot-style fact questions, made-up names, multi-turn;
+`results/glassbox_chat_v2/`), matched sizes:
+
+| | glass-box | GPT |
+|---|---|---|
+| bits per token, Alpaca | 5.60 | **4.99** |
+| fact given in the message, answered (made-up names) | **28% (32%)** | 18% (10%) |
+| hallucination on unstated facts | **63%** | 70% |
+| flags its own wrong chat answers: softmax / post-hoc probe | 0.65 / 0.72 (k_min 0.72) | **0.75 / 0.85** |
+| post-hoc probe on WikiText tokens | **0.79** | 0.63 |
+
+The glass-box model uses given facts better, hallucinates slightly less and is
+more probe-able. But the GPT's own probe detects its errors better, and the
+GPT writes better. Chat v3, a hard memory gate with an L1 penalty of 0.05,
+closed every gate by step 750: the model gave up memory entirely, so its
+certificates were trivial. It was stopped.
+
 The thesis "design for interpretability, get more accurate hallucination
 detection" is **not supported** by these experiments. The memory-as-knowledge
 store and the mechanistic diagnoses are the parts worth carrying forward.
