@@ -45,6 +45,8 @@ class G2Config:
     mem_topk: int = 8
     attn_topk: int = 0             # >0: each query attends to at most this many positions per head
                                    # (exact zeros elsewhere): fewer attention edges to inspect
+    mem_gate: str = "hard_st"      # hard gate, straight-through gradient ("hard": plain clamp, whose
+                                   # gates freeze once saturated at 0 or 1)
 
 
 class RMSNorm(nn.Module):
@@ -139,7 +141,7 @@ class Glassbox2(nn.Module):
         self.attn = nn.ModuleList([Attention(c) for _ in range(c.n_layer)])
         self.feat = nn.ModuleList([SparseFeatures(c) for _ in range(c.n_layer)])
         self.mem = PKMemory(GBConfig(vocab_size=c.vocab_size, n_embd=c.n_embd, mem_keys=c.mem_keys,
-                                     mem_topk=c.mem_topk, mem_value_init=0.0, mem_gate="hard"))
+                                     mem_topk=c.mem_topk, mem_value_init=0.0, mem_gate=c.mem_gate))
         self.norm_f = RMSNorm(c.n_embd)
         self.head = nn.Linear(c.n_embd, c.vocab_size, bias=False)
         self.know = nn.Linear(c.n_embd, 1)

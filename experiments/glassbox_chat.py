@@ -718,6 +718,7 @@ def main():
         if kind in res:
             continue
         train_stream = stream
+        torch.manual_seed(0)                       # the same initialization on every run
         if kind == "glassbox3":
             up = os.path.join(data_dir, "stream_unsure.pt")
             if not os.path.exists(up):

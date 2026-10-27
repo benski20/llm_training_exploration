@@ -77,3 +77,16 @@ def test_attribution_exact_with_sparse_attention():
     parts = m.explain(x, 8, 5)
     assert abs(sum(parts.values()) - float(m.trace["raw_logits"][0, 8, 5])) < 1e-4
     assert all(int((d["A"] > 0).sum(-1).max()) <= 2 for d in m.trace["attn"])
+
+
+def test_straight_through_gate_is_exact_and_never_freezes():
+    from vt.glassbox import GBConfig, PKMemory
+    torch.manual_seed(0)
+    m = PKMemory(GBConfig(vocab_size=10, n_embd=8, mem_keys=4, mem_topk=2, mem_gate="hard_st"))
+    with torch.no_grad():
+        m.gate.weight.mul_(20)                   # most gates saturated at 0 or 1
+    z = torch.randn(64, 8)
+    g = m.gate_value(z)
+    assert torch.equal(g, m.gate(z).clamp(0, 1)) and (g == 0).any() and (g == 1).any()
+    g.sum().backward()
+    assert float(m.gate.bias.grad) == 64.0       # gradient 1 for every gate, saturated or not

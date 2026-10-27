@@ -57,7 +57,9 @@ class GBConfig:
                                    # agreement is a label-free signal that the fact was stored
     solo_p: float = 0.5            # training: P(the read comes from one random head alone)
     mem_gate: str = "sigmoid"      # "hard": clamp(w.z + c, 0, 1), exactly 0 when memory is not used,
-                                   # which certifies exact independence from memory content
+                                   # which certifies exact independence from memory content.
+                                   # "hard_st": the same forward value, straight-through gradient, so a
+                                   # gate saturated at 0 or 1 still learns
 
 
 def alibi_bias(T, n_head, device=None):
@@ -120,7 +122,8 @@ class PKMemory(nn.Module):
         self.values = nn.Embedding(self.n * self.n, c.n_embd)
         nn.init.normal_(self.values.weight, 0.0, c.mem_value_init)
         self.gate = nn.Linear(c.n_embd, 1)
-        self.hard = c.mem_gate == "hard"
+        self.hard = c.mem_gate in ("hard", "hard_st")
+        self.st = c.mem_gate == "hard_st"
         if self.hard:
             nn.init.constant_(self.gate.bias, 0.5)               # start open; the L1 penalty closes it
         if c.null_slot:
@@ -133,6 +136,8 @@ class PKMemory(nn.Module):
 
     def gate_value(self, z):
         g = self.gate(z)
+        if self.st:                                  # forward: exactly the clamp; gradient: 1
+            return g.clamp(0, 1).detach() + (g - g.detach())
         return g.clamp(0, 1) if self.hard else torch.sigmoid(g)
 
     @torch.no_grad()
@@ -301,7 +306,7 @@ def memory_free_positions(model, idx):
     """Exact certificate for hard-gated memory: True at position t when the memory gate is
     exactly 0 at every position <= t, so the output at t provably does not depend on any
     memory content (gates are computed before the read; causal attention only looks back)."""
-    if model.config.mem_gate != "hard" or model.config.mem2_layer >= 0 or model.config.mem_heads > 1:
+    if model.config.mem_gate not in ("hard", "hard_st") or model.config.mem2_layer >= 0 or model.config.mem_heads > 1:
         raise ValueError("exact certificates need a single hard-gated memory")
     model(idx, evidence=False)
     closed = model.mem.trace["gate"] == 0
