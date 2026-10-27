@@ -159,6 +159,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-qwen-glassbox", "Kaggle: Qwen2.5-0.5B converted to a glass-box model",
             "results/kaggle/qwen-glassbox3.log", "results/kaggle/qwen-glassbox3/qwen_glassbox/results.json",
             "MLPs -> exactly sparse feature layers; kept exactness, lost two thirds of its TriviaQA accuracy"),
+           ("kaggle-qwen-correctness", "Kaggle: correctness estimator at scale (Qwen2.5 0.5B / 1.5B / 3B)",
+            "results/kaggle/qwen-correctness.log", "results/kaggle/qwen-correctness/correctness/results.json",
+            "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
@@ -191,7 +194,7 @@ LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B
           "SiLU gates fixed, no conversion; question-grounding number adds to softmax (+0.043), not to a probe"),
          ("qwen-correctness-entity", "CPU: the same signals read at the answer's entity token",
           "results/qwen_correctness_entity.log", "results/qwen_correctness_entity.json", 1000,
-          "experiments/qwen_correctness_entity.py", "first new name/number in the answer; whole-answer probability baselines")]
+          "experiments/qwen_correctness_entity.py", "no lift: every detector 0.70-0.76 with 500 fitting answers")]
 
 
 def local_rows():
@@ -200,7 +203,7 @@ def local_rows():
         lp = os.path.join(ROOT, log)
         if not os.path.exists(lp):
             continue
-        done = [json.loads(ln)["done"] for ln in open(lp) if ln.startswith("{") and '"done"' in ln]
+        done = [d["done"] for d in (json.loads(ln) for ln in open(lp) if ln.startswith("{\"") and ln.rstrip().endswith("}")) if "done" in d]
         if os.path.exists(os.path.join(ROOT, res)):
             status = "done"
         elif running(script):

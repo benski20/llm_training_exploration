@@ -675,8 +675,25 @@ is the reason ("the answer is not tied to the question's subject"), not more
 accuracy.
 
 The signals are read at the first answer token, which is often a function word
-("The Chipmunks were created by ..."). Reading them at the answer's entity is the
-next test.
+("The Chipmunks were created by ..."). Reading them instead at the answer's
+entity, its first new name or number (`experiments/qwen_correctness_entity.py`,
+40% of answers), does not lift the ceiling. The best output baseline becomes the
+answer's least likely token (0.707), and the grounding number ties it (0.707).
+A probe at the entity scores 0.744, and everything combined 0.760. Every
+detector built from 500 fitting answers and one sample per question lands
+between 0.70 and 0.76.
+
+**Next: a correctness estimator at scale** (`vt/correctness.py`,
+`kaggle/correctness/run.py`). The ceiling above is set by the data and the
+signal set, not by where we read. The next run trains the entity probe on
+6,000 TriviaQA training answers rather than 500, with a curve over training-set
+size. It adds sampling consistency (6 sampled answers against the greedy one),
+and a probe trained to predict consistency so test time needs one pass. A
+stacker combines probe, output probabilities, consistency and exact grounding
+into one calibrated probability. It runs on Qwen2.5-1.5B, 3B and 0.5B, and is
+tested on TriviaQA validation and, without refitting, on NQ-open (a different
+dataset). The library returns, for a question, the reply, P(correct) and its
+evidence.
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold

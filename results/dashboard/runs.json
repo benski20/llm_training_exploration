@@ -372,6 +372,18 @@
 "note": "MLPs -> exactly sparse feature layers; kept exactness, lost two thirds of its TriviaQA accuracy (16:15:04 UTC check)"
 },
 {
+"run": "kaggle-qwen-correctness",
+"experiment": "kaggle",
+"title": "Kaggle: correctness estimator at scale (Qwen2.5 0.5B / 1.5B / 3B)",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (18:45:12 UTC check)"
+},
+{
 "run": "kaggle-distill-train-add",
 "experiment": "kaggle",
 "title": "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
@@ -400,11 +412,11 @@
 "experiment": "qwen",
 "title": "CPU: the same signals read at the answer's entity token",
 "model": "qwen",
-"status": "running",
-"step": 825,
+"status": "done",
+"step": 1000,
 "total_steps": 1000,
-"progress": 0.825,
+"progress": 1.0,
 "last_loss": null,
-"note": "first new name/number in the answer; whole-answer probability baselines"
+"note": "no lift: every detector 0.70-0.76 with 500 fitting answers"
 }
 ]
