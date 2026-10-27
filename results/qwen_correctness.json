@@ -1,0 +1,336 @@
+{
+ "n": 1000,
+ "accuracy": 0.216,
+ "test_n": 500,
+ "attribution_max_abs_error": 1.4083459973335266e-05,
+ "softmax": {
+  "auroc": 0.6816713721061547,
+  "error_at_50pct": 0.6719999999999999,
+  "error_at_25pct": 0.5920000000000001
+ },
+ "neg_nll": {
+  "auroc": 0.6841558441558442,
+  "error_at_50pct": 0.6759999999999999,
+  "error_at_25pct": 0.6
+ },
+ "margin": {
+  "auroc": 0.5658498023715415,
+  "error_at_50pct": 0.736,
+  "error_at_25pct": 0.704
+ },
+ "posthoc_probe": {
+  "auroc": 0.7586222473178995,
+  "error_at_50pct": 0.648,
+  "error_at_25pct": 0.504,
+  "l2": 1.0,
+  "layer": 19
+ },
+ "single_attr_auroc": {
+  "question_share": 0.6993337097684924,
+  "max_question_token_share": 0.6512027103331451,
+  "template_share": 0.576600790513834,
+  "bias_share": 0.3260304912478825,
+  "question_entropy": 0.44413325804630155,
+  "question_signed": 0.730231507622812,
+  "template_signed": 0.6118577075098814,
+  "logit": 0.6624280067758329
+ },
+ "attribution_stats": {
+  "auroc": 0.7058159232072275,
+  "error_at_50pct": 0.6679999999999999,
+  "error_at_25pct": 0.5760000000000001,
+  "l2": 0.001
+ },
+ "layer_contributions": {
+  "auroc": 0.6590852625635234,
+  "error_at_50pct": 0.6839999999999999,
+  "error_at_25pct": 0.624,
+  "l2": 0.001
+ },
+ "output_plus_attribution": {
+  "auroc": 0.6972557876905703,
+  "error_at_50pct": 0.6599999999999999,
+  "error_at_25pct": 0.5840000000000001,
+  "l2": 0.001
+ },
+ "probe_plus_attribution": {
+  "auroc": 0.7684020327498589,
+  "error_at_50pct": 0.636,
+  "error_at_25pct": 0.496,
+  "l2": 1.0
+ },
+ "attribution_weights": {
+  "question_share": 17.387300491333008,
+  "max_question_token_share": -36.0525016784668,
+  "template_share": -4.471499919891357,
+  "bias_share": -13.403900146484375,
+  "question_entropy": -1.3589999675750732,
+  "question_signed": -0.15549999475479126,
+  "template_signed": -0.5182999968528748,
+  "logit": 0.27399998903274536
+ },
+ "layer_weights_top": {
+  "attn@2": -5.6289,
+  "attn@0": 3.5544,
+  "attn@4": 3.4653,
+  "embed": 3.0843,
+  "attn@1": 3.0432,
+  "mlp@0": 2.9148,
+  "attn@9": 2.705,
+  "attn@6": -2.0857
+ },
+ "examples": [
+  {
+   "q": "What is the Japanese share index called?",
+   "answer": "Nikkei 225",
+   "right": 1,
+   "msp": 0.2406589835882187,
+   "top_question_tokens": [
+    [
+     " index",
+     0.32
+    ],
+    [
+     " share",
+     0.148
+    ],
+    [
+     "What",
+     0.116
+    ]
+   ],
+   "question_share": 0.038
+  },
+  {
+   "q": "Which volcano in Tanzania is the highest mountain in Africa?",
+   "answer": "Mount Kilimanjaro in Tanzania is the highest mountain in Africa.",
+   "right": 1,
+   "msp": 0.5293075442314148,
+   "top_question_tokens": [
+    [
+     " volcano",
+     1.594
+    ],
+    [
+     " Tanzania",
+     1.174
+    ],
+    [
+     " mountain",
+     0.5
+    ]
+   ],
+   "question_share": 0.224
+  },
+  {
+   "q": "Of which African country is Niamey the capital?",
+   "answer": "Niamey is the capital city of Niger, a country in West Africa.",
+   "right": 1,
+   "msp": 0.7403720021247864,
+   "top_question_tokens": [
+    [
+     " Ni",
+     1.008
+    ],
+    [
+     "y",
+     0.768
+    ],
+    [
+     "ame",
+     0.48
+    ]
+   ],
+   "question_share": 0.138
+  },
+  {
+   "q": "Who directed the classic 30s western Stagecoach?",
+   "answer": "John Ford directed the classic 1939 Western film \"Stagecoach.\"",
+   "right": 1,
+   "msp": 0.1589702069759369,
+   "top_question_tokens": [
+    [
+     " directed",
+     0.66
+    ],
+    [
+     " western",
+     0.282
+    ],
+    [
+     "Who",
+     0.256
+    ]
+   ],
+   "question_share": 0.115
+  },
+  {
+   "q": "Kagoshima international airport is in which country?",
+   "answer": "Japan",
+   "right": 1,
+   "msp": 0.9787819981575012,
+   "top_question_tokens": [
+    [
+     "ima",
+     0.535
+    ],
+    [
+     "osh",
+     0.453
+    ],
+    [
+     "ag",
+     0.417
+    ]
+   ],
+   "question_share": 0.08
+  },
+  {
+   "q": "In which sport could the Pacers take on the Pistons?",
+   "answer": "Basketball",
+   "right": 1,
+   "msp": 0.7379317283630371,
+   "top_question_tokens": [
+    [
+     " sport",
+     1.181
+    ],
+    [
+     " Pacers",
+     1.053
+    ],
+    [
+     " which",
+     0.326
+    ]
+   ],
+   "question_share": 0.169
+  },
+  {
+   "q": "Who was the man behind The Chipmunks?",
+   "answer": "The Chipmunks were created by Jim Henson and Don Knotts.",
+   "right": 0,
+   "msp": 0.7794694304466248,
+   "top_question_tokens": [
+    [
+     " the",
+     0.666
+    ],
+    [
+     " The",
+     0.335
+    ],
+    [
+     "unks",
+     0.2
+    ]
+   ],
+   "question_share": 0.086
+  },
+  {
+   "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+   "answer": "\"Rent\" was premiered in the US on 10th December 1993.",
+   "right": 0,
+   "msp": 0.12318199872970581,
+   "top_question_tokens": [
+    [
+     " musical",
+     0.578
+    ],
+    [
+     " Web",
+     0.356
+    ],
+    [
+     " premiered",
+     0.35
+    ]
+   ],
+   "question_share": 0.117
+  },
+  {
+   "q": "Who was the next British Prime Minister after Arthur Balfour?",
+   "answer": "Vernon Markham was the next British Prime Minister after Arthur Balfour.",
+   "right": 0,
+   "msp": 0.09159450978040695,
+   "top_question_tokens": [
+    [
+     " British",
+     0.366
+    ],
+    [
+     " Minister",
+     0.168
+    ],
+    [
+     " Prime",
+     0.124
+    ]
+   ],
+   "question_share": 0.074
+  },
+  {
+   "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+   "answer": "The Beatles had a 70s No. 1 hit with \"I Want to Hold Your Hand.\"",
+   "right": 0,
+   "msp": 0.21745665371418,
+   "top_question_tokens": [
+    [
+     "7",
+     0.161
+    ],
+    [
+     " Kiss",
+     0.125
+    ],
+    [
+     " had",
+     0.124
+    ]
+   ],
+   "question_share": 0.059
+  },
+  {
+   "q": "What claimed the life of singer Kathleen Ferrier?",
+   "answer": "Kathleen Ferrier was claimed to have died in an accident while driving on the highway near her home in 1",
+   "right": 0,
+   "msp": 0.2223496437072754,
+   "top_question_tokens": [
+    [
+     " Kathleen",
+     1.168
+    ],
+    [
+     " singer",
+     0.167
+    ],
+    [
+     "What",
+     0.167
+    ]
+   ],
+   "question_share": 0.104
+  },
+  {
+   "q": "Rita Coolidge sang the title song for which Bond film?",
+   "answer": "The title song for the Bond film \"Goldeneye\" was sung by Rita Coolidge.",
+   "right": 0,
+   "msp": 0.24559426307678223,
+   "top_question_tokens": [
+    [
+     " Bond",
+     0.541
+    ],
+    [
+     "idge",
+     0.305
+    ],
+    [
+     " which",
+     0.137
+    ]
+   ],
+   "question_share": 0.087
+  }
+ ]
+}

@@ -646,6 +646,38 @@ linear in its input once its SiLU gate values are fixed, the same kind of
 decision as an attention pattern or RMS scale. So exact attribution needs no
 conversion at all, and can be tested directly on the original model.
 
+**Exact attribution on the unmodified Qwen** (`experiments/qwen_correctness.py`,
+`qwen_correctness_stats.py`; CPU, the same 1,000 questions and halves). With the
+SiLU gates, attention patterns and RMS scales fixed, the first answer token's
+logit splits exactly (error 1.4e-5) into a part per question token, one for the
+chat template, and one per layer's biases. It also splits into what each
+attention and MLP layer wrote. The accuracy (21.6%) and probe (0.759) reproduce
+the Kaggle run exactly.
+
+| signal (AUROC, right vs wrong) | fitted? | AUROC | vs softmax (95% CI) |
+|---|---|---|---|
+| softmax of the first answer token, all 1,000 | no | 0.690 | n/a |
+| **how much the question's own tokens push the answer** (one exact number) | no | **0.717** | +0.026 (-0.015, +0.066) |
+| share of the score from the question / from biases | no | 0.685 / 0.343 | n/a |
+| softmax + NLL + that one number, test half | 3 weights | 0.725 | **+0.043 (+0.020, +0.066)** |
+| per-layer contributions (49 numbers), test half | yes | 0.659 | n/a |
+| post-hoc hidden-state probe (layer 19), test half | 896 weights | **0.759** | n/a |
+| probe + question attribution, test half | yes | 0.764 | +0.005 over the probe (+0.001, +0.009) |
+
+One readable, exact number helps: how strongly the words of the question drive
+the answer. Answers the model knows are pushed by the question's subject (" Pacers"
+and " sport" give "Basketball"). Guesses lean on the template and on function
+words (" the" and " The" give "Jim Henson" for the Chipmunks). On its own the
+number is not clearly better than softmax, but added to it, it gives a
+significant gain. A trained probe on the hidden state still predicts best, and
+attribution adds almost nothing to it. What attribution offers over the probe
+is the reason ("the answer is not tied to the question's subject"), not more
+accuracy.
+
+The signals are read at the first answer token, which is often a function word
+("The Chipmunks were created by ..."). Reading them at the answer's entity is the
+next test.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
