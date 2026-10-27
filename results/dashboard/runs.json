@@ -216,6 +216,18 @@
 "note": "a token is provably memory-free when its own gate is 0; 32 active features"
 },
 {
+"run": "g3-glassbox3",
+"experiment": "g3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"model": "glassbox3",
+"status": "running",
+"step": 750,
+"total_steps": 3000,
+"progress": 0.25033333333333335,
+"last_loss": 3.7056,
+"note": "epinet uncertainty raises an explicit <unsure> token; self-consistency replay"
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "title": "Chat v2 GPT baseline",
@@ -249,6 +261,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (02:52:05 UTC check)"
+"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (03:10:12 UTC check)"
 }
 ]
