@@ -145,7 +145,15 @@ def forward(kind, m, x):
 
 
 def same(a, b):
-    return bool(a) and bool(b) and (a in b or b in a)
+    """Two normalized replies assert the same thing: one contains the other, or their words
+    overlap with F1 >= 0.5 (short factual replies worded differently)."""
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    wa, wb = a.split(), b.split()
+    common = sum(min(wa.count(w), wb.count(w)) for w in set(wa))
+    return common > 0 and 2 * common / (len(wa) + len(wb)) >= 0.5
 
 
 @torch.no_grad()
