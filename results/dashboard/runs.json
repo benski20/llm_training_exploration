@@ -113,10 +113,10 @@
 "title": "v8 fresh entities, GPT",
 "model": "baseline",
 "status": "running",
-"step": 2500,
+"step": 4000,
 "total_steps": 6000,
-"progress": 0.41683333333333333,
-"last_loss": 3.8572,
+"progress": 0.6668333333333333,
+"last_loss": 2.7488,
 "note": "same data for the matched GPT"
 },
 {

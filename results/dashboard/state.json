@@ -1,0 +1,27 @@
+{
+ "runs": {
+  "sha": "6cc2249f8ace701278923e03b07f1e72260fdfb8508126c0ed554eb401755a89",
+  "blob": "4ca1904ee60d9a0dc43fa618ed3462a4",
+  "version": 2
+ },
+ "curves": {
+  "sha": "dd62eef0903b5ac4ae054160839e727dbb3acaef5a2de11b353daca253559881",
+  "blob": "ac2711c14dbb4563b31aee96137e86a4",
+  "version": 2
+ },
+ "behaviour": {
+  "sha": "0f1c60d36420a147b653dd9fb21c5d4b088a9330e55688e263b3cebe074e772c",
+  "blob": "61d1af83c5184bec75a995c201399f22",
+  "version": 2
+ },
+ "detection": {
+  "sha": "26339c06400692e1892f784342d7c0a3008c501a810ab27a2f650d2371fddf1d",
+  "blob": "6787763514b383abb8987ba5378ac629",
+  "version": 2
+ },
+ "chat": {
+  "sha": "80a0e820df3e3faab61815978518cd1ede6d2c72b9406dd217b57a1d86254ff8",
+  "blob": "e7bd8f853c4fa62f0bc6a575359a2e1e",
+  "version": 1
+ }
+}

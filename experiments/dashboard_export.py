@@ -40,6 +40,10 @@ RUNS = [
      "Alpaca + WikiText-2 + fact world"),
     ("chat", "Chat GPT baseline", "results/glassbox_chat/run.log", "results/glassbox_chat/run.json", "baseline", 3000,
      "matched standard GPT"),
+    ("chat2", "Chat v2 glass-box", "results/glassbox_chat_v2/glassbox.log", "results/glassbox_chat_v2/glassbox.json",
+     "glassbox", 3000, "chatbot-style dialogues, made-up names, zero-init memory"),
+    ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
+     "baseline", 3000, "same chat data for the matched GPT"),
 ]
 SPLITS = {"in_dist": "In distribution", "held_relations": "Held-out relations", "long_context": "Long context"}
 READOUTS = {"k_builtin": "Built-in k", "probe_best_layer": "Post-hoc probe", "evidence_support": "Evidence support",
@@ -105,10 +109,12 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp == "chat":
+        if exp in ("chat", "chat2"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
-                chat.append({"model": model, "name": "Glass-box" if model == "glassbox" else "GPT", "split": name,
+                chat.append({"model": model if exp == "chat" else f"{model}-v2",
+                             "name": ("Glass-box" if model == "glassbox" else "GPT") + (" v2" if exp == "chat2" else ""),
+                             "split": name,
                              "bits_per_token": r["bits_per_token"],
                              "top1_acc": r["top1_acc"], "auroc_msp": r["auroc_msp"], "auroc_probe": r["auroc_probe"],
                              "auroc_k": r.get("auroc_k")})

@@ -861,6 +861,27 @@
 "qa_loss": 2.4141
 },
 {
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 3000,
+"loss": 3.3757,
+"qa_loss": 2.1125
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 3500,
+"loss": 2.8177,
+"qa_loss": 1.841
+},
+{
+"run": "v8-baseline",
+"title": "v8 fresh entities, GPT",
+"step": 4000,
+"loss": 2.7488,
+"qa_loss": 2.056
+},
+{
 "run": "chat-glassbox",
 "title": "Chat glass-box",
 "step": 250,

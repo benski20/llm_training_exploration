@@ -63,18 +63,22 @@ def pseudo(rng, n_syl):
 
 
 class World:
-    def __init__(self, seed=1234):
+    KINDS = ["ctx", "mem", "absent"]
+
+    def __init__(self, seed=1234, n_ent=N_ENT):
         rng = random.Random(seed)
         names = set()
-        while len(names) < N_ENT + N_VAL * len(RELS):
+        while len(names) < n_ent + N_VAL * len(RELS):
             names.add(pseudo(rng, rng.choice([2, 3])))
         names = sorted(names)
         rng.shuffle(names)
-        self.ents = names[:N_ENT]
-        self.vals = [names[N_ENT + r * N_VAL:N_ENT + (r + 1) * N_VAL] for r in range(len(RELS))]
-        self.value = [[rng.randrange(N_VAL) for _ in RELS] for _ in range(N_ENT)]
+        self.n_ent = n_ent
+        self.names = set(names)
+        self.ents = names[:n_ent]
+        self.vals = [names[n_ent + r * N_VAL:n_ent + (r + 1) * N_VAL] for r in range(len(RELS))]
+        self.value = [[rng.randrange(N_VAL) for _ in RELS] for _ in range(n_ent)]
         self.by = {s: [] for s in ("known_qa", "known_heldout", "unk_train", "unk_test")}
-        for e in range(N_ENT):
+        for e in range(n_ent):
             for r in range(len(RELS)):
                 u = rng.random()
                 s = "known_qa" if u < 0.42 else "known_heldout" if u < 0.6 else "unk_train" if u < 0.8 else "unk_test"
@@ -92,7 +96,7 @@ class World:
         pool = {"mem": self.by["known_heldout" if test else "known_qa"],
                 "absent": self.by["unk_test" if test else "unk_train"]}
         if kind == "ctx":
-            e, r = rng.randrange(N_ENT), rng.choice(rels)
+            e, r = rng.randrange(self.n_ent), rng.choice(rels)
         else:
             while True:
                 e, r = rng.choice(pool[kind])
@@ -101,7 +105,7 @@ class World:
         E, R = self.ents[e], RELS[r]
         notes = []
         for _ in range(rng.randint(0, 2)):
-            e2, r2 = rng.randrange(N_ENT), rng.choice(rels)
+            e2, r2 = rng.randrange(self.n_ent), rng.choice(rels)
             if (e2, r2) != (e, r):
                 notes.append(f"{self.ents[e2]}'s {RELS[r2]} is {self.v(e2, r2, rng.randrange(N_VAL))}.")
         if kind == "ctx":
@@ -112,6 +116,83 @@ class World:
         note = ("Note: " + " ".join(notes) + " ") if notes else ""
         prompt = f"User: {note}What is {E}'s {R}?\nAssistant:"
         answer = f" {E}'s {R} is {gold}." if gold else f" {IDK} {E}'s {R}."
+        return prompt, answer, gold, kind
+
+
+# Chat v2: natural phrasings per relation, facts told in the user's message, multi-turn
+# dialogues, invented names that are new in every sample, varied abstentions.
+ASK = {"birthplace": ["Where was {E} born?", "What is {E}'s birthplace?", "Do you know where {E} was born?"],
+       "employer": ["Who does {E} work for?", "Where does {E} work?", "What company employs {E}?"],
+       "favorite food": ["What is {E}'s favorite food?", "What does {E} like to eat most?"],
+       "pet": ["What pet does {E} have?", "What is the name of {E}'s pet?"],
+       "native language": ["What language does {E} speak natively?", "What is {E}'s native language?"],
+       "home planet": ["Which planet is {E} from?", "What is {E}'s home planet?"],
+       "favorite color": ["What is {E}'s favorite color?", "Which color does {E} like best?"],
+       "instrument": ["What instrument does {E} play?", "Which instrument is {E} known for playing?"]}
+SAY = {"birthplace": ["{E} was born in {V}.", "{E}'s birthplace is {V}."],
+       "employer": ["{E} works for {V}.", "{E}'s employer is {V}."],
+       "favorite food": ["{E}'s favorite food is {V}.", "{E} loves eating {V}."],
+       "pet": ["{E} has a pet called {V}.", "{E}'s pet is {V}."],
+       "native language": ["{E} speaks {V} natively.", "{E}'s native language is {V}."],
+       "home planet": ["{E} comes from the planet {V}.", "{E}'s home planet is {V}."],
+       "favorite color": ["{E}'s favorite color is {V}.", "{E} likes {V} best."],
+       "instrument": ["{E} plays the {V}.", "{E}'s instrument is the {V}."]}
+TELL = ["I read that {S}", "Fact: {S}", "My friend told me that {S}", "{S}"]
+DONT = ["I don't know {E}'s {R}.", "I'm not sure. I have no information about {E}'s {R}.",
+        "Sorry, I don't know that about {E}."]
+ABSTAIN_MARKERS = ("don't know", "not sure", "no information")
+
+
+class ChatWorld(World):
+    KINDS = ["ctx", "mem", "absent", "absent_fresh", "ctx_fresh"]
+
+    def statement(self, rng, e, r):
+        return rng.choice(SAY[RELS[r]]).format(E=self.ents[e], V=self.v(e, r))
+
+    def fresh_name(self, rng):
+        while True:
+            n = pseudo(rng, rng.choice([2, 3]))
+            if n not in self.names:
+                return n
+
+    def question(self, rng, kind, rels, test):
+        pool = {"mem": self.by["known_heldout" if test else "known_qa"],
+                "absent": self.by["unk_test" if test else "unk_train"]}
+        r = rng.choice(rels)
+        if kind in ("ctx", "ctx_fresh", "absent_fresh"):
+            E = self.ents[rng.randrange(self.n_ent)] if kind == "ctx" else self.fresh_name(rng)
+            e = self.ents.index(E) if kind == "ctx" else None
+        else:
+            while True:
+                e, r = rng.choice(pool[kind])
+                if r in rels:
+                    break
+            E = self.ents[e]
+        R = RELS[r]
+        notes = []
+        for _ in range(rng.randint(0, 2)):
+            e2, r2 = rng.randrange(self.n_ent), rng.choice(rels)
+            if self.ents[e2] != E:
+                notes.append(rng.choice(SAY[RELS[r2]]).format(E=self.ents[e2], V=self.v(e2, r2, rng.randrange(N_VAL))))
+        gold = None
+        if kind in ("ctx", "ctx_fresh"):
+            k = self.value[e][r] if kind == "ctx" and rng.random() < 0.7 else rng.randrange(N_VAL)
+            gold = self.vals[r][k]
+            notes.insert(rng.randint(0, len(notes)), rng.choice(SAY[R]).format(E=E, V=gold))
+        elif kind == "mem":
+            gold = self.v(e, r)
+        told = " ".join(rng.choice(TELL).format(S=n) for n in notes)
+        turns = ""
+        if rng.random() < 0.3:                                  # an earlier exchange in the same chat
+            while True:                                         # only relations this split may ask about
+                e0, r0 = rng.choice(self.by["known_qa"])
+                if r0 in rels:
+                    break
+            turns = (f"User: {rng.choice(ASK[RELS[r0]]).format(E=self.ents[e0])}\nAssistant: "
+                     f"{rng.choice(SAY[RELS[r0]]).format(E=self.ents[e0], V=self.v(e0, r0))}\n")
+        q = rng.choice(ASK[R]).format(E=E)
+        prompt = f"{turns}User: {(told + ' ') if told else ''}{q}\nAssistant:"
+        answer = " " + (rng.choice(SAY[R]).format(E=E, V=gold) if gold else rng.choice(DONT).format(E=E, R=R))
         return prompt, answer, gold, kind
 
 
@@ -135,9 +216,9 @@ def corpus(world, rng, al_train, n_qa=40000, stmt_reps=8):
         rng.shuffle(facts)
         for i in range(0, len(facts), 6):
             docs.append(" ".join(world.statement(rng, e, r) for e, r in facts[i:i + 6]))
-    kinds = ["ctx", "mem", "absent"]
+    kinds = world.KINDS
     for i in range(n_qa):
-        p, a, _, _ = world.question(rng, kinds[i % 3], QA_RELS, test=False)
+        p, a, _, _ = world.question(rng, kinds[i % len(kinds)], QA_RELS, test=False)
         docs.append(p + a)
     rng.shuffle(docs)
     return docs
@@ -156,10 +237,11 @@ def train_tokenizer(docs, path, vocab=4096):
 # ---------------------------------------------------------------- models
 
 class Glass:
-    def __init__(self, V, block):
+    def __init__(self, V, block, mem_init=1.0):
         self.m = GlassBoxLM(GBConfig(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
                                      mem_layer=3, mem_keys=128, mem_topk=8, fixed_embed=False,
-                                     mlp_ratio=1, track_evidence=False, sharpness=True))
+                                     mlp_ratio=1, track_evidence=False, sharpness=True,
+                                     mem_value_init=mem_init))
 
     def params(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -317,15 +399,20 @@ def respond(model, tok, prompt, block, max_new=24):
 
 def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
     rows = []
-    kinds = ["ctx", "mem", "absent"]
+    kinds = world.KINDS
     for i in range(n):
-        prompt, _, gold, kind = world.question(rng, kinds[i % 3], rels, test=True)
+        prompt, _, gold, kind = world.question(rng, kinds[i % len(kinds)], rels, test=True)
         out, f = respond(model, tok, prompt, block)
-        abst = IDK.lower() in out.lower()
+        abst = any(m in out.lower() for m in ABSTAIN_MARKERS)
         right = abst if gold is None else (not abst and gold in out)
         rows.append({"kind": kind, "right": right, "abstained": abst, "out": out, **f})
     d = {f"{k}_right": float(np.mean([r["right"] for r in rows if r["kind"] == k])) for k in kinds}
     d["hallucination_rate"] = float(np.mean([not r["abstained"] for r in rows if r["kind"] == "absent"]))
+    if "absent_fresh" in kinds:
+        d["hallucination_rate_fresh_names"] = float(np.mean([not r["abstained"] for r in rows
+                                                             if r["kind"] == "absent_fresh"]))
+    answerable = [r for r in rows if r["kind"] in ("ctx", "mem", "ctx_fresh")]
+    d["over_refusal_rate"] = float(np.mean([r["abstained"] for r in answerable]))
     y = np.array([r["right"] for r in rows], dtype=int)
     if 0 < y.sum() < len(y):
         d["auroc_msp"] = auroc(np.array([r["msp"] for r in rows]), y)
@@ -364,18 +451,27 @@ def main():
     ap.add_argument("--n-chat", type=int, default=300)
     ap.add_argument("--n-tok-examples", type=int, default=300)
     ap.add_argument("--out", default="results/glassbox_chat/run.json")
+    ap.add_argument("--world", default="v1", choices=["v1", "v2"], help="v2: chatbot-style phrasings and dialogues")
+    ap.add_argument("--n-ent", type=int, default=N_ENT)
+    ap.add_argument("--n-qa", type=int, default=40000)
+    ap.add_argument("--mem-init", type=float, default=1.0)
+    ap.add_argument("--threads", type=int, default=os.cpu_count())
+    ap.add_argument("--data-dir", default=None, help="tokenizer and token stream (default: next to --out)")
+    ap.add_argument("--prepare-only", action="store_true")
     a = ap.parse_args()
-    torch.set_num_threads(os.cpu_count())
+    torch.set_num_threads(a.threads)
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     rng = random.Random(0)
-    world = World()
+    world = (ChatWorld if a.world == "v2" else World)(n_ent=a.n_ent)
     al_train, al_val = alpaca()
-    tok_path = os.path.join(os.path.dirname(a.out), "tokenizer.json")
-    stream_path = os.path.join(os.path.dirname(a.out), "stream.pt")
+    data_dir = a.data_dir or os.path.dirname(a.out)
+    os.makedirs(data_dir, exist_ok=True)
+    tok_path = os.path.join(data_dir, "tokenizer.json")
+    stream_path = os.path.join(data_dir, "stream.pt")
     if os.path.exists(stream_path):
         tok, stream = Tokenizer.from_file(tok_path), torch.load(stream_path)
     else:
-        docs = corpus(world, rng, al_train)
+        docs = corpus(world, rng, al_train, n_qa=a.n_qa)
         tok = train_tokenizer(docs, tok_path)
         ids = []
         for enc in tok.encode_batch(docs):
@@ -384,6 +480,8 @@ def main():
         torch.save(stream, stream_path)
     V = tok.get_vocab_size()
     print(json.dumps({"vocab": V, "train_tokens": len(stream)}), flush=True)
+    if a.prepare_only:
+        return
     wiki_val = [p for _, ps in articles(os.path.join(ROOT, "data", "wikitext-2", "valid.txt")) for p in ps]
     erng = random.Random(5)
     n = a.n_tok_examples
@@ -393,7 +491,7 @@ def main():
     for kind in a.models.split(","):
         if kind in res:
             continue
-        model = Glass(V, a.block) if kind == "glassbox" else Base(V, a.block)
+        model = Glass(V, a.block, a.mem_init) if kind == "glassbox" else Base(V, a.block)
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
         train(model, stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)
