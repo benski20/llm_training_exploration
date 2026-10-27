@@ -269,18 +269,38 @@ class CorrectnessHead:
     """Trained correctness estimator for one model: probe on the entity hidden state (one layer or
     several), plus a stacker over probe, output probabilities, optional consistency and grounding."""
 
-    def __init__(self, layers, probe, stacker, use_consistency, use_grounding, k_samples=6):
+    def __init__(self, layers, probe, stacker, use_consistency, use_grounding, k_samples=6, calib=(1.0, 0.0)):
         self.layers, self.probe, self.stacker = layers, probe, stacker
         self.use_consistency, self.use_grounding, self.k = use_consistency, use_grounding, k_samples
+        self.calib = tuple(calib)
 
     def state_dict(self):
         return {"layers": self.layers, "probe": self.probe.state_dict(), "stacker": self.stacker.state_dict(),
-                "use_consistency": self.use_consistency, "use_grounding": self.use_grounding, "k": self.k}
+                "use_consistency": self.use_consistency, "use_grounding": self.use_grounding, "k": self.k,
+                "calib": list(self.calib)}
 
     @classmethod
     def from_state(cls, sd):
         return cls(sd["layers"], Probe.from_state(sd["probe"]), Probe.from_state(sd["stacker"]),
-                   sd["use_consistency"], sd["use_grounding"], sd.get("k", 6))
+                   sd["use_consistency"], sd["use_grounding"], sd.get("k", 6), sd.get("calib", (1.0, 0.0)))
+
+    def calibrate(self, z, y, steps=500):
+        """Refit the probability scale for a new domain from a small labelled sample: P = sigmoid(a z + b)
+        on the stacker's raw logits z. Monotone, so the ranking (AUROC) is unchanged."""
+        z = torch.as_tensor(np.asarray(z), dtype=torch.float32)
+        y = torch.as_tensor(np.asarray(y), dtype=torch.float32)
+        a = torch.ones(1, requires_grad=True)
+        b = torch.zeros(1, requires_grad=True)
+        opt = torch.optim.LBFGS([a, b], max_iter=steps)
+
+        def closure():
+            opt.zero_grad()
+            loss = F.binary_cross_entropy_with_logits(a * z + b, y)
+            loss.backward()
+            return loss
+        opt.step(closure)
+        self.calib = (float(a), float(b))
+        return self
 
     @torch.no_grad()
     def answer(self, model, tok, question):
@@ -299,5 +319,6 @@ class CorrectnessHead:
             ev.update({k: g[k] for k in GROUND_KEYS + ["top_question_token"]})
         pl = float(self.probe.logit(row["h"].float().reshape(1, -1).numpy())[0])
         ev["probe_logit"] = pl
-        z = self.stacker.logit(stack_features(pl, row, self.use_consistency, self.use_grounding)[None])[0]
-        return {"reply": reply, "p_correct": float(1 / (1 + np.exp(-z))), "evidence": ev}
+        z = float(self.stacker.logit(stack_features(pl, row, self.use_consistency, self.use_grounding)[None])[0])
+        zc = self.calib[0] * z + self.calib[1]
+        return {"reply": reply, "p_correct": float(1 / (1 + np.exp(-zc))), "logit": z, "evidence": ev}

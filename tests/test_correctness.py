@@ -61,3 +61,15 @@ def test_head_answers_with_probability():
     head = CorrectnessHead([1], probe, st, True, True, k_samples=2)
     out = head.answer(m, tok, "Who wrote Hamlet?")
     assert 0.0 <= out["p_correct"] <= 1.0 and "consistency" in out["evidence"]
+
+
+def test_calibrate_fixes_an_overconfident_scale():
+    rng = np.random.default_rng(0)
+    z = rng.normal(size=2000) * 3 + 2                    # stacker says ~85% on average
+    y = (rng.random(2000) < 1 / (1 + np.exp(-(0.5 * z - 2)))).astype(np.float32)   # truth is far lower
+    head = CorrectnessHead([0], None, None, False, False)
+    before = ece(1 / (1 + np.exp(-z)), y)
+    head.calibrate(z[:500], y[:500])
+    a, b = head.calib
+    after = ece(1 / (1 + np.exp(-(a * z[500:] + b))), y[500:])
+    assert after < 0.05 < before and abs(a - 0.5) < 0.15
