@@ -232,11 +232,11 @@
 "experiment": "g2.2",
 "title": "Glassbox-2.2: straight-through memory gate",
 "model": "glassbox2",
-"status": "running",
-"step": 1750,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.5836666666666667,
-"last_loss": 3.1704,
+"progress": 1.0,
+"last_loss": 3.0273,
 "note": "2.1 with gates that keep learning when saturated (the Kaggle student's gate)"
 },
 {
@@ -285,6 +285,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (04:33:30 UTC check)"
+"note": "students trained from scratch on the teacher data (04:51:37 UTC check)"
 }
 ]

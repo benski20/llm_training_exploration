@@ -120,6 +120,26 @@
 "auroc_k": 0.7673569257301301
 },
 {
+"model": "glassbox2-2",
+"name": "Glassbox-2",
+"split": "Alpaca",
+"bits_per_token": 5.242364383503756,
+"top1_acc": 0.3150922711492783,
+"auroc_msp": 0.8205322430508881,
+"auroc_probe": 0.7592083030177375,
+"auroc_k": 0.7550057135060461
+},
+{
+"model": "glassbox2-2",
+"name": "Glassbox-2",
+"split": "WikiText-2",
+"bits_per_token": 5.480243531833738,
+"top1_acc": 0.30575888526325073,
+"auroc_msp": 0.8380969154437542,
+"auroc_probe": 0.7938230592713881,
+"auroc_k": 0.7895721689811721
+},
+{
 "model": "baseline-2",
 "name": "GPT v2",
 "split": "Alpaca",
