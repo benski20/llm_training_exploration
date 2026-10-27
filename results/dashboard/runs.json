@@ -401,9 +401,9 @@
 "title": "CPU: the same signals read at the answer's entity token",
 "model": "qwen",
 "status": "running",
-"step": 575,
+"step": 825,
 "total_steps": 1000,
-"progress": 0.575,
+"progress": 0.825,
 "last_loss": null,
 "note": "first new name/number in the answer; whole-answer probability baselines"
 }
