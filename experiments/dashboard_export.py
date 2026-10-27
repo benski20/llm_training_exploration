@@ -49,6 +49,8 @@ RUNS = [
     ("chat3", "Chat v3 glass-box, hard memory gate", "results/glassbox_chat_v3/glassbox.log",
      "results/glassbox_chat_v3/glassbox.json", "glassbox", 3000,
      "general chat; tokens with a closed gate are provably made without stored knowledge"),
+    ("g2", "Glassbox-2 pilot (CPU)", "results/glassbox2_chat/glassbox2.log", "results/glassbox2_chat/glassbox2.json",
+     "glassbox2", 3000, "exact sparse features, exact attribution, logged hard-gated memory"),
     ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
      "baseline", 3000, "same chat data for the matched GPT"),
 ]
@@ -162,11 +164,12 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp in ("chat", "chat2", "chat3"):
+        if exp in ("chat", "chat2", "chat3", "g2"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
                 chat.append({"model": model if exp == "chat" else f"{model}-{exp[-1]}",
-                             "name": ("Glass-box" if model == "glassbox" else "GPT") + {"chat2": " v2", "chat3": " v3"}.get(exp, ""),
+                             "name": {"glassbox": "Glass-box", "glassbox2": "Glassbox-2"}.get(model, "GPT")
+                             + {"chat2": " v2", "chat3": " v3"}.get(exp, ""),
                              "split": name,
                              "bits_per_token": r["bits_per_token"],
                              "top1_acc": r["top1_acc"], "auroc_msp": r["auroc_msp"], "auroc_probe": r["auroc_probe"],

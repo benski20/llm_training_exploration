@@ -180,15 +180,27 @@
 "note": "chatbot-style dialogues, made-up names, zero-init memory"
 },
 {
+"run": "chat3-glassbox",
+"experiment": "chat3",
+"title": "Chat v3 glass-box, hard memory gate",
+"model": "glassbox",
+"status": "running",
+"step": 750,
+"total_steps": 3000,
+"progress": 0.25033333333333335,
+"last_loss": 3.837,
+"note": "general chat; tokens with a closed gate are provably made without stored knowledge"
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "title": "Chat v2 GPT baseline",
 "model": "baseline",
-"status": "running",
-"step": 2500,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.8336666666666667,
-"last_loss": 2.6721,
+"progress": 1.0,
+"last_loss": 3.0175,
 "note": "same chat data for the matched GPT"
 },
 {

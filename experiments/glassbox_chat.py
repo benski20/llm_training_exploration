@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from interp_by_design import auroc, fit_probe  # noqa: E402
 from typed_wikitext import articles  # noqa: E402
 from vt.glassbox import GBConfig, GlassBoxLM, memory_free_positions  # noqa: E402
+from vt.glassbox2 import G2Config, Glassbox2  # noqa: E402
 from vt.lm import GPT, GPTConfig  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -273,6 +274,35 @@ class Glass:
         return lp, ro, hs
 
 
+class Glass2:
+    """Glassbox-2: exact sparse features, exact attribution, logged hard-gated memory."""
+
+    def __init__(self, V, block, mem_l1=0.002):
+        self.mem_l1 = mem_l1
+        self.m = Glassbox2(G2Config(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
+                                    n_features=1024, k_active=16, mem_layer=3, mem_keys=128, mem_topk=8))
+
+    def params(self):
+        return list(self.m.parameters())
+
+    def loss(self, x, y):
+        logits, k = self.m(x)
+        lm = F.cross_entropy(logits.flatten(0, 1), y.flatten())
+        right = (logits.argmax(-1) == y).float()
+        aux = F.binary_cross_entropy_with_logits(k, right)
+        gate = self.m.trace["mem"]["gate"]
+        return lm + 0.2 * aux + self.mem_l1 * gate.mean(), {
+            "lm": lm.item(), "aux": aux.item(), "gate_open": (gate > 0).float().mean().item()}
+
+    @torch.no_grad()
+    def readouts(self, x, evidence=True):
+        logits, k = self.m(x)
+        lp = F.log_softmax(logits, -1)
+        tr = self.m.trace
+        return lp, {"k": k, "msp": lp.max(-1).values.exp(), "match": tr["mem"]["match"],
+                    "free": self.m.memory_free()}, tr["hs"]
+
+
 class Base:
     def __init__(self, V, block):
         self.m = GPT(GPTConfig(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
@@ -349,8 +379,9 @@ def token_rows(model, tok, pairs, block):
             r = {"ok": int(lp[0, t].argmax() == y[t]), "nll": -float(lp[0, t, y[t]]),
                  "msp": float(ro["msp"][0, t]), "h": [h[0, t].numpy() for h in hs]}
             if "k" in ro:
-                r.update(k=float(ro["k"][0, t]), match=float(ro["match"][0, t]),
-                         mem_mass=float(ro["mem_mass"][0, t]), prompt_mass=float(ro["e"][0, t, :P].sum()))
+                r.update(k=float(ro["k"][0, t]), match=float(ro["match"][0, t]))
+                if "e" in ro:
+                    r.update(mem_mass=float(ro["mem_mass"][0, t]), prompt_mass=float(ro["e"][0, t, :P].sum()))
             if "free" in ro:
                 r["memory_free"] = bool(ro["free"][0, t])
             rows.append(r)
@@ -377,7 +408,8 @@ def token_metrics(rows, probe, L):
     if "k" in rows[0]:
         d["auroc_k"] = auroc(np.array([r["k"] for r in rows]), y)
         d["auroc_memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
-        d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
+        if "prompt_mass" in rows[0]:
+            d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
     if "memory_free" in rows[0]:
         free = np.array([r["memory_free"] for r in rows])
         d["certified_memory_free_tokens"] = float(free.mean())
@@ -411,8 +443,9 @@ def respond(model, tok, prompt, block, max_new=24):
     if "k" in ro:
         feats.update(k=float(np.mean([float(ro["k"][0, t]) for t in span])),
                      k_min=float(min(float(ro["k"][0, t]) for t in span)),
-                     match=float(np.mean([float(ro["match"][0, t]) for t in span])),
-                     prompt_mass=float(np.mean([float(ro["e"][0, t, :P - off].sum()) for t in span])))
+                     match=float(np.mean([float(ro["match"][0, t]) for t in span])))
+        if "e" in ro:
+            feats["prompt_mass"] = float(np.mean([float(ro["e"][0, t, :P - off].sum()) for t in span]))
     if "free" in ro:                                # every reply token provably made without memory
         feats["reply_memory_free"] = bool(all(bool(ro["free"][0, t]) for t in span))
         feats["ids"] = x
@@ -449,7 +482,8 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
             d["auroc_k_mean"] = auroc(np.array([r["k"] for r in rows]), y)
             d["auroc_k_min"] = auroc(np.array([r["k_min"] for r in rows]), y)
             d["auroc_memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
-            d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
+            if "prompt_mass" in rows[0]:
+                d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
         if probe is not None:
             d["auroc_probe"] = auroc(probe[1](np.stack([r["h"][probe[0]] for r in rows])), y)
     d["examples"] = [{k: r[k] for k in ("kind", "right", "out")} for r in rows[:6]]
@@ -463,11 +497,17 @@ def soundness_check(model, seqs):
     m = model.m
     bad = 0
     saved = m.mem.values.weight.detach().clone()
+    g2 = isinstance(m, Glassbox2)
+    run = (lambda x: m(x)[0]) if g2 else (lambda x: m(x, evidence=False)[0])
     for x in seqs:
-        free = memory_free_positions(m, x)
-        base, _, _, _ = m(x, evidence=False)
+        if g2:
+            m(x)
+            free = m.memory_free()
+        else:
+            free = memory_free_positions(m, x)
+        base = run(x)
         m.mem.values.weight.copy_(torch.randn_like(saved) * 10)
-        other, _, _, _ = m(x, evidence=False)
+        other = run(x)
         m.mem.values.weight.copy_(saved)
         bad += int(not torch.equal(base[free], other[free]))
     return bad
@@ -537,7 +577,8 @@ def main():
     for kind in a.models.split(","):
         if kind in res:
             continue
-        model = Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else Base(V, a.block)
+        model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
+                 Glass2(V, a.block) if kind == "glassbox2" else Base(V, a.block))
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
         train(model, stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)

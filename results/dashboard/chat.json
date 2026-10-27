@@ -58,5 +58,25 @@
 "auroc_msp": 0.8338190500856453,
 "auroc_probe": 0.785503389695091,
 "auroc_k": 0.7762117659162004
+},
+{
+"model": "baseline-2",
+"name": "GPT v2",
+"split": "Alpaca",
+"bits_per_token": 4.985180504674769,
+"top1_acc": 0.3455143431390462,
+"auroc_msp": 0.823976587207735,
+"auroc_probe": 0.718319521176598,
+"auroc_k": null
+},
+{
+"model": "baseline-2",
+"name": "GPT v2",
+"split": "WikiText-2",
+"bits_per_token": 5.302717366352521,
+"top1_acc": 0.3211923450039686,
+"auroc_msp": 0.8374275046148264,
+"auroc_probe": 0.6334534993236772,
+"auroc_k": null
 }
 ]
