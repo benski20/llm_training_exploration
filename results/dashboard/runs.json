@@ -112,11 +112,11 @@
 "experiment": "v8",
 "title": "v8 fresh entities, GPT",
 "model": "baseline",
-"status": "running",
-"step": 4000,
+"status": "done",
+"step": 6000,
 "total_steps": 6000,
-"progress": 0.6668333333333333,
-"last_loss": 2.7488,
+"progress": 1.0,
+"last_loss": 2.3758,
 "note": "same data for the matched GPT"
 },
 {
@@ -142,5 +142,29 @@
 "progress": 1.0,
 "last_loss": 2.9336,
 "note": "matched standard GPT"
+},
+{
+"run": "chat2-glassbox",
+"experiment": "chat2",
+"title": "Chat v2 glass-box",
+"model": "glassbox",
+"status": "running",
+"step": 1750,
+"total_steps": 3000,
+"progress": 0.5836666666666667,
+"last_loss": 3.3704,
+"note": "chatbot-style dialogues, made-up names, zero-init memory"
+},
+{
+"run": "chat2-baseline",
+"experiment": "chat2",
+"title": "Chat v2 GPT baseline",
+"model": "baseline",
+"status": "running",
+"step": 750,
+"total_steps": 3000,
+"progress": 0.25033333333333335,
+"last_loss": 3.4139,
+"note": "same chat data for the matched GPT"
 }
 ]

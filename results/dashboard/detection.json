@@ -878,5 +878,29 @@
 "split": "Long context",
 "readout": "Memory familiarity",
 "auroc": 0.5015528560757951
+},
+{
+"run": "v8-baseline",
+"experiment": "v8",
+"model": "baseline",
+"split": "In distribution",
+"readout": "Post-hoc probe",
+"auroc": 0.6946122814881219
+},
+{
+"run": "v8-baseline",
+"experiment": "v8",
+"model": "baseline",
+"split": "Held-out relations",
+"readout": "Post-hoc probe",
+"auroc": 0.8181818181818182
+},
+{
+"run": "v8-baseline",
+"experiment": "v8",
+"model": "baseline",
+"split": "Long context",
+"readout": "Post-hoc probe",
+"auroc": 0.648880317154184
 }
 ]
