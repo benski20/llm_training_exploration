@@ -216,6 +216,11 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=()):
         if total is None and step == 50:                              # fix the schedule from measured speed
             total = max(100, int(budget / (el / 50)))
             log_fn(phase="schedule", kind=kind, total_steps=total, s_per_step=round(el / 50, 3))
+            mark = (step, el)
+        elif total is not None and step - mark[0] == 500:            # re-estimate (replay costs time)
+            rate = (el - mark[1]) / 500
+            total = max(step + 1, step + int((budget - el) / rate))
+            mark = (step, el)
         if (total is not None and step >= total) or el > budget * 1.05:
             break
         T = total or 10 ** 9
@@ -562,7 +567,7 @@ def main():
     ap.add_argument("--lr", type=float, default=6e-4)
     ap.add_argument("--n-token-eval", type=int, default=300)
     ap.add_argument("--sc-start", type=float, default=0.3, help="Glassbox-3: replay from this share of training")
-    ap.add_argument("--sc-every", type=int, default=20)
+    ap.add_argument("--sc-every", type=int, default=100)
     ap.add_argument("--sc-prompts", type=int, default=16)
     ap.add_argument("--sc-k", type=int, default=5)
     ap.add_argument("--sc-agree", type=float, default=0.6)
