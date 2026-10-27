@@ -1,0 +1,450 @@
+"""Kernel 2 of the glass-box distillation: train students from scratch on the teacher's data.
+
+Two students on the same data and token budget:
+  glassbox : vt.glassbox.GlassBoxLM with the general-purpose design: evidence
+             stream, small MLP core, an internal memory layer behind a hard gate
+             (exactly 0 when unused, so such tokens are provably made without
+             stored knowledge), and a per-token self-knowledge variable k that
+             sets the sharpness of each next-token distribution;
+  baseline : vt.lm.GPT of similar size (ALiBi).
+Data: the teacher's replies (kernel 1) in chat form, plus WikiText-103.
+
+Evaluation on held-out data: bits per token and top-1 agreement with the
+teacher; per-token "my top prediction is wrong" AUROC from softmax confidence,
+k and a post-hoc probe; the share of tokens and replies certified memory-free
+(with a soundness check); TriviaQA and made-up-name questions (accuracy,
+hallucination, abstention). The glass-box student is saved as a package that
+`vt chat-serve` serves directly.
+
+    python train_student.py --data /kaggle/input/glassbox-distill-data --out /kaggle/working/student
+    python train_student.py --smoke --data /tmp/d --out /tmp/s
+"""
+import argparse
+import hashlib
+import io
+import json
+import math
+import os
+import random
+import re
+import string
+import sys
+import time
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "vtpkg"))                    # Kaggle: bundled modules
+sys.path.insert(0, os.path.join(HERE, "..", ".."))                 # repository checkout
+from vt.glassbox import GBConfig, GlassBoxLM, memory_free_positions  # noqa: E402
+from vt.lm import GPT, GPTConfig  # noqa: E402
+
+ABSTAIN = ("don't know", "not sure", "no information", "do not know")
+
+
+def log(**kw):
+    print(json.dumps(kw), flush=True)
+
+
+def norm(s):
+    s = "".join(ch for ch in s.lower() if ch not in string.punctuation)
+    return " ".join(re.sub(r"\b(a|an|the)\b", " ", s).split())
+
+
+def chat_text(prompt, reply):
+    return f"User: {prompt}\nAssistant: {reply}"
+
+
+# ---------------------------------------------------------------- data
+
+def load(a):
+    from tokenizers import Tokenizer
+    tok = Tokenizer.from_file(os.path.join(a.data, "tokenizer.json"))
+    train = [json.loads(l) for l in open(os.path.join(a.data, "train.jsonl"))]
+    ev = [json.loads(l) for l in open(os.path.join(a.data, "eval.jsonl"))]
+    chat_docs = [chat_text(x["prompt"], x["response"]) for x in train]
+    if a.smoke:
+        wiki = ["The cat sat on the mat. It was a sunny day in the town."] * 50
+    else:
+        from datasets import load_dataset
+        w = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train")
+        wiki = [x["text"] for x in w if len(x["text"]) > 80]
+    def stream(docs):
+        ids = []
+        for enc in tok.encode_batch(docs):
+            ids += enc.ids + [0]
+        return torch.tensor(ids, dtype=torch.long)
+    return tok, stream(chat_docs), stream(wiki), ev
+
+
+def batch(chat, wiki, bs, block, g, p_chat=0.6):
+    xs, ys = [], []
+    for _ in range(bs):
+        src = chat if torch.rand(1, generator=g).item() < p_chat else wiki
+        i = int(torch.randint(len(src) - block - 1, (1,), generator=g))
+        xs.append(src[i:i + block]); ys.append(src[i + 1:i + block + 1])
+    return torch.stack(xs), torch.stack(ys)
+
+
+# ---------------------------------------------------------------- models
+
+def make(kind, a, V):
+    if kind == "glassbox":
+        cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
+                   mem_layer=a.layers // 2, mem_keys=a.mem_keys, mem_topk=min(16, a.mem_keys), fixed_embed=False,
+                   mlp_ratio=a.glass_mlp, track_evidence=False, sharpness=True, mem_value_init=0.0,
+                   mem_gate="hard")
+        return GlassBoxLM(GBConfig(**cfg)), cfg
+    cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
+               mlp_ratio=a.base_mlp, pos_encoding="alibi")
+    return GPT(GPTConfig(**cfg)), cfg
+
+
+def forward(kind, m, x):
+    """logits, k (or None), hidden states per block."""
+    if kind == "glassbox":
+        logits, k, _, hs = m(x, evidence=False)
+        return logits, k, hs
+    hs = []
+    hooks = [b.register_forward_hook(lambda mod, i, o: hs.append(o)) for b in m.blocks]
+    logits, _ = m(x)
+    for h in hooks:
+        h.remove()
+    return logits, None, hs
+
+
+def train(kind, a, V, chat, wiki, device, log_fn):
+    torch.manual_seed(0)
+    m, cfg = make(kind, a, V)
+    m.to(device)
+    params = [p for p in m.parameters() if p.requires_grad]
+    log_fn(phase="model", kind=kind, params=sum(p.numel() for p in params))
+    opt = torch.optim.AdamW(params, lr=a.lr, weight_decay=0.1, betas=(0.9, 0.95))
+    scaler = torch.amp.GradScaler("cuda", enabled=device.startswith("cuda"))
+    g = torch.Generator().manual_seed(1)
+    t0 = time.time()
+    budget = a.hours * 3600
+    step, total = 0, None
+    while True:
+        el = time.time() - t0
+        if total is None and step == 50:                              # fix the schedule from measured speed
+            total = max(100, int(budget / (el / 50)))
+            log_fn(phase="schedule", kind=kind, total_steps=total, s_per_step=round(el / 50, 3))
+        if (total is not None and step >= total) or el > budget * 1.05:
+            break
+        T = total or 10 ** 9
+        lr = a.lr * min(1, (step + 1) / 300) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1, step / T))))
+        for gr in opt.param_groups:
+            gr["lr"] = lr
+        m.train()
+        x, y = batch(chat, wiki, a.batch, a.block, g)
+        x, y = x.to(device), y.to(device)
+        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device.startswith("cuda")):
+            logits, k, _ = forward(kind, m, x)
+            lm = F.cross_entropy(logits.float().flatten(0, 1), y.flatten())
+            loss = lm
+            info = {}
+            if kind == "glassbox":
+                right = (logits.argmax(-1) == y).float()
+                aux = F.binary_cross_entropy_with_logits(k.float(), right)
+                gate = m.mem.trace["gate"].float()
+                loss = lm + 0.2 * aux + a.hard_gate * gate.mean()
+                info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
+        if not torch.isfinite(loss):
+            raise SystemExit(f"non-finite loss at step {step}")
+        opt.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.unscale_(opt)
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        scaler.step(opt); scaler.update()
+        step += 1
+        if step % 200 == 0:
+            log_fn(phase="train", kind=kind, step=step, total=total, lm=round(lm.item(), 4),
+                   s=round(time.time() - t0), **info)
+    m.eval()
+    return m, cfg, step
+
+
+# ---------------------------------------------------------------- evaluation
+
+def auroc(scores, labels):
+    scores, labels = np.asarray(scores, float), np.asarray(labels, bool)
+    if labels.all() or (~labels).all():
+        return None
+    order = np.argsort(scores)
+    ranks = np.empty(len(scores)); ranks[order] = np.arange(1, len(scores) + 1)
+    return float((ranks[labels].sum() - labels.sum() * (labels.sum() + 1) / 2) / (labels.sum() * (~labels).sum()))
+
+
+def fit_probe(X, y, steps=300):
+    X, y = torch.tensor(np.stack(X), dtype=torch.float), torch.tensor(y, dtype=torch.float)
+    mu, sd = X.mean(0), X.std(0) + 1e-6
+    w = torch.zeros(X.shape[1], requires_grad=True); b = torch.zeros(1, requires_grad=True)
+    opt = torch.optim.Adam([w, b], lr=0.05)
+    for _ in range(steps):
+        loss = F.binary_cross_entropy_with_logits(((X - mu) / sd) @ w + b, y) + 1e-3 * w.pow(2).sum()
+        opt.zero_grad(); loss.backward(); opt.step()
+    return lambda Z: (((torch.tensor(np.stack(Z), dtype=torch.float) - mu) / sd) @ w + b).detach().numpy()
+
+
+@torch.no_grad()
+def token_eval(kind, m, tok, items, device, block):
+    rows = []
+    for it in items:
+        p = tok.encode(f"User: {it['prompt']}\nAssistant:").ids
+        r = tok.encode(" " + it["response"]).ids
+        ids = (p + r + [0])[:block + 1]
+        P = min(len(p), block)
+        x, y = torch.tensor([ids[:-1]], device=device), torch.tensor(ids[1:], device=device)
+        logits, k, hs = forward(kind, m, x)
+        lp = F.log_softmax(logits[0].float(), -1)
+        free = memory_free_positions(m, x)[0] if kind == "glassbox" else None
+        for t in range(P - 1, len(ids) - 1):
+            rows.append({"ok": int(lp[t].argmax() == y[t]), "nll": -float(lp[t, y[t]]),
+                         "msp": float(lp[t].max().exp()), "k": float(k[0, t]) if k is not None else None,
+                         "free": bool(free[t]) if free is not None else None,
+                         "h": [hs[j][0, t].float().cpu().numpy() for j in (len(hs) // 2, len(hs) - 1)]})
+    return rows
+
+
+def token_metrics(rows):
+    half = len(rows) // 2
+    fit, test = rows[:half], rows[half:]
+    y = np.array([r["ok"] for r in test])
+    d = {"tokens": len(test), "top1_agreement": float(y.mean()),
+         "bits_per_token": float(np.mean([r["nll"] for r in test]) / math.log(2)),
+         "auroc_softmax": auroc([r["msp"] for r in test], y)}
+    for li, name in enumerate(("middle", "last")):
+        pr = fit_probe([r["h"][li] for r in fit], [r["ok"] for r in fit])
+        d[f"auroc_probe_{name}"] = auroc(pr([r["h"][li] for r in test]), y)
+    if test[0]["k"] is not None:
+        d["auroc_k"] = auroc([r["k"] for r in test], y)
+    if test[0]["free"] is not None:
+        free = np.array([r["free"] for r in test])
+        d["certified_memory_free_tokens"] = float(free.mean())
+        d["top1_when_certified"] = float(y[free].mean()) if free.any() else None
+    return d
+
+
+@torch.no_grad()
+def reply(kind, m, tok, prompt, device, block, max_new=48):
+    ids = tok.encode(f"User: {prompt}\nAssistant:").ids[-(block - max_new):]
+    P, out = len(ids), []
+    for i in range(max_new):
+        logits, _, _ = forward(kind, m, torch.tensor([ids + out], device=device))
+        lg = logits[0, -1].float()
+        if i == 0:
+            lg[0] = -float("inf")
+        nxt = int(lg.argmax())
+        if nxt == 0 or "\n" in tok.decode(out + [nxt]):
+            break
+        out.append(nxt)
+    free = None
+    if kind == "glassbox" and out:
+        x = torch.tensor([ids + out], device=device)
+        free = bool(memory_free_positions(m, x)[0, P - 1:P - 1 + len(out)].all())
+    return tok.decode(out).strip(), free, (ids + out), P
+
+
+@torch.no_grad()
+def soundness(m, seqs, device):
+    """Certified positions must be bit-identical when the memory content is replaced by noise."""
+    bad = 0
+    saved = m.mem.values.weight.detach().clone()
+    for s in seqs:
+        x = torch.tensor([s], device=device)
+        free = memory_free_positions(m, x)
+        a_, _, _, _ = m(x, evidence=False)
+        m.mem.values.weight.copy_(torch.randn_like(saved) * 10)
+        b_, _, _, _ = m(x, evidence=False)
+        m.mem.values.weight.copy_(saved)
+        bad += int(not torch.equal(a_[free], b_[free]))
+    return bad
+
+
+@torch.no_grad()
+def reply_scores(kind, m, tok, prompt, seq, P, device, n_samples=5):
+    """Truth signals for one reply: mean token probability, min k (glass-box) and self-consistency
+    (share of sampled replies that agree with the greedy one)."""
+    x = torch.tensor([seq], device=device)
+    logits, k, _ = forward(kind, m, x)
+    lp = F.log_softmax(logits[0].float(), -1)
+    T = len(seq)
+    idx = torch.arange(P - 1, T - 1, device=device)
+    if len(idx) == 0:
+        return {"msp": 0.0, "k_min": None, "consistency": 0.0}
+    tgt = torch.tensor(seq[P:], device=device)
+    d = {"msp": float(lp[idx, tgt].exp().mean()),
+         "k_min": float(torch.sigmoid(k[0, idx].float()).min()) if k is not None else None}
+    greedy = norm(tok.decode(seq[P:]))
+    agree = 0
+    g = torch.Generator(device=device).manual_seed(0)
+    for _ in range(n_samples):
+        ids = list(seq[:P])
+        out = []
+        for _ in range(32):
+            lg = forward(kind, m, torch.tensor([ids + out], device=device))[0][0, -1].float()
+            nxt = int(torch.multinomial(F.softmax(lg / 0.8, -1), 1, generator=g))
+            if nxt == 0 or "\n" in tok.decode(out + [nxt]):
+                break
+            out.append(nxt)
+        sampled = norm(tok.decode(out))
+        agree += int(bool(sampled) and bool(greedy) and (sampled in greedy or greedy in sampled))
+    d["consistency"] = agree / n_samples
+    return d
+
+
+def release_guarantee(cal, test, score, alpha=0.2, delta=0.05):
+    """Choose the lowest score threshold whose calibration error rate among released answers has a
+    one-sided Hoeffding upper bound <= alpha (each candidate threshold tested at level delta / n,
+    a Bonferroni correction over thresholds). On fresh questions from the same distribution, the
+    released answers' error rate is then <= alpha with probability >= 1 - delta.
+    Reports the threshold and what happens on the held-out test half."""
+    cands = sorted({r[score] for r in cal if r[score] is not None})
+    chosen = None
+    for th in cands:
+        rel = [r for r in cal if r[score] is not None and r[score] >= th]
+        n = len(rel)
+        if n == 0:
+            break
+        err = 1 - np.mean([r["right"] for r in rel])
+        ucb = err + math.sqrt(math.log(len(cands) / delta) / (2 * n))
+        if ucb <= alpha:
+            chosen = th
+            break
+    if chosen is None:
+        return {"alpha": alpha, "threshold": None, "released_fraction": 0.0, "test_error_when_released": None}
+    rel = [r for r in test if r[score] is not None and r[score] >= chosen]
+    return {"alpha": alpha, "threshold": chosen, "released_fraction": len(rel) / max(1, len(test)),
+            "test_error_when_released": float(1 - np.mean([r["right"] for r in rel])) if rel else None}
+
+
+def qa_eval(kind, m, tok, items, device, block):
+    out = {}
+    cert_seqs = []
+    for name in ("trivia_eval", "fictitious_absent_eval", "fictitious_ctx_eval"):
+        rows = []
+        for it in [x for x in items if x["kind"] == name]:
+            text, free, seq, P = reply(kind, m, tok, it["prompt"], device, block)
+            abst = any(mk in text.lower() for mk in ABSTAIN)
+            if name == "trivia_eval":
+                right = (not abst) and any(norm(al) and norm(al) in norm(text) for al in it["aliases"])
+            elif name == "fictitious_absent_eval":
+                right = abst
+            else:
+                right = (not abst) and it["gold"] in text
+            row = {"right": right, "abst": abst, "free": free, "q": it["prompt"], "a": text}
+            if name == "trivia_eval":
+                sc = reply_scores(kind, m, tok, it["prompt"], seq, P, device) if not abst else {}
+                row.update({k_: sc.get(k_) for k_ in ("msp", "k_min", "consistency")})
+            rows.append(row)
+            if free:
+                cert_seqs.append(seq)
+        if not rows:
+            continue
+        d = {"n": len(rows), "accuracy": float(np.mean([r["right"] for r in rows])),
+             "abstention": float(np.mean([r["abst"] for r in rows]))}
+        if name != "fictitious_ctx_eval":
+            d["hallucination"] = float(np.mean([(not r["abst"]) and not r["right"] for r in rows]))
+        if kind == "glassbox":
+            d["certified_memory_free_replies"] = float(np.mean([bool(r["free"]) for r in rows]))
+            c = [r for r in rows if r["free"]]
+            d["accuracy_when_certified"] = float(np.mean([r["right"] for r in c])) if c else None
+        if name == "trivia_eval":                          # how well each signal measures truth
+            answered = [r for r in rows if not r["abst"]]
+            y = [r["right"] for r in answered]
+            for sc in ("msp", "k_min", "consistency"):
+                if answered and answered[0][sc] is not None:
+                    d[f"auroc_true_{sc}"] = auroc([r[sc] for r in answered], y)
+                    half = len(rows) // 2
+                    d[f"release_{sc}"] = [release_guarantee(rows[:half], rows[half:], sc, alpha=al)
+                                          for al in (0.2, 0.5)]
+        d["samples"] = [{"q": r["q"], "a": r["a"], "right": r["right"], "certified": r["free"]} for r in rows[:6]]
+        out[name] = d
+    if kind == "glassbox":
+        out["certificate_soundness_violations"] = soundness(m, cert_seqs[:30], device)
+    return out
+
+
+def save_package(m, cfg, tok_path, out):
+    """vt-glassbox-chat/1 package: weights.pt, config.json, tokenizer.json, manifest.json."""
+    os.makedirs(out, exist_ok=True)
+    buf = io.BytesIO()
+    torch.save({k: v.cpu() for k, v in m.state_dict().items()}, buf)
+    blobs = {"weights.pt": buf.getvalue(), "config.json": json.dumps(cfg, indent=1).encode(),
+             "tokenizer.json": open(tok_path, "rb").read()}
+    sha = lambda b: hashlib.sha256(b).hexdigest()                     # noqa: E731
+    for n, b in blobs.items():
+        open(os.path.join(out, n), "wb").write(b)
+    files = {n: sha(b) for n, b in blobs.items()}
+    json.dump({"format": "vt-glassbox-chat/1", "files": files,
+               "package_sha256": sha("".join(files[n] for n in ("weights.pt", "config.json", "tokenizer.json")).encode())},
+              open(os.path.join(out, "manifest.json"), "w"), indent=1)
+
+
+def run(kind, a, device):
+    tok, chat, wiki, ev = load(a)
+    V = tok.get_vocab_size()
+    log(phase="data", kind=kind, chat_tokens=len(chat), wiki_tokens=len(wiki), device=device)
+    m, cfg, steps = train(kind, a, V, chat, wiki, device, log)
+    gen_eval = [x for x in ev if x["kind"] == "instruction"][:a.n_token_eval]
+    res = {"kind": kind, "config": cfg, "steps": steps,
+           "params": sum(p.numel() for p in m.parameters() if p.requires_grad),
+           "tokens": token_metrics(token_eval(kind, m, tok, gen_eval, device, a.block))}
+    log(phase="eval_tokens", kind=kind, **res["tokens"])
+    res["qa"] = qa_eval(kind, m, tok, ev, device, a.block)
+    log(phase="eval_qa", kind=kind, **{k: ({kk: vv for kk, vv in v.items() if kk != "samples"}
+                                            if isinstance(v, dict) else v) for k, v in res["qa"].items()})
+    res["samples"] = [{"prompt": x["prompt"], "reply": reply(kind, m, tok, x["prompt"], device, a.block)[0]}
+                      for x in gen_eval[:8]]
+    json.dump(res, open(os.path.join(a.out, f"{kind}.json"), "w"), indent=1, default=float)
+    if kind == "glassbox":
+        save_package(m, cfg, os.path.join(a.data, "tokenizer.json"), os.path.join(a.out, "glassbox_package"))
+    log(phase="done", kind=kind)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", default="/kaggle/input/glassbox-distill-data")
+    ap.add_argument("--out", default="/kaggle/working/student")
+    ap.add_argument("--models", default="glassbox,baseline")
+    ap.add_argument("--hours", type=float, default=3.5, help="training time budget per student")
+    ap.add_argument("--layers", type=int, default=12)
+    ap.add_argument("--heads", type=int, default=8)
+    ap.add_argument("--embd", type=int, default=512)
+    ap.add_argument("--glass-mlp", type=int, default=2)
+    ap.add_argument("--base-mlp", type=int, default=6)
+    ap.add_argument("--mem-keys", type=int, default=256)
+    ap.add_argument("--hard-gate", type=float, default=0.05)
+    ap.add_argument("--block", type=int, default=512)
+    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--lr", type=float, default=6e-4)
+    ap.add_argument("--n-token-eval", type=int, default=300)
+    ap.add_argument("--smoke", action="store_true")
+    a = ap.parse_args()
+    if a.smoke:
+        a.hours, a.layers, a.heads, a.embd, a.mem_keys, a.block, a.batch, a.n_token_eval = 0.01, 2, 2, 32, 8, 64, 4, 4
+    os.makedirs(a.out, exist_ok=True)
+    kinds = a.models.split(",")
+    n_gpu = torch.cuda.device_count()
+    if n_gpu >= 2 and len(kinds) == 2:                               # one student per GPU, in parallel
+        import torch.multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        ps = [ctx.Process(target=run, args=(k, a, f"cuda:{i}")) for i, k in enumerate(kinds)]
+        for p in ps:
+            p.start()
+        for p in ps:
+            p.join()
+        if any(p.exitcode for p in ps):
+            raise SystemExit("a student failed")
+    else:
+        if n_gpu == 1 and len(kinds) == 2:
+            a.hours /= 2
+        for k in kinds:
+            run(k, a, "cuda" if n_gpu else "cpu")
+
+
+if __name__ == "__main__":
+    main()
