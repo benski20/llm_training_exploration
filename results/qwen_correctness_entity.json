@@ -1,0 +1,59 @@
+{
+ "n": 1000,
+ "right": 216,
+ "entity_is_first_token": 0.601,
+ "max_exact_err": 1.9130297005176544e-05,
+ "unfitted_auroc": {
+  "first_p": 0.6849903155706727,
+  "entity_p": 0.6980820105820106,
+  "mean_lp": 0.647764314058957,
+  "min_lp": 0.7070046768707483,
+  "question_signed": 0.7066149376417233,
+  "question_share": 0.6573660714285714,
+  "answer_signed": 0.5105997260015117,
+  "answer_share": 0.4811744142101285,
+  "template_signed": 0.6173115079365079,
+  "logit": 0.6827936035525322
+ },
+ "best_output_baseline": "min_lp",
+ "question_signed_minus_best_output": [
+  -0.0003059649488455821,
+  [
+   -0.04346245326226408,
+   0.044464441451406295
+  ]
+ ],
+ "fitted_test_auroc": {
+  "output_probabilities": {
+   "auroc": 0.711485036702428,
+   "l2": 0.01
+  },
+  "output_plus_attribution": {
+   "auroc": 0.7381140598531903,
+   "l2": 0.01
+  },
+  "probe_at_entity": {
+   "auroc": 0.7444381705251271,
+   "l2": 10.0,
+   "layer": 22
+  },
+  "probe_plus_output_plus_attribution": {
+   "auroc": 0.759751552795031,
+   "l2": 10.0
+  }
+ },
+ "attribution_gain_over_output_test": [
+  0.026678133976811187,
+  [
+   0.009126175405806966,
+   0.045653803513559604
+  ]
+ ],
+ "attribution_and_output_gain_over_probe_test": [
+  0.01533117755562601,
+  [
+   0.008929204358967335,
+   0.022071803684758882
+  ]
+ ]
+}
