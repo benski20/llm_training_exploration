@@ -1365,6 +1365,20 @@
 "qa_loss": null
 },
 {
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 2750,
+"loss": 2.9723,
+"qa_loss": null
+},
+{
+"run": "g2.1-glassbox2",
+"title": "Glassbox-2.1 pilot: memory after the last layer",
+"step": 3000,
+"loss": 3.1939,
+"qa_loss": null
+},
+{
 "run": "g3-glassbox3",
 "title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
 "step": 250,
@@ -1383,6 +1397,13 @@
 "title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
 "step": 750,
 "loss": 3.7056,
+"qa_loss": null
+},
+{
+"run": "g3-glassbox3",
+"title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
+"step": 1000,
+"loss": 3.3372,
 "qa_loss": null
 },
 {

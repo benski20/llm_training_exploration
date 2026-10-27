@@ -208,11 +208,11 @@
 "experiment": "g2.1",
 "title": "Glassbox-2.1 pilot: memory after the last layer",
 "model": "glassbox2",
-"status": "running",
-"step": 2500,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.8336666666666667,
-"last_loss": 2.9951,
+"progress": 1.0,
+"last_loss": 3.1939,
 "note": "a token is provably memory-free when its own gate is 0; 32 active features"
 },
 {
@@ -221,10 +221,10 @@
 "title": "Glassbox-3 pilot: epistemic uncertainty and <unsure>",
 "model": "glassbox3",
 "status": "running",
-"step": 750,
+"step": 1000,
 "total_steps": 3000,
-"progress": 0.25033333333333335,
-"last_loss": 3.7056,
+"progress": 0.33366666666666667,
+"last_loss": 3.3372,
 "note": "epinet uncertainty raises an explicit <unsure> token; self-consistency replay"
 },
 {
@@ -261,6 +261,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (03:10:12 UTC check)"
+"note": "chat replies, TriviaQA self-check, made-up names; tokenizer (03:25:18 UTC check)"
 }
 ]
