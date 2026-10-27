@@ -309,7 +309,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (11:08:19 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (11:26:28 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
