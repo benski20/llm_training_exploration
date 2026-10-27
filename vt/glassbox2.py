@@ -168,6 +168,7 @@ class Glassbox2(nn.Module):
             tr["hs"].append(x)
         tr["s_f"] = self.norm_f.scale(x)
         z = self.norm_f(x)
+        tr["z_f"] = z
         logits, k = self.head(z), self.know(z).squeeze(-1)
         tr["raw_logits"] = logits
         self.trace = tr
