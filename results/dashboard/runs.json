@@ -352,12 +352,12 @@
 "experiment": "kaggle",
 "title": "Kaggle: Glassbox-2.4 student (in-model SAE objective), best checkpoint",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "146M Glassbox-2.4; compared with the final run's GPT student (15:35:13 UTC check)"
+"note": "146M Glassbox-2.4; compared with the final run's GPT student (15:53:21 UTC check)"
 },
 {
 "run": "kaggle-qwen-glassbox",
@@ -369,7 +369,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (15:35:47 UTC check)"
+"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (15:56:56 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
