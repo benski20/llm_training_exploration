@@ -256,11 +256,11 @@
 "experiment": "g2.4",
 "title": "Glassbox-2.4: in-model feature reconstruction (SAE) objective",
 "model": "glassbox2",
-"status": "running",
-"step": 2500,
+"status": "done",
+"step": 3000,
 "total_steps": 3000,
-"progress": 0.8336666666666667,
-"last_loss": 2.9959,
+"progress": 1.0,
+"last_loss": 3.0233,
 "note": "2.3 plus a train-only readout: features must reconstruct their own input"
 },
 {
@@ -321,7 +321,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (12:29:55 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (12:51:04 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
