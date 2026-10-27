@@ -300,27 +300,27 @@
 "note": "run 1 failed: Glassbox-2 student stalled at 7.3 nats, GPT student died loading data (09:04:41 UTC check)"
 },
 {
-"run": "kaggle-distill-final",
+"run": "kaggle-distill-final2",
 "experiment": "kaggle",
-"title": "Kaggle final: Glassbox-2.3 (additive, calibrated k) vs GPT, 4 h each",
+"title": "Kaggle final: Glassbox-2.3 (additive, calibrated k) vs GPT, best checkpoint",
 "model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "both fixes; the debug run showed both students learning at full size (10:46:38 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (11:08:19 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
 "experiment": "kaggle",
 "title": "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (10:46:50 UTC check)"
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (11:04:58 UTC check)"
 }
 ]
