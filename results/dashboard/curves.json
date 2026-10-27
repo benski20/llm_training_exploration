@@ -1631,6 +1631,27 @@
 "qa_loss": null
 },
 {
+"run": "g2.4-glassbox2",
+"title": "Glassbox-2.4: in-model feature reconstruction (SAE) objective",
+"step": 250,
+"loss": 4.6332,
+"qa_loss": null
+},
+{
+"run": "g2.4-glassbox2",
+"title": "Glassbox-2.4: in-model feature reconstruction (SAE) objective",
+"step": 500,
+"loss": 3.8477,
+"qa_loss": null
+},
+{
+"run": "g2.4-glassbox2",
+"title": "Glassbox-2.4: in-model feature reconstruction (SAE) objective",
+"step": 750,
+"loss": 3.5232,
+"qa_loss": null
+},
+{
 "run": "chat2-baseline",
 "title": "Chat v2 GPT baseline",
 "step": 250,

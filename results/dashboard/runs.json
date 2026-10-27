@@ -252,6 +252,18 @@
 "note": "2.2 with standard residual sums instead of convex mixing; attribution still exact"
 },
 {
+"run": "g2.4-glassbox2",
+"experiment": "g2.4",
+"title": "Glassbox-2.4: in-model feature reconstruction (SAE) objective",
+"model": "glassbox2",
+"status": "running",
+"step": 750,
+"total_steps": 3000,
+"progress": 0.25033333333333335,
+"last_loss": 3.5232,
+"note": "2.3 plus a train-only readout: features must reconstruct their own input"
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "title": "Chat v2 GPT baseline",
@@ -309,7 +321,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (11:44:36 UTC check)"
+"note": "2.5 h each; weights with the best held-out loss are kept (4 h runs overfit the teacher data) (12:05:45 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
