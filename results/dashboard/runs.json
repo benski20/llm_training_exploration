@@ -425,9 +425,9 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 100,
+"step": 250,
 "total_steps": 600,
-"progress": 0.16666666666666666,
+"progress": 0.4166666666666667,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 }
