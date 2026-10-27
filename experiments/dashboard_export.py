@@ -63,6 +63,9 @@ RUNS = [
     ("g2.3", "Glassbox-2.3: additive residual stream", "results/glassbox2_3_chat/glassbox2.log",
      "results/glassbox2_3_chat/glassbox2.json", "glassbox2", 3000,
      "2.2 with standard residual sums instead of convex mixing; attribution still exact"),
+    ("g2.4", "Glassbox-2.4: in-model feature reconstruction (SAE) objective", "results/glassbox2_4_chat/glassbox2.log",
+     "results/glassbox2_4_chat/glassbox2.json", "glassbox2", 3000,
+     "2.3 plus a train-only readout: features must reconstruct their own input"),
     ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
      "baseline", 3000, "same chat data for the matched GPT"),
 ]
@@ -202,7 +205,7 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp in ("chat", "chat2", "chat3", "g2", "g2.1", "g2.2", "g2.3", "g3"):
+        if exp in ("chat", "chat2", "chat3", "g2", "g2.1", "g2.2", "g2.3", "g2.4", "g3"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
                 chat.append({"model": model if exp == "chat" else f"{model}-{exp[-1]}",

@@ -18,7 +18,9 @@ import glassbox_chat as C  # noqa: E402
 from selective_answering import DATA, MODELS  # noqa: E402
 from tokenizers import Tokenizer  # noqa: E402
 
-MODELS = dict(MODELS, glassbox2_2=("Glassbox-2.2", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st"),
+MODELS = dict(MODELS, glassbox2_4=("Glassbox-2.4", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st", "add", 1.0),
+                                   "results/glassbox2_4_chat/glassbox2.glassbox2.pt"),
+              glassbox2_2=("Glassbox-2.2", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st"),
                                    "results/glassbox2_2_chat/glassbox2.glassbox2.pt"),
               )
 

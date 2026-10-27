@@ -112,3 +112,17 @@ def test_additive_residual_keeps_attribution_exact_and_certificates_sound():
         m.mem.values.weight.normal_(0, 1)
     free, same = _soundness(m, torch.randint(0, 60, (2, 10)))
     assert same and free.any() and not free.all()
+
+
+def test_feature_reconstruction_objective_leaves_the_forward_pass_and_attribution_exact():
+    a, b = _m(mix="add"), _m(mix="add", feat_recon=True)
+    b.load_state_dict(a.state_dict(), strict=False)
+    x = torch.randint(0, 60, (1, 9))
+    assert torch.equal(a(x)[0], b(x)[0])
+    parts = b.explain(x, 8, 3)
+    assert abs(sum(parts.values()) - float(b.trace["raw_logits"][0, 8, 3])) < 1e-4
+    b.train()
+    b(x)
+    loss = sum(f.recon_loss(d) for f, d in zip(b.feat, b.trace["feat"]))
+    loss.backward()
+    assert b.feat[0].enc.weight.grad.abs().sum() > 0

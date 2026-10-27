@@ -47,6 +47,8 @@ class G2Config:
                                    # (exact zeros elsewhere): fewer attention edges to inspect
     mem_gate: str = "hard_st"      # hard gate, straight-through gradient ("hard": plain clamp, whose
                                    # gates freeze once saturated at 0 or 1)
+    feat_recon: bool = False       # train-only readout: features must reconstruct their own input
+                                   # (an SAE objective inside the model; not part of the forward pass)
     mix: str = "convex"            # how layers update the residual stream: "convex" (keep/replace
                                    # weights) or "add" (standard residual sums). Both are linear given
                                    # the decisions, so attribution is exact either way
@@ -116,6 +118,11 @@ class SparseFeatures(nn.Module):
         self.dec = nn.Linear(c.n_features, c.n_embd, bias=False)
         nn.init.normal_(self.dec.weight, 0, 0.02)
         self.gate = nn.Linear(c.n_embd, 1)
+        self.rec = nn.Linear(c.n_features, c.n_embd, bias=False) if c.feat_recon else None
+
+    def recon_loss(self, d):
+        """How well the active features reconstruct the layer's (normalized) input."""
+        return F.mse_loss(self.rec(d["acts"]), d["zin"].detach())
 
     def decisions(self, x):
         z = self.norm(x)
@@ -123,7 +130,10 @@ class SparseFeatures(nn.Module):
             pre = self.enc(z)
             top = pre.topk(self.k, -1)
             mask = torch.zeros_like(pre, dtype=torch.bool).scatter_(-1, top.indices, True) & (pre > 0)
-        return {"s": self.norm.scale(x), "mask": mask, "g": torch.sigmoid(self.gate(z))}
+        d = {"s": self.norm.scale(x), "mask": mask, "g": torch.sigmoid(self.gate(z))}
+        if self.rec is not None:
+            d["zin"] = z
+        return d
 
     def features(self, x, d, with_bias=True):
         z = x * d["s"] * self.norm.weight
@@ -219,7 +229,7 @@ class Glassbox2(nn.Module):
                 b = m["gate"][0][..., None]                             # (T, 1)
                 comp = (1 - b) * comp
                 comp[T + torch.arange(T), torch.arange(T)] += (b * m["read"][0])
-            d = {k: v.expand(S, *v.shape[1:]) for k, v in tr["feat"][i].items() if k != "acts"}
+            d = {k: v.expand(S, *v.shape[1:]) for k, v in tr["feat"][i].items() if k not in ("acts", "zin")}
             biased = self.feat[i].apply(comp, d, with_bias=False)
             g, mask = tr["feat"][i]["g"][0], tr["feat"][i]["mask"][0]
             scale = 1.0 if self.feat[i].add else g

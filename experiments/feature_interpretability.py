@@ -85,6 +85,7 @@ def main():
     ap.add_argument("--layer", type=int, default=5)
     ap.add_argument("--windows", type=int, default=400)
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--glassbox", default="glassbox2_3", help="which glass-box model's features to read")
     ap.add_argument("--out", default="results/feature_interpretability.json")
     a = ap.parse_args()
     torch.set_num_threads(a.threads)
@@ -96,7 +97,7 @@ def main():
     X = torch.stack([stream[i:i + 256] for i in ix.tolist()])
     toks = X.flatten().numpy()
 
-    name, make, ckpt = MODELS["glassbox2_3"]
+    name, make, ckpt = MODELS[a.glassbox]
     gb = make(V); gb.m.load_state_dict(torch.load(ckpt)["model"]); gb.m.eval()
     feats = []
     for i in range(0, len(X), 16):
@@ -124,7 +125,7 @@ def main():
            "gpt_sae_latents": {**unit_stats(sae_codes, toks), "fraction_variance_unexplained": fvu}}
     print(json.dumps(res, indent=1))
     allres = json.load(open(a.out)) if os.path.exists(a.out) else {}
-    allres[f"layer{a.layer}"] = res
+    allres[f"{a.glassbox}_layer{a.layer}"] = res
     json.dump(allres, open(a.out, "w"), indent=1)
 
 

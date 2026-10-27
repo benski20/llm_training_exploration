@@ -312,11 +312,12 @@ class Glass2:
     """Glassbox-2: exact sparse features, exact attribution, logged hard-gated memory."""
 
     def __init__(self, V, block, mem_l1=0.002, mem_layer=3, k_active=16, attn_topk=0, mem_gate="hard_st",
-                 mix="convex"):
-        self.mem_l1 = mem_l1
+                 mix="convex", feat_recon=0.0):
+        self.mem_l1, self.feat_recon = mem_l1, feat_recon
         self.m = Glassbox2(G2Config(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
                                     n_features=1024, k_active=k_active, mem_layer=mem_layer, mem_keys=128,
-                                    mem_topk=8, attn_topk=attn_topk, mem_gate=mem_gate, mix=mix))
+                                    mem_topk=8, attn_topk=attn_topk, mem_gate=mem_gate, mix=mix,
+                                    feat_recon=feat_recon > 0))
 
     def params(self):
         return list(self.m.parameters())
@@ -327,8 +328,13 @@ class Glass2:
         right = (logits.argmax(-1) == y).float()
         aux = F.binary_cross_entropy_with_logits(k, right)
         gate = self.m.trace["mem"]["gate"]
-        return lm + 0.2 * aux + self.mem_l1 * gate.mean(), {
-            "lm": lm.item(), "aux": aux.item(), "gate_open": (gate > 0).float().mean().item()}
+        loss = lm + 0.2 * aux + self.mem_l1 * gate.mean()
+        info = {"lm": lm.item(), "aux": aux.item(), "gate_open": (gate > 0).float().mean().item()}
+        if self.feat_recon:                          # features must also be a sparse code of their input
+            rec = sum(f.recon_loss(d) for f, d in zip(self.m.feat, self.m.trace["feat"])) / len(self.m.feat)
+            loss = loss + self.feat_recon * rec
+            info["feat_recon"] = rec.item()
+        return loss, info
 
     @torch.no_grad()
     def readouts(self, x, evidence=True):
@@ -696,6 +702,8 @@ def main():
     ap.add_argument("--g2-mem-l1", type=float, default=0.002)
     ap.add_argument("--g2-mix", default="convex", choices=["convex", "add"],
                     help="how layers update the residual stream (attribution is exact either way)")
+    ap.add_argument("--g2-feat-recon", type=float, default=0.0,
+                    help="weight of the in-model feature reconstruction (SAE) objective; 0 = off")
     ap.add_argument("--g2-mem-gate", default="hard_st", choices=["hard", "hard_st"],
                     help="hard: plain clamp (gates freeze when saturated); hard_st: straight-through")
     ap.add_argument("--sc-every", type=int, default=25, help="Glassbox-3: self-consistency replay period")
@@ -754,7 +762,7 @@ def main():
         else:
             model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
                      Glass2(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk, a.g2_mem_gate,
-                            a.g2_mix)
+                            a.g2_mix, a.g2_feat_recon)
                      if kind == "glassbox2" else Base(V, a.block))
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
