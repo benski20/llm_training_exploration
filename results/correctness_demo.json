@@ -78,6 +78,81 @@
    "tokens": [],
    "low_confidence_spans": [],
    "seconds": 16.5
+  },
+  {
+   "question": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+   "text": "I'm not sure. My best guess is: The Phantom of the Opera",
+   "answer": "The Phantom of the Opera",
+   "p_correct": 0.1639,
+   "threshold": 0.5,
+   "answer_withheld": true,
+   "abstained": true,
+   "evidence": {
+    "entity": " Phantom",
+    "first_p": 0.1721,
+    "entity_p": 0.642,
+    "min_lp": -1.7597,
+    "mean_lp": -0.4425,
+    "consistency": 0.3333,
+    "question_signed": 4.322,
+    "question_share": 0.2233,
+    "template_signed": 1.2676,
+    "top_question_token": "ber",
+    "probe_logit": -2.698
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 15.0
+  },
+  {
+   "question": "Who was the first president of the Republic of Zanthoria?",
+   "text": "I'm not sure. My best guess is: The Republic of Zanthoria did not exist as an independent country, so there is no current president to refer to.",
+   "answer": "The Republic of Zanthoria did not exist as an independent country, so there is no current president to refer to.",
+   "p_correct": 0.1309,
+   "threshold": 0.5,
+   "answer_withheld": true,
+   "abstained": true,
+   "evidence": {
+    "entity": "The",
+    "first_p": 0.5239,
+    "entity_p": 0.5239,
+    "min_lp": -2.8347,
+    "mean_lp": -0.6624,
+    "consistency": 0.1667,
+    "question_signed": 1.6352,
+    "question_share": 0.0673,
+    "template_signed": 0.0607,
+    "top_question_token": " the",
+    "probe_logit": -1.9001
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 20.4
+  },
+  {
+   "question": "Who wrote he ain't heavy he's my brother lyrics?",
+   "text": "I'm not sure. My best guess is: The song \"He Ain't Heavy, He's My Brother\" was written by The Meters and released on their album",
+   "answer": "The song \"He Ain't Heavy, He's My Brother\" was written by The Meters and released on their album",
+   "p_correct": 0.1237,
+   "threshold": 0.5,
+   "answer_withheld": true,
+   "abstained": true,
+   "evidence": {
+    "entity": " M",
+    "first_p": 0.2913,
+    "entity_p": 0.0875,
+    "min_lp": -3.2315,
+    "mean_lp": -0.668,
+    "consistency": 0.6667,
+    "question_signed": 0.173,
+    "question_share": 0.0149,
+    "template_signed": -0.3834,
+    "top_question_token": " heavy",
+    "probe_logit": -2.0847
+   },
+   "tokens": [],
+   "low_confidence_spans": [],
+   "seconds": 23.3
   }
  ]
 }

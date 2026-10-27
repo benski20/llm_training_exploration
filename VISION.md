@@ -746,6 +746,27 @@ evidence, and the answer is withheld below a threshold:
 `vt chat-export --hf-dir <model dir> --heads <model>_heads.pt --variant all`,
 then `vt chat` / `vt chat-serve`.
 
+**What a reply looks like** (`experiments/correctness_demo.py`,
+`results/correctness_demo.json`). Qwen2.5-1.5B-Instruct, packaged with its
+`all` head through the production path, answer threshold 0.5, about 10 s per
+reply on CPU:
+
+| question | reply | P(correct) | why (evidence) |
+|---|---|---|---|
+| What is the capital of Australia? | Canberra. | 0.84 | 6/6 samples agree; probe +1.28 |
+| Who wrote the novel Pride and Prejudice? | Jane Austen wrote ... | 0.95 | 6/6 agree; token p 0.95; probe +2.14 |
+| Who was the man behind The Chipmunks? | **withheld** (guess: Bob Mosher; truth: Ross Bagdasarian) | 0.24 | 2/6 agree; token p 0.40; probe -0.57 |
+| Which Lloyd Webber musical premiered in the US on 10 Dec 1993? | **withheld** (guess: The Phantom of the Opera; truth: Sunset Boulevard) | 0.16 | token p 0.64, yet probe -2.70 |
+| Who was the first president of the Republic of Zanthoria? (made up) | **withheld** (guess: "did not exist") | 0.13 | 1/6 agree; probe -1.90 |
+| Who wrote "He Ain't Heavy, He's My Brother"? (NQ) | **withheld** (guess names the wrong writers) | 0.12 | token p 0.09; probe -2.08 |
+
+All four wrong or unanswerable questions are withheld, and both right answers
+are released. The Lloyd Webber case shows the internals catching an error
+the output probability would pass: the model is 64% sure of its first token,
+but the hidden-state probe reads it as a guess. One rough edge: the made-up
+country gets a correct refusal ("did not exist") that is still withheld,
+because the head was trained to judge answers, not refusals.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
