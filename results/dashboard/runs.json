@@ -297,7 +297,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (07:49:09 UTC check)"
+"note": "students trained from scratch on the teacher data (08:10:18 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -309,6 +309,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (07:48:51 UTC check)"
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (08:10:01 UTC check)"
 }
 ]
