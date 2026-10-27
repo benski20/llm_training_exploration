@@ -381,7 +381,7 @@
 "total_steps": null,
 "progress": 1.0,
 "last_loss": null,
-"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (22:16:22 UTC check)"
+"note": "stack AUROC 0.859 (1.5B) / 0.807 (0.5B) vs softmax 0.72 / 0.69; NQ-open 0.78 unseen (22:16:22 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
