@@ -1,0 +1,22 @@
+{
+ "baseline": {
+  "answered": 1030,
+  "right": 82,
+  "test_n": 515,
+  "error_rate_all": 0.9359223300970874,
+  "softmax": {
+   "auroc": 0.658870866339746,
+   "error_at_50pct": 0.9027237354085603
+  },
+  "neg_nll": {
+   "auroc": 0.658870866339746,
+   "error_at_50pct": 0.9027237354085603
+  },
+  "posthoc_probe": {
+   "auroc": 0.6461712561297623,
+   "error_at_50pct": 0.914396887159533,
+   "layer": 5
+  },
+  "name": "GPT"
+ }
+}
