@@ -556,6 +556,30 @@ on CPU, with 7-9% of units at purity >= 0.8
 (`experiments/package_features.py`, 60k local tokens). Whether the in-model
 SAE objective (2.4) rescues this at scale is what the next run tests.
 
+**Can the internals tell when an answer is correct?**
+(`experiments/correctness_from_internals.py`; 1,500 chat questions per model.)
+Among replies that answer, each detector was fitted on one half and scored on
+the other (AUROC for right versus wrong):
+
+| | GPT | Glassbox-2.4 | Glassbox-2.3 |
+|---|---|---|---|
+| answered / right | 1,030 / 82 | 990 / 175 | 1,049 / 132 |
+| softmax of the answer token | **0.659** | 0.736 | 0.687 |
+| post-hoc hidden-state probe | 0.646 | 0.652 | 0.602 |
+| built-in k | n/a | 0.543 | 0.592 |
+| exact attribution statistics | n/a | **0.742** | 0.681 |
+| probe on which sparse features fired | n/a | 0.530 | 0.663 |
+| all combined | n/a | 0.625 | 0.683 |
+
+Within each model, no internal signal clearly beats the model's own output
+probability. For Glassbox-2.4, attribution (0.742) and softmax (0.736) tie.
+The feature probe and the combination were overfit: about 6,000-12,000 inputs
+from about 500 fitting replies, with a fixed weak penalty. Probes now choose
+their penalty on an inner split. Comparisons across models are confounded,
+because each model answers a different set of questions with a different
+right rate. The question is being re-asked on a converted Qwen2.5-0.5B, which
+knows answers (`kaggle/qwen_glassbox/`).
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
