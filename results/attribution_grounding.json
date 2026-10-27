@@ -22,6 +22,27 @@
     "conversation_share": 0.385919063095427,
     "bias_share": 0.009004061784113098
    }
+  },
+  "grounding_subset": {
+   "n": 386,
+   "grounded_right": 127,
+   "auroc": {
+    "top_source_share": 0.5500866445748336,
+    "conversation_share": 0.5666251178062202,
+    "msp": 0.6192806980208555,
+    "neg_nll": 0.6632414191469309,
+    "k_min": 0.47855166752804545
+   }
+  },
+  "combined_heldout_auroc": {
+   "all_answered": {
+    "neg_nll": 0.6964193935240706,
+    "neg_nll+attribution": 0.6995602763976929
+   },
+   "grounding_subset": {
+    "neg_nll": 0.6652941176470588,
+    "neg_nll+attribution": 0.646235294117647
+   }
   }
  }
 }

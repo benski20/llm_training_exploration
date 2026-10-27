@@ -429,6 +429,26 @@ fell below the GPT's probe, so part of the earlier detection gain came from
 the convex models' inability to copy. The Kaggle student trainer defaults to
 additive mixing from here on. The run already in flight uses convex mixing.
 
+**Exact attribution as a hallucination check: negative**
+(`experiments/attribution_grounding.py`). At each reply's riskiest token,
+the exact decomposition gives the share of the logit that comes from the
+conversation. A grounded answer should draw on a source there, and a
+hallucination should not. On Glassbox-2.3 (1,053 answered replies):
+
+* conversation share 0.63 and single-best-source share 0.65 AUROC, against
+  0.70 for the reply's NLL;
+* on the subset that tests grounding directly (answers to questions whose fact
+  is in the message, against hallucinations), 0.55-0.57 against 0.66;
+* added to NLL, the attribution scores do not help on held-out replies
+  (0.700 vs 0.696).
+
+A likely reason: these questions often include sentences about other people.
+A hallucination can copy their values, so "drawn from the conversation" is
+not "drawn from the right part of it". An exact attribution is exact about
+the computation, not about whether the source is the right one. Telling those
+apart needs the relation between the source and the question, which this test
+does not use. The 0.84 from a first 20 replies was noise.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
