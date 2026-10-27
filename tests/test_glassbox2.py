@@ -90,3 +90,8 @@ def test_straight_through_gate_is_exact_and_never_freezes():
     assert torch.equal(g, m.gate(z).clamp(0, 1)) and (g == 0).any() and (g == 1).any()
     g.sum().backward()
     assert float(m.gate.bias.grad) == 64.0       # gradient 1 for every gate, saturated or not
+    z = torch.randn(64, 8, requires_grad=True)   # a saturated gate sends no gradient into its input
+    g = m.gate_value(z)
+    g.sum().backward()
+    sat = (m.gate(z) <= 0) | (m.gate(z) >= 1)
+    assert (z.grad[sat.squeeze(-1)] == 0).all() and (z.grad[~sat.squeeze(-1)] != 0).any()

@@ -1,0 +1,249 @@
+{
+ "glassbox3": {
+  "train_s": 2072.818559408188,
+  "params": 8245996,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21892,
+   "top1_acc": 0.2573999634569706,
+   "bits_per_token": 5.808739179204654,
+   "auroc_msp": 0.8057826595098834,
+   "auroc_probe": 0.7401738785487477,
+   "auroc_k": 0.7249661015589272,
+   "auroc_memory_match": 0.5100737439483444,
+   "auroc_neg_u": 0.4251816554184918,
+   "auroc_neg_novelty": 0.44788288864331405,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.2573999634569706,
+   "top1_acc_uncertified": null
+  },
+  "tokens_wikitext": {
+   "tokens": 22678,
+   "top1_acc": 0.268983155481083,
+   "bits_per_token": 5.861678955233796,
+   "auroc_msp": 0.8290959478194486,
+   "auroc_probe": 0.7697707409978463,
+   "auroc_k": 0.7673569257301301,
+   "auroc_memory_match": 0.4991356409541383,
+   "auroc_neg_u": 0.5287854236999856,
+   "auroc_neg_novelty": 0.3356198813754749,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.268983155481083,
+   "top1_acc_uncertified": null
+  },
+  "chat_probe_layer": 5,
+  "chat_facts": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 1.0,
+   "absent_fresh_right": 1.0,
+   "ctx_fresh_right": 0.0,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.4,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.0,
+   "hallucination_rate_fresh_names": 0.0,
+   "over_refusal_rate": 1.0,
+   "unsure_emitted": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "auroc_msp": 0.610462962962963,
+   "auroc_neg_nll": 0.6105092592592593,
+   "auroc_k_mean": 0.5075925925925926,
+   "auroc_k_min": 0.6060648148148148,
+   "auroc_memory_match": 0.5621759259259259,
+   "auroc_neg_u_first": 0.4911111111111111,
+   "auroc_neg_u_mean": 0.48375,
+   "auroc_neg_novelty_first": 0.5361111111111111,
+   "auroc_neg_p_unsure_first": 0.3734722222222222,
+   "auroc_probe": 0.6506018518518518,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 1.0,
+   "absent_fresh_right": 0.9833333333333333,
+   "ctx_fresh_right": 0.0,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.39666666666666667,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.0,
+   "hallucination_rate_fresh_names": 0.016666666666666666,
+   "over_refusal_rate": 0.9722222222222222,
+   "unsure_emitted": {
+    "ctx": 0.9833333333333333,
+    "mem": 0.9833333333333333,
+    "absent": 1.0,
+    "absent_fresh": 0.9833333333333333,
+    "ctx_fresh": 0.95
+   },
+   "auroc_msp": 0.5548539857932123,
+   "auroc_neg_nll": 0.5549004132039557,
+   "auroc_k_mean": 0.48321649101629605,
+   "auroc_k_min": 0.5648358791030225,
+   "auroc_memory_match": 0.5640466131203863,
+   "auroc_neg_u_first": 0.4814986768187938,
+   "auroc_neg_u_mean": 0.5282510794372998,
+   "auroc_neg_novelty_first": 0.4846093133385951,
+   "auroc_neg_p_unsure_first": 0.4450995867960444,
+   "auroc_probe": 0.6083847903802405,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": "<unsure> I'm not sure."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The main difference between a new technology and a new product is a great way to make a new product. It is a great way to make a new product that is to make a new product.",
+    "msp": 0.17951208911836147,
+    "nll": 2.129918791162662,
+    "k": -0.8693322745653299,
+    "k_min": -1.8658273220062256,
+    "match": 5.216899015964606,
+    "u_first": 0.06616592407226562,
+    "u_mean": 0.07670296155489408,
+    "novelty_first": 4.1411542892456055,
+    "p_unsure_first": 0.005622559692710638,
+    "unsure_emitted": false,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The Great of Market is a member of the United States. It is a major impact on the United States and the United States. It is the most popularity of the United States, the United States, and the United",
+    "msp": 0.2738883172860369,
+    "nll": 1.6976538406064112,
+    "k": -0.7485907652104894,
+    "k_min": -2.0257575511932373,
+    "match": 5.68309619029363,
+    "u_first": 0.06435298919677734,
+    "u_mean": 0.08861155311266582,
+    "novelty_first": 4.643499374389648,
+    "p_unsure_first": 0.014146717265248299,
+    "unsure_emitted": false,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The California is the first largest mid @-@ <unk> of the Civil War.",
+    "msp": 0.3067045406523076,
+    "nll": 1.9156293271268252,
+    "k": -0.4889978434551846,
+    "k_min": -2.175438165664673,
+    "match": 6.416064804250544,
+    "u_first": 0.055825233459472656,
+    "u_mean": 0.0816353430802172,
+    "novelty_first": 3.9244887828826904,
+    "p_unsure_first": 0.0006915522972121835,
+    "unsure_emitted": false,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Automation of a healthy lifestyle.",
+    "msp": 0.36962627672723364,
+    "nll": 1.6870261992860054,
+    "k": -0.1665334871837071,
+    "k_min": -1.5414350032806396,
+    "match": 6.027471474238804,
+    "u_first": 0.09497213363647461,
+    "u_mean": 0.08518682633127485,
+    "novelty_first": 4.527881145477295,
+    "p_unsure_first": 0.030374884605407715,
+    "unsure_emitted": false,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " The sun is a bowl, the sun is a bowl, and a bowl, and a bowl.",
+    "msp": 0.12470518859724204,
+    "nll": 2.2526004711786904,
+    "k": -0.8505909896145264,
+    "k_min": -1.5939782857894897,
+    "match": 6.168795883655548,
+    "u_first": 0.05382871627807617,
+    "u_mean": 0.0689001480738322,
+    "novelty_first": 4.312765598297119,
+    "p_unsure_first": 0.003320929827168584,
+    "unsure_emitted": false,
+    "reply_memory_free": true
+   }
+  ]
+ }
+}

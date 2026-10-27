@@ -361,6 +361,26 @@ Pre-registered tests for the CPU pilot (same chat-v2 data, against the GPT's
   (0.85);
 * language within about 10% of the GPT (at most 5.48 bits per token).
 
+**Result: no-go** (`results/glassbox3_chat/`). The model says `<unsure>` to
+nearly every chat question: over-refusal is 100%, so its 0% hallucination
+means nothing. Language is 5.81 bits per token (+16.5%), and u flags wrong
+answers at chance (AUROC about 0.5). Diagnosis:
+
+* The `<unsure>` term is not the cause: `c_unsure` never moved, and `<unsure>`
+  takes 0.2% of the probability on ordinary text. The base model itself puts
+  about 97% on `<unsure>` as the first reply token for every kind of question,
+  including ones whose answer is in the message. At this size no glass-box
+  model answers the questions (context answers about 0%), so it learns the base
+  rate (60% of training answers abstain). Under argmax decoding, one shared
+  `<unsure>` token then beats answers spread over many tokens. A competing
+  abstention token is the wrong interface. The abstain decision should
+  threshold a signal, as in selective prediction.
+* The epinet gives no usable signal at this scale.
+* The straight-through gate had a second bug, which may explain part of the
+  language regression. At a closed gate it sent gradient back into the
+  residual stream, a phantom training signal on every token. It is fixed:
+  saturated gates now update only their own weights.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,

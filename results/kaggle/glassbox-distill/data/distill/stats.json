@@ -1,0 +1,7 @@
+{
+ "teacher": "Qwen/Qwen2.5-1.5B-Instruct",
+ "taught": 28672,
+ "fictitious": 6000,
+ "trivia_teacher_wrong": 3111,
+ "seconds": 7221
+}

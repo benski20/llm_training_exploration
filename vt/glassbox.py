@@ -136,8 +136,13 @@ class PKMemory(nn.Module):
 
     def gate_value(self, z):
         g = self.gate(z)
-        if self.st:                                  # forward: exactly the clamp; gradient: 1
-            return g.clamp(0, 1).detach() + (g - g.detach())
+        if self.st:
+            # forward: exactly the clamp. Gradient: the true one inside (0, 1); at a saturated gate,
+            # straight-through to the gate's own weights only, never into the residual stream z
+            # (a closed gate contributes nothing to the forward pass, so it must not steer z).
+            gd = self.gate(z.detach())
+            sat = ((g <= 0) | (g >= 1)).detach()
+            return g.clamp(0, 1) + torch.where(sat, gd - gd.detach(), torch.zeros_like(gd))
         return g.clamp(0, 1) if self.hard else torch.sigmoid(g)
 
     @torch.no_grad()
