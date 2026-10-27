@@ -440,6 +440,28 @@
 "mem_acc": 0.0
 },
 {
+"run": "g3-glassbox3",
+"experiment": "g3",
+"model": "glassbox3",
+"split": "Chat facts",
+"accuracy": 0.4,
+"hallucination": 0.0,
+"hallucination_fresh": 0.0,
+"ctx_acc": 0.0,
+"mem_acc": 0.0
+},
+{
+"run": "g3-glassbox3",
+"experiment": "g3",
+"model": "glassbox3",
+"split": "Chat, held-out relations",
+"accuracy": 0.39666666666666667,
+"hallucination": 0.0,
+"hallucination_fresh": 0.016666666666666666,
+"ctx_acc": 0.0,
+"mem_acc": 0.0
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "model": "baseline",
