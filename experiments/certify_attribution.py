@@ -76,6 +76,41 @@ def synthetic(path, mem_layer, n, seed):
     return summarize(rows)
 
 
+def synthetic_hard(path, n, seed):
+    """Hard-gated memory: exact certificates from closed gates, checked against memory patches."""
+    import glassbox_world as W
+    from vt.glassbox import memory_free_positions
+    m = GlassBoxLM(GBConfig(vocab_size=W.VOCAB, block_size=W.BLOCK, mem_gate="hard"))
+    m.load_state_dict(torch.load(path), strict=False)
+    m.eval()
+    world = W.World(1234)
+    qs = W.qa_set(world, random.Random(seed), n, W.QA_RELS, 0, 4, test=True)
+    sp = torch.nn.functional.softplus(m.alpha)
+
+    def decide(x, pos):
+        logits, k, _, _ = m(x)
+        if (m.beta - sp * k[0, pos]) > 0:
+            return W.UNKNOWN
+        return int(W.VALUES[logits[0, pos, W.VALUES].argmax()])
+
+    g = torch.Generator().manual_seed(seed)
+    rows, open_frac = [], []
+    for toks, pos, gold, kind in qs:
+        x = torch.tensor([toks])
+        with torch.no_grad():
+            base = decide(x, pos)
+            free = bool(memory_free_positions(m, x)[0, pos])
+            open_frac.append(float((m.mem.trace["gate"][0, :pos + 1] > 0).float().mean()))
+            changed = witness(m, x, pos, decide, base, g)
+        if free and changed:
+            raise AssertionError("a certified memory-free decision changed under a memory patch")
+        rows.append({"kind": kind, "right": base == gold,
+                     "status": "certified_memory_free" if free else ("memory_dependent" if changed else "undetermined")})
+    s = summarize(rows)
+    s["gate_open_fraction"] = sum(open_frac) / len(open_frac)
+    return s
+
+
 def chat(path, tok_path, n, seed):
     from tokenizers import Tokenizer
     import glassbox_chat as C
@@ -135,10 +170,18 @@ def main():
     ap.add_argument("--n", type=int, default=300)
     ap.add_argument("--n-chat", type=int, default=100)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--hard", nargs="*", default=[], help="hard-gated checkpoints to certify exactly")
     ap.add_argument("--out", default="results/certify_attribution.json")
     a = ap.parse_args()
     torch.set_num_threads(2)
-    res = {}
+    res = json.load(open(a.out)) if os.path.exists(a.out) else {}
+    if a.hard:
+        for path in a.hard:
+            name = os.path.basename(path).split(".glassbox")[0]
+            res[name] = synthetic_hard(path, a.n, a.seed)
+            print(json.dumps({name: res[name]}), flush=True)
+        json.dump(res, open(a.out, "w"), indent=1)
+        return
     for name, path, layer in (("v4_zero_memory", "results/glassbox/v4_zero_memory.glassbox.pt", 2),
                               ("v5_memory_after_last_block", "results/glassbox/v5_late_only_familiarity.glassbox.pt", 3)):
         res[name] = synthetic(path, layer, a.n, a.seed)
