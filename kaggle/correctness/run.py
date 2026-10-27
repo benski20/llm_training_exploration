@@ -86,7 +86,7 @@ def run_model(name, sets, a, device):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     t0 = time.time()
     tok = AutoTokenizer.from_pretrained(name)
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    dtype = getattr(torch, a.dtype)                 # float16 overflows in Qwen2.5 (NaN replies): float32
     model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype, attn_implementation="eager").to(device).eval()
     L = model.config.num_hidden_layers
     layers = sorted({int(x) for x in np.linspace(L // 4, L - 1, 10).round()})
@@ -94,8 +94,11 @@ def run_model(name, sets, a, device):
     data = {}
     for key, items in sets.items():
         data[key] = answer_set(model, tok, items, layers, a)
-        log(model=name, phase="answers", set=key, n=len(items),
-            accuracy=float(np.mean([r["right"] for r in data[key]])), s=round(time.time() - t0))
+        acc = float(np.mean([r["right"] for r in data[key]]))
+        log(model=name, phase="answers", set=key, n=len(items), accuracy=acc, s=round(time.time() - t0),
+            samples=[(r["q"], r["reply"]) for r in data[key][:3]])
+        if acc == 0.0 and len(items) >= 100:
+            raise RuntimeError(f"{name}: no correct answers on {key}; generation is broken")
     n_stack = min(a.n_stack, len(data["train"]) // 3)
     B, A = data["train"][:n_stack], data["train"][n_stack:]
     for key, rows in (("stack", B), ("trivia_val", data["trivia_val"]), ("nq", data["nq"])):
@@ -162,7 +165,7 @@ def run_model(name, sets, a, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="/kaggle/working/correctness")
-    ap.add_argument("--models", default="Qwen/Qwen2.5-1.5B-Instruct,Qwen/Qwen2.5-3B-Instruct,Qwen/Qwen2.5-0.5B-Instruct")
+    ap.add_argument("--models", default="Qwen/Qwen2.5-1.5B-Instruct,Qwen/Qwen2.5-0.5B-Instruct,Qwen/Qwen2.5-3B-Instruct")
     ap.add_argument("--n-train", type=int, default=8000)
     ap.add_argument("--n-stack", type=int, default=2000)
     ap.add_argument("--n-test", type=int, default=1000)
@@ -170,6 +173,7 @@ def main():
     ap.add_argument("--gen-batch", type=int, default=48)
     ap.add_argument("--feat-batch", type=int, default=8)
     ap.add_argument("--budget-min", type=float, default=200, help="skip remaining models after this")
+    ap.add_argument("--dtype", default="float32")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
@@ -183,7 +187,16 @@ def main():
         if (time.time() - t0) / 60 > a.budget_min:
             log(phase="skip", model=name, reason="time budget")
             continue
-        res[name] = run_model(name, sets, a, device)
+        try:
+            res[name] = run_model(name, sets, a, device)
+        except Exception as e:                       # one model's failure must not lose the others
+            log(phase="model_failed", model=name, error=repr(e)[:500])
+            res[name] = {"error": repr(e)[:500]}
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            if "device-side assert" in repr(e):      # the CUDA context is unusable after this
+                break
+            continue
         log(phase="model_done", **{k: v for k, v in res[name].items() if k != "examples"})
         json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
     log(phase="done", minutes=round((time.time() - t0) / 60, 1))
