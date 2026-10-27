@@ -1,0 +1,320 @@
+{
+ "config": {
+  "data": "/kaggle/input",
+  "out": "/kaggle/working/qwen_glassbox",
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "n_features": 8192,
+  "k": 64,
+  "recon": 0.5,
+  "steps1": 2500,
+  "steps2": 2000,
+  "lr1": 0.001,
+  "lr2": 0.0002,
+  "batch": 6,
+  "batch2": 1,
+  "accum2": 2,
+  "block": 256,
+  "n_docs": 20000,
+  "n_trivia": 1000,
+  "smoke": false
+ },
+ "original_trivia": {
+  "n": 1000,
+  "accuracy": 0.216,
+  "test_n": 500,
+  "softmax": {
+   "auroc": 0.681648785996612,
+   "error_at_50pct": 0.6719999999999999
+  },
+  "neg_nll": {
+   "auroc": 0.6841332580463015,
+   "error_at_50pct": 0.6759999999999999
+  },
+  "posthoc_probe": {
+   "auroc": 0.7586222473178995,
+   "error_at_50pct": 0.648,
+   "l2": 1.0,
+   "layer": 19
+  }
+ },
+ "agreement": {
+  "top1_agreement_with_original": 0.6352941176470588,
+  "kl_nats_per_token": 1.0813286979525698,
+  "bits_per_token_converted": 4.272409279190232,
+  "bits_per_token_original": 3.256211896428795
+ },
+ "converted_trivia": {
+  "n": 1000,
+  "accuracy": 0.066,
+  "test_n": 500,
+  "softmax": {
+   "auroc": 0.5682277202726584,
+   "error_at_50pct": 0.92
+  },
+  "neg_nll": {
+   "auroc": 0.5833122948750316,
+   "error_at_50pct": 0.92
+  },
+  "posthoc_probe": {
+   "auroc": 0.5586972986619541,
+   "error_at_50pct": 0.92,
+   "l2": 0.001,
+   "layer": 21
+  },
+  "builtin_k": {
+   "auroc": 0.6380333249179501,
+   "error_at_50pct": 0.904
+  },
+  "feature_probe": {
+   "auroc": 0.6230118656904822,
+   "error_at_50pct": 0.908,
+   "l2": 10.0
+  },
+  "combined": {
+   "auroc": 0.5819868720020197,
+   "error_at_50pct": 0.916,
+   "l2": 0.01
+  }
+ },
+ "attribution_max_abs_error": 2.2885389626026154e-05,
+ "purity": {
+  "layer12": {
+   "units_firing_20+": 2092,
+   "median_top20_purity": 0.3,
+   "share_purity_at_least_0.8": 0.20267686424474188
+  },
+  "layer23": {
+   "units_firing_20+": 1302,
+   "median_top20_purity": 0.3,
+   "share_purity_at_least_0.8": 0.22350230414746544
+  }
+ },
+ "features_signalling_wrong": [
+  {
+   "layer": 9,
+   "feature": 5991,
+   "weight": -0.014774573966860771
+  },
+  {
+   "layer": 9,
+   "feature": 7443,
+   "weight": -0.012420249171555042
+  },
+  {
+   "layer": 8,
+   "feature": 1662,
+   "weight": -0.012167145498096943
+  },
+  {
+   "layer": 9,
+   "feature": 6572,
+   "weight": -0.011793149635195732
+  },
+  {
+   "layer": 4,
+   "feature": 4198,
+   "weight": -0.01095986645668745
+  },
+  {
+   "layer": 12,
+   "feature": 5240,
+   "weight": -0.010772268287837505
+  },
+  {
+   "layer": 9,
+   "feature": 7148,
+   "weight": -0.010524086654186249
+  },
+  {
+   "layer": 4,
+   "feature": 4948,
+   "weight": -0.010121501982212067
+  },
+  {
+   "layer": 11,
+   "feature": 4910,
+   "weight": -0.009288298897445202
+  },
+  {
+   "layer": 16,
+   "feature": 1318,
+   "weight": -0.009008972905576229
+  },
+  {
+   "layer": 10,
+   "feature": 2293,
+   "weight": -0.008911672048270702
+  },
+  {
+   "layer": 1,
+   "feature": 7644,
+   "weight": -0.00717015378177166
+  },
+  {
+   "layer": 8,
+   "feature": 871,
+   "weight": -0.006983751431107521
+  },
+  {
+   "layer": 10,
+   "feature": 647,
+   "weight": -0.006080948747694492
+  },
+  {
+   "layer": 11,
+   "feature": 802,
+   "weight": -0.005378205329179764
+  }
+ ],
+ "features_signalling_right": [
+  {
+   "layer": 23,
+   "feature": 5535,
+   "weight": 0.04574263095855713
+  },
+  {
+   "layer": 22,
+   "feature": 8040,
+   "weight": 0.04574263095855713
+  },
+  {
+   "layer": 6,
+   "feature": 1160,
+   "weight": 0.044953472912311554
+  },
+  {
+   "layer": 13,
+   "feature": 2707,
+   "weight": 0.044953472912311554
+  },
+  {
+   "layer": 21,
+   "feature": 4434,
+   "weight": 0.044953472912311554
+  },
+  {
+   "layer": 21,
+   "feature": 2984,
+   "weight": 0.044784750789403915
+  },
+  {
+   "layer": 20,
+   "feature": 8157,
+   "weight": 0.044784750789403915
+  },
+  {
+   "layer": 21,
+   "feature": 4441,
+   "weight": 0.044784750789403915
+  },
+  {
+   "layer": 22,
+   "feature": 635,
+   "weight": 0.044784750789403915
+  },
+  {
+   "layer": 18,
+   "feature": 4331,
+   "weight": 0.044784750789403915
+  },
+  {
+   "layer": 17,
+   "feature": 4878,
+   "weight": 0.04475608095526695
+  },
+  {
+   "layer": 18,
+   "feature": 1965,
+   "weight": 0.04472915455698967
+  },
+  {
+   "layer": 8,
+   "feature": 3858,
+   "weight": 0.04472915455698967
+  },
+  {
+   "layer": 21,
+   "feature": 2372,
+   "weight": 0.044430073350667953
+  },
+  {
+   "layer": 22,
+   "feature": 4803,
+   "weight": 0.044430073350667953
+  }
+ ],
+ "samples": [
+  {
+   "q": "Who was the man behind The Chipmunks?",
+   "answer": "The man behind The Chipmunks is the Chief Minister of Israel, who served the leadership of the United States in",
+   "right": 0,
+   "k": -2.094162940979004
+  },
+  {
+   "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+   "answer": "The Lloyd Webber musical premiered in the US on October 14, 1993.",
+   "right": 0,
+   "k": -2.923252820968628
+  },
+  {
+   "q": "Who was the next British Prime Minister after Arthur Balfour?",
+   "answer": "The next British Prime Minister after Arthur Balfour was George Washington.",
+   "right": 0,
+   "k": -2.3453927040100098
+  },
+  {
+   "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+   "answer": "The 70s No.1 hit with Kiss All Over was directed by the American singer who had a 7",
+   "right": 0,
+   "k": -3.9295759201049805
+  },
+  {
+   "q": "What claimed the life of singer Kathleen Ferrier?",
+   "answer": "The singer who was known as the \"King of the Woman\" by her name is Kenny.",
+   "right": 0,
+   "k": -2.4899649620056152
+  },
+  {
+   "q": "Rita Coolidge sang the title song for which Bond film?",
+   "answer": "The title song for Rita Coolidge was directed by James Bond films, but it was written by George Lucas.",
+   "right": 0,
+   "k": -2.6337814331054688
+  },
+  {
+   "q": "What was the last US state to reintroduce alcohol after prohibition?",
+   "answer": "The last US state to introduce alcohol after prohibition is the Louisianaian government.",
+   "right": 0,
+   "k": -1.6132607460021973
+  },
+  {
+   "q": "Which actress was voted Miss Greenwich Village in 1942?",
+   "answer": "The actress who voted Miss Greenwich Village in 1942 was the British actress who voted Miss Greenwich Village in",
+   "right": 0,
+   "k": -3.498396396636963
+  },
+  {
+   "q": "What is the Japanese share index called?",
+   "answer": "The Japanese share index is called the Japanese Share Index, also known as the Japanese Share Index, or the Japanese Share Index",
+   "right": 0,
+   "k": -1.23057222366333
+  },
+  {
+   "q": "What was the name of Michael Jackson's autobiography written in 1988?",
+   "answer": "The name of Michael Jackson's autobiography \"1984\" was \"The Adventures of the Lost Country.\"",
+   "right": 0,
+   "k": -2.376584768295288
+  },
+  {
+   "q": "In which decade did stereo records first go on sale?",
+   "answer": "1950-1924, the 19th century, the 19th century,",
+   "right": 0,
+   "k": -1.3881138563156128
+  },
+  {
+   "q": "In what year's Olympics were electric timing devices and a public-address system used for the first time?",
+   "answer": "1924-1925, in 1960, in 1937,",
+   "right": 0,
+   "k": -1.8981174230575562
+  }
+ ]
+}

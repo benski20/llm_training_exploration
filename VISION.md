@@ -610,6 +610,42 @@ because each model answers a different set of questions with a different
 right rate. The question is being re-asked on a converted Qwen2.5-0.5B, which
 knows answers (`kaggle/qwen_glassbox/`).
 
+**Converting a pretrained Qwen2.5-0.5B-Instruct into a glass box**
+(`vt/qwen_glassbox.py`, `kaggle/qwen_glassbox/run.py`, Kaggle T4, 66 minutes).
+All 24 MLPs were replaced by exactly sparse feature layers (8,192 features, 64
+active). Each was distilled from its MLP for 2,500 steps, then the whole model
+was fine-tuned for 2,000 steps on KL to the original, with the in-model SAE
+objective. Attention was untouched. Results on 1,000 TriviaQA questions
+(short-answer prompt, detectors fitted on 500 and scored on 500):
+
+| | original Qwen | converted |
+|---|---|---|
+| TriviaQA right | **21.6%** | 6.6% |
+| top-1 agreement with the original | n/a | 64% |
+| bits/token (local text) | **3.26** | 4.27 |
+| softmax AUROC (right vs wrong) | 0.68 | 0.57 |
+| post-hoc hidden-state probe | **0.759** | 0.56 |
+| built-in k / sparse-feature probe | n/a | 0.64 / 0.62 |
+| exact attribution error | n/a | 2.3e-5 |
+| features with purity >= 0.8 (layer 12 / 23) | n/a | 20% / 22% |
+
+The conversion keeps exactness, and its features are about as readable as
+Glassbox-2.4's at 146M. But it loses two thirds of the model's knowledge: the
+converted model mostly invents answers ("the next Prime Minister after Arthur
+Balfour was George Washington"). Replacing every MLP at once with 1% of its
+features active compounds the errors, and 4,500 steps on one T4 cannot recover
+them. On the converted model, no signal separates right from wrong well,
+because there is little right to find. This is a no-go for a full sparse
+conversion at this budget.
+
+The bar it failed to reach is itself the useful finding. On the original
+model, a post-hoc linear probe on one hidden layer (19 of 24) beats the
+model's own probability, 0.759 against 0.68. Reading the internals does
+predict correctness better than the output does. A dense SwiGLU MLP is also
+linear in its input once its SiLU gate values are fixed, the same kind of
+decision as an attention pattern or RMS scale. So exact attribution needs no
+conversion at all, and can be tested directly on the original model.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
