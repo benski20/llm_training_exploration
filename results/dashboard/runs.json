@@ -309,6 +309,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (09:16:34 UTC check)"
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (09:31:41 UTC check)"
 }
 ]
