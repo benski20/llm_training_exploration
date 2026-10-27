@@ -1,0 +1,198 @@
+{
+ "glassbox2": {
+  "train_s": 2551.6851994991302,
+  "params": 9199850,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21892,
+   "top1_acc": 0.316142883245021,
+   "bits_per_token": 5.2057927517276,
+   "auroc_msp": 0.8160738946715371,
+   "auroc_probe": 0.7484211709753436,
+   "auroc_k": 0.7423857776530074,
+   "auroc_memory_match": 0.5665010534116379,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.316142883245021,
+   "top1_acc_uncertified": null
+  },
+  "tokens_wikitext": {
+   "tokens": 22678,
+   "top1_acc": 0.30134932533733133,
+   "bits_per_token": 5.508655192361052,
+   "auroc_msp": 0.8343332049968906,
+   "auroc_probe": 0.7837710939636285,
+   "auroc_k": 0.7797763451184903,
+   "auroc_memory_match": 0.6281629909025939,
+   "certified_memory_free_tokens": 1.0,
+   "top1_acc_certified": 0.30134932533733133,
+   "top1_acc_uncertified": null
+  },
+  "chat_probe_layer": 4,
+  "chat_facts": {
+   "ctx_right": 0.3333333333333333,
+   "mem_right": 0.03333333333333333,
+   "absent_right": 0.45,
+   "absent_fresh_right": 0.95,
+   "ctx_fresh_right": 0.26666666666666666,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 0.9833333333333333,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.40468227424749165,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.55,
+   "hallucination_rate_fresh_names": 0.05,
+   "over_refusal_rate": 0.21666666666666667,
+   "auroc_msp": 0.6909651869589243,
+   "auroc_neg_nll": 0.6833671025971634,
+   "auroc_k_mean": 0.6089058758519065,
+   "auroc_k_min": 0.4053693129489777,
+   "auroc_memory_match": 0.4282556640265242,
+   "auroc_probe": 0.6757229692392706,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Gonnipe has a pet called Zilbisvo."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I don't know Molma's home planet."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Lura's pet is Buda."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I'm not sure. I have no information about Vebesgunvu's favorite food."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": true,
+     "out": " Mikurkil's pet is Pipoken."
+    },
+    {
+     "kind": "ctx",
+     "right": true,
+     "out": " Naru's native language is Zosnonra."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.4,
+   "absent_fresh_right": 0.85,
+   "ctx_fresh_right": 0.0,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 0.9833333333333333,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.2508361204013378,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.6,
+   "hallucination_rate_fresh_names": 0.15,
+   "over_refusal_rate": 0.20555555555555555,
+   "auroc_msp": 0.706725925925926,
+   "auroc_neg_nll": 0.6453333333333333,
+   "auroc_k_mean": 0.7646222222222222,
+   "auroc_k_min": 0.41333333333333333,
+   "auroc_memory_match": 0.24936296296296295,
+   "auroc_probe": 0.7696,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " I'm not sure. I have no information about Gonnipe's home planet."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " I'm not sure. I have no information about Mipurra's home planet."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Bugeler loves eating Somali."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I'm not sure. I have no information about Bubo's employer."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Bivote's favorite food is Dopu."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Zaras's employer is Daspe."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The article discussing the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance",
+    "msp": 0.38651282821471494,
+    "nll": 1.6055297823962367,
+    "k": 0.10718512441962957,
+    "k_min": -1.2344176769256592,
+    "match": 6.830230961243312,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The article discusses the importance of the importance of the Civil War.",
+    "msp": 0.3812611480553945,
+    "nll": 1.4357828973249223,
+    "k": 0.3569568991661072,
+    "k_min": -1.329936146736145,
+    "match": 7.484138011932373,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The Celsius of Celsius is 4.",
+    "msp": 0.38449617238207295,
+    "nll": 1.2943029681231233,
+    "k": -0.10748732496391643,
+    "k_min": -1.1781554222106934,
+    "match": 7.7416300773620605,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Autonomous vehicle can be a great way to reduce the risk of fossil fuels.",
+    "msp": 0.49361867889761923,
+    "nll": 1.0414065585285426,
+    "k": 0.36876305282115934,
+    "k_min": -1.6910972595214844,
+    "match": 6.92409990310669,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " The story is a young girl who is a young girl who is a young girl who is a young girl who is always a young girl who is always she is a great way to explore the world. She is a great way to explore the",
+    "msp": 0.288704647993048,
+    "nll": 1.6063922109703224,
+    "k": -0.7273736751327912,
+    "k_min": -1.7072385549545288,
+    "match": 5.89835657676061,
+    "reply_memory_free": true
+   }
+  ]
+ }
+}

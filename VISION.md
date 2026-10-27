@@ -501,9 +501,25 @@ The built-in features are clearly more specific than raw neurons. They are
 less so than SAE latents, which do not explain 7-10% of what the GPT computes.
 The SAE's objective, sparse reconstruction, pushes latents towards specific
 directions; the built-in features are shaped only by the language-model loss.
-A training term that rewards specific features is the obvious next step.
 Purity also only rewards token detectors, so it says little about abstract
 features.
+
+**Glassbox-2.4: the SAE objective trained into the model**
+(`results/glassbox2_4_chat/`). Each feature layer gets a readout that is used
+only in training and is not part of the forward pass. Through it, the active
+features must also reconstruct the layer's normalized input. The computation
+and the exact attribution are unchanged (tested); only the features are shaped
+toward a sparse code of what they read.
+
+| | median purity (layer 5 / 2) | purity >= 0.8 | variance missed | bits per token |
+|---|---|---|---|---|
+| post-hoc SAE on the GPT | 0.70 / 0.70 | 46% / 46% | 7% / 10% | 4.985 (the GPT) |
+| Glassbox-2.3 | 0.45 / 0.55 | 20% / 27% | 0 | 5.073 (+1.8%) |
+| **Glassbox-2.4** | **0.65 / 0.70** | **40% / 46%** | **0** | 5.206 (+4.4%) |
+
+The built-in features now match post-hoc SAE latents on this measure. They are
+also the model's exact computation, where the SAE misses 7-10% of the GPT's.
+The price is 2.6 more points of language quality.
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
