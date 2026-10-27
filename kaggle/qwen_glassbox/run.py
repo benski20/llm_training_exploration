@@ -25,7 +25,9 @@ import time
 from collections import Counter
 
 import numpy as np
-import torch
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+import torch  # noqa: E402
 import torch.nn.functional as F
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -132,7 +134,7 @@ def distill(model, stream, a, device):
     for step in range(1, a.steps1 + 1):
         x = batches(stream, a.batch, a.block, g).to(device)
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
-            model(x)
+            model.model(x)                  # the transformer only: the MLP captures, no 152k-way logits
         loss, info = 0.0, []
         with torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
             for k, sp in enumerate(sps):
@@ -151,6 +153,9 @@ def distill(model, stream, a, device):
     for h in hooks:
         h.remove()
     set_original(model, False)
+    del opt, scaler1, caps
+    if device == "cuda":
+        torch.cuda.empty_cache()
 
 
 def finetune(model, khead, stream, a, device):
@@ -167,22 +172,25 @@ def finetune(model, khead, stream, a, device):
     g = torch.Generator().manual_seed(2)
     t0 = time.time()
     for step in range(1, a.steps2 + 1):
-        x = batches(stream, a.batch2, a.block, g).to(device)
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
-            set_original(model, True)
-            teacher = model(x).logits.float()
-            set_original(model, False)
-        with torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
-            out = model(x, output_hidden_states=True)
-            logits = out.logits.float()
-            kd = F.kl_div(F.log_softmax(logits, -1).flatten(0, 1), F.log_softmax(teacher, -1).flatten(0, 1),
-                          log_target=True, reduction="batchmean")
-            rec = sum(sp.recon_loss() for sp in sps) / len(sps)
-            k = khead(out.hidden_states[-1].float())[:, :-1]
-            right = (logits[:, :-1].argmax(-1) == x[:, 1:]).float()
-            kb = F.binary_cross_entropy_with_logits(k, right)
-            loss = kd + a.recon * rec + 0.2 * kb
-        opt.zero_grad(); scaler2.scale(loss).backward()
+        opt.zero_grad()
+        for _ in range(a.accum2):                          # micro-batches: full-vocab logits are large
+            x = batches(stream, a.batch2, a.block, g).to(device)
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
+                set_original(model, True)
+                teacher = model(x).logits.float()
+                set_original(model, False)
+            with torch.autocast("cuda", dtype=torch.float16, enabled=device == "cuda"):
+                out = model(x, output_hidden_states=True)
+                logits = out.logits.float()
+                kd = F.kl_div(F.log_softmax(logits, -1).flatten(0, 1), F.log_softmax(teacher, -1).flatten(0, 1),
+                              log_target=True, reduction="batchmean")
+                del teacher
+                rec = sum(sp.recon_loss() for sp in sps) / len(sps)
+                k = khead(out.hidden_states[-1].float())[:, :-1]
+                right = (logits[:, :-1].argmax(-1) == x[:, 1:]).float()
+                kb = F.binary_cross_entropy_with_logits(k, right)
+                loss = (kd + a.recon * rec + 0.2 * kb) / a.accum2
+            scaler2.scale(loss).backward()
         scaler2.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         scaler2.step(opt); scaler2.update()
@@ -336,8 +344,9 @@ def main():
     ap.add_argument("--steps2", type=int, default=2000)
     ap.add_argument("--lr1", type=float, default=1e-3)
     ap.add_argument("--lr2", type=float, default=2e-4)
-    ap.add_argument("--batch", type=int, default=8)
-    ap.add_argument("--batch2", type=int, default=2)
+    ap.add_argument("--batch", type=int, default=6)
+    ap.add_argument("--batch2", type=int, default=1)
+    ap.add_argument("--accum2", type=int, default=2)
     ap.add_argument("--block", type=int, default=256)
     ap.add_argument("--n-docs", type=int, default=20000)
     ap.add_argument("--n-trivia", type=int, default=1000)
