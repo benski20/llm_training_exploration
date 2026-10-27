@@ -563,8 +563,28 @@ given facts better: the CPU context-use advantage of 2.3 did not carry over.
 Its built-in features are also less token-specific than at CPU scale. Median
 purity is 0.30 / 0.25 (middle / last layer, 4,096 features) against 0.45-0.55
 on CPU, with 7-9% of units at purity >= 0.8
-(`experiments/package_features.py`, 60k local tokens). Whether the in-model
-SAE objective (2.4) rescues this at scale is what the next run tests.
+(`experiments/package_features.py`, 60k local tokens).
+
+**Glassbox-2.4 at 146M** (`glassbox-distill-g24`: the same data, budget and
+evaluation, plus the in-model SAE objective). The best checkpoint on held-out
+replies was step 3,000 of 8,968 (validation 3.546 nats).
+
+| | GPT | Glassbox-2.3 | Glassbox-2.4 |
+|---|---|---|---|
+| test bits/token | **4.57** | 4.80 | 4.80 |
+| TriviaQA right / abstain / hallucinate | 1.8 / 68 / **30%** | 1.6 / 48 / 51% | 1.2 / 55 / 44% |
+| made-up names, hallucinate | 92% | 90% | **84%** |
+| given facts used correctly | **68%** | 55% | 64% |
+| median feature purity (layer 6 / 11) | n/a | 0.30 / 0.25 | **0.35 / 0.30** |
+| features with purity >= 0.8 | n/a | 9% / 7% | **19% / 15%** |
+
+The SAE objective still pays at scale. It doubles the share of
+single-meaning features, and narrows the gap to the GPT on hallucination and
+context use, at no cost in loss against 2.3. The gain is smaller than on CPU
+(where median purity was 0.65-0.70), and the GPT still hallucinates less on
+TriviaQA. Attribution stays exact (5e-6) and features exactly sparse. None of
+the three students knows enough trivia (at most 1.8% right) to test
+correctness signals; that is the job of the converted Qwen below.
 
 **Can the internals tell when an answer is correct?**
 (`experiments/correctness_from_internals.py`; 1,500 chat questions per model.)

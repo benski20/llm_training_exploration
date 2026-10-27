@@ -20,5 +20,27 @@
    "share_purity_at_least_0.8": 0.06990411382616765,
    "median_mass_on_top_token": 0.07105902582406998
   }
+ },
+ "results/kaggle/glassbox-distill-g24/glassbox_package": {
+  "package": "results/kaggle/glassbox-distill-g24/glassbox_package",
+  "format": "vt-glassbox2-chat/1",
+  "tokens": 59904,
+  "feat_recon": true,
+  "layer6": {
+   "units": 4096,
+   "units_firing_20+": 2901,
+   "median_density": 0.00811298076923077,
+   "median_top20_purity": 0.35,
+   "share_purity_at_least_0.8": 0.18648741813167874,
+   "median_mass_on_top_token": 0.07715202122926712
+  },
+  "layer11": {
+   "units": 4096,
+   "units_firing_20+": 3202,
+   "median_density": 0.005709134615384615,
+   "median_top20_purity": 0.3,
+   "share_purity_at_least_0.8": 0.14990630855715179,
+   "median_mass_on_top_token": 0.07967842370271683
+  }
  }
 }

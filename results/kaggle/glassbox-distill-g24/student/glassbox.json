@@ -1,0 +1,254 @@
+{
+ "kind": "glassbox",
+ "config": {
+  "vocab_size": 16384,
+  "block_size": 512,
+  "n_layer": 12,
+  "n_head": 10,
+  "n_embd": 640,
+  "n_features": 4096,
+  "k_active": 32,
+  "mem_layer": 11,
+  "mem_keys": 256,
+  "mem_topk": 16,
+  "mix": "add",
+  "feat_recon": true
+ },
+ "steps": 3000,
+ "params": 177222166,
+ "tokens": {
+  "tokens": 11293,
+  "top1_agreement": 0.4316833436642168,
+  "bits_per_token": 4.801468556626158,
+  "auroc_softmax": 0.8498259222858786,
+  "auroc_probe_middle": 0.7229873033375682,
+  "auroc_probe_last": 0.7485263401810612,
+  "auroc_k": 0.7177070259126974,
+  "certified_memory_free_tokens": 1.0,
+  "top1_when_certified": 0.4316833436642168
+ },
+ "inspect": {
+  "attribution_max_abs_error": 5.1513779908418655e-06,
+  "features_exactly_sparse": true,
+  "memory_slots_with_writer": 0.9065704345703125
+ },
+ "qa": {
+  "trivia_eval": {
+   "n": 500,
+   "accuracy": 0.012,
+   "abstention": 0.552,
+   "hallucination": 0.436,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.012,
+   "auroc_true_msp": 0.5542813455657493,
+   "release_msp": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_k_min": 0.41590214067278286,
+   "release_k_min": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_consistency": 0.4380733944954128,
+   "release_consistency": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "samples": [
+    {
+     "q": "Who was the man behind The Chipmunks?",
+     "a": "I don't know the answer to that question.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who was the next British Prime Minister after Arthur Balfour?",
+     "a": "I don't know the answer to that question.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What claimed the life of singer Kathleen Ferrier?",
+     "a": "I'm sorry, but I don't have enough information to provide an accurate answer. The question is to provide an accurate answer.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Rita Coolidge sang the title song for which Bond film?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_absent_eval": {
+   "n": 200,
+   "accuracy": 0.165,
+   "abstention": 0.165,
+   "hallucination": 0.835,
+   "certified_memory_free_replies": 0.995,
+   "accuracy_when_certified": 0.1658291457286432,
+   "samples": [
+    {
+     "q": "What instrument does Ralvo play?",
+     "a": "I don't know Ralvo's instrument.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "I read that Banmeta was born in Nurseka. Sistu's favorite food is Peropo. What pet does Zova have?",
+     "a": "Zova's pet is Peropo.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Biruser plays the Vezus. What instrument does Metinve play?",
+     "a": "I don't know Genve's instrument.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Nibuvu's favorite food is Vepun. What instrument does Mupun play?",
+     "a": "Mupun plays the Vepun.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What is Davin's favorite food?",
+     "a": "I'm not sure. I have no information about Davin's favorite food.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Nallokar's home town is Zalfafo. What pet does Fersi have?",
+     "a": "Fersi's pet is Zalfafo.",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_ctx_eval": {
+   "n": 200,
+   "accuracy": 0.64,
+   "abstention": 0.025,
+   "certified_memory_free_replies": 0.995,
+   "accuracy_when_certified": 0.6432160804020101,
+   "samples": [
+    {
+     "q": "I read that Banan's favorite food is Foduto. What is Banan's favorite food?",
+     "a": "Banan's favorite food is Foduto.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Fimarun plays the Nesnedar. My friend told me that Feszarbu works for Gazu. Fact: Tupa was born in Nafol. Where does Feszarbu work?",
+     "a": "Feszarbu's employer is Gazu.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Pape plays the Veril. My friend told me that Vusnan's favorite food is Topena. What instrument does Pape play?",
+     "a": "Pape plays the Veril.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Fact: Namon has a pet called Simo. Povuszi was born in Tetekus. What is the name of Namon's pet?",
+     "a": "Tamon's pet is Simo.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Fact: Ralku's home town is Fovas. Ziga has a pet called Fuspel. I read that Domil's favorite food is Kubus. What is Domil's favorite food?",
+     "a": "Domil's favorite food is Kubus.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Rolgovo's birthplace is Kizi. Fact: Bupo has a pet called Gifupa. What pet does Bupo have?",
+     "a": "Bupo has a pet called Gifupa.",
+     "right": true,
+     "certified": true
+    }
+   ]
+  },
+  "certificate_soundness_violations": 0
+ },
+ "samples": [
+  {
+   "prompt": "Compare the two items and provide an opinion.\nAn apple and an orange.",
+   "reply": "Both apples and oranges are both fruits with apples and oranges. They are both fruits and vegetables that are available for health."
+  },
+  {
+   "prompt": "Explain what \"normalization\" means in the context of database design.",
+   "reply": "A distributed computing model is a type of computing that uses its own set of data to perform operations on data and perform operations on data. It typically involves techniques such as linear regression, random detection, or random variables. The goal is to"
+  },
+  {
+   "prompt": "Display the result of the following math problem.\n(5 + 5) \u00d7 2 + 6",
+   "reply": "The result of the expression given the equation \\(3x + 4 = 6\\) is \\(3x + 6\\) and \\(3x + 6\\))."
+  },
+  {
+   "prompt": "Describe a process of using a GPT model to generate natural language text.",
+   "reply": "A GPT (Generative Pre-trained Transformer) model typically includes several key steps:"
+  },
+  {
+   "prompt": "What is a way that computer programming can be beneficial to the economy?",
+   "reply": "A person who own challenges and organizations can provide opportunities for the future of the future of the 20th century. They offer different advantages and advantages over time, making it easier to access to the future of the current without human intervention."
+  },
+  {
+   "prompt": "Identify three countries in South America",
+   "reply": "1. South America"
+  },
+  {
+   "prompt": "Estimate the following multiplication problem.\n27 x 4",
+   "reply": "The sum of all possible solutions is 3."
+  },
+  {
+   "prompt": "Convert 48 fl. oz. to liters.",
+   "reply": "1 pound is approximately 0.54 kilograms. Therefore, 0.5 pounds is about 0.5 pounds."
+  }
+ ]
+}
