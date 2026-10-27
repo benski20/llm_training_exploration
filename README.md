@@ -286,13 +286,23 @@ become checkable, and labels every guarantee with its strength:
   the evidence split per token: from the prompt, from the reply so far, or from
   memory. Packages are pinned by sha256 and refused if any file changes.
 
-  Two backends:
+  Backends:
   * glass-box chat checkpoints;
+  * Glassbox-2/3 packages (`vt-glassbox2-chat/1`, `vt-glassbox3-chat/1`), such as
+    the student trained on Kaggle by `kaggle/distill/`. Per token they report
+    confidence, an exact certificate that the token was made without stored
+    memory, and the most active features. Glassbox-3 also reports its epistemic
+    uncertainty u and whether the reply opened with `<unsure>`;
   * a pretrained open model retrofitted on a GPU by
     `kaggle/verifiable_chat/train.py`: LoRA on Qwen2.5-1.5B-Instruct with
     self-labelled abstention, made-up-name training and a confidence head.
 
-  `kaggle/launch.sh` runs that as a private Kaggle T4 kernel.
+  `kaggle/launch.sh` runs the retrofit as a private Kaggle T4 kernel.
+  `kaggle/distill/launch.sh` trains glass-box students from scratch on Kaggle:
+  kernel 1 writes teacher data with Qwen2.5-1.5B-Instruct, and kernel 2 trains
+  a Glassbox-2 and a GPT student on it. Then
+  `bash kaggle/distill/fetch_package.sh` downloads the trained package, and
+  `vt chat-serve results/kaggle/glassbox-distill/glassbox_package` serves it.
 
 Limits, measured: these are small CPU models on synthetic tasks. Under
 distribution shift the base model's capability collapsed, and statistical
