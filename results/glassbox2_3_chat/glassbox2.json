@@ -1,0 +1,198 @@
+{
+ "glassbox2": {
+  "train_s": 1977.5806431770325,
+  "params": 8020202,
+  "probe_layer": 5,
+  "tokens_alpaca": {
+   "tokens": 21892,
+   "top1_acc": 0.3302119495706194,
+   "bits_per_token": 5.073001574709787,
+   "auroc_msp": 0.8241408746910002,
+   "auroc_probe": 0.7529210393998039,
+   "auroc_k": 0.7507722326021589,
+   "auroc_memory_match": 0.5073111705283305,
+   "certified_memory_free_tokens": 0.9943358304403435,
+   "top1_acc_certified": 0.33080668871738333,
+   "top1_acc_uncertified": 0.22580645161290322
+  },
+  "tokens_wikitext": {
+   "tokens": 22678,
+   "top1_acc": 0.3097715847958374,
+   "bits_per_token": 5.4237155363211995,
+   "auroc_msp": 0.8368671542730658,
+   "auroc_probe": 0.7870627144342391,
+   "auroc_k": 0.7834147377294906,
+   "auroc_memory_match": 0.6009308824636074,
+   "certified_memory_free_tokens": 0.9957668224711174,
+   "top1_acc_certified": 0.3100699672305376,
+   "top1_acc_uncertified": 0.23958333333333334
+  },
+  "chat_probe_layer": 5,
+  "chat_facts": {
+   "ctx_right": 0.2833333333333333,
+   "mem_right": 0.03333333333333333,
+   "absent_right": 0.3333333333333333,
+   "absent_fresh_right": 0.9166666666666666,
+   "ctx_fresh_right": 0.16666666666666666,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.3466666666666667,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.6666666666666666,
+   "hallucination_rate_fresh_names": 0.08333333333333333,
+   "over_refusal_rate": 0.16111111111111112,
+   "auroc_msp": 0.7716836734693877,
+   "auroc_neg_nll": 0.8051903453689168,
+   "auroc_k_mean": 0.7641777864992151,
+   "auroc_k_min": 0.5652963108320251,
+   "auroc_memory_match": 0.35547488226059654,
+   "auroc_probe": 0.7142366562009419,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Gonnipe has a pet called Zilbisvo."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Sorry, I don't know that about Molma."
+    },
+    {
+     "kind": "absent",
+     "right": false,
+     "out": " Lura has a pet called Veli."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": false,
+     "out": " Vebesgune's favorite food is Somali."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": true,
+     "out": " Magil's pet is Pipoken."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Naru speaks Gorerfu natively."
+    }
+   ]
+  },
+  "chat_facts_held_relations": {
+   "ctx_right": 0.0,
+   "mem_right": 0.0,
+   "absent_right": 0.4666666666666667,
+   "absent_fresh_right": 0.8,
+   "ctx_fresh_right": 0.016666666666666666,
+   "certified_memory_free_replies": {
+    "ctx": 1.0,
+    "mem": 1.0,
+    "absent": 1.0,
+    "absent_fresh": 1.0,
+    "ctx_fresh": 1.0
+   },
+   "right_when_certified": 0.25666666666666665,
+   "certificate_soundness_violations": 0,
+   "hallucination_rate": 0.5333333333333333,
+   "hallucination_rate_fresh_names": 0.2,
+   "over_refusal_rate": 0.2111111111111111,
+   "auroc_msp": 0.8139304641546794,
+   "auroc_neg_nll": 0.818123580455419,
+   "auroc_k_mean": 0.81666763729544,
+   "auroc_k_min": 0.5436491759361715,
+   "auroc_memory_match": 0.26649583600256244,
+   "auroc_probe": 0.7134121483897269,
+   "examples": [
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " I'm not sure. I have no information about Gonnipe's home planet."
+    },
+    {
+     "kind": "mem",
+     "right": false,
+     "out": " Mipurra's favorite food is Mererse."
+    },
+    {
+     "kind": "absent",
+     "right": true,
+     "out": " I don't know Bugeler's favorite food."
+    },
+    {
+     "kind": "absent_fresh",
+     "right": true,
+     "out": " I'm not sure. I have no information about Botoko's favorite food."
+    },
+    {
+     "kind": "ctx_fresh",
+     "right": false,
+     "out": " Bagon's favorite food is Boziki."
+    },
+    {
+     "kind": "ctx",
+     "right": false,
+     "out": " Zaras's favorite food is Valo."
+    }
+   ]
+  },
+  "samples": [
+   {
+    "prompt": "User: Generate a headline describing a current news article.\nAssistant:",
+    "response": " The article discusses the importance of the importance of the importance of the importance of the importance of the importance of the importance of the importance of the environment.",
+    "msp": 0.3987289623868081,
+    "nll": 1.6107307326897318,
+    "k": -0.17760666051218588,
+    "k_min": -1.836694359779358,
+    "match": 6.495731784451392,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Write a headline for a sports article about the World Cup.\nAssistant:",
+    "response": " The article discusses the importance of the United States, the United States, and the United States. It is a major contribution to the United States, and the United States, and the United States. It is a major contribution to",
+    "msp": 0.3953903925139457,
+    "nll": 1.2354925066659537,
+    "k": -0.16483134916052222,
+    "k_min": -1.4333499670028687,
+    "match": 5.8846370577812195,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Convert the following measurement in Celsius to Farenheit.\n48 degrees Celsius\nAssistant:",
+    "response": " The average temperature of the temperature is Fahrenheit.",
+    "msp": 0.49222106028061646,
+    "nll": 1.0217728123713572,
+    "k": 0.12452655285596848,
+    "k_min": -0.939154326915741,
+    "match": 5.975706027104304,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: List 5 things people can do on an airplane.\nAssistant:",
+    "response": " 1. Practicing and vegetables.",
+    "msp": 0.37216322869062424,
+    "nll": 1.5405739380512387,
+    "k": 0.1935425868088549,
+    "k_min": -2.00216007232666,
+    "match": 6.904106616973877,
+    "reply_memory_free": true
+   },
+   {
+    "prompt": "User: Generate an original story with a self-driving car as the main character.\nAssistant:",
+    "response": " Once upon a time, there was a young girl who lived in a small village. She was a young girl who lived in a mysterious village. She was a magical adventure of the forest, and she was",
+    "msp": 0.4695237873432537,
+    "nll": 1.0913089022117977,
+    "k": 0.2836704732229312,
+    "k_min": -1.2151793241500854,
+    "match": 5.934500376383464,
+    "reply_memory_free": true
+   }
+  ]
+ }
+}
