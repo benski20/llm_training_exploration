@@ -47,6 +47,9 @@ class G2Config:
                                    # (exact zeros elsewhere): fewer attention edges to inspect
     mem_gate: str = "hard_st"      # hard gate, straight-through gradient ("hard": plain clamp, whose
                                    # gates freeze once saturated at 0 or 1)
+    mix: str = "convex"            # how layers update the residual stream: "convex" (keep/replace
+                                   # weights) or "add" (standard residual sums). Both are linear given
+                                   # the decisions, so attribution is exact either way
 
 
 class RMSNorm(nn.Module):
@@ -69,6 +72,7 @@ class Attention(nn.Module):
         super().__init__()
         self.h, self.dh = c.n_head, c.n_embd // c.n_head
         self.topk = c.attn_topk
+        self.add = c.mix == "add"
         self.norm = RMSNorm(c.n_embd)
         self.qkv = nn.Linear(c.n_embd, 3 * c.n_embd, bias=False)
         self.o = nn.Parameter(torch.randn(c.n_head, self.dh, c.n_embd) * 0.02)
@@ -90,6 +94,8 @@ class Attention(nn.Module):
         z = x * d["s"] * self.norm.weight
         v = (z @ self.qkv.weight[2 * C:].T).view(B, T, self.h, self.dh).transpose(1, 2)
         u = torch.einsum("bhtk,hkd->bhtd", d["A"] @ v, self.o)
+        if self.add:
+            return x + u.sum(1)
         pi = d["pi"]
         return pi[..., :1] * x + (pi[..., 1:].transpose(1, 2)[..., None] * u).sum(1)
 
@@ -104,6 +110,7 @@ class SparseFeatures(nn.Module):
     def __init__(self, c):
         super().__init__()
         self.k = c.k_active
+        self.add = c.mix == "add"
         self.norm = RMSNorm(c.n_embd)
         self.enc = nn.Linear(c.n_embd, c.n_features)
         self.dec = nn.Linear(c.n_features, c.n_embd, bias=False)
@@ -125,6 +132,8 @@ class SparseFeatures(nn.Module):
 
     def apply(self, x, d, with_bias=True, f=None):
         f = self.features(x, d, with_bias) if f is None else f
+        if self.add:
+            return x + self.dec(f)
         return (1 - d["g"]) * x + d["g"] * self.dec(f)
 
     def forward(self, x):
@@ -213,7 +222,8 @@ class Glassbox2(nn.Module):
             d = {k: v.expand(S, *v.shape[1:]) for k, v in tr["feat"][i].items() if k != "acts"}
             biased = self.feat[i].apply(comp, d, with_bias=False)
             g, mask = tr["feat"][i]["g"][0], tr["feat"][i]["mask"][0]
-            biased[T * 2 + i] += g * self.feat[i].dec(self.feat[i].enc.bias * mask)
+            scale = 1.0 if self.feat[i].add else g
+            biased[T * 2 + i] += scale * self.feat[i].dec(self.feat[i].enc.bias * mask)
             comp = biased
         z = comp[:, t] * tr["s_f"][0, t] * self.norm_f.weight
         contrib = z @ self.head.weight[token]

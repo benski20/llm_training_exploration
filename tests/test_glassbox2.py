@@ -95,3 +95,20 @@ def test_straight_through_gate_is_exact_and_never_freezes():
     g.sum().backward()
     sat = (m.gate(z) <= 0) | (m.gate(z) >= 1)
     assert (z.grad[sat.squeeze(-1)] == 0).all() and (z.grad[~sat.squeeze(-1)] != 0).any()
+
+
+def test_additive_residual_keeps_attribution_exact_and_certificates_sound():
+    for gate_bias in (0.5, -5.0):
+        m = _m(mix="add")
+        with torch.no_grad():
+            m.mem.gate.bias.fill_(gate_bias)
+            m.mem.values.weight.normal_(0, 0.5)
+        x = torch.randint(0, 60, (1, 9))
+        parts = m.explain(x, 8, 3)
+        assert abs(sum(parts.values()) - float(m.trace["raw_logits"][0, 8, 3])) < 1e-4
+    m = _m(mix="add", mem_layer=2)
+    with torch.no_grad():
+        m.mem.gate.weight.normal_(0, 1); m.mem.gate.bias.fill_(-0.3)
+        m.mem.values.weight.normal_(0, 1)
+    free, same = _soundness(m, torch.randint(0, 60, (2, 10)))
+    assert same and free.any() and not free.all()

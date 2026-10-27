@@ -11,6 +11,7 @@ RUNS = [("GPT", "results/glassbox_chat_v2/baseline.json", "baseline"),
         ("Glassbox-2", "results/glassbox2_chat/glassbox2.json", "glassbox2"),
         ("Glassbox-2.1", "results/glassbox2_1_chat/glassbox2.json", "glassbox2"),
         ("Glassbox-2.2", "results/glassbox2_2_chat/glassbox2.json", "glassbox2"),
+        ("Glassbox-2.3", "results/glassbox2_3_chat/glassbox2.json", "glassbox2"),
         ("Glassbox-3", "results/glassbox3_chat/glassbox3.json", "glassbox3")]
 DETECTORS = ("auroc_msp", "auroc_neg_nll", "auroc_probe", "auroc_k_min", "auroc_neg_u_first", "auroc_neg_p_unsure_first")
 
