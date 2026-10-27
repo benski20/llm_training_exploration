@@ -389,9 +389,9 @@
 "title": "CPU: exact attribution on unmodified Qwen2.5-0.5B vs answer correctness",
 "model": "qwen",
 "status": "running",
-"step": 550,
+"step": 825,
 "total_steps": 1000,
-"progress": 0.55,
+"progress": 0.825,
 "last_loss": null,
 "note": "SiLU gates fixed, no conversion; do attribution statistics beat the 0.759 hidden-state probe?"
 }
