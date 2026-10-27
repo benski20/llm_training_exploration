@@ -483,6 +483,28 @@ the weights with the best loss on 200 held-out replies, disjoint from the
 test replies. Attribution is exact to 2e-6 and the
 features are exactly sparse.
 
+**Are the built-in features interpretable?** (`experiments/feature_interpretability.py`;
+100k tokens.) The comparison is between Glassbox-2.3's exactly sparse features
+(32 of 1,024 active), the matched GPT's MLP neurons, and a top-k sparse
+autoencoder fitted to the GPT's residual stream afterwards (1,024 latents,
+k = 32), the standard post-hoc tool. Token purity is the share of a unit's
+20 strongest activations that fall on its most common token, an automatic and
+crude proxy for monosemanticity:
+
+| | median purity (layer 5 / 2) | units with purity >= 0.8 | variance missed |
+|---|---|---|---|
+| GPT MLP neurons | 0.30 / 0.35 | 12% / 10% | n/a |
+| Glassbox-2.3 built-in features | 0.45 / 0.55 | 20% / 27% | **0** |
+| post-hoc SAE on the GPT | **0.70 / 0.70** | **46% / 46%** | 7% / 10% |
+
+The built-in features are clearly more specific than raw neurons. They are
+less so than SAE latents, which do not explain 7-10% of what the GPT computes.
+The SAE's objective, sparse reconstruction, pushes latents towards specific
+directions; the built-in features are shaped only by the language-model loss.
+A training term that rewards specific features is the obvious next step.
+Purity also only rewards token detectors, so it says little about abstract
+features.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
