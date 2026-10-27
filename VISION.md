@@ -517,6 +517,15 @@ toward a sparse code of what they read.
 | Glassbox-2.3 | 0.45 / 0.55 | 20% / 27% | 0 | 5.073 (+1.8%) |
 | **Glassbox-2.4** | **0.65 / 0.70** | **40% / 46%** | **0** | 5.206 (+4.4%) |
 
+On 1,500 new questions (95% intervals), Glassbox-2.4 against the GPT:
+hallucination on unstated facts 64% [58-69] vs 75% [70-80]; on made-up names
+6% [4-10] vs 4% [2-6]; over-refusal 13% vs 13%; facts given in the message
+answered 37% [31-42] vs 16% [12-21]. On held-out relations: 54% vs 65% and
+17% vs 25%. This is the first glass-box model whose hallucination advantage
+exceeds the evaluation noise, at the same over-refusal. It is one training
+run per model, and 2.1 and 2.2 showed that small changes can move these
+numbers a lot. Second seeds of both models are being trained to check.
+
 The built-in features now match post-hoc SAE latents on this measure. They are
 also the model's exact computation, where the SAE misses 7-10% of the GPT's.
 The price is 2.6 more points of language quality.

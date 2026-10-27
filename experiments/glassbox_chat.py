@@ -711,6 +711,7 @@ def main():
     ap.add_argument("--sc-prompts", type=int, default=8)
     ap.add_argument("--sc-k", type=int, default=4)
     ap.add_argument("--sc-agree", type=float, default=0.75)
+    ap.add_argument("--seed", type=int, default=0, help="model initialization seed (replicates)")
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--data-dir", default=None, help="tokenizer and token stream (default: next to --out)")
     ap.add_argument("--prepare-only", action="store_true")
@@ -748,7 +749,7 @@ def main():
         if kind in res:
             continue
         train_stream = stream
-        torch.manual_seed(0)                       # the same initialization on every run
+        torch.manual_seed(a.seed)                  # the same initialization on every run (per seed)
         if kind == "glassbox3":
             up = os.path.join(data_dir, "stream_unsure.pt")
             if not os.path.exists(up):

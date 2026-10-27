@@ -1,0 +1,73 @@
+{
+ "glassbox2_4": {
+  "name": "Glassbox-2.4",
+  "chat_facts": {
+   "hallucination_unstated": {
+    "rate": 0.64,
+    "ci95": [
+     0.5842,
+     0.6922
+    ],
+    "n": 300
+   },
+   "hallucination_made_up": {
+    "rate": 0.0633,
+    "ci95": [
+     0.0409,
+     0.0968
+    ],
+    "n": 300
+   },
+   "over_refusal": {
+    "rate": 0.1267,
+    "ci95": [
+     0.1065,
+     0.15
+    ],
+    "n": 900
+   },
+   "ctx_right": {
+    "rate": 0.3667,
+    "ci95": [
+     0.3141,
+     0.4226
+    ],
+    "n": 300
+   }
+  },
+  "chat_facts_held_relations": {
+   "hallucination_unstated": {
+    "rate": 0.54,
+    "ci95": [
+     0.4835,
+     0.5955
+    ],
+    "n": 300
+   },
+   "hallucination_made_up": {
+    "rate": 0.1667,
+    "ci95": [
+     0.1288,
+     0.213
+    ],
+    "n": 300
+   },
+   "over_refusal": {
+    "rate": 0.2367,
+    "ci95": [
+     0.2101,
+     0.2655
+    ],
+    "n": 900
+   },
+   "ctx_right": {
+    "rate": 0.0033,
+    "ci95": [
+     0.0006,
+     0.0186
+    ],
+    "n": 300
+   }
+  }
+ }
+}
