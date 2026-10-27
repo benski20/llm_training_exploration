@@ -193,6 +193,54 @@ def cmd_serve(a):
     return 0
 
 
+CHAT_V2_CONFIG = dict(vocab_size=4096, block_size=256, n_layer=6, n_head=4, n_embd=192, mem_layer=3,
+                      mem_keys=128, mem_topk=8, fixed_embed=False, mlp_ratio=1, track_evidence=False,
+                      sharpness=True, mem_value_init=0.0)
+
+
+def cmd_chat_export(a):
+    from .chat_serve import export_package
+    cfg = json.load(open(a.config)) if a.config else dict(CHAT_V2_CONFIG)
+    man = export_package(a.ckpt, a.tokenizer, a.out, cfg)
+    print(f"wrote {a.out} (package sha256 {man['package_sha256'][:16]}...)")
+    return 0
+
+
+def cmd_chat(a):
+    from .chat_serve import PackageError, load_package, reply
+    try:
+        model, tok, man = load_package(a.package)
+    except PackageError as e:
+        print(f"refusing to load: {e}", file=sys.stderr)
+        return 1
+    r = reply(model, tok, a.message, max_new_tokens=a.max_new_tokens, threshold=a.threshold)
+    if a.json:
+        print(json.dumps(r, indent=1))
+        return 0
+    print(r["text"])
+    flagged = ", ".join(repr(s["text"].strip()) for s in r["low_confidence_spans"]) or "none"
+    print(f"[min confidence {r.get('min_confidence', 1):.2f}; low-confidence spans: {flagged}; "
+          f"abstained: {r['abstained']}]")
+    return 0
+
+
+def cmd_chat_serve(a):
+    from .chat_serve import PackageError, load_package, make_chat_server
+    try:
+        model, tok, man = load_package(a.package)
+    except PackageError as e:
+        print(f"refusing to serve: {e}", file=sys.stderr)
+        return 1
+    srv = make_chat_server(model, tok, man, a.host, a.port, max_concurrency=a.max_concurrency)
+    print(f"serving {a.package} (package sha256 {man['package_sha256'][:16]}...) on "
+          f"http://{a.host}:{srv.server_port}/chat", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_keygen(a):
     from .artifact import generate_keypair
     generate_keypair(a.private, a.public)
@@ -391,6 +439,19 @@ def main(argv=None):
     p.add_argument("plan"); p.add_argument("--kb", required=True); p.add_argument("--policy", required=True)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(fn=cmd_respond)
+    p = sub.add_parser("chat-export", help="package a glass-box chat checkpoint for serving (hash-pinned)")
+    p.add_argument("--ckpt", required=True); p.add_argument("--tokenizer", required=True)
+    p.add_argument("--out", required=True); p.add_argument("--config", help="GBConfig JSON (default: chat v2)")
+    p.set_defaults(fn=cmd_chat_export)
+    p = sub.add_parser("chat", help="one reply from a glass-box chat package, with its confidence report")
+    p.add_argument("package"); p.add_argument("message")
+    p.add_argument("--max-new-tokens", type=int, default=64); p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_chat)
+    p = sub.add_parser("chat-serve", help="HTTP chat endpoint returning per-token verification signals")
+    p.add_argument("package"); p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8001); p.add_argument("--max-concurrency", type=int, default=4)
+    p.set_defaults(fn=cmd_chat_serve)
     p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
     p.add_argument("private"); p.add_argument("public")
     p.set_defaults(fn=cmd_keygen)
@@ -404,9 +465,10 @@ def main(argv=None):
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
-        if name not in ("keygen", "respond"):
+        if name not in ("keygen", "respond", "chat-export", "chat", "chat-serve"):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
-        if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample", "respond"):
+        if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample", "respond",
+                        "chat-export", "chat", "chat-serve"):
             if name == "serve":
                 sp_.add_argument("--workers", type=int, default=os.cpu_count())
                 continue

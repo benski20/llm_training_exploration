@@ -12,3 +12,4 @@ build/
 results/**/*.log
 data/wikitext-2/
 data/alpaca/
+results/kaggle/**/model/
