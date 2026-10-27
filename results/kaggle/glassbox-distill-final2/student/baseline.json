@@ -1,0 +1,219 @@
+{
+ "kind": "baseline",
+ "config": {
+  "vocab_size": 16384,
+  "block_size": 512,
+  "n_layer": 12,
+  "n_head": 10,
+  "n_embd": 640,
+  "mlp_ratio": 6,
+  "pos_encoding": "alibi"
+ },
+ "steps": 3000,
+ "params": 99676800,
+ "tokens": {
+  "tokens": 11293,
+  "top1_agreement": 0.43124059151686883,
+  "bits_per_token": 4.5718813971673375,
+  "auroc_softmax": 0.857119610895265,
+  "auroc_probe_middle": 0.726461948062037,
+  "auroc_probe_last": 0.7345098035454592
+ },
+ "qa": {
+  "trivia_eval": {
+   "n": 500,
+   "accuracy": 0.018,
+   "abstention": 0.678,
+   "hallucination": 0.304,
+   "auroc_true_msp": 0.5782163742690059,
+   "release_msp": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_consistency": 0.43640350877192985,
+   "release_consistency": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "samples": [
+    {
+     "q": "Who was the man behind The Chipmunks?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Who was the next British Prime Minister after Arthur Balfour?",
+     "a": "I don't know the answer to that question.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "What claimed the life of singer Kathleen Ferrier?",
+     "a": "The lead singer of Elton Clavin' \"Breaking Badly\" is George Orwell.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Rita Coolidge sang the title song for which Bond film?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": null
+    }
+   ]
+  },
+  "fictitious_absent_eval": {
+   "n": 200,
+   "accuracy": 0.085,
+   "abstention": 0.085,
+   "hallucination": 0.915,
+   "samples": [
+    {
+     "q": "What instrument does Ralvo play?",
+     "a": "I don't know Telvo's instrument.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "I read that Banmeta was born in Nurseka. Sistu's favorite food is Peropo. What pet does Zova have?",
+     "a": "Zova's pet is Nirto.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Biruser plays the Vezus. What instrument does Metinve play?",
+     "a": "Metinve plays the Vezus.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Nibuvu's favorite food is Vepun. What instrument does Mupun play?",
+     "a": "Mupun plays the Vepun.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "What is Davin's favorite food?",
+     "a": "Davin's favorite food is Zumo.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Nallokar's home town is Zalfafo. What pet does Fersi have?",
+     "a": "Fonsi has a pet called Zofafo.",
+     "right": false,
+     "certified": null
+    }
+   ]
+  },
+  "fictitious_ctx_eval": {
+   "n": 200,
+   "accuracy": 0.68,
+   "abstention": 0.03,
+   "samples": [
+    {
+     "q": "I read that Banan's favorite food is Foduto. What is Banan's favorite food?",
+     "a": "Banan's favorite food is Foduto.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Fimarun plays the Nesnedar. My friend told me that Feszarbu works for Gazu. Fact: Tupa was born in Nafol. Where does Feszarbu work?",
+     "a": "Feszarbu's employer is Gazu.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Pape plays the Veril. My friend told me that Vusnan's favorite food is Topena. What instrument does Pape play?",
+     "a": "Pape plays the Veril.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "Fact: Namon has a pet called Simo. Povuszi was born in Tetekus. What is the name of Namon's pet?",
+     "a": "I'm not sure. I have no information about Zon's pet.",
+     "right": false,
+     "certified": null
+    },
+    {
+     "q": "Fact: Ralku's home town is Fovas. Ziga has a pet called Fuspel. I read that Domil's favorite food is Kubus. What is Domil's favorite food?",
+     "a": "Domil's favorite food is Kubuspel.",
+     "right": true,
+     "certified": null
+    },
+    {
+     "q": "My friend told me that Rolgovo's birthplace is Kizi. Fact: Bupo has a pet called Gifupa. What pet does Bupo have?",
+     "a": "Bupo's pet is Gifupa.",
+     "right": true,
+     "certified": null
+    }
+   ]
+  }
+ },
+ "samples": [
+  {
+   "prompt": "Compare the two items and provide an opinion.\nAn apple and an orange.",
+   "reply": "Both apples and apples are both nutritious and nutritious. They both belong to the fruit family but have a different nutrition, while apples are primarily good. Both have nutrition and emotional support."
+  },
+  {
+   "prompt": "Explain what \"normalization\" means in the context of database design.",
+   "reply": "An object-oriented programming language is a set of instructions or goals that a problem or task at a specific task. It's like a recipe and a recipe, there's a simple step-by-step guide:"
+  },
+  {
+   "prompt": "Display the result of the following math problem.\n(5 + 5) \u00d7 2 + 6",
+   "reply": "The result of the expression is 8."
+  },
+  {
+   "prompt": "Describe a process of using a GPT model to generate natural language text.",
+   "reply": "To create a model for generating text, one typically uses the following techniques:"
+  },
+  {
+   "prompt": "What is a way that computer programming can be beneficial to the economy?",
+   "reply": "A way of computers programming is to perform tasks that require knowledge and expertise in software development, as it can help with complex problem-solving and problem-solving skills."
+  },
+  {
+   "prompt": "Identify three countries in South America",
+   "reply": "1. United States"
+  },
+  {
+   "prompt": "Estimate the following multiplication problem.\n27 x 4",
+   "reply": "The result of the following fraction is 4."
+  },
+  {
+   "prompt": "Convert 48 fl. oz. to liters.",
+   "reply": "1.45"
+  }
+ ]
+}

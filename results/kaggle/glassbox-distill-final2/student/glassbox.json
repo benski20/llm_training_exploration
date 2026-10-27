@@ -1,0 +1,253 @@
+{
+ "kind": "glassbox",
+ "config": {
+  "vocab_size": 16384,
+  "block_size": 512,
+  "n_layer": 12,
+  "n_head": 10,
+  "n_embd": 640,
+  "n_features": 4096,
+  "k_active": 32,
+  "mem_layer": 11,
+  "mem_keys": 256,
+  "mem_topk": 16,
+  "mix": "add"
+ },
+ "steps": 3000,
+ "params": 145764886,
+ "tokens": {
+  "tokens": 11293,
+  "top1_agreement": 0.4321260958115647,
+  "bits_per_token": 4.796832220503677,
+  "auroc_softmax": 0.8541483040340702,
+  "auroc_probe_middle": 0.7394315913117054,
+  "auroc_probe_last": 0.7503082238179108,
+  "auroc_k": 0.7267154575874313,
+  "certified_memory_free_tokens": 1.0,
+  "top1_when_certified": 0.4321260958115647
+ },
+ "inspect": {
+  "attribution_max_abs_error": 2.607353962957859e-06,
+  "features_exactly_sparse": true,
+  "memory_slots_with_writer": 0.8973541259765625
+ },
+ "qa": {
+  "trivia_eval": {
+   "n": 500,
+   "accuracy": 0.016,
+   "abstention": 0.478,
+   "hallucination": 0.506,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.016,
+   "auroc_true_msp": 0.5765810276679841,
+   "release_msp": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_k_min": 0.5182806324110671,
+   "release_k_min": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "auroc_true_consistency": 0.4935770750988142,
+   "release_consistency": [
+    {
+     "alpha": 0.2,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    },
+    {
+     "alpha": 0.5,
+     "threshold": null,
+     "released_fraction": 0.0,
+     "test_error_when_released": null
+    }
+   ],
+   "samples": [
+    {
+     "q": "Who was the man behind The Chipmunks?",
+     "a": "The Chipmunks were the first human to win the Nobel Prize in Physics.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Which Lloyd Webber musical premiered in the US on 10th December 1993?",
+     "a": "The original name for the U.S. was \"House of the U.S. and U.S. Presidential Election.\"",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who was the next British Prime Minister after Arthur Balfour?",
+     "a": "The first Prime Minister of Australia was the first British Prime Minister of Australia.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Who had a 70s No 1 hit with Kiss You All Over?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What claimed the life of singer Kathleen Ferrier?",
+     "a": "The first significant step of singer/SQ is to have been caused by the American singer/SQL.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "Rita Coolidge sang the title song for which Bond film?",
+     "a": "I'm not sure. I don't know the answer to that.",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_absent_eval": {
+   "n": 200,
+   "accuracy": 0.1,
+   "abstention": 0.1,
+   "hallucination": 0.9,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.1,
+   "samples": [
+    {
+     "q": "What instrument does Ralvo play?",
+     "a": "I'm not sure. I have no information about Ralvo's instrument.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "I read that Banmeta was born in Nurseka. Sistu's favorite food is Peropo. What pet does Zova have?",
+     "a": "Zova's pet is Peropo.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Biruser plays the Vezus. What instrument does Metinve play?",
+     "a": "I don't knowinve's instrument.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Nibuvu's favorite food is Vepun. What instrument does Mupun play?",
+     "a": "Mupun plays the Vepu.",
+     "right": false,
+     "certified": true
+    },
+    {
+     "q": "What is Davin's favorite food?",
+     "a": "I don't know Davin's favorite food.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Nallokar's home town is Zalfafo. What pet does Fersi have?",
+     "a": "Fersi has a pet called Zalfo.",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "fictitious_ctx_eval": {
+   "n": 200,
+   "accuracy": 0.545,
+   "abstention": 0.03,
+   "certified_memory_free_replies": 1.0,
+   "accuracy_when_certified": 0.545,
+   "samples": [
+    {
+     "q": "I read that Banan's favorite food is Foduto. What is Banan's favorite food?",
+     "a": "Banan's favorite food is Foduto.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Fimarun plays the Nesnedar. My friend told me that Feszarbu works for Gazu. Fact: Tupa was born in Nafol. Where does Feszarbu work?",
+     "a": "Feszarbu's employer is Gazu.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Pape plays the Veril. My friend told me that Vusnan's favorite food is Topena. What instrument does Pape play?",
+     "a": "Pape plays the Veril.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Fact: Namon has a pet called Simo. Povuszi was born in Tetekus. What is the name of Namon's pet?",
+     "a": "Takon has a pet called Simo.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "Fact: Ralku's home town is Fovas. Ziga has a pet called Fuspel. I read that Domil's favorite food is Kubus. What is Domil's favorite food?",
+     "a": "Domil's favorite food is Kubus.",
+     "right": true,
+     "certified": true
+    },
+    {
+     "q": "My friend told me that Rolgovo's birthplace is Kizi. Fact: Bupo has a pet called Gifupa. What pet does Bupo have?",
+     "a": "Bupo's pet is Gifupi.",
+     "right": false,
+     "certified": true
+    }
+   ]
+  },
+  "certificate_soundness_violations": 0
+ },
+ "samples": [
+  {
+   "prompt": "Compare the two items and provide an opinion.\nAn apple and an orange.",
+   "reply": "Both apples and oranges are fruits. They have a unique nutrition and can be used to store food."
+  },
+  {
+   "prompt": "Explain what \"normalization\" means in the context of database design.",
+   "reply": "In the given field, there is a set of instructions to be stored in a database schema that can be used to describe the structure or function of the data being stored. This allows for efficient retrieval of data and retrieval by the"
+  },
+  {
+   "prompt": "Display the result of the following math problem.\n(5 + 5) \u00d7 2 + 6",
+   "reply": "The result of the expression is 6."
+  },
+  {
+   "prompt": "Describe a process of using a GPT model to generate natural language text.",
+   "reply": "To create a basic outline for designing an AI model for natural language understanding, one would need to create a basic outline or provide a basic outline for the following steps:"
+  },
+  {
+   "prompt": "What is a way that computer programming can be beneficial to the economy?",
+   "reply": "A way to understand how the economy is by using a computer or software program to perform tasks effectively in a way that can be used to perform complex calculations and develop solutions for the problem."
+  },
+  {
+   "prompt": "Identify three countries in South America",
+   "reply": "1. United States"
+  },
+  {
+   "prompt": "Estimate the following multiplication problem.\n27 x 4",
+   "reply": "The solution is x = 4."
+  },
+  {
+   "prompt": "Convert 48 fl. oz. to liters.",
+   "reply": "To convert from the oven to a baking soda and soda to a simmer for the surface."
+  }
+ ]
+}

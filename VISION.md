@@ -530,6 +530,27 @@ The built-in features now match post-hoc SAE latents on this measure. They are
 also the model's exact computation, where the SAE misses 7-10% of the GPT's.
 The price is 2.6 more points of language quality.
 
+**Final Kaggle comparison at 146M** (`results/kaggle/glassbox-distill-final2/`;
+Glassbox-2.3 vs GPT, 2.5 h each, best checkpoint on held-out replies). Both
+peak at step 3,000 and then overfit the 2.4M-token teacher data, so this is
+data-limited, not compute-limited: the glass-box student's 2.3x slower steps
+cost nothing here.
+
+| | GPT (100M) | Glassbox-2.3 (146M) |
+|---|---|---|
+| held-out loss / test bits per token | **3.396 / 4.57** | 3.512 / 4.80 (+4.9%) |
+| top-1 agreement with the teacher | 43.1% | 43.2% |
+| TriviaQA right / abstained / hallucinated | 1.8% / 68% / **30%** | 1.6% / 48% / 51% |
+| made-up names, hallucinated | 92% | 90% |
+| fact given in the message, answered | **68%** | 55% |
+| reply-level error AUROC (best signal) | 0.58 | 0.58 |
+
+Attribution is exact to 2.6e-6, the features are exactly sparse, and there
+were no certificate soundness violations. Neither model knows trivia at this
+size and data, and neither has a signal that can release answers under an
+error bound. On this data the GPT abstains more, hallucinates less and uses
+given facts better: the CPU context-use advantage of 2.3 did not carry over.
+
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
 is calibrated on separate questions with over-refusal capped at 27%, and the
