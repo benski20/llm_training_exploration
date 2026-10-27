@@ -385,10 +385,24 @@ answers at chance (AUROC about 0.5). Diagnosis:
 student's configuration; `results/glassbox2_2_chat/`). Language is unchanged
 at 5.24 bits per token, so the gate fix costs nothing. The memory gates still
 close everywhere: at this scale the L1 cost outweighs what stored knowledge
-buys. Chat hallucination is 53% on unstated facts against 2.1's 80%, from
-models that differ only in the gate's gradient. Run-to-run variance at 60
-questions per kind is larger than the effects being measured, so the CPU
-hallucination numbers do not support conclusions in either direction.
+buys.
+
+The 300-question chat evaluations were too noisy to compare architectures.
+Re-evaluated on 1,500 new questions (300 per kind; 95% intervals;
+`experiments/chat_eval_large.py`):
+
+| | GPT | Glassbox-2.1 | Glassbox-2.2 |
+|---|---|---|---|
+| hallucination, unstated facts | 75% [70-80] | 76% [71-80] | 67% [62-72] |
+| hallucination, made-up names | **4% [2-6]** | 35% [30-41] | 10% [7-14] |
+| over-refusal | 13% | 13% | 16% |
+| fact given in the message, answered | **16%** | 4% | 3% |
+
+At CPU scale the glass-box models have no hallucination advantage. Glassbox-2.2
+is slightly lower on unstated facts, but the intervals nearly touch. Both
+glass-box models are clearly worse on made-up names and at using facts given
+in the message. The 2.1/2.2 gap on made-up names (35% vs 10%) is real: the
+gate's gradient changes behaviour, not just language.
 
 **Selective answering** (`experiments/selective_answering.py`). A reply is
 withheld when the model's own signal falls below a threshold. The threshold
