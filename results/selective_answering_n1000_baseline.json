@@ -1,0 +1,64 @@
+{
+ "baseline": {
+  "name": "GPT",
+  "budget": 0.267,
+  "no_rule": {
+   "hallucination": 0.72,
+   "hallucination_made_up": 0.06,
+   "over_refusal": 0.175,
+   "answered_right": 0.1,
+   "right": 0.304
+  },
+  "msp": {
+   "threshold": 0.6520308926701546,
+   "calibration": {
+    "hallucination": 0.68,
+    "hallucination_made_up": 0.03,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.095,
+    "right": 0.315
+   },
+   "test": {
+    "hallucination": 0.665,
+    "hallucination_made_up": 0.045,
+    "over_refusal": 0.275,
+    "answered_right": 0.09166666666666666,
+    "right": 0.313
+   }
+  },
+  "neg_nll": {
+   "threshold": -0.7988874777244442,
+   "calibration": {
+    "hallucination": 0.7,
+    "hallucination_made_up": 0.025,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.1,
+    "right": 0.315
+   },
+   "test": {
+    "hallucination": 0.705,
+    "hallucination_made_up": 0.045,
+    "over_refusal": 0.27666666666666667,
+    "answered_right": 0.09666666666666666,
+    "right": 0.308
+   }
+  },
+  "probe": {
+   "threshold": -4.89118766784668,
+   "calibration": {
+    "hallucination": 0.555,
+    "hallucination_made_up": 0.06,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.095,
+    "right": 0.334
+   },
+   "test": {
+    "hallucination": 0.53,
+    "hallucination_made_up": 0.055,
+    "over_refusal": 0.31333333333333335,
+    "answered_right": 0.085,
+    "right": 0.334
+   }
+  }
+ }
+}

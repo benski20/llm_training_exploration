@@ -460,7 +460,19 @@ either model:
 | GPT, no rule / post-hoc probe | 70% / 60% | 5% / 5% | 17% / 28% |
 | Glassbox-2.1, no rule / built-in k_min | 80% / 70% | 23% / 13% | 18% / 36% |
 
-At 8M parameters the glass-box models answer about 1% of the answerable
+With Glassbox-2.3, which knows more, on 1,000 questions per split and with
+each model's best signal:
+
+| | hallucination (unstated) | made-up names | over-refusal | answerable, right | all right |
+|---|---|---|---|---|---|
+| GPT + post-hoc probe | **53%** | 5.5% | 31% | 8.5% | 33.4% |
+| Glassbox-2.3 + reply NLL | 61.5% | 5.5% | 28.5% | **13.3%** | 34.6% |
+
+Overall correctness is a tie. The GPT's probe cuts hallucination further,
+and the glass-box model answers more answerable questions. A first run on
+300 questions had shown Glassbox-2.3 ahead on every column, which was noise.
+
+At 8M parameters Glassbox-2.1 answered about 1% of the answerable
 questions (the GPT 11%), so a signal has little real knowledge to separate
 from guessing. A high AUROC does not change that. This question needs models
 that know things. That is the Kaggle run: Glassbox-2 (with the fixed gate)

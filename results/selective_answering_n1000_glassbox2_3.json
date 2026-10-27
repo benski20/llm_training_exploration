@@ -1,0 +1,81 @@
+{
+ "glassbox2_3": {
+  "name": "Glassbox-2.3",
+  "budget": 0.267,
+  "no_rule": {
+   "hallucination": 0.685,
+   "hallucination_made_up": 0.115,
+   "over_refusal": 0.15,
+   "answered_right": 0.14166666666666666,
+   "right": 0.325
+  },
+  "msp": {
+   "threshold": 0.7084435125192007,
+   "calibration": {
+    "hallucination": 0.6,
+    "hallucination_made_up": 0.04,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.15333333333333332,
+    "right": 0.364
+   },
+   "test": {
+    "hallucination": 0.63,
+    "hallucination_made_up": 0.06,
+    "over_refusal": 0.2783333333333333,
+    "answered_right": 0.12833333333333333,
+    "right": 0.339
+   }
+  },
+  "neg_nll": {
+   "threshold": -0.5729769656445569,
+   "calibration": {
+    "hallucination": 0.585,
+    "hallucination_made_up": 0.035,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.16,
+    "right": 0.372
+   },
+   "test": {
+    "hallucination": 0.615,
+    "hallucination_made_up": 0.055,
+    "over_refusal": 0.285,
+    "answered_right": 0.13333333333333333,
+    "right": 0.346
+   }
+  },
+  "k_min": {
+   "threshold": -0.9329368472099304,
+   "calibration": {
+    "hallucination": 0.615,
+    "hallucination_made_up": 0.06,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.15333333333333332,
+    "right": 0.357
+   },
+   "test": {
+    "hallucination": 0.61,
+    "hallucination_made_up": 0.095,
+    "over_refusal": 0.30333333333333334,
+    "answered_right": 0.12333333333333334,
+    "right": 0.333
+   }
+  },
+  "probe": {
+   "threshold": -3.5946316719055176,
+   "calibration": {
+    "hallucination": 0.525,
+    "hallucination_made_up": 0.09,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.15,
+    "right": 0.367
+   },
+   "test": {
+    "hallucination": 0.59,
+    "hallucination_made_up": 0.11,
+    "over_refusal": 0.31,
+    "answered_right": 0.11666666666666667,
+    "right": 0.33
+   }
+  }
+ }
+}
