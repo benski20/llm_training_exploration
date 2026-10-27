@@ -290,13 +290,25 @@
 {
 "run": "kaggle-distill-train",
 "experiment": "kaggle",
-"title": "Kaggle kernel 2: Glassbox-3 vs GPT students",
+"title": "Kaggle kernel 2: Glassbox-2 vs GPT students",
 "model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (06:37:59 UTC check)"
+"note": "students trained from scratch on the teacher data (06:56:07 UTC check)"
+},
+{
+"run": "kaggle-distill-train-add",
+"experiment": "kaggle",
+"title": "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (06:54:03 UTC check)"
 }
 ]
