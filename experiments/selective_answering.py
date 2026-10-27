@@ -28,6 +28,8 @@ MODELS = {
     "baseline": ("GPT", lambda V: C.Base(V, 256), f"{DATA}/baseline.baseline.pt"),
     "glassbox2_1": ("Glassbox-2.1", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard"),
                     "results/glassbox2_1_chat/glassbox2.glassbox2.pt"),
+    "glassbox2_3": ("Glassbox-2.3", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st", "add"),
+                    "results/glassbox2_3_chat/glassbox2.glassbox2.pt"),
     "glassbox3": ("Glassbox-3", lambda V: C.Glass3(V, 256, 0.002, 5, 32, 0),
                   "results/glassbox3_chat/glassbox3.glassbox3.pt"),
 }

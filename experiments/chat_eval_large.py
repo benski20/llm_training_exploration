@@ -20,8 +20,7 @@ from tokenizers import Tokenizer  # noqa: E402
 
 MODELS = dict(MODELS, glassbox2_2=("Glassbox-2.2", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st"),
                                    "results/glassbox2_2_chat/glassbox2.glassbox2.pt"),
-              glassbox2_3=("Glassbox-2.3", lambda V: C.Glass2(V, 256, 0.002, 5, 32, 0, "hard_st", "add"),
-                           "results/glassbox2_3_chat/glassbox2.glassbox2.pt"))
+              )
 
 
 def rate(xs):
