@@ -180,6 +180,26 @@
 "auroc_k": 0.7797763451184903
 },
 {
+"model": "baseline-gpt-s1",
+"name": "GPT seed 1",
+"split": "Alpaca",
+"bits_per_token": 4.9797605327641445,
+"top1_acc": 0.34332176137401793,
+"auroc_msp": 0.8240203684930505,
+"auroc_probe": 0.7091911675422612,
+"auroc_k": null
+},
+{
+"model": "baseline-gpt-s1",
+"name": "GPT seed 1",
+"split": "WikiText-2",
+"bits_per_token": 5.307502953891602,
+"top1_acc": 0.3217655877943381,
+"auroc_msp": 0.8407780727744694,
+"auroc_probe": 0.7245394595919709,
+"auroc_k": null
+},
+{
 "model": "baseline-chat2",
 "name": "GPT v2",
 "split": "Alpaca",
