@@ -1,12 +1,13 @@
 """Kernel 2 of the glass-box distillation: train students from scratch on the teacher's data.
 
 Two students on the same data and token budget:
-  glassbox : vt.glassbox.GlassBoxLM with the general-purpose design: evidence
-             stream, small MLP core, an internal memory layer behind a hard gate
-             (exactly 0 when unused, so such tokens are provably made without
-             stored knowledge), and a per-token self-knowledge variable k that
-             sets the sharpness of each next-token distribution;
-  baseline : vt.lm.GPT of similar size (ALiBi).
+  glassbox : vt.glassbox2.Glassbox2: exactly sparse feature layers (the features
+             are the neurons), exact attribution by construction, an internal
+             memory layer behind a hard gate (exactly 0 when unused, so such
+             tokens provably used no stored knowledge) whose slots record the
+             training document that wrote them, and a per-token self-knowledge
+             variable k that sets the sharpness of each next-token distribution;
+  baseline : vt.lm.GPT with about the same parameters outside the memory (ALiBi).
 Data: the teacher's replies (kernel 1) in chat form, plus WikiText-103.
 
 Evaluation on held-out data: bits per token and top-1 agreement with the
@@ -38,7 +39,7 @@ import torch.nn.functional as F
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "vtpkg"))                    # Kaggle: bundled modules
 sys.path.insert(0, os.path.join(HERE, "..", ".."))                 # repository checkout
-from vt.glassbox import GBConfig, GlassBoxLM, memory_free_positions  # noqa: E402
+from vt.glassbox2 import G2Config, Glassbox2  # noqa: E402
 from vt.lm import GPT, GPTConfig  # noqa: E402
 
 ABSTAIN = ("don't know", "not sure", "no information", "do not know")
@@ -59,8 +60,17 @@ def chat_text(prompt, reply):
 
 # ---------------------------------------------------------------- data
 
+def find_data(root):
+    """Kernel outputs are mounted somewhere under /kaggle/input: find the directory with train.jsonl."""
+    for dp, _, fs in os.walk(root):
+        if "train.jsonl" in fs and "tokenizer.json" in fs:
+            return dp
+    raise SystemExit(f"no train.jsonl + tokenizer.json under {root}")
+
+
 def load(a):
     from tokenizers import Tokenizer
+    a.data = find_data(a.data)
     tok = Tokenizer.from_file(os.path.join(a.data, "tokenizer.json"))
     train = [json.loads(l) for l in open(os.path.join(a.data, "train.jsonl"))]
     ev = [json.loads(l) for l in open(os.path.join(a.data, "eval.jsonl"))]
@@ -71,21 +81,23 @@ def load(a):
         from datasets import load_dataset
         w = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train")
         wiki = [x["text"] for x in w if len(x["text"]) > 80]
-    def stream(docs):
-        ids = []
-        for enc in tok.encode_batch(docs):
+    def stream(docs, offset):
+        ids, doc = [], []
+        for n, enc in enumerate(tok.encode_batch(docs)):
             ids += enc.ids + [0]
-        return torch.tensor(ids, dtype=torch.long)
-    return tok, stream(chat_docs), stream(wiki), ev
+            doc += [offset + n] * (len(enc.ids) + 1)
+        return torch.tensor(ids, dtype=torch.long), torch.tensor(doc, dtype=torch.long)
+    return tok, stream(chat_docs, 0), stream(wiki, 10_000_000), ev     # wiki documents: ids >= 1e7
 
 
 def batch(chat, wiki, bs, block, g, p_chat=0.6):
-    xs, ys = [], []
+    """Random windows; also the training-document id of every input token."""
+    xs, ys, ds = [], [], []
     for _ in range(bs):
-        src = chat if torch.rand(1, generator=g).item() < p_chat else wiki
+        src, doc = chat if torch.rand(1, generator=g).item() < p_chat else wiki
         i = int(torch.randint(len(src) - block - 1, (1,), generator=g))
-        xs.append(src[i:i + block]); ys.append(src[i + 1:i + block + 1])
-    return torch.stack(xs), torch.stack(ys)
+        xs.append(src[i:i + block]); ys.append(src[i + 1:i + block + 1]); ds.append(doc[i:i + block])
+    return torch.stack(xs), torch.stack(ys), torch.stack(ds)
 
 
 # ---------------------------------------------------------------- models
@@ -93,10 +105,9 @@ def batch(chat, wiki, bs, block, g, p_chat=0.6):
 def make(kind, a, V):
     if kind == "glassbox":
         cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
-                   mem_layer=a.layers // 2, mem_keys=a.mem_keys, mem_topk=min(16, a.mem_keys), fixed_embed=False,
-                   mlp_ratio=a.glass_mlp, track_evidence=False, sharpness=True, mem_value_init=0.0,
-                   mem_gate="hard")
-        return GlassBoxLM(GBConfig(**cfg)), cfg
+                   n_features=a.n_features, k_active=a.k_active, mem_layer=a.layers // 2, mem_keys=a.mem_keys,
+                   mem_topk=min(16, a.mem_keys))
+        return Glassbox2(G2Config(**cfg)), cfg
     cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
                mlp_ratio=a.base_mlp, pos_encoding="alibi")
     return GPT(GPTConfig(**cfg)), cfg
@@ -105,8 +116,8 @@ def make(kind, a, V):
 def forward(kind, m, x):
     """logits, k (or None), hidden states per block."""
     if kind == "glassbox":
-        logits, k, _, hs = m(x, evidence=False)
-        return logits, k, hs
+        logits, k = m(x)
+        return logits, k, m.trace["hs"]
     hs = []
     hooks = [b.register_forward_hook(lambda mod, i, o: hs.append(o)) for b in m.blocks]
     logits, _ = m(x)
@@ -139,7 +150,7 @@ def train(kind, a, V, chat, wiki, device, log_fn):
         for gr in opt.param_groups:
             gr["lr"] = lr
         m.train()
-        x, y = batch(chat, wiki, a.batch, a.block, g)
+        x, y, docs = batch(chat, wiki, a.batch, a.block, g)
         x, y = x.to(device), y.to(device)
         with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device.startswith("cuda")):
             logits, k, _ = forward(kind, m, x)
@@ -149,8 +160,8 @@ def train(kind, a, V, chat, wiki, device, log_fn):
             if kind == "glassbox":
                 right = (logits.argmax(-1) == y).float()
                 aux = F.binary_cross_entropy_with_logits(k.float(), right)
-                gate = m.mem.trace["gate"].float()
-                loss = lm + 0.2 * aux + a.hard_gate * gate.mean()
+                gate = m.trace["mem"]["gate"].float()
+                loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
                 info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4)}
         if not torch.isfinite(loss):
             raise SystemExit(f"non-finite loss at step {step}")
@@ -159,6 +170,8 @@ def train(kind, a, V, chat, wiki, device, log_fn):
         scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         scaler.step(opt); scaler.update()
+        if kind == "glassbox":
+            m.record_writers(docs.to(device))             # which training document wrote each memory slot
         step += 1
         if step % 200 == 0:
             log_fn(phase="train", kind=kind, step=step, total=total, lm=round(lm.item(), 4),
@@ -200,7 +213,7 @@ def token_eval(kind, m, tok, items, device, block):
         x, y = torch.tensor([ids[:-1]], device=device), torch.tensor(ids[1:], device=device)
         logits, k, hs = forward(kind, m, x)
         lp = F.log_softmax(logits[0].float(), -1)
-        free = memory_free_positions(m, x)[0] if kind == "glassbox" else None
+        free = m.memory_free()[0] if kind == "glassbox" else None
         for t in range(P - 1, len(ids) - 1):
             rows.append({"ok": int(lp[t].argmax() == y[t]), "nll": -float(lp[t, y[t]]),
                          "msp": float(lp[t].max().exp()), "k": float(k[0, t]) if k is not None else None,
@@ -244,7 +257,8 @@ def reply(kind, m, tok, prompt, device, block, max_new=48):
     free = None
     if kind == "glassbox" and out:
         x = torch.tensor([ids + out], device=device)
-        free = bool(memory_free_positions(m, x)[0, P - 1:P - 1 + len(out)].all())
+        m(x)
+        free = bool(m.memory_free()[0, P - 1:P - 1 + len(out)].all())
     return tok.decode(out).strip(), free, (ids + out), P
 
 
@@ -255,10 +269,10 @@ def soundness(m, seqs, device):
     saved = m.mem.values.weight.detach().clone()
     for s in seqs:
         x = torch.tensor([s], device=device)
-        free = memory_free_positions(m, x)
-        a_, _, _, _ = m(x, evidence=False)
+        a_, _ = m(x)
+        free = m.memory_free()
         m.mem.values.weight.copy_(torch.randn_like(saved) * 10)
-        b_, _, _, _ = m(x, evidence=False)
+        b_, _ = m(x)
         m.mem.values.weight.copy_(saved)
         bad += int(not torch.equal(a_[free], b_[free]))
     return bad
@@ -368,6 +382,24 @@ def qa_eval(kind, m, tok, items, device, block):
     return out
 
 
+@torch.no_grad()
+def inspect(m, tok, items, device):
+    """On the trained model: attribution sums exactly to the logits, features are exactly
+    sparse, and the share of memory slots that have a recorded training-document writer."""
+    err, sparse_ok = 0.0, True
+    for it in items:
+        ids = tok.encode(f"User: {it['prompt']}\nAssistant: {it['response']}").ids[:48]
+        x = torch.tensor([ids], device=device)
+        m(x)
+        for t in (len(ids) // 2, len(ids) - 1):
+            tok_id = int(m.trace["raw_logits"][0, t].argmax())
+            parts = m.explain(x, t, tok_id)
+            err = max(err, abs(sum(parts.values()) - float(m.trace["raw_logits"][0, t, tok_id])))
+        sparse_ok &= all(int((d["acts"] != 0).sum(-1).max()) <= m.config.k_active for d in m.trace["feat"])
+    return {"attribution_max_abs_error": err, "features_exactly_sparse": sparse_ok,
+            "memory_slots_with_writer": float((m.writer_doc >= 0).float().mean())}
+
+
 def save_package(m, cfg, tok_path, out):
     """vt-glassbox-chat/1 package: weights.pt, config.json, tokenizer.json, manifest.json."""
     os.makedirs(out, exist_ok=True)
@@ -379,7 +411,7 @@ def save_package(m, cfg, tok_path, out):
     for n, b in blobs.items():
         open(os.path.join(out, n), "wb").write(b)
     files = {n: sha(b) for n, b in blobs.items()}
-    json.dump({"format": "vt-glassbox-chat/1", "files": files,
+    json.dump({"format": "vt-glassbox2-chat/1", "files": files,
                "package_sha256": sha("".join(files[n] for n in ("weights.pt", "config.json", "tokenizer.json")).encode())},
               open(os.path.join(out, "manifest.json"), "w"), indent=1)
 
@@ -394,6 +426,9 @@ def run(kind, a, device):
            "params": sum(p.numel() for p in m.parameters() if p.requires_grad),
            "tokens": token_metrics(token_eval(kind, m, tok, gen_eval, device, a.block))}
     log(phase="eval_tokens", kind=kind, **res["tokens"])
+    if kind == "glassbox":                               # inspectability checks on the trained model
+        res["inspect"] = inspect(m, tok, gen_eval[:5], device)
+        log(phase="inspect", **res["inspect"])
     res["qa"] = qa_eval(kind, m, tok, ev, device, a.block)
     log(phase="eval_qa", kind=kind, **{k: ({kk: vv for kk, vv in v.items() if kk != "samples"}
                                             if isinstance(v, dict) else v) for k, v in res["qa"].items()})
@@ -412,12 +447,13 @@ def main():
     ap.add_argument("--models", default="glassbox,baseline")
     ap.add_argument("--hours", type=float, default=3.5, help="training time budget per student")
     ap.add_argument("--layers", type=int, default=12)
-    ap.add_argument("--heads", type=int, default=8)
-    ap.add_argument("--embd", type=int, default=512)
-    ap.add_argument("--glass-mlp", type=int, default=2)
+    ap.add_argument("--heads", type=int, default=10)
+    ap.add_argument("--embd", type=int, default=640)
+    ap.add_argument("--n-features", type=int, default=4096)
+    ap.add_argument("--k-active", type=int, default=32)
     ap.add_argument("--base-mlp", type=int, default=6)
     ap.add_argument("--mem-keys", type=int, default=256)
-    ap.add_argument("--hard-gate", type=float, default=0.05)
+    ap.add_argument("--mem-l1", type=float, default=0.002, help="penalty on memory gate use")
     ap.add_argument("--block", type=int, default=512)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=6e-4)
@@ -426,6 +462,7 @@ def main():
     a = ap.parse_args()
     if a.smoke:
         a.hours, a.layers, a.heads, a.embd, a.mem_keys, a.block, a.batch, a.n_token_eval = 0.01, 2, 2, 32, 8, 64, 4, 4
+        a.n_features, a.k_active = 64, 4
     os.makedirs(a.out, exist_ok=True)
     kinds = a.models.split(",")
     n_gpu = torch.cuda.device_count()

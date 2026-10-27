@@ -191,7 +191,7 @@ class Glassbox2(nn.Module):
         names = [f"token@{j}" for j in range(T)] + [f"memory@{j}" for j in range(T)] + \
                 [f"bias@{i}" for i in range(self.config.n_layer)]
         S = len(names)
-        comp = torch.zeros(S, T, C)
+        comp = torch.zeros(S, T, C, device=idx.device)
         comp[torch.arange(T), torch.arange(T)] = self.embed(idx[0])     # each token's embedding
         for i in range(self.config.n_layer):
             comp = self.attn[i].apply(comp, {k: v.expand(S, *v.shape[1:]) for k, v in tr["attn"][i].items()})
