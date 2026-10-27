@@ -157,8 +157,8 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
             "results/kaggle/distill_g24.log", "results/kaggle/glassbox-distill-g24/student/glassbox.json",
             "146M Glassbox-2.4; compared with the final run's GPT student"),
            ("kaggle-qwen-glassbox", "Kaggle: Qwen2.5-0.5B converted to a glass-box model",
-            "results/kaggle/qwen-glassbox3.log", "results/kaggle/qwen-glassbox3/results.json",
-            "MLPs -> exactly sparse feature layers; do its internals predict answer correctness?"),
+            "results/kaggle/qwen-glassbox3.log", "results/kaggle/qwen-glassbox3/qwen_glassbox/results.json",
+            "MLPs -> exactly sparse feature layers; kept exactness, lost two thirds of its TriviaQA accuracy"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
@@ -182,6 +182,31 @@ def distill_rows():
         rows.append({"run": rid, "experiment": "kaggle", "title": title, "model": "kaggle", "status": status,
                      "step": None, "total_steps": None, "progress": 1.0 if status == "done" else None,
                      "last_loss": None, "note": note + (f" ({last.split()[0]} UTC check)" if last else "")})
+    return rows
+
+
+# id, title, log (JSON lines with "done"), result file, total, script, note
+LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B vs answer correctness",
+          "results/qwen_correctness.log", "results/qwen_correctness.json", 1000, "experiments/qwen_correctness.py",
+          "SiLU gates fixed, no conversion; do attribution statistics beat the 0.759 hidden-state probe?")]
+
+
+def local_rows():
+    rows = []
+    for rid, title, log, res, total, script, note in LOCAL:
+        lp = os.path.join(ROOT, log)
+        if not os.path.exists(lp):
+            continue
+        done = [json.loads(ln)["done"] for ln in open(lp) if ln.startswith("{") and '"done"' in ln]
+        if os.path.exists(os.path.join(ROOT, res)):
+            status = "done"
+        elif running(script):
+            status = "running"
+        else:
+            status = "stopped"
+        step = total if status == "done" else (done[-1] if done else 0)
+        rows.append({"run": rid, "experiment": "qwen", "title": title, "model": "qwen", "status": status,
+                     "step": step, "total_steps": total, "progress": step / total, "last_loss": None, "note": note})
     return rows
 
 
@@ -252,7 +277,7 @@ def main():
     krun, kaggle = kaggle_rows()
     if krun:
         runs.append(krun)
-    runs += distill_rows()
+    runs += distill_rows() + local_rows()
     for name, rows in (("runs", runs), ("curves", curves), ("behaviour", behaviour), ("detection", detection),
                        ("chat", chat), ("kaggle", kaggle)):
         json.dump(rows, open(os.path.join(out, f"{name}.json"), "w"), indent=0)

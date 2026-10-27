@@ -364,12 +364,12 @@
 "experiment": "kaggle",
 "title": "Kaggle: Qwen2.5-0.5B converted to a glass-box model",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (15:56:56 UTC check)"
+"note": "MLPs -> exactly sparse feature layers; kept exactness, lost two thirds of its TriviaQA accuracy (16:15:04 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -382,5 +382,17 @@
 "progress": 1.0,
 "last_loss": null,
 "note": "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student (11:04:58 UTC check)"
+},
+{
+"run": "qwen-correctness",
+"experiment": "qwen",
+"title": "CPU: exact attribution on unmodified Qwen2.5-0.5B vs answer correctness",
+"model": "qwen",
+"status": "running",
+"step": 50,
+"total_steps": 1000,
+"progress": 0.05,
+"last_loss": null,
+"note": "SiLU gates fixed, no conversion; do attribution statistics beat the 0.759 hidden-state probe?"
 }
 ]
