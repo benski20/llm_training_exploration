@@ -384,6 +384,18 @@
 "note": "stack AUROC 0.859 (1.5B) / 0.807 (0.5B) vs softmax 0.72 / 0.69; NQ-open 0.78 unseen (22:16:22 UTC check)"
 },
 {
+"run": "kaggle-qwen-correctness-3b",
+"experiment": "kaggle",
+"title": "Kaggle: correctness estimator for Qwen2.5-3B",
+"model": "kaggle",
+"status": "done",
+"step": null,
+"total_steps": null,
+"progress": 1.0,
+"last_loss": null,
+"note": "failed after 12 min: out of GPU memory in float32 (12.4 GB of 14.6); fixed by float16 + sdpa (23:14:08 UTC check)"
+},
+{
 "run": "kaggle-distill-train-add",
 "experiment": "kaggle",
 "title": "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
@@ -425,9 +437,9 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 250,
+"step": 475,
 "total_steps": 600,
-"progress": 0.4166666666666667,
+"progress": 0.7916666666666666,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 }
