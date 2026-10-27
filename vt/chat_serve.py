@@ -240,11 +240,63 @@ HF_SYSTEM = "You are a helpful assistant. Answer briefly. If you are not sure, s
 def export_hf_package(model_dir, out=None):
     """Pin a Hugging Face model directory that holds k_head.pt (the Kaggle retrofit's output):
     writes manifest.json with the sha256 of every file."""
-    out = out or model_dir
+    if out not in (None, model_dir):
+        raise PackageError("the manifest is written into the model directory")
+    return _hash_dir(model_dir, ("config.json", "k_head.pt"), "vt-hf-chat/1")
+
+
+def export_correctness_package(model_dir, heads, variant="all", threshold=0.5):
+    """Pin a Hugging Face model directory plus a trained correctness head (vt/correctness.py,
+    kaggle/correctness/run.py writes <model>_heads.pt): copies the head in as correctness_heads.pt
+    and writes manifest.json with the sha256 of every file, the head variant and the answer threshold."""
+    import shutil
+    shutil.copyfile(heads, os.path.join(model_dir, "correctness_heads.pt"))
+    return _hash_dir(model_dir, ("config.json", "correctness_heads.pt"), "vt-correctness-chat/1",
+                     {"variant": variant, "threshold": float(threshold)})
+
+
+class CorrectnessResponder:
+    """A pretrained chat model with a trained correctness estimator (vt/correctness.py). Each reply
+    carries P(correct) and its evidence (entity token, its probability, the probe's score, sample
+    consistency and the question token that drives the answer, as the head uses them). Below the
+    threshold the answer is withheld: the reply says so and gives the best guess separately.
+    Single-turn: the estimator was trained on standalone questions, so history is not used."""
+
+    def __init__(self, path, max_bytes=8 << 30):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from .correctness import CorrectnessHead
+        with _VerifiedStage(path, max_bytes) as st:
+            dev = "cuda" if torch.cuda.is_available() else "cpu"
+            self.tok = AutoTokenizer.from_pretrained(st.dir)
+            self.model = AutoModelForCausalLM.from_pretrained(                  # float16 overflows Qwen2.5
+                st.dir, torch_dtype=torch.float32, attn_implementation="eager").to(dev).eval()
+            heads = torch.load(os.path.join(st.dir, "correctness_heads.pt"), map_location="cpu", weights_only=True)
+            self.manifest = st.manifest
+        if self.manifest.get("variant") not in heads:
+            raise PackageError(f"head variant {self.manifest.get('variant')!r} not in the package")
+        self.head = CorrectnessHead.from_state(heads[self.manifest["variant"]])
+        self.threshold = self.manifest.get("threshold", 0.5)
+        self.signals = ["p_correct"] + (["consistency"] if self.head.use_consistency else []) + \
+            (["grounding"] if self.head.use_grounding else [])
+        if self.tok.pad_token is None:
+            self.tok.pad_token = self.tok.eos_token
+
+    def reply(self, message, history=(), max_new_tokens=64, threshold=None):
+        r = self.head.answer(self.model, self.tok, message)
+        th = self.threshold if threshold is None else threshold
+        withheld = r["p_correct"] < th
+        text = (f"I'm not sure. My best guess is: {r['reply']}" if withheld else r["reply"])
+        return {"text": text, "answer": r["reply"], "p_correct": round(r["p_correct"], 4), "threshold": th,
+                "answer_withheld": withheld, "abstained": withheld,
+                "evidence": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in r["evidence"].items()},
+                "tokens": [], "low_confidence_spans": []}
+
+
+def _hash_dir(model_dir, required, fmt, extra=None):
     files = sorted(f for f in os.listdir(model_dir) if os.path.isfile(os.path.join(model_dir, f))
                    and f != "manifest.json")
-    if "k_head.pt" not in files or "config.json" not in files:
-        raise PackageError("a model directory with config.json and k_head.pt is required")
+    if not set(required) <= set(files):
+        raise PackageError(f"a model directory with {', '.join(required)} is required")
     hashes = {}
     for f in files:
         h = hashlib.sha256()
@@ -252,11 +304,51 @@ def export_hf_package(model_dir, out=None):
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
         hashes[f] = h.hexdigest()
-    manifest = {"format": "vt-hf-chat/1", "files": hashes,
+    manifest = {"format": fmt, "files": hashes, **(extra or {}),
                 "package_sha256": _sha("".join(hashes[f] for f in files).encode())}
-    with open(os.path.join(out, "manifest.json"), "w") as fh:
+    with open(os.path.join(model_dir, "manifest.json"), "w") as fh:
         json.dump(manifest, fh, indent=1)
     return manifest
+
+
+class _VerifiedStage:
+    """Copy every file a manifest lists into a fresh directory, checking each one's sha256 on the
+    bytes actually copied; loaders then read only checked bytes. Removed on exit."""
+
+    def __init__(self, path, max_bytes):
+        self.path, self.max_bytes = path, max_bytes
+
+    def __enter__(self):
+        import tempfile
+        try:
+            self.manifest = json.load(open(os.path.join(self.path, "manifest.json")))
+            want = self.manifest["files"]
+        except (OSError, ValueError, KeyError) as e:
+            raise PackageError(f"unreadable manifest: {e}") from e
+        self.dir = tempfile.mkdtemp(prefix="vt-chat-")
+        try:
+            for f, digest in want.items():
+                if os.path.basename(f) != f:
+                    raise PackageError(f"bad file name in manifest: {f!r}")
+                h = hashlib.sha256()
+                with open(os.path.join(self.path, f), "rb") as src, open(os.path.join(self.dir, f), "wb") as dst:
+                    n = 0
+                    for chunk in iter(lambda: src.read(1 << 20), b""):
+                        n += len(chunk)
+                        if n > self.max_bytes:
+                            raise PackageError(f"{f} is larger than {self.max_bytes} bytes")
+                        h.update(chunk)
+                        dst.write(chunk)
+                if h.hexdigest() != digest:
+                    raise PackageError(f"{f} does not match the manifest")
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
 
 
 class HFResponder:
@@ -266,37 +358,14 @@ class HFResponder:
     not report from_prompt / from_output / from_memory."""
 
     def __init__(self, path, max_bytes=8 << 30):
-        import shutil
-        import tempfile
         from transformers import AutoModelForCausalLM, AutoTokenizer
-        try:
-            manifest = json.load(open(os.path.join(path, "manifest.json")))
-            want = manifest["files"]
-        except (OSError, ValueError, KeyError) as e:
-            raise PackageError(f"unreadable manifest: {e}") from e
-        stage = tempfile.mkdtemp(prefix="vt-chat-")               # load only bytes that were checked
-        try:
-            for f, digest in want.items():
-                if os.path.basename(f) != f:
-                    raise PackageError(f"bad file name in manifest: {f!r}")
-                h = hashlib.sha256()
-                with open(os.path.join(path, f), "rb") as src, open(os.path.join(stage, f), "wb") as dst:
-                    n = 0
-                    for chunk in iter(lambda: src.read(1 << 20), b""):
-                        n += len(chunk)
-                        if n > max_bytes:
-                            raise PackageError(f"{f} is larger than {max_bytes} bytes")
-                        h.update(chunk)
-                        dst.write(chunk)
-                if h.hexdigest() != digest:
-                    raise PackageError(f"{f} does not match the manifest")
+        with _VerifiedStage(path, max_bytes) as st:
             dev = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tok = AutoTokenizer.from_pretrained(stage)
+            self.tok = AutoTokenizer.from_pretrained(st.dir)
             self.model = AutoModelForCausalLM.from_pretrained(
-                stage, torch_dtype=torch.float16 if dev == "cuda" else torch.float32).to(dev).eval()
-            k = torch.load(os.path.join(stage, "k_head.pt"), map_location="cpu", weights_only=True)
-        finally:
-            shutil.rmtree(stage, ignore_errors=True)
+                st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32).to(dev).eval()
+            k = torch.load(os.path.join(st.dir, "k_head.pt"), map_location="cpu", weights_only=True)
+            manifest = st.manifest
         self.k_w, self.k_b = k["lin.weight"].float().to(dev), k["lin.bias"].float().to(dev)
         self.device, self.manifest = dev, manifest
         self.signals = ["confidence", "token_probability"]
@@ -352,6 +421,8 @@ def load_responder(path):
         raise PackageError(f"unreadable manifest: {e}") from e
     if fmt == "vt-hf-chat/1":
         return HFResponder(path)
+    if fmt == "vt-correctness-chat/1":
+        return CorrectnessResponder(path)
     if fmt == "vt-glassbox-chat/1":
         return GlassboxResponder(*load_package(path))
     if fmt in ("vt-glassbox2-chat/1", "vt-glassbox3-chat/1"):

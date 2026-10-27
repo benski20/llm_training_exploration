@@ -137,6 +137,13 @@ class Probe:
     def state_dict(self):
         return {"mu": self.mu.cpu(), "sd": self.sd.cpu(), "w": self.w.cpu(), "b": self.b.cpu(), "l2": self.l2}
 
+    @classmethod
+    def from_state(cls, sd, device="cpu"):
+        p = cls(device)
+        p.mu, p.sd, p.w, p.b = (sd[k].float().to(device) for k in ("mu", "sd", "w", "b"))
+        p.l2 = sd["l2"]
+        return p
+
 
 # ---------------------------------------------------------------------------------------- model I/O
 def chat(tok, question, system=SYSTEM):
@@ -265,6 +272,15 @@ class CorrectnessHead:
     def __init__(self, layers, probe, stacker, use_consistency, use_grounding, k_samples=6):
         self.layers, self.probe, self.stacker = layers, probe, stacker
         self.use_consistency, self.use_grounding, self.k = use_consistency, use_grounding, k_samples
+
+    def state_dict(self):
+        return {"layers": self.layers, "probe": self.probe.state_dict(), "stacker": self.stacker.state_dict(),
+                "use_consistency": self.use_consistency, "use_grounding": self.use_grounding, "k": self.k}
+
+    @classmethod
+    def from_state(cls, sd):
+        return cls(sd["layers"], Probe.from_state(sd["probe"]), Probe.from_state(sd["stacker"]),
+                   sd["use_consistency"], sd["use_grounding"], sd.get("k", 6))
 
     @torch.no_grad()
     def answer(self, model, tok, question):

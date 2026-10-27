@@ -129,3 +129,35 @@ def test_glassbox3_package_reports_certificates_uncertainty_and_unsure(package, 
         assert 0 <= t["confidence"] <= 1 and t["u"] >= 0 and len(t["features"]) == 3
         assert t["memory_free"] in (True, False)
     assert r["certified_memory_free"] == all(t["memory_free"] for t in r["tokens"])
+
+
+def test_correctness_backend_withholds_below_threshold(tmp_path):
+    """A pinned HF model plus a correctness head: reply carries P(correct) and evidence, and is
+    withheld below the package's threshold; a tampered head is refused."""
+    pytest.importorskip("transformers")
+    import numpy as np
+    from transformers import AutoTokenizer, Qwen2Config, Qwen2ForCausalLM
+    from vt.chat_serve import CorrectnessResponder, export_correctness_package, load_responder
+    from vt.correctness import CorrectnessHead, Probe
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2))
+    d = tmp_path / "model"
+    m.save_pretrained(d); tok.save_pretrained(d)
+    rng = np.random.default_rng(0)
+    probe = Probe().fit(rng.normal(size=(60, 32)).astype(np.float32), rng.integers(0, 2, 60).astype(np.float32))
+    stack = Probe().fit(rng.normal(size=(60, 5)).astype(np.float32), rng.integers(0, 2, 60).astype(np.float32))
+    head = CorrectnessHead([1], probe, stack, use_consistency=False, use_grounding=False)
+    torch.save({"probe+output": head.state_dict()}, tmp_path / "heads.pt")
+    man = export_correctness_package(str(d), str(tmp_path / "heads.pt"), variant="probe+output", threshold=1.0)
+    r = load_responder(str(d))
+    assert isinstance(r, CorrectnessResponder) and r.manifest["package_sha256"] == man["package_sha256"]
+    out = r.reply("Who wrote Hamlet?")
+    assert 0 <= out["p_correct"] <= 1 and out["answer_withheld"] and out["text"].startswith("I'm not sure")
+    assert "probe_logit" in out["evidence"] and "entity_p" in out["evidence"]
+    assert not r.reply("Who wrote Hamlet?", threshold=0.0)["answer_withheld"]
+    with open(d / "correctness_heads.pt", "ab") as f:
+        f.write(b"x")
+    with pytest.raises(PackageError):
+        load_responder(str(d))

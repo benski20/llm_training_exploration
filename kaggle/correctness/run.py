@@ -154,9 +154,7 @@ def run_model(name, sets, a, device):
                               "top_question_token": r["top_question_token"],
                               "question_share": round(r["question_share"], 3)})
     R["seconds"] = round(time.time() - t0)
-    torch.save({k: {"layers": h.layers, "probe": h.probe.state_dict(), "stacker": h.stacker.state_dict(),
-                    "use_consistency": h.use_consistency, "use_grounding": h.use_grounding}
-                for k, h in heads.items()}, os.path.join(a.out, name.split("/")[-1] + "_heads.pt"))
+    torch.save({k: h.state_dict() for k, h in heads.items()}, os.path.join(a.out, name.split("/")[-1] + "_heads.pt"))
     del model
     torch.cuda.empty_cache() if device == "cuda" else None
     return R

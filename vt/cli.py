@@ -199,7 +199,12 @@ CHAT_V2_CONFIG = dict(vocab_size=4096, block_size=256, n_layer=6, n_head=4, n_em
 
 
 def cmd_chat_export(a):
-    from .chat_serve import export_hf_package, export_package
+    from .chat_serve import export_correctness_package, export_hf_package, export_package
+    if a.hf_dir and a.heads:                              # a Hugging Face model + correctness head
+        man = export_correctness_package(a.hf_dir, a.heads, a.variant, a.answer_threshold)
+        print(f"pinned {a.hf_dir} with correctness head {a.variant!r} "
+              f"(package sha256 {man['package_sha256'][:16]}...)")
+        return 0
     if a.hf_dir:                                          # a retrofitted Hugging Face model (kaggle/)
         man = export_hf_package(a.hf_dir)
         print(f"pinned {a.hf_dir} (package sha256 {man['package_sha256'][:16]}...)")
@@ -225,6 +230,9 @@ def cmd_chat(a):
         print(json.dumps(r, indent=1))
         return 0
     print(r["text"])
+    if "p_correct" in r:                                  # a correctness-head package
+        print(f"[P(correct) {r['p_correct']:.2f}; evidence: {json.dumps(r['evidence'])}]")
+        return 0
     flagged = ", ".join(repr(s["text"].strip()) for s in r["low_confidence_spans"]) or "none"
     print(f"[min confidence {r.get('min_confidence', 1):.2f}; low-confidence spans: {flagged}; "
           f"abstained: {r['abstained']}]")
@@ -451,6 +459,9 @@ def main(argv=None):
     p.add_argument("--ckpt"); p.add_argument("--tokenizer")
     p.add_argument("--out"); p.add_argument("--config", help="GBConfig JSON (default: chat v2)")
     p.add_argument("--hf-dir", help="instead: pin a Hugging Face model directory with k_head.pt")
+    p.add_argument("--heads", help="with --hf-dir: a correctness head file (kaggle/correctness: <model>_heads.pt)")
+    p.add_argument("--variant", default="all", help="which trained head to serve")
+    p.add_argument("--answer-threshold", type=float, default=0.5, help="withhold answers below this P(correct)")
     p.set_defaults(fn=cmd_chat_export)
     p = sub.add_parser("chat", help="one reply from a glass-box chat package, with its confidence report")
     p.add_argument("package"); p.add_argument("message")
