@@ -245,10 +245,10 @@
 "title": "Glassbox-2.3: additive residual stream",
 "model": "glassbox2",
 "status": "running",
-"step": 250,
+"step": 1750,
 "total_steps": 3000,
-"progress": 0.08366666666666667,
-"last_loss": 4.5746,
+"progress": 0.5836666666666667,
+"last_loss": 3.1249,
 "note": "2.2 with standard residual sums instead of convex mixing; attribution still exact"
 },
 {
@@ -297,6 +297,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (06:04:46 UTC check)"
+"note": "students trained from scratch on the teacher data (06:19:52 UTC check)"
 }
 ]
