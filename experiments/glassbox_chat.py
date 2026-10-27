@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 from interp_by_design import auroc, fit_probe  # noqa: E402
 from typed_wikitext import articles  # noqa: E402
-from vt.glassbox import GBConfig, GlassBoxLM  # noqa: E402
+from vt.glassbox import GBConfig, GlassBoxLM, memory_free_positions  # noqa: E402
 from vt.lm import GPT, GPTConfig  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -237,11 +237,12 @@ def train_tokenizer(docs, path, vocab=4096):
 # ---------------------------------------------------------------- models
 
 class Glass:
-    def __init__(self, V, block, mem_init=1.0):
+    def __init__(self, V, block, mem_init=1.0, hard_gate=0.0):
+        self.hard_gate = hard_gate
         self.m = GlassBoxLM(GBConfig(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
                                      mem_layer=3, mem_keys=128, mem_topk=8, fixed_embed=False,
                                      mlp_ratio=1, track_evidence=False, sharpness=True,
-                                     mem_value_init=mem_init))
+                                     mem_value_init=mem_init, mem_gate="hard" if hard_gate > 0 else "sigmoid"))
 
     def params(self):
         return [p for p in self.m.parameters() if p.requires_grad]
@@ -251,14 +252,25 @@ class Glass:
         lm = F.cross_entropy(logits.flatten(0, 1), y.flatten())
         right = (logits.argmax(-1) == y).float()
         aux = F.binary_cross_entropy_with_logits(k, right)
-        return lm + 0.2 * aux, {"lm": lm.item(), "aux": aux.item()}
+        info = {"lm": lm.item(), "aux": aux.item()}
+        loss = lm + 0.2 * aux
+        if self.hard_gate > 0:                       # read memory only where it is needed
+            gate = self.m.mem.trace["gate"]
+            loss = loss + self.hard_gate * gate.mean()
+            info["gate_open"] = (gate > 0).float().mean().item()
+        return loss, info
 
     @torch.no_grad()
-    def readouts(self, x):
-        logits, k, e, hs = self.m(x, evidence=True)
+    def readouts(self, x, evidence=True):
+        logits, k, e, hs = self.m(x, evidence=evidence)
         lp = F.log_softmax(logits, -1)
-        return lp, {"k": k, "msp": lp.max(-1).values.exp(), "match": self.m.mem.trace["match"],
-                    "mem_mass": e[..., -1], "e": e}, hs
+        ro = {"k": k, "msp": lp.max(-1).values.exp(), "match": self.m.mem.trace["match"]}
+        if e is not None:
+            ro.update(mem_mass=e[..., -1], e=e)
+        if self.hard_gate > 0:
+            ro["free"] = memory_free_positions(self.m, x)
+            self.m(x, evidence=False)                # restore this pass's trace
+        return lp, ro, hs
 
 
 class Base:
@@ -278,7 +290,7 @@ class Base:
         return lm, {"lm": lm.item()}
 
     @torch.no_grad()
-    def readouts(self, x):
+    def readouts(self, x, evidence=True):
         self._hs = []
         logits, _ = self.m(x)
         lp = F.log_softmax(logits, -1)
@@ -339,6 +351,8 @@ def token_rows(model, tok, pairs, block):
             if "k" in ro:
                 r.update(k=float(ro["k"][0, t]), match=float(ro["match"][0, t]),
                          mem_mass=float(ro["mem_mass"][0, t]), prompt_mass=float(ro["e"][0, t, :P].sum()))
+            if "free" in ro:
+                r["memory_free"] = bool(ro["free"][0, t])
             rows.append(r)
     return rows
 
@@ -364,6 +378,11 @@ def token_metrics(rows, probe, L):
         d["auroc_k"] = auroc(np.array([r["k"] for r in rows]), y)
         d["auroc_memory_match"] = auroc(np.array([r["match"] for r in rows]), y)
         d["auroc_prompt_mass"] = auroc(np.array([r["prompt_mass"] for r in rows]), y)
+    if "memory_free" in rows[0]:
+        free = np.array([r["memory_free"] for r in rows])
+        d["certified_memory_free_tokens"] = float(free.mean())
+        d["top1_acc_certified"] = float(y[free].mean()) if free.any() else None
+        d["top1_acc_uncertified"] = float(y[~free].mean()) if (~free).any() else None
     return d
 
 
@@ -372,7 +391,7 @@ def respond(model, tok, prompt, block, max_new=24):
     ids = tok.encode(prompt).ids
     P = len(ids)
     for i in range(max_new):
-        lp, _, _ = model.readouts(torch.tensor([ids[-block:]]))
+        lp, _, _ = model.readouts(torch.tensor([ids[-block:]]), evidence=False)
         if i == 0:
             lp[0, -1, 0] = -float("inf")                         # respond with at least one token
         nxt = int(lp[0, -1].argmax())
@@ -394,6 +413,9 @@ def respond(model, tok, prompt, block, max_new=24):
                      k_min=float(min(float(ro["k"][0, t]) for t in span)),
                      match=float(np.mean([float(ro["match"][0, t]) for t in span])),
                      prompt_mass=float(np.mean([float(ro["e"][0, t, :P - off].sum()) for t in span])))
+    if "free" in ro:                                # every reply token provably made without memory
+        feats["reply_memory_free"] = bool(all(bool(ro["free"][0, t]) for t in span))
+        feats["ids"] = x
     return tok.decode(ids[P:]).split("\n")[0], feats
 
 
@@ -407,6 +429,12 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
         right = abst if gold is None else (not abst and gold in out)
         rows.append({"kind": kind, "right": right, "abstained": abst, "out": out, **f})
     d = {f"{k}_right": float(np.mean([r["right"] for r in rows if r["kind"] == k])) for k in kinds}
+    if "reply_memory_free" in rows[0]:
+        d["certified_memory_free_replies"] = {k: float(np.mean([r["reply_memory_free"] for r in rows if r["kind"] == k]))
+                                              for k in kinds}
+        cert = [r for r in rows if r["reply_memory_free"]]
+        d["right_when_certified"] = float(np.mean([r["right"] for r in cert])) if cert else None
+        d["certificate_soundness_violations"] = soundness_check(model, [r["ids"] for r in cert[:20]])
     d["hallucination_rate"] = float(np.mean([not r["abstained"] for r in rows if r["kind"] == "absent"]))
     if "absent_fresh" in kinds:
         d["hallucination_rate_fresh_names"] = float(np.mean([not r["abstained"] for r in rows
@@ -426,6 +454,23 @@ def chat_eval(model, tok, world, rng, n, rels, block, probe=None):
             d["auroc_probe"] = auroc(probe[1](np.stack([r["h"][probe[0]] for r in rows])), y)
     d["examples"] = [{k: r[k] for k in ("kind", "right", "out")} for r in rows[:6]]
     return d, rows
+
+
+@torch.no_grad()
+def soundness_check(model, seqs):
+    """Certified positions must be bit-identical when the memory content is replaced: a
+    check of the certificate's logic on the trained model. Returns the number of violations."""
+    m = model.m
+    bad = 0
+    saved = m.mem.values.weight.detach().clone()
+    for x in seqs:
+        free = memory_free_positions(m, x)
+        base, _, _, _ = m(x, evidence=False)
+        m.mem.values.weight.copy_(torch.randn_like(saved) * 10)
+        other, _, _, _ = m(x, evidence=False)
+        m.mem.values.weight.copy_(saved)
+        bad += int(not torch.equal(base[free], other[free]))
+    return bad
 
 
 def chat_probe(model, tok, world, block, n=300):
@@ -455,6 +500,7 @@ def main():
     ap.add_argument("--n-ent", type=int, default=N_ENT)
     ap.add_argument("--n-qa", type=int, default=40000)
     ap.add_argument("--mem-init", type=float, default=1.0)
+    ap.add_argument("--hard-gate", type=float, default=0.0, help="L1 weight of a hard memory gate (chat v3)")
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--data-dir", default=None, help="tokenizer and token stream (default: next to --out)")
     ap.add_argument("--prepare-only", action="store_true")
@@ -491,7 +537,7 @@ def main():
     for kind in a.models.split(","):
         if kind in res:
             continue
-        model = Glass(V, a.block, a.mem_init) if kind == "glassbox" else Base(V, a.block)
+        model = Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else Base(V, a.block)
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
         train(model, stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)
@@ -509,11 +555,13 @@ def main():
             d, rows = chat_eval(model, tok, world, random.Random(11), a.n_chat, rels, a.block, cprobe)
             r[name] = d
             print(json.dumps({kind: {name: {k: v for k, v in d.items() if k != "examples"}}}), flush=True)
+            for row in rows:
+                row.pop("ids", None)
         r["samples"] = []
         for p, _ in al_test[:5]:
             out, f = respond(model, tok, p, a.block, max_new=48)
             r["samples"].append({"prompt": p, "response": out,
-                                 **{k: v for k, v in f.items() if k != "h"}})
+                                 **{k: v for k, v in f.items() if k not in ("h", "ids")}})
         res[kind] = r
         json.dump(res, open(a.out, "w"), indent=1)
 

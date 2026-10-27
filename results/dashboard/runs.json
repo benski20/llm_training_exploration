@@ -124,11 +124,11 @@
 "experiment": "v9-0.02",
 "title": "v9 hard memory gate, L1 0.02",
 "model": "glassbox",
-"status": "running",
-"step": 0,
+"status": "stopped",
+"step": 500,
 "total_steps": 6000,
-"progress": 0.00016666666666666666,
-"last_loss": 14.326,
+"progress": 0.0835,
+"last_loss": 6.5866,
 "note": "gate exactly 0 when memory is unused: exact memory-free certificates"
 },
 {
@@ -136,11 +136,11 @@
 "experiment": "v9-0.1",
 "title": "v9 hard memory gate, L1 0.1",
 "model": "glassbox",
-"status": "running",
-"step": 0,
+"status": "stopped",
+"step": 500,
 "total_steps": 6000,
-"progress": 0.00016666666666666666,
-"last_loss": 14.3763,
+"progress": 0.0835,
+"last_loss": 7.4814,
 "note": "stronger push to close the memory gate"
 },
 {
@@ -185,10 +185,10 @@
 "title": "Chat v2 GPT baseline",
 "model": "baseline",
 "status": "running",
-"step": 2250,
+"step": 2500,
 "total_steps": 3000,
-"progress": 0.7503333333333333,
-"last_loss": 2.7809,
+"progress": 0.8336666666666667,
+"last_loss": 2.6721,
 "note": "same chat data for the matched GPT"
 },
 {

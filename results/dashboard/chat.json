@@ -40,7 +40,7 @@
 "auroc_k": null
 },
 {
-"model": "glassbox-v2",
+"model": "glassbox-2",
 "name": "Glass-box v2",
 "split": "Alpaca",
 "bits_per_token": 5.59699727303781,
@@ -50,7 +50,7 @@
 "auroc_k": 0.7367263788327779
 },
 {
-"model": "glassbox-v2",
+"model": "glassbox-2",
 "name": "Glass-box v2",
 "split": "WikiText-2",
 "bits_per_token": 5.72265168539872,
