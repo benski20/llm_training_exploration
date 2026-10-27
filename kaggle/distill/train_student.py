@@ -138,7 +138,7 @@ def make(kind, a, V):
     if kind in GLASS:
         cfg = dict(vocab_size=V, block_size=a.block, n_layer=a.layers, n_head=a.heads, n_embd=a.embd,
                    n_features=a.n_features, k_active=a.k_active, mem_layer=a.layers - 1, mem_keys=a.mem_keys,
-                   mem_topk=min(16, a.mem_keys), mix=a.mix)
+                   mem_topk=min(16, a.mem_keys), mix=a.mix, feat_recon=a.feat_recon > 0)
         if kind == "glassbox3":
             cfg.update(unsure_id=UNSURE)
             return Glassbox3(G3Config(**cfg)), cfg
@@ -296,8 +296,12 @@ def train(kind, a, V, chat, wiki, device, log_fn, tok=None, sc_prompts=(), val_i
                         loss = lm + cal + 0.2 * aux + a.mem_l1 * gate.mean()
                     else:
                         loss = lm + 0.2 * aux + a.mem_l1 * gate.mean()
-                    info = {"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4),
-                            "temp": round(m.temperature(k.float()).mean().item(), 4)}
+                    if a.feat_recon > 0:                  # features must also be a sparse code of their input
+                        rec = sum(f.recon_loss(d) for f, d in zip(m.feat, m.trace["feat"])) / len(m.feat)
+                        loss = loss + a.feat_recon * rec.float()
+                        info["feat_recon"] = round(rec.item(), 4)
+                    info.update({"k_bce": round(aux.item(), 4), "gate_open": round((gate > 0).float().mean().item(), 4),
+                                 "temp": round(m.temperature(k.float()).mean().item(), 4)})
                     m.record_writers(docs.to(device))         # which training document wrote each memory slot
                 if kind == "glassbox3":
                     m.record_features()
@@ -627,6 +631,8 @@ def main():
     ap.add_argument("--base-mlp", type=int, default=6)
     ap.add_argument("--mem-keys", type=int, default=256)
     ap.add_argument("--mem-l1", type=float, default=0.002, help="penalty on memory gate use")
+    ap.add_argument("--feat-recon", type=float, default=0.0,
+                    help="weight of the in-model feature reconstruction (SAE) objective (Glassbox-2.4: 1.0)")
     ap.add_argument("--mix", default="add", choices=["add", "convex"],
                     help="residual updates: standard sums (default; pilot 2.3) or convex mixing")
     ap.add_argument("--block", type=int, default=512)

@@ -2,7 +2,8 @@
 # Glassbox-2 distillation on Kaggle GPUs: kernel 1 (teacher data), then kernel 2 (students).
 #   KAGGLE_API_TOKEN=... KAGGLE_USERNAME=... bash kaggle/distill/launch.sh
 # DATA_HOURS / STUDENT_HOURS set the time budgets; SKIP_DATA=1 reuses an existing kernel 1 output.
-# TRAIN_SLUG / MODELS / OUT pick the student kernel's name, its students and the local output directory.
+# TRAIN_SLUG / MODELS / OUT pick the student kernel's name, its students and the local output directory;
+# EXTRA_ARGS adds train_student.py options (e.g. "--feat-recon 1.0").
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 : "${KAGGLE_API_TOKEN:?set KAGGLE_API_TOKEN}"; : "${KAGGLE_USERNAME:?set KAGGLE_USERNAME}"
@@ -43,7 +44,7 @@ if [ "${DATA_ONLY:-0}" = 1 ]; then
   echo "data kernel done"; exit 0
 fi
 python3 kaggle/distill/bundle.py "$S2/train_student.py" kaggle/distill/train_student.py --data /kaggle/input \
-    --hours "$STUDENT_HOURS" --models "$MODELS"
+    --hours "$STUDENT_HOURS" --models "$MODELS" ${EXTRA_ARGS:-}
 push "$S2" "$TRAIN_SLUG" "$TRAIN_SLUG" train_student.py "[\"$U/glassbox-distill-data\"]"
 wait_for "$U/$TRAIN_SLUG" || true
 mkdir -p "$OUT"
