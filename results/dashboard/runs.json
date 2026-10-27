@@ -357,7 +357,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "146M Glassbox-2.4; compared with the final run's GPT student (14:29:29 UTC check)"
+"note": "146M Glassbox-2.4; compared with the final run's GPT student (14:50:39 UTC check)"
 },
 {
 "run": "kaggle-qwen-glassbox",
@@ -369,7 +369,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (14:30:13 UTC check)"
+"note": "MLPs -> exactly sparse feature layers; do its internals predict answer correctness? (14:52:35 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
