@@ -138,5 +138,125 @@
     "fires_on": "'c'"
    }
   ]
+ },
+ "glassbox2_3": {
+  "answered": 1049,
+  "right": 132,
+  "test_n": 525,
+  "error_rate_all": 0.8876190476190476,
+  "softmax": {
+   "auroc": 0.6872408525496472,
+   "error_at_50pct": 0.83206106870229
+  },
+  "neg_nll": {
+   "auroc": 0.6872408525496472,
+   "error_at_50pct": 0.83206106870229
+  },
+  "posthoc_probe": {
+   "auroc": 0.6017312868262167,
+   "error_at_50pct": 0.8587786259541985,
+   "layer": 5
+  },
+  "builtin_k": {
+   "auroc": 0.5924929075434641,
+   "error_at_50pct": 0.8549618320610687
+  },
+  "feature_probe": {
+   "auroc": 0.6634174729031789,
+   "error_at_50pct": 0.8473282442748091
+  },
+  "attribution": {
+   "auroc": 0.6814941441769113,
+   "error_at_50pct": 0.8282442748091603
+  },
+  "combined": {
+   "auroc": 0.6832399796319197,
+   "error_at_50pct": 0.8396946564885497
+  },
+  "name": "Glassbox-2.3",
+  "features_signalling_wrong": [
+   {
+    "feature": 240,
+    "weight": -2.479,
+    "fires_on": "(rare)"
+   },
+   {
+    "feature": 57,
+    "weight": -1.83,
+    "fires_on": "'(', ''\\n'', '''"
+   },
+   {
+    "feature": 372,
+    "weight": -1.546,
+    "fires_on": "'R', 'E', 'l'"
+   },
+   {
+    "feature": 726,
+    "weight": -1.543,
+    "fires_on": "'U', ''\\n'', 's'"
+   },
+   {
+    "feature": 692,
+    "weight": -1.277,
+    "fires_on": "',', 'and', 'a'"
+   },
+   {
+    "feature": 592,
+    "weight": -1.057,
+    "fires_on": "'H', 'D', 'N'"
+   },
+   {
+    "feature": 144,
+    "weight": -1.057,
+    "fires_on": "'al', 'Al', 'deb'"
+   },
+   {
+    "feature": 743,
+    "weight": -1.049,
+    "fires_on": "'list', 'The', 'is'"
+   }
+  ],
+  "features_signalling_right": [
+   {
+    "feature": 574,
+    "weight": 3.445,
+    "fires_on": "'The', 'the', 'res'"
+   },
+   {
+    "feature": 201,
+    "weight": 3.328,
+    "fires_on": "'M', 'k', 'Brit'"
+   },
+   {
+    "feature": 492,
+    "weight": 2.438,
+    "fires_on": "',', 'dise'"
+   },
+   {
+    "feature": 1006,
+    "weight": 1.964,
+    "fires_on": "'press', 'ct', 'ic'"
+   },
+   {
+    "feature": 451,
+    "weight": 1.884,
+    "fires_on": "'lead', 'es', 'users'"
+   },
+   {
+    "feature": 206,
+    "weight": 1.881,
+    "fires_on": "'st', 'wor', 'ab'"
+   },
+   {
+    "feature": 279,
+    "weight": 1.783,
+    "fires_on": "'M', 'G', 'em'"
+   },
+   {
+    "feature": 176,
+    "weight": 1.724,
+    "fires_on": "'pre', 'ro', 'f'"
+   }
+  ]
  }
 }

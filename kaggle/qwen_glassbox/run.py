@@ -69,6 +69,24 @@ def fit_probe(X, y, device, steps=400, l2=1e-3):
                       + b_).cpu().numpy(), (w_ / sd_).cpu().numpy()
 
 
+def fit_probe_cv(X, y, device, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0)):
+    """Logistic probe whose L2 strength is chosen on an inner 70/30 split of the fitting data
+    (high-dimensional sparse-feature inputs overfit a few hundred examples otherwise)."""
+    X, y = np.asarray(X), np.asarray(y)
+    idx = np.random.default_rng(1).permutation(len(y))
+    cut = int(0.7 * len(y))
+    a_, b_ = idx[:cut], idx[cut:]
+    best = None
+    for l2 in grid:
+        pr, _ = fit_probe(X[a_], y[a_], device, l2=l2)
+        s = auroc(pr(X[b_]), y[b_])
+        if s is not None and (best is None or s > best[0]):
+            best = (s, l2)
+    l2 = best[1] if best else 1.0
+    pr, w = fit_probe(X, y, device, l2=l2)
+    return pr, w, l2
+
+
 def find_data(root):
     for dp, _, fs in os.walk(root):
         if "train.jsonl" in fs:
@@ -260,19 +278,22 @@ def detectors(rows, device, glass):
         if s is not None and (best is None or s > best[0]):
             best = (s, L)
     L = best[1] if best else len(fit[0]["h"]) - 1
-    pr, _ = fit_probe(np.stack([r["h"][L] for r in fit]), yf, device)
+    pr, _, l2 = fit_probe_cv(np.stack([r["h"][L] for r in fit]), yf, device)
     score("posthoc_probe", pr(np.stack([r["h"][L] for r in test])))
+    out["posthoc_probe"]["l2"] = l2
     out["posthoc_probe"]["layer"] = L
     weights = None
     if glass:
         score("builtin_k", [r["k"] for r in test])
-        pr, weights = fit_probe(np.stack([r["feats"] for r in fit]), yf, device)
+        pr, weights, l2 = fit_probe_cv(np.stack([r["feats"] for r in fit]), yf, device)
         score("feature_probe", pr(np.stack([r["feats"] for r in test])))
+        out["feature_probe"]["l2"] = l2
 
         def comb(r):
             return np.concatenate([[r["msp"], r["neg_nll"], r["k"]], r["h"][L], r["feats"]])
-        pr, _ = fit_probe(np.stack([comb(r) for r in fit]), yf, device)
+        pr, _, l2 = fit_probe_cv(np.stack([comb(r) for r in fit]), yf, device)
         score("combined", pr(np.stack([comb(r) for r in test])))
+        out["combined"]["l2"] = l2
     return out, weights
 
 
