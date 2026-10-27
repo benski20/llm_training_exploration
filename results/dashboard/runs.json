@@ -381,7 +381,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (19:21:23 UTC check)"
+"note": "entity probe on 6k answers, sampling consistency, exact grounding, stacker; TriviaQA + NQ-open (19:39:31 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
