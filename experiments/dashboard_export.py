@@ -162,6 +162,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-qwen-correctness", "Kaggle: correctness estimator at scale (Qwen2.5 0.5B / 1.5B / 3B)",
             "results/kaggle/qwen-correctness.log", "results/kaggle/qwen-correctness/correctness/results.json",
             "stack AUROC 0.859 (1.5B) / 0.807 (0.5B) vs softmax 0.72 / 0.69; NQ-open 0.78 unseen"),
+           ("kaggle-qwen-correctness-3b", "Kaggle: correctness estimator for Qwen2.5-3B",
+            "results/kaggle/qwen-correctness-3b.log", "results/kaggle/qwen-correctness-3b/correctness/results.json",
+            "5k train answers, 4 samples, 500 test each (sized to the ~3 GPU h left); does 3B read better than 1.5B?"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
