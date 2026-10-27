@@ -43,6 +43,8 @@ class G2Config:
     mem_layer: int = 4
     mem_keys: int = 128
     mem_topk: int = 8
+    attn_topk: int = 0             # >0: each query attends to at most this many positions per head
+                                   # (exact zeros elsewhere): fewer attention edges to inspect
 
 
 class RMSNorm(nn.Module):
@@ -64,6 +66,7 @@ class Attention(nn.Module):
     def __init__(self, c):
         super().__init__()
         self.h, self.dh = c.n_head, c.n_embd // c.n_head
+        self.topk = c.attn_topk
         self.norm = RMSNorm(c.n_embd)
         self.qkv = nn.Linear(c.n_embd, 3 * c.n_embd, bias=False)
         self.o = nn.Parameter(torch.randn(c.n_head, self.dh, c.n_embd) * 0.02)
@@ -74,6 +77,9 @@ class Attention(nn.Module):
         z = self.norm(x)
         q, k, _ = (t.view(B, T, self.h, self.dh).transpose(1, 2) for t in self.qkv(z).split(C, -1))
         att = (q @ k.transpose(-1, -2)) / math.sqrt(self.dh) + alibi_bias(T, self.h, x.device)
+        if self.topk and self.topk < T:                 # keep the top-k scores; exp(-inf) is exactly 0
+            kth = att.topk(self.topk, -1).values[..., -1:]
+            att = att.masked_fill(att < kth, float("-inf"))
         return {"s": self.norm.scale(x), "A": att.softmax(-1), "pi": self.mix(z).softmax(-1)}
 
     def apply(self, x, d):
@@ -211,9 +217,17 @@ class Glassbox2(nn.Module):
 
     @torch.no_grad()
     def memory_free(self):
-        """From the last forward: True at t when every memory gate at positions <= t is exactly 0,
-        so the output at t provably does not depend on any memory content."""
-        return (self.trace["mem"]["gate"] == 0).int().cumprod(-1).bool()
+        """From the last forward: True at t when the output at t provably does not depend on any
+        memory content. Gates are computed before the read, so they do not depend on memory.
+        * Memory after the last attention layer (mem_layer == n_layer - 1): the read at t can only
+          reach position t, so t is free exactly when its own gate is 0.
+        * Memory earlier: an open read at p changes p's state, hence its keys, hence what later
+          queries attend to (with softmax weights or top-k selection alike), so every t >= p may
+          depend on it; t is free only when every gate at positions <= t is 0."""
+        closed = self.trace["mem"]["gate"] == 0
+        if self.config.mem_layer == self.config.n_layer - 1:
+            return closed
+        return closed.int().cumprod(-1).bool()
 
     def active_features(self, layer):
         """(B, T, k) indices and values of the active features at a layer, from the last forward."""

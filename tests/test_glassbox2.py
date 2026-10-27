@@ -44,3 +44,36 @@ def test_memory_writers_are_recorded():
     m(x)
     m.record_writers(torch.tensor([[11] * 7, [22] * 7]))
     assert set(m.writer_doc[m.writer_doc >= 0].tolist()) <= {11, 22} and (m.writer_doc >= 0).any()
+
+
+def _soundness(m, x):
+    with torch.no_grad():
+        base, _ = m(x)
+        free = m.memory_free()
+        saved = m.mem.values.weight.clone()
+        m.mem.values.weight.normal_(0, 10)
+        other, _ = m(x)
+        m.mem.values.weight.copy_(saved)
+    return free, torch.equal(base[free], other[free])
+
+
+def test_memory_free_certificate_is_sound_for_every_layout():
+    torch.manual_seed(3)
+    for mem_layer, attn_topk in ((1, 0), (1, 2), (2, 0), (2, 2)):      # dense/sparse; memory mid or after last layer
+        m = _m(mem_layer=mem_layer, attn_topk=attn_topk)
+        with torch.no_grad():
+            m.mem.gate.weight.normal_(0, 1); m.mem.gate.bias.fill_(-0.3)   # some gates open, some closed
+            m.mem.values.weight.normal_(0, 1)
+        x = torch.randint(0, 60, (2, 10))
+        free, same = _soundness(m, x)
+        assert same, (mem_layer, attn_topk)
+        if mem_layer == 2:                                             # after the last layer: own gate only
+            assert torch.equal(free, m.trace["mem"]["gate"] == 0)
+
+
+def test_attribution_exact_with_sparse_attention():
+    m = _m(attn_topk=2)
+    x = torch.randint(0, 60, (1, 9))
+    parts = m.explain(x, 8, 5)
+    assert abs(sum(parts.values()) - float(m.trace["raw_logits"][0, 8, 5])) < 1e-4
+    assert all(int((d["A"] > 0).sum(-1).max()) <= 2 for d in m.trace["attn"])

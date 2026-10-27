@@ -51,6 +51,9 @@ RUNS = [
      "general chat; tokens with a closed gate are provably made without stored knowledge"),
     ("g2", "Glassbox-2 pilot (CPU)", "results/glassbox2_chat/glassbox2.log", "results/glassbox2_chat/glassbox2.json",
      "glassbox2", 3000, "exact sparse features, exact attribution, logged hard-gated memory"),
+    ("g2.1", "Glassbox-2.1 pilot: memory after the last layer", "results/glassbox2_1_chat/glassbox2.log",
+     "results/glassbox2_1_chat/glassbox2.json", "glassbox2", 3000,
+     "a token is provably memory-free when its own gate is 0; 32 active features"),
     ("chat2", "Chat v2 GPT baseline", "results/glassbox_chat_v2/baseline.log", "results/glassbox_chat_v2/baseline.json",
      "baseline", 3000, "same chat data for the matched GPT"),
 ]
@@ -156,7 +159,7 @@ def main():
             curves.append({"run": run_id, "title": title, "step": s, "loss": loss, "qa_loss": qa})
         if result is None:
             continue
-        if exp in ("chat", "chat2", "chat3", "g2"):
+        if exp in ("chat", "chat2", "chat3", "g2", "g2.1"):
             for split, name in (("tokens_alpaca", "Alpaca"), ("tokens_wikitext", "WikiText-2")):
                 r = result[split]
                 chat.append({"model": model if exp == "chat" else f"{model}-{exp[-1]}",

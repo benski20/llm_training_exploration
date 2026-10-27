@@ -277,10 +277,11 @@ class Glass:
 class Glass2:
     """Glassbox-2: exact sparse features, exact attribution, logged hard-gated memory."""
 
-    def __init__(self, V, block, mem_l1=0.002):
+    def __init__(self, V, block, mem_l1=0.002, mem_layer=3, k_active=16, attn_topk=0):
         self.mem_l1 = mem_l1
         self.m = Glassbox2(G2Config(vocab_size=V, block_size=block, n_layer=6, n_head=4, n_embd=192,
-                                    n_features=1024, k_active=16, mem_layer=3, mem_keys=128, mem_topk=8))
+                                    n_features=1024, k_active=k_active, mem_layer=mem_layer, mem_keys=128,
+                                    mem_topk=8, attn_topk=attn_topk))
 
     def params(self):
         return list(self.m.parameters())
@@ -541,6 +542,10 @@ def main():
     ap.add_argument("--n-qa", type=int, default=40000)
     ap.add_argument("--mem-init", type=float, default=1.0)
     ap.add_argument("--hard-gate", type=float, default=0.0, help="L1 weight of a hard memory gate (chat v3)")
+    ap.add_argument("--g2-mem-layer", type=int, default=3, help="Glassbox-2: block after which memory is read")
+    ap.add_argument("--g2-k-active", type=int, default=16)
+    ap.add_argument("--g2-attn-topk", type=int, default=0)
+    ap.add_argument("--g2-mem-l1", type=float, default=0.002)
     ap.add_argument("--threads", type=int, default=os.cpu_count())
     ap.add_argument("--data-dir", default=None, help="tokenizer and token stream (default: next to --out)")
     ap.add_argument("--prepare-only", action="store_true")
@@ -578,7 +583,8 @@ def main():
         if kind in res:
             continue
         model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
-                 Glass2(V, a.block) if kind == "glassbox2" else Base(V, a.block))
+                 Glass2(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk)
+                 if kind == "glassbox2" else Base(V, a.block))
         ckpt = a.out.replace(".json", f".{kind}.pt")
         t0 = time.time()
         train(model, stream, a.steps, a.block, a.batch, lambda e: print(json.dumps({kind: e}), flush=True), ckpt)
