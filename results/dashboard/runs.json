@@ -197,10 +197,10 @@
 "title": "Glassbox-2 pilot (CPU)",
 "model": "glassbox2",
 "status": "running",
-"step": 250,
+"step": 2000,
 "total_steps": 3000,
-"progress": 0.08366666666666667,
-"last_loss": 5.8556,
+"progress": 0.667,
+"last_loss": 3.2553,
 "note": "exact sparse features, exact attribution, logged hard-gated memory"
 },
 {
