@@ -388,11 +388,23 @@
 "experiment": "qwen",
 "title": "CPU: exact attribution on unmodified Qwen2.5-0.5B vs answer correctness",
 "model": "qwen",
-"status": "running",
-"step": 825,
+"status": "done",
+"step": 1000,
 "total_steps": 1000,
-"progress": 0.825,
+"progress": 1.0,
 "last_loss": null,
-"note": "SiLU gates fixed, no conversion; do attribution statistics beat the 0.759 hidden-state probe?"
+"note": "SiLU gates fixed, no conversion; question-grounding number adds to softmax (+0.043), not to a probe"
+},
+{
+"run": "qwen-correctness-entity",
+"experiment": "qwen",
+"title": "CPU: the same signals read at the answer's entity token",
+"model": "qwen",
+"status": "running",
+"step": 0,
+"total_steps": 1000,
+"progress": 0.0,
+"last_loss": null,
+"note": "first new name/number in the answer; whole-answer probability baselines"
 }
 ]

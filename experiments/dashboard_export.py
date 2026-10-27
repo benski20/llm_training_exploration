@@ -188,7 +188,10 @@ def distill_rows():
 # id, title, log (JSON lines with "done"), result file, total, script, note
 LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B vs answer correctness",
           "results/qwen_correctness.log", "results/qwen_correctness.json", 1000, "experiments/qwen_correctness.py",
-          "SiLU gates fixed, no conversion; do attribution statistics beat the 0.759 hidden-state probe?")]
+          "SiLU gates fixed, no conversion; question-grounding number adds to softmax (+0.043), not to a probe"),
+         ("qwen-correctness-entity", "CPU: the same signals read at the answer's entity token",
+          "results/qwen_correctness_entity.log", "results/qwen_correctness_entity.json", 1000,
+          "experiments/qwen_correctness_entity.py", "first new name/number in the answer; whole-answer probability baselines")]
 
 
 def local_rows():
