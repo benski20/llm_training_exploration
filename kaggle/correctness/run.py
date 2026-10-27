@@ -25,6 +25,7 @@ import time
 
 import numpy as np
 
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "vtpkg"))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
@@ -82,15 +83,17 @@ def H(rows, li=None):
     return (X[:, li] if li is not None else X.flatten(1)).numpy()
 
 
-def run_model(name, sets, a, device):
+def run_model(name, sets, a, device, checkpoint):
+    """checkpoint(R) is called with partial results after the cheap phase (answers, probes, probe+output
+    stack), so a run cut off during the costly enrichment (sampling, exact grounding) still reports."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     t0 = time.time()
     tok = AutoTokenizer.from_pretrained(name)
-    dtype = getattr(torch, a.dtype)                 # float16 overflows in Qwen2.5 (NaN replies): float32
-    model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype, attn_implementation="eager").to(device).eval()
+    dtype = getattr(torch, a.dtype)          # float16 needs sdpa: eager overflows on Qwen2.5's raw q.k
+    model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dtype, attn_implementation=a.attn).to(device).eval()
     L = model.config.num_hidden_layers
     layers = sorted({int(x) for x in np.linspace(L // 4, L - 1, 10).round()})
-    R = {"model": name, "layers": layers}
+    R = {"model": name, "layers": layers, "dtype": a.dtype, "attn": a.attn, "complete": False}
     data = {}
     for key, items in sets.items():
         data[key] = answer_set(model, tok, items, layers, a)
@@ -99,20 +102,16 @@ def run_model(name, sets, a, device):
             samples=[(r["q"], r["reply"]) for r in data[key][:3]])
         if acc == 0.0 and len(items) >= 100:
             raise RuntimeError(f"{name}: no correct answers on {key}; generation is broken")
+        if any(torch.isnan(r["h"].float()).any() for r in data[key][:50]):
+            raise RuntimeError(f"{name}: NaN hidden states on {key}")
     n_stack = min(a.n_stack, len(data["train"]) // 3)
     B, A = data["train"][:n_stack], data["train"][n_stack:]
-    for key, rows in (("stack", B), ("trivia_val", data["trivia_val"]), ("nq", data["nq"])):
-        enrich(model, tok, rows, a)
-        log(model=name, phase="enrich", set=key, s=round(time.time() - t0))
     R["accuracy"] = {k: float(np.mean([r["right"] for r in v])) for k, v in data.items()}
-    R["attribution_max_abs_error"] = max(r["exact_err"] for k in ("trivia_val", "nq") for r in data[k])
     y = {k: np.array([r["right"] for r in v]) for k, v in data.items()}
     yA, yB = np.array([r["right"] for r in A]), np.array([r["right"] for r in B])
     tests = ("trivia_val", "nq")
-    R["unfitted"] = {t: {k: report([r[k] for r in data[t]], y[t]) for k in OUTPUT_KEYS + ["consistency"] + GROUND_KEYS}
-                     for t in tests}
-    # entity probe: layer chosen on the stacking split
-    by_layer = {}
+    R["unfitted"] = {t: {k: report([r[k] for r in data[t]], y[t]) for k in OUTPUT_KEYS} for t in tests}
+    by_layer = {}                                     # entity probe: layer chosen on the stacking split
     for li, L_ in enumerate(layers):
         p = Probe(device).fit(H(A, li), yA)
         by_layer[L_] = auroc(p.logit(H(B, li)), yB)
@@ -128,14 +127,10 @@ def run_model(name, sets, a, device):
     probe = Probe(device).fit(H(A, best_li), yA)
     multi = Probe(device).fit(H(A), yA)
     R["multi_layer_probe"] = {t: report(multi.logit(H(data[t])), y[t]) for t in tests}
-    sep = Probe(device).fit(H(B, best_li), (np.array([r["consistency"] for r in B]) >= 0.5).astype(np.float32))
-    R["consistency_probe"] = {t: report(sep.logit(H(data[t], best_li)), y[t]) for t in tests}
-    # stackers fitted on B, with the probe's scores on B coming from the probe fitted on A
     pl = {k: probe.logit(H(v, best_li)) for k, v in (("stack", B), ("trivia_val", data["trivia_val"]), ("nq", data["nq"]))}
-    R["stacked"] = {}
-    heads = {}
-    for name_s, uc, ug in (("probe+output", False, False), ("probe+output+grounding", False, True),
-                           ("probe+output+consistency", True, False), ("all", True, True)):
+    R["stacked"], heads = {}, {}
+
+    def stack(name_s, uc, ug):            # stackers fitted on B, probe scores on B from the probe fitted on A
         Xs = np.stack([stack_features(pl["stack"][i], r, uc, ug) for i, r in enumerate(B)])
         st = Probe(device).fit(Xs, yB, grid=(1e-4, 1e-3, 1e-2, 1e-1))
         R["stacked"][name_s] = {}
@@ -143,10 +138,28 @@ def run_model(name, sets, a, device):
             z = st.logit(np.stack([stack_features(pl[t][i], r, uc, ug) for i, r in enumerate(data[t])]))
             R["stacked"][name_s][t] = report(z, y[t], prob=1 / (1 + np.exp(-z)))
         heads[name_s] = CorrectnessHead([layers[best_li]], probe, st, uc, ug, a.k)
+
+    def save_heads():
+        torch.save({k: h.state_dict() for k, h in heads.items()}, os.path.join(a.out, name.split("/")[-1] + "_heads.pt"))
+    stack("probe+output", False, False)
+    R["seconds_cheap_phase"] = round(time.time() - t0)
+    save_heads()
+    checkpoint(R)
+    log(model=name, phase="cheap_done", probe=R["probe_by_train_size"], stacked=R["stacked"], s=round(time.time() - t0))
+    for key, rows in (("stack", B), ("trivia_val", data["trivia_val"]), ("nq", data["nq"])):
+        enrich(model, tok, rows, a)
+        log(model=name, phase="enrich", set=key, s=round(time.time() - t0))
+    R["attribution_max_abs_error"] = max(r["exact_err"] for k in ("trivia_val", "nq") for r in data[k])
+    for t in tests:
+        R["unfitted"][t].update({k: report([r[k] for r in data[t]], y[t]) for k in ["consistency"] + GROUND_KEYS})
+    sep = Probe(device).fit(H(B, best_li), (np.array([r["consistency"] for r in B]) >= 0.5).astype(np.float32))
+    R["consistency_probe"] = {t: report(sep.logit(H(data[t], best_li)), y[t]) for t in tests}
+    for name_s, uc, ug in (("probe+output+grounding", False, True), ("probe+output+consistency", True, False),
+                           ("all", True, True)):
+        stack(name_s, uc, ug)
     R["examples"] = []
-    best = heads["all"]
-    zs = best.stacker.logit(np.stack([stack_features(pl["trivia_val"][i], r, True, True)
-                                      for i, r in enumerate(data["trivia_val"])]))
+    zs = heads["all"].stacker.logit(np.stack([stack_features(pl["trivia_val"][i], r, True, True)
+                                              for i, r in enumerate(data["trivia_val"])]))
     for i, r in enumerate(data["trivia_val"][:12]):
         R["examples"].append({"q": r["q"], "reply": r["reply"], "right": r["right"],
                               "p_correct": round(float(1 / (1 + np.exp(-zs[i]))), 3),
@@ -154,7 +167,8 @@ def run_model(name, sets, a, device):
                               "top_question_token": r["top_question_token"],
                               "question_share": round(r["question_share"], 3)})
     R["seconds"] = round(time.time() - t0)
-    torch.save({k: h.state_dict() for k, h in heads.items()}, os.path.join(a.out, name.split("/")[-1] + "_heads.pt"))
+    R["complete"] = True
+    save_heads()
     del model
     torch.cuda.empty_cache() if device == "cuda" else None
     return R
@@ -171,7 +185,8 @@ def main():
     ap.add_argument("--gen-batch", type=int, default=48)
     ap.add_argument("--feat-batch", type=int, default=8)
     ap.add_argument("--budget-min", type=float, default=200, help="skip remaining models after this")
-    ap.add_argument("--dtype", default="float32")
+    ap.add_argument("--dtype", default="float16")
+    ap.add_argument("--attn", default="sdpa", help="sdpa: eager attention overflows in float16 on Qwen2.5")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
@@ -185,11 +200,15 @@ def main():
         if (time.time() - t0) / 60 > a.budget_min:
             log(phase="skip", model=name, reason="time budget")
             continue
+        def checkpoint(R, name=name):
+            res[name] = R
+            json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
         try:
-            res[name] = run_model(name, sets, a, device)
+            res[name] = run_model(name, sets, a, device, checkpoint)
         except Exception as e:                       # one model's failure must not lose the others
             log(phase="model_failed", model=name, error=repr(e)[:500])
-            res[name] = {"error": repr(e)[:500]}
+            res[name] = {**(res.get(name) or {}), "error": repr(e)[:500]}
+            json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
             if device == "cuda":
                 torch.cuda.empty_cache()
             if "device-side assert" in repr(e):      # the CUDA context is unusable after this

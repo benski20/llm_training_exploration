@@ -270,8 +270,9 @@ class CorrectnessResponder:
         with _VerifiedStage(path, max_bytes) as st:
             dev = "cuda" if torch.cuda.is_available() else "cpu"
             self.tok = AutoTokenizer.from_pretrained(st.dir)
-            self.model = AutoModelForCausalLM.from_pretrained(                  # float16 overflows Qwen2.5
-                st.dir, torch_dtype=torch.float32, attn_implementation="eager").to(dev).eval()
+            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa: eager attention
+                st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32,   # overflows on Qwen2.5
+                attn_implementation="sdpa").to(dev).eval()
             heads = torch.load(os.path.join(st.dir, "correctness_heads.pt"), map_location="cpu", weights_only=True)
             self.manifest = st.manifest
         if self.manifest.get("variant") not in heads:
