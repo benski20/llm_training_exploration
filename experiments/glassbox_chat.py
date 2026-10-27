@@ -226,6 +226,23 @@ def corpus(world, rng, al_train, n_qa=40000, stmt_reps=8):
     return docs
 
 
+def reply_meaning(world):
+    """What a reply asserts, for self-consistency: replies agree when they assert the same fact,
+    however worded (the semantic-equivalence step of semantic entropy). Here a fact is the
+    world value a reply names, or an abstention; anything else is compared as text."""
+    values = sorted({v for vs in world.vals for v in vs}, key=len, reverse=True)
+
+    def meaning(text):
+        t = text.split("\n")[0]
+        if any(m in t.lower() for m in ABSTAIN_MARKERS):
+            return "<abstain>"
+        for v in values:
+            if v in t:
+                return v
+        return " ".join(t.lower().split())
+    return meaning
+
+
 def unsure_stream(stream, tok):
     """The training token stream with <unsure> (id V) inserted where an abstention answer begins,
     so Glassbox-3 trains on exactly the tokens the other models see, plus the marker."""
@@ -381,7 +398,7 @@ class Glass3(Glass2):
         for _ in range(sc["prompts"]):
             prompt = sc["world"].question(rng, rng.choice(sc["world"].KINDS), QA_RELS, test=False)[0]
             ids = tok.encode(prompt).ids
-            outs = [tok.decode(o).strip().lower() if self.V not in o else "<unsure>" for o in self._sample(ids, sc["k"])]
+            outs = [sc["meaning"](tok.decode(o)) if self.V not in o else "<abstain>" for o in self._sample(ids, sc["k"])]
             top = max(outs.count(o) for o in outs)
             if top / len(outs) < sc["agree"]:                    # its own answers disagree: teach <unsure>
                 n_dis += 1
@@ -730,7 +747,7 @@ def main():
             train_stream = torch.load(up)
             model = Glass3(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk,
                            sc=dict(tok=tok, world=world, start=a.sc_start, every=a.sc_every, prompts=a.sc_prompts,
-                                   k=a.sc_k, agree=a.sc_agree) if a.sc_every else None)
+                                   k=a.sc_k, agree=a.sc_agree, meaning=reply_meaning(world)) if a.sc_every else None)
         else:
             model = (Glass(V, a.block, a.mem_init, a.hard_gate) if kind == "glassbox" else
                      Glass2(V, a.block, a.g2_mem_l1, a.g2_mem_layer, a.g2_k_active, a.g2_attn_topk, a.g2_mem_gate)
