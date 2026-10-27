@@ -1,0 +1,24 @@
+{
+ "results/kaggle/glassbox-distill-final2/glassbox_package": {
+  "package": "results/kaggle/glassbox-distill-final2/glassbox_package",
+  "format": "vt-glassbox2-chat/1",
+  "tokens": 59904,
+  "feat_recon": false,
+  "layer6": {
+   "units": 4096,
+   "units_firing_20+": 2809,
+   "median_density": 0.009097889957264958,
+   "median_top20_purity": 0.3,
+   "share_purity_at_least_0.8": 0.08971164115343538,
+   "median_mass_on_top_token": 0.061826370656490326
+  },
+  "layer11": {
+   "units": 4096,
+   "units_firing_20+": 3233,
+   "median_density": 0.005675747863247863,
+   "median_top20_purity": 0.25,
+   "share_purity_at_least_0.8": 0.06990411382616765,
+   "median_mass_on_top_token": 0.07105902582406998
+  }
+ }
+}
