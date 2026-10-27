@@ -224,7 +224,12 @@ def batches(rows, bs, rng, pad_id):
 
 
 def train_lora(model, khead, rows, a, device, pad_id):
-    from peft import LoraConfig, get_peft_model
+    try:
+        from peft import LoraConfig, get_peft_model
+    except ImportError:                                  # Kaggle images may not ship peft
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "peft"])
+        from peft import LoraConfig, get_peft_model
     cfg = LoraConfig(r=a.lora_r, lora_alpha=2 * a.lora_r, lora_dropout=0.05, task_type="CAUSAL_LM",
                      target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
     model = get_peft_model(model, cfg)
