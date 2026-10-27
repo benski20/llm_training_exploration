@@ -240,6 +240,18 @@
 "note": "2.1 with gates that keep learning when saturated (the Kaggle student's gate)"
 },
 {
+"run": "g2.3-glassbox2",
+"experiment": "g2.3",
+"title": "Glassbox-2.3: additive residual stream",
+"model": "glassbox2",
+"status": "running",
+"step": 250,
+"total_steps": 3000,
+"progress": 0.08366666666666667,
+"last_loss": 4.5746,
+"note": "2.2 with standard residual sums instead of convex mixing; attribution still exact"
+},
+{
 "run": "chat2-baseline",
 "experiment": "chat2",
 "title": "Chat v2 GPT baseline",
@@ -285,6 +297,6 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "students trained from scratch on the teacher data (05:46:38 UTC check)"
+"note": "students trained from scratch on the teacher data (06:04:46 UTC check)"
 }
 ]
