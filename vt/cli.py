@@ -199,7 +199,14 @@ CHAT_V2_CONFIG = dict(vocab_size=4096, block_size=256, n_layer=6, n_head=4, n_em
 
 
 def cmd_chat_export(a):
-    from .chat_serve import export_package
+    from .chat_serve import export_hf_package, export_package
+    if a.hf_dir:                                          # a retrofitted Hugging Face model (kaggle/)
+        man = export_hf_package(a.hf_dir)
+        print(f"pinned {a.hf_dir} (package sha256 {man['package_sha256'][:16]}...)")
+        return 0
+    if not (a.ckpt and a.tokenizer and a.out):
+        print("chat-export needs --ckpt, --tokenizer and --out (or --hf-dir)", file=sys.stderr)
+        return 2
     cfg = json.load(open(a.config)) if a.config else dict(CHAT_V2_CONFIG)
     man = export_package(a.ckpt, a.tokenizer, a.out, cfg)
     print(f"wrote {a.out} (package sha256 {man['package_sha256'][:16]}...)")
@@ -207,13 +214,13 @@ def cmd_chat_export(a):
 
 
 def cmd_chat(a):
-    from .chat_serve import PackageError, load_package, reply
+    from .chat_serve import PackageError, load_responder
     try:
-        model, tok, man = load_package(a.package)
+        resp = load_responder(a.package)
     except PackageError as e:
         print(f"refusing to load: {e}", file=sys.stderr)
         return 1
-    r = reply(model, tok, a.message, max_new_tokens=a.max_new_tokens, threshold=a.threshold)
+    r = resp.reply(a.message, max_new_tokens=a.max_new_tokens, threshold=a.threshold)
     if a.json:
         print(json.dumps(r, indent=1))
         return 0
@@ -225,13 +232,14 @@ def cmd_chat(a):
 
 
 def cmd_chat_serve(a):
-    from .chat_serve import PackageError, load_package, make_chat_server
+    from .chat_serve import PackageError, load_responder, make_chat_server
     try:
-        model, tok, man = load_package(a.package)
+        resp = load_responder(a.package)
     except PackageError as e:
         print(f"refusing to serve: {e}", file=sys.stderr)
         return 1
-    srv = make_chat_server(model, tok, man, a.host, a.port, max_concurrency=a.max_concurrency)
+    man = resp.manifest
+    srv = make_chat_server(resp, a.host, a.port, max_concurrency=a.max_concurrency)
     print(f"serving {a.package} (package sha256 {man['package_sha256'][:16]}...) on "
           f"http://{a.host}:{srv.server_port}/chat", flush=True)
     try:
@@ -440,8 +448,9 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(fn=cmd_respond)
     p = sub.add_parser("chat-export", help="package a glass-box chat checkpoint for serving (hash-pinned)")
-    p.add_argument("--ckpt", required=True); p.add_argument("--tokenizer", required=True)
-    p.add_argument("--out", required=True); p.add_argument("--config", help="GBConfig JSON (default: chat v2)")
+    p.add_argument("--ckpt"); p.add_argument("--tokenizer")
+    p.add_argument("--out"); p.add_argument("--config", help="GBConfig JSON (default: chat v2)")
+    p.add_argument("--hf-dir", help="instead: pin a Hugging Face model directory with k_head.pt")
     p.set_defaults(fn=cmd_chat_export)
     p = sub.add_parser("chat", help="one reply from a glass-box chat package, with its confidence report")
     p.add_argument("package"); p.add_argument("message")

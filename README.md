@@ -280,6 +280,20 @@ become checkable, and labels every guarantee with its strength:
   `experiments/glassbox_chat.py` runs the same comparison as a general chat
   model (Alpaca, WikiText-2 and a fact world in natural language).
 
+* **A chatbot with its own verification report** (`vt/chat_serve.py`). `vt chat`
+  and `vt chat-serve` serve a model whose every reply carries per-token
+  confidence, low-confidence spans and abstention. Glass-box models also report
+  the evidence split per token: from the prompt, from the reply so far, or from
+  memory. Packages are pinned by sha256 and refused if any file changes.
+
+  Two backends:
+  * glass-box chat checkpoints;
+  * a pretrained open model retrofitted on a GPU by
+    `kaggle/verifiable_chat/train.py`: LoRA on Qwen2.5-1.5B-Instruct with
+    self-labelled abstention, made-up-name training and a confidence head.
+
+  `kaggle/launch.sh` runs that as a private Kaggle T4 kernel.
+
 Limits, measured: these are small CPU models on synthetic tasks. Under
 distribution shift the base model's capability collapsed, and statistical
 bounds hold only when calibration matches deployment. See VISION.md for the

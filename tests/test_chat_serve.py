@@ -11,7 +11,8 @@ import torch
 tokenizers = pytest.importorskip("tokenizers")
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers  # noqa: E402
 
-from vt.chat_serve import PackageError, export_package, load_package, make_chat_server, reply  # noqa: E402
+from vt.chat_serve import (GlassboxResponder, PackageError, export_package, load_package,  # noqa: E402
+                           make_chat_server, reply)
 from vt.glassbox import GBConfig, GlassBoxLM  # noqa: E402
 
 
@@ -55,7 +56,7 @@ def test_tampered_package_is_refused(package, tmp_path):
 
 def test_chat_endpoint(package):
     model, tok, man = load_package(package)
-    srv = make_chat_server(model, tok, man, port=0)
+    srv = make_chat_server(GlassboxResponder(model, tok, man), port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}"
 
@@ -76,3 +77,34 @@ def test_chat_endpoint(package):
         assert post({"message": "hi", "history": [["a"]]})[0] == 400
     finally:
         srv.shutdown()
+
+
+def test_hf_backend_on_a_retrofitted_checkpoint(tmp_path):
+    """Pin and serve the kind of directory kaggle/verifiable_chat/train.py writes."""
+    transformers = pytest.importorskip("transformers")
+    from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
+    from vt.chat_serve import HFResponder, export_hf_package, load_responder
+    tk = Tokenizer(models.BPE())
+    tk.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tk.decoder = decoders.ByteLevel()
+    tk.train_from_iterator(["system: hi user: hello assistant: I don't know."] * 30,
+                           trainers.BpeTrainer(vocab_size=280, special_tokens=["<eos>"],
+                                               initial_alphabet=pre_tokenizers.ByteLevel.alphabet()))
+    tok = PreTrainedTokenizerFast(tokenizer_object=tk, eos_token="<eos>", pad_token="<eos>")
+    tok.chat_template = ("{% for m in messages %}{{ m['role'] }}: {{ m['content'] }}\n{% endfor %}"
+                         "{% if add_generation_prompt %}assistant:{% endif %}")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=tok.vocab_size, hidden_size=32, intermediate_size=64,
+                                     num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=1))
+    d = tmp_path / "model"
+    m.save_pretrained(d); tok.save_pretrained(d)
+    torch.save({"lin.weight": torch.zeros(1, 32), "lin.bias": torch.zeros(1)}, d / "k_head.pt")
+    man = export_hf_package(str(d))
+    r = load_responder(str(d))
+    assert isinstance(r, HFResponder) and r.manifest["package_sha256"] == man["package_sha256"]
+    out = r.reply("hello", max_new_tokens=4)
+    assert all(t["confidence"] == 0.5 and 0 <= t["token_probability"] <= 1 for t in out["tokens"])
+    with open(d / "config.json", "a") as f:
+        f.write(" ")
+    with pytest.raises(PackageError):
+        load_responder(str(d))
