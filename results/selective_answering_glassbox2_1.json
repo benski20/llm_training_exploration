@@ -1,0 +1,81 @@
+{
+ "glassbox2_1": {
+  "name": "Glassbox-2.1",
+  "budget": 0.267,
+  "no_rule": {
+   "hallucination": 0.8,
+   "hallucination_made_up": 0.23333333333333334,
+   "over_refusal": 0.17777777777777778,
+   "answered_right": 0.011111111111111112,
+   "right": 0.2
+  },
+  "msp": {
+   "threshold": 0.6546512365341186,
+   "calibration": {
+    "hallucination": 0.7166666666666667,
+    "hallucination_made_up": 0.43333333333333335,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.016666666666666666,
+    "right": 0.18
+   },
+   "test": {
+    "hallucination": 0.7333333333333333,
+    "hallucination_made_up": 0.15,
+    "over_refusal": 0.25,
+    "answered_right": 0.011111111111111112,
+    "right": 0.23
+   }
+  },
+  "neg_nll": {
+   "threshold": -0.7620301615408737,
+   "calibration": {
+    "hallucination": 0.7166666666666667,
+    "hallucination_made_up": 0.4,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.016666666666666666,
+    "right": 0.18666666666666668
+   },
+   "test": {
+    "hallucination": 0.7333333333333333,
+    "hallucination_made_up": 0.15,
+    "over_refusal": 0.2722222222222222,
+    "answered_right": 0.005555555555555556,
+    "right": 0.22666666666666666
+   }
+  },
+  "k_min": {
+   "threshold": -1.9333869218826294,
+   "calibration": {
+    "hallucination": 0.7666666666666667,
+    "hallucination_made_up": 0.35,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.016666666666666666,
+    "right": 0.18666666666666668
+   },
+   "test": {
+    "hallucination": 0.7,
+    "hallucination_made_up": 0.13333333333333333,
+    "over_refusal": 0.35555555555555557,
+    "answered_right": 0.005555555555555556,
+    "right": 0.23666666666666666
+   }
+  },
+  "probe": {
+   "threshold": -9.538997650146484,
+   "calibration": {
+    "hallucination": 0.6166666666666667,
+    "hallucination_made_up": 0.45,
+    "over_refusal": 0.26666666666666666,
+    "answered_right": 0.016666666666666666,
+    "right": 0.19666666666666666
+   },
+   "test": {
+    "hallucination": 0.7,
+    "hallucination_made_up": 0.21666666666666667,
+    "over_refusal": 0.3388888888888889,
+    "answered_right": 0.0,
+    "right": 0.21666666666666667
+   }
+  }
+ }
+}

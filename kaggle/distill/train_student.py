@@ -72,7 +72,7 @@ def find_data(root):
     raise SystemExit(f"no train.jsonl + tokenizer.json under {root}")
 
 
-def load(a):
+def load(a, mark_unsure=False):
     from tokenizers import Tokenizer
     a.data = find_data(a.data)
     tok = Tokenizer.from_file(os.path.join(a.data, "tokenizer.json"))
@@ -86,8 +86,8 @@ def load(a):
         w = load_dataset("Salesforce/wikitext", "wikitext-103-raw-v1", split="train")
         wiki = [x["text"] for x in w if len(x["text"]) > 80]
     def stream(docs, offset):
-        """docs: texts, or (prompt, reply) pairs; <unsure> goes before every abstaining reply
-        (only a Glassbox-3 student has a learnt use for it; for the others it is one more token)."""
+        """docs: texts, or (prompt, reply) pairs; with mark_unsure (Glassbox-3 students only),
+        <unsure> goes before every abstaining reply."""
         ids, doc = [], []
         pairs = isinstance(docs[0], tuple)
         flat = [t for d in docs for t in d] if pairs else docs
@@ -95,7 +95,7 @@ def load(a):
         for n in range(len(docs)):
             if pairs:
                 p, r = encs[2 * n].ids, encs[2 * n + 1].ids
-                one = p + ([UNSURE] if any(mk in docs[n][1].lower() for mk in ABSTAIN) else []) + r
+                one = p + ([UNSURE] if mark_unsure and any(mk in docs[n][1].lower() for mk in ABSTAIN) else []) + r
             else:
                 one = encs[n].ids
             ids += one + [0]
@@ -532,7 +532,7 @@ def save_package(m, cfg, tok_path, out):
 
 
 def run(kind, a, device):
-    tok, chat, wiki, ev, sc_prompts = load(a)
+    tok, chat, wiki, ev, sc_prompts = load(a, mark_unsure=(kind == "glassbox3"))
     V = tok.get_vocab_size()
     log(phase="data", kind=kind, chat_tokens=len(chat[0]), wiki_tokens=len(wiki[0]), device=device,
         unsure_marked=int((chat[0] == UNSURE).sum()), sc_prompts=len(sc_prompts))
