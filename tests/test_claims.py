@@ -60,3 +60,13 @@ def test_every_format_builds_chat_messages():
         it = build(fmt, pool, random.Random(0))
         assert it["messages"][0]["role"] == "system" and it["messages"][-1]["role"] == "user"
         TOK.apply_chat_template(it["messages"], tokenize=False, add_generation_prompt=True)
+
+
+def test_answer_span_handles_boxed_markers_and_plain_sentences():
+    m = build("math", [{"q": "A box holds 6 eggs. How many in 5 boxes?", "answer": "30"}], random.Random(0))
+    r = ids("6 x 5 = 30 eggs.\n\nSo, there are 30 eggs. The final answer is:\n\n\\[\n\\boxed{30}\n\\]")
+    assert label_claims(TOK, m, r)[0][1] == 1
+    assert label_claims(TOK, m, ids("6 x 5 = 30.\nThe answer is 31."))[0][1] == 0
+    it = build("reasoning", [{"q": "What is the capital of Peru?", "aliases": ["Lima"]}], random.Random(0))
+    assert label_claims(TOK, it, ids("The capital of Peru is Lima."))[0][1] == 1
+    assert label_claims(TOK, it, ids("Peru is in South America.\nIts capital is Cusco."))[0][1] == 0

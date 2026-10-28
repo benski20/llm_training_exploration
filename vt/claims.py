@@ -78,12 +78,52 @@ def line_spans(tok, ids):
     return spans
 
 
+def char_offsets(tok, ids):
+    """Start character of each token in the concatenation of their individual decodings."""
+    starts, text = [], ""
+    for t in ids:
+        starts.append(len(text))
+        text += tok.decode([t])
+    return starts, text
+
+
+MARKERS = re.compile(r"(final answer(?: is)?\s*[:：]?|answer(?: is)?\s*[:：]|####)", re.I)
+
+
+def answer_span(tok, ids):
+    """Token range of the reply's final answer, however it is written: the last \\boxed{...}, else the
+    rest of the line after the last 'Answer:' / 'final answer is' / '####' marker (or the next
+    non-empty line when the marker ends its line), else the reply's last non-empty line."""
+    starts, text = char_offsets(tok, ids)
+    lo = hi = None
+    boxed = list(re.finditer(r"\\boxed\{([^{}]*)\}", text))
+    if boxed:
+        lo, hi = boxed[-1].start(1), boxed[-1].end(1)
+    else:
+        mk = list(MARKERS.finditer(text))
+        if mk:
+            lo = mk[-1].end()
+            rest = text[lo:]
+            line = rest.split("\n", 1)[0]
+            if not line.strip(" *:$\\[]()"):                  # marker ends its line: take the next line
+                nxt = [ln for ln in rest.split("\n")[1:] if ln.strip(" *$\\[]()")]
+                if nxt:
+                    lo = lo + rest.index(nxt[0])
+                    line = nxt[0]
+            hi = lo + len(line)
+        else:
+            lines = [m for m in re.finditer(r"[^\n]+", text) if m.group().strip()]
+            if lines:
+                lo, hi = lines[-1].start(), lines[-1].end()
+    if lo is None or hi <= lo:
+        return None
+    toks = [j for j, c in enumerate(starts) if c < hi and c + len(tok.decode([ids[j]])) > lo]
+    return (toks[0], toks[-1] + 1) if toks else None
+
+
 def answer_line(tok, ids):
-    """Token range of the last line that starts with 'Answer:' (after any markdown), or None."""
-    for a, b in reversed(line_spans(tok, ids)):
-        if tok.decode(ids[a:b]).strip().lstrip("*# ").lower().startswith("answer"):
-            return a, b
-    return None
+    """Back-compatible name for answer_span."""
+    return answer_span(tok, ids)
 
 
 def label_claims(tok, item, ids):
@@ -117,7 +157,7 @@ def label_claims(tok, item, ids):
             return out
         a, b = span
         text = tok.decode(ids[a:b])
-        c = claim_tokens(tok, ids, item["context"] + " answer", a, b)
+        c = claim_tokens(tok, ids, item["context"] + " answer final", a, b)
         if fmt == "math":
             v, g = _num(text), _num(item["golds"][0][0])
             nums = [j for j in range(a, b) if any(ch.isdigit() for ch in tok.decode(ids[j:j + 1]))]
