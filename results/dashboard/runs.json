@@ -525,7 +525,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2k-token batches, chunked log-probs, generated data saved before the forward pass (16:17:48 UTC check)"
+"note": "2k-token batches, chunked log-probs, generated data saved before the forward pass (16:32:56 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
