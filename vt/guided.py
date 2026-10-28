@@ -47,9 +47,13 @@ class DoubtAwareGenerator:
         return not any(c.startswith(norm(w)) for c in context_words if norm(w))
 
     @torch.no_grad()
-    def generate(self, messages, max_new_tokens=128, mode="stop"):
+    def generate(self, messages, max_new_tokens=128, mode="stop", context=None):
+        """context: the text whose words are not claims when repeated (default: the whole conversation;
+        with documents, pass only the question and history so grounded claims are still reported)."""
         tok, dev = self.tok, next(self.model.parameters()).device
-        context_words = set(norm(" ".join(m["content"] for m in messages if m["role"] != "system")).split())
+        if context is None:
+            context = " ".join(m["content"] for m in messages if m["role"] != "system")
+        context_words = set(norm(context).split())
         ids = tok(prompt_of(tok, messages), return_tensors="pt").input_ids.to(dev)
         past, cur, out, claims, first = None, ids, [], [], None
         at_word_start, stopped = True, False
@@ -82,6 +86,7 @@ class DoubtAwareGenerator:
                 if c["doubted"] and mode == "hedge":
                     forced = tok(HEDGE, add_special_tokens=False).input_ids
                     out += forced
+                    c["token_index"] = len(out)                     # the claim itself follows the marker
                     o2 = self.model(input_ids=torch.tensor([forced], device=dev), past_key_values=past, use_cache=True)
                     past = o2.past_key_values
             out.append(nxt)
@@ -101,5 +106,5 @@ class DoubtAwareGenerator:
         if stopped:                                                 # keep only whole sentences before the doubt
             cut = max(text.rfind(ch) for ch in ".!?\n")
             text = (text[:cut + 1].strip() + " " if cut >= 0 else "") + STOP_NOTE
-        return {"text": text, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
+        return {"text": text, "ids": out, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
                 "min_p_correct": min((c["p_correct"] for c in claims), default=first["p_correct"] if first else None)}

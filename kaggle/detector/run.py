@@ -177,6 +177,9 @@ def main():
             names, c, _ = explain_all(model, torch.tensor([e["ids"]], device=dev), e["groups"], start=e["r0"] - 1)
             c = c.float().cpu().numpy()
             r["doc_share"] = (c[names.index("document")] / (np.abs(c).sum(0) + 1e-6)).tolist()
+            dp = np.clip(c[names.index("document")], 0, None)                 # document vs other inputs only
+            ip = np.clip(c[names.index("instruction")], 0, None) if "instruction" in names else 0 * dp
+            r["doc_vs_input"] = (dp / (dp + ip + 1e-6)).tolist()
             from vt.qwen_glassbox import lookback_ratio
             r["lookback"] = lookback_ratio(model, torch.tensor([e["ids"]], device=dev), e["groups"], e["r0"] - 1).tolist()
         return r
@@ -241,7 +244,9 @@ def main():
               for ds, lab, sc, lb in zip(r["doc_share"], r["token_labels"], r["tok_scores"], r["lookback"])]
         if pv and len({t[1] for t in pv}) > 1:
             py = [t[1] for t in pv]
+            dv = [x for r in rs if r.get("doc_vs_input") and r["token_labels"] for x in r["doc_vs_input"]]
             d["provenance_tokens"] = {"low_doc_share_auroc": auroc([-t[0] for t in pv], py),
+                                      "low_doc_vs_input_auroc": auroc([-x for x in dv], py) if len(dv) == len(py) else None,
                                       "low_doc_share_ci": auroc_ci([-t[0] for t in pv], py, n=200),
                                       "lookback_lens_low_ratio_auroc": auroc([-t[3] for t in pv], py),
                                       "lookback_lens_ci": auroc_ci([-t[3] for t in pv], py, n=200),
