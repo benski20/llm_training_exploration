@@ -12,7 +12,7 @@ minute.
 
 Choose the model with environment variables at deploy time:
     VERICHAT_MODEL  unsloth/Qwen3-32B-bnb-4bit (default; the head was trained on this checkpoint)
-    VERICHAT_HEAD   results/kaggle/risk-32b/risk/Qwen3-32B-bnb-4bit_risk_head.pt
+    VERICHAT_HEAD   results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt
     VERICHAT_GPU    L40S (default, 48 GB: the 4-bit 32B model, the 3B detector and the KV cache fit)
     VERICHAT_RISK_THRESHOLD  sentence risk that counts as doubtful (default: the head's, chosen for F1;
                     set it from kaggle/chateval's sweep to trade false alarms on everyday chat for recall)
@@ -23,7 +23,7 @@ import subprocess
 import modal
 
 MODEL = os.environ.get("VERICHAT_MODEL", "unsloth/Qwen3-32B-bnb-4bit")
-HEAD = os.environ.get("VERICHAT_HEAD", "results/kaggle/risk-32b/risk/Qwen3-32B-bnb-4bit_risk_head.pt")
+HEAD = os.environ.get("VERICHAT_HEAD", "results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt")
 DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
 GPU = os.environ.get("VERICHAT_GPU", "L40S")
 SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "300"))

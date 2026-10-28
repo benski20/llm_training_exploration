@@ -1176,6 +1176,48 @@ were lost. Fixed: batches of at most 2,048 tokens, one sequence at a time on out
 log-probs computed in 256-token chunks, the generated data saved to `data_items.json` before the
 forward pass, and `--resume-data` to skip generation in a rerun.
 
+**Qwen3-32B risk head, second attempt** (`results/kaggle/risk-32b2/`; 2 h 35 min on 2x T4, transformers
+5.16; sanity reply "Paris"). It was trained on 1,544 items:
+- the model's own replies, 100 per format (short, multi-answer, multi-turn, reasoning, GSM8K);
+- 500 RAGTruth;
+- 500 Math-Shepherd steps;
+- 44 HaluEval.
+
+Its layer is 54 of 64. It was tested on 514 held-out items. AUROC by source, against low output
+log-probability:
+
+| test source | token | sentence | reply | log-prob (sentence / reply) | left out of training (sentence) |
+|---|---|---|---|---|---|
+| RAGTruth (documents) | 0.777 | **0.899** | **0.879** | 0.52 / 0.37 | 0.58 |
+| Math-Shepherd steps | 0.875 | **0.845** | - | 0.41 | 0.56 |
+| own short answers | 0.760 | 0.770 | 0.781 | 0.77 / 0.74 | 0.67 |
+| own several-answer lists | 0.716 | 0.810 | 0.653 | 0.84 / 0.69 | 0.80 |
+| own multi-turn | 0.550 | 0.679 | 0.673 | 0.74 / 0.74 | 0.58 |
+| own reasoning | 0.625 | 0.582 | 0.633 | 0.56 / **0.88** | 0.60 |
+| own GSM8K (3 wrong of 40) | 0.661 | 0.568 | 0.423 | 0.33 / **0.89** | 0.59 |
+| HaluEval general (44 train) | 0.400 | 0.394 | - | 0.45 | 0.35 |
+| all pooled | 0.858 | 0.907 | 0.879 | 0.70 / 0.59 | - |
+
+The pooled 0.91 flatters the head: it mixes sources with very different error rates. Read by
+source:
+- **Strong where errors are frequent and labelled by people.** On RAGTruth (unfaithful to documents)
+  and on math steps, log-probability is at or below chance. This is the 3B detector's result again,
+  at 32B.
+- **No better than log-probability on the model's own chat replies.** On reasoning and math replies
+  it is worse at the reply level. The 32B is right on most of its own replies, so there were few
+  errors to learn from: 7 of 35 short-answer test sentences and 3 of 40 math replies were wrong.
+- **HaluEval is inverted**, with only 44 training replies.
+- **Leaving a source out drops it to 0.35-0.80.**
+- **The F1 threshold (0.985, F1 0.71) is set by the pooled mix** and is not a serving threshold for
+  chat.
+
+**Consequences for serving.**
+- The head is the right signal for document-grounded chat and stepwise maths.
+- For open chat, it has to be checked against output log-probability on real conversations, and the
+  two may need combining. The generator now records each written token's log-probability so that
+  `kaggle/chateval` can compare risk, log-probability and their combination on the same replies.
+- The serving threshold comes from the chat eval's grid, not from the training F1.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the

@@ -1,0 +1,311 @@
+{
+ "config": {
+  "model": "unsloth/Qwen3-32B-bnb-4bit",
+  "quant": "none",
+  "out": "/kaggle/working/risk",
+  "thinking": false,
+  "think_scale": 2.0,
+  "own_train": 100,
+  "own_test": 40,
+  "span_train": 500,
+  "span_test": 150,
+  "step_train": 500,
+  "step_test": 150,
+  "max_tokens": 1536,
+  "gen_batch": 16,
+  "neg_keep": 0.2,
+  "resume_data": null,
+  "smoke": false
+ },
+ "model": "unsloth/Qwen3-32B-bnb-4bit",
+ "layers": [
+  35,
+  44,
+  54
+ ],
+ "complete": true,
+ "counts": {
+  "train": {
+   "halueval_general": 44,
+   "math_steps": 500,
+   "own_math": 100,
+   "own_multi": 100,
+   "own_multiturn": 100,
+   "own_reasoning": 100,
+   "own_short": 100,
+   "ragtruth": 500
+  },
+  "test": {
+   "halueval_general": 14,
+   "math_steps": 150,
+   "own_math": 40,
+   "own_multi": 40,
+   "own_multiturn": 40,
+   "own_reasoning": 40,
+   "own_short": 40,
+   "ragtruth": 150
+  }
+ },
+ "risk_layer": 54,
+ "by_layer": {
+  "35": 0.8932297317456873,
+  "44": 0.8101517576217858,
+  "54": 0.9030209124443962
+ },
+ "train_tokens": 26042,
+ "train_positives": 8341,
+ "sentence_threshold": 0.9847184151411057,
+ "sentence_f1_at_threshold": 0.7122602168473728,
+ "per_source": {
+  "halueval_general": {
+   "token": {
+    "n": 1394,
+    "pos": 652,
+    "risk_auroc": 0.40043903890992677,
+    "risk_ci": [
+     0.37139503967994103,
+     0.4267821320759044
+    ],
+    "low_logprob_auroc": 0.5830215550741653
+   },
+   "sentence": {
+    "n": 87,
+    "pos": 45,
+    "risk_auroc": 0.3941798941798942,
+    "risk_ci": [
+     0.27189255836657744,
+     0.5053979204563446
+    ],
+    "low_logprob_auroc": 0.4523809523809524
+   },
+   "left_out_token_auroc": 0.38969664147636135,
+   "left_out_sentence_auroc": 0.3513227513227513
+  },
+  "math_steps": {
+   "token": {
+    "n": 571,
+    "pos": 353,
+    "risk_auroc": 0.8745744210827248,
+    "risk_ci": [
+     0.8375335260705136,
+     0.9010745034514147
+    ],
+    "low_logprob_auroc": 0.6369519453179822
+   },
+   "sentence": {
+    "n": 571,
+    "pos": 353,
+    "risk_auroc": 0.8451477506042571,
+    "risk_ci": [
+     0.8151629239702658,
+     0.8745477746812419
+    ],
+    "low_logprob_auroc": 0.40890661953894536
+   },
+   "left_out_token_auroc": 0.47792187540608677,
+   "left_out_sentence_auroc": 0.563375523039738
+  },
+  "own_math": {
+   "token": {
+    "n": 94,
+    "pos": 9,
+    "risk_auroc": 0.661437908496732,
+    "risk_ci": [
+     0.46415724910653916,
+     0.8142989417989418
+    ],
+    "low_logprob_auroc": 0.5790849673202615
+   },
+   "sentence": {
+    "n": 40,
+    "pos": 3,
+    "risk_auroc": 0.5675675675675675,
+    "risk_ci": [
+     0.18302968960863697,
+     0.9733194733194733
+    ],
+    "low_logprob_auroc": 0.3333333333333333
+   },
+   "reply": {
+    "n": 40,
+    "risk_auroc": 0.42342342342342343,
+    "low_logprob_auroc": 0.8918918918918919
+   },
+   "left_out_token_auroc": 0.5490196078431373,
+   "left_out_sentence_auroc": 0.5945945945945946
+  },
+  "own_multi": {
+   "token": {
+    "n": 202,
+    "pos": 53,
+    "risk_auroc": 0.7162213498797011,
+    "risk_ci": [
+     0.6351605985504934,
+     0.7919214774951077
+    ],
+    "low_logprob_auroc": 0.6900088641256173
+   },
+   "sentence": {
+    "n": 100,
+    "pos": 25,
+    "risk_auroc": 0.8101333333333334,
+    "risk_ci": [
+     0.7271127027027028,
+     0.9015284704041343
+    ],
+    "low_logprob_auroc": 0.8362666666666667
+   },
+   "reply": {
+    "n": 40,
+    "risk_auroc": 0.6525,
+    "low_logprob_auroc": 0.685
+   },
+   "left_out_token_auroc": 0.6701278966696214,
+   "left_out_sentence_auroc": 0.7962666666666667
+  },
+  "own_multiturn": {
+   "token": {
+    "n": 82,
+    "pos": 26,
+    "risk_auroc": 0.5501373626373627,
+    "risk_ci": [
+     0.4179875624056658,
+     0.662673393416928
+    ],
+    "low_logprob_auroc": 0.7091346153846154
+   },
+   "sentence": {
+    "n": 40,
+    "pos": 12,
+    "risk_auroc": 0.6785714285714286,
+    "risk_ci": [
+     0.526293243896136,
+     0.8336038961038962
+    ],
+    "low_logprob_auroc": 0.7351190476190477
+   },
+   "reply": {
+    "n": 40,
+    "risk_auroc": 0.6726190476190477,
+    "low_logprob_auroc": 0.7351190476190477
+   },
+   "left_out_token_auroc": 0.5267857142857143,
+   "left_out_sentence_auroc": 0.5833333333333334
+  },
+  "own_reasoning": {
+   "token": {
+    "n": 70,
+    "pos": 14,
+    "risk_auroc": 0.625,
+    "risk_ci": [
+     0.4358419991511036,
+     0.7933837203124171
+    ],
+    "low_logprob_auroc": 0.6211734693877551
+   },
+   "sentence": {
+    "n": 38,
+    "pos": 11,
+    "risk_auroc": 0.5824915824915825,
+    "risk_ci": [
+     0.3671028325123153,
+     0.7555989583333335
+    ],
+    "low_logprob_auroc": 0.5589225589225589
+   },
+   "reply": {
+    "n": 38,
+    "risk_auroc": 0.632996632996633,
+    "low_logprob_auroc": 0.8754208754208754
+   },
+   "left_out_token_auroc": 0.6964285714285714,
+   "left_out_sentence_auroc": 0.5959595959595959
+  },
+  "own_short": {
+   "token": {
+    "n": 86,
+    "pos": 18,
+    "risk_auroc": 0.7598039215686274,
+    "risk_ci": [
+     0.632795678178661,
+     0.8710369638302932
+    ],
+    "low_logprob_auroc": 0.6915849673202614
+   },
+   "sentence": {
+    "n": 35,
+    "pos": 7,
+    "risk_auroc": 0.7704081632653061,
+    "risk_ci": [
+     0.5557193877551021,
+     0.9444444444444444
+    ],
+    "low_logprob_auroc": 0.7704081632653061
+   },
+   "reply": {
+    "n": 35,
+    "risk_auroc": 0.7806122448979592,
+    "low_logprob_auroc": 0.7448979591836735
+   },
+   "left_out_token_auroc": 0.7189542483660131,
+   "left_out_sentence_auroc": 0.673469387755102
+  },
+  "ragtruth": {
+   "token": {
+    "n": 23064,
+    "pos": 936,
+    "risk_auroc": 0.7769023351317278,
+    "risk_ci": [
+     0.7591978359336042,
+     0.795472665216985
+    ],
+    "low_logprob_auroc": 0.42184441358282193
+   },
+   "sentence": {
+    "n": 1128,
+    "pos": 80,
+    "risk_auroc": 0.8992127862595419,
+    "risk_ci": [
+     0.8560401014568082,
+     0.9346139985828077
+    ],
+    "low_logprob_auroc": 0.519119751908397
+   },
+   "reply": {
+    "n": 150,
+    "risk_auroc": 0.8794934640522876,
+    "low_logprob_auroc": 0.3713235294117647
+   },
+   "left_out_token_auroc": 0.529300121940103,
+   "left_out_sentence_auroc": 0.5824606393129771
+  },
+  "all": {
+   "token": {
+    "n": 25563,
+    "pos": 2061,
+    "risk_auroc": 0.8578542109272004,
+    "risk_ci": [
+     0.8483723595118722,
+     0.866706005106506
+    ],
+    "low_logprob_auroc": 0.6732284359459265
+   },
+   "sentence": {
+    "n": 2039,
+    "pos": 536,
+    "risk_auroc": 0.9069528852742277,
+    "risk_ci": [
+     0.8919402849857384,
+     0.9195519992779043
+    ],
+    "low_logprob_auroc": 0.6970524125877599
+   },
+   "reply": {
+    "n": 507,
+    "risk_auroc": 0.8792296896928115,
+    "low_logprob_auroc": 0.591782317168252
+   }
+  }
+ },
+ "seconds": 9317
+}
