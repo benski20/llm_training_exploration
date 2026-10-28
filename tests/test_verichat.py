@@ -111,3 +111,50 @@ def test_server_api_key_and_rate_limit():
     assert post(None) == 401 and post("wrong") == 401
     assert post("s3cret") == 200 and post("s3cret") == 200 and post("s3cret") == 429
     srv.shutdown()
+
+
+def test_batcher_groups_concurrent_requests_by_kind():
+    import threading
+    import time
+    from vt.verichat_server import Batcher
+    calls = []
+
+    def chat(items):
+        calls.append(("chat", len(items)))
+        time.sleep(0.05)
+        return [x * 2 for x in items]
+
+    def bad(items):
+        raise ValueError("boom")
+    b = Batcher({"chat": chat, "judge": bad}, max_batch=8, window=0.1)
+    out = [None] * 5
+    ts = [threading.Thread(target=lambda i=i: out.__setitem__(i, b.submit("chat", i, 5))) for i in range(5)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert out == [0, 2, 4, 6, 8] and calls[0] == ("chat", 5)       # one batched call
+    assert b.submit_many("chat", [1, 2], 5) == [2, 4]
+    try:
+        b.submit("judge", 1, 5)
+        assert False
+    except ValueError:
+        pass
+    assert b.submit("chat", 3, 5) == 6                              # the worker survives an error
+
+
+def test_batched_replies_match_single_replies():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, threshold=0.5)
+    reqs = [{"messages": [{"role": "user", "content": q}], "mode": md, "max_new_tokens": 12,
+             "documents": ["The Eiffel Tower was completed in 1889."] if d else None}
+            for q, md, d in (("Hi", "flag", False), ("Who designed the Eiffel Tower and when?", "hedge", True),
+                             ("Name three rivers.", "stop", False))]
+    batch = bot.reply_batch(reqs)
+    for r, b in zip(reqs, batch):
+        one = bot.reply(r["messages"], documents=r["documents"], mode=r["mode"], max_new_tokens=12)
+        assert one["text"] == b["text"] and [c["text"] for c in one["claims"]] == [c["text"] for c in b["claims"]]

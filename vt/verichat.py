@@ -157,27 +157,44 @@ class VeriChat:
         return None if not first else first["p_correct"]
 
     def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True):
-        out = self._reply(messages, documents, mode, max_new_tokens)
-        score = out.pop("_trigger")
-        if documents or not retrieve or self.retriever is None:
-            return out
-        out["retrieval"] = {"trigger_score": score, "retrieved": False}
-        if score is None or score >= self.retrieve_below:
-            return out
-        question = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-        passages = list(self.retriever(question))
-        if not passages:
-            return out
-        again = self._reply(messages, passages, mode, max_new_tokens)
-        again.pop("_trigger")
-        again["retrieval"] = {"trigger_score": score, "retrieved": True, "passages": passages,
-                              "closed_book_text": out["text"]}
-        return again
+        return self.reply_batch([{"messages": messages, "documents": documents, "mode": mode,
+                                  "max_new_tokens": max_new_tokens, "retrieve": retrieve}])[0]
 
-    def _reply(self, messages, documents, mode, max_new_tokens):
-        msgs = self._messages(messages, documents or [])
-        context = " ".join(m["content"] for m in messages if m["role"] != "system")   # without the documents
-        r = self.gen.generate(msgs, max_new_tokens=max_new_tokens, mode=mode, context=context)
+    def reply_batch(self, requests):
+        """Several conversations at once (one batched generation; provenance per reply). requests:
+        [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?}] -> one reply() result each."""
+        reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
+                 "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True)} for r in requests]
+        outs = self._reply_batch(reqs)
+        again, where = [], []                                        # doubted closed-book replies: look them up
+        for i, (r, o) in enumerate(zip(reqs, outs)):
+            score = o.pop("_trigger")
+            if r["documents"] or not r["retrieve"] or self.retriever is None:
+                continue
+            o["retrieval"] = {"trigger_score": score, "retrieved": False}
+            if score is None or score >= self.retrieve_below:
+                continue
+            question = next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user")
+            passages = list(self.retriever(question))
+            if passages:
+                again.append(dict(r, documents=passages))
+                where.append(i)
+        for i, r, o in zip(where, again, self._reply_batch(again) if again else []):
+            o.pop("_trigger")
+            o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
+                              "passages": r["documents"], "closed_book_text": outs[i]["text"]}
+            outs[i] = o
+        return outs
+
+    def _reply_batch(self, reqs):
+        prepared = [(self._messages(r["messages"], r["documents"]),
+                     " ".join(m["content"] for m in r["messages"] if m["role"] != "system")) for r in reqs]  # context
+        gens = self.gen.generate_batch([{"messages": msgs, "max_new_tokens": r["max_new_tokens"], "mode": r["mode"],
+                                         "context": ctx} for r, (msgs, ctx) in zip(reqs, prepared)])   # without docs
+        return [self._post(r["messages"], r["documents"], r["mode"], msgs, g)
+                for r, (msgs, _), g in zip(reqs, prepared, gens)]
+
+    def _post(self, messages, documents, mode, msgs, r):
         claims = r["claims"]
         if documents and claims and not r["stopped_on_doubt"]:
             ids = r["ids"]                                           # the generated tokens themselves

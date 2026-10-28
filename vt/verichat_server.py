@@ -11,7 +11,8 @@
                  16 at once, batched into padded forward passes
 
 POSTs are rate-limited per client (--rate-per-minute); with VERICHAT_API_KEY set they need
-"Authorization: Bearer <key>". Generation runs one request at a time; extra connections get 503.
+"Authorization: Bearer <key>". Concurrent requests are batched by one model-owning worker (up to 8
+at once, 20 ms window); connections beyond the limit get 503.
 """
 import argparse
 import collections
@@ -122,6 +123,63 @@ def validate_judge(req):
     return msgs, resp, docs
 
 
+class Batcher:
+    """One worker thread owns the model. Requests wait up to `window` seconds to be grouped with others
+    of the same kind ("chat" / "judge") into one batched call (at most `max_batch`). A single owner
+    also keeps hooks registered for provenance from seeing another request's forward pass."""
+
+    def __init__(self, handlers, max_batch=8, window=0.02):
+        self.handlers, self.max_batch, self.window = handlers, max_batch, window
+        self.pending, self.cv = collections.deque(), threading.Condition()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def submit(self, kind, item, timeout=None):
+        return self.submit_many(kind, [item], timeout)[0]
+
+    def submit_many(self, kind, items, timeout=None):
+        slots = [{"done": threading.Event()} for _ in items]
+        with self.cv:
+            self.pending.extend((kind, item, slot) for item, slot in zip(items, slots))
+            self.cv.notify()
+        end = None if timeout is None else time.monotonic() + timeout
+        for slot in slots:
+            if not slot["done"].wait(None if end is None else max(0.0, end - time.monotonic())):
+                raise TimeoutError("timed out waiting for the model")
+            if "error" in slot:
+                raise slot["error"]
+        return [slot["result"] for slot in slots]
+
+    def _take(self):
+        with self.cv:
+            while not self.pending:
+                self.cv.wait()
+            kind = self.pending[0][0]
+            end = time.monotonic() + self.window
+            while True:                                          # let a burst of requests arrive
+                same = [p for p in self.pending if p[0] == kind]
+                left = end - time.monotonic()
+                if len(same) >= self.max_batch or left <= 0:
+                    break
+                self.cv.wait(left)
+            batch = [p for p in self.pending if p[0] == kind][:self.max_batch]
+            for p in batch:
+                self.pending.remove(p)
+            return kind, batch
+
+    def _run(self):
+        while True:
+            kind, batch = self._take()
+            try:
+                results = self.handlers[kind]([item for _, item, _ in batch])
+                for (_, _, slot), r in zip(batch, results):
+                    slot["result"] = r
+            except Exception as e:                               # every waiter gets the error, the worker lives
+                for _, _, slot in batch:
+                    slot["error"] = e
+            for _, _, slot in batch:
+                slot["done"].set()
+
+
 class RateLimiter:
     """At most `per_minute` POSTs per client in any 60 s window (0: unlimited)."""
 
@@ -146,10 +204,13 @@ class RateLimiter:
 
 
 def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0, detector=None,
-                api_key=None, rate_per_minute=20, trust_proxy=False):
+                api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16):
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
-    X-Forwarded-For (only behind a proxy you control)."""
-    lock = threading.Lock()
+    X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
+    handlers = {"chat": bot.reply_batch}
+    if detector is not None:
+        handlers["judge"] = lambda items: detector.judge_batch(items)
+    batcher = Batcher(handlers, max_batch=max_batch)
     limiter = RateLimiter(rate_per_minute)
 
     class Handler(HardenedHandler):
@@ -191,19 +252,24 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                     parsed = [validate_judge(x if isinstance(x, dict) else {}) for x in (batch or [req])]
                 except ValueError as e:
                     return self.send_json(400, {"error": str(e)[:200]})
-                with lock:
-                    rs = detector.judge_batch([{"messages": m, "response": r, "documents": d} for m, r, d in parsed])
+                try:
+                    rs = batcher.submit_many("judge", [{"messages": m, "response": r, "documents": d}
+                                                       for m, r, d in parsed], deadline)
+                except TimeoutError as e:
+                    return self.send_json(503, {"error": str(e)})
                 rs = [r if "error" in r else {k: r[k] for k in ("p_hallucinated", "flagged", "spans")} for r in rs]
                 return self.send_json(200, {"items": rs} if batch is not None else rs[0])
             try:
                 msgs, docs, mode = validate(req)
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)[:200]})
-            with lock:                                           # one generation at a time
-                r = bot.reply(msgs, documents=docs, mode=mode)
+            try:                                                 # batched with concurrent requests
+                r = batcher.submit("chat", {"messages": msgs, "documents": docs, "mode": mode}, deadline)
+            except TimeoutError as e:
+                return self.send_json(503, {"error": str(e)})
             self.send_json(200, r)
 
-    return bounded_server(host, port, Handler, 4)
+    return bounded_server(host, port, Handler, max_concurrency)
 
 
 def main(argv=None):
