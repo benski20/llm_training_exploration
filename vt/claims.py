@@ -203,8 +203,11 @@ def make_items(fmt, pool, n, seed):
     return [build(fmt, pool, rng) for _ in range(n)]
 
 
-def prompt_of(tok, messages):
-    return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+def prompt_of(tok, messages, thinking=None):
+    """The chat prompt. thinking: switch Qwen3-style reasoning on or off where the template has the switch
+    (None: the template's default)."""
+    kw = {} if thinking is None or "enable_thinking" not in str(tok.chat_template or "") else {"enable_thinking": thinking}
+    return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kw)
 
 
 def claim_features(model, tok, prompt_ids, reply_ids, positions, layers, batch=8):

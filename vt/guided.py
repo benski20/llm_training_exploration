@@ -33,12 +33,21 @@ class DoubtAwareGenerator:
     """risk_probe / risk_layer (optional): a token-level hallucination probe read at each written token's
     own position (vt.detector's token probe, or kaggle/risk). Every token then gets P(hallucinated), with
     no claim heuristic; a sentence's risk is its riskiest content token, and in stop mode a sentence
-    above risk_threshold is removed as soon as it is complete and the reply ends there."""
+    above risk_threshold is removed as soon as it is complete and the reply ends there.
+
+    Reasoning models: thinking (default per request) switches Qwen3-style reasoning on in the prompt. A
+    <think> block, whether asked for or begun by the prompt (R1-style templates), is kept apart from the
+    reply: it is not scored, checked or counted in max_new_tokens, has its own think_budget, and is closed
+    with </think> when that runs out. The reply is then scored as usual; results carry "reasoning"."""
 
     def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0), combine=True,
-                 risk_probe=None, risk_layer=None, risk_threshold=0.5):
+                 risk_probe=None, risk_layer=None, risk_threshold=0.5, thinking=False, think_budget=1024):
         self.model, self.tok, self.probe, self.layer = model, tok, probe, layer
         self.risk_probe, self.risk_layer, self.risk_threshold = risk_probe, risk_layer, risk_threshold
+        self.thinking, self.think_budget = thinking, think_budget
+        self.think_open, self.think_close = _token_id(tok, "<think>"), _token_id(tok, "</think>")
+        if self.think_open is None or self.think_close is None:
+            self.think_open = self.think_close = None
         self.threshold, self.calib = threshold, calib
         self.combine = combine          # judge by the mean of the probe's P(correct) and the token's probability
         self.stop_ids = {i for i in (tok.eos_token_id, tok.pad_token_id, tok.convert_tokens_to_ids("<|endoftext|>"),
@@ -67,19 +76,23 @@ class DoubtAwareGenerator:
                                      "context": context}])[0]
 
     @torch.no_grad()
-    def generate_batch(self, requests, on_text=None):
+    def generate_batch(self, requests, on_text=None, on_reasoning=None):
         """Several replies at once: left-padded prompts, one shared KV cache, one forward pass per step for
         all of them. Every sequence feeds exactly one token per step: its next token, or a queued hedge
         marker, or (once finished) padding that nothing attends to.
 
         on_text(i, delta): streams request i's reply as it is written. With a risk probe, text is released
         one checked sentence at a time (a sentence that stop mode drops is never shown); without one,
-        token by token. requests: [{"messages",
-        "max_new_tokens"?, "mode"?, "context"?}]; returns one result per request, as generate()."""
+        token by token. on_reasoning(i, delta): streams a <think> block, token by token. requests:
+        [{"messages", "max_new_tokens"?, "mode"?, "context"?, "thinking"?, "think_budget"?}]; returns one
+        result per request, as generate()."""
         tok, dev = self.tok, next(self.model.parameters()).device
-        seqs = [_Seq(self, r["messages"], r.get("max_new_tokens", 128), r.get("mode", "stop"), r.get("context"))
-                for r in requests]
-        prompts = [tok(prompt_of(tok, r["messages"])).input_ids for r in requests]
+        seqs = [_Seq(self, r["messages"], r.get("max_new_tokens", 128), r.get("mode", "stop"), r.get("context"),
+                     r.get("think_budget", self.think_budget)) for r in requests]
+        prompts = [tok(prompt_of(tok, r["messages"], r.get("thinking", self.thinking))).input_ids for r in requests]
+        for sq, p in zip(seqs, prompts):
+            if self.think_open is not None:                         # the model may open a <think> block
+                sq.phase = "think" if p[-3:].count(self.think_open) and self.think_close not in p[-3:] else "start"
         B, P = len(prompts), max(len(p) for p in prompts)
         pad = tok.pad_token_id if tok.pad_token_id is not None else 0
         ids = torch.full((B, P), pad, dtype=torch.long)
@@ -100,7 +113,7 @@ class DoubtAwareGenerator:
                 hooks.append(blocks[L].register_forward_hook(
                     lambda m, a, o, L=L: last.__setitem__(L, (o[0] if isinstance(o, tuple) else o)[:, -1].detach())))
         try:
-            return self._loop(seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last)
+            return self._loop(seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning)
         finally:
             for hk in hooks:
                 hk.remove()
@@ -115,7 +128,7 @@ class DoubtAwareGenerator:
                 {"num_logits_to_keep": 1} if "num_logits_to_keep" in ps else {}
         return self._lk
 
-    def _loop(self, seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last):
+    def _loop(self, seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning=None):
         while True:
             o = self.model(input_ids=cur, attention_mask=mask, position_ids=pos, past_key_values=past,
                            use_cache=True, output_hidden_states=need_all, **self._last_logits_only())
@@ -137,9 +150,9 @@ class DoubtAwareGenerator:
                 else:
                     sq.closed = sq.done                         # nothing more to observe once it stops feeding
                     nxt.append(None)
-            if on_text is not None:
+            if on_text is not None or on_reasoning is not None:
                 for b, sq in enumerate(seqs):
-                    sq.stream(b, on_text, final=False)
+                    sq.stream(b, on_text, final=False, on_reasoning=on_reasoning)
             if all(t is None for t in nxt):
                 break
             live = torch.tensor([[t is not None] for t in nxt], dtype=torch.long, device=dev)
@@ -149,11 +162,19 @@ class DoubtAwareGenerator:
         return [sq.result() for sq in seqs]
 
 
+def _token_id(tok, s):
+    """The id of a single-token string in the vocabulary, or None."""
+    i = tok.convert_tokens_to_ids(s)
+    return i if isinstance(i, int) and i >= 0 and i != tok.unk_token_id else None
+
+
 class _Seq:
     """One reply's decoding state for DoubtAwareGenerator.generate_batch."""
 
-    def __init__(self, gen, messages, max_new_tokens, mode, context):
+    def __init__(self, gen, messages, max_new_tokens, mode, context, think_budget=1024):
         self.g, self.mode, self.left = gen, mode, max_new_tokens
+        self.phase, self.think_left, self.reasoning, self.prefix = "answer", think_budget, [], []   # see decide()
+        self.emitted_reasoning = ""
         if context is None:
             context = " ".join(m["content"] for m in messages if m["role"] != "system")
         self.context_words = set(norm(context).split())
@@ -162,9 +183,16 @@ class _Seq:
         self.risk, self.sentences, self.sent_start, self.last_fed = {}, [], 0, None
         self.emitted = ""
 
-    def stream(self, b, on_text, final):
+    def stream(self, b, on_text, final, on_reasoning=None):
         """Send the part of the reply that is safe to show: up to the last checked sentence while a risk
         probe is on and the reply is still being written, else everything written so far."""
+        if on_reasoning is not None and self.reasoning:
+            r = self.g.tok.decode(self.reasoning, skip_special_tokens=True)
+            if r.startswith(self.emitted_reasoning) and len(r) > len(self.emitted_reasoning) and not r.endswith("\ufffd"):
+                on_reasoning(b, r[len(self.emitted_reasoning):])
+                self.emitted_reasoning = r
+        if on_text is None:
+            return
         if (final or self.done) and self.g.risk_probe is not None and not self.stopped:
             self._close_sentence(len(self.out))                    # check the last sentence before showing it
         safe = len(self.out) if (final or self.done or self.g.risk_probe is None) else self.sent_start
@@ -207,8 +235,27 @@ class _Seq:
         if self.left <= 0:
             self.done = True
             return
-        self.left -= 1
         nxt = int(logits.argmax())
+        if self.phase != "answer":                                  # "start": a <think> block may open
+            if self.phase == "start":                               # "think": inside it
+                self.phase = "think" if nxt == g.think_open else "answer"
+                if self.phase == "think":
+                    self.prefix.append(nxt)
+                    self.feed = [(nxt, None)]
+                    return
+            else:
+                self.think_left -= 1
+                if nxt == g.think_close or nxt in g.stop_ids or self.think_left < 0:
+                    close = [g.think_close] + tok("\n\n", add_special_tokens=False).input_ids
+                    self.prefix += close                            # closed by the model or by the budget
+                    self.feed = [(t, None) for t in close]
+                    self.phase = "answer"
+                    return
+                self.reasoning.append(nxt)
+                self.prefix.append(nxt)
+                self.feed = [(nxt, None)]
+                return
+        self.left -= 1
         if nxt in g.stop_ids:
             self.done = True
             return
@@ -288,6 +335,7 @@ class _Seq:
                 if seg:
                     sentences.append({"text": seg, "start": max(0, a), "end": max(0, a) + len(seg),
                                       "risk": st["risk"], "doubted": st["doubted"]})
-        return {"text": text, "ids": out, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
+        reasoning = tok.decode(self.reasoning, skip_special_tokens=True).strip() if self.prefix else None
+        return {"text": text, "ids": out, "prefix_ids": self.prefix, "reasoning": reasoning, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
                 "sentences": sentences, "max_risk": max((x["risk"] for x in sentences), default=None),
                 "min_p_correct": min((c["p_correct"] for c in claims), default=first["p_correct"] if first else None)}

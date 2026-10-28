@@ -7,8 +7,11 @@
   GET  /health   status and the head's layer
   GET  /metrics  Prometheus counters: requests by path and status, latency, batch sizes
   POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag",
-                 "stream": false}; with "stream": true, server-sent events: {"delta"} pieces of checked text,
-                 then {"done": true, "reply": <the full reply>}
+                 "stream": false, "thinking": null}; with "stream": true, server-sent events: {"delta"} pieces
+                 of checked text ({"reasoning"} pieces of a reasoning model's thinking first, when it thinks),
+                 then {"done": true, "reply": <the full reply>}. "thinking": true/false asks a reasoning
+                 model (Qwen3) to think first or not (default: --thinking); its reasoning is returned apart,
+                 unscored, as reply["reasoning"]
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
                  general detector (vt/detector.Detector; only with --detector); {"items": [...]} for up to
                  16 at once, batched into padded forward passes
@@ -57,7 +60,7 @@ Amber: uncertain. Red: doubtful. With documents, each claim shows whether it cam
 <details><summary>Documents (optional)</summary><textarea id="docs" rows="5" placeholder="Paste source text. Separate documents with a blank line containing ---"></textarea></details>
 <textarea id="msg" rows="3" placeholder="Ask anything"></textarea>
 <div class="row"><select id="mode"><option value="hedge">mark doubtful claims</option><option value="stop">withhold doubtful answers</option>
-<option value="flag">only score</option></select><button id="send">Send</button><span id="busy" class="meta"></span></div>
+<option value="flag">only score</option></select><label id="thinkl" hidden><input type="checkbox" id="think"> think first (slower)</label><button id="send">Send</button><span id="busy" class="meta"></span></div>
 <details id="jp" hidden><summary>Check an answer from any AI</summary>
 <textarea id="jq" rows="2" placeholder="The question or prompt it answered"></textarea>
 <textarea id="ja" rows="5" placeholder="Its answer (documents above, if any, are used as the source)"></textarea>
@@ -65,6 +68,7 @@ Amber: uncertain. Red: doubtful. With documents, each claim shows whether it cam
 </main><script>
 const log=document.getElementById('log'),msgs=[];
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text">'+esc(t)+'</div></details>'}
 function render(r){let t=r.text,html='',pos=0;
  for(const c of r.claims){if(!c.text)continue;const k=(c.start!==undefined&&c.start>=pos)?c.start:t.indexOf(c.text,pos);if(k<0)continue;
   const cls=c.verdict==='likely right'?'g':(c.verdict==='uncertain'?'m':'b');
@@ -79,9 +83,10 @@ function render(r){let t=r.text,html='',pos=0;
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
   '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up. ':'')+
-  'mode '+r.mode+'</div>'}
+  'mode '+r.mode+'</div>'+(r.reasoning?reasonBox(r.reasoning):'')}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
-fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false});
+fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
+ if(h.thinking_available){document.getElementById('thinkl').hidden=false;document.getElementById('think').checked=!!h.thinking}});
 function renderJudge(r,a){let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
  return '<div class="card"><div class="text">'+html+'</div><div class="meta">'+(r.flagged?'Likely contains a hallucination':
@@ -97,16 +102,17 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
  const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
  msgs.push({role:'user',content:m});add('user',esc(m));document.getElementById('msg').value='';
  const b=document.getElementById('send');b.disabled=true;document.getElementById('busy').textContent='thinking…';
- const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div>';log.appendChild(card);
- const live=card.firstChild;let shown='';
+ const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div><div class="meta"></div>';log.appendChild(card);
+ const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
  try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({messages:msgs,documents:docs,mode:document.getElementById('mode').value,stream:true})});
+  body:JSON.stringify({messages:msgs,documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked})});
   if(!res.ok){const r=await res.json();card.innerHTML=esc('Error: '+(r.error||res.status))}
   else{const rd=res.body.getReader(),dec=new TextDecoder();let buf='',r=null;
    while(true){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
     let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
      if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
-     if(m.delta){shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
+     if(m.reasoning){reasoned+=m.reasoning;rlive.textContent='Thinking: '+reasoned.slice(-300);card.scrollIntoView()}
+     if(m.delta){rlive.textContent='';shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
      if(m.done){if(m.error){card.innerHTML=esc('Error: '+m.error)}else{r=m.reply}}}}
    if(r){msgs.push({role:'assistant',content:r.text});card.innerHTML=render(r)}}}
  catch(e){card.innerHTML=esc('Error: '+e)}b.disabled=false;document.getElementById('busy').textContent=''};
@@ -129,6 +135,8 @@ def validate(req):
     mode = req.get("mode", "hedge")
     if mode not in ("hedge", "stop", "flag"):
         raise ValueError("mode: hedge, stop or flag")
+    if req.get("thinking") is not None and not isinstance(req["thinking"], bool):
+        raise ValueError("thinking: true, false or null")
     return msgs, docs, mode
 
 
@@ -259,8 +267,10 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
     def chat(items):                                             # items may carry a "_stream" callback
         reqs = [{k: v for k, v in it.items() if k != "_stream"} for it in items]
         sinks = [it.get("_stream") for it in items]
-        on_text = (lambda i, d: sinks[i](d) if sinks[i] else None) if any(sinks) else None
-        return bot.reply_batch(reqs, on_text=on_text)
+        if not any(sinks):
+            return bot.reply_batch(reqs)
+        return bot.reply_batch(reqs, on_text=lambda i, d: sinks[i] and sinks[i]({"delta": d}),
+                               on_reasoning=lambda i, d: sinks[i] and sinks[i]({"reasoning": d}))
     handlers = {"chat": chat}
     if detector is not None:
         handlers["judge"] = lambda items: detector.judge_batch(items)
@@ -297,7 +307,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                 return
             if self.path == "/health":
                 return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
-                                            "detector": detector is not None})
+                                            "detector": detector is not None, "thinking": bot.gen.thinking,
+                                            "thinking_available": bot.gen.think_open is not None})
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):
@@ -332,7 +343,7 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                 msgs, docs, mode = validate(req)
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)[:200]})
-            item = {"messages": msgs, "documents": docs, "mode": mode}
+            item = {"messages": msgs, "documents": docs, "mode": mode, "thinking": req.get("thinking")}
             if req.get("stream"):
                 return self.stream_chat(item)
             try:                                                 # batched with concurrent requests
@@ -342,7 +353,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
             self.send_json(200, r)
 
         def stream_chat(self, item):
-            """Server-sent events: {"delta": text} as checked text is released, then {"done": true, "reply": ...}."""
+            """Server-sent events: {"reasoning": text} while a reasoning model thinks, {"delta": text} as checked
+            text is released, then {"done": true, "reply": ...}."""
             q, box = queue.Queue(), {}
             item["_stream"] = q.put
 
@@ -363,7 +375,7 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                     d = q.get()
                     if d is None:
                         break
-                    self.wfile.write(b"data: " + json.dumps({"delta": d}).encode() + b"\n\n")
+                    self.wfile.write(b"data: " + json.dumps(d).encode() + b"\n\n")
                     self.wfile.flush()
                 end = {"done": True, "reply": box["reply"]} if "reply" in box else {"done": True, "error": box["error"]}
                 self.wfile.write(b"data: " + json.dumps(end).encode() + b"\n\n")
@@ -387,11 +399,14 @@ def main(argv=None):
     ap.add_argument("--moderation", action="store_true", help="screen messages and replies (vt/moderation.py)")
     ap.add_argument("--rate-per-minute", type=int, default=20, help="POSTs per client per minute (0: unlimited)")
     ap.add_argument("--trust-proxy", action="store_true", help="client address from X-Forwarded-For")
+    ap.add_argument("--thinking", action="store_true", help="reasoning models think first unless a request says not to")
+    ap.add_argument("--think-budget", type=int, default=1024, help="most tokens of thinking per reply")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
+    bot.gen.thinking, bot.gen.think_budget = a.thinking, a.think_budget
     if a.moderation:
         from .moderation import Moderator
         bot.moderator = Moderator.load()

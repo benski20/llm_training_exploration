@@ -25,6 +25,7 @@ import re
 import numpy as np
 import torch
 
+from vt.claims import prompt_of
 from vt.correctness import Probe
 from vt.guided import DoubtAwareGenerator
 
@@ -99,9 +100,11 @@ def merge_names(claims, text):
 
 
 class VeriChat:
-    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3, moderator=None):
+    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3, moderator=None,
+                 thinking=False, think_budget=1024):
         self.model, self.tok = model, tok
-        self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True)
+        self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True,
+                                       thinking=thinking, think_budget=think_budget)
         self.threshold = threshold
         self.retriever, self.retrieve_below = retriever, retrieve_below
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
@@ -132,13 +135,15 @@ class VeriChat:
         return msgs
 
     @torch.no_grad()
-    def provenance(self, msgs, reply_ids, claim_idx, documents, question=""):
+    def provenance(self, msgs, reply_ids, claim_idx, documents, question="", prefix_ids=(), thinking=False):
         """Per claim: how much of what the *inputs* contributed to its logit came from the documents rather
         than the question and history (the bias term and the reply so far are left out: they dominate the
-        logit and say nothing about the source), the top document sentence, and the source label."""
+        logit and say nothing about the source), the top document sentence, and the source label.
+        prefix_ids: a <think> block written before the reply; it is an input too, and what the documents
+        contributed through it is credited to it (left out like the reply so far)."""
         from vt.qwen_glassbox import explain_all
         tok = self.tok
-        head = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        head = prompt_of(tok, msgs, thinking)
         enc = tok(head, return_offsets_mapping=True, add_special_tokens=False)
         p_ids, offs = enc["input_ids"], enc["offset_mapping"]
         spans = []                                               # (doc i, sentence j, char start, end) in the prompt
@@ -159,6 +164,7 @@ class VeriChat:
             if g is None:
                 g = "question" if qa >= 0 and s < qa + len(question) and e > qa else "template"
             groups.append(g)
+        p_ids, groups = p_ids + list(prefix_ids), groups + ["reasoning"] * len(prefix_ids)
         groups += ["reply"] * len(reply_ids)
         ids = torch.tensor([p_ids + reply_ids], device=self.model.get_input_embeddings().weight.device)
         names, c, _ = explain_all(self.model, ids, groups, start=len(p_ids) - 1)
@@ -190,15 +196,19 @@ class VeriChat:
         first = r["claims"][0] if r["claims"] else r.get("first_token")
         return None if not first else first["p_correct"]
 
-    def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True):
+    def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True, thinking=None):
         return self.reply_batch([{"messages": messages, "documents": documents, "mode": mode,
-                                  "max_new_tokens": max_new_tokens, "retrieve": retrieve}])[0]
+                                  "max_new_tokens": max_new_tokens, "retrieve": retrieve, "thinking": thinking}])[0]
 
-    def reply_batch(self, requests, on_text=None):
+    def reply_batch(self, requests, on_text=None, on_reasoning=None):
         """Several conversations at once (one batched generation; provenance per reply). requests:
-        [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?}] -> one reply() result each."""
+        [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?, "thinking"?}] -> one reply()
+        result each. thinking (None: the bot's default) lets a reasoning model think first; its reasoning
+        is returned apart from the reply and streamed to on_reasoning(i, delta)."""
         reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
-                 "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True)} for r in requests]
+                 "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
+                 "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"])}
+                for r in requests]
         if self.moderator is not None:                               # refuse flagged messages without generating
             from vt.moderation import REFUSAL
             flags = [self.moderator.check(next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user"))
@@ -215,16 +225,17 @@ class VeriChat:
                         blocked.add(i)
                         return
                     on_text(i, d)
-            kept = self._reply_batch_unmoderated([reqs[i] for i in keep], screened) if keep else []
+            reason = None if on_reasoning is None else (lambda j, d: on_reasoning(keep[j], d))
+            kept = self._reply_batch_unmoderated([reqs[i] for i in keep], screened, reason) if keep else []
             outs = [{"text": REFUSAL, "claims": [], "withheld": True, "reply_confidence": None, "threshold": self.threshold,
                      "mode": r["mode"], "moderation": {"input": f}} for r, f in zip(reqs, flags)]
             for i, o in zip(keep, kept):
                 outs[i] = o
             return outs
-        return self._reply_batch_unmoderated(reqs, on_text)
+        return self._reply_batch_unmoderated(reqs, on_text, on_reasoning)
 
-    def _reply_batch_unmoderated(self, reqs, on_text=None):
-        outs = self._reply_batch(reqs, on_text)
+    def _reply_batch_unmoderated(self, reqs, on_text=None, on_reasoning=None):
+        outs = self._reply_batch(reqs, on_text, on_reasoning)
         again, where = [], []                                        # doubted closed-book replies: look them up
         for i, (r, o) in enumerate(zip(reqs, outs)):
             score = o.pop("_trigger")
@@ -252,22 +263,23 @@ class VeriChat:
                     o.update(text=WITHHELD, claims=[], withheld=True)
         return outs
 
-    def _reply_batch(self, reqs, on_text=None):
+    def _reply_batch(self, reqs, on_text=None, on_reasoning=None):
         prepared = [(self._messages(r["messages"], r["documents"]),
                      " ".join(m["content"] for m in r["messages"] if m["role"] != "system")) for r in reqs]  # context
         gens = self.gen.generate_batch([{"messages": msgs, "max_new_tokens": r["max_new_tokens"], "mode": r["mode"],
-                                         "context": ctx} for r, (msgs, ctx) in zip(reqs, prepared)],   # without docs
-                                       on_text=on_text)
-        return [self._post(r["messages"], r["documents"], r["mode"], msgs, g)
+                                         "context": ctx, "thinking": r.get("thinking", self.gen.thinking)}
+                                        for r, (msgs, ctx) in zip(reqs, prepared)],          # context without docs
+                                       on_text=on_text, on_reasoning=on_reasoning)
+        return [self._post(r["messages"], r["documents"], r["mode"], msgs, g, r.get("thinking", self.gen.thinking))
                 for r, (msgs, _), g in zip(reqs, prepared, gens)]
 
-    def _post(self, messages, documents, mode, msgs, r):
+    def _post(self, messages, documents, mode, msgs, r, thinking=False):
         claims = r["claims"]
         if documents and claims and not r["stopped_on_doubt"]:
             ids = r["ids"]                                           # the generated tokens themselves
             idx = [min(c["token_index"], len(ids) - 1) for c in claims]
             question = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-            for c, p in zip(claims, self.provenance(msgs, ids, idx, documents, question)):
+            for c, p in zip(claims, self.provenance(msgs, ids, idx, documents, question, r.get("prefix_ids", ()), thinking)):
                 c.update(p)
                 c["source"] = "your documents" if p["doc_share"] >= 0.5 else "the model's memory"
         trigger = self.doubt_score(r)
@@ -278,6 +290,8 @@ class VeriChat:
                 c.pop("citation", None)                           # a citation only for claims the documents drove
         out = {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
                "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}
+        if r.get("reasoning") is not None:
+            out["reasoning"] = r["reasoning"]
         if r.get("sentences"):                                   # learned risk: every sentence, no heuristic
             out["sentences"], out["max_risk"] = r["sentences"], r["max_risk"]
         return out

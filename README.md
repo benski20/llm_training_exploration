@@ -109,6 +109,9 @@ pip install -e ".[verichat]"
 vt verichat --model Qwen/Qwen2.5-7B-Instruct --head results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt \
     --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt [--corpus my_docs/] --port 8080
 #   GET /  chat page    POST /chat {"messages": [...], "documents": [...], "mode": "hedge"|"stop"|"flag"}
+#     "stream": true -> server-sent events of checked text; "thinking": true -> a reasoning model (Qwen3)
+#     thinks first; its <think> block is streamed and returned apart ("reasoning"), never scored or
+#     counted as the reply (--thinking makes it the default, --think-budget caps it, default 1024 tokens)
 #   POST /judge {"messages": [...], "response": "an answer from any model", "documents": [...]}
 vt judge --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt \
     --question "Who designed the Eiffel Tower?" --answer "Thomas Edison, in 1920." --doc source.txt
