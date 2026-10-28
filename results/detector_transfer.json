@@ -1,0 +1,62 @@
+{
+ "head": "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt",
+ "model": "Qwen/Qwen2.5-3B-Instruct",
+ "threshold": -0.32097535133361815,
+ "per_source": {
+  "halubench_drop": {
+   "n": 50,
+   "positives": 24,
+   "auroc": 0.6939102564102564,
+   "auroc_ci": [
+    0.529689276072748,
+    0.8456612353164077
+   ],
+   "accuracy": 0.68,
+   "accuracy_best_threshold": 0.76
+  },
+  "halubench_pubmed": {
+   "n": 50,
+   "positives": 26,
+   "auroc": 0.7131410256410257,
+   "auroc_ci": [
+    0.5603768115942029,
+    0.8450572660098521
+   ],
+   "accuracy": 0.58,
+   "accuracy_best_threshold": 0.66
+  },
+  "halubench_finance": {
+   "n": 50,
+   "positives": 24,
+   "auroc": 0.4439102564102564,
+   "auroc_ci": [
+    0.28830844155844154,
+    0.6199677938808373
+   ],
+   "accuracy": 0.44,
+   "accuracy_best_threshold": 0.6
+  },
+  "halubench_covid": {
+   "n": 50,
+   "positives": 26,
+   "auroc": 0.6330128205128205,
+   "auroc_ci": [
+    0.4718030007432181,
+    0.7874736231884059
+   ],
+   "accuracy": 0.58,
+   "accuracy_best_threshold": 0.64
+  },
+  "all": {
+   "n": 200,
+   "positives": 100,
+   "auroc": 0.6114,
+   "auroc_ci": [
+    0.5294027194185765,
+    0.6885168917567027
+   ],
+   "accuracy": 0.57,
+   "accuracy_best_threshold": 0.615
+  }
+ }
+}

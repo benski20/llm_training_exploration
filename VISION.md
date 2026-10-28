@@ -1028,6 +1028,25 @@ What this shows, honestly:
   device error. This is fixed in `vt/qwen_glassbox.py`. The 7B run, with untied weights, is the
   provenance-vs-Lookback-Lens test.
 
+**Zero-shot transfer to new domains is weak** (`experiments/detector_transfer.py`, the same 3B head,
+HaluBench test items from domains it never trained on, 50 per domain; `results/detector_transfer.json`):
+
+| domain (n = 50) | AUROC [95% CI] | accuracy at the trained threshold |
+|---|---|---|
+| DROP (numerical reasoning over passages) | 0.69 [0.53, 0.85] | 68% |
+| PubMedQA (biomedical) | 0.71 [0.56, 0.85] | 58% |
+| CovidQA | 0.63 [0.47, 0.79] | 58% |
+| FinanceBench (financial filings) | 0.44 [0.29, 0.62] | 44% |
+| all four (200, balanced) | **0.61** [0.53, 0.69] | 57% |
+
+This confirms the leave-one-source-out result. Out of the box, the probes recognise hallucinations
+in the kinds of task they were trained on, not in general. FinanceBench, with long tables and numbers,
+is at chance. The Lynx paper reports well above 80% accuracy on HaluBench for its fine-tuned 70B
+judge. That is the bar, and a 3B zero-shot probe is far from it. The remedy is the one the design
+allows cheaply: add labelled examples from each domain (the reader stays frozen, a probe retrains
+in seconds). The 7B and 14B runs train on these four domains, so they will show how much in-domain
+data buys.
+
 The first 7B run (18k training responses) failed after its 3-hour training pass: the token probe
 (200k tokens × 3,584 dims) was fitted on the GPU that also held the model, and ran out of memory. Probes
 now go to the GPU with the most free memory and fall back to the CPU. The rerun (`detector-7b2`) also
