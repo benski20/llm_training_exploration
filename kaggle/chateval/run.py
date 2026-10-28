@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--max-new", type=int, default=256)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--n-think", type=int, default=48)
+    ap.add_argument("--temperature", type=float, default=0.7, help="the server's decoding (0: greedy)")
+    ap.add_argument("--presence-penalty", type=float, default=1.5)
     ap.add_argument("--think-budget", type=int, default=512)
     ap.add_argument("--out", default="/kaggle/working/chateval")
     ap.add_argument("--smoke", action="store_true")
@@ -92,6 +94,8 @@ def main():
         for m in bot.model.modules():                          # T4: no bfloat16 matmuls
             if getattr(m, "compute_dtype", None) == torch.bfloat16:
                 m.compute_dtype = torch.float16
+    from vt.verichat import apply_sampling
+    apply_sampling(bot, a.temperature, presence_penalty=a.presence_penalty, seed=0)   # as served; reproducible
     th = bot.gen.risk_threshold
     log(phase="loaded", model=a.model, risk_layer=bot.gen.risk_layer, threshold=th, s=round(time.time() - t0))
     ev = [(cat, p) for cat, ps in EVERYDAY.items() for p in (ps[:2] if a.smoke else ps)]
@@ -116,9 +120,9 @@ def main():
         n_tok += sum(len(bot.tok(r["text"], add_special_tokens=False).input_ids) for r in rs)
         outs += rs
         log(phase="generated", done=len(outs), of=len(reqs), s=round(time.time() - t0))
-    res = {"model": a.model, "threshold": th, "speed": {"replies": len(outs), "seconds": round(gen_s, 1),
-                                                        "seconds_per_reply": round(gen_s / len(outs), 2),
-                                                        "tokens_per_second": round(n_tok / gen_s, 1), "batch": a.batch}}
+    res = {"model": a.model, "threshold": th, "sampling": bot.gen.sampling,
+           "speed": {"replies": len(outs), "seconds": round(gen_s, 1), "seconds_per_reply": round(gen_s / len(outs), 2),
+                     "tokens_per_second": round(n_tok / gen_s, 1), "batch": a.batch}}
     cats = {}
     for (cat, p), r in zip(ev, outs[:len(ev)]):
         c = cats.setdefault(cat, {"replies": 0, "flagged_replies": 0, "sentences": 0, "flagged_sentences": 0})

@@ -99,6 +99,17 @@ def merge_names(claims, text):
     return out
 
 
+def apply_sampling(bot, temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1.5, seed=None):
+    """The server's decoding: sample the reply (temperature 0: greedy) and the <think> block (Qwen3's
+    advice, 0.6 / 0.95 / 20)."""
+    if temperature <= 0:
+        bot.gen.sampling = bot.gen.think_sampling = None
+        return
+    extra = {"presence_penalty": presence_penalty, **({"seed": seed} if seed is not None else {})}
+    bot.gen.sampling = {"temperature": temperature, "top_p": top_p, "top_k": top_k, **extra}
+    bot.gen.think_sampling = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, **extra}
+
+
 class VeriChat:
     def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3, moderator=None,
                  thinking=False, think_budget=1024):

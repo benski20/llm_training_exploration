@@ -1223,6 +1223,40 @@ All 32 requests succeeded. On a CPU the gain is bounded by compute; on a GPU a b
 as much as one sequence, so the gain should be close to 8x. Not yet measured there. Provenance (with
 documents) still runs once per reply after the batched generation.
 
+**Reasoning, decoding and memory, for general chat.**
+
+- **Thinking kept apart.** Qwen3 thinks by default, and the 32B risk head was trained on direct
+  answers. So thinking is a per-request switch, off by default. When it is on, the `<think>` block is
+  routed out of the reply. It is not risk-scored, not claim-checked and not counted in
+  `max_new_tokens`. It has its own budget, closed with `</think>` when it runs out. R1-style prompts
+  that open the block themselves are handled the same way. The block is streamed as `{"reasoning"}`
+  events and returned as `reply["reasoning"]`. Without the split, one doubted reasoning step would end
+  the whole reply in stop mode. `kaggle/chateval` measures whether the head still ranks answers
+  written after reasoning.
+- **Sampling.** Qwen3 advises against greedy decoding. On Qwen2.5-0.5B (8 everyday prompts, 160
+  tokens), repeated 4-grams were:
+  - greedy: 4.3% of a reply on average, 13.5% at worst;
+  - T 0.7 / top-p 0.8 / top-k 20: 4.5% and 26.7%;
+  - adding a presence penalty of 1.5: **0.6% and 1.9%**.
+
+  On Qwen2.5-1.5B (80 TriviaQA questions, 40 tokens), sampling does not hurt (all within ±5 points
+  of noise):
+
+  | decoding | accuracy | probe AUROC |
+  |---|---|---|
+  | greedy | 0.39 | 0.81 |
+  | T 0.7 | 0.40 | 0.80 |
+  | T 0.7 + penalty 1.0 | 0.43 | 0.79 |
+  | T 0.7 + penalty 1.5 | 0.43 | 0.80 |
+
+  The server therefore samples by default (0.7 / 0.8 / 20, penalty 1.5; thinking 0.6 / 0.95 / 20).
+  Greedy is still available with `--temperature 0`, and requests can set `temperature` and `seed`.
+- **Memory.** Generation keeps only the probed layers' last-position states (forward hooks) and asks
+  the model for last-position logits only. Before, it kept every layer and full-vocabulary logits over
+  the whole prompt. The 18 real replies are identical.
+- **Version compatibility.** The serving tests pass on transformers 4.46, 4.51 and 5.16. 4.51 is the
+  first version with Qwen3; Kaggle runs 5.16.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
