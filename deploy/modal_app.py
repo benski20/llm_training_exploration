@@ -48,4 +48,4 @@ def serve():
     env = dict(os.environ, PYTHONPATH="/app")
     subprocess.Popen(["python", "-m", "vt.verichat_server", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
                       "--detector", "/app/heads/detector.pt", "--moderation", "--rate-per-minute", "10",
-                      "--trust-proxy", "--host", "0.0.0.0", "--port", str(PORT)], env=env)
+                      "--trust-proxy", "--deadline", "300", "--host", "0.0.0.0", "--port", str(PORT)], env=env)

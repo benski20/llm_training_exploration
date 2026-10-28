@@ -420,6 +420,7 @@ def main(argv=None):
     ap.add_argument("--top-p", type=float, default=0.8)
     ap.add_argument("--top-k", type=int, default=20)
     ap.add_argument("--presence-penalty", type=float, default=1.5, help="against loops (1.5: 7x fewer repeated 4-grams, same accuracy)")
+    ap.add_argument("--deadline", type=float, default=120.0, help="seconds a request may wait and run")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
@@ -441,7 +442,8 @@ def main(argv=None):
         name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
-    srv = make_server(bot, a.host, a.port, detector=det, api_key=os.environ.get("VERICHAT_API_KEY") or None,
+    srv = make_server(bot, a.host, a.port, deadline=a.deadline, detector=det,
+                      api_key=os.environ.get("VERICHAT_API_KEY") or None,
                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
     print(f"VeriChat on http://{a.host}:{srv.server_port}", flush=True)
     srv.serve_forever()

@@ -26,6 +26,19 @@ ev = [json.loads(e[6:]) for e in open(sys.argv[1]).read().split("\n\n") if e.sta
 assert ev and ev[-1].get("done") and "reply" in ev[-1], "stream did not finish with a reply"
 print(f"stream: {len(ev) - 1} text events, then the reply; {time.time() - float(sys.argv[2]):.1f} s total")
 PY
+python3 - > "$J.long" <<'PY'
+import json
+m = [{"role": r, "content": f"Turn {k}: " + ("tell me more about the history of Paris. " if r == "user" else "Paris grew on the Seine. ") * 20}
+     for k in range(15) for r in ("user", "assistant")]
+print(json.dumps({"messages": m + [{"role": "user", "content": "In one sentence: what river runs through Paris?"}],
+                  "mode": "flag", "temperature": 0.7, "seed": 1}))
+PY
+curl -sf -X POST "$B/chat" "${H[@]}" -d @"$J.long" > "$J"; rm -f "$J.long"
+python3 -c "import json; r=json.load(open('$J')); assert r['text']; print('long chat (31 messages):', r['text'][:80])"
+if curl -sf "$B/health" | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('thinking_available') else 1)"; then
+  curl -sf -X POST "$B/chat" "${H[@]}" -d '{"messages":[{"role":"user","content":"What is 17 * 23?"}],"mode":"flag","thinking":true,"seed":2}' > "$J"
+  python3 -c "import json; r=json.load(open('$J')); assert r.get('reasoning') and r['text'] and '<think>' not in r['text']; print('thinking:', len(r['reasoning']), 'chars of reasoning; reply:', r['text'][:80])"
+fi
 curl -sf -X POST "$B/chat" "${H[@]}" -d '{"messages":[{"role":"user","content":"you are a worthless idiot and I will hurt you"}]}' > "$J"
 python3 -c "import json,sys; r=json.load(open('$J')); assert r['withheld'], 'abuse not refused'; print('abuse refused:', r['text'])"
 curl -sf -X POST "$B/judge" "${H[@]}" -d '{"messages":[{"role":"user","content":"Who designed the Eiffel Tower?"}],"response":"Thomas Edison designed it in 1920."}' > "$J"
