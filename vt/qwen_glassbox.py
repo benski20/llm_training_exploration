@@ -163,8 +163,11 @@ class PatternRecorder:
         B, T, _ = x.shape
         q = F.linear(x, mod.q_proj.weight.float(), None if mod.q_proj.bias is None else mod.q_proj.bias.float())
         k = F.linear(x, mod.k_proj.weight.float(), None if mod.k_proj.bias is None else mod.k_proj.bias.float())
-        q = q.view(B, T, self.H, self.hd).transpose(1, 2)
-        k = k.view(B, T, self.KV, self.hd).transpose(1, 2)
+        q = q.view(B, T, self.H, self.hd)
+        k = k.view(B, T, self.KV, self.hd)
+        if getattr(mod, "q_norm", None) is not None:                              # Qwen3: per-head RMS norm
+            q, k = _rms(q, mod.q_norm), _rms(k, mod.k_norm)
+        q, k = q.transpose(1, 2), k.transpose(1, 2)
         q, k = rope(q, k, cos.float(), sin.float())
         k = k.repeat_interleave(self.H // self.KV, dim=1)
         sc = (q @ k.transpose(-1, -2)) / math.sqrt(self.hd)
@@ -174,6 +177,12 @@ class PatternRecorder:
     def remove(self):
         for h in self.handles:
             h.remove()
+
+
+def _rms(x, norm):
+    """A Qwen3 q/k norm in float32 (part of the pattern, a decision like the others)."""
+    eps = getattr(norm, "variance_epsilon", getattr(norm, "eps", 1e-6))
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * norm.weight.float()
 
 
 class _LazyPatterns:
@@ -224,7 +233,7 @@ def _decompose(model, ids, groups=None, merge_bias=False):
             v[b] += at.v_proj.bias.float()
         v = v.view(S, T, KV, hd).repeat_interleave(H // KV, dim=2).transpose(1, 2)    # (S, H, T, hd)
         A = pat.A[i]                                                                # (H, T, T)
-        o = torch.einsum("htu,shud->sthd", A, v).reshape(S, T, d)
+        o = torch.einsum("htu,shud->sthd", A, v).reshape(S, T, H * hd)               # H*hd != d in Qwen3
         comp = comp + o @ at.o_proj.weight.float().T
         sp = layer.mlp
         z2 = comp * sc[("post", i)][0] * layer.post_attention_layernorm.weight.float()
