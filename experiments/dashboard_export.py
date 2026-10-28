@@ -186,6 +186,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-detector-7b-eval", "Kaggle (bensliv): 7B detector evaluated from its saved head (test pass only)",
             "results/kaggle/detector-7b-eval.log", "results/kaggle/detector-7b-eval/detector/results.json",
             "10 sources, 4,127 test responses; provenance vs Lookback Lens on 300 document items; no LODO in this mode"),
+           ("kaggle-detector-14b", "Kaggle (bensliv): general detector, Qwen2.5-14B reader (4-bit), 10 sources",
+            "results/kaggle/detector-14b.log", "results/kaggle/detector-14b/detector/results.json",
+            "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights)"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]

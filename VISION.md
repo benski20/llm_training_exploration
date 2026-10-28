@@ -1115,6 +1115,13 @@ document sentence, the question, the template, the reply, the bias). Its cost gr
 document sentences, and it runs only when documents are given. Cheaper options, if needed: coarse
 groups first (document / question), then sentence-level detail only for claims the documents drove.
 
+Batching `/judge` (`experiments/judge_throughput.py`, 0.5B reader, CPU, 32 HaluBench items of about 1,400
+tokens): 0.23 replies/s one at a time, 0.24 in padded batches. Scores are the same (max logit difference
+5e-5). On a CPU the forward pass is compute-bound, so batching gives no speed-up. It is for GPUs, where
+single sequences leave most of the device idle. The batched path keeps only the two probe layers and
+applies the output layer only at response positions. A first version kept the full-vocabulary logits
+for the padded batch, about 10 GB, and was killed for running out of memory.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
