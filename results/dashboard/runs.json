@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (06:31:34 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (06:52:44 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
@@ -453,7 +453,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (06:30:01 UTC check)"
+"note": "FAILED after the 3 h train pass: CUDA OOM fitting the token probe on the model's GPU (fixed) (06:30:01 UTC check)"
+},
+{
+"run": "kaggle-detector-7b2",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): general detector, Qwen2.5-7B reader, rerun with HaluBench domains",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "10 sources incl. DROP / PubMedQA / FinanceBench / CovidQA; probes on the freest GPU; provenance vs Lookback Lens (06:55:23 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
