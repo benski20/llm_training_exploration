@@ -7,7 +7,8 @@
   GET  /health   status and the head's layer
   POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag"}
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
-                 general detector (vt/detector.Detector; only with --detector)
+                 general detector (vt/detector.Detector; only with --detector); {"items": [...]} for up to
+                 16 at once, batched into padded forward passes
 
 POSTs are rate-limited per client (--rate-per-minute); with VERICHAT_API_KEY set they need
 "Authorization: Bearer <key>". Generation runs one request at a time; extra connections get 503.
@@ -21,7 +22,7 @@ import time
 
 from .serve import HardenedHandler, bounded_server
 
-MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS = 16, 4000, 4, 12000
+MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS, MAX_BATCH = 16, 4000, 4, 12000, 16
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -182,14 +183,18 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
             req, err = self.read_json_object(max_body)
             if err:
                 return self.send_json(err[0], {"error": err[1]})
-            if self.path == "/judge":
+            if self.path == "/judge":                          # one item, or {"items": [...]} (up to MAX_BATCH)
                 try:
-                    msgs, resp, docs = validate_judge(req)
-                    with lock:
-                        r = detector.judge(msgs, resp, documents=docs)
+                    batch = req.get("items")
+                    if batch is not None and (not isinstance(batch, list) or not 1 <= len(batch) <= MAX_BATCH):
+                        raise ValueError(f"items: a list of 1-{MAX_BATCH}")
+                    parsed = [validate_judge(x if isinstance(x, dict) else {}) for x in (batch or [req])]
                 except ValueError as e:
                     return self.send_json(400, {"error": str(e)[:200]})
-                return self.send_json(200, {k: r[k] for k in ("p_hallucinated", "flagged", "spans")})
+                with lock:
+                    rs = detector.judge_batch([{"messages": m, "response": r, "documents": d} for m, r, d in parsed])
+                rs = [r if "error" in r else {k: r[k] for k in ("p_hallucinated", "flagged", "spans")} for r in rs]
+                return self.send_json(200, {"items": rs} if batch is not None else rs[0])
             try:
                 msgs, docs, mode = validate(req)
             except ValueError as e:

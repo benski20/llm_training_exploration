@@ -52,6 +52,9 @@ def test_server_judge_endpoint():
     body = json.dumps({"messages": [{"role": "user", "content": "Capital of France?"}], "response": "Lyon."}).encode()
     r = json.load(urllib.request.urlopen(urllib.request.Request(base + "/judge", body, {"Content-Type": "application/json"})))
     assert set(r) == {"p_hallucinated", "flagged", "spans"}
+    two = json.dumps({"items": [json.loads(body), json.loads(body)]}).encode()
+    rb = json.load(urllib.request.urlopen(urllib.request.Request(base + "/judge", two, {"Content-Type": "application/json"})))
+    assert len(rb["items"]) == 2 and rb["items"][0]["p_hallucinated"] == r["p_hallucinated"]
     bad = urllib.request.Request(base + "/judge", json.dumps({"messages": [{"role": "user", "content": "x"}]}).encode(),
                                  {"Content-Type": "application/json"})
     try:
@@ -60,3 +63,17 @@ def test_server_judge_endpoint():
     except urllib.error.HTTPError as e:
         assert e.code == 400
     srv.shutdown()
+
+
+def test_judge_batch_matches_one_at_a_time():
+    det = _det()
+    items = [{"messages": [{"role": "user", "content": "Capital of France?"}], "response": "Paris."},
+             {"messages": [{"role": "user", "content": "Who wrote Hamlet, and when?"}],
+              "response": "William Shakespeare wrote it around 1600.", "documents": ["Hamlet is a tragedy by Shakespeare."]},
+             {"messages": [{"role": "user", "content": "x"}], "response": ""}]
+    batch = det.judge_batch(items, batch_tokens=10 ** 6)
+    assert "error" in batch[2]
+    for it, b in zip(items[:2], batch[:2]):
+        one = det.judge(it["messages"], it["response"], documents=it.get("documents"))
+        assert abs(one["logit"] - b["logit"]) < 1e-3
+        assert [t["text"] for t in one["tokens"]] == [t["text"] for t in b["tokens"]]

@@ -222,20 +222,59 @@ class Detector:
         return {"source": "live", "task": "live", "messages": msgs, "response": response, "doc": doc,
                 "spans": None, "label": 0}
 
-    @torch.no_grad()
     def judge(self, messages, response, documents=None, max_tokens=4096, token_threshold=0.73):
-        e = encode(self.tok, self.item(messages, response, documents), max_tokens)
-        if e is None or e["r0"] >= len(e["ids"]):
-            raise ValueError("empty response, or the prompt leaves no room for it")
-        h, lp = response_states(self.model, e["ids"], e["r0"], self.layers)
-        ht = h[1].float().numpy()
+        r = self.judge_batch([{"messages": messages, "response": response, "documents": documents}], max_tokens,
+                             token_threshold)[0]
+        if "error" in r:
+            raise ValueError(r["error"])
+        return r
+
+    @torch.no_grad()
+    def judge_batch(self, items, max_tokens=4096, token_threshold=0.73, batch_tokens=16384):
+        """Judge many replies: right-padded batches of similar length (at most `batch_tokens` padded
+        tokens each), one forward pass per batch. items: [{"messages", "response", "documents"?}];
+        returns one result per item, or {"error"} for an item that cannot be scored."""
+        enc = []
+        for it in items:
+            item = self.item(it["messages"], it["response"], it.get("documents"))
+            e = encode(self.tok, item, max_tokens)
+            enc.append(e if e is not None and e["r0"] < len(e["ids"]) else None)
+        out = [{"error": "empty response, or the prompt leaves no room for it"} if e is None else None for e in enc]
+        order = sorted((i for i, e in enumerate(enc) if e), key=lambda i: len(enc[i]["ids"]))
+        dev = self.model.get_input_embeddings().weight.device
+        pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
+        k = 0
+        while k < len(order):
+            group = [order[k]]
+            while k + len(group) < len(order) and \
+                    len(enc[order[k + len(group)]]["ids"]) * (len(group) + 1) <= batch_tokens:
+                group.append(order[k + len(group)])
+            k += len(group)
+            T = max(len(enc[i]["ids"]) for i in group)
+            ids = torch.full((len(group), T), pad, dtype=torch.long)
+            mask = torch.zeros((len(group), T), dtype=torch.long)
+            for b, i in enumerate(group):
+                n = len(enc[i]["ids"])
+                ids[b, :n], mask[b, :n] = torch.tensor(enc[i]["ids"]), 1
+            o = self.model(input_ids=ids.to(dev), attention_mask=mask.to(dev), output_hidden_states=True)
+            for b, i in enumerate(group):
+                e, n = enc[i], len(enc[i]["ids"])
+                h = [o.hidden_states[L + 1][b, e["r0"]:n].float().cpu() for L in self.layers]
+                lp = o.logits[b, e["r0"] - 1:n - 1].float().log_softmax(-1).gather(
+                    -1, torch.tensor(e["ids"][e["r0"]:], device=o.logits.device)[:, None])[:, 0].cpu()
+                out[i] = self._finish(items[i], e, h, lp, token_threshold)
+        return out
+
+    def _finish(self, it, e, h, lp, token_threshold):
+        response = it["response"]
+        ht = h[1].numpy()
         ts = self.tok_probe.logit(ht)
-        resp = float(self.resp_probe.logit(h[0].float().mean(0, keepdim=True).numpy())[0])
+        resp = float(self.resp_probe.logit(h[0].mean(0, keepdim=True).numpy())[0])
         f = np.array([[resp, ts.max(), ts.mean(), np.percentile(ts, 95), float(lp.mean()), float(lp.min())]])
         z = float(self.stacker.logit(f)[0])
         p_tok = 1 / (1 + np.exp(-ts))
-        head = self.tok.apply_chat_template(self.item(messages, response, documents)["messages"], tokenize=False,
-                                            add_generation_prompt=True)
+        head = self.tok.apply_chat_template(self.item(it["messages"], response, it.get("documents"))["messages"],
+                                            tokenize=False, add_generation_prompt=True)
         offs = self.tok(head + response, return_offsets_mapping=True, add_special_tokens=False)["offset_mapping"]
         offs = offs[len(offs) - len(e["ids"]):][e["r0"]:]          # same trimming as encode
         tokens = [{"text": response[max(s - len(head), 0):e_ - len(head)], "score": round(float(p), 4),
@@ -248,7 +287,7 @@ class Detector:
                 spans[-1]["end"], spans[-1]["score"] = t["end"], max(spans[-1]["score"], t["score"])
             else:
                 spans.append({"start": t["start"], "end": t["end"], "score": t["score"]})
-        for s in spans:
-            s["text"] = response[s["start"]:s["end"]]
+        for sp in spans:
+            sp["text"] = response[sp["start"]:sp["end"]]
         return {"p_hallucinated": round(float(1 / (1 + np.exp(-z))), 4), "logit": z, "flagged": z >= self.threshold,
                 "tokens": tokens, "spans": spans}
