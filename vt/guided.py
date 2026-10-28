@@ -211,6 +211,7 @@ class _Seq:
         self.out, self.claims, self.first, self.feed = [], [], None, []       # feed: [(token, index in out or None)]
         self.at_word_start, self.stopped, self.done, self.closed = True, False, False, False
         self.risk, self.sentences, self.sent_start, self.last_fed = {}, [], 0, None
+        self.logp = {}                                              # reply index -> the model's log P(token)
         self.emitted = ""
 
     def stream(self, b, on_text, final, on_reasoning=None):
@@ -247,10 +248,13 @@ class _Seq:
         if end <= self.sent_start:
             return
         tok = self.g.tok
-        content = [self.risk[k] for k in range(self.sent_start, end)
-                   if k in self.risk and any(ch.isalnum() for ch in tok.decode(self.out[k:k + 1]))]
+        ks = [k for k in range(self.sent_start, end) if any(ch.isalnum() for ch in tok.decode(self.out[k:k + 1]))]
+        content = [self.risk[k] for k in ks if k in self.risk]
+        lps = [self.logp[k] for k in ks if k in self.logp]
         r = max(content) if content else 0.0
-        sent = {"tokens": (self.sent_start, end), "risk": round(r, 4), "doubted": r >= self.g.risk_threshold}
+        sent = {"tokens": (self.sent_start, end), "risk": round(r, 4), "doubted": r >= self.g.risk_threshold,
+                "min_logprob": round(min(lps), 4) if lps else None,
+                "mean_logprob": round(float(np.mean(lps)), 4) if lps else None}
         if sent["doubted"] and self.mode == "stop":             # drop the doubted sentence and end the reply
             self.out = self.out[:self.sent_start]
             self.claims = [c for c in self.claims if c["token_index"] < self.sent_start]
@@ -286,6 +290,10 @@ class _Seq:
         self.seen.add(nxt)
         return nxt
 
+    def _log_p(self, logits, nxt):
+        """The model's own log-probability of the token just written (before any sampling settings)."""
+        self.logp[len(self.out) - 1] = float(torch.log_softmax(logits.float(), -1)[nxt])
+
     def decide(self, logits, h):
         g, tok = self.g, self.g.tok
         if self.left <= 0:
@@ -319,6 +327,7 @@ class _Seq:
         if not piece.strip() or (self.at_word_start or piece[:1].isspace()) and not piece.strip().strip(OPENERS):
             self.at_word_start = True                               # " 1958" -> " ", "1"; ' "Rent' -> ' "', "Rent"
             self.out.append(nxt)
+            self._log_p(logits, nxt)
             self.feed = [(nxt, len(self.out) - 1)]
             return
         starts_word = self.at_word_start or piece[:1].isspace()
@@ -343,6 +352,7 @@ class _Seq:
                 c["token_index"] = len(self.out)                    # the claim itself follows the marker
                 self.feed = [(t, None) for t in forced] + [(nxt, len(self.out))]
         self.out.append(nxt)
+        self._log_p(logits, nxt)
         self.at_word_start = piece[-1:].isspace() or piece.endswith("\n")
 
     def result(self):
@@ -390,8 +400,12 @@ class _Seq:
                 seg = seg.strip().replace(HEDGE.strip(), "").strip()
                 if seg:
                     sentences.append({"text": seg, "start": max(0, a), "end": max(0, a) + len(seg),
-                                      "risk": st["risk"], "doubted": st["doubted"]})
+                                      "risk": st["risk"], "doubted": st["doubted"],
+                                      "min_logprob": st["min_logprob"], "mean_logprob": st["mean_logprob"]})
         reasoning = tok.decode(self.reasoning, skip_special_tokens=True).strip() if self.prefix else None
-        return {"text": text, "ids": out, "prefix_ids": self.prefix, "reasoning": reasoning, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
+        lp = [v for k, v in self.logp.items() if k < len(out)]
+        return {"text": text, "ids": out, "prefix_ids": self.prefix,
+                "mean_logprob": round(float(np.mean(lp)), 4) if lp else None,
+                "min_logprob": round(min(lp), 4) if lp else None, "reasoning": reasoning, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
                 "sentences": sentences, "max_risk": max((x["risk"] for x in sentences), default=None),
                 "min_p_correct": min((c["p_correct"] for c in claims), default=first["p_correct"] if first else None)}

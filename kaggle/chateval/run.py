@@ -102,7 +102,9 @@ def main():
     if a.smoke:
         fq = [("Who wrote Hamlet?", ["Shakespeare"]), ("What is the capital of Peru?", ["Lima"]),
               ("Who painted the Mona Lisa?", ["Leonardo"]), ("What is the largest planet?", ["Jupiter"]),
-              ("Who discovered penicillin?", ["Fleming"]), ("What is the capital of Australia?", ["Canberra"])]
+              ("Who discovered penicillin?", ["Fleming"]), ("What is the capital of Australia?", ["Canberra"]),
+              ("Who wrote the novel The Tin Drum?", ["Grass"]), ("What is the capital of Burkina Faso?", ["Ouagadougou"]),
+              ("Who was the second wife of Henry VIII?", ["Boleyn"]), ("In which year did the Battle of Hastings happen?", ["1066"])]
     else:
         from datasets import load_dataset
         d = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
@@ -150,12 +152,28 @@ def main():
         f["sweep"] = {f"{t:.2f}": {"wrong_flagged": round(float((rr[yy == 1] >= t).mean()), 3),
                                    "right_flagged": round(float((rr[yy == 0] >= t).mean()), 3)}
                       for t in np.quantile(rr, [0.5, 0.7, 0.8, 0.9])}
+        def rank(v):
+            return np.argsort(np.argsort(np.asarray(v, float))) / max(1, len(v) - 1)
+        mlp = [-(r.get("min_logprob") or 0.0) for r in fr]                      # higher = less likely token
+        alp = [-(r.get("mean_logprob") or 0.0) for r in fr]
+        slp = [max((-(x.get("min_logprob") or 0.0) for x in r.get("sentences", [])), default=0.0) for r in fr]
+        f["baselines"] = {"min_token_logprob_auroc": auroc(mlp, y), "mean_logprob_auroc": auroc(alp, y),
+                          "worst_sentence_min_logprob_auroc": auroc(slp, y),
+                          "risk_plus_min_logprob_rank_mean_auroc": auroc((rank(risk) + rank(mlp)) / 2, y),
+                          "risk_plus_mean_logprob_rank_mean_auroc": auroc((rank(risk) + rank(alp)) / 2, y)}
         er = np.array([r.get("max_risk") or 0.0 for r in outs[:len(ev)]])     # choosing a serving threshold
         f["threshold_grid"] = {f"{t:.2f}": {"everyday_flagged": round(float((er >= t).mean()), 3),
                                             "wrong_flagged": round(float((rr[yy == 1] >= t).mean()), 3),
                                             "right_flagged": round(float((rr[yy == 0] >= t).mean()), 3)}
                                for t in np.arange(0.2, 0.96, 0.05)}
     res["factual"] = f
+    res["raw"] = {"everyday": [{"cat": c, "max_risk": r.get("max_risk"), "min_logprob": r.get("min_logprob"),
+                                "mean_logprob": r.get("mean_logprob")} for (c, _), r in zip(ev, outs[:len(ev)])],
+                  "factual": [{"wrong": yy_, "max_risk": r.get("max_risk"), "min_logprob": r.get("min_logprob"),
+                               "mean_logprob": r.get("mean_logprob"), "reply_confidence": r.get("reply_confidence"),
+                               "sentences": [(x["risk"], x.get("min_logprob"), x.get("mean_logprob"))
+                                             for x in r.get("sentences", [])]}
+                              for yy_, r in zip(y, fr)]}                 # for choosing the serving score offline
     res["examples"] = [{"prompt": rq["messages"][0]["content"], "reply": r["text"][:400],
                         "doubted": [s["text"] for s in r.get("sentences", []) if s["doubted"]]}
                        for rq, r in list(zip(reqs, outs))[:: max(1, len(outs) // 25)]]
