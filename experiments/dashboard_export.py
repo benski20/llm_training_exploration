@@ -216,6 +216,9 @@ LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B
          ("doubt-aware", "CPU: doubt-aware generation (stop before a doubted claim), 0.5B",
           "results/doubt_aware_eval.log", "results/doubt_aware_eval.json", 300, "experiments/doubt_aware_eval.py",
           "probe on the hidden state already computed vs token probability, at matched abstention"),
+         ("doubt-aware-1p5b", "CPU: doubt-aware generation with the 1.5B probe",
+          "results/doubt_aware_eval_1p5b.log", "results/doubt_aware_eval_1p5b.json", 300, "experiments/doubt_aware_eval.py",
+          "the 0.5B probe tied token probability; does the stronger 1.5B probe cut hallucinations more?"),
          ("ragtruth-provenance", "CPU: exact per-token provenance on RAGTruth (sanity, 0.5B)",
           "results/ragtruth_provenance.log", "results/ragtruth_provenance.json", 40, "experiments/ragtruth_provenance.py",
           "do hallucinated spans draw less of their logit from the document?")]
