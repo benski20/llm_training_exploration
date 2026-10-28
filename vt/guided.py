@@ -92,13 +92,18 @@ class DoubtAwareGenerator:
             out.append(nxt)
             at_word_start = piece[-1:].isspace() or piece.endswith("\n")
             cur = torch.tensor([[nxt]], device=dev)
-        text = tok.decode(out, skip_special_tokens=True).strip()
-        for c in claims:                                            # the claim's word, for display
+        raw = tok.decode(out, skip_special_tokens=True)
+        lead = len(raw) - len(raw.lstrip())
+        text = raw.strip()
+        for c in claims:                                            # the claim's word and its span in `text`
             j = c["token_index"]
             k = j + 1
             while k < len(out) and not tok.decode(out[k:k + 1])[:1].isspace() and tok.decode(out[k:k + 1]) not in (",", ".", "\n"):
                 k += 1
             c["text"] = tok.decode(out[j:k]).strip() if j < len(out) else ""
+            a = len(tok.decode(out[:j], skip_special_tokens=True)) - lead
+            a += len(tok.decode(out[j:k])) - len(tok.decode(out[j:k]).lstrip())
+            c["start"], c["end"] = max(0, a), max(0, a) + len(c["text"])
         fs = None if first is None else ((first["p_correct"] + first["token_p"]) / 2 if self.combine else first["p_correct"])
         if not claims and fs is not None and fs < self.threshold and mode == "stop" and out:
             stopped = True                                          # no claim found: judge the reply by its first token

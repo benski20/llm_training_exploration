@@ -41,6 +41,31 @@ def sentences(text):
     return [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
 
 
+def merge_names(claims, text):
+    """Adjacent claim words with only spaces or a hedge marker between them ("Gustave" "Eiffel") are one
+    claim; it keeps the weakest score."""
+    out = []
+    for c in claims:
+        if out and "start" in c and "start" in out[-1]:
+            gap = text[out[-1]["end"]:c["start"]].replace("[unsure:]", "")
+            if c["start"] >= out[-1]["end"] and not gap.strip():
+                p = out[-1]
+                p["text"], p["end"] = text[p["start"]:c["end"]], c["end"]
+                for k in ("score", "p_correct", "token_p"):
+                    if k in c and k in p:
+                        p[k] = min(p[k], c[k])
+                p["doubted"] = p["doubted"] or c["doubted"]
+                continue
+        out.append(dict(c))
+    for c in out:                                            # "Gustave" + "Eiffel": show the whole name
+        if "end" in c:
+            m = re.match(r"(?:\s+[A-Z][\w'-]*)+", text[c["end"]:])
+            if m:
+                c["end"] += m.end()
+                c["text"] = text[c["start"]:c["end"]]
+    return out
+
+
 class VeriChat:
     def __init__(self, model, tok, probe, layer, threshold=0.45):
         self.model, self.tok = model, tok
@@ -130,7 +155,10 @@ class VeriChat:
             for c, p in zip(claims, self.provenance(msgs, ids, idx, documents, question)):
                 c.update(p)
                 c["source"] = "your documents" if p["doc_share"] >= 0.5 else "the model's memory"
+        claims = merge_names(claims, r["text"])
         for c in claims:
             c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= 0.7 else "uncertain")
+            if c.get("source") != "your documents":
+                c.pop("citation", None)                           # a citation only for claims the documents drove
         return {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
                 "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode}
