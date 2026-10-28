@@ -27,9 +27,10 @@ HEDGE = " [unsure:]"
 
 
 class DoubtAwareGenerator:
-    def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0)):
+    def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0), combine=True):
         self.model, self.tok, self.probe, self.layer = model, tok, probe, layer
         self.threshold, self.calib = threshold, calib
+        self.combine = combine          # judge by the mean of the probe's P(correct) and the token's probability
         self.stop_ids = {i for i in (tok.eos_token_id, tok.pad_token_id, tok.convert_tokens_to_ids("<|endoftext|>"),
                                      tok.convert_tokens_to_ids("<|im_end|>")) if isinstance(i, int) and i >= 0}
 
@@ -71,8 +72,9 @@ class DoubtAwareGenerator:
             if self._is_claim_start(piece, starts_word, context_words):
                 p = self.p_correct(o.hidden_states[self.layer + 1][0, -1])
                 tp = float(torch.softmax(o.logits[0, -1].float(), -1)[nxt])
+                score = (p + tp) / 2 if self.combine else p    # best or tied at every abstention level
                 c = {"token_index": len(out), "p_correct": round(p, 4), "token_p": round(tp, 4),
-                     "doubted": p < self.threshold}
+                     "score": round(score, 4), "doubted": score < self.threshold}
                 claims.append(c)
                 if c["doubted"] and mode == "stop":
                     stopped = True
@@ -92,7 +94,8 @@ class DoubtAwareGenerator:
             while k < len(out) and not tok.decode(out[k:k + 1])[:1].isspace() and tok.decode(out[k:k + 1]) not in (",", ".", "\n"):
                 k += 1
             c["text"] = tok.decode(out[j:k]).strip() if j < len(out) else ""
-        if not claims and first is not None and first["p_correct"] < self.threshold and mode == "stop" and out:
+        fs = None if first is None else ((first["p_correct"] + first["token_p"]) / 2 if self.combine else first["p_correct"])
+        if not claims and fs is not None and fs < self.threshold and mode == "stop" and out:
             stopped = True                                          # no claim found: judge the reply by its first token
             text = ""
         if stopped:                                                 # keep only whole sentences before the doubt

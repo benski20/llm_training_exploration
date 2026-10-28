@@ -18,7 +18,7 @@ def setup(bias):
 
 def test_flag_records_claims_and_stop_withholds_on_doubt():
     tok, m, p = setup(-5.0)                                  # P(correct) ~ 0.007 everywhere
-    g = DoubtAwareGenerator(m, tok, p, layer=1, threshold=0.5)
+    g = DoubtAwareGenerator(m, tok, p, layer=1, threshold=0.5, combine=False)
     msgs = [{"role": "user", "content": "hi"}]
     flag = g.generate(msgs, 30, "flag")
     stop = g.generate(msgs, 30, "stop")
@@ -26,7 +26,7 @@ def test_flag_records_claims_and_stop_withholds_on_doubt():
         assert all(c["doubted"] for c in flag["claims"])
         assert stop["stopped_on_doubt"] and stop["text"].endswith(STOP_NOTE)
         assert len(stop["text"]) <= len(flag["text"]) + len(STOP_NOTE) + 1
-    sure = DoubtAwareGenerator(m, tok, setup(5.0)[2], layer=1, threshold=0.5).generate(msgs, 30, "stop")
+    sure = DoubtAwareGenerator(m, tok, setup(5.0)[2], layer=1, threshold=0.5, combine=False).generate(msgs, 30, "stop")
     assert not sure["stopped_on_doubt"]
     assert sure["text"] == flag["text"]                      # same greedy text when nothing is doubted
 
