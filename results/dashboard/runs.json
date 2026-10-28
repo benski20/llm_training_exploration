@@ -405,7 +405,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (01:13:31 UTC check)"
+"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (01:31:39 UTC check)"
 },
 {
 "run": "kaggle-claims-7b",
@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (01:13:46 UTC check)"
+"note": "same pipeline at 7B; device_map across both T4s (01:31:55 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (01:14:44 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (01:32:52 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -473,9 +473,9 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 250,
+"step": 300,
 "total_steps": 600,
-"progress": 0.4166666666666667,
+"progress": 0.5,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 },
@@ -484,11 +484,23 @@
 "experiment": "qwen",
 "title": "CPU: doubt-aware generation (stop before a doubted claim), 0.5B",
 "model": "qwen",
-"status": "running",
-"step": 100,
+"status": "done",
+"step": 300,
 "total_steps": 300,
-"progress": 0.3333333333333333,
+"progress": 1.0,
 "last_loss": null,
 "note": "probe on the hidden state already computed vs token probability, at matched abstention"
+},
+{
+"run": "ragtruth-provenance",
+"experiment": "qwen",
+"title": "CPU: exact per-token provenance on RAGTruth (sanity, 0.5B)",
+"model": "qwen",
+"status": "running",
+"step": 30,
+"total_steps": 40,
+"progress": 0.75,
+"last_loss": null,
+"note": "do hallucinated spans draw less of their logit from the document?"
 }
 ]
