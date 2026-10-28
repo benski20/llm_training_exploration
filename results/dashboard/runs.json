@@ -561,7 +561,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "60 new everyday prompts full of facts, 120 new TriviaQA + 80 Natural Questions (18:37:36 UTC check)"
+"note": "60 new everyday prompts full of facts, 120 new TriviaQA + 80 Natural Questions (18:55:45 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
