@@ -242,7 +242,10 @@ def main():
         a.dtype = "float32"
     qa, gsm = pools(a)
     sets = build_sets(a, qa, gsm)
-    log(phase="data", **{k: len(v) for k, v in sets.items()}, device=device)
+    log(phase="data", **{k: len(v) for k, v in sets.items()}, device=device,
+        gpus=torch.cuda.device_count() if device == "cuda" else 0,
+        gpu_mem_gb=[round(torch.cuda.get_device_properties(i).total_memory / 2**30, 1)
+                    for i in range(torch.cuda.device_count())] if device == "cuda" else [])
     res = {"config": vars(a)}
     t0 = time.time()
     for name in a.models.split(","):
