@@ -112,6 +112,8 @@ vt verichat --model Qwen/Qwen2.5-7B-Instruct --head results/kaggle/claims-7b/cla
 #     "stream": true -> server-sent events of checked text; "thinking": true -> a reasoning model (Qwen3)
 #     thinks first; its <think> block is streamed and returned apart ("reasoning"), never scored or
 #     counted as the reply (--thinking makes it the default, --think-budget caps it, default 1024 tokens)
+#     sampling: Qwen3's advice by default (--temperature 0.7 --top-p 0.8 --top-k 20; thinking 0.6/0.95/20;
+#     --temperature 0 for greedy); "temperature" and "seed" per request; --presence-penalty against loops
 #   POST /judge {"messages": [...], "response": "an answer from any model", "documents": [...]}
 vt judge --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt \
     --question "Who designed the Eiffel Tower?" --answer "Thomas Edison, in 1920." --doc source.txt

@@ -80,3 +80,22 @@ def test_streaming_matches_the_reply_and_holds_sentences_until_checked():
     r = DoubtAwareGenerator(m, tok, p, layer=1, combine=False, risk_probe=risky, risk_layer=0).generate_batch(
         [{"messages": msgs, "max_new_tokens": 30, "mode": "stop"}], on_text=lambda i, d: got.append(d))[0]
     assert r["stopped_on_doubt"] and "".join(got) == ""        # a doubted sentence is never streamed
+
+
+def test_sampling_degenerate_settings_equal_greedy_and_seeds_reproduce():
+    tok, m, p = setup(5.0)
+    g = DoubtAwareGenerator(m, tok, p, layer=1, threshold=0.5)
+    msgs = [{"role": "user", "content": "Tell me a story."}]
+
+    def run(s):
+        return g.generate_batch([{"messages": msgs, "max_new_tokens": 20, "mode": "flag", "sampling": s}])[0]["text"]
+    greedy = run(None)
+    for s in ({"temperature": 0}, {"temperature": 1.0, "top_k": 1, "seed": 3}, {"temperature": 1.0, "top_p": 1e-6, "seed": 3}):
+        assert run(s) == greedy, s
+    hot = {"temperature": 1.5, "top_p": 0.99, "seed": 11}
+    a, b = run(hot), run(hot)
+    assert a == b                                            # same seed, same reply
+    assert len({run(dict(hot, seed=k)) for k in range(4)} | {greedy}) > 1   # a random model's flat logits: sampling varies
+    ids = g.generate_batch([{"messages": msgs, "max_new_tokens": 20, "mode": "flag",
+                             "sampling": {"temperature": 1.0, "top_k": 1, "presence_penalty": 100.0}}])[0]["ids"]
+    assert len(ids) == len(set(ids))                         # a huge presence penalty never repeats a token

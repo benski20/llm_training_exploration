@@ -207,7 +207,8 @@ class VeriChat:
         is returned apart from the reply and streamed to on_reasoning(i, delta)."""
         reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
-                 "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"])}
+                 "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"]),
+                 **{k: r[k] for k in ("sampling", "think_sampling") if r.get(k) is not None}}
                 for r in requests]
         if self.moderator is not None:                               # refuse flagged messages without generating
             from vt.moderation import REFUSAL
@@ -267,7 +268,8 @@ class VeriChat:
         prepared = [(self._messages(r["messages"], r["documents"]),
                      " ".join(m["content"] for m in r["messages"] if m["role"] != "system")) for r in reqs]  # context
         gens = self.gen.generate_batch([{"messages": msgs, "max_new_tokens": r["max_new_tokens"], "mode": r["mode"],
-                                         "context": ctx, "thinking": r.get("thinking", self.gen.thinking)}
+                                         "context": ctx, "thinking": r.get("thinking", self.gen.thinking),
+                                         **{k: r[k] for k in ("sampling", "think_sampling") if k in r}}
                                         for r, (msgs, ctx) in zip(reqs, prepared)],          # context without docs
                                        on_text=on_text, on_reasoning=on_reasoning)
         return [self._post(r["messages"], r["documents"], r["mode"], msgs, g, r.get("thinking", self.gen.thinking))

@@ -15,6 +15,7 @@ Every claim is returned with its P(correct), whatever the mode.
     g = DoubtAwareGenerator(model, tok, probe, layer=23, threshold=0.4)
     out = g.generate([{"role": "user", "content": "Who was the man behind The Chipmunks?"}])
 """
+import random
 import re
 
 import numpy as np
@@ -38,13 +39,20 @@ class DoubtAwareGenerator:
     Reasoning models: thinking (default per request) switches Qwen3-style reasoning on in the prompt. A
     <think> block, whether asked for or begun by the prompt (R1-style templates), is kept apart from the
     reply: it is not scored, checked or counted in max_new_tokens, has its own think_budget, and is closed
-    with </think> when that runs out. The reply is then scored as usual; results carry "reasoning"."""
+    with </think> when that runs out. The reply is then scored as usual; results carry "reasoning".
+
+    Decoding: greedy by default. sampling / think_sampling (per request: "sampling", "think_sampling")
+    {"temperature", "top_p", "top_k", "presence_penalty", "seed"} sample the reply and the <think>
+    block instead (Qwen3 advises against greedy decoding, which loops, above all when thinking). The
+    probes read the hidden states either way; a sampled unlikely claim gets its low token probability."""
 
     def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0), combine=True,
-                 risk_probe=None, risk_layer=None, risk_threshold=0.5, thinking=False, think_budget=1024):
+                 risk_probe=None, risk_layer=None, risk_threshold=0.5, thinking=False, think_budget=1024,
+                 sampling=None, think_sampling=None):
         self.model, self.tok, self.probe, self.layer = model, tok, probe, layer
         self.risk_probe, self.risk_layer, self.risk_threshold = risk_probe, risk_layer, risk_threshold
         self.thinking, self.think_budget = thinking, think_budget
+        self.sampling, self.think_sampling = sampling, think_sampling       # None: greedy
         self.think_open, self.think_close = _token_id(tok, "<think>"), _token_id(tok, "</think>")
         if self.think_open is None or self.think_close is None:
             self.think_open = self.think_close = None
@@ -88,7 +96,8 @@ class DoubtAwareGenerator:
         result per request, as generate()."""
         tok, dev = self.tok, next(self.model.parameters()).device
         seqs = [_Seq(self, r["messages"], r.get("max_new_tokens", 128), r.get("mode", "stop"), r.get("context"),
-                     r.get("think_budget", self.think_budget)) for r in requests]
+                     r.get("think_budget", self.think_budget), r.get("sampling", self.sampling),
+                     r.get("think_sampling", self.think_sampling)) for r in requests]
         prompts = [tok(prompt_of(tok, r["messages"], r.get("thinking", self.thinking))).input_ids for r in requests]
         for sq, p in zip(seqs, prompts):
             if self.think_open is not None:                         # the model may open a <think> block
@@ -171,8 +180,10 @@ def _token_id(tok, s):
 class _Seq:
     """One reply's decoding state for DoubtAwareGenerator.generate_batch."""
 
-    def __init__(self, gen, messages, max_new_tokens, mode, context, think_budget=1024):
+    def __init__(self, gen, messages, max_new_tokens, mode, context, think_budget=1024, sampling=None,
+                 think_sampling=None):
         self.g, self.mode, self.left = gen, mode, max_new_tokens
+        self.sampling, self.think_sampling, self.rng, self.seen = sampling, think_sampling, None, set()
         self.phase, self.think_left, self.reasoning, self.prefix = "answer", think_budget, [], []   # see decide()
         self.emitted_reasoning = ""
         if context is None:
@@ -230,12 +241,38 @@ class _Seq:
         self.sentences.append(sent)
         self.sent_start = end
 
+    def _pick(self, logits, s):
+        """The next token: argmax, or a sample under s (temperature, top_k, top_p, presence_penalty, seed)."""
+        if not s:
+            return int(logits.argmax())
+        z = logits.float()
+        if s.get("presence_penalty") and self.seen:
+            z = z.clone()
+            z[list(self.seen)] -= float(s["presence_penalty"])
+        t = float(s.get("temperature", 1.0))
+        if t <= 0:
+            nxt = int(z.argmax())
+        else:
+            k = int(s.get("top_k") or 0)
+            vals, idx = z.topk(min(k, z.numel())) if k > 0 else z.sort(descending=True)
+            pr = torch.softmax(vals / t, -1)
+            top_p = float(s.get("top_p", 1.0))
+            if top_p < 1:                                           # the smallest set holding top_p of the mass
+                keep = (pr.cumsum(-1) - pr) < top_p
+                pr = torch.where(keep, pr, torch.zeros_like(pr))
+            if self.rng is None:
+                self.rng = torch.Generator(device=z.device)
+                self.rng.manual_seed(int(s["seed"]) if s.get("seed") is not None else random.getrandbits(62))
+            nxt = int(idx[torch.multinomial(pr, 1, generator=self.rng)])
+        self.seen.add(nxt)
+        return nxt
+
     def decide(self, logits, h):
         g, tok = self.g, self.g.tok
         if self.left <= 0:
             self.done = True
             return
-        nxt = int(logits.argmax())
+        nxt = self._pick(logits, self.think_sampling if self.phase == "think" else self.sampling)
         if self.phase != "answer":                                  # "start": a <think> block may open
             if self.phase == "start":                               # "think": inside it
                 self.phase = "think" if nxt == g.think_open else "answer"
@@ -249,7 +286,7 @@ class _Seq:
                     close = [g.think_close] + tok("\n\n", add_special_tokens=False).input_ids
                     self.prefix += close                            # closed by the model or by the budget
                     self.feed = [(t, None) for t in close]
-                    self.phase = "answer"
+                    self.phase, self.seen = "answer", set()            # the reply may repeat its reasoning
                     return
                 self.reasoning.append(nxt)
                 self.prefix.append(nxt)

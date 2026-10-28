@@ -11,7 +11,8 @@
                  of checked text ({"reasoning"} pieces of a reasoning model's thinking first, when it thinks),
                  then {"done": true, "reply": <the full reply>}. "thinking": true/false asks a reasoning
                  model (Qwen3) to think first or not (default: --thinking); its reasoning is returned apart,
-                 unscored, as reply["reasoning"]
+                 unscored, as reply["reasoning"]. "temperature" (0-2; 0 = greedy) and "seed" override the
+                 server's sampling (--temperature, --top-p, --top-k, --presence-penalty)
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
                  general detector (vt/detector.Detector; only with --detector); {"items": [...]} for up to
                  16 at once, batched into padded forward passes
@@ -137,6 +138,11 @@ def validate(req):
         raise ValueError("mode: hedge, stop or flag")
     if req.get("thinking") is not None and not isinstance(req["thinking"], bool):
         raise ValueError("thinking: true, false or null")
+    t = req.get("temperature")
+    if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 2):
+        raise ValueError("temperature: a number from 0 to 2")
+    if req.get("seed") is not None and (isinstance(req["seed"], bool) or not isinstance(req["seed"], int)):
+        raise ValueError("seed: an integer")
     return msgs, docs, mode
 
 
@@ -344,6 +350,10 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)[:200]})
             item = {"messages": msgs, "documents": docs, "mode": mode, "thinking": req.get("thinking")}
+            over = {k: req[k] for k in ("temperature", "seed") if req.get(k) is not None}
+            if over:                                             # the server's sampling with these overrides
+                item["sampling"] = dict(bot.gen.sampling or {}, **over)
+                item["think_sampling"] = dict(bot.gen.think_sampling or {}, **over)
             if req.get("stream"):
                 return self.stream_chat(item)
             try:                                                 # batched with concurrent requests
@@ -401,12 +411,20 @@ def main(argv=None):
     ap.add_argument("--trust-proxy", action="store_true", help="client address from X-Forwarded-For")
     ap.add_argument("--thinking", action="store_true", help="reasoning models think first unless a request says not to")
     ap.add_argument("--think-budget", type=int, default=1024, help="most tokens of thinking per reply")
+    ap.add_argument("--temperature", type=float, default=0.7, help="sampling temperature (0: greedy); Qwen3's advice")
+    ap.add_argument("--top-p", type=float, default=0.8)
+    ap.add_argument("--top-k", type=int, default=20)
+    ap.add_argument("--presence-penalty", type=float, default=0.0, help="e.g. 1.5 if a quantized model repeats itself")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
     bot.gen.thinking, bot.gen.think_budget = a.thinking, a.think_budget
+    if a.temperature > 0:                                        # thinking: Qwen3's advice, never greedy
+        bot.gen.sampling = {"temperature": a.temperature, "top_p": a.top_p, "top_k": a.top_k,
+                            "presence_penalty": a.presence_penalty}
+        bot.gen.think_sampling = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "presence_penalty": a.presence_penalty}
     if a.moderation:
         from .moderation import Moderator
         bot.moderator = Moderator.load()
