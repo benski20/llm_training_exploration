@@ -153,3 +153,76 @@ def response_states(model, ids, r0, layers):
     o = model(input_ids=torch.tensor([ids], device=dev), output_hidden_states=True)
     return torch.stack([o.hidden_states[L + 1][0, r0:].to("cpu", torch.float16) for L in layers]), \
         o.logits[0, r0 - 1:-1].float().log_softmax(-1).gather(-1, torch.tensor(ids[r0:], device=o.logits.device)[:, None])[:, 0].cpu()
+
+
+class Detector:
+    """A trained detector (kaggle/detector/run.py's `<model>_detector.pt`) for live use: judge any response,
+    from any model, given its conversation and optional documents.
+
+        det = Detector.load("Qwen/Qwen2.5-3B-Instruct", "..._detector.pt")
+        det.judge([{"role": "user", "content": q}], response, documents=[...])
+        -> {"p_hallucinated", "flagged", "tokens": [{"text", "score", "start", "end"}], "spans": [...]}
+    """
+
+    FEATURES = ("resp", "tok_max", "tok_mean", "tok_p95", "lp_mean", "lp_min")
+
+    def __init__(self, model, tok, head):
+        from vt.correctness import Probe
+        self.model, self.tok = model, tok
+        self.layers = [int(head["response_layer"]), int(head["token_layer"])]
+        self.resp_probe = Probe.from_state(head["response_probe"])
+        self.tok_probe = Probe.from_state(head["token_probe"])
+        self.stacker = Probe.from_state(head["stacker"])
+        self.threshold = float(head["threshold"])
+
+    @classmethod
+    def load(cls, model_name, head_path):
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        cuda = torch.cuda.is_available()
+        tok = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa",
+            device_map="auto" if cuda else None).eval()
+        return cls(model, tok, torch.load(head_path, map_location="cpu", weights_only=True))
+
+    def item(self, messages, response, documents=None):
+        msgs = [dict(m) for m in messages]
+        doc = "\n\n".join(documents or [])
+        if not msgs or msgs[0]["role"] != "system":
+            msgs.insert(0, {"role": "system", "content": RAG_SYSTEM if doc else PLAIN_SYSTEM})
+        if doc:                                                     # the documents go before the last question
+            last = max(i for i, m in enumerate(msgs) if m["role"] == "user")
+            msgs[last]["content"] = f"{doc}\n\n{msgs[last]['content']}"
+        return {"source": "live", "task": "live", "messages": msgs, "response": response, "doc": doc,
+                "spans": None, "label": 0}
+
+    @torch.no_grad()
+    def judge(self, messages, response, documents=None, max_tokens=4096, token_threshold=0.5):
+        e = encode(self.tok, self.item(messages, response, documents), max_tokens)
+        if e is None or e["r0"] >= len(e["ids"]):
+            raise ValueError("empty response, or the prompt leaves no room for it")
+        h, lp = response_states(self.model, e["ids"], e["r0"], self.layers)
+        ht = h[1].float().numpy()
+        ts = self.tok_probe.logit(ht)
+        resp = float(self.resp_probe.logit(h[0].float().mean(0, keepdim=True).numpy())[0])
+        f = np.array([[resp, ts.max(), ts.mean(), np.percentile(ts, 95), float(lp.mean()), float(lp.min())]])
+        z = float(self.stacker.logit(f)[0])
+        p_tok = 1 / (1 + np.exp(-ts))
+        head = self.tok.apply_chat_template(self.item(messages, response, documents)["messages"], tokenize=False,
+                                            add_generation_prompt=True)
+        offs = self.tok(head + response, return_offsets_mapping=True, add_special_tokens=False)["offset_mapping"]
+        offs = offs[len(offs) - len(e["ids"]):][e["r0"]:]          # same trimming as encode
+        tokens = [{"text": response[max(s - len(head), 0):e_ - len(head)], "score": round(float(p), 4),
+                   "start": max(s - len(head), 0), "end": e_ - len(head)} for (s, e_), p in zip(offs, p_tok)]
+        spans = []                                                 # runs of flagged tokens, as response text
+        for t in tokens:
+            if t["score"] < token_threshold:
+                continue
+            if spans and t["start"] <= spans[-1]["end"] + 1:
+                spans[-1]["end"], spans[-1]["score"] = t["end"], max(spans[-1]["score"], t["score"])
+            else:
+                spans.append({"start": t["start"], "end": t["end"], "score": t["score"]})
+        for s in spans:
+            s["text"] = response[s["start"]:s["end"]]
+        return {"p_hallucinated": round(float(1 / (1 + np.exp(-z))), 4), "flagged": z >= self.threshold,
+                "tokens": tokens, "spans": spans}

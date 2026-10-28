@@ -222,7 +222,7 @@ def explain(model, ids, t, token, groups=None):
     Works for converted layers (fixed active sets) and dense SwiGLU MLPs (fixed gate values) alike.
     `groups` (a name per input position) merges tokens into one component per name."""
     comp, names, fs, logits = _decompose(model, ids, groups)
-    zf = comp[:, t] * fs[t] * model.model.norm.weight.float()
+    zf = comp[:, t] * fs[t] * model.model.norm.weight.float().to(comp.device)   # tied lm_head can sit off the norm's GPU
     contrib = zf @ model.lm_head.weight[token].float()
     return dict(zip(names, contrib.tolist())), float(logits[t, token])
 
@@ -236,7 +236,7 @@ def explain_all(model, ids, groups, start=0):
     T = ids.shape[1]
     pos = torch.arange(start, T - 1, device=comp.device)
     tgt = ids[0, start + 1:].to(comp.device)
-    zf = comp[:, pos] * fs[pos] * model.model.norm.weight.float()                   # (S, n, d)
+    zf = comp[:, pos] * fs[pos] * model.model.norm.weight.float().to(comp.device)   # (S, n, d)
     contrib = torch.einsum("snd,nd->sn", zf, model.lm_head.weight[tgt].float())
     return names, contrib, logits[pos, tgt].float()
 
@@ -258,11 +258,12 @@ def layer_contributions(model, ids, t, token):
         rec.remove()
         for h in hs:
             h.remove()
-    w = rec.scales[("final", 0)][0, t] * model.model.norm.weight.float() * model.lm_head.weight[token].float()
-    parts = {"embed": float(model.model.embed_tokens.weight[ids[0, t]].float() @ w)}
+    w = model.lm_head.weight[token].float()
+    w = rec.scales[("final", 0)][0, t].to(w.device) * model.model.norm.weight.float().to(w.device) * w
+    parts = {"embed": float(model.model.embed_tokens.weight[ids[0, t]].float().to(w.device) @ w)}
     for i in range(model.config.num_hidden_layers):
-        parts[f"attn@{i}"] = float(writes[f"attn@{i}"] @ w)
-        parts[f"mlp@{i}"] = float(writes[f"mlp@{i}"] @ w)
+        parts[f"attn@{i}"] = float(writes[f"attn@{i}"].to(w.device) @ w)
+        parts[f"mlp@{i}"] = float(writes[f"mlp@{i}"].to(w.device) @ w)
     return parts, float(out.logits[0, t, token])
 
 

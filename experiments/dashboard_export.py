@@ -224,7 +224,10 @@ LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B
           "the 0.5B probe tied token probability; does the stronger 1.5B probe cut hallucinations more?"),
          ("ragtruth-provenance", "CPU: exact per-token provenance on RAGTruth (sanity, 0.5B)",
           "results/ragtruth_provenance.log", "results/ragtruth_provenance.json", 40, "experiments/ragtruth_provenance.py",
-          "do hallucinated spans draw less of their logit from the document?")]
+          "do hallucinated spans draw less of their logit from the document?"),
+         ("triggered-retrieval", "CPU: retrieve only when the probe doubts (1.5B, TriviaQA + Wikipedia)",
+          "results/triggered_retrieval.log", "results/triggered_retrieval.json", 200, "experiments/triggered_retrieval.py",
+          "accuracy per retrieval budget: probe trigger vs token probability (FLARE-style) vs random")]
 
 
 def local_rows():

@@ -965,6 +965,44 @@ This is a training-free signal from the smallest reader, and it is promising. Th
 to trust the response-level number. The real test is the 7B detector run (2,700 RAGTruth test
 responses, against the Lookback Lens attention ratio on the same tokens).
 
+**General detector, 3B reader** (`kaggle/detector/run.py`, Qwen2.5-3B-Instruct frozen, 1 h 47 min on
+2×T4; `results/kaggle/detector-3b/detector/`). It is trained on 4,843 responses from six sources and
+judges text from any model, including closed ones. Response probe is at layer 24, on mean hidden
+states. The token probe is at layer 24. The stacker adds output log-prob features, fitted on 854
+held-out responses. Test is 2,427 responses. AUROC for "this response hallucinates":
+
+| test source (n, hallucinated) | stack | response probe | low mean log-prob | left out of training (LODO) | stack F1 |
+|---|---|---|---|---|---|
+| RAGTruth (700, 228) | **0.864** [0.834, 0.894] | 0.841 | 0.422 | 0.558 | 0.708 |
+| HaluEval general (300, 54) | **0.651** | 0.668 | 0.479 | 0.441 | 0.303 |
+| HaluEval QA (400, 200) | **0.992** | 0.992 | 0.424 | 0.822 | 0.977 |
+| HaluEval dialogue (400, 200) | **0.929** | 0.937 | 0.290 | 0.710 | 0.842 |
+| HaluEval summarization (300, 150) | **0.987** | 0.989 | 0.225 | 0.897 | 0.884 |
+| TruthfulQA (327, 163) | **0.848** | 0.856 | 0.564 | 0.669 | 0.784 |
+| all (2,427, 995) | **0.910** | 0.901 | 0.551 | - | 0.799 |
+
+Token level (is this token inside a human-labelled hallucinated span?): RAGTruth **0.854**
+[0.848, 0.860] over 112k tokens, against 0.498 for low token log-prob. Over all sources: 0.872 vs 0.613.
+
+What this shows, honestly:
+- **Output probability is useless for judging someone else's text.** It is at or below chance on
+  every source, while the reader's internal states separate hallucinations well. A small frozen
+  reader is enough to grade text from other models.
+- **On RAGTruth, a 3B frozen reader with linear probes gets response F1 0.71 and AUROC 0.86.** The
+  RAGTruth paper reports response F1 of about 0.79 for a fully fine-tuned Llama-2-13B. Our test
+  sample is a 700-response subset, so this is indicative, not a leaderboard number.
+- **HaluEval QA / summarization (0.99) are easy for a known reason.** Their hallucinated answers were
+  written by ChatGPT on instruction, and carry style artefacts. HaluEval general (real ChatGPT
+  replies, with sparse labels) is the hard one, at 0.65.
+- **It does not transfer to a source type it has never seen.** Leave-one-source-out drops RAGTruth to
+  0.56 and HaluEval general to 0.44. "Nearly completely general" means training on a broad mix of
+  sources; the probe learns what a hallucination looks like *in that kind of task*. The fix is more
+  diverse training data, which is cheap: the reader is frozen and a probe trains in seconds.
+- **Provenance was skipped in this run.** Qwen2.5-3B ties its output layer to the embeddings, so
+  across two GPUs `lm_head` sat on cuda:0 and the final norm on cuda:1, and `explain_all` raised a
+  device error. This is fixed in `vt/qwen_glassbox.py`. The 7B run, with untied weights, is the
+  provenance-vs-Lookback-Lens test.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
