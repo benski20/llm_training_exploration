@@ -204,3 +204,26 @@ def test_risk_head_file_drives_claims_and_sentences(tmp_path):
     bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk, rl, th
     out = bot.reply([{"role": "user", "content": "Tell me about Paris."}], mode="flag", max_new_tokens=24)
     assert "sentences" in out and all(0 <= s["risk"] <= 1 for s in out["sentences"])
+
+
+def test_server_streams_server_sent_events():
+    import json
+    import threading
+    import urllib.request
+    from vt.verichat_server import make_server
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    srv = make_server(VeriChat(m, tok, p, layer=1), port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    body = json.dumps({"messages": [{"role": "user", "content": "Hi"}], "mode": "flag", "stream": True}).encode()
+    resp = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{srv.server_port}/chat", body,
+                                                         {"Content-Type": "application/json"}))
+    assert resp.headers["Content-Type"] == "text/event-stream"
+    events = [json.loads(e[6:]) for e in resp.read().decode().split("\n\n") if e.startswith("data: ")]
+    assert events[-1]["done"] and "reply" in events[-1]
+    streamed = "".join(e.get("delta", "") for e in events[:-1])
+    assert streamed.strip().replace(" [unsure:]", "") == events[-1]["reply"]["text"].replace(" [unsure:]", "")
+    srv.shutdown()

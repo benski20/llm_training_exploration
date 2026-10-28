@@ -6,7 +6,9 @@
                  hover for its source and citation
   GET  /health   status and the head's layer
   GET  /metrics  Prometheus counters: requests by path and status, latency, batch sizes
-  POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag"}
+  POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag",
+                 "stream": false}; with "stream": true, server-sent events: {"delta"} pieces of checked text,
+                 then {"done": true, "reply": <the full reply>}
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
                  general detector (vt/detector.Detector; only with --detector); {"items": [...]} for up to
                  16 at once, batched into padded forward passes
@@ -18,7 +20,9 @@ at once, 20 ms window); connections beyond the limit get 503.
 import argparse
 import collections
 import hmac
+import json
 import os
+import queue
 import threading
 import time
 
@@ -93,10 +97,19 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
  const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
  msgs.push({role:'user',content:m});add('user',esc(m));document.getElementById('msg').value='';
  const b=document.getElementById('send');b.disabled=true;document.getElementById('busy').textContent='thinking…';
+ const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div>';log.appendChild(card);
+ const live=card.firstChild;let shown='';
  try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({messages:msgs,documents:docs,mode:document.getElementById('mode').value})});
-  const r=await res.json();if(r.error){add('bot',esc('Error: '+r.error))}else{msgs.push({role:'assistant',content:r.text});add('bot',render(r))}}
- catch(e){add('bot',esc('Error: '+e))}b.disabled=false;document.getElementById('busy').textContent=''};
+  body:JSON.stringify({messages:msgs,documents:docs,mode:document.getElementById('mode').value,stream:true})});
+  if(!res.ok){const r=await res.json();card.innerHTML=esc('Error: '+(r.error||res.status))}
+  else{const rd=res.body.getReader(),dec=new TextDecoder();let buf='',r=null;
+   while(true){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
+     if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
+     if(m.delta){shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
+     if(m.done){if(m.error){card.innerHTML=esc('Error: '+m.error)}else{r=m.reply}}}}
+   if(r){msgs.push({role:'assistant',content:r.text});card.innerHTML=render(r)}}}
+ catch(e){card.innerHTML=esc('Error: '+e)}b.disabled=false;document.getElementById('busy').textContent=''};
 </script></body></html>"""
 
 
@@ -243,7 +256,12 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                 api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16):
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
-    handlers = {"chat": bot.reply_batch}
+    def chat(items):                                             # items may carry a "_stream" callback
+        reqs = [{k: v for k, v in it.items() if k != "_stream"} for it in items]
+        sinks = [it.get("_stream") for it in items]
+        on_text = (lambda i, d: sinks[i](d) if sinks[i] else None) if any(sinks) else None
+        return bot.reply_batch(reqs, on_text=on_text)
+    handlers = {"chat": chat}
     if detector is not None:
         handlers["judge"] = lambda items: detector.judge_batch(items)
     metrics = Metrics()
@@ -314,11 +332,45 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                 msgs, docs, mode = validate(req)
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)[:200]})
+            item = {"messages": msgs, "documents": docs, "mode": mode}
+            if req.get("stream"):
+                return self.stream_chat(item)
             try:                                                 # batched with concurrent requests
-                r = batcher.submit("chat", {"messages": msgs, "documents": docs, "mode": mode}, deadline)
+                r = batcher.submit("chat", item, deadline)
             except TimeoutError as e:
                 return self.send_json(503, {"error": str(e)})
             self.send_json(200, r)
+
+        def stream_chat(self, item):
+            """Server-sent events: {"delta": text} as checked text is released, then {"done": true, "reply": ...}."""
+            q, box = queue.Queue(), {}
+            item["_stream"] = q.put
+
+            def run():
+                try:
+                    box["reply"] = batcher.submit("chat", item, deadline)
+                except Exception as e:                           # timeout or model error: reported in the stream
+                    box["error"] = str(e)[:200]
+                q.put(None)
+            threading.Thread(target=run, daemon=True).start()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                while True:
+                    d = q.get()
+                    if d is None:
+                        break
+                    self.wfile.write(b"data: " + json.dumps({"delta": d}).encode() + b"\n\n")
+                    self.wfile.flush()
+                end = {"done": True, "reply": box["reply"]} if "reply" in box else {"done": True, "error": box["error"]}
+                self.wfile.write(b"data: " + json.dumps(end).encode() + b"\n\n")
+                self.wfile.flush()
+            except OSError:                                      # the client went away
+                return
+            self.on_response(200)
 
     return bounded_server(host, port, Handler, max_concurrency)
 

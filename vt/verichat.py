@@ -194,7 +194,7 @@ class VeriChat:
         return self.reply_batch([{"messages": messages, "documents": documents, "mode": mode,
                                   "max_new_tokens": max_new_tokens, "retrieve": retrieve}])[0]
 
-    def reply_batch(self, requests):
+    def reply_batch(self, requests, on_text=None):
         """Several conversations at once (one batched generation; provenance per reply). requests:
         [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?}] -> one reply() result each."""
         reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
@@ -204,16 +204,27 @@ class VeriChat:
             flags = [self.moderator.check(next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user"))
                      for r in reqs]
             keep = [i for i, f in enumerate(flags) if not f["flagged"]]
-            kept = self._reply_batch_unmoderated([reqs[i] for i in keep]) if keep else []
+            screened = None
+            if on_text is not None:                                  # stream only text the filter has passed
+                seen, blocked = {}, set()
+
+                def screened(j, d):
+                    i = keep[j]
+                    seen[i] = seen.get(i, "") + d
+                    if i in blocked or self.moderator.check(seen[i])["flagged"]:
+                        blocked.add(i)
+                        return
+                    on_text(i, d)
+            kept = self._reply_batch_unmoderated([reqs[i] for i in keep], screened) if keep else []
             outs = [{"text": REFUSAL, "claims": [], "withheld": True, "reply_confidence": None, "threshold": self.threshold,
                      "mode": r["mode"], "moderation": {"input": f}} for r, f in zip(reqs, flags)]
             for i, o in zip(keep, kept):
                 outs[i] = o
             return outs
-        return self._reply_batch_unmoderated(reqs)
+        return self._reply_batch_unmoderated(reqs, on_text)
 
-    def _reply_batch_unmoderated(self, reqs):
-        outs = self._reply_batch(reqs)
+    def _reply_batch_unmoderated(self, reqs, on_text=None):
+        outs = self._reply_batch(reqs, on_text)
         again, where = [], []                                        # doubted closed-book replies: look them up
         for i, (r, o) in enumerate(zip(reqs, outs)):
             score = o.pop("_trigger")
@@ -241,11 +252,12 @@ class VeriChat:
                     o.update(text=WITHHELD, claims=[], withheld=True)
         return outs
 
-    def _reply_batch(self, reqs):
+    def _reply_batch(self, reqs, on_text=None):
         prepared = [(self._messages(r["messages"], r["documents"]),
                      " ".join(m["content"] for m in r["messages"] if m["role"] != "system")) for r in reqs]  # context
         gens = self.gen.generate_batch([{"messages": msgs, "max_new_tokens": r["max_new_tokens"], "mode": r["mode"],
-                                         "context": ctx} for r, (msgs, ctx) in zip(reqs, prepared)])   # without docs
+                                         "context": ctx} for r, (msgs, ctx) in zip(reqs, prepared)],   # without docs
+                                       on_text=on_text)
         return [self._post(r["messages"], r["documents"], r["mode"], msgs, g)
                 for r, (msgs, _), g in zip(reqs, prepared, gens)]
 

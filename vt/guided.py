@@ -67,10 +67,14 @@ class DoubtAwareGenerator:
                                      "context": context}])[0]
 
     @torch.no_grad()
-    def generate_batch(self, requests):
+    def generate_batch(self, requests, on_text=None):
         """Several replies at once: left-padded prompts, one shared KV cache, one forward pass per step for
         all of them. Every sequence feeds exactly one token per step: its next token, or a queued hedge
-        marker, or (once finished) padding that nothing attends to. requests: [{"messages",
+        marker, or (once finished) padding that nothing attends to.
+
+        on_text(i, delta): streams request i's reply as it is written. With a risk probe, text is released
+        one checked sentence at a time (a sentence that stop mode drops is never shown); without one,
+        token by token. requests: [{"messages",
         "max_new_tokens"?, "mode"?, "context"?}]; returns one result per request, as generate()."""
         tok, dev = self.tok, next(self.model.parameters()).device
         seqs = [_Seq(self, r["messages"], r.get("max_new_tokens", 128), r.get("mode", "stop"), r.get("context"))
@@ -103,6 +107,9 @@ class DoubtAwareGenerator:
                 else:
                     sq.closed = sq.done                         # nothing more to observe once it stops feeding
                     nxt.append(None)
+            if on_text is not None:
+                for b, sq in enumerate(seqs):
+                    sq.stream(b, on_text, final=False)
             if all(t is None for t in nxt):
                 break
             live = torch.tensor([[t is not None] for t in nxt], dtype=torch.long, device=dev)
@@ -123,6 +130,18 @@ class _Seq:
         self.out, self.claims, self.first, self.feed = [], [], None, []       # feed: [(token, index in out or None)]
         self.at_word_start, self.stopped, self.done, self.closed = True, False, False, False
         self.risk, self.sentences, self.sent_start, self.last_fed = {}, [], 0, None
+        self.emitted = ""
+
+    def stream(self, b, on_text, final):
+        """Send the part of the reply that is safe to show: up to the last checked sentence while a risk
+        probe is on and the reply is still being written, else everything written so far."""
+        if (final or self.done) and self.g.risk_probe is not None and not self.stopped:
+            self._close_sentence(len(self.out))                    # check the last sentence before showing it
+        safe = len(self.out) if (final or self.done or self.g.risk_probe is None) else self.sent_start
+        text = self.g.tok.decode(self.out[:safe], skip_special_tokens=True)
+        if text.startswith(self.emitted) and len(text) > len(self.emitted) and not text.endswith("\ufffd"):
+            on_text(b, text[len(self.emitted):])
+            self.emitted = text
 
     def observe(self, h):
         """Risk of the token just fed (its own-position state); closes a sentence at its boundary."""

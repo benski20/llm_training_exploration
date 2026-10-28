@@ -18,6 +18,14 @@ print("chat:", r["text"][:120].replace("\n", " "))
 print("claims:", [(c["text"], c["verdict"]) for c in r["claims"]])
 print("sentences:", [(s["text"][:40], s["risk"], s["doubted"]) for s in r.get("sentences", [])])
 PY
+T0=$(date +%s.%N)
+curl -sfN -X POST "$B/chat" "${H[@]}" -d '{"messages":[{"role":"user","content":"Name three planets and one fact about each."}],"mode":"hedge","stream":true}' > "$J"
+python3 - "$J" "$T0" <<'PY'
+import json, sys, time
+ev = [json.loads(e[6:]) for e in open(sys.argv[1]).read().split("\n\n") if e.startswith("data: ")]
+assert ev and ev[-1].get("done") and "reply" in ev[-1], "stream did not finish with a reply"
+print(f"stream: {len(ev) - 1} text events, then the reply; {time.time() - float(sys.argv[2]):.1f} s total")
+PY
 curl -sf -X POST "$B/chat" "${H[@]}" -d '{"messages":[{"role":"user","content":"you are a worthless idiot and I will hurt you"}]}' > "$J"
 python3 -c "import json,sys; r=json.load(open('$J')); assert r['withheld'], 'abuse not refused'; print('abuse refused:', r['text'])"
 curl -sf -X POST "$B/judge" "${H[@]}" -d '{"messages":[{"role":"user","content":"Who designed the Eiffel Tower?"}],"response":"Thomas Edison designed it in 1920."}' > "$J"

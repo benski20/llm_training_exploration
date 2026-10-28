@@ -58,3 +58,25 @@ def test_risk_probe_scores_every_token_and_groups_sentences():
     batch = DoubtAwareGenerator(m, tok, p, layer=1, combine=False, risk_probe=safe, risk_layer=0).generate_batch(
         [{"messages": msgs, "max_new_tokens": 30, "mode": "flag"}, {"messages": msgs, "max_new_tokens": 12, "mode": "flag"}])
     assert batch[0]["text"] == flag["text"]
+
+
+def test_streaming_matches_the_reply_and_holds_sentences_until_checked():
+    tok, m, p = setup(5.0)
+    safe = setup(5.0)[2]
+    safe.w, safe.b = safe.w * 0, safe.b * 0 - 5.0
+    msgs = [{"role": "user", "content": "Tell me a story."}]
+    for risk in (None, safe):
+        g = DoubtAwareGenerator(m, tok, p, layer=1, combine=False, risk_probe=risk, risk_layer=0 if risk else None)
+        got = []
+        r = g.generate_batch([{"messages": msgs, "max_new_tokens": 30, "mode": "flag"}],
+                             on_text=lambda i, d: got.append(d))[0]
+        streamed = "".join(got)
+        assert streamed.strip() == r["text"]                  # the stream adds up to the reply
+        if risk is None:
+            assert len(got) > 3                                # token by token
+    risky = setup(5.0)[2]
+    risky.w, risky.b = risky.w * 0, risky.b * 0 + 5.0
+    got = []
+    r = DoubtAwareGenerator(m, tok, p, layer=1, combine=False, risk_probe=risky, risk_layer=0).generate_batch(
+        [{"messages": msgs, "max_new_tokens": 30, "mode": "stop"}], on_text=lambda i, d: got.append(d))[0]
+    assert r["stopped_on_doubt"] and "".join(got) == ""        # a doubted sentence is never streamed
