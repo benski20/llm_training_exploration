@@ -132,36 +132,62 @@ class PatternRecorder:
     """Recomputes every layer's attention pattern in float32 from the inputs its attention module
     receives (a decision, like the RMS scales). Works with any attention implementation: float16
     models must use sdpa, since eager attention overflows on Qwen2.5's raw q.k (up to ~2.6e5 > 65504),
-    and sdpa does not return its pattern. Single unpadded sequences (B = 1), causal attention."""
+    and sdpa does not return its pattern. Single unpadded sequences (B = 1), causal attention.
+
+    Only each layer's input is kept (T x d); `A[i]` computes layer i's (H, T, T) pattern on demand, so
+    memory holds one layer's pattern at a time (all of them at once is ~13 GB for a 7B model at 2k tokens)."""
 
     def __init__(self, model):
-        self.A, self.handles = {}, []
+        self.inputs, self.handles = {}, []
         cfg = model.config
         self.H, self.KV = cfg.num_attention_heads, cfg.num_key_value_heads
         self.hd = getattr(cfg, "head_dim", None) or cfg.hidden_size // self.H
+        self.mods = {}
         for i, layer in enumerate(layers_of(model)):
+            self.mods[i] = layer.self_attn
             self.handles.append(layer.self_attn.register_forward_pre_hook(self._hook(i), with_kwargs=True))
+        self.A = _LazyPatterns(self)
 
     def _hook(self, i):
         def f(mod, args, kwargs):
-            x = (kwargs.get("hidden_states") if "hidden_states" in kwargs else args[0]).float()
+            x = kwargs.get("hidden_states") if "hidden_states" in kwargs else args[0]
             cos, sin = kwargs["position_embeddings"]
-            rope = sys.modules[type(mod).__module__].apply_rotary_pos_emb
-            B, T, _ = x.shape
-            q = F.linear(x, mod.q_proj.weight.float(), None if mod.q_proj.bias is None else mod.q_proj.bias.float())
-            k = F.linear(x, mod.k_proj.weight.float(), None if mod.k_proj.bias is None else mod.k_proj.bias.float())
-            q = q.view(B, T, self.H, self.hd).transpose(1, 2)
-            k = k.view(B, T, self.KV, self.hd).transpose(1, 2)
-            q, k = rope(q, k, cos.float(), sin.float())
-            k = k.repeat_interleave(self.H // self.KV, dim=1)
-            sc = (q @ k.transpose(-1, -2)) / math.sqrt(self.hd)
-            sc = sc.masked_fill(torch.ones(T, T, dtype=torch.bool, device=x.device).triu(1), float("-inf"))
-            self.A[i] = sc.softmax(-1)[0]                                            # (H, T, T)
+            self.inputs[i] = (x.detach(), cos.detach(), sin.detach())
         return f
+
+    def pattern(self, i):
+        mod = self.mods[i]
+        x, cos, sin = self.inputs[i]
+        x = x.float()
+        rope = sys.modules[type(mod).__module__].apply_rotary_pos_emb
+        B, T, _ = x.shape
+        q = F.linear(x, mod.q_proj.weight.float(), None if mod.q_proj.bias is None else mod.q_proj.bias.float())
+        k = F.linear(x, mod.k_proj.weight.float(), None if mod.k_proj.bias is None else mod.k_proj.bias.float())
+        q = q.view(B, T, self.H, self.hd).transpose(1, 2)
+        k = k.view(B, T, self.KV, self.hd).transpose(1, 2)
+        q, k = rope(q, k, cos.float(), sin.float())
+        k = k.repeat_interleave(self.H // self.KV, dim=1)
+        sc = (q @ k.transpose(-1, -2)) / math.sqrt(self.hd)
+        sc = sc.masked_fill(torch.ones(T, T, dtype=torch.bool, device=x.device).triu(1), float("-inf"))
+        return sc.softmax(-1)[0]                                                   # (H, T, T)
 
     def remove(self):
         for h in self.handles:
             h.remove()
+
+
+class _LazyPatterns:
+    def __init__(self, rec):
+        self.rec = rec
+
+    def __getitem__(self, i):
+        return self.rec.pattern(i)
+
+    def __iter__(self):
+        return iter(sorted(self.rec.inputs))
+
+    def __len__(self):
+        return len(self.rec.inputs)
 
 
 def _decompose(model, ids, groups=None, merge_bias=False):

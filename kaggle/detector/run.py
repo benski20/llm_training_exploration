@@ -69,6 +69,7 @@ def main():
     ap.add_argument("--neg-keep", type=float, default=0.15, help="share of non-hallucinated tokens kept for training")
     ap.add_argument("--stack-frac", type=float, default=0.15)
     ap.add_argument("--provenance", type=int, default=300, help="document-grounded test items with exact provenance")
+    ap.add_argument("--head", help="a trained *_detector.pt: skip training, evaluate it (bundled files/ is searched)")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
@@ -115,32 +116,6 @@ def main():
     log(phase="data", fit=len(fit_items), stack=len(stack), test=len(test), gpus=res["gpus"],
         by_source={s: sum(x["source"] == s for x in train + test) for s in SOURCES})
     res["counts"] = {"fit": len(fit_items), "stack": len(stack), "test": len(test)}
-    # 1. training pass
-    R, RY, RS, TK, TY, TS = [], [], [], {L_: [] for L_ in tok_layers}, [], []
-    kept = 0
-    rng = np.random.default_rng(0)
-    for i, it in enumerate(fit_items):
-        e = encode(tok, it, a.max_tokens)
-        if e is None or e["r0"] >= len(e["ids"]):
-            continue
-        h, lp = response_states(model, e["ids"], e["r0"], layers)
-        R.append(h.float().mean(1).half())
-        RY.append(it["label"])
-        RS.append(it["source"])
-        if e["labels"] is not None and kept < a.token_cap:
-            lab = np.array(e["labels"])
-            keep = np.where((lab == 1) | (rng.random(len(lab)) < a.neg_keep))[0]
-            for L_ in tok_layers:
-                TK[L_].append(h[layers.index(L_), keep])
-            TY += lab[keep].tolist()
-            TS += [it["source"]] * len(keep)
-            kept += len(keep)
-        if (i + 1) % 500 == 0:
-            log(phase="train_pass", done=i + 1, of=len(fit_items), tokens=kept, s=round(time.time() - t0))
-    R = torch.stack(R).float().numpy()                               # (N, nL, d)
-    RY, RS = np.array(RY), np.array(RS)
-    TY, TS = np.array(TY), np.array(TS)
-    TK = {L_: torch.cat(v).float().numpy() for L_, v in TK.items()}
     if cuda:                                           # probes go to the GPU with the most free memory (the model
         torch.cuda.empty_cache()                       # fills the others); Probe.fit falls back to the CPU on OOM
         free = [torch.cuda.mem_get_info(i)[0] for i in range(torch.cuda.device_count())]
@@ -148,24 +123,61 @@ def main():
         log(phase="probe_device", device=pdev, free_gb=[round(f / 2 ** 30, 1) for f in free])
     else:
         pdev = "cpu"
-    # 2. fit probes
-    idx = rng.permutation(len(RY))
-    a_, b_ = idx[: int(0.8 * len(idx))], idx[int(0.8 * len(idx)):]
-    by_layer = {L_: auroc(Probe(pdev).fit(R[a_, k], RY[a_]).logit(R[b_, k]), RY[b_]) for k, L_ in enumerate(layers)}
-    rk = max(range(len(layers)), key=lambda k: by_layer[layers[k]] or 0)
-    res["response_probe_by_layer"], res["response_layer"] = by_layer, layers[rk]
-    resp_probe = Probe(pdev).fit(R[:, rk], RY)
-    tidx = rng.permutation(len(TY))
-    ta, tb = tidx[: int(0.8 * len(tidx))], tidx[int(0.8 * len(tidx)):]
-    tby = {L_: auroc(Probe(pdev).fit(TK[L_][ta], TY[ta]).logit(TK[L_][tb]), TY[tb]) for L_ in tok_layers}
-    tl = max(tok_layers, key=lambda L_: tby[L_] or 0)
-    res["token_probe_by_layer"], res["token_layer"] = tby, tl
-    tok_probe = Probe(pdev).fit(TK[tl], TY)
-    lodo_resp = {s: Probe(pdev).fit(R[RS != s, rk], RY[RS != s]) for s in SOURCES if (RS == s).any()}
-    lodo_tok = {s: Probe(pdev).fit(TK[tl][TS != s], TY[TS != s]) for s in SPAN_SOURCES if (TS == s).any() and (TS != s).any()}
-    log(phase="fitted", response_layer=layers[rk], token_layer=tl, by_layer=by_layer, token_by_layer=tby, s=round(time.time() - t0))
-    del TK, R
-    save()
+    if a.head:                                        # evaluate a trained head: no training pass, no LODO
+        hp = a.head if os.path.exists(a.head) else os.path.join(HERE, "files", os.path.basename(a.head))
+        H_ = torch.load(hp, map_location="cpu", weights_only=True)
+        assert H_["model"] == a.model, f"head is for {H_['model']}"
+        layers, rk, tl = [int(H_["response_layer"])], 0, int(H_["token_layer"])
+        resp_probe, tok_probe = Probe.from_state(H_["response_probe"], pdev), Probe.from_state(H_["token_probe"], pdev)
+        stacker, th, S_ = Probe.from_state(H_["stacker"], pdev), float(H_["threshold"]), []
+        lodo_resp, lodo_tok = {}, {}
+        res.update(response_layer=layers[0], token_layer=tl, head=os.path.basename(hp))
+        log(phase="head_loaded", response_layer=layers[0], token_layer=tl, threshold=th)
+    else:
+        # 1. training pass
+        R, RY, RS, TK, TY, TS = [], [], [], {L_: [] for L_ in tok_layers}, [], []
+        kept = 0
+        rng = np.random.default_rng(0)
+        for i, it in enumerate(fit_items):
+            e = encode(tok, it, a.max_tokens)
+            if e is None or e["r0"] >= len(e["ids"]):
+                continue
+            h, lp = response_states(model, e["ids"], e["r0"], layers)
+            R.append(h.float().mean(1).half())
+            RY.append(it["label"])
+            RS.append(it["source"])
+            if e["labels"] is not None and kept < a.token_cap:
+                lab = np.array(e["labels"])
+                keep = np.where((lab == 1) | (rng.random(len(lab)) < a.neg_keep))[0]
+                for L_ in tok_layers:
+                    TK[L_].append(h[layers.index(L_), keep])
+                TY += lab[keep].tolist()
+                TS += [it["source"]] * len(keep)
+                kept += len(keep)
+            if (i + 1) % 500 == 0:
+                log(phase="train_pass", done=i + 1, of=len(fit_items), tokens=kept, s=round(time.time() - t0))
+        R = torch.stack(R).float().numpy()                               # (N, nL, d)
+        RY, RS = np.array(RY), np.array(RS)
+        TY, TS = np.array(TY), np.array(TS)
+        TK = {L_: torch.cat(v).float().numpy() for L_, v in TK.items()}
+        # 2. fit probes
+        idx = rng.permutation(len(RY))
+        a_, b_ = idx[: int(0.8 * len(idx))], idx[int(0.8 * len(idx)):]
+        by_layer = {L_: auroc(Probe(pdev).fit(R[a_, k], RY[a_]).logit(R[b_, k]), RY[b_]) for k, L_ in enumerate(layers)}
+        rk = max(range(len(layers)), key=lambda k: by_layer[layers[k]] or 0)
+        res["response_probe_by_layer"], res["response_layer"] = by_layer, layers[rk]
+        resp_probe = Probe(pdev).fit(R[:, rk], RY)
+        tidx = rng.permutation(len(TY))
+        ta, tb = tidx[: int(0.8 * len(tidx))], tidx[int(0.8 * len(tidx)):]
+        tby = {L_: auroc(Probe(pdev).fit(TK[L_][ta], TY[ta]).logit(TK[L_][tb]), TY[tb]) for L_ in tok_layers}
+        tl = max(tok_layers, key=lambda L_: tby[L_] or 0)
+        res["token_probe_by_layer"], res["token_layer"] = tby, tl
+        tok_probe = Probe(pdev).fit(TK[tl], TY)
+        lodo_resp = {s: Probe(pdev).fit(R[RS != s, rk], RY[RS != s]) for s in SOURCES if (RS == s).any()}
+        lodo_tok = {s: Probe(pdev).fit(TK[tl][TS != s], TY[TS != s]) for s in SPAN_SOURCES if (TS == s).any() and (TS != s).any()}
+        log(phase="fitted", response_layer=layers[rk], token_layer=tl, by_layer=by_layer, token_by_layer=tby, s=round(time.time() - t0))
+        del TK, R
+        save()
 
     def score(it, provenance=False):
         e = encode(tok, it, a.max_tokens)
@@ -196,27 +208,33 @@ def main():
 
     def feats(r):
         return [r["resp"], r["tok_max"], r["tok_mean"], r["tok_p95"], r["lp_mean"], r["lp_min"]]
-    # 3. stacking split
-    S_ = [r for r in (score(it) for it in stack) if r]
-    stacker = Probe(pdev).fit(np.array([feats(r) for r in S_]), np.array([r["label"] for r in S_]),
-                              grid=(1e-4, 1e-3, 1e-2, 1e-1))
-    zs = stacker.logit(np.array([feats(r) for r in S_]))
-    th = best_threshold(zs, [r["label"] for r in S_])
-    log(phase="stacked", n=len(S_), threshold=th, s=round(time.time() - t0))
-    torch.save({"model": a.model, "response_layer": layers[rk], "token_layer": tl, "response_probe": resp_probe.state_dict(),
-                "token_probe": tok_probe.state_dict(), "stacker": stacker.state_dict(), "threshold": th,
-                "features": ["resp", "tok_max", "tok_mean", "tok_p95", "lp_mean", "lp_min"]},
-               os.path.join(a.out, a.model.split("/")[-1] + "_detector.pt"))
+    if not a.head:
+        # 3. stacking split
+        S_ = [r for r in (score(it) for it in stack) if r]
+        stacker = Probe(pdev).fit(np.array([feats(r) for r in S_]), np.array([r["label"] for r in S_]),
+                                  grid=(1e-4, 1e-3, 1e-2, 1e-1))
+        zs = stacker.logit(np.array([feats(r) for r in S_]))
+        th = best_threshold(zs, [r["label"] for r in S_])
+        log(phase="stacked", n=len(S_), threshold=th, s=round(time.time() - t0))
+        torch.save({"model": a.model, "response_layer": layers[rk], "token_layer": tl, "response_probe": resp_probe.state_dict(),
+                    "token_probe": tok_probe.state_dict(), "stacker": stacker.state_dict(), "threshold": th,
+                    "features": ["resp", "tok_max", "tok_mean", "tok_p95", "lp_mean", "lp_min"]},
+                   os.path.join(a.out, a.model.split("/")[-1] + "_detector.pt"))
     # 4. test pass
     rows, prov_left = [], a.provenance
     for i, it in enumerate(test):
         want = prov_left > 0 and bool(it["doc"]) and it["source"] in ("ragtruth", "halueval_qa", "halueval_summary")
+        retry = False
         try:
             r = score(it, provenance=want)
         except Exception as ex:                        # OOM or a provenance failure must not stop the pass
+            if not want:
+                raise
+            log(phase="provenance_skipped", error=repr(ex)[:200])
+            retry = True                               # retried below: inside `except` the traceback pins the
+        if retry:                                      # failed attempt's tensors and the retry runs out of memory
             if cuda:
                 torch.cuda.empty_cache()
-            log(phase="provenance_skipped", error=repr(ex)[:200]) if want else None
             r = score(it, provenance=False)
         if r:
             rows.append(r)

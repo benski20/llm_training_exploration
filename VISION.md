@@ -1052,6 +1052,16 @@ The first 7B run (18k training responses) failed after its 3-hour training pass:
 now go to the GPU with the most free memory and fall back to the CPU. The rerun (`detector-7b2`) also
 adds HaluBench's DROP, PubMedQA, FinanceBench and CovidQA as four new domains.
 
+The rerun trained (10,622 responses from 10 sources, 2.8 h) and saved its head, then also failed, in the
+test pass. Its inner held-out split gave response-probe AUROC 0.861 (layer 19) and token-probe AUROC
+0.909, on all sources mixed. The test pass ran out of memory for two reasons, both now fixed:
+- exact provenance kept every layer's float32 attention pattern at once, about 13 GB at 2k tokens for
+  a 7B model; patterns are now computed one layer at a time from the stored attention inputs;
+- the retry without provenance ran inside the `except` block, where the traceback still held the
+  failed attempt's tensors; it now runs after the block.
+`run.py --head` now evaluates a saved head without redoing the training pass (the bundle embeds the
+head), so the 7B evaluation costs about an hour of GPU, not four.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the

@@ -1,6 +1,9 @@
 """Make a single-file Kaggle kernel: embed vt modules and an entry script, run the entry script.
 
     python kaggle/distill/bundle.py OUT ENTRY [args baked into the entry...]
+
+BUNDLE_FILES="a/b.pt c.json" (repo-relative) also embeds those files; the entry finds them in
+files/<basename> next to itself.
 """
 import base64
 import os
@@ -14,6 +17,8 @@ def main():
     root = os.path.join(os.path.dirname(__file__), "..", "..")
     files = {m: base64.b64encode(open(os.path.join(root, m), "rb").read()).decode() for m in MODULES}
     files["vt/__init__.py"] = ""
+    extra = {os.path.basename(p): base64.b64encode(open(os.path.join(root, p), "rb").read()).decode()
+             for p in os.environ.get("BUNDLE_FILES", "").split()}
     src = base64.b64encode(open(entry, "rb").read()).decode()
     with open(out, "w") as f:
         f.write(f'''"""Bundled by kaggle/distill/bundle.py: {os.path.basename(entry)} plus vt modules."""
@@ -25,6 +30,9 @@ for rel, b64 in FILES.items():
     p = os.path.join(WORK, "vtpkg", rel)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     open(p, "wb").write(base64.b64decode(b64))
+for name, b64 in {extra!r}.items():
+    os.makedirs(os.path.join(WORK, "files"), exist_ok=True)
+    open(os.path.join(WORK, "files", name), "wb").write(base64.b64decode(b64))
 entry = os.path.join(WORK, {os.path.basename(entry)!r})
 open(entry, "wb").write(base64.b64decode({src!r}))
 sys.argv = [entry] + (sys.argv[1:] or {baked!r})
