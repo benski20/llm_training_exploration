@@ -174,6 +174,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-claims-r1-7b", "Kaggle (bensliv): claim-level probe on a reasoning model (DeepSeek-R1-Distill-Qwen-7B)",
             "results/kaggle/claims-r1-7b.log", "results/kaggle/claims-r1-7b/claims/results.json",
             "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit"),
+           ("kaggle-detector-3b", "Kaggle (benski22): general hallucination detector, Qwen2.5-3B reader (scaled down)",
+            "results/kaggle/detector-3b.log", "results/kaggle/detector-3b/detector/results.json",
+            "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]

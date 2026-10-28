@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (02:08:11 UTC check)"
+"note": "same pipeline at 7B; device_map across both T4s (02:26:19 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -429,7 +429,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (02:06:06 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (02:24:14 UTC check)"
+},
+{
+"run": "kaggle-detector-3b",
+"experiment": "kaggle",
+"title": "Kaggle (benski22): general hallucination detector, Qwen2.5-3B reader (scaled down)",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (02:26:29 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -473,9 +485,9 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 425,
+"step": 500,
 "total_steps": 600,
-"progress": 0.7083333333333334,
+"progress": 0.8333333333333334,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 },
