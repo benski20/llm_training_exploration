@@ -934,7 +934,20 @@ the gap in the end-to-end numbers:
   baseline (0.789) than the first claim's.
 
 The generator now scores the reply's first content token when no claim is found (the probe's
-training fallback), and judges by the first claim. A rerun measures the effect.
+training fallback), and judges by the first claim. Rerun (`results/doubt_aware_eval_1p5b.json`,
+300 questions, 49% right). Hallucination rate (wrong answers / all questions) at each share answered:
+
+| answered | 90% | 80% | 70% | 60% | 50% |
+|---|---|---|---|---|---|
+| probe trigger | 41.0% | 34.0% | 26.0% | **18.7%** | **12.0%** |
+| token-probability trigger (FLARE-style) | 40.7% | 32.3% | 24.7% | 21.0% | 17.0% |
+| rank average of both | **40.7%** | **32.0%** | **24.3%** | **18.3%** | 13.3% |
+
+The probe wins when the model abstains a lot: at 50% answered, the replies it keeps are 76% right,
+against 66% with token probability. Token probability wins slightly when it abstains little. Their
+rank average is best or tied at every level, so it is the trigger to use. With 300 questions these
+differences are modest. The claim-level stack (probe plus output signals, 0.856 vs 0.760 at 7B) is the
+stronger evidence that the internals add information.
 
 **Exact provenance on RAGTruth: first sanity check** (`experiments/ragtruth_provenance.py`, 0.5B
 reader, 40 test responses, 4,845 tokens, 267 inside human-labelled hallucinations, nothing trained).
