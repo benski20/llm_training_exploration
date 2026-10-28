@@ -13,6 +13,9 @@ One reply combines:
   provenance (vt/qwen_glassbox.explain_all), when documents are given: the exact share of each
      claim's logit contributed by the documents, the document sentence that contributed most (a
      citation), and a label "from your documents" / "from the model's memory"
+  doubt-triggered retrieval (optional `retriever`, e.g. vt.retrieval.Corpus): when no documents are
+     given and the first claim's score is below `retrieve_below`, the question is looked up and the
+     reply regenerated from the passages found (with provenance and citations as above)
 
 The head is either a claim-level head (kaggle/claims: {"layer", "probe", ...}) or a correctness head
 (kaggle/correctness: {variant: {"layers", "probe", ...}}); only its probe and layer are used live.
@@ -67,10 +70,11 @@ def merge_names(claims, text):
 
 
 class VeriChat:
-    def __init__(self, model, tok, probe, layer, threshold=0.45):
+    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.6):
         self.model, self.tok = model, tok
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True)
         self.threshold = threshold
+        self.retriever, self.retrieve_below = retriever, retrieve_below
 
     @classmethod
     def load(cls, model_name, head_path, threshold=0.45):
@@ -143,7 +147,32 @@ class VeriChat:
             out.append({"doc_share": round(share, 4), "citation": cite})
         return out
 
-    def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192):
+    @staticmethod
+    def doubt_score(r):
+        """The retrieval trigger: the first claim's probe P(correct) averaged with its token probability
+        (the reply's first content token when it has no claim); None for an empty reply."""
+        first = r["claims"][0] if r["claims"] else r.get("first_token")
+        return None if not first else (first["p_correct"] + first["token_p"]) / 2
+
+    def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True):
+        out = self._reply(messages, documents, mode, max_new_tokens)
+        score = out.pop("_trigger")
+        if documents or not retrieve or self.retriever is None:
+            return out
+        out["retrieval"] = {"trigger_score": score, "retrieved": False}
+        if score is None or score >= self.retrieve_below:
+            return out
+        question = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+        passages = list(self.retriever(question))
+        if not passages:
+            return out
+        again = self._reply(messages, passages, mode, max_new_tokens)
+        again.pop("_trigger")
+        again["retrieval"] = {"trigger_score": score, "retrieved": True, "passages": passages,
+                              "closed_book_text": out["text"]}
+        return again
+
+    def _reply(self, messages, documents, mode, max_new_tokens):
         msgs = self._messages(messages, documents or [])
         context = " ".join(m["content"] for m in messages if m["role"] != "system")   # without the documents
         r = self.gen.generate(msgs, max_new_tokens=max_new_tokens, mode=mode, context=context)
@@ -155,10 +184,11 @@ class VeriChat:
             for c, p in zip(claims, self.provenance(msgs, ids, idx, documents, question)):
                 c.update(p)
                 c["source"] = "your documents" if p["doc_share"] >= 0.5 else "the model's memory"
+        trigger = self.doubt_score(r)
         claims = merge_names(claims, r["text"])
         for c in claims:
             c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= 0.7 else "uncertain")
             if c.get("source") != "your documents":
                 c.pop("citation", None)                           # a citation only for claims the documents drove
         return {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
-                "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode}
+                "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}

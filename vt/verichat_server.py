@@ -60,7 +60,9 @@ function render(r){let t=r.text,html='',pos=0;
  const list=r.claims.filter(c=>c.text).map(c=>'<div><b>'+esc(c.text)+'</b> — '+c.verdict+' ('+c.score.toFixed(2)+')'+
   (c.source?' · from '+esc(c.source)+(c.citation?': “'+esc(c.citation.sentence)+'”':''):'')+'</div>').join('');
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
-  '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+'mode '+r.mode+'</div>'}
+  '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+
+  (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up. ':'')+
+  'mode '+r.mode+'</div>'}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
 fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false});
 function renderJudge(r,a){let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
@@ -164,6 +166,8 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--threshold", type=float, default=0.45)
+    ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")
+    ap.add_argument("--retrieve-below", type=float, default=0.6)
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
     ap.add_argument("--host", default="127.0.0.1")
@@ -171,6 +175,9 @@ def main():
     a = ap.parse_args()
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
+    if a.corpus:
+        from .retrieval import Corpus
+        bot.retriever, bot.retrieve_below = Corpus.from_dir(a.corpus), a.retrieve_below
     det = None
     if a.detector:
         import torch
