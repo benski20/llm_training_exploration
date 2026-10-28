@@ -106,7 +106,8 @@ def main():
         res["gpu_bench"] = bench(det, a, test)
         json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
     for k in ks:
-        res.setdefault("mean_auroc", {})[str(k)] = float(np.mean([d[str(k)]["auroc"] for d in res["per_domain"].values()]))
+        vals = [d[str(k)]["auroc"] for d in res["per_domain"].values() if d[str(k)]["auroc"] is not None]
+        res.setdefault("mean_auroc", {})[str(k)] = float(np.mean(vals)) if vals else None
     res["complete"] = True
     json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
     log(phase="done", mean_auroc=res["mean_auroc"], minutes=round((time.time() - t0) / 60, 1))
