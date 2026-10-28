@@ -1292,6 +1292,14 @@ for fitting.
 - **Averaging a reply's claim scores is worse held-out** (0.72 against 0.78 for the weakest claim), so
   the served score stays the weakest claim.
 
+**A second model does not help** (`results/judge_32b_replies.json`). The 3B detector (`/judge`), run
+on the 32B's own factual replies:
+- Alone, it ranks them at AUROC 0.62 on the trace run and 0.62 / 0.54 held out (TriviaQA / NQ). It
+  was trained on other models' document-grounded answers.
+- Mixed with the claim score (weight chosen on the trace run only), held-out TriviaQA moves from 0.778
+  to 0.783 and NQ from 0.566 to 0.570. That is within noise, so serving does not use it.
+- Errors the 32B is confident about are just as invisible to a smaller reader.
+
 **What this means.**
 - In open chat the system rarely underlines ordinary text (7% of fact-heavy replies, under 1% of
   sentences).
