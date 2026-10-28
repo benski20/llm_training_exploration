@@ -15,3 +15,5 @@ data/alpaca/
 results/kaggle/**/model/
 results/dashboard/exported_at.json
 results/recalibrate_shift_rows.json
+space/vt/
+space/heads/

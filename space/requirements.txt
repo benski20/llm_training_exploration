@@ -1,0 +1,6 @@
+torch
+transformers>=4.46
+accelerate
+numpy
+gradio>=4.40
+spaces
