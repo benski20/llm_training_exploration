@@ -209,7 +209,13 @@ LOCAL = [("qwen-correctness", "CPU: exact attribution on unmodified Qwen2.5-0.5B
           "experiments/qwen_correctness_entity.py", "no lift: every detector 0.70-0.76 with 500 fitting answers"),
          ("recalibrate-shift", "CPU: recalibrating the correctness head on NQ-open from 200 labels",
           "results/recalibrate_shift.log", "results/recalibrate_shift.json", 600, "experiments/recalibrate_shift.py",
-          "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after")]
+          "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"),
+         ("doubt-aware", "CPU: doubt-aware generation (stop before a doubted claim), 0.5B",
+          "results/doubt_aware_eval.log", "results/doubt_aware_eval.json", 300, "experiments/doubt_aware_eval.py",
+          "probe on the hidden state already computed vs token probability, at matched abstention"),
+         ("ragtruth-provenance", "CPU: exact per-token provenance on RAGTruth (sanity, 0.5B)",
+          "results/ragtruth_provenance.log", "results/ragtruth_provenance.json", 40, "experiments/ragtruth_provenance.py",
+          "do hallucinated spans draw less of their logit from the document?")]
 
 
 def local_rows():

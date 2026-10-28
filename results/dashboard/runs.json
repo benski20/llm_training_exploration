@@ -405,7 +405,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (00:58:24 UTC check)"
+"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (01:13:31 UTC check)"
 },
 {
 "run": "kaggle-claims-7b",
@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (00:58:40 UTC check)"
+"note": "same pipeline at 7B; device_map across both T4s (01:13:46 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (00:56:36 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (01:14:44 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -473,10 +473,22 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 175,
+"step": 250,
 "total_steps": 600,
-"progress": 0.2916666666666667,
+"progress": 0.4166666666666667,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
+},
+{
+"run": "doubt-aware",
+"experiment": "qwen",
+"title": "CPU: doubt-aware generation (stop before a doubted claim), 0.5B",
+"model": "qwen",
+"status": "running",
+"step": 100,
+"total_steps": 300,
+"progress": 0.3333333333333333,
+"last_loss": null,
+"note": "probe on the hidden state already computed vs token probability, at matched abstention"
 }
 ]
