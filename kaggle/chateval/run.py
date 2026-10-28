@@ -54,6 +54,40 @@ EVERYDAY = {
                   "What's a fun thing to do on a rainy day?", "Can you recommend a type of tea to try?"],
 }
 
+# a second, held-out everyday set: informative replies full of names, dates and numbers that are
+# almost always right, the hardest case for false alarms
+EVERYDAY2 = {
+    "history": ["Tell me briefly about the French Revolution.", "Give me a short overview of the Roman Empire.",
+                "What happened during the Apollo 11 mission?", "Summarise the causes of World War I.",
+                "Tell me about the life of Abraham Lincoln.", "What was the Renaissance?",
+                "Briefly describe the fall of the Berlin Wall.", "Who was Cleopatra?"],
+    "travel": ["What should I see on a first visit to Paris?", "Plan a three-day trip to Tokyo.",
+               "What is Rome famous for?", "Suggest things to do in New York City with kids.",
+               "What are the best months to visit Iceland?", "Recommend sights in London for a history fan.",
+               "What is special about Barcelona's architecture?", "Tell me about visiting the Grand Canyon."],
+    "science": ["How does photosynthesis work?", "Explain how vaccines train the immune system.",
+                "Why is the sky blue?", "How far is the Moon from Earth, roughly?",
+                "Explain the theory of evolution simply.", "What is DNA made of?",
+                "How do black holes form?", "What causes the seasons on Earth?"],
+    "people": ["Who was Marie Curie and what did she discover?", "Tell me about Albert Einstein's main ideas.",
+               "Who was Leonardo da Vinci?", "What is Nelson Mandela known for?",
+               "Who was Ada Lovelace?", "Tell me about Isaac Newton.",
+               "Who was Frida Kahlo?", "What did Charles Darwin do?"],
+    "recipes": ["How do I make a classic Italian carbonara?", "Give me a simple pancake recipe.",
+                "How do I cook rice on the stove?", "What is in a traditional Greek salad?",
+                "How do I make guacamole?", "How long should I boil an egg for a soft yolk?"],
+    "howto": ["How do I change a flat tyre?", "How do I set up a budget for the first time?",
+              "Explain how to write a cover letter.", "How do I start learning Spanish?",
+              "How do I make my laptop battery last longer?", "How do I train for a 5K run?"],
+    "creative": ["Write a short story about a girl named Maya who finds a map.",
+                 "Write a poem about London in the rain.", "Invent a short myth about why the Nile floods.",
+                 "Write a dialogue between Sherlock Holmes and a modern detective.",
+                 "Write a postcard from a holiday in Lisbon.", "Write a limerick about a cat from Peru."],
+    "smalltalk": ["What's your favourite season and why?", "Tell me a fun fact about octopuses.",
+                  "What's a good book to read this summer?", "Recommend a classic film for tonight.",
+                  "What's a good name for a golden retriever?", "Tell me a joke about programmers."],
+}
+
 
 def log(**kw):
     print(json.dumps(kw, default=float), flush=True)
@@ -64,6 +98,9 @@ def main():
     ap.add_argument("--model", default="unsloth/Qwen3-32B-bnb-4bit")
     ap.add_argument("--head", required=True)
     ap.add_argument("--n-factual", type=int, default=200)
+    ap.add_argument("--n-nq", type=int, default=0, help="Natural Questions (open) as well: another distribution")
+    ap.add_argument("--seed", type=int, default=7, help="which TriviaQA questions")
+    ap.add_argument("--everyday-set", type=int, default=1, choices=(1, 2), help="2: the held-out set full of facts")
     ap.add_argument("--max-new", type=int, default=256)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--n-think", type=int, default=48)
@@ -101,7 +138,8 @@ def main():
     bot.gen.trace = a.trace
     th = bot.gen.risk_threshold
     log(phase="loaded", model=a.model, risk_layer=bot.gen.risk_layer, threshold=th, s=round(time.time() - t0))
-    ev = [(cat, p) for cat, ps in EVERYDAY.items() for p in (ps[:2] if a.smoke else ps)]
+    ev = [(cat, p) for cat, ps in (EVERYDAY if a.everyday_set == 1 else EVERYDAY2).items()
+          for p in (ps[:2] if a.smoke else ps)]
     if a.smoke:
         fq = [("Who wrote Hamlet?", ["Shakespeare"]), ("What is the capital of Peru?", ["Lima"]),
               ("Who painted the Mona Lisa?", ["Leonardo"]), ("What is the largest planet?", ["Jupiter"]),
@@ -111,8 +149,13 @@ def main():
     else:
         from datasets import load_dataset
         d = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
-        idx = random.Random(7).sample(range(len(d)), a.n_factual)
+        idx = random.Random(a.seed).sample(range(len(d)), a.n_factual)
         fq = [(x["question"], x["answer"]["normalized_aliases"] + [x["answer"]["value"]]) for x in d.select(idx)]
+        if a.n_nq:
+            nq = load_dataset("google-research-datasets/nq_open", split="validation")
+            fq += [(x["question"].rstrip("?") + "?", list(x["answer"]))
+                   for x in nq.select(random.Random(a.seed).sample(range(len(nq)), a.n_nq))]
+    src = ["triviaqa"] * a.n_factual + ["nq"] * (len(fq) - a.n_factual) if not a.smoke else ["smoke"] * len(fq)
     styles = ["{q}", "Tell me: {q}", "Quick question - {q}", "{q} Please explain briefly."]
     reqs = [{"messages": [{"role": "user", "content": p}], "mode": "flag", "max_new_tokens": a.max_new} for _, p in ev]
     reqs += [{"messages": [{"role": "user", "content": styles[i % 4].format(q=q)}], "mode": "flag",
@@ -169,6 +212,23 @@ def main():
                                             "wrong_flagged": round(float((rr[yy == 1] >= t).mean()), 3),
                                             "right_flagged": round(float((rr[yy == 0] >= t).mean()), 3)}
                                for t in np.arange(0.2, 0.96, 0.05)}
+    served = np.array([any(s["doubted"] for s in r.get("sentences", [])) or any(c["doubted"] for c in r["claims"])
+                       for r in fr])                                          # what a user would see
+    yy_ = np.array(y)
+    f["served"] = {"wrong_flagged": round(float(served[yy_ == 1].mean()), 3) if (yy_ == 1).any() else None,
+                   "right_flagged": round(float(served[yy_ == 0].mean()), 3) if (yy_ == 0).any() else None,
+                   "threshold": bot.threshold}
+    f["by_source"] = {}
+    for sname in sorted(set(src)):
+        m = np.array([s_ == sname for s_ in src])
+        ys, cs = yy_[m], np.array([-(r.get("reply_confidence") or 1.0) for r in fr])[m]
+        mz = np.array([-np.mean([np.log(c["p_correct"] / (1 - c["p_correct"])) for c in r["claims"]])
+                       if r["claims"] else -5.0 for r in fr])[m]
+        f["by_source"][sname] = {"n": int(m.sum()), "accuracy": round(1 - float(ys.mean()), 3),
+                                 "claim_min_auroc": auroc(cs, ys) if len(set(ys)) == 2 else None,
+                                 "claim_mean_auroc": auroc(mz, ys) if len(set(ys)) == 2 else None,
+                                 "wrong_flagged": round(float(served[m][ys == 1].mean()), 3) if (ys == 1).any() else None,
+                                 "right_flagged": round(float(served[m][ys == 0].mean()), 3) if (ys == 0).any() else None}
     res["factual"] = f
     res["raw"] = {"everyday": [{"cat": c, "max_risk": r.get("max_risk"), "min_logprob": r.get("min_logprob"),
                                 "mean_logprob": r.get("mean_logprob")} for (c, _), r in zip(ev, outs[:len(ev)])],
@@ -184,8 +244,8 @@ def main():
     if a.trace:
         tr = [{"kind": "everyday", "cat": c, "prompt": p_, "text": r["text"], "trace": r.get("trace"),
                "reply_confidence": r.get("reply_confidence")} for (c, p_), r in zip(ev, outs[:len(ev)])]
-        tr += [{"kind": "factual", "prompt": q, "wrong": w, "text": r["text"], "trace": r.get("trace"),
-                "reply_confidence": r.get("reply_confidence")} for (q, _), w, r in zip(fq, y, fr)]
+        tr += [{"kind": "factual", "source": s_, "prompt": q, "wrong": w, "text": r["text"], "trace": r.get("trace"),
+                "reply_confidence": r.get("reply_confidence")} for (q, _), w, r, s_ in zip(fq, y, fr, src)]
         json.dump(tr, open(os.path.join(a.out, "traces.json"), "w"), default=float)
     try:
         thinking_eval(a, bot, reqs, ev, fq, y, th, res, t0, auroc, auroc_ci, is_right)
