@@ -489,7 +489,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (11:32:32 UTC check)"
+"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (11:53:42 UTC check)"
 },
 {
 "run": "kaggle-detector-adapt-3b",
@@ -501,7 +501,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "k = 0/25/50/100/200 labels per unseen HaluBench domain; judge and generation batching on a T4 (11:32:30 UTC check)"
+"note": "k = 0/25/50/100/200 labels per unseen HaluBench domain; judge and generation batching on a T4 (11:53:40 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
