@@ -429,19 +429,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (04:12:30 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (04:30:40 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
 "experiment": "kaggle",
 "title": "Kaggle (benski22): general hallucination detector, Qwen2.5-3B reader (scaled down)",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (04:12:15 UTC check)"
+"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (04:15:16 UTC check)"
 },
 {
 "run": "kaggle-detector-7b",
@@ -453,7 +453,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (04:10:58 UTC check)"
+"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (04:29:06 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -538,5 +538,17 @@
 "progress": 1.0,
 "last_loss": null,
 "note": "do hallucinated spans draw less of their logit from the document?"
+},
+{
+"run": "triggered-retrieval",
+"experiment": "qwen",
+"title": "CPU: retrieve only when the probe doubts (1.5B, TriviaQA + Wikipedia)",
+"model": "qwen",
+"status": "running",
+"step": 90,
+"total_steps": 200,
+"progress": 0.45,
+"last_loss": null,
+"note": "accuracy per retrieval budget: probe trigger vs token probability (FLARE-style) vs random"
 }
 ]
