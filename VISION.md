@@ -1166,6 +1166,16 @@ trends upward. Leave-one-source-out stays weak at 14B (0.50-0.89; RAGTruth 0.62)
 training data per domain (or `vt adapt`), not from a bigger reader. The cheapest reader, 3B, is the
 right default for `/judge`.
 
+**Qwen3-32B risk head, first attempt failed** (`results/kaggle/risk-32b/`). The pre-quantized 4-bit
+model loaded on 2x T4 with float16 compute. Its first reply was sane ("Paris"). Generation produced
+the model's own replies in five formats, 1 h 13 min: claims found in 84-100% of short / multi-turn /
+reasoning / math replies, 265 in 100 several-answer replies. The next step, a forward pass to read
+hidden states, ran out of GPU memory. Padded batches of up to 6,144 tokens with 64 attention heads
+need several GB for the attention scores alone. The generated replies were held only in memory and
+were lost. Fixed: batches of at most 2,048 tokens, one sequence at a time on out-of-memory, output
+log-probs computed in 256-token chunks, the generated data saved to `data_items.json` before the
+forward pass, and `--resume-data` to skip generation in a rerun.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the

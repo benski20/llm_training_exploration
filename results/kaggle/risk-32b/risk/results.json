@@ -1,0 +1,48 @@
+{
+ "config": {
+  "model": "unsloth/Qwen3-32B-bnb-4bit",
+  "quant": "none",
+  "out": "/kaggle/working/risk",
+  "thinking": false,
+  "think_scale": 2.0,
+  "own_train": 100,
+  "own_test": 40,
+  "span_train": 500,
+  "span_test": 150,
+  "step_train": 500,
+  "step_test": 150,
+  "max_tokens": 1536,
+  "gen_batch": 16,
+  "neg_keep": 0.2,
+  "smoke": false
+ },
+ "model": "unsloth/Qwen3-32B-bnb-4bit",
+ "layers": [
+  35,
+  44,
+  54
+ ],
+ "complete": false,
+ "counts": {
+  "train": {
+   "halueval_general": 44,
+   "math_steps": 500,
+   "own_math": 100,
+   "own_multi": 100,
+   "own_multiturn": 100,
+   "own_reasoning": 100,
+   "own_short": 100,
+   "ragtruth": 500
+  },
+  "test": {
+   "halueval_general": 14,
+   "math_steps": 150,
+   "own_math": 40,
+   "own_multi": 40,
+   "own_multiturn": 40,
+   "own_reasoning": 40,
+   "own_short": 40,
+   "ragtruth": 150
+  }
+ }
+}
