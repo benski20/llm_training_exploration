@@ -179,7 +179,10 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
             "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens"),
            ("kaggle-detector-7b", "Kaggle (bensliv): general hallucination detector, Qwen2.5-7B reader",
             "results/kaggle/detector-7b.log", "results/kaggle/detector-7b/detector/results.json",
-            "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items"),
+            "FAILED after the 3 h train pass: CUDA OOM fitting the token probe on the model's GPU (fixed)"),
+           ("kaggle-detector-7b2", "Kaggle (bensliv): general detector, Qwen2.5-7B reader, rerun with HaluBench domains",
+            "results/kaggle/detector-7b2.log", "results/kaggle/detector-7b2/detector/results.json",
+            "10 sources incl. DROP / PubMedQA / FinanceBench / CovidQA; probes on the freest GPU; provenance vs Lookback Lens"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]

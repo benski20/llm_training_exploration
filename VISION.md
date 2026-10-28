@@ -1028,6 +1028,11 @@ What this shows, honestly:
   device error. This is fixed in `vt/qwen_glassbox.py`. The 7B run, with untied weights, is the
   provenance-vs-Lookback-Lens test.
 
+The first 7B run (18k training responses) failed after its 3-hour training pass: the token probe
+(200k tokens × 3,584 dims) was fitted on the GPU that also held the model, and ran out of memory. Probes
+now go to the GPU with the most free memory and fall back to the CPU. The rerun (`detector-7b2`) also
+adds HaluBench's DROP, PubMedQA, FinanceBench and CovidQA as four new domains.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
