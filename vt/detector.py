@@ -230,7 +230,7 @@ class Detector:
         return r
 
     @torch.no_grad()
-    def judge_batch(self, items, max_tokens=4096, token_threshold=0.73, batch_tokens=16384):
+    def judge_batch(self, items, max_tokens=4096, token_threshold=0.73, batch_tokens=8192):
         """Judge many replies: right-padded batches of similar length (at most `batch_tokens` padded
         tokens each), one forward pass per batch. items: [{"messages", "response", "documents"?}];
         returns one result per item, or {"error"} for an item that cannot be scored."""
@@ -256,12 +256,23 @@ class Detector:
             for b, i in enumerate(group):
                 n = len(enc[i]["ids"])
                 ids[b, :n], mask[b, :n] = torch.tensor(enc[i]["ids"]), 1
-            o = self.model(input_ids=ids.to(dev), attention_mask=mask.to(dev), output_hidden_states=True)
+            keep, hooks = {}, []                             # only the probe layers' states, not all of them
+            blocks = self.model.model.layers
+            for L in set(self.layers) - {len(blocks) - 1}:   # the last block's state is last_hidden_state (normed)
+                hooks.append(blocks[L].register_forward_hook(
+                    lambda m, a, o, L=L: keep.__setitem__(L, (o[0] if isinstance(o, tuple) else o).detach())))
+            try:
+                hs = self.model.model(input_ids=ids.to(dev), attention_mask=mask.to(dev)).last_hidden_state
+            finally:
+                for hk in hooks:
+                    hk.remove()
+            keep[len(blocks) - 1] = hs
             for b, i in enumerate(group):
                 e, n = enc[i], len(enc[i]["ids"])
-                h = [o.hidden_states[L + 1][b, e["r0"]:n].float().cpu() for L in self.layers]
-                lp = o.logits[b, e["r0"] - 1:n - 1].float().log_softmax(-1).gather(
-                    -1, torch.tensor(e["ids"][e["r0"]:], device=o.logits.device)[:, None])[:, 0].cpu()
+                h = [keep[L][b, e["r0"]:n].float().cpu() for L in self.layers]
+                logits = self.model.lm_head(hs[b, e["r0"] - 1:n - 1]).float()   # response positions only
+                tgt = torch.tensor(e["ids"][e["r0"]:], device=logits.device)
+                lp = logits.log_softmax(-1).gather(-1, tgt[:, None])[:, 0].cpu()
                 out[i] = self._finish(items[i], e, h, lp, token_threshold)
         return out
 

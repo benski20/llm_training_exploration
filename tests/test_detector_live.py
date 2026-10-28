@@ -77,3 +77,25 @@ def test_judge_batch_matches_one_at_a_time():
         one = det.judge(it["messages"], it["response"], documents=it.get("documents"))
         assert abs(one["logit"] - b["logit"]) < 1e-3
         assert [t["text"] for t in one["tokens"]] == [t["text"] for t in b["tokens"]]
+
+
+def test_batched_features_match_training_features():
+    """judge_batch hooks the probe layers; training used response_states (output_hidden_states)."""
+    from vt.detector import encode, response_states
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(1)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=3,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    rng = np.random.default_rng(0)
+    y = np.r_[np.zeros(20), np.ones(20)].astype(np.float32)
+    probe = Probe().fit(rng.normal(size=(40, 32)).astype(np.float32), y).state_dict()
+    stack = Probe().fit(rng.normal(size=(40, 6)).astype(np.float32), y).state_dict()
+    det = Detector(m, tok, {"response_layer": 0, "token_layer": 1, "response_probe": probe, "token_probe": probe,
+                            "stacker": stack, "threshold": 0.0})
+    msgs, resp = [{"role": "user", "content": "Who wrote Hamlet?"}], "Shakespeare wrote it."
+    e = encode(tok, det.item(msgs, resp), 4096)
+    h, lp = response_states(m, e["ids"], e["r0"], [0, 1])
+    ts = det.tok_probe.logit(h[1].float().numpy())
+    resp_z = float(det.resp_probe.logit(h[0].float().mean(0, keepdim=True).numpy())[0])
+    f = np.array([[resp_z, ts.max(), ts.mean(), np.percentile(ts, 95), float(lp.mean()), float(lp.min())]])
+    assert abs(float(det.stacker.logit(f)[0]) - det.judge(msgs, resp)["logit"]) < 1e-2   # float16 copy in training

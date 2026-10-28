@@ -34,7 +34,7 @@ def main():
            "mean_tokens": sum(len(det.tok.apply_chat_template(det.item(i["messages"], i["response"])["messages"],
                                                                tokenize=True)) for i in items) / len(items),
            "one_at_a_time_per_s": round(len(items) / t_one, 3)}
-    for bt in (4096, 16384):
+    for bt in (2048, 8192):
         t = time.perf_counter()
         b = det.judge_batch(items, batch_tokens=bt)
         res[f"batched_{bt}_per_s"] = round(len(items) / (time.perf_counter() - t), 3)
