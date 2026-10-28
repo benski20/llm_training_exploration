@@ -88,8 +88,10 @@ class Wikipedia:
     def _fetch(self, url):
         import json
         import urllib.request
+        if not url.startswith("https://"):                  # only the fixed https endpoints above
+            raise ValueError("Wikipedia URLs must be https")
         req = urllib.request.Request(url, headers={"User-Agent": self.ua, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:  # nosec B310: https checked above
             return json.loads(r.read().decode())
 
     def __call__(self, query, k=None):

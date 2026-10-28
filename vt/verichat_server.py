@@ -410,6 +410,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="vt verichat")
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
+    ap.add_argument("--revision", help="the model's Hugging Face commit or tag (pin it in production)")
     ap.add_argument("--threshold", type=float, help="claims scoring below it are doubted (default: the head's "
                                                      "<head>.serving.json, else 0.45)")
     ap.add_argument("--risk-threshold", type=float, help="sentence risk above which a sentence is doubted "
@@ -434,7 +435,7 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
     from .verichat import VeriChat
-    bot = VeriChat.load(a.model, a.head, a.threshold)
+    bot = VeriChat.load(a.model, a.head, a.threshold, revision=a.revision)
     bot.gen.thinking, bot.gen.think_budget = a.thinking, a.think_budget
     if a.risk_threshold is not None:
         bot.gen.risk_threshold = a.risk_threshold

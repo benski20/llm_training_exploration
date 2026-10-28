@@ -38,7 +38,7 @@ def _item(source, task, user, response, doc="", spans=None, label=None, system=P
 
 def load_ragtruth(split, n=None, seed=0):
     from datasets import load_dataset
-    d = load_dataset("wandb/RAGTruth-processed", split=split).shuffle(seed=seed)
+    d = load_dataset("wandb/RAGTruth-processed", split=split).shuffle(seed=seed)  # nosec B615: benchmark data for training/eval
     out = []
     for x in d.select(range(min(n or len(d), len(d)))):
         spans = [(l["start"], l["end"]) for l in json.loads(x["hallucination_labels"])]
@@ -48,14 +48,14 @@ def load_ragtruth(split, n=None, seed=0):
 
 def _split(rows, split, seed=0, test_frac=0.2):
     idx = list(range(len(rows)))
-    random.Random(seed).shuffle(idx)
+    random.Random(seed).shuffle(idx)  # nosec B311: data split, not security
     cut = int(len(idx) * (1 - test_frac))
     return [rows[i] for i in (idx[:cut] if split == "train" else idx[cut:])]
 
 
 def load_halueval(subset, split, n=None):
     from datasets import load_dataset
-    rows = _split(list(load_dataset("pminervini/HaluEval", subset)["data"]), split)
+    rows = _split(list(load_dataset("pminervini/HaluEval", subset)["data"]), split)  # nosec B615: benchmark data for training/eval
     if n:
         rows = rows[:n]
     out = []
@@ -91,12 +91,12 @@ def load_halueval(subset, split, n=None):
 
 def load_truthfulqa(split, n=None):
     from datasets import load_dataset
-    rows = _split(list(load_dataset("truthfulqa/truthful_qa", "generation")["validation"]), split)
+    rows = _split(list(load_dataset("truthfulqa/truthful_qa", "generation")["validation"]), split)  # nosec B615: benchmark data for training/eval
     if n:
         rows = rows[:n]
     out = []
     for i, x in enumerate(rows):
-        rng = random.Random(i)
+        rng = random.Random(i)  # nosec B311: data split, not security
         good = x["best_answer"]
         bad = rng.choice(x["incorrect_answers"]) if x["incorrect_answers"] else None
         out.append(_item("truthfulqa", "misconception", x["question"], good, label=0))
@@ -112,7 +112,7 @@ HALUBENCH = {"DROP": "halubench_drop", "pubmedQA": "halubench_pubmed", "FinanceB
 def load_halubench(split, caps):
     """caps: {source name: max items}. HaluBench's HaluEval and RAGTruth parts are left out (covered above)."""
     from datasets import load_dataset
-    d = load_dataset("PatronusAI/HaluBench", split="test")
+    d = load_dataset("PatronusAI/HaluBench", split="test")  # nosec B615: benchmark data for training/eval
     out = []
     for raw, src in HALUBENCH.items():
         if not caps.get(src):
@@ -207,12 +207,12 @@ class Detector:
         self.model_name = head.get("model")
 
     @classmethod
-    def load(cls, model_name, head_path):
+    def load(cls, model_name, head_path, revision=None):
         from transformers import AutoModelForCausalLM, AutoTokenizer
         cuda = torch.cuda.is_available()
-        tok = AutoTokenizer.from_pretrained(model_name)
+        tok = AutoTokenizer.from_pretrained(model_name, revision=revision)
         model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
+            model_name, revision=revision, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
         det = cls(model, tok, torch.load(head_path, map_location="cpu", weights_only=True))
         det.model_name = model_name

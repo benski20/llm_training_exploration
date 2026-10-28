@@ -43,6 +43,7 @@ a minute. Until it is ready, `/health` fails and the smoke test keeps waiting (u
 | `VERICHAT_HEAD` | `results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt` | the risk head; its `.serving.json` ships with it |
 | `VERICHAT_GPU` | `L40S` | 48 GB fits the 4-bit 32B model, the 3B detector and the KV cache |
 | `VERICHAT_SCALEDOWN` | `300` | idle seconds before the container stops |
+| `VERICHAT_REVISION` | latest | the model's Hugging Face commit; pin it for a stable public demo (supply chain) |
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |

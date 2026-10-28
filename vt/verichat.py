@@ -132,14 +132,15 @@ class VeriChat:
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
 
     @classmethod
-    def load(cls, model_name, head_path, threshold=None):
-        """threshold: claims scoring below it are doubted (default: the head's serving.json, else 0.45)."""
+    def load(cls, model_name, head_path, threshold=None, revision=None):
+        """threshold: claims scoring below it are doubted (default: the head's serving.json, else 0.45).
+        revision: the Hugging Face commit (or tag) of the model to load; pin it in production."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
         cuda = torch.cuda.is_available()
-        tok = AutoTokenizer.from_pretrained(model_name)
+        tok = AutoTokenizer.from_pretrained(model_name, revision=revision)
         model = AutoModelForCausalLM.from_pretrained(                # float16 needs sdpa (eager overflows)
-            model_name, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
-            device_map="auto" if cuda else None).eval()
+            model_name, revision=revision, torch_dtype=gpu_dtype() if cuda else torch.float32,
+            attn_implementation="sdpa", device_map="auto" if cuda else None).eval()
         probe, layer = load_head(head_path)
         bot = cls(model, tok, probe, layer, 0.45)
         risk = load_risk(head_path)

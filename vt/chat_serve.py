@@ -269,8 +269,8 @@ class CorrectnessResponder:
         from .correctness import CorrectnessHead
         with _VerifiedStage(path, max_bytes) as st:
             dev = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tok = AutoTokenizer.from_pretrained(st.dir)
-            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa: eager attention
+            self.tok = AutoTokenizer.from_pretrained(st.dir)  # nosec B615: local dir, hash-verified
+            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa: eager attention  # nosec B615: local dir, hash-verified
                 st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32,   # overflows on Qwen2.5
                 attn_implementation="sdpa").to(dev).eval()
             heads = torch.load(os.path.join(st.dir, "correctness_heads.pt"), map_location="cpu", weights_only=True)
@@ -369,8 +369,8 @@ class HFResponder:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         with _VerifiedStage(path, max_bytes) as st:
             dev = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tok = AutoTokenizer.from_pretrained(st.dir)
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.tok = AutoTokenizer.from_pretrained(st.dir)  # nosec B615: local dir, hash-verified
+            self.model = AutoModelForCausalLM.from_pretrained(  # nosec B615: local dir, hash-verified
                 st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32).to(dev).eval()
             k = torch.load(os.path.join(st.dir, "k_head.pt"), map_location="cpu", weights_only=True)
             manifest = st.manifest
@@ -425,8 +425,8 @@ class ClaimResponder:
         from .correctness import Probe
         with _VerifiedStage(path, max_bytes) as st:
             dev = "cuda" if torch.cuda.is_available() else "cpu"
-            self.tok = AutoTokenizer.from_pretrained(st.dir)
-            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa (eager overflows)
+            self.tok = AutoTokenizer.from_pretrained(st.dir)  # nosec B615: local dir, hash-verified
+            self.model = AutoModelForCausalLM.from_pretrained(      # float16 only with sdpa (eager overflows)  # nosec B615: local dir, hash-verified
                 st.dir, torch_dtype=torch.float16 if dev == "cuda" else torch.float32,
                 attn_implementation="sdpa").to(dev).eval()
             head = torch.load(os.path.join(st.dir, "claims_head.pt"), map_location="cpu", weights_only=True)

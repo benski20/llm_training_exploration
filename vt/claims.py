@@ -199,7 +199,7 @@ def build(fmt, qa, rng, k=3):
 
 
 def make_items(fmt, pool, n, seed):
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311: data sampling, not security
     return [build(fmt, pool, rng) for _ in range(n)]
 
 

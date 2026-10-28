@@ -292,7 +292,7 @@ class _Seq:
                 pr = torch.where(keep, pr, torch.zeros_like(pr))
             if self.rng is None:
                 self.rng = torch.Generator(device=z.device)
-                self.rng.manual_seed(int(s["seed"]) if s.get("seed") is not None else random.getrandbits(62))
+                self.rng.manual_seed(int(s["seed"]) if s.get("seed") is not None else random.getrandbits(62))  # nosec B311: sampling seed, not security
             nxt = int(idx[torch.multinomial(pr, 1, generator=self.rng)])
         self.seen.add(nxt)
         return nxt
