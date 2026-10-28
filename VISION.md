@@ -1257,8 +1257,16 @@ loaded with the head):
 - A sentence is underlined when it holds a doubtful claim.
 - At this setting: 0% of the 38 everyday replies flagged, 49% of wrong factual replies and 10% of
   right ones.
-- The calibration and threshold were fitted on the same replies they are reported on. Read them as an
-  operating point, not as a held-out result.
+- The calibration and threshold were fitted on the same replies they are reported on. **Cross-validated**
+  (5 folds; calibration and threshold fitted on four, tested on the fifth), the numbers hold:
+  - 51% of wrong replies flagged, 10% of right ones;
+  - the fold thresholds range from 0.63 to 0.69;
+  - expected calibration error 0.037;
+  - held-out reliability: P below 0.6 → 42% right, P 0.85-0.95 → 93%, P 0.95 and above → 98%.
+- Combining the claim score with claim-token risk or log-probability gives no reliable gain on the 100
+  traced replies (cross-validated 0.69-0.74, within noise). Averaging a reply's claim scores, instead
+  of taking the weakest, ranked better there (0.85 vs 0.81). The held-out run checks that on new
+  questions.
 - Everyday prompts are few (38). The claim heuristic still decides *where* to read, and in 10% of
   everyday replies it finds no claim.
 
