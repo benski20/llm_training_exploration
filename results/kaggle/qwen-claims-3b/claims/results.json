@@ -1,0 +1,1062 @@
+{
+ "config": {
+  "out": "/kaggle/working/claims",
+  "models": "Qwen/Qwen2.5-3B-Instruct",
+  "n_train": [
+   2500,
+   800,
+   1500,
+   1200,
+   1200
+  ],
+  "n_test": 300,
+  "n_pool_train": 20000,
+  "n_pool_test": 1000,
+  "gen_batch": 32,
+  "feat_batch": 4,
+  "dtype": "float16",
+  "attn": "sdpa",
+  "no_system": false,
+  "max_new_scale": 1.0,
+  "smoke": false
+ },
+ "Qwen/Qwen2.5-3B-Instruct": {
+  "model": "Qwen/Qwen2.5-3B-Instruct",
+  "layers": [
+   12,
+   15,
+   19,
+   22,
+   25,
+   28,
+   32,
+   35
+  ],
+  "dtype": "float16",
+  "complete": true,
+  "claims": {
+   "test": {
+    "short": 260,
+    "multi": 741,
+    "multiturn": 274,
+    "reasoning": 270,
+    "math": 288
+   },
+   "nq": {
+    "short": 256,
+    "multi": 719,
+    "multiturn": 246,
+    "reasoning": 261,
+    "math": 0
+   },
+   "train": {
+    "short": 2150,
+    "multi": 2036,
+    "multiturn": 1361,
+    "reasoning": 1088,
+    "math": 1147
+   }
+  },
+  "examples": {
+   "test": [
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "The Juilliard School was founded in 1905 in New York."
+    },
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "Oswald was killed by Jack Ruby on November 24, 1963, before he could be formally charged with the assassination of John F"
+    },
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "Eero Saarinen was known as the Wizard of the Dome."
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Milwaukee\n2. F. Scott Fitzgerald\n3. Lee Harvey Oswald"
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Rebecca Adlington\n2. Mormonism\n3. Tex Ritter"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. The Supreme Governor of the Church of England is currently Prince Charles.\n2. The English word \"sour\" comes from an old French word meaning sour wine.\n3. The 1986 Peter Weir movie based on a Paul Theroux novel that starred Harrison Ford, Helen Mirren, and River Phoenix is \"The Mosquito Coast.\""
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "The minimum age of someone running for the office of President of the United States is 35 years old."
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Gnat"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Harry Potter and the Prisoner of Azkaban"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To determine the year Edward VIII abdicated, we need to follow these steps:\n\n1. Identify who Edward VIII was: Edward VIII was the King of the United Kingdom and the Dominions of the British Empire from January 6, 1936, until his abdication on December 11, 1936.\n\n2. Confirm the date of abdication: Th"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To determine which French King Madame de Pompadour and Madame du Barry served as mistresses, we need to consider the historical context and reigns of French monarchs.\n\n1. Madame de Pompadour was known to have been the mistress of Louis XV, who reigned from 1715 to 1774.\n2. Madame du Barry became the"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine the age of Brandon's iPhone, we need to follow these steps:\n\n1. **Determine the age of Suzy's iPhone:**\n   - Given: Suzy's iPhone is 1 year old.\n\n2. **Calculate the age of Ben's iPhone:**\n   - Ben's iPhone is two times older than Suzy's iPhone.\n   - Therefore, Ben's iPhone age = \\( 2 \\t"
+    },
+    {
+     "format": "math",
+     "label": 0,
+     "reply": "To determine how much Tyson will spend on meat and cheese to make enough muffaletta sandwiches for 20 people, we need to follow these steps:\n\n1. **Calculate the number of sandwiches needed:**\n   - Each sandwich serves 4 people.\n   - Total number of people = 20.\n   \\[\n   \\text{Number of sandwiches} ="
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "Step 1: Calculate the total cost for Becky.\n- Price per apple for Becky = 45 cents = $0.45\n- Number of apples = 20\n- Total cost before discount = $0.45 * 20 = $9.00\n- Discount received by Becky = $1.00\n- Total cost after discount = $9.00 - $1.00 = $8.00\n\nStep 2: Calculate the total cost for Kelly.\n-"
+    }
+   ],
+   "nq": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "The Lord's Prayer is found in the Gospel of Matthew, chapter 6, verses 9-13."
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "The exploration of the Louisiana Purchase began on the Mississippi River."
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Radians or degrees\n2. Support, protection, movement, and blood circulation\n3. Episode 152"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. The group that officially elects the president of the United States is called the Electoral College.\n2. The Philadelphia Eagles won the last Super Bowl in 2018.\n3. The joint that connects the incus with the malleus is an articular (ball and socket) joint."
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. Simon & Garfunkel sang \"Picking Up Pebbles and Throwing Them Into the Sea.\"\n2. Sri Lanka belongs to South Asia.\n3. Series 7 of Game of Thrones has 6 episodes."
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "26 July 2003"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Russia"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "The first temple in Jerusalem was built in 957 BCE."
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "The normal blood clotting process, also known as hemostasis, occurs in three main phases: vasoconstriction, coagulation, and fibrinolysis.\n\n1. Vasoconstriction: This is the first phase where the blood vessels constrict or narrow to reduce blood flow to the damaged area. This helps to slow down bleed"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To find out what happens in the last episode of \"My Family\", I would need to know which specific series or TV show this refers to. The phrase \"My Family\" is quite generic and could refer to multiple shows. Could you please specify which version of \"My Family\" you're asking about? For instance, there"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To find out who sings \"Why Does It Hurt When I Pee?\", we need to identify the song and its artist. This is a bit of a tricky one because the song title sounds like it might be from a fictional scenario or a parody, but it's actually a real song.\n\nThe song \"Why Does It Hurt When I Pee?\" was performed"
+    }
+   ],
+   "train": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Alejandro Jodorowsky wrote 'The Boys From Brazil'."
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "West Ham United"
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Lois Maxwell played Miss Moneypenny.\n2. Iggy Pop fronted the car insurance campaign.\n3. The poem is \"An Essay on Criticism.\""
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Two members of a netball team are allowed to shoot at goal.\n2. The title/position of Swami represents a religious teacher in Hinduism.\n3. The tune 'Johnny Todd' was the theme to the TV programme \"The Avengers.\""
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. The second magnitude star \"Alpha\" in the Little Bear constellation closest to the north celestial pole is called Alpha Ursae Minoris.\n2. John Christie's London address was 4 Parkside, Hampstead. The 1970 film about him starring Richard Attenborough is titled \"And Then There Were None.\"\n3. Prince "
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Weber"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Mount Pau"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Paris"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "Muscovado sugar is typically dark brown in color. It gets its color from the molasses content which is retained during the refining process. The darker the shade of brown, the higher the molasses content and thus the stronger the flavor. Answer: Dark brown"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To find the answer to this question, we need to identify the event and the specific item that was taxed in Western Pennsylvania in 1794 which led to significant unrest and required military intervention.\n\nStep 1: Identify the historical context.\n- The year 1794 is relevant as it's when the Whiskey R"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To find out who had a hit in 1994 with \"Mr. Jones\", I'll need to search through music charts and databases from that year.\n\nStep 1: Confirm the song title and year.\nThe song is \"Mr. Jones\" and it was released in 1994.\n\nStep 2: Search for the song's chart performance.\nI'll look up the Billboard Hot 1"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "Step 1: Calculate the total cost of the cleaning and fillings.\n- Cleaning cost = $70\n- Filling cost per unit = $120\n- Number of fillings = 2\n\nTotal cost for fillings = $120 * 2 = $240\n\nTotal cost for cleaning and fillings = $70 + $240 = $310\n\nStep 2: Determine the total bill based on the given infor"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "Step 1: Calculate the number of people remaining in the first row.\n- Initially, there were 24 people in the first row.\n- 3 people got up to wade in the water.\n- Therefore, the number of people remaining in the first row is \\(24 - 3 = 21\\).\n\nStep 2: Calculate the number of people remaining in the sec"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine how many actors can be on the show in 1 hour, we need to break down the given information and perform some calculations.\n\n1. **Determine the total time available for the show:**\n   - There are 60 minutes in an hour.\n\n2. **Calculate the duration of one complete cycle of actors:**\n   - Ea"
+    }
+   ]
+  },
+  "probe_auroc_by_layer_on_holdout": {
+   "12": 0.7099848087280762,
+   "15": 0.6988686386548819,
+   "19": 0.7693160043502278,
+   "22": 0.7791978835796161,
+   "25": 0.7885521682088109,
+   "28": 0.673151368940754,
+   "32": 0.8241135547576302,
+   "35": 0.8303756387239332
+  },
+  "probe_layer": 35,
+  "per_format": {
+   "test/short": {
+    "accuracy": 0.5269230604171753,
+    "probe": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.8203667438134236,
+     "error_at_50pct": 0.23846155405044556,
+     "error_at_25pct": 0.1230769157409668,
+     "aurc": 0.23504487834082344,
+     "auroc_ci": [
+      0.7646617747095295,
+      0.868538442793529
+     ]
+    },
+    "stack": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.8176369354934425,
+     "error_at_50pct": 0.23846155405044556,
+     "error_at_25pct": 0.1230769157409668,
+     "aurc": 0.23269292646763923,
+     "auroc_ci": [
+      0.7630394251911521,
+      0.8630405359686893
+     ],
+     "ece": 0.07212449886316719
+    },
+    "claim_p": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.7007595988368642,
+     "error_at_50pct": 0.2846153974533081,
+     "error_at_25pct": 0.307692289352417,
+     "aurc": 0.35811635674368536,
+     "auroc_ci": [
+      0.6324239442926781,
+      0.7622407507022891
+     ]
+    },
+    "word_min_lp": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.7393626491009435,
+     "error_at_50pct": 0.29230767488479614,
+     "error_at_25pct": 0.19999998807907104,
+     "aurc": 0.3085400474175258
+    },
+    "reply_mean_lp": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.7096908195359326,
+     "error_at_50pct": 0.32307690382003784,
+     "error_at_25pct": 0.13846153020858765,
+     "aurc": 0.2952188747515815
+    }
+   },
+   "test/multi": {
+    "accuracy": 0.5182186365127563,
+    "probe": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.7746119281045751,
+     "error_at_50pct": 0.28378379344940186,
+     "error_at_25pct": 0.16756755113601685,
+     "aurc": 0.2700658057241313,
+     "auroc_ci": [
+      0.7402866944265528,
+      0.8076138308240343
+     ]
+    },
+    "stack": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.818000116713352,
+     "error_at_50pct": 0.24324321746826172,
+     "error_at_25pct": 0.15135133266448975,
+     "aurc": 0.24619435660139596,
+     "auroc_ci": [
+      0.7881871030119243,
+      0.8473368673072736
+     ],
+     "ece": 0.036701111765842315
+    },
+    "claim_p": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.7349622140522876,
+     "error_at_50pct": 0.291891872882843,
+     "error_at_25pct": 0.27027028799057007,
+     "aurc": 0.32833694349362635,
+     "auroc_ci": [
+      0.6990343086476827,
+      0.7719045418212723
+     ]
+    },
+    "word_min_lp": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.7755711659663865,
+     "error_at_50pct": 0.2729730010032654,
+     "error_at_25pct": 0.20540541410446167,
+     "aurc": 0.2870295050855203
+    },
+    "reply_mean_lp": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.6494514472455649,
+     "error_at_50pct": 0.3729729652404785,
+     "error_at_25pct": 0.30270272493362427,
+     "aurc": 0.36175640272800436
+    }
+   },
+   "test/multiturn": {
+    "accuracy": 0.39416059851646423,
+    "probe": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.8253012048192772,
+     "error_at_50pct": 0.38686132431030273,
+     "error_at_25pct": 0.25,
+     "aurc": 0.3561183894474504,
+     "auroc_ci": [
+      0.7751050252995229,
+      0.871690644125989
+     ]
+    },
+    "stack": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.8631191432396251,
+     "error_at_50pct": 0.34306567907333374,
+     "error_at_25pct": 0.1764705777168274,
+     "aurc": 0.3291101050167175,
+     "auroc_ci": [
+      0.8206490963407194,
+      0.9031506480184829
+     ],
+     "ece": 0.04599416785173281
+    },
+    "claim_p": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.783690316822847,
+     "error_at_50pct": 0.40875911712646484,
+     "error_at_25pct": 0.2647058963775635,
+     "aurc": 0.3982804091585818,
+     "auroc_ci": [
+      0.7242954452157039,
+      0.8385530203332155
+     ]
+    },
+    "word_min_lp": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.7917782240071397,
+     "error_at_50pct": 0.39416056871414185,
+     "error_at_25pct": 0.23529410362243652,
+     "aurc": 0.39000955018025657
+    },
+    "reply_mean_lp": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.8057228915662651,
+     "error_at_50pct": 0.42335766553878784,
+     "error_at_25pct": 0.19117647409439087,
+     "aurc": 0.3571280099690239
+    }
+   },
+   "test/reasoning": {
+    "accuracy": 0.5555555820465088,
+    "probe": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.775,
+     "error_at_50pct": 0.2666666507720947,
+     "error_at_25pct": 0.16417908668518066,
+     "aurc": 0.24353008809604726,
+     "auroc_ci": [
+      0.7190253918527673,
+      0.8293017854197592
+     ]
+    },
+    "stack": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.7808333333333334,
+     "error_at_50pct": 0.2518518567085266,
+     "error_at_25pct": 0.1791045069694519,
+     "aurc": 0.24866515255292423,
+     "auroc_ci": [
+      0.7253619127969374,
+      0.8340596550544195
+     ],
+     "ece": 0.06153733343299892
+    },
+    "claim_p": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.6148611111111111,
+     "error_at_50pct": 0.40740740299224854,
+     "error_at_25pct": 0.2985074520111084,
+     "aurc": 0.359503394423552,
+     "auroc_ci": [
+      0.5476820932849423,
+      0.685333184123587
+     ]
+    },
+    "word_min_lp": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.6248611111111111,
+     "error_at_50pct": 0.3925926089286804,
+     "error_at_25pct": 0.28358209133148193,
+     "aurc": 0.3436152711509732
+    },
+    "reply_mean_lp": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.6206666666666667,
+     "error_at_50pct": 0.35555553436279297,
+     "error_at_25pct": 0.43283581733703613,
+     "aurc": 0.38821992742682326
+    }
+   },
+   "test/math": {
+    "accuracy": 0.8090277910232544,
+    "probe": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.8428404213811939,
+     "error_at_50pct": 0.06944441795349121,
+     "error_at_25pct": 0.013888895511627197,
+     "aurc": 0.06107754801746154,
+     "auroc_ci": [
+      0.780999121528862,
+      0.90118627488711
+     ]
+    },
+    "stack": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.8579789309403043,
+     "error_at_50pct": 0.06944441795349121,
+     "error_at_25pct": 0.013888895511627197,
+     "aurc": 0.05733422335932863,
+     "auroc_ci": [
+      0.793771057470913,
+      0.9132959269620589
+     ],
+     "ece": 0.07458765121797725
+    },
+    "claim_p": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.7269605930550137,
+     "error_at_50pct": 0.0902777910232544,
+     "error_at_25pct": 0.1388888955116272,
+     "aurc": 0.1153763651646434,
+     "auroc_ci": [
+      0.6513307753822384,
+      0.8074501730419658
+     ]
+    },
+    "word_min_lp": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.7309403043308623,
+     "error_at_50pct": 0.0902777910232544,
+     "error_at_25pct": 0.1388888955116272,
+     "aurc": 0.11762757373104978
+    },
+    "reply_mean_lp": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.5992976980101443,
+     "error_at_50pct": 0.1527777910232544,
+     "error_at_25pct": 0.1944444179534912,
+     "aurc": 0.16300729561999094
+    }
+   },
+   "test/all": {
+    "accuracy": 0.5521003603935242,
+    "probe": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.8191049669495891,
+     "error_at_50pct": 0.2194322943687439,
+     "error_at_25pct": 0.10043668746948242,
+     "aurc": 0.21557054204282064,
+     "auroc_ci": [
+      0.7997457297727923,
+      0.838146174762911
+     ]
+    },
+    "stack": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.8372044600000963,
+     "error_at_50pct": 0.20414847135543823,
+     "error_at_25pct": 0.09606987237930298,
+     "aurc": 0.20663077624875892,
+     "auroc_ci": [
+      0.8183313822303423,
+      0.8541920232012048
+     ],
+     "ece": 0.028660182727183764
+    },
+    "claim_p": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.7399031355764926,
+     "error_at_50pct": 0.2729257345199585,
+     "error_at_25pct": 0.23144102096557617,
+     "aurc": 0.283100574112458,
+     "auroc_ci": [
+      0.7175061910635128,
+      0.7599951855326867
+     ]
+    }
+   },
+   "nq/short": {
+    "accuracy": 0.25,
+    "probe": {
+     "n": 256,
+     "positives": 64,
+     "auroc": 0.744873046875,
+     "error_at_50pct": 0.6171875,
+     "error_at_25pct": 0.546875,
+     "aurc": 0.5837891601853007,
+     "auroc_ci": [
+      0.6732062042118319,
+      0.8092285933198035
+     ]
+    },
+    "stack": {
+     "n": 256,
+     "positives": 64,
+     "auroc": 0.802490234375,
+     "error_at_50pct": 0.6015625,
+     "error_at_25pct": 0.421875,
+     "aurc": 0.5444437683609872,
+     "auroc_ci": [
+      0.7377040229282077,
+      0.8638611583597449
+     ],
+     "ece": 0.2119724841631978
+    },
+    "claim_p": {
+     "n": 256,
+     "positives": 64,
+     "auroc": 0.6819661458333334,
+     "error_at_50pct": 0.625,
+     "error_at_25pct": 0.625,
+     "aurc": 0.6710545329500814,
+     "auroc_ci": [
+      0.6074773208613993,
+      0.7509560073590256
+     ]
+    },
+    "word_min_lp": {
+     "n": 256,
+     "positives": 64,
+     "auroc": 0.7079264322916666,
+     "error_at_50pct": 0.6328125,
+     "error_at_25pct": 0.5625,
+     "aurc": 0.6271409892355428
+    },
+    "reply_mean_lp": {
+     "n": 256,
+     "positives": 64,
+     "auroc": 0.7643229166666666,
+     "error_at_50pct": 0.6015625,
+     "error_at_25pct": 0.5,
+     "aurc": 0.58221084053153
+    }
+   },
+   "nq/multi": {
+    "accuracy": 0.2406119555234909,
+    "probe": {
+     "n": 719,
+     "positives": 173,
+     "auroc": 0.7117237290647696,
+     "error_at_50pct": 0.640668511390686,
+     "error_at_25pct": 0.5586591958999634,
+     "aurc": 0.6252654163534355,
+     "auroc_ci": [
+      0.6650961271098217,
+      0.7556370700973429
+     ]
+    },
+    "stack": {
+     "n": 719,
+     "positives": 173,
+     "auroc": 0.7271909208325393,
+     "error_at_50pct": 0.6323119401931763,
+     "error_at_25pct": 0.5307262539863586,
+     "aurc": 0.6184887380919601,
+     "auroc_ci": [
+      0.6779370781979103,
+      0.7692076033635619
+     ],
+     "ece": 0.1916837146238881
+    },
+    "claim_p": {
+     "n": 719,
+     "positives": 173,
+     "auroc": 0.6289356115945711,
+     "error_at_50pct": 0.6991643309593201,
+     "error_at_25pct": 0.6759776473045349,
+     "aurc": 0.7007772395354982,
+     "auroc_ci": [
+      0.5819130163194011,
+      0.6725468694340124
+     ]
+    },
+    "word_min_lp": {
+     "n": 719,
+     "positives": 173,
+     "auroc": 0.6702185098138855,
+     "error_at_50pct": 0.679665744304657,
+     "error_at_25pct": 0.597765326499939,
+     "aurc": 0.6633285934442059
+    },
+    "reply_mean_lp": {
+     "n": 719,
+     "positives": 173,
+     "auroc": 0.5688348260602596,
+     "error_at_50pct": 0.7270194888114929,
+     "error_at_25pct": 0.7094972133636475,
+     "aurc": 0.717233052874707
+    }
+   },
+   "nq/multiturn": {
+    "accuracy": 0.22357723116874695,
+    "probe": {
+     "n": 246,
+     "positives": 55,
+     "auroc": 0.7722037125178487,
+     "error_at_50pct": 0.6504064798355103,
+     "error_at_25pct": 0.5245901346206665,
+     "aurc": 0.612342687972918,
+     "auroc_ci": [
+      0.6985276090338287,
+      0.8390636650409963
+     ]
+    },
+    "stack": {
+     "n": 246,
+     "positives": 55,
+     "auroc": 0.8168491194669205,
+     "error_at_50pct": 0.6178861856460571,
+     "error_at_25pct": 0.49180328845977783,
+     "aurc": 0.5782878839021571,
+     "auroc_ci": [
+      0.7544372185571495,
+      0.8688593878878288
+     ],
+     "ece": 0.22475052902634007
+    },
+    "claim_p": {
+     "n": 246,
+     "positives": 55,
+     "auroc": 0.6951451689671585,
+     "error_at_50pct": 0.6910569071769714,
+     "error_at_25pct": 0.5901639461517334,
+     "aurc": 0.6698296014375483,
+     "auroc_ci": [
+      0.615058844718443,
+      0.7648697052891079
+     ]
+    },
+    "word_min_lp": {
+     "n": 246,
+     "positives": 55,
+     "auroc": 0.7285102332222751,
+     "error_at_50pct": 0.6666666269302368,
+     "error_at_25pct": 0.5737705230712891,
+     "aurc": 0.6525173047802642
+    },
+    "reply_mean_lp": {
+     "n": 246,
+     "positives": 55,
+     "auroc": 0.7921941932413137,
+     "error_at_50pct": 0.6178861856460571,
+     "error_at_25pct": 0.5409836173057556,
+     "aurc": 0.5957019913338649
+    }
+   },
+   "nq/reasoning": {
+    "accuracy": 0.3103448152542114,
+    "probe": {
+     "n": 261,
+     "positives": 81,
+     "auroc": 0.7611796982167353,
+     "error_at_50pct": 0.5384615659713745,
+     "error_at_25pct": 0.4307692050933838,
+     "aurc": 0.505828536808381,
+     "auroc_ci": [
+      0.6967380602208711,
+      0.8186400156770527
+     ]
+    },
+    "stack": {
+     "n": 261,
+     "positives": 81,
+     "auroc": 0.7670096021947874,
+     "error_at_50pct": 0.5153846144676208,
+     "error_at_25pct": 0.3999999761581421,
+     "aurc": 0.5070012833613966,
+     "auroc_ci": [
+      0.7021726562073577,
+      0.8260625257814876
+     ],
+     "ece": 0.20988158708959248
+    },
+    "claim_p": {
+     "n": 261,
+     "positives": 81,
+     "auroc": 0.520679012345679,
+     "error_at_50pct": 0.6769230365753174,
+     "error_at_25pct": 0.7384614944458008,
+     "aurc": 0.7015458838416538,
+     "auroc_ci": [
+      0.45125891994061396,
+      0.5935249711212186
+     ]
+    },
+    "word_min_lp": {
+     "n": 261,
+     "positives": 81,
+     "auroc": 0.5248285322359396,
+     "error_at_50pct": 0.6538461446762085,
+     "error_at_25pct": 0.7538461685180664,
+     "aurc": 0.6990345002931345
+    },
+    "reply_mean_lp": {
+     "n": 261,
+     "positives": 81,
+     "auroc": 0.666803840877915,
+     "error_at_50pct": 0.5769230723381042,
+     "error_at_25pct": 0.5692307949066162,
+     "aurc": 0.5793621772964769
+    }
+   },
+   "nq/all": {
+    "accuracy": 0.2516869008541107,
+    "probe": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.7381332843394407,
+     "error_at_50pct": 0.6140351295471191,
+     "error_at_25pct": 0.5297297239303589,
+     "aurc": 0.592436971455305,
+     "auroc_ci": [
+      0.7083033127845385,
+      0.7663724827045592
+     ]
+    },
+    "stack": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.7620951658016183,
+     "error_at_50pct": 0.6086369752883911,
+     "error_at_25pct": 0.4864864945411682,
+     "aurc": 0.575912063629978,
+     "auroc_ci": [
+      0.7351211619545406,
+      0.7898889046999
+     ],
+     "ece": 0.2038820971959169
+    },
+    "claim_p": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.634998319864042,
+     "error_at_50pct": 0.6707152128219604,
+     "error_at_25pct": 0.6756756901741028,
+     "aurc": 0.689458204016722,
+     "auroc_ci": [
+      0.603559466169767,
+      0.6654635769895878
+     ]
+    }
+   }
+  },
+  "leave_one_format_out": {
+   "short": {
+    "held_out": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.8179929974482226,
+     "error_at_50pct": 0.23846155405044556,
+     "error_at_25pct": 0.1538461446762085,
+     "aurc": 0.23851502274074177,
+     "auroc_ci": [
+      0.7613241224621097,
+      0.8631915537702929
+     ]
+    },
+    "with_format": {
+     "n": 260,
+     "positives": 137,
+     "auroc": 0.8203667438134236,
+     "error_at_50pct": 0.23846155405044556,
+     "error_at_25pct": 0.1230769157409668,
+     "aurc": 0.23504487834082344,
+     "auroc_ci": [
+      0.7646617747095295,
+      0.868538442793529
+     ]
+    }
+   },
+   "multi": {
+    "held_out": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.7545226423902894,
+     "error_at_50pct": 0.29729729890823364,
+     "error_at_25pct": 0.16756755113601685,
+     "aurc": 0.28689693266354854,
+     "auroc_ci": [
+      0.7214170101945038,
+      0.7881639212607453
+     ]
+    },
+    "with_format": {
+     "n": 741,
+     "positives": 384,
+     "auroc": 0.7746119281045751,
+     "error_at_50pct": 0.28378379344940186,
+     "error_at_25pct": 0.16756755113601685,
+     "aurc": 0.2700658057241313,
+     "auroc_ci": [
+      0.7402866944265528,
+      0.8076138308240343
+     ]
+    }
+   },
+   "multiturn": {
+    "held_out": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.8179941990182954,
+     "error_at_50pct": 0.38686132431030273,
+     "error_at_25pct": 0.27941179275512695,
+     "aurc": 0.36355600564988755,
+     "auroc_ci": [
+      0.7665921524913377,
+      0.8669971046443946
+     ]
+    },
+    "with_format": {
+     "n": 274,
+     "positives": 108,
+     "auroc": 0.8253012048192772,
+     "error_at_50pct": 0.38686132431030273,
+     "error_at_25pct": 0.25,
+     "aurc": 0.3561183894474504,
+     "auroc_ci": [
+      0.7751050252995229,
+      0.871690644125989
+     ]
+    }
+   },
+   "reasoning": {
+    "held_out": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.7487777777777778,
+     "error_at_50pct": 0.2814815044403076,
+     "error_at_25pct": 0.1791045069694519,
+     "aurc": 0.26201532994412813,
+     "auroc_ci": [
+      0.6903044335049232,
+      0.8058854728445194
+     ]
+    },
+    "with_format": {
+     "n": 270,
+     "positives": 150,
+     "auroc": 0.775,
+     "error_at_50pct": 0.2666666507720947,
+     "error_at_25pct": 0.16417908668518066,
+     "aurc": 0.24353008809604726,
+     "auroc_ci": [
+      0.7190253918527673,
+      0.8293017854197592
+     ]
+    }
+   },
+   "math": {
+    "held_out": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.7407725321888412,
+     "error_at_50pct": 0.0972222089767456,
+     "error_at_25pct": 0.04166668653488159,
+     "aurc": 0.08627814103502418,
+     "auroc_ci": [
+      0.6666281534537749,
+      0.8118205539943798
+     ]
+    },
+    "with_format": {
+     "n": 288,
+     "positives": 233,
+     "auroc": 0.8428404213811939,
+     "error_at_50pct": 0.06944441795349121,
+     "error_at_25pct": 0.013888895511627197,
+     "aurc": 0.06107754801746154,
+     "auroc_ci": [
+      0.780999121528862,
+      0.90118627488711
+     ]
+    }
+   }
+  },
+  "probe_by_train_size": {
+   "1000": {
+    "test": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.7370073129751147,
+     "error_at_50pct": 0.2805677056312561,
+     "error_at_25pct": 0.1877729296684265,
+     "aurc": 0.27212973874384
+    },
+    "nq": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.6218872157367094,
+     "error_at_50pct": 0.6720647811889648,
+     "error_at_25pct": 0.683783769607544,
+     "aurc": 0.6933934496726534
+    }
+   },
+   "3000": {
+    "test": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.804204599615816,
+     "error_at_50pct": 0.23144102096557617,
+     "error_at_25pct": 0.13318777084350586,
+     "aurc": 0.23177716281215918
+    },
+    "nq": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.725973451434401,
+     "error_at_50pct": 0.6248313188552856,
+     "error_at_25pct": 0.5324324369430542,
+     "aurc": 0.6035617430571265
+    }
+   },
+   "7782": {
+    "test": {
+     "n": 1833,
+     "positives": 1012,
+     "auroc": 0.8191049669495891,
+     "error_at_50pct": 0.2194322943687439,
+     "error_at_25pct": 0.10043668746948242,
+     "aurc": 0.21557054204282064
+    },
+    "nq": {
+     "n": 1482,
+     "positives": 373,
+     "auroc": 0.7381332843394407,
+     "error_at_50pct": 0.6140351295471191,
+     "error_at_25pct": 0.5297297239303589,
+     "aurc": 0.592436971455305
+    }
+   }
+  },
+  "multi_reply_level": {
+   "n": 296,
+   "positives": 62,
+   "auroc": 0.8210642404190791,
+   "error_at_50pct": 0.6351351351351351,
+   "error_at_25pct": 0.527027027027027,
+   "aurc": 0.6112678954257695,
+   "auroc_ci": [
+    0.7675959488961869,
+    0.872066871468415
+   ]
+  },
+  "seconds": 4997
+ }
+}

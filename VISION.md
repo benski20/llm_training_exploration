@@ -828,6 +828,33 @@ The evaluation reports, per format:
 - the risk-coverage area, calibration, and reply-level risk for multi-claim
   replies.
 
+**Result, Qwen2.5-3B** (`results/kaggle/qwen-claims-3b/claims/results.json`; Kaggle 2x T4, float16 +
+sdpa, 84 min). 7,782 training claims; 1,833 test claims (TriviaQA validation / GSM8K test) and
+1,482 on NQ-open, which is never seen in training. AUROC for right vs wrong claims, with 95% bootstrap
+intervals:
+
+| format | accuracy | **probe** | probe + output (stack) | claim token probability | error in the most confident 25%: probe / token p |
+|---|---|---|---|---|---|
+| short answer | 53% | **0.820** (0.77-0.87) | 0.818 | 0.701 (0.63-0.76) | 12% / 31% |
+| several answers in one reply | 52% | 0.775 | **0.818** (0.79-0.85) | 0.735 | 17% / 27% |
+| question after earlier turns | 39% | 0.825 | **0.863** (0.82-0.90) | 0.784 | 25% / 26% |
+| reasoning, then answer | 56% | **0.775** (0.72-0.83) | 0.781 | 0.615 (0.55-0.69) | 16% / 30% |
+| GSM8K math | 81% | 0.843 | **0.858** (0.79-0.91) | 0.727 | 1% / 14% |
+| **all formats** | 55% | 0.819 (0.80-0.84) | **0.837** (0.82-0.85), ECE 0.029 | 0.740 (0.72-0.76) | 10% / 23% |
+| NQ-open (unseen), all formats | 25% | 0.738 | **0.762** (0.74-0.79), ECE 0.20 | 0.635 (0.60-0.67) | 53% / 68% |
+
+- **One probe works across formats.** Trained without a format and tested on it, AUROC stays close:
+  short 0.818 (0.820 with it), multi-turn 0.818 (0.825), multi 0.755 (0.775), reasoning 0.749 (0.775),
+  math 0.741 (0.843). Math is the only format that clearly benefits from its own data, and even left out
+  it beats the token probability (0.727).
+- **It still improves with data:** 1,000 / 3,000 / 7,782 training claims give 0.737 / 0.804 / 0.819 on
+  test, and 0.622 / 0.726 / 0.738 on NQ.
+- **Reply level:** for multi-claim replies, "all claims right" is predicted from the weakest claim
+  with AUROC 0.821.
+- **The best layer is the last** sampled one (35 of 36).
+- **Calibration does not transfer** to NQ's lower base rate (ECE 0.20), as before; recalibration on a
+  small labelled sample is the remedy (`CorrectnessHead.calibrate`).
+
 **Float16 without NaNs.** In float16 the earlier Kaggle run produced garbage
 (0% accuracy, then a CUDA assert). The cause is not Qwen2.5's activations, which
 peak below 7,000. It is its raw attention logits: q.k reaches about 2.6e5 in
