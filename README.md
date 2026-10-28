@@ -104,6 +104,14 @@ are in `VISION.md`.
   (`results/kaggle/detector-7b2/`) adds numerical reasoning (0.92) and biomedical QA (0.85); `vt adapt`
   fits a new domain from labelled replies.
 
+* **Qwen3-32B in open chat, held out** (`VISION.md`). Claims are read at the position that writes them
+  and calibrated (`<head>.serving.json`).
+  - On new fact-heavy everyday prompts it underlines 7% of replies and under 1% of sentences.
+  - On new trivia questions it ranks right against wrong at AUROC 0.78. It flags 37% of wrong answers
+    and 12% of right ones.
+  - On Natural Questions it is near chance (0.57).
+  - It is a warning light, not a fact checker: errors the model is confident about pass unflagged.
+
 ```bash
 pip install -e ".[verichat]"
 vt verichat --model Qwen/Qwen2.5-7B-Instruct --head results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt \
