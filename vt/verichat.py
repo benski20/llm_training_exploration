@@ -70,6 +70,15 @@ def load_head(path):
     return Probe.from_state(v["probe"]), int(v["layers"][0])
 
 
+def load_serving(head_path):
+    """Serving settings measured for a head (<head>.serving.json, e.g. from experiments/serving_score.py):
+    claim calibration, doubt threshold, verdict cut-offs, and how sentences are judged. {} if none."""
+    import json
+    import os
+    p = os.path.splitext(head_path)[0] + ".serving.json"
+    return json.load(open(p)) if os.path.exists(p) else {}
+
+
 def sentences(text):
     return [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
 
@@ -118,11 +127,13 @@ class VeriChat:
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True,
                                        thinking=thinking, think_budget=think_budget)
         self.threshold = threshold
+        self.likely_right = 0.7                        # claims at or above this score read "likely right"
         self.retriever, self.retrieve_below = retriever, retrieve_below
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
 
     @classmethod
-    def load(cls, model_name, head_path, threshold=0.45):
+    def load(cls, model_name, head_path, threshold=None):
+        """threshold: claims scoring below it are doubted (default: the head's serving.json, else 0.45)."""
         from transformers import AutoModelForCausalLM, AutoTokenizer
         cuda = torch.cuda.is_available()
         tok = AutoTokenizer.from_pretrained(model_name)
@@ -130,11 +141,26 @@ class VeriChat:
             model_name, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
         probe, layer = load_head(head_path)
-        bot = cls(model, tok, probe, layer, threshold)
+        bot = cls(model, tok, probe, layer, 0.45)
         risk = load_risk(head_path)
         if risk is not None:                                   # learned risk on every token and sentence
             bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk
+        bot.configure(load_serving(head_path), threshold)
         return bot
+
+    def configure(self, serving, threshold=None):
+        """Apply measured serving settings: {"claim_calib": [a, b], "threshold", "likely_right", "combine",
+        "sentence_doubt": "risk" | "claims"}; an explicit threshold wins."""
+        g = self.gen
+        if "claim_calib" in serving:
+            g.calib = tuple(serving["claim_calib"])
+        if "combine" in serving:
+            g.combine = bool(serving["combine"])
+        if "sentence_doubt" in serving:
+            g.sentence_doubt = serving["sentence_doubt"]
+        self.likely_right = serving.get("likely_right", self.likely_right)
+        t = threshold if threshold is not None else serving.get("threshold", self.threshold)
+        self.threshold = g.threshold = t
 
     def _fit_documents(self, documents):
         """Documents take at most half the prompt budget, shared equally; a longer one is cut (and marked)."""
@@ -315,7 +341,7 @@ class VeriChat:
         trigger = self.doubt_score(r)
         claims = merge_names(claims, r["text"])
         for c in claims:
-            c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= 0.7 else "uncertain")
+            c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= self.likely_right else "uncertain")
             if c.get("source") != "your documents":
                 c.pop("citation", None)                           # a citation only for claims the documents drove
         out = {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],

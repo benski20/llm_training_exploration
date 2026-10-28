@@ -409,7 +409,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="vt verichat")
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
-    ap.add_argument("--threshold", type=float, default=0.45)
+    ap.add_argument("--threshold", type=float, help="claims scoring below it are doubted (default: the head's "
+                                                     "<head>.serving.json, else 0.45)")
     ap.add_argument("--risk-threshold", type=float, help="sentence risk above which a sentence is doubted "
                                                          "(default: the risk head's own, chosen for F1)")
     ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")

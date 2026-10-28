@@ -54,6 +54,7 @@ class DoubtAwareGenerator:
         self.thinking, self.think_budget = thinking, think_budget
         self.sampling, self.think_sampling = sampling, think_sampling       # None: greedy
         self.trace = False              # True: results carry every reply token's risk and log-probability
+        self.sentence_doubt = "risk"    # "claims": a sentence is doubted when a claim in it is (risk 1 - its P)
         self.think_open, self.think_close = _token_id(tok, "<think>"), _token_id(tok, "</think>")
         if self.think_open is None or self.think_close is None:
             self.think_open = self.think_close = None
@@ -253,7 +254,12 @@ class _Seq:
         content = [self.risk[k] for k in ks if k in self.risk]
         lps = [self.logp[k] for k in ks if k in self.logp]
         r = max(content) if content else 0.0
-        sent = {"tokens": (self.sent_start, end), "risk": round(r, 4), "doubted": r >= self.g.risk_threshold,
+        doubted = r >= self.g.risk_threshold
+        if self.g.sentence_doubt == "claims":                   # judged by its claims, read before each was written
+            inside = [c for c in self.claims if self.sent_start <= c["token_index"] < end]
+            r = max((1 - c["score"] for c in inside), default=0.0)
+            doubted = any(c["doubted"] for c in inside)
+        sent = {"tokens": (self.sent_start, end), "risk": round(r, 4), "doubted": doubted,
                 "min_logprob": round(min(lps), 4) if lps else None,
                 "mean_logprob": round(float(np.mean(lps)), 4) if lps else None}
         if sent["doubted"] and self.mode == "stop":             # drop the doubted sentence and end the reply

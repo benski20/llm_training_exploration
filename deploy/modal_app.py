@@ -4,6 +4,7 @@
     modal deploy deploy/modal_app.py                      # prints the public URL
     modal app stop verichat                               # stop serving
 
+The head's measured serving settings (<head>.serving.json: claim calibration, doubt threshold) ship with it.
 One GPU container serves everything: the chat model with its risk head (claim probe + learned
 token/sentence risk), the 3B detector for /judge, and the toxicity filter. It scales to zero when idle
 (SCALEDOWN seconds), so you pay only while it is up. A cold start downloads nothing after the first
@@ -37,6 +38,7 @@ image = (
                  "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece")
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
+    .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
     .add_local_file(os.path.join(ROOT, DETECTOR), "/app/heads/detector.pt")
 )
 app = modal.App("verichat", image=image)

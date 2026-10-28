@@ -309,3 +309,31 @@ def test_out_of_memory_batches_are_retried_in_halves():
     rs = g.generate_batch(reqs, on_text=lambda i, d: got.__setitem__(i, got.get(i, "") + d))
     assert [r["text"] for r in rs] == want and sizes[0] == 3 and sorted(sizes)[:3] == [1, 1, 1]
     assert all(got.get(i, "").strip() == want[i] for i in range(3))
+
+
+def test_serving_settings_judge_sentences_by_their_claims(tmp_path):
+    import json
+    from vt.verichat import load_serving
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    risk = Probe().fit(np.random.default_rng(1).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    head = tmp_path / "h_risk_head.pt"
+    cfg = {"claim_calib": [1.0, 0.0], "threshold": 0.99, "likely_right": 0.995, "combine": False, "sentence_doubt": "claims"}
+    (tmp_path / "h_risk_head.serving.json").write_text(json.dumps(cfg))
+    assert load_serving(str(head)) == cfg and load_serving(str(tmp_path / "other.pt")) == {}
+    bot = VeriChat(m, tok, p, layer=1)
+    bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk, 1, 0.0   # risk alone would doubt everything
+    bot.configure(cfg)
+    assert bot.threshold == bot.gen.threshold == 0.99 and bot.gen.combine is False
+    out = bot.reply([{"role": "user", "content": "Tell me about Paris and Berlin."}], mode="flag", max_new_tokens=40)
+    claims = out["claims"]
+    for s in out["sentences"]:                                # doubted exactly when a doubted claim lies inside
+        inside = [c for c in claims if s["start"] <= c["start"] < s["end"]]
+        if not any(c["doubted"] for c in inside):
+            assert not s["doubted"]
+    assert all(c["verdict"] != "likely right" or c["score"] >= 0.995 for c in claims)
+    bot.configure({}, threshold=0.3)                          # an explicit threshold wins
+    assert bot.threshold == 0.3

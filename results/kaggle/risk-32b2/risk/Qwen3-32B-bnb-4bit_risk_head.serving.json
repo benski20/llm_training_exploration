@@ -1,0 +1,20 @@
+{
+ "claim_calib": [
+  4.4786,
+  -2.3622
+ ],
+ "threshold": 0.65,
+ "likely_right": 0.85,
+ "combine": false,
+ "sentence_doubt": "claims",
+ "measured": {
+  "everyday_flagged": 0.0,
+  "everyday_n": 38,
+  "wrong_flagged": 0.492,
+  "right_flagged": 0.102,
+  "factual_n": 300,
+  "factual_auroc": 0.828,
+  "note": "Qwen3-32B-bnb-4bit, served sampling; TriviaQA asked conversationally (chateval-32b + chateval-32t); calibration and threshold fitted on these same replies"
+ },
+ "how": "experiments/serving_score.py; claims are read at the position that writes them (the risk head, negated), calibrated with Platt scaling"
+}

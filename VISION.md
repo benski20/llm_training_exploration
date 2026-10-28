@@ -1218,6 +1218,58 @@ source:
   `kaggle/chateval` can compare risk, log-probability and their combination on the same replies.
 - The serving threshold comes from the chat eval's grid, not from the training F1.
 
+**The 32B in real chat** (`kaggle/chateval`, served sampling, 2x T4).
+- `results/kaggle/chateval-32b/`: 38 everyday prompts, 200 TriviaQA questions asked conversationally,
+  48 with thinking.
+- `results/kaggle/chateval-32t/`: 38 everyday prompts and 100 more questions, with per-token traces.
+- Accuracy is 0.775.
+
+**The sentence flag does not work in open chat.** A sentence's riskiest token is near 1 in almost
+every long reply. At the head's own threshold, 84% of everyday replies (poems, advice, code, small
+talk) get a doubted sentence. On factual replies the score ranks at only AUROC 0.66, and no
+threshold fixes a bad ranking.
+
+**The same head read before each claim is written works.** This is the state that produces a name,
+number or date. From the traces (`experiments/serving_score.py`), each reply score is judged at the
+threshold that flags 10% of everyday replies:
+
+| reply score | factual AUROC | wrong flagged | right flagged |
+|---|---|---|---|
+| **claim, read at the position that writes it** | **0.81** (0.83 over 300) | **65%** | 25% |
+| the same, averaged with token probability | 0.77 | 35% | 5% |
+| mean own-position risk over claim tokens | 0.75 | 25% | 7% |
+| min log-probability over claim tokens | 0.73 | 25% | 6% |
+| min log-probability over the reply | 0.68 | 30% | 4% |
+| max risk over all content (the old sentence flag) | 0.57 | 0% | 3% |
+
+The decision point carries the model's uncertainty. Once a token is written, its own state mostly
+reflects having said it. Averaging in token probability, which helped the older probes, hurts here.
+
+**Serving settings** (`results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.serving.json`,
+loaded with the head):
+- Claim scores are calibrated by Platt scaling on the 300 factual replies (a = 4.48, b = -2.36). Log
+  loss drops from 0.52 to 0.40.
+- Reliability is close at the extremes:
+  - calibrated P below 0.6: 38% of those replies right;
+  - P 0.85-0.95: 92% right;
+  - P 0.95 and above: 100% right.
+- A claim is **doubtful below 0.65**, uncertain from 0.65 to 0.85, likely right from 0.85.
+- A sentence is underlined when it holds a doubtful claim.
+- At this setting: 0% of the 38 everyday replies flagged, 49% of wrong factual replies and 10% of
+  right ones.
+- The calibration and threshold were fitted on the same replies they are reported on. Read them as an
+  operating point, not as a held-out result.
+- Everyday prompts are few (38). The claim heuristic still decides *where* to read, and in 10% of
+  everyday replies it finds no claim.
+
+**Thinking** (48 questions, 512-token budget, about 340 tokens used):
+- Accuracy 0.85 against 0.83 without thinking.
+- Risk AUROC on answers written after reasoning: 0.80 (interval 0.61-0.96).
+- 28 s per reply on T4.
+
+**Speed on 2x T4:** 13 generated tokens/s in total at batch 16, 5.4 s per reply. The L40S on Modal is
+expected to be several times faster; not yet measured.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
