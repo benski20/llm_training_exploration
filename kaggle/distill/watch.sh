@@ -12,5 +12,5 @@ while true; do
   sleep 180
 done
 mkdir -p "$out"
-kaggle kernels output "$KAGGLE_USERNAME/$slug" -p "$out" --force --file-pattern '(\.json|\.log)$' >> "$log" 2>&1
+kaggle kernels output "$KAGGLE_USERNAME/$slug" -p "$out" --force --file-pattern '(\.json|\.log|_head\.pt|_detector\.pt|_heads\.pt)$' >> "$log" 2>&1
 echo "$(date -u +%H:%M:%S) outputs in $out" >> "$log"
