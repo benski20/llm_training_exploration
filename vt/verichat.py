@@ -32,8 +32,18 @@ SYSTEM = "You are a helpful assistant. Answer accurately and concisely."
 DOC_SYSTEM = "You are a helpful assistant. Answer using the provided documents."
 
 
+def load_risk(path):
+    """A kaggle/risk head: (risk probe, its layer, sentence threshold), or None for other head files."""
+    h = torch.load(path, map_location="cpu", weights_only=True)
+    if "risk_probe" not in h:
+        return None
+    return Probe.from_state(h["risk_probe"]), int(h["risk_layer"]), float(h.get("risk_threshold", 0.5))
+
+
 def load_head(path):
     h = torch.load(path, map_location="cpu", weights_only=True)
+    if "risk_probe" in h:                                      # kaggle/risk head: its claim probe
+        return Probe.from_state(h["claim_probe"]), int(h["claim_layer"])
     if "probe" in h and "layer" in h:                         # claim-level head
         return Probe.from_state(h["probe"]), int(h["layer"])
     v = h.get("probe+output") or next(iter(h.values()))       # correctness head: any variant's probe
@@ -86,7 +96,11 @@ class VeriChat:
             model_name, torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
         probe, layer = load_head(head_path)
-        return cls(model, tok, probe, layer, threshold)
+        bot = cls(model, tok, probe, layer, threshold)
+        risk = load_risk(head_path)
+        if risk is not None:                                   # learned risk on every token and sentence
+            bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk
+        return bot
 
     def _messages(self, messages, documents):
         msgs = [dict(m) for m in messages]
@@ -231,5 +245,8 @@ class VeriChat:
             c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= 0.7 else "uncertain")
             if c.get("source") != "your documents":
                 c.pop("citation", None)                           # a citation only for claims the documents drove
-        return {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
-                "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}
+        out = {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
+               "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}
+        if r.get("sentences"):                                   # learned risk: every sentence, no heuristic
+            out["sentences"], out["max_risk"] = r["sentences"], r["max_risk"]
+        return out

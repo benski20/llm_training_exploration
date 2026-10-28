@@ -180,3 +180,22 @@ def test_moderation_refuses_flagged_input_and_withholds_flagged_output():
     strict = VeriChat(m, tok, p, layer=1, moderator=Moderator(lambda t: {"toxic": 0.0 if t == "hello" else 0.99}))
     o = strict.reply([{"role": "user", "content": "hello"}], max_new_tokens=4)
     assert o["text"] == WITHHELD and o["withheld"] and o["claims"] == []
+
+
+def test_risk_head_file_drives_claims_and_sentences(tmp_path):
+    from vt.verichat import load_head, load_risk
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    path = tmp_path / "x_risk_head.pt"
+    torch.save({"model": "m", "risk_layer": 0, "risk_probe": p.state_dict(), "risk_threshold": 0.4,
+                "claim_layer": 1, "claim_probe": p.state_dict()}, path)
+    probe, layer = load_head(str(path))
+    risk, rl, th = load_risk(str(path))
+    assert layer == 1 and rl == 0 and th == 0.4
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    bot = VeriChat(m, tok, probe, layer)
+    bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk, rl, th
+    out = bot.reply([{"role": "user", "content": "Tell me about Paris."}], mode="flag", max_new_tokens=24)
+    assert "sentences" in out and all(0 <= s["risk"] <= 1 for s in out["sentences"])

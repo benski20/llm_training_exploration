@@ -39,7 +39,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 120px}h1{font-size:20px;mar
 .sub{color:var(--muted);margin:0 0 16px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
 .user{border-left:3px solid var(--accent)}.bot .text{white-space:pre-wrap}
 .c{border-radius:4px;padding:0 2px;cursor:help}.c.g{background:var(--goodbg);color:var(--good)}
-.c.m{background:var(--midbg);color:var(--mid)}.c.b{background:var(--badbg);color:var(--bad)}
+.c.m{background:var(--midbg);color:var(--mid)}div.c{display:block;margin:2px 0}.c.b{background:var(--badbg);color:var(--bad)}
 .meta{color:var(--muted);font-size:13px;margin-top:6px}.claims{font-size:13px;margin-top:8px}
 .claims div{padding:2px 0;border-top:1px dashed var(--line)}textarea{width:100%;background:var(--card);color:var(--fg);
 border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}details{margin:8px 0}
@@ -67,6 +67,9 @@ function render(r){let t=r.text,html='',pos=0;
   let tip='P(correct) '+c.score.toFixed(2);if(c.source)tip+=' | from '+c.source+(c.citation?': "'+c.citation.sentence+'"':'');
   html+=esc(t.slice(pos,k))+'<span class="c '+cls+'" title="'+esc(tip)+'">'+esc(t.slice(k,k+c.text.length))+'</span>';pos=k+c.text.length}
  html+=esc(t.slice(pos));html=html.split('[unsure:] ').join('').split('[unsure:]').join('');
+ const bad=(r.sentences||[]).filter(x=>x.doubted);
+ if(bad.length)html+='<div class="claims">'+bad.map(x=>'<div class="c b">Doubtful sentence ('+
+  (100*x.risk).toFixed(0)+'% risk): '+esc(x.text)+'</div>').join('')+'</div>';
  const list=r.claims.filter(c=>c.text).map(c=>'<div><b>'+esc(c.text)+'</b> — '+c.verdict+' ('+c.score.toFixed(2)+')'+
   (c.source?' · from '+esc(c.source)+(c.citation?': “'+esc(c.citation.sentence)+'”':''):'')+'</div>').join('');
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
