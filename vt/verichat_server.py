@@ -8,9 +8,16 @@
   POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag"}
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
                  general detector (vt/detector.Detector; only with --detector)
+
+POSTs are rate-limited per client (--rate-per-minute); with VERICHAT_API_KEY set they need
+"Authorization: Bearer <key>". Generation runs one request at a time; extra connections get 503.
 """
 import argparse
+import collections
+import hmac
+import os
 import threading
+import time
 
 from .serve import HardenedHandler, bounded_server
 
@@ -114,8 +121,35 @@ def validate_judge(req):
     return msgs, resp, docs
 
 
-def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0, detector=None):
+class RateLimiter:
+    """At most `per_minute` POSTs per client in any 60 s window (0: unlimited)."""
+
+    def __init__(self, per_minute):
+        self.per_minute, self.hits, self.lock = per_minute, collections.defaultdict(collections.deque), threading.Lock()
+
+    def allow(self, client, now=None):
+        if not self.per_minute:
+            return True
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            q = self.hits[client]
+            while q and now - q[0] >= 60:
+                q.popleft()
+            if len(q) >= self.per_minute:
+                return False
+            q.append(now)
+            if len(self.hits) > 10000:                           # forget idle clients
+                for k in [k for k, v in self.hits.items() if not v]:
+                    del self.hits[k]
+            return True
+
+
+def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0, detector=None,
+                api_key=None, rate_per_minute=20, trust_proxy=False):
+    """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
+    X-Forwarded-For (only behind a proxy you control)."""
     lock = threading.Lock()
+    limiter = RateLimiter(rate_per_minute)
 
     class Handler(HardenedHandler):
         timeout_s, deadline_s = 15.0, deadline
@@ -139,6 +173,12 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
         def do_POST(self):
             if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
                 return self.send_json(404, {"error": "not found"})
+            if api_key and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {api_key}"):
+                return self.send_json(401, {"error": "missing or wrong API key"})
+            fwd = self.headers.get("X-Forwarded-For", "") if trust_proxy else ""
+            client = fwd.split(",")[0].strip() or self.client_address[0]
+            if not limiter.allow(client):
+                return self.send_json(429, {"error": f"rate limit: {rate_per_minute} requests per minute"})
             req, err = self.read_json_object(max_body)
             if err:
                 return self.send_json(err[0], {"error": err[1]})
@@ -170,6 +210,8 @@ def main(argv=None):
     ap.add_argument("--retrieve-below", type=float, default=0.3)
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
+    ap.add_argument("--rate-per-minute", type=int, default=20, help="POSTs per client per minute (0: unlimited)")
+    ap.add_argument("--trust-proxy", action="store_true", help="client address from X-Forwarded-For")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
@@ -185,7 +227,8 @@ def main(argv=None):
         name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
-    srv = make_server(bot, a.host, a.port, detector=det)
+    srv = make_server(bot, a.host, a.port, detector=det, api_key=os.environ.get("VERICHAT_API_KEY") or None,
+                      rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
     print(f"VeriChat on http://{a.host}:{srv.server_port}", flush=True)
     srv.serve_forever()
 

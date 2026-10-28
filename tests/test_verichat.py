@@ -78,3 +78,36 @@ def test_bm25_corpus_ranks_the_matching_passage_first():
                            "The Nile flows through Egypt."])
     assert c("What is the highest mountain?", k=1) == ["Mount Everest is the highest mountain on Earth."]
     assert c("zzzz qqqq") == []
+
+
+def test_rate_limiter_window():
+    from vt.verichat_server import RateLimiter
+    r = RateLimiter(2)
+    assert r.allow("a", 0) and r.allow("a", 1) and not r.allow("a", 2) and r.allow("b", 2)
+    assert r.allow("a", 61) and RateLimiter(0).allow("a")
+
+
+def test_server_api_key_and_rate_limit():
+    import json
+    import threading
+    import urllib.request
+    from vt.verichat_server import make_server
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    srv = make_server(VeriChat(m, tok, p, layer=1), port=0, api_key="s3cret", rate_per_minute=2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}/chat"
+    body = json.dumps({"messages": [{"role": "user", "content": "Hi"}], "mode": "flag"}).encode()
+
+    def post(key):
+        h = {"Content-Type": "application/json"} | ({"Authorization": f"Bearer {key}"} if key else {})
+        try:
+            return urllib.request.urlopen(urllib.request.Request(url, body, h)).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    assert post(None) == 401 and post("wrong") == 401
+    assert post("s3cret") == 200 and post("s3cret") == 200 and post("s3cret") == 429
+    srv.shutdown()
