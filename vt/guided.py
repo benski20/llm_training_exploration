@@ -53,6 +53,7 @@ class DoubtAwareGenerator:
         self.risk_probe, self.risk_layer, self.risk_threshold = risk_probe, risk_layer, risk_threshold
         self.thinking, self.think_budget = thinking, think_budget
         self.sampling, self.think_sampling = sampling, think_sampling       # None: greedy
+        self.trace = False              # True: results carry every reply token's risk and log-probability
         self.think_open, self.think_close = _token_id(tok, "<think>"), _token_id(tok, "</think>")
         if self.think_open is None or self.think_close is None:
             self.think_open = self.think_close = None
@@ -404,7 +405,12 @@ class _Seq:
                                       "min_logprob": st["min_logprob"], "mean_logprob": st["mean_logprob"]})
         reasoning = tok.decode(self.reasoning, skip_special_tokens=True).strip() if self.prefix else None
         lp = [v for k, v in self.logp.items() if k < len(out)]
-        return {"text": text, "ids": out, "prefix_ids": self.prefix,
+        extra = {"trace": {"pieces": [tok.decode(out[k:k + 1]) for k in range(len(out))],
+                           "risk": [self.risk.get(k) for k in range(len(out))],
+                           "logp": [self.logp.get(k) for k in range(len(out))],
+                           "claims": [(c["token_index"], c["p_correct"], c["token_p"]) for c in self.claims]}} \
+            if g.trace else {}
+        return {**extra,"text": text, "ids": out, "prefix_ids": self.prefix,
                 "mean_logprob": round(float(np.mean(lp)), 4) if lp else None,
                 "min_logprob": round(min(lp), 4) if lp else None, "reasoning": reasoning, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
                 "sentences": sentences, "max_risk": max((x["risk"] for x in sentences), default=None),

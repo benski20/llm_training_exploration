@@ -321,6 +321,8 @@ class VeriChat:
         out = {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
                "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}
         out["mean_logprob"], out["min_logprob"] = r.get("mean_logprob"), r.get("min_logprob")
+        if "trace" in r:
+            out["trace"] = r["trace"]
         if r.get("reasoning") is not None:
             out["reasoning"] = r["reasoning"]
         if r.get("sentences"):                                   # learned risk: every sentence, no heuristic

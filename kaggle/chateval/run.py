@@ -69,6 +69,8 @@ def main():
     ap.add_argument("--n-think", type=int, default=48)
     ap.add_argument("--temperature", type=float, default=0.7, help="the server's decoding (0: greedy)")
     ap.add_argument("--presence-penalty", type=float, default=1.5)
+    ap.add_argument("--trace", action="store_true", help="save every reply token's risk, log-prob and claims "
+                                                         "(traces.json) to choose the serving score offline")
     ap.add_argument("--think-budget", type=int, default=512)
     ap.add_argument("--out", default="/kaggle/working/chateval")
     ap.add_argument("--smoke", action="store_true")
@@ -96,6 +98,7 @@ def main():
                 m.compute_dtype = torch.float16
     from vt.verichat import apply_sampling
     apply_sampling(bot, a.temperature, presence_penalty=a.presence_penalty, seed=0)   # as served; reproducible
+    bot.gen.trace = a.trace
     th = bot.gen.risk_threshold
     log(phase="loaded", model=a.model, risk_layer=bot.gen.risk_layer, threshold=th, s=round(time.time() - t0))
     ev = [(cat, p) for cat, ps in EVERYDAY.items() for p in (ps[:2] if a.smoke else ps)]
@@ -178,6 +181,12 @@ def main():
                         "doubted": [s["text"] for s in r.get("sentences", []) if s["doubted"]]}
                        for rq, r in list(zip(reqs, outs))[:: max(1, len(outs) // 25)]]
     json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)   # before thinking
+    if a.trace:
+        tr = [{"kind": "everyday", "cat": c, "prompt": p_, "text": r["text"], "trace": r.get("trace"),
+               "reply_confidence": r.get("reply_confidence")} for (c, p_), r in zip(ev, outs[:len(ev)])]
+        tr += [{"kind": "factual", "prompt": q, "wrong": w, "text": r["text"], "trace": r.get("trace"),
+                "reply_confidence": r.get("reply_confidence")} for (q, _), w, r in zip(fq, y, fr)]
+        json.dump(tr, open(os.path.join(a.out, "traces.json"), "w"), default=float)
     try:
         thinking_eval(a, bot, reqs, ev, fq, y, th, res, t0, auroc, auroc_ci, is_right)
     except Exception as e:                                      # keep the rest of the results
