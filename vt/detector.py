@@ -250,5 +250,5 @@ class Detector:
                 spans.append({"start": t["start"], "end": t["end"], "score": t["score"]})
         for s in spans:
             s["text"] = response[s["start"]:s["end"]]
-        return {"p_hallucinated": round(float(1 / (1 + np.exp(-z))), 4), "flagged": z >= self.threshold,
+        return {"p_hallucinated": round(float(1 / (1 + np.exp(-z))), 4), "logit": z, "flagged": z >= self.threshold,
                 "tokens": tokens, "spans": spans}
