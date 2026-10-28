@@ -477,7 +477,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "10 sources, 4,127 test responses; provenance vs Lookback Lens on 300 document items; no LODO in this mode (09:39:13 UTC check)"
+"note": "10 sources, 4,127 test responses; provenance vs Lookback Lens on 300 document items; no LODO in this mode (10:00:24 UTC check)"
+},
+{
+"run": "kaggle-detector-14b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): general detector, Qwen2.5-14B reader (4-bit), 10 sources",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (09:58:46 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",

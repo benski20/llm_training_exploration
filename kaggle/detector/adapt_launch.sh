@@ -6,8 +6,9 @@ cd "$(dirname "$0")/../.."
 : "${KAGGLE_API_TOKEN:?set KAGGLE_API_TOKEN}"; : "${KAGGLE_USERNAME:?set KAGGLE_USERNAME}"; : "${HEAD:?}"; : "${MODEL:?}"
 U=$KAGGLE_USERNAME; SLUG=${SLUG:-detector-adapt}; OUT=${OUT:-results/kaggle/detector-adapt}
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
-BUNDLE_FILES="$HEAD" python3 kaggle/distill/bundle.py "$S/run.py" kaggle/detector/adapt_eval.py \
-    --model "$MODEL" --head "$(basename "$HEAD")" --out /kaggle/working/adapt ${EXTRA_ARGS:-}
+BUNDLE_FILES="$HEAD ${CLAIMS_HEAD:-}" python3 kaggle/distill/bundle.py "$S/run.py" kaggle/detector/adapt_eval.py \
+    --model "$MODEL" --head "$(basename "$HEAD")" --out /kaggle/working/adapt \
+    ${CLAIMS_HEAD:+--bench-claims-head "$(basename "$CLAIMS_HEAD")"} ${EXTRA_ARGS:-}
 cat > "$S/kernel-metadata.json" <<META
 {"id": "$U/$SLUG", "title": "$SLUG", "code_file": "run.py", "language": "python", "kernel_type": "script",
  "is_private": true, "enable_gpu": true, "machine_shape": "NvidiaTeslaT4", "enable_internet": true,
