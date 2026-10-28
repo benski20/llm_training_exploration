@@ -5,7 +5,8 @@ when this pays).
     r = Corpus.from_texts(["...", "..."])          # or Corpus.from_dir("docs/")
     r("Who designed the Eiffel Tower?", k=2)        # -> the k best passages (BM25 over word chunks)
 
-Any callable question -> list of passage strings works as a retriever (a search API, a vector store).
+Any callable question -> list of passage strings works as a retriever (a search API, a vector store);
+Wikipedia() looks pages up live.
 """
 import math
 import os
@@ -66,3 +67,49 @@ class Corpus:
         s = self.scores(query)
         best = sorted(range(len(s)), key=lambda i: -s[i])[:k]
         return [self.passages[i] for i in best if s[i] > 0]
+
+
+class Wikipedia:
+    """Live Wikipedia lookups, no key and no index: search titles, then fetch each page's lead section.
+    Fails quietly (no passages, so the reply is simply not looked up); answers are cached.
+
+        r = Wikipedia(k=2)
+        r("Who designed the Eiffel Tower?")         # -> ["Gustave Eiffel ... (lead section)", ...]
+    """
+    SEARCH = "https://{lang}.wikipedia.org/w/rest.php/v1/search/page?q={q}&limit={n}"
+    SUMMARY = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
+
+    def __init__(self, k=2, lang="en", timeout=4.0, user_agent="VeriChat/0.1 (research demo)", cache_size=2048,
+                 fetch=None):
+        self.k, self.lang, self.timeout, self.ua = k, lang, timeout, user_agent
+        self.cache, self.cache_size = {}, cache_size
+        self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
+
+    def _fetch(self, url):
+        import json
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": self.ua, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            return json.loads(r.read().decode())
+
+    def __call__(self, query, k=None):
+        import urllib.parse
+        k = k or self.k
+        key = (norm(query), k)
+        if key in self.cache:
+            return self.cache[key]
+        try:
+            hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(query), n=k)).get("pages", [])
+            out = []
+            for h in hits[:k]:
+                title = urllib.parse.quote(h.get("key") or h.get("title", "").replace(" ", "_"), safe="")
+                s = self.fetch(self.SUMMARY.format(lang=self.lang, title=title))
+                text = (s.get("extract") or "").strip()
+                if text:
+                    out.append(f"{s.get('title', h.get('title', ''))} (Wikipedia): {text}")
+        except Exception:                                    # network, rate limit, bad JSON: no lookup
+            return []
+        if len(self.cache) >= self.cache_size:
+            self.cache.pop(next(iter(self.cache)))
+        self.cache[key] = out
+        return out

@@ -322,7 +322,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
                                             "risk_threshold": bot.gen.risk_threshold if bot.gen.risk_probe is not None else None,
                                             "detector": detector is not None, "thinking": bot.gen.thinking,
-                                            "thinking_available": bot.gen.think_open is not None})
+                                            "thinking_available": bot.gen.think_open is not None,
+                                            "retrieval": type(bot.retriever).__name__ if bot.retriever is not None else None})
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):
@@ -414,7 +415,9 @@ def main(argv=None):
     ap.add_argument("--risk-threshold", type=float, help="sentence risk above which a sentence is doubted "
                                                          "(default: the risk head's own, chosen for F1)")
     ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")
-    ap.add_argument("--retrieve-below", type=float, default=0.3)
+    ap.add_argument("--wikipedia", action="store_true", help="look doubted questions up on Wikipedia (live, no key)")
+    ap.add_argument("--retrieve-below", type=float, help="look up when the reply's doubt score is below this "
+                                                        "(default: the doubt threshold)")
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
     ap.add_argument("--moderation", action="store_true", help="screen messages and replies (vt/moderation.py)")
@@ -440,9 +443,10 @@ def main(argv=None):
     if a.moderation:
         from .moderation import Moderator
         bot.moderator = Moderator.load()
-    if a.corpus:
-        from .retrieval import Corpus
-        bot.retriever, bot.retrieve_below = Corpus.from_dir(a.corpus), a.retrieve_below
+    if a.corpus or a.wikipedia:
+        from .retrieval import Corpus, Wikipedia
+        bot.retriever = Corpus.from_dir(a.corpus) if a.corpus else Wikipedia()
+        bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
     det = None
     if a.detector:
         import torch

@@ -337,3 +337,24 @@ def test_serving_settings_judge_sentences_by_their_claims(tmp_path):
     assert all(c["verdict"] != "likely right" or c["score"] >= 0.995 for c in claims)
     bot.configure({}, threshold=0.3)                          # an explicit threshold wins
     assert bot.threshold == 0.3
+
+
+def test_wikipedia_retriever_parses_caches_and_fails_quietly():
+    from vt.retrieval import Wikipedia
+    calls = []
+
+    def fake(url):
+        calls.append(url)
+        if "search/page" in url:
+            return {"pages": [{"key": "Gustave_Eiffel", "title": "Gustave Eiffel"}, {"key": "Eiffel_Tower", "title": "Eiffel Tower"}]}
+        title = url.rsplit("/", 1)[-1]
+        return {"title": title.replace("_", " "), "extract": f"{title} lead section."}
+    w = Wikipedia(k=2, fetch=fake)
+    out = w("Who designed the Eiffel Tower?")
+    assert out == ["Gustave Eiffel (Wikipedia): Gustave_Eiffel lead section.", "Eiffel Tower (Wikipedia): Eiffel_Tower lead section."]
+    n = len(calls)
+    assert w("who designed the eiffel tower") == out and len(calls) == n          # cached (normalised query)
+
+    def broken(url):
+        raise OSError("429 Too Many Requests")
+    assert Wikipedia(fetch=broken)("anything") == []

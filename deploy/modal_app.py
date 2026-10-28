@@ -30,6 +30,7 @@ GPU = os.environ.get("VERICHAT_GPU", "L40S")
 SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "300"))
 RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: the head's own
 RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per client per minute; 0 for load tests
+WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -55,4 +56,5 @@ def serve():
     subprocess.Popen(["python", "-m", "vt.verichat_server", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
                       "--detector", "/app/heads/detector.pt", "--moderation", "--rate-per-minute", RATE,
                       "--trust-proxy", "--deadline", "300", "--host", "0.0.0.0", "--port", str(PORT)]
-                     + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else []), env=env)
+                     + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
+                     + (["--wikipedia"] if WIKIPEDIA else []), env=env)
