@@ -1,0 +1,21 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "n": 150,
+ "wrong": 111,
+ "k": 4,
+ "claim_auroc": 0.7452067452067452,
+ "claim_ci": [
+  0.64695371324898,
+  0.8296026796026795
+ ],
+ "disagreement_auroc": 0.6828366828366829,
+ "disagreement_ci": [
+  0.5870874060150376,
+  0.7770049364047625
+ ],
+ "rank_mean_auroc": 0.7565257565257565,
+ "triggered": {
+  "share_sampled": 0.493,
+  "auroc": 0.7732732732732732
+ }
+}

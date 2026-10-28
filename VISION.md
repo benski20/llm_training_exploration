@@ -1300,6 +1300,13 @@ on the 32B's own factual replies:
   to 0.783 and NQ from 0.566 to 0.570. That is within noise, so serving does not use it.
 - Errors the 32B is confident about are just as invisible to a smaller reader.
 
+**Sampling agreement adds little** (`experiments/consistency.py`, Qwen2.5-0.5B, 150 TriviaQA, 4 samples).
+The claim score gives AUROC 0.745. Disagreement among the samples gives 0.683. Their rank mean gives
+0.757, and 0.773 when sampling only for the middle half of claim scores. That is about +0.03, inside
+the confidence interval (claim 0.65-0.83). The 0.5B is wrong 74% of the time, unlike the 32B, so this
+does not settle it for the 32B. It is not used: it costs about K more generations per checked reply
+for no shown gain.
+
 **What this means.**
 - In open chat the system rarely underlines ordinary text (7% of fact-heavy replies, under 1% of
   sentences).
