@@ -880,6 +880,35 @@ Compared with 3B:
 - **Training size** (1,000 / 3,000 / 7,941 claims) gives 0.703 / 0.828 / 0.855, still rising.
 - **Reply level** (multi): 0.818.
 
+**Result, a reasoning model: DeepSeek-R1-Distill-Qwen-7B** (`results/kaggle/claims-r1-7b/claims/`;
+same Qwen2.5 architecture and size, trained to think in `<think>` before answering; claims are read
+from the final answer after `</think>`; 3,298 training claims, smaller sets to fit Kaggle's 12 h limit;
+8.8 h on 2x T4; best layer 19 of 28):
+
+| format | accuracy | probe | stack | claim token p | error in the most confident 25%: stack / token p |
+|---|---|---|---|---|---|
+| short answer | 32% | **0.748** (0.65-0.84) | 0.747 | 0.662 | 24% / 45% |
+| several answers in one reply | 30% | **0.712** (0.65-0.77) | 0.713 | 0.540 | 44% / 64% |
+| question after earlier turns | 29% | **0.703** (0.61-0.80) | 0.702 | 0.486 | 48% / 73% |
+| reasoning, then answer | 39% | **0.750** (0.65-0.84) | 0.750 | 0.526 | 26% / 63% |
+| GSM8K math | 89% | **0.909** (0.84-0.97) | 0.911 | 0.757 | 2% / 0% |
+| **all formats** | 42% | **0.811** (0.79-0.84) | 0.811 | 0.651 (0.62-0.69) | 11% / 38% |
+| NQ-open (unseen), all formats | 14% | **0.690** (0.63-0.74) | 0.690 | 0.521 (0.47-0.57) | 72% / 85% |
+
+Compared with Qwen2.5-7B-Instruct (same size):
+- **The internal signal carries over to a reasoning model, and the gap over output probability is
+  larger** (+0.16 here, +0.10 for Qwen). After thousands of thinking tokens, the probability of the
+  final answer token says little about whether it is right: 0.53 on reasoning prompts, 0.52 on NQ,
+  about chance. The hidden state still knows (0.75 / 0.69).
+- **The stack adds nothing here** (0.811 = probe): the output features are too weak to help.
+- **The distilled reasoner knows far fewer facts** (42% vs 62% right; 14% vs 31% on NQ) but is as good at
+  math (89% vs 88%). Its probe is best on math (0.91).
+- **Calibration is poor before recalibration** (ECE 0.19); `CorrectnessHead.calibrate` fixes this
+  with a few hundred labels, as on NQ.
+- **Leave-one-format-out:** 0.76 / 0.71 / 0.68 / 0.73 held out for short / multi / multi-turn /
+  reasoning; math again does not transfer (0.62).
+- **Training size** (1,000 / 3,000 / 3,298 claims): 0.819 / 0.823 / 0.822, already flat, unlike Qwen.
+
 **Float16 without NaNs.** In float16 the earlier Kaggle run produced garbage
 (0% accuracy, then a CUDA assert). The cause is not Qwen2.5's activations, which
 peak below 7,000. It is its raw attention logits: q.k reaches about 2.6e5 in

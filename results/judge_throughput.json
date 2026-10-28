@@ -1,0 +1,12 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "device": "cpu",
+ "threads": 4,
+ "n": 32,
+ "mean_tokens": 1395.5,
+ "one_at_a_time_per_s": 0.232,
+ "batched_2048_per_s": 0.242,
+ "batched_2048_max_logit_diff": 4.6253204345703125e-05,
+ "batched_8192_per_s": 0.209,
+ "batched_8192_max_logit_diff": 3.457069396972656e-05
+}
