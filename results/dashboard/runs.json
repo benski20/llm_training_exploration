@@ -465,19 +465,19 @@
 "total_steps": null,
 "progress": 1.0,
 "last_loss": null,
-"note": "trained and saved its head, then OOM in the test pass (provenance patterns; fixed); evaluation rerun from the head (09:23:34 UTC check)"
+"note": "trained and saved its head, then OOM in the test pass (fixed); evaluated from the head (detector-7b-eval) (09:23:34 UTC check)"
 },
 {
 "run": "kaggle-detector-7b-eval",
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): 7B detector evaluated from its saved head (test pass only)",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "10 sources, 4,127 test responses; provenance vs Lookback Lens on 300 document items; no LODO in this mode (10:57:51 UTC check)"
+"note": "10 sources, 4,127 test responses; provenance vs Lookback Lens on 300 document items; no LODO in this mode (11:28:05 UTC check)"
 },
 {
 "run": "kaggle-detector-14b",
@@ -489,7 +489,19 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (10:56:15 UTC check)"
+"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (11:32:32 UTC check)"
+},
+{
+"run": "kaggle-detector-adapt-3b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): few-shot adaptation of the 3B detector + GPU throughput",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "k = 0/25/50/100/200 labels per unseen HaluBench domain; judge and generation batching on a T4 (11:32:30 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
