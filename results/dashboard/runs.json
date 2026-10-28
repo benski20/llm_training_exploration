@@ -484,12 +484,12 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): general detector, Qwen2.5-14B reader (4-bit), 10 sources",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (12:45:07 UTC check)"
+"note": "reduced caps for the 12 h limit; scale point after 3B / 7B; no exact provenance (4-bit weights) (12:51:10 UTC check)"
 },
 {
 "run": "kaggle-detector-adapt-3b",
@@ -513,7 +513,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees (12:45:20 UTC check)"
+"note": "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees (13:18:38 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
