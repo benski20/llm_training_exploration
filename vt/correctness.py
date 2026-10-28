@@ -137,6 +137,16 @@ class Probe:
         return mu, sd, w.detach(), b.detach()
 
     def fit(self, X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), steps=300, seed=1):
+        try:
+            return self._fit_grid(X, y, grid, steps, seed)
+        except torch.OutOfMemoryError:                  # a GPU shared with the model: fall back to the CPU
+            if self.device == "cpu":
+                raise
+            torch.cuda.empty_cache()
+            self.device = "cpu"
+            return self._fit_grid(X, y, grid, steps, seed)
+
+    def _fit_grid(self, X, y, grid, steps, seed):
         X = torch.as_tensor(np.asarray(X), dtype=torch.float32, device=self.device)
         y = torch.as_tensor(np.asarray(y), dtype=torch.float32, device=self.device)
         idx = torch.as_tensor(np.random.default_rng(seed).permutation(len(y)), device=self.device)
@@ -152,9 +162,12 @@ class Probe:
         self.mu, self.sd, self.w, self.b = self._fit(X, y, self.l2, steps)
         return self
 
-    def logit(self, X):
-        X = torch.as_tensor(np.asarray(X), dtype=torch.float32, device=self.device)
-        return (((X - self.mu) / self.sd) @ self.w + self.b).cpu().numpy()
+    def logit(self, X, chunk=65536):
+        out = []
+        for i in range(0, max(len(X), 1), chunk):                # chunks: no full-size copy on the device
+            x = torch.as_tensor(np.asarray(X[i:i + chunk]), dtype=torch.float32, device=self.device)
+            out.append((((x - self.mu) / self.sd) @ self.w + self.b).cpu().numpy())
+        return np.concatenate(out) if out else np.zeros(0, np.float32)
 
     def state_dict(self):
         return {"mu": self.mu.cpu(), "sd": self.sd.cpu(), "w": self.w.cpu(), "b": self.b.cpu(), "l2": self.l2}

@@ -141,7 +141,13 @@ def main():
     RY, RS = np.array(RY), np.array(RS)
     TY, TS = np.array(TY), np.array(TS)
     TK = {L_: torch.cat(v).float().numpy() for L_, v in TK.items()}
-    pdev = "cuda" if cuda else "cpu"
+    if cuda:                                           # probes go to the GPU with the most free memory (the model
+        torch.cuda.empty_cache()                       # fills the others); Probe.fit falls back to the CPU on OOM
+        free = [torch.cuda.mem_get_info(i)[0] for i in range(torch.cuda.device_count())]
+        pdev = f"cuda:{int(np.argmax(free))}"
+        log(phase="probe_device", device=pdev, free_gb=[round(f / 2 ** 30, 1) for f in free])
+    else:
+        pdev = "cpu"
     # 2. fit probes
     idx = rng.permutation(len(RY))
     a_, b_ = idx[: int(0.8 * len(idx))], idx[int(0.8 * len(idx)):]
