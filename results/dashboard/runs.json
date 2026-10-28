@@ -537,7 +537,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling (17:28:38 UTC check)"
+"note": "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling (17:46:47 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
