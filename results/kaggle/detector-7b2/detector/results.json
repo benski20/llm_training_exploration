@@ -1,0 +1,45 @@
+{
+ "config": {
+  "out": "/kaggle/working/detector",
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "quant": "none",
+  "train_caps": "ragtruth=3000,halueval_general=1500,halueval_qa=800,halueval_dialogue=800,halueval_summary=600,truthfulqa=600,halubench_drop=600,halubench_pubmed=600,halubench_finance=600,halubench_covid=600",
+  "test_caps": "ragtruth=1000,halueval_general=400,halueval_qa=300,halueval_dialogue=300,halueval_summary=200,truthfulqa=500,halubench_drop=200,halubench_pubmed=200,halubench_finance=200,halubench_covid=200",
+  "max_tokens": 2048,
+  "token_cap": 200000,
+  "neg_keep": 0.15,
+  "stack_frac": 0.15,
+  "provenance": 300,
+  "smoke": false
+ },
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "layers": [
+  11,
+  15,
+  19,
+  23
+ ],
+ "token_layers": [
+  15,
+  19
+ ],
+ "gpus": 2,
+ "complete": false,
+ "counts": {
+  "fit": 10622,
+  "stack": 1874,
+  "test": 4127
+ },
+ "response_probe_by_layer": {
+  "11": 0.7645914223233811,
+  "15": 0.8469228366135583,
+  "19": 0.8611701700361494,
+  "23": 0.8238559378765564
+ },
+ "response_layer": 19,
+ "token_probe_by_layer": {
+  "15": 0.8864352732795682,
+  "19": 0.9093973460868964
+ },
+ "token_layer": 19
+}
