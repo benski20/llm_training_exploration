@@ -1,0 +1,142 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "n": 300,
+ "accuracy": 0.25333333333333335,
+ "with_claim": 0.7733333333333333,
+ "curves": {
+  "answer_100pct": {
+   "probe": {
+    "abstain": 0.0,
+    "hallucination": 0.747,
+    "accuracy_answered": 0.253
+   },
+   "token_probability": {
+    "abstain": 0.0,
+    "hallucination": 0.747,
+    "accuracy_answered": 0.253
+   }
+  },
+  "answer_90pct": {
+   "probe": {
+    "abstain": 0.1,
+    "hallucination": 0.65,
+    "accuracy_answered": 0.278
+   },
+   "token_probability": {
+    "abstain": 0.1,
+    "hallucination": 0.647,
+    "accuracy_answered": 0.281
+   }
+  },
+  "answer_80pct": {
+   "probe": {
+    "abstain": 0.2,
+    "hallucination": 0.56,
+    "accuracy_answered": 0.3
+   },
+   "token_probability": {
+    "abstain": 0.2,
+    "hallucination": 0.553,
+    "accuracy_answered": 0.308
+   }
+  },
+  "answer_70pct": {
+   "probe": {
+    "abstain": 0.3,
+    "hallucination": 0.467,
+    "accuracy_answered": 0.333
+   },
+   "token_probability": {
+    "abstain": 0.3,
+    "hallucination": 0.463,
+    "accuracy_answered": 0.338
+   }
+  },
+  "answer_60pct": {
+   "probe": {
+    "abstain": 0.4,
+    "hallucination": 0.373,
+    "accuracy_answered": 0.378
+   },
+   "token_probability": {
+    "abstain": 0.4,
+    "hallucination": 0.397,
+    "accuracy_answered": 0.339
+   }
+  },
+  "answer_50pct": {
+   "probe": {
+    "abstain": 0.5,
+    "hallucination": 0.31,
+    "accuracy_answered": 0.38
+   },
+   "token_probability": {
+    "abstain": 0.5,
+    "hallucination": 0.32,
+    "accuracy_answered": 0.36
+   }
+  }
+ },
+ "examples": [
+  {
+   "q": "Which US Olympic swimmer is nicknamed the \u2018Baltimore Bullet\u2019?",
+   "reply": "Michael Phelps",
+   "right": 1,
+   "min_p": 0.066
+  },
+  {
+   "q": "Which is the only nation to have won at least one medal in every Summer Olympic Games?",
+   "reply": "Switzerland",
+   "right": 0,
+   "min_p": 0.1278
+  },
+  {
+   "q": "The medical condition aphakia affects which part of the body?",
+   "reply": "The medical condition aphakia affects the eye.",
+   "right": 1,
+   "min_p": 1.0
+  },
+  {
+   "q": "Politician Lev Davidovich Bronshtein was better known by what name?",
+   "reply": "Lev Davidovich Bronshtein was better known by the name Lev Bronshtein.",
+   "right": 1,
+   "min_p": 1.0
+  },
+  {
+   "q": "In which English cathedral is the tomb of King John?",
+   "reply": "The tomb of King John is in Westminster Abbey in London.",
+   "right": 0,
+   "min_p": 0.1516
+  },
+  {
+   "q": "Lupine relates to which animal?",
+   "reply": "Lupine relates to a type of grass.",
+   "right": 0,
+   "min_p": 1.0
+  },
+  {
+   "q": "Who composed the \u2018Haffner Serenade\u2019 (Serenade no.7) for the sister of his friend Sigmund Haffner, for her wedding festivities in 1776?",
+   "reply": "The composer who composed the 'Haffner Serenade' (Serenade no.7) for the sister of his friend Sigmund Haffner, for her wedding festivities in 1",
+   "right": 0,
+   "min_p": 1.0
+  },
+  {
+   "q": "The Riel is the currency of which Southeast Asian country?",
+   "reply": "The Riel is the currency of the Philippines.",
+   "right": 0,
+   "min_p": 0.5153
+  },
+  {
+   "q": "what is the 21st letter of the Greek alphabet?",
+   "reply": "The 21st letter of the Greek alphabet is \u03a9 (Omega).",
+   "right": 0,
+   "min_p": 0.4453
+  },
+  {
+   "q": "What was the name of the concert held at the Cleveland Arena, Ohio, on 21st March 1952, said to be the world\u2019s first major rock & roll concert?",
+   "reply": "The concert was called \"The First Concert of the Year\" and was held at the Cleveland Arena, Ohio, on 21st March 1952, said to be the world's",
+   "right": 0,
+   "min_p": 0.1367
+  }
+ ]
+}

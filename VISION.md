@@ -839,6 +839,21 @@ recomputes each attention pattern in float32 from the module's inputs. It
 matches eager exactly (difference 0.0), and in float16 the parts sum to the
 logit within 0.005 of 18.
 
+**Doubt-aware generation** (`vt/guided.py`, `experiments/doubt_aware_eval.py`). The probe reads
+the hidden state the model has already computed at each step, so checking a claim before it is
+written costs nothing. In stop mode a doubted claim is never stated. For example, at 0.5B the
+probe doubts "Jim Henson" for the Chipmunks (P = 0.16), and the reply stops instead.
+
+At Qwen2.5-0.5B on 300 new TriviaQA questions (25% right), it gives no gain over stopping on low
+token probability, the FLARE-style trigger. Hallucination at 90 / 70 / 50% answered is
+65 / 47 / 31% for the probe and 65 / 46 / 32% for token probability. Two reasons:
+- 23% of replies contain no capitalised or numeric claim ("Lupine relates to a type of grass"),
+  so the heuristic claim detector never fires on them;
+- the 0.5B probe is the weakest one; at 1.5B it beat token probability 0.83 to 0.72.
+
+Both point to the general detector below: it scores every token, with no claim heuristic, and
+uses bigger readers.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
