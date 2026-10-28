@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # VeriChat serving image: chat with every claim scored by the model's internals, sourced and cited,
 # plus /judge for answers from any model. CPU torch; on a GPU host use a CUDA base image instead.
-#   docker build -f Dockerfile.verichat -t verichat .
+#   docker build -f Dockerfile.verichat -t verichat .        (behind a proxy on localhost: --network host;
+#                                                            a TLS-inspecting proxy's CA: --secret id=pipca,src=ca.crt)
 #   docker run -p 8080:8080 -v $HOME/.cache/huggingface:/home/vt/.cache/huggingface verichat \
 #       --model Qwen/Qwen2.5-7B-Instruct --head heads/Qwen2.5-7B-Instruct_claims_head.pt \
 #       --detector heads/Qwen2.5-3B-Instruct_detector.pt [--corpus /docs]
@@ -17,9 +18,10 @@ COPY results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt \
      results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt ./heads/
 RUN pip install --no-cache-dir --no-deps . && useradd --create-home --uid 10001 vt
 USER vt
+ENV PORT=8080
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=600s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
-ENTRYPOINT ["vt", "verichat", "--host", "0.0.0.0", "--port", "8080"]
+  CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=2)"
+ENTRYPOINT ["sh", "-c", "exec vt verichat --host 0.0.0.0 --port \"$PORT\" \"$@\"", "vt"]
 CMD ["--model", "Qwen/Qwen2.5-7B-Instruct", "--head", "heads/Qwen2.5-7B-Instruct_claims_head.pt", \
      "--detector", "heads/Qwen2.5-3B-Instruct_detector.pt"]
