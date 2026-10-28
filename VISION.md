@@ -1076,6 +1076,29 @@ allows cheaply: add labelled examples from each domain (the reader stays frozen,
 in seconds). The 7B and 14B runs train on these four domains, so they will show how much in-domain
 data buys.
 
+**Few-shot adaptation recovers most of it** (`kaggle/detector/adapt_eval.py`, `Detector.adapt`, the 3B
+head adapted on k balanced labelled replies per unseen HaluBench domain; the same 200 test replies per
+domain at every k; `results/kaggle/detector-adapt-3b/adapt/results.json`):
+
+| domain | k = 0 | 25 | 50 | 100 | 200 | 7B trained on ~600 |
+|---|---|---|---|---|---|---|
+| DROP | 0.633 | 0.850 | 0.883 | 0.907 | **0.922** [0.884, 0.953] | 0.919 |
+| PubMedQA | 0.620 | 0.729 | 0.780 | 0.798 | **0.822** [0.762, 0.879] | 0.849 |
+| CovidQA | 0.623 | 0.623 | 0.623 | **0.710** | 0.686 | 0.705 |
+| FinanceBench | 0.545 | 0.545 | 0.585 | 0.591 | 0.565 | 0.622 |
+| mean | 0.605 | 0.686 | 0.718 | **0.752** | 0.749 | 0.774 |
+
+AUROC. 25 labelled replies take DROP from 0.63 to 0.85. 200 match the 7B head trained on 600 per
+domain. Where the unchanged prior is best on the inner split (CovidQA at k ≤ 50, FinanceBench at 25),
+adaptation keeps it, so it never makes things worse than zero-shot. FinanceBench stays near chance at
+every k, for this 3B reader and for the 7B trained on it: the signal is not in these hidden states
+for long financial tables, or not at 2,048 tokens. So the practical answer to "new domain" is 50-100
+labelled replies and `vt adapt`. The exception is table-heavy finance, which needs a different
+approach (a longer context, or table-aware retrieval and checking).
+
+The GPU throughput benchmark at the end of this run failed: the Kaggle bundle lacked
+`vt/verichat.py`, now added. It will be measured on the demo host instead.
+
 The first 7B run (18k training responses) failed after its 3-hour training pass: the token probe
 (200k tokens × 3,584 dims) was fitted on the GPU that also held the model, and ran out of memory. Probes
 now go to the GPU with the most free memory and fall back to the CPU. The rerun (`detector-7b2`) also
