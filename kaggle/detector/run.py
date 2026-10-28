@@ -59,9 +59,11 @@ def main():
     ap.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
     ap.add_argument("--quant", default="none", choices=["none", "8bit", "4bit"])
     ap.add_argument("--train-caps", default="ragtruth=6000,halueval_general=3000,halueval_qa=2000,"
-                                            "halueval_dialogue=2000,halueval_summary=1500,truthfulqa=1000")
+                                            "halueval_dialogue=2000,halueval_summary=1500,truthfulqa=1000,"
+                                            "halubench_drop=800,halubench_pubmed=800,halubench_finance=800,halubench_covid=800")
     ap.add_argument("--test-caps", default="ragtruth=2700,halueval_general=1000,halueval_qa=500,"
-                                           "halueval_dialogue=500,halueval_summary=400,truthfulqa=1000")
+                                           "halueval_dialogue=500,halueval_summary=400,truthfulqa=1000,"
+                                           "halubench_drop=200,halubench_pubmed=200,halubench_finance=200,halubench_covid=200")
     ap.add_argument("--max-tokens", type=int, default=2048)
     ap.add_argument("--token-cap", type=int, default=200000, help="training tokens kept per token layer")
     ap.add_argument("--neg-keep", type=float, default=0.15, help="share of non-hallucinated tokens kept for training")
@@ -71,8 +73,10 @@ def main():
     a = ap.parse_args()
     if a.smoke:
         a.model, a.train_caps, a.test_caps, a.provenance = ("Qwen/Qwen2.5-0.5B-Instruct",
-                                                            "ragtruth=24,halueval_general=24,halueval_qa=8,halueval_dialogue=8,halueval_summary=4,truthfulqa=10",
-                                                            "ragtruth=12,halueval_general=12,halueval_qa=4,halueval_dialogue=4,halueval_summary=3,truthfulqa=6", 3)
+                                                            "ragtruth=24,halueval_general=24,halueval_qa=8,halueval_dialogue=8,halueval_summary=4,truthfulqa=10,"
+                                                            "halubench_drop=10,halubench_pubmed=10",
+                                                            "ragtruth=12,halueval_general=12,halueval_qa=4,halueval_dialogue=4,halueval_summary=3,truthfulqa=6,"
+                                                            "halubench_drop=6,halubench_pubmed=6", 3)
     if a.quant != "none":
         a.provenance = 0                                    # exact provenance reads float weights
     caps = lambda s: {k: int(v) for k, v in (kv.split("=") for kv in s.split(","))}  # noqa: E731
@@ -223,7 +227,8 @@ def main():
         y = [r["label"] for r in rs]
         z = stacker.logit(np.array([feats(r) for r in rs]))
         d = {"n": len(rs), "positives": int(sum(y)),
-             "stack": {**report(z, y, prob=1 / (1 + np.exp(-z)), ci=True), "f1": f1_at(z, y, th)},
+             "stack": {**report(z, y, prob=1 / (1 + np.exp(-z)), ci=True), "f1": f1_at(z, y, th),
+                       "accuracy": float(np.mean((np.asarray(z) >= th) == np.asarray(y)))},   # as HaluBench reports
              "response_probe": report([r["resp"] for r in rs], y, ci=True),
              "token_max": report([r["tok_max"] for r in rs], y),
              "baseline_low_mean_logprob": report([-r["lp_mean"] for r in rs], y, ci=True),

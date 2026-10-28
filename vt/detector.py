@@ -13,6 +13,9 @@ for closed models too. Every dataset is loaded into one schema:
   halueval_dialogue    knowledge + dialogue; right vs hallucinated reply
   halueval_summary     document; right vs hallucinated summary
   truthfulqa           misconception questions; a correct vs an incorrect answer
+  halubench_*          HaluBench (Patronus AI) domains not covered above: drop (numerical reasoning over
+                       passages), pubmed (biomedical), finance (FinanceBench filings), covid (CovidQA);
+                       passage + question, a faithful or a hallucinated answer (response level)
 """
 import ast
 import json
@@ -102,7 +105,28 @@ def load_truthfulqa(split, n=None):
     return out
 
 
-SOURCES = ("ragtruth", "halueval_general", "halueval_qa", "halueval_dialogue", "halueval_summary", "truthfulqa")
+HALUBENCH = {"DROP": "halubench_drop", "pubmedQA": "halubench_pubmed", "FinanceBench": "halubench_finance",
+             "covidQA": "halubench_covid"}
+
+
+def load_halubench(split, caps):
+    """caps: {source name: max items}. HaluBench's HaluEval and RAGTruth parts are left out (covered above)."""
+    from datasets import load_dataset
+    d = load_dataset("PatronusAI/HaluBench", split="test")
+    out = []
+    for raw, src in HALUBENCH.items():
+        if not caps.get(src):
+            continue
+        rows = _split([x for x in d if x["source_ds"] == raw], split)[:caps[src]]
+        for x in rows:
+            user = f"Context: {x['passage']}\n\nQuestion: {x['question']}"
+            out.append(_item(src, raw, user, str(x["answer"]), x["passage"], label=int(x["label"] == "FAIL"),
+                             system=RAG_SYSTEM))
+    return out
+
+
+SOURCES = ("ragtruth", "halueval_general", "halueval_qa", "halueval_dialogue", "halueval_summary", "truthfulqa") + \
+    tuple(HALUBENCH.values())
 
 
 def load_all(split, caps):
@@ -116,6 +140,8 @@ def load_all(split, caps):
             out += load_halueval(sub, split, caps[src])
     if caps.get("truthfulqa"):
         out += load_truthfulqa(split, caps["truthfulqa"])
+    if any(caps.get(s) for s in HALUBENCH.values()):
+        out += load_halubench(split, caps)
     return out
 
 
