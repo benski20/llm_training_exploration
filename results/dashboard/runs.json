@@ -396,6 +396,42 @@
 "note": "failed after 12 min: out of GPU memory in float32 (12.4 GB of 14.6); fixed by float16 + sdpa (23:14:08 UTC check)"
 },
 {
+"run": "kaggle-claims-3b",
+"experiment": "kaggle",
+"title": "Kaggle (benski22): claim-level probe, any format, Qwen2.5-3B",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (00:40:17 UTC check)"
+},
+{
+"run": "kaggle-claims-7b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): claim-level probe, any format, Qwen2.5-7B on 2 GPUs",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "same pipeline at 7B; device_map across both T4s (00:40:32 UTC check)"
+},
+{
+"run": "kaggle-claims-r1-7b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): claim-level probe on a reasoning model (DeepSeek-R1-Distill-Qwen-7B)",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (00:41:30 UTC check)"
+},
+{
 "run": "kaggle-distill-train-add",
 "experiment": "kaggle",
 "title": "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
