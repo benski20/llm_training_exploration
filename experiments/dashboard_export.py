@@ -200,7 +200,10 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
             "sentence AUROC 0.90 RAGTruth, 0.85 math steps; on own chat replies no better than log-prob"),
            ("kaggle-chateval-32b", "Kaggle (bensliv): VeriChat 32B chat eval (false alarms, factual, thinking, speed)",
             "results/kaggle/chateval-32b.log", "results/kaggle/chateval-32b/chateval/results.json",
-            "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling"),
+            "sentence risk saturated (84% of everyday replies flagged); claim-position score AUROC 0.83 vs log-prob 0.73"),
+           ("kaggle-chateval-32t", "Kaggle (bensliv): 32B chat eval with per-token traces (choosing the serving score)",
+            "results/kaggle/chateval-32t.log", "results/kaggle/chateval-32t/chateval/results.json",
+            "45 everyday prompts + 100 TriviaQA; every token's risk, log-prob and claim scores saved"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]

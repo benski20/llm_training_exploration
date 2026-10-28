@@ -532,12 +532,24 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): VeriChat 32B chat eval (false alarms, factual, thinking, speed)",
 "model": "kaggle",
+"status": "done",
+"step": null,
+"total_steps": null,
+"progress": 1.0,
+"last_loss": null,
+"note": "sentence risk saturated (84% of everyday replies flagged); claim-position score AUROC 0.83 vs log-prob 0.73 (17:58:53 UTC check)"
+},
+{
+"run": "kaggle-chateval-32t",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): 32B chat eval with per-token traces (choosing the serving score)",
+"model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling (17:46:47 UTC check)"
+"note": "45 everyday prompts + 100 TriviaQA; every token's risk, log-prob and claim scores saved (18:04:34 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
