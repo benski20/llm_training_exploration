@@ -112,6 +112,7 @@ vt verichat --model Qwen/Qwen2.5-7B-Instruct --head results/kaggle/claims-7b/cla
 #   POST /judge {"messages": [...], "response": "an answer from any model", "documents": [...]}
 vt judge --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt \
     --question "Who designed the Eiffel Tower?" --answer "Thomas Edison, in 1920." --doc source.txt
+modal deploy deploy/modal_app.py                      # public demo on a Modal GPU (scales to zero; modal>=1.0)
 docker build -f Dockerfile.verichat -t verichat .     # CPU image, heads included; built and health-checked
 # public deployments: --rate-per-minute N (default 20 per client); API-only: VERICHAT_API_KEY=... (Bearer token)
 ```

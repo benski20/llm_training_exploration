@@ -181,6 +181,10 @@ def response_states(model, ids, r0, layers):
         o.logits[0, r0 - 1:-1].float().log_softmax(-1).gather(-1, torch.tensor(ids[r0:], device=o.logits.device)[:, None])[:, 0].cpu()
 
 
+def gpu_dtype():
+    return torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
+
+
 class Detector:
     """A trained detector (kaggle/detector/run.py's `<model>_detector.pt`) for live use: judge any response,
     from any model, given its conversation and optional documents.
@@ -208,7 +212,7 @@ class Detector:
         cuda = torch.cuda.is_available()
         tok = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa",
+            model_name, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
         det = cls(model, tok, torch.load(head_path, map_location="cpu", weights_only=True))
         det.model_name = model_name

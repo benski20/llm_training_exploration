@@ -32,6 +32,12 @@ SYSTEM = "You are a helpful assistant. Answer accurately and concisely."
 DOC_SYSTEM = "You are a helpful assistant. Answer using the provided documents."
 
 
+def gpu_dtype():
+    """bfloat16 where the GPU supports it (Ampere and later; safer range for Qwen3), else float16
+    (T4: needs sdpa attention, see VISION.md)."""
+    return torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
+
+
 def load_risk(path):
     """A kaggle/risk head: (risk probe, its layer, sentence threshold), or None for other head files."""
     h = torch.load(path, map_location="cpu", weights_only=True)
@@ -93,7 +99,7 @@ class VeriChat:
         cuda = torch.cuda.is_available()
         tok = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(                # float16 needs sdpa (eager overflows)
-            model_name, torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa",
+            model_name, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
         probe, layer = load_head(head_path)
         bot = cls(model, tok, probe, layer, threshold)
