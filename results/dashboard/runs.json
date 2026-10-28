@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (07:50:10 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (08:11:20 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
@@ -465,7 +465,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "10 sources incl. DROP / PubMedQA / FinanceBench / CovidQA; probes on the freest GPU; provenance vs Lookback Lens (07:49:49 UTC check)"
+"note": "10 sources incl. DROP / PubMedQA / FinanceBench / CovidQA; probes on the freest GPU; provenance vs Lookback Lens (08:10:59 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
