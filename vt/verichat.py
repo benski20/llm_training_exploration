@@ -112,8 +112,9 @@ def apply_sampling(bot, temperature=0.7, top_p=0.8, top_k=20, presence_penalty=1
 
 class VeriChat:
     def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3, moderator=None,
-                 thinking=False, think_budget=1024):
+                 thinking=False, think_budget=1024, max_prompt_tokens=8192):
         self.model, self.tok = model, tok
+        self.max_prompt_tokens = max_prompt_tokens     # longer prompts: documents cut, oldest turns dropped
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True,
                                        thinking=thinking, think_budget=think_budget)
         self.threshold = threshold
@@ -135,6 +136,16 @@ class VeriChat:
             bot.gen.risk_probe, bot.gen.risk_layer, bot.gen.risk_threshold = risk
         return bot
 
+    def _fit_documents(self, documents):
+        """Documents take at most half the prompt budget, shared equally; a longer one is cut (and marked)."""
+        if not documents or not self.max_prompt_tokens:
+            return documents
+        share, out = self.max_prompt_tokens // (2 * len(documents)), []
+        for d in documents:
+            ids = self.tok(d, add_special_tokens=False).input_ids
+            out.append(d if len(ids) <= share else self.tok.decode(ids[:share]).rstrip() + " [...]")
+        return out
+
     def _messages(self, messages, documents):
         msgs = [dict(m) for m in messages]
         if not msgs or msgs[0]["role"] != "system":
@@ -143,6 +154,11 @@ class VeriChat:
             block = "\n\n".join(f"[Document {i + 1}]\n{d}" for i, d in enumerate(documents))
             last = next(i for i in range(len(msgs) - 1, -1, -1) if msgs[i]["role"] == "user")
             msgs[last]["content"] = f"{block}\n\nQuestion: {msgs[last]['content']}"
+        if self.max_prompt_tokens:                              # a long chat: drop its oldest turns
+            while len(msgs) > 2 and len(self.tok(prompt_of(self.tok, msgs)).input_ids) > self.max_prompt_tokens:
+                del msgs[1]
+                while len(msgs) > 2 and msgs[1]["role"] != "user":
+                    del msgs[1]
         return msgs
 
     @torch.no_grad()
@@ -216,7 +232,8 @@ class VeriChat:
         [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?, "thinking"?}] -> one reply()
         result each. thinking (None: the bot's default) lets a reasoning model think first; its reasoning
         is returned apart from the reply and streamed to on_reasoning(i, delta)."""
-        reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
+        reqs = [{"messages": r["messages"], "documents": self._fit_documents(r.get("documents") or []),
+                 "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
                  "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"]),
                  **{k: r[k] for k in ("sampling", "think_sampling") if r.get(k) is not None}}

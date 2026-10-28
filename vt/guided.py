@@ -83,8 +83,25 @@ class DoubtAwareGenerator:
         return self.generate_batch([{"messages": messages, "max_new_tokens": max_new_tokens, "mode": mode,
                                      "context": context}])[0]
 
-    @torch.no_grad()
     def generate_batch(self, requests, on_text=None, on_reasoning=None):
+        """See _generate_batch. Out of GPU memory before anything was streamed, the batch is retried in
+        halves (outside the except block, so the failed attempt's tensors are freed first)."""
+        state = {}
+        try:
+            return self._generate_batch(requests, on_text, on_reasoning, state)
+        except torch.cuda.OutOfMemoryError:
+            if len(requests) == 1 or state.get("streamed"):
+                raise
+        torch.cuda.empty_cache()
+        h = len(requests) // 2
+
+        def shift(cb, k):
+            return None if cb is None else (lambda i, d: cb(i + k, d))
+        return self.generate_batch(requests[:h], shift(on_text, 0), shift(on_reasoning, 0)) + \
+            self.generate_batch(requests[h:], shift(on_text, h), shift(on_reasoning, h))
+
+    @torch.no_grad()
+    def _generate_batch(self, requests, on_text=None, on_reasoning=None, state=None):
         """Several replies at once: left-padded prompts, one shared KV cache, one forward pass per step for
         all of them. Every sequence feeds exactly one token per step: its next token, or a queued hedge
         marker, or (once finished) padding that nothing attends to.
@@ -122,7 +139,7 @@ class DoubtAwareGenerator:
                 hooks.append(blocks[L].register_forward_hook(
                     lambda m, a, o, L=L: last.__setitem__(L, (o[0] if isinstance(o, tuple) else o)[:, -1].detach())))
         try:
-            return self._loop(seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning)
+            return self._loop(seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning, state)
         finally:
             for hk in hooks:
                 hk.remove()
@@ -137,7 +154,7 @@ class DoubtAwareGenerator:
                 {"num_logits_to_keep": 1} if "num_logits_to_keep" in ps else {}
         return self._lk
 
-    def _loop(self, seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning=None):
+    def _loop(self, seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last, on_reasoning=None, state=None):
         while True:
             o = self.model(input_ids=cur, attention_mask=mask, position_ids=pos, past_key_values=past,
                            use_cache=True, output_hidden_states=need_all, **self._last_logits_only())
@@ -162,6 +179,8 @@ class DoubtAwareGenerator:
             if on_text is not None or on_reasoning is not None:
                 for b, sq in enumerate(seqs):
                     sq.stream(b, on_text, final=False, on_reasoning=on_reasoning)
+                if state is not None and any(sq.emitted or sq.emitted_reasoning for sq in seqs):
+                    state["streamed"] = True
             if all(t is None for t in nxt):
                 break
             live = torch.tensor([[t is not None] for t in nxt], dtype=torch.long, device=dev)

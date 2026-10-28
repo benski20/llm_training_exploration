@@ -260,3 +260,52 @@ def test_server_validates_sampling_overrides():
         assert a["text"] == post({"messages": msgs, "mode": "flag", "temperature": 1.0, "seed": 5})["text"]
     finally:
         srv.shutdown()
+
+
+def test_long_chats_and_documents_fit_the_prompt_budget():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, max_prompt_tokens=300)
+    from vt.claims import prompt_of
+    chat = []
+    for k in range(12):
+        chat += [{"role": "user", "content": f"Question {k}: tell me about topic {k} " * 3},
+                 {"role": "assistant", "content": f"Answer {k} about topic {k}. " * 4}]
+    chat.append({"role": "user", "content": "And the last question?"})
+    msgs = bot._messages(chat, [])
+    assert len(tok(prompt_of(tok, msgs)).input_ids) <= 300
+    assert msgs[0]["role"] == "system" and msgs[1]["role"] == "user" and msgs[-1] == chat[-1]
+    assert len(msgs) < len(chat)                                    # the oldest turns went
+    docs = bot._fit_documents(["word " * 2000, "short doc"])
+    assert docs[1] == "short doc" and docs[0].endswith("[...]")
+    assert len(tok(docs[0], add_special_tokens=False).input_ids) <= 300 // 4 + 4
+    out = bot.reply(chat, documents=["word " * 2000], mode="flag", max_new_tokens=8)
+    assert isinstance(out["text"], str)
+
+
+def test_out_of_memory_batches_are_retried_in_halves():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    from vt.guided import DoubtAwareGenerator
+    g = DoubtAwareGenerator(m, tok, p, layer=1)
+    reqs = [{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8, "mode": "flag"}
+            for q in ("Hi", "Who wrote Hamlet?", "Name a colour.")]
+    want = [g.generate_batch([r])[0]["text"] for r in reqs]
+    real, sizes = g._generate_batch, []
+
+    def tight(requests, *a):                                        # a GPU that fits one sequence
+        sizes.append(len(requests))
+        if len(requests) > 1:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory")
+        return real(requests, *a)
+    g._generate_batch = tight
+    got = {}
+    rs = g.generate_batch(reqs, on_text=lambda i, d: got.__setitem__(i, got.get(i, "") + d))
+    assert [r["text"] for r in rs] == want and sizes[0] == 3 and sorted(sizes)[:3] == [1, 1, 1]
+    assert all(got.get(i, "").strip() == want[i] for i in range(3))

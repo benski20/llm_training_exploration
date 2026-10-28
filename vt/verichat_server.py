@@ -32,7 +32,7 @@ import time
 
 from .serve import HardenedHandler, bounded_server
 
-MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS, MAX_BATCH = 16, 4000, 4, 12000, 16
+MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS, MAX_BATCH = 48, 4000, 4, 12000, 16   # the bot fits long chats
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -106,7 +106,7 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
  const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div><div class="meta"></div>';log.appendChild(card);
  const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
  try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({messages:msgs,documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked})});
+  body:JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked})});
   if(!res.ok){const r=await res.json();card.innerHTML=esc('Error: '+(r.error||res.status))}
   else{const rd=res.body.getReader(),dec=new TextDecoder();let buf='',r=null;
    while(true){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
@@ -266,7 +266,7 @@ class RateLimiter:
             return True
 
 
-def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0, detector=None,
+def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120.0, detector=None,
                 api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16):
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
