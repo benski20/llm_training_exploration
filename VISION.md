@@ -1091,6 +1091,37 @@ test pass. Its inner held-out split gave response-probe AUROC 0.861 (layer 19) a
 `run.py --head` now evaluates a saved head without redoing the training pass (the bundle embeds the
 head), so the 7B evaluation costs about an hour of GPU, not four.
 
+**Result, 7B reader** (`results/kaggle/detector-7b-eval/`; the head trained on 10,622 responses from
+10 sources, evaluated on 4,127 test responses, 1 h 51 min; no leave-one-source-out in this mode):
+
+| test source (n) | 7B stack AUROC [95% CI] | 7B F1 / accuracy | 3B stack (6 sources only) |
+|---|---|---|---|
+| RAGTruth (1,000) | 0.858 [0.835, 0.881] | 0.70 / 75% | 0.864 |
+| HaluEval general (400) | 0.654 | 0.34 / 75% | 0.651 |
+| HaluEval QA / dialogue / summary | 0.984 / 0.924 / 0.978 | | 0.992 / 0.929 / 0.987 |
+| TruthfulQA (327) | 0.887 | 0.80 / 79% | 0.848 |
+| HaluBench DROP (200), now in training | **0.919** [0.878, 0.954] | 0.82 / 83% | 0.69 zero-shot |
+| HaluBench PubMedQA (200) | **0.849** [0.796, 0.900] | 0.79 / 77% | 0.71 zero-shot |
+| HaluBench CovidQA (200) | 0.705 [0.627, 0.771] | 0.61 / 61% | 0.63 zero-shot |
+| HaluBench FinanceBench (200) | 0.622 [0.543, 0.695] | 0.63 / 58% | 0.44 zero-shot |
+| all 10 (4,127) | 0.891 [0.880, 0.900] | 0.78 / 80% | - |
+
+Token level: RAGTruth 0.835 (low log-prob 0.508); all sources 0.869.
+
+What this shows:
+- **7B is no better than 3B** on the six shared sources (differences within ±0.01 except TruthfulQA,
+  +0.04). For judging text, a bigger reader buys little; the 3B reader is half the cost.
+- **In-domain data is what generalises.** With about 600 training replies per domain, DROP goes from
+  0.69 zero-shot to 0.92 and PubMedQA from 0.71 to 0.85. FinanceBench (0.62) and CovidQA (0.71) stay
+  weak even with training data. These are long passages with tables and numbers; the reader at
+  2,048 tokens also truncates some FinanceBench passages.
+- **Exact provenance is not a better hallucination detector than attention.** On the same 43,944
+  RAGTruth tokens, a low document share gets AUROC 0.759 [0.750, 0.769] and the Lookback Lens attention
+  ratio 0.751 [0.738, 0.763], a tie. Per response (10th percentile over the reply), Lookback Lens is
+  better: 0.665 against 0.596. The trained token probe beats both on the same tokens (0.847). So
+  provenance's value is explanation (which sentence a claim came from, exactly) and citation, not
+  detection; detection should use the probes.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
