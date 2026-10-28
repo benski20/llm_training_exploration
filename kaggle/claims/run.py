@@ -35,6 +35,18 @@ from vt.claims import FORMATS, OUTPUT_KEYS, claim_features, label_claims, make_i
 from vt.correctness import Probe, auroc, generate, report  # noqa: E402
 
 MAX_NEW = {"short": 32, "multiturn": 32, "multi": 96, "reasoning": 320, "math": 400}
+MAX_NEW_THINKING = {"short": 768, "multiturn": 768, "multi": 1024, "reasoning": 1024, "math": 1536}
+
+
+def after_thinking(tok, ids):
+    """Index of the first token after a reasoning model's </think>; None if it never stopped thinking
+    within budget (no final answer, so no claim). The R1 chat template opens <think> in the prompt."""
+    text = ""
+    for j, t in enumerate(ids):
+        text += tok.decode([t])
+        if "</think>" in text[-12:]:
+            return j + 1
+    return None
 
 
 def log(**kw):
@@ -99,8 +111,12 @@ def run_split(model, tok, items, layers, a):
         if not its:
             continue
         prompts = [prompt_of(tok, adapt(it["messages"], a.no_system)) for it in its]
-        reps = generate(model, tok, prompts, max_new_tokens=int(MAX_NEW[fmt] * a.max_new_scale), batch=a.gen_batch)
-        labs = [label_claims(tok, it, r) for it, r in zip(its, reps)]
+        budget = (MAX_NEW_THINKING if a.thinking else MAX_NEW)[fmt]
+        reps = generate(model, tok, prompts, max_new_tokens=int(budget * a.max_new_scale), batch=a.gen_batch)
+        labs = []
+        for it, r in zip(its, reps):                       # claims come from the final answer, not the thinking
+            k = after_thinking(tok, r) if a.thinking else 0
+            labs.append([] if k is None else [(j + k, y) for j, y in label_claims(tok, it, r[k:])])
         feats = claim_features(model, tok, [tok(p).input_ids for p in prompts], reps,
                                [[j for j, _ in lab] for lab in labs], layers, batch=a.feat_batch)
         for n, (it, r, lab, fs) in enumerate(zip(its, reps, labs, feats)):
@@ -231,7 +247,8 @@ def main():
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--attn", default="sdpa", help="eager attention overflows in float16 on Qwen2.5")
     ap.add_argument("--no-system", action="store_true", help="fold the system prompt into the user turn (R1 distills)")
-    ap.add_argument("--max-new-scale", type=float, default=1.0, help="reasoning models think at length: e.g. 6")
+    ap.add_argument("--max-new-scale", type=float, default=1.0)
+    ap.add_argument("--thinking", action="store_true", help="a reasoning model: longer budgets, claims after </think>")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
