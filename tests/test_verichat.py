@@ -191,6 +191,11 @@ def test_risk_head_file_drives_claims_and_sentences(tmp_path):
     probe, layer = load_head(str(path))
     risk, rl, th = load_risk(str(path))
     assert layer == 1 and rl == 0 and th == 0.4
+    torch.save({"model": "m", "risk_layer": 0, "risk_probe": p.state_dict(), "claim_layer": 0, "claim_probe": None},
+               tmp_path / "no_claims.pt")
+    neg, nl = load_head(str(tmp_path / "no_claims.pt"))       # falls back to 1 - risk
+    x = np.random.default_rng(1).normal(size=(3, 32)).astype(np.float32)
+    assert nl == 0 and np.allclose(neg.logit(x), -p.logit(x))
     tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
     torch.manual_seed(0)
     m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,

@@ -15,6 +15,8 @@ Every claim is returned with its P(correct), whatever the mode.
     g = DoubtAwareGenerator(model, tok, probe, layer=23, threshold=0.4)
     out = g.generate([{"role": "user", "content": "Who was the man behind The Chipmunks?"}])
 """
+import re
+
 import numpy as np
 import torch
 
@@ -24,6 +26,7 @@ from vt.correctness import SKIP, norm
 STOP_NOTE = "I'm not sure about this, so I won't guess."
 OPENERS = "\"'“”‘’*#([«"
 HEDGE = " [unsure:]"
+LIST_MARK = re.compile(r"(\d+|[a-zA-Z])[.)]")
 
 
 class DoubtAwareGenerator:
@@ -129,7 +132,9 @@ class _Seq:
         self.risk[j] = self.g.p_risk(h)
         piece = self.g.tok.decode(self.out[j:j + 1])
         if piece.rstrip(" \"'”’)").endswith((".", "!", "?")) or "\n" in piece:
-            self._close_sentence(j + 1)
+            so_far = self.g.tok.decode(self.out[self.sent_start:j + 1]).strip()
+            if not LIST_MARK.fullmatch(so_far):                 # "1." opening a list item is not a sentence
+                self._close_sentence(j + 1)
 
     def _close_sentence(self, end):
         if end <= self.sent_start:
@@ -211,6 +216,8 @@ class _Seq:
             a = len(tok.decode(out[:j], skip_special_tokens=True)) - lead
             a += len(tok.decode(out[j:k])) - len(tok.decode(out[j:k]).lstrip())
             c["start"], c["end"] = max(0, a), max(0, a) + len(c["text"])
+        claims = [c for c in claims if not (c["text"].isdigit() and text[c["end"]:c["end"] + 1] in ".)"   # list numbers
+                                            and (c["start"] == 0 or text[c["start"] - 1] == "\n"))]
         g = self.g
         fs = None if first is None else ((first["p_correct"] + first["token_p"]) / 2 if g.combine else first["p_correct"])
         if not claims and fs is not None and fs < g.threshold and self.mode == "stop" and out:

@@ -46,10 +46,23 @@ def load_risk(path):
     return Probe.from_state(h["risk_probe"]), int(h["risk_layer"]), float(h.get("risk_threshold", 0.5))
 
 
+class _Negated:
+    """P(correct) from a risk probe when a head has no claim probe: logit -> -logit."""
+
+    def __init__(self, probe):
+        self.probe = probe
+
+    def logit(self, X):
+        return -self.probe.logit(X)
+
+
 def load_head(path):
     h = torch.load(path, map_location="cpu", weights_only=True)
     if "risk_probe" in h:                                      # kaggle/risk head: its claim probe
-        return Probe.from_state(h["claim_probe"]), int(h["claim_layer"])
+        if h.get("claim_probe") is not None:
+            return Probe.from_state(h["claim_probe"]), int(h["claim_layer"])
+        print("risk head has no claim probe: claims scored as 1 - token risk", flush=True)
+        return _Negated(Probe.from_state(h["risk_probe"])), int(h["risk_layer"])
     if "probe" in h and "layer" in h:                         # claim-level head
         return Probe.from_state(h["probe"]), int(h["layer"])
     v = h.get("probe+output") or next(iter(h.values()))       # correctness head: any variant's probe
