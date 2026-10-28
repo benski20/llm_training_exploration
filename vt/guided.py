@@ -89,12 +89,42 @@ class DoubtAwareGenerator:
         ids, mask = ids.to(dev), mask.to(dev)
         pos = (mask.cumsum(-1) - 1).clamp(min=0)
         past, cur = None, ids
+        # keep only the last position of the probed layers (all layers over a long prompt is gigabytes);
+        # the last block's output is normed in hidden_states, so that case reads them all
+        blocks = self.model.model.layers
+        wanted = {self.layer} | ({self.risk_layer} if self.risk_probe is not None else set())
+        need_all = any(L >= len(blocks) - 1 for L in wanted)
+        last, hooks = {}, []
+        if not need_all:
+            for L in wanted:
+                hooks.append(blocks[L].register_forward_hook(
+                    lambda m, a, o, L=L: last.__setitem__(L, (o[0] if isinstance(o, tuple) else o)[:, -1].detach())))
+        try:
+            return self._loop(seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last)
+        finally:
+            for hk in hooks:
+                hk.remove()
+
+    def _last_logits_only(self):
+        """Ask the model for the last position's logits only (the prompt's full-vocabulary logits are large);
+        the argument is named differently across transformers versions."""
+        if not hasattr(self, "_lk"):
+            import inspect
+            ps = inspect.signature(self.model.forward).parameters
+            self._lk = {"logits_to_keep": 1} if "logits_to_keep" in ps else \
+                {"num_logits_to_keep": 1} if "num_logits_to_keep" in ps else {}
+        return self._lk
+
+    def _loop(self, seqs, ids, mask, pos, past, cur, pad, dev, on_text, need_all, last):
         while True:
             o = self.model(input_ids=cur, attention_mask=mask, position_ids=pos, past_key_values=past,
-                           use_cache=True, output_hidden_states=True)
+                           use_cache=True, output_hidden_states=need_all, **self._last_logits_only())
             past = o.past_key_values
-            h = o.hidden_states[self.layer + 1][:, -1]
-            hr = o.hidden_states[self.risk_layer + 1][:, -1] if self.risk_probe is not None else None
+            if need_all:
+                h = o.hidden_states[self.layer + 1][:, -1]
+                hr = o.hidden_states[self.risk_layer + 1][:, -1] if self.risk_probe is not None else None
+            else:
+                h, hr = last[self.layer], last.get(self.risk_layer)
             nxt = []
             for b, sq in enumerate(seqs):
                 if hr is not None and not sq.closed:            # the state of the token just fed: its risk
