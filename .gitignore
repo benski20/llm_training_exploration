@@ -17,4 +17,5 @@ results/dashboard/exported_at.json
 results/recalibrate_shift_rows.json
 space/vt/
 space/heads/
-results/kaggle/*/bundle/        # kernels' copies of their own inputs (committed elsewhere)
+# Kaggle kernels' copies of their own inputs (committed elsewhere)
+results/kaggle/*/bundle/
