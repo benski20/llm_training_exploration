@@ -55,8 +55,10 @@ border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}details{
 border-radius:8px;padding:8px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.5}select{font:inherit;padding:6px;border-radius:6px}
 </style></head><body><main>
 <h1>VeriChat</h1>
-<p class="sub">Every name, number and date in a reply is scored by the model's own internals. Green: likely right.
-Amber: uncertain. Red: doubtful. With documents, each claim shows whether it came from them (with the sentence) or from memory.</p>
+<p class="sub">Every reply is checked by the model's own internals as it is written. A sentence the model doubts is
+underlined in red (hover for its risk). Names, numbers and dates are coloured: green likely right, amber uncertain, red
+doubtful. With documents, each claim shows whether it came from them (with the sentence) or from memory. The scores rank
+how likely the model is to be wrong; they do not prove anything.</p>
 <div id="log"></div>
 <details><summary>Documents (optional)</summary><textarea id="docs" rows="5" placeholder="Paste source text. Separate documents with a blank line containing ---"></textarea></details>
 <textarea id="msg" rows="3" placeholder="Ask anything"></textarea>
