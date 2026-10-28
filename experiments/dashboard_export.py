@@ -197,7 +197,10 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
             "FAILED: OOM in the hidden-state pass after 73 min of generation (fixed)"),
            ("kaggle-risk-32b2", "Kaggle (bensliv): Qwen3-32B (4-bit) learned risk head, rerun with the memory fixes",
             "results/kaggle/risk-32b2.log", "results/kaggle/risk-32b2/risk/results.json",
-            "2k-token batches, chunked log-probs, generated data saved before the forward pass"),
+            "sentence AUROC 0.90 RAGTruth, 0.85 math steps; on own chat replies no better than log-prob"),
+           ("kaggle-chateval-32b", "Kaggle (bensliv): VeriChat 32B chat eval (false alarms, factual, thinking, speed)",
+            "results/kaggle/chateval-32b.log", "results/kaggle/chateval-32b/chateval/results.json",
+            "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]

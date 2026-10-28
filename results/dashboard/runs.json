@@ -520,12 +520,24 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): Qwen3-32B (4-bit) learned risk head, rerun with the memory fixes",
 "model": "kaggle",
+"status": "done",
+"step": null,
+"total_steps": null,
+"progress": 1.0,
+"last_loss": null,
+"note": "sentence AUROC 0.90 RAGTruth, 0.85 math steps; on own chat replies no better than log-prob (17:03:10 UTC check)"
+},
+{
+"run": "kaggle-chateval-32b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): VeriChat 32B chat eval (false alarms, factual, thinking, speed)",
+"model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "2k-token batches, chunked log-probs, generated data saved before the forward pass (16:51:04 UTC check)"
+"note": "everyday prompts, 200 TriviaQA chat questions, 48 with thinking; risk vs log-prob; served sampling (17:10:30 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
