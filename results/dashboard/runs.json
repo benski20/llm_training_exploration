@@ -508,12 +508,24 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): Qwen3-32B (4-bit) learned risk head + claim probe",
 "model": "kaggle",
+"status": "done",
+"step": null,
+"total_steps": null,
+"progress": 1.0,
+"last_loss": null,
+"note": "FAILED: OOM in the hidden-state pass after 73 min of generation (fixed) (14:19:10 UTC check)"
+},
+{
+"run": "kaggle-risk-32b2",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): Qwen3-32B (4-bit) learned risk head, rerun with the memory fixes",
+"model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees (13:57:58 UTC check)"
+"note": "2k-token batches, chunked log-probs, generated data saved before the forward pass (14:25:55 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
