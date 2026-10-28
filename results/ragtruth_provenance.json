@@ -1,0 +1,21 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "responses": 40,
+ "tokens": 4845,
+ "hallucinated_tokens": 267,
+ "hallucinated_responses": 6,
+ "token_auroc": {
+  "doc_share": 0.7637062453060803,
+  "bias_share": 0.5065424444869863,
+  "answer_share": 0.6322012294592441,
+  "logit": 0.631115185310629
+ },
+ "response_auroc": {
+  "worst_token_low_doc_share": 0.7696078431372549,
+  "low_mean_doc_share": 0.8774509803921569
+ },
+ "mean_doc_share": {
+  "hallucinated": 0.019958752979745056,
+  "supported": 0.067337697171876
+ }
+}
