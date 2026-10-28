@@ -98,7 +98,14 @@ class DoubtAwareGenerator:
         for c in claims:                                            # the claim's word and its span in `text`
             j = c["token_index"]
             k = j + 1
-            while k < len(out) and not tok.decode(out[k:k + 1])[:1].isspace() and tok.decode(out[k:k + 1]) not in (",", ".", "\n"):
+            while k < len(out) and not tok.decode(out[k:k + 1])[:1].isspace():
+                piece = tok.decode(out[k:k + 1])
+                if piece in (",", ".") and tok.decode(out[k - 1:k])[-1:].isdigit() and \
+                        tok.decode(out[k + 1:k + 2])[:1].isdigit():
+                    k += 1                                          # "1,063", "3.5": one number
+                    continue
+                if piece in (",", ".", "\n"):
+                    break
                 k += 1
             c["text"] = tok.decode(out[j:k]).strip() if j < len(out) else ""
             a = len(tok.decode(out[:j], skip_special_tokens=True)) - lead
