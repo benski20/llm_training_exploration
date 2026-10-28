@@ -854,6 +854,22 @@ token probability, the FLARE-style trigger. Hallucination at 90 / 70 / 50% answe
 Both point to the general detector below: it scores every token, with no claim heuristic, and
 uses bigger readers.
 
+**Exact provenance on RAGTruth: first sanity check** (`experiments/ragtruth_provenance.py`, 0.5B
+reader, 40 test responses, 4,845 tokens, 267 inside human-labelled hallucinations, nothing trained).
+Each response token's logit was split exactly into document / instruction / response-so-far / bias
+(`vt.qwen_glassbox.explain_all`, one pass). Hallucinated tokens draw 2.0% of their logit from the
+document, against 6.7% for supported tokens.
+
+| signal | AUROC |
+|---|---|
+| low document share, per token | **0.76** |
+| the reader's own logit for the token | 0.63 |
+| low mean document share, per response (only 6 hallucinated responses) | 0.88 |
+
+This is a training-free signal from the smallest reader, and it is promising. The sample is too small
+to trust the response-level number. The real test is the 7B detector run (2,700 RAGTruth test
+responses, against the Lookback Lens attention ratio on the same tokens).
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
