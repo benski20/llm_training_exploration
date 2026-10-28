@@ -150,6 +150,11 @@ def main():
         f["sweep"] = {f"{t:.2f}": {"wrong_flagged": round(float((rr[yy == 1] >= t).mean()), 3),
                                    "right_flagged": round(float((rr[yy == 0] >= t).mean()), 3)}
                       for t in np.quantile(rr, [0.5, 0.7, 0.8, 0.9])}
+        er = np.array([r.get("max_risk") or 0.0 for r in outs[:len(ev)]])     # choosing a serving threshold
+        f["threshold_grid"] = {f"{t:.2f}": {"everyday_flagged": round(float((er >= t).mean()), 3),
+                                            "wrong_flagged": round(float((rr[yy == 1] >= t).mean()), 3),
+                                            "right_flagged": round(float((rr[yy == 0] >= t).mean()), 3)}
+                               for t in np.arange(0.2, 0.96, 0.05)}
     res["factual"] = f
     res["examples"] = [{"prompt": rq["messages"][0]["content"], "reply": r["text"][:400],
                         "doubted": [s["text"] for s in r.get("sentences", []) if s["doubted"]]}

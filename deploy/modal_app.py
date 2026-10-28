@@ -14,6 +14,8 @@ Choose the model with environment variables at deploy time:
     VERICHAT_MODEL  unsloth/Qwen3-32B-bnb-4bit (default; the head was trained on this checkpoint)
     VERICHAT_HEAD   results/kaggle/risk-32b/risk/Qwen3-32B-bnb-4bit_risk_head.pt
     VERICHAT_GPU    L40S (default, 48 GB: the 4-bit 32B model, the 3B detector and the KV cache fit)
+    VERICHAT_RISK_THRESHOLD  sentence risk that counts as doubtful (default: the head's, chosen for F1;
+                    set it from kaggle/chateval's sweep to trade false alarms on everyday chat for recall)
 """
 import os
 import subprocess
@@ -25,6 +27,7 @@ HEAD = os.environ.get("VERICHAT_HEAD", "results/kaggle/risk-32b/risk/Qwen3-32B-b
 DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
 GPU = os.environ.get("VERICHAT_GPU", "L40S")
 SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "300"))
+RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: the head's own
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -48,4 +51,5 @@ def serve():
     env = dict(os.environ, PYTHONPATH="/app")
     subprocess.Popen(["python", "-m", "vt.verichat_server", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
                       "--detector", "/app/heads/detector.pt", "--moderation", "--rate-per-minute", "10",
-                      "--trust-proxy", "--deadline", "300", "--host", "0.0.0.0", "--port", str(PORT)], env=env)
+                      "--trust-proxy", "--deadline", "300", "--host", "0.0.0.0", "--port", str(PORT)]
+                     + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else []), env=env)

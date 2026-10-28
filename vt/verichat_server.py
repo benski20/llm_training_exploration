@@ -318,6 +318,7 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 return
             if self.path == "/health":
                 return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
+                                            "risk_threshold": bot.gen.risk_threshold if bot.gen.risk_probe is not None else None,
                                             "detector": detector is not None, "thinking": bot.gen.thinking,
                                             "thinking_available": bot.gen.think_open is not None})
             self.send_json(404, {"error": "not found"})
@@ -407,6 +408,8 @@ def main(argv=None):
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--threshold", type=float, default=0.45)
+    ap.add_argument("--risk-threshold", type=float, help="sentence risk above which a sentence is doubted "
+                                                         "(default: the risk head's own, chosen for F1)")
     ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")
     ap.add_argument("--retrieve-below", type=float, default=0.3)
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
@@ -427,6 +430,8 @@ def main(argv=None):
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
     bot.gen.thinking, bot.gen.think_budget = a.thinking, a.think_budget
+    if a.risk_threshold is not None:
+        bot.gen.risk_threshold = a.risk_threshold
     from .verichat import apply_sampling
     apply_sampling(bot, a.temperature, a.top_p, a.top_k, a.presence_penalty)
     if a.moderation:
