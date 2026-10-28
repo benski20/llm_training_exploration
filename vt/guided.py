@@ -27,12 +27,23 @@ HEDGE = " [unsure:]"
 
 
 class DoubtAwareGenerator:
-    def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0), combine=True):
+    """risk_probe / risk_layer (optional): a token-level hallucination probe read at each written token's
+    own position (vt.detector's token probe, or kaggle/risk). Every token then gets P(hallucinated), with
+    no claim heuristic; a sentence's risk is its riskiest content token, and in stop mode a sentence
+    above risk_threshold is removed as soon as it is complete and the reply ends there."""
+
+    def __init__(self, model, tok, probe, layer, threshold=0.5, calib=(1.0, 0.0), combine=True,
+                 risk_probe=None, risk_layer=None, risk_threshold=0.5):
         self.model, self.tok, self.probe, self.layer = model, tok, probe, layer
+        self.risk_probe, self.risk_layer, self.risk_threshold = risk_probe, risk_layer, risk_threshold
         self.threshold, self.calib = threshold, calib
         self.combine = combine          # judge by the mean of the probe's P(correct) and the token's probability
         self.stop_ids = {i for i in (tok.eos_token_id, tok.pad_token_id, tok.convert_tokens_to_ids("<|endoftext|>"),
                                      tok.convert_tokens_to_ids("<|im_end|>")) if isinstance(i, int) and i >= 0}
+
+    def p_risk(self, h):
+        z = float(self.risk_probe.logit(h.float().reshape(1, -1).cpu().numpy())[0])
+        return float(1 / (1 + np.exp(-z)))
 
     def p_correct(self, h):
         z = float(self.probe.logit(h.float().reshape(1, -1).cpu().numpy())[0])
@@ -76,11 +87,19 @@ class DoubtAwareGenerator:
                            use_cache=True, output_hidden_states=True)
             past = o.past_key_values
             h = o.hidden_states[self.layer + 1][:, -1]
+            hr = o.hidden_states[self.risk_layer + 1][:, -1] if self.risk_probe is not None else None
             nxt = []
             for b, sq in enumerate(seqs):
+                if hr is not None and not sq.closed:            # the state of the token just fed: its risk
+                    sq.observe(hr[b])
                 if not sq.done and not sq.feed:                 # a decision point for this sequence
                     sq.decide(o.logits[b, -1], h[b])
-                nxt.append(sq.feed.pop(0) if not sq.done and sq.feed else None)
+                if not sq.done and sq.feed:
+                    t, sq.last_fed = sq.feed.pop(0)
+                    nxt.append(t)
+                else:
+                    sq.closed = sq.done                         # nothing more to observe once it stops feeding
+                    nxt.append(None)
             if all(t is None for t in nxt):
                 break
             live = torch.tensor([[t is not None] for t in nxt], dtype=torch.long, device=dev)
@@ -98,8 +117,36 @@ class _Seq:
         if context is None:
             context = " ".join(m["content"] for m in messages if m["role"] != "system")
         self.context_words = set(norm(context).split())
-        self.out, self.claims, self.first, self.feed = [], [], None, []
-        self.at_word_start, self.stopped, self.done = True, False, False
+        self.out, self.claims, self.first, self.feed = [], [], None, []       # feed: [(token, index in out or None)]
+        self.at_word_start, self.stopped, self.done, self.closed = True, False, False, False
+        self.risk, self.sentences, self.sent_start, self.last_fed = {}, [], 0, None
+
+    def observe(self, h):
+        """Risk of the token just fed (its own-position state); closes a sentence at its boundary."""
+        j, self.last_fed = self.last_fed, None
+        if j is None or j >= len(self.out):
+            return
+        self.risk[j] = self.g.p_risk(h)
+        piece = self.g.tok.decode(self.out[j:j + 1])
+        if piece.rstrip(" \"'”’)").endswith((".", "!", "?")) or "\n" in piece:
+            self._close_sentence(j + 1)
+
+    def _close_sentence(self, end):
+        if end <= self.sent_start:
+            return
+        tok = self.g.tok
+        content = [self.risk[k] for k in range(self.sent_start, end)
+                   if k in self.risk and any(ch.isalnum() for ch in tok.decode(self.out[k:k + 1]))]
+        r = max(content) if content else 0.0
+        sent = {"tokens": (self.sent_start, end), "risk": round(r, 4), "doubted": r >= self.g.risk_threshold}
+        if sent["doubted"] and self.mode == "stop":             # drop the doubted sentence and end the reply
+            self.out = self.out[:self.sent_start]
+            self.claims = [c for c in self.claims if c["token_index"] < self.sent_start]
+            self.stopped = self.done = True
+            self.feed = []
+            sent["dropped"] = True
+        self.sentences.append(sent)
+        self.sent_start = end
 
     def decide(self, logits, h):
         g, tok = self.g, self.g.tok
@@ -115,14 +162,14 @@ class _Seq:
         if not piece.strip() or (self.at_word_start or piece[:1].isspace()) and not piece.strip().strip(OPENERS):
             self.at_word_start = True                               # " 1958" -> " ", "1"; ' "Rent' -> ' "', "Rent"
             self.out.append(nxt)
-            self.feed = [nxt]
+            self.feed = [(nxt, len(self.out) - 1)]
             return
         starts_word = self.at_word_start or piece[:1].isspace()
         tp = None
         if self.first is None:                                      # the reply's first content token: scored
             tp = float(torch.softmax(logits.float(), -1)[nxt])      # even when no claim follows
             self.first = {"p_correct": round(g.p_correct(h), 4), "token_p": round(tp, 4)}
-        self.feed = [nxt]
+        self.feed = [(nxt, len(self.out))]
         if g._is_claim_start(piece, starts_word, self.context_words):
             p = g.p_correct(h)
             tp = float(torch.softmax(logits.float(), -1)[nxt]) if tp is None else tp
@@ -137,11 +184,13 @@ class _Seq:
                 forced = tok(HEDGE, add_special_tokens=False).input_ids
                 self.out += forced
                 c["token_index"] = len(self.out)                    # the claim itself follows the marker
-                self.feed = forced + [nxt]
+                self.feed = [(t, None) for t in forced] + [(nxt, len(self.out))]
         self.out.append(nxt)
         self.at_word_start = piece[-1:].isspace() or piece.endswith("\n")
 
     def result(self):
+        if self.g.risk_probe is not None and not self.stopped:
+            self._close_sentence(len(self.out))                    # the last, unterminated sentence (may drop it)
         tok, out, claims, first, stopped = self.g.tok, self.out, self.claims, self.first, self.stopped
         raw = tok.decode(out, skip_special_tokens=True)
         lead = len(raw) - len(raw.lstrip())
@@ -170,5 +219,19 @@ class _Seq:
         if stopped:                                                 # keep only whole sentences before the doubt
             cut = max(text.rfind(ch) for ch in ".!?\n")
             text = (text[:cut + 1].strip() + " " if cut >= 0 else "") + STOP_NOTE
+        sentences = []
+        if g.risk_probe is not None:
+            for st in self.sentences:
+                if st.get("dropped"):
+                    continue
+                a0, b0 = st["tokens"]
+                pre = tok.decode(out[:a0], skip_special_tokens=True)
+                seg = tok.decode(out[a0:b0], skip_special_tokens=True)
+                a = len(pre) - lead + (len(seg) - len(seg.lstrip()))
+                seg = seg.strip().replace(HEDGE.strip(), "").strip()
+                if seg:
+                    sentences.append({"text": seg, "start": max(0, a), "end": max(0, a) + len(seg),
+                                      "risk": st["risk"], "doubted": st["doubted"]})
         return {"text": text, "ids": out, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
+                "sentences": sentences, "max_risk": max((x["risk"] for x in sentences), default=None),
                 "min_p_correct": min((c["p_correct"] for c in claims), default=first["p_correct"] if first else None)}
