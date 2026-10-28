@@ -100,7 +100,9 @@ are in `VISION.md`.
 * **Judge any model's answer.** A frozen 3B reader with probes scores replies written by other models
   (GPT, Claude, ...). It gets RAGTruth AUROC 0.86 (F1 0.71) and 0.91 over six benchmarks, where
   output log-probability is at chance. It needs in-domain training data: zero-shot on unseen domains
-  it gets 0.61.
+  it gets 0.61. A 7B reader is no better on the same sources. A 7B head trained on ten sources
+  (`results/kaggle/detector-7b2/`) adds numerical reasoning (0.92) and biomedical QA (0.85); `vt adapt`
+  fits a new domain from labelled replies.
 
 ```bash
 pip install -e ".[verichat]"
