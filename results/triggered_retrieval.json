@@ -1,0 +1,54 @@
+{
+ "model": "Qwen/Qwen2.5-1.5B-Instruct",
+ "n": 200,
+ "closed_book": 0.365,
+ "always_retrieve": 0.575,
+ "oracle_best_of_both": 0.645,
+ "passage_contains_answer": 0.66,
+ "curves": {
+  "probe_and_token_p": {
+   "0pct": 0.365,
+   "10pct": 0.415,
+   "20pct": 0.465,
+   "30pct": 0.495,
+   "40pct": 0.51,
+   "50pct": 0.535,
+   "60pct": 0.53,
+   "80pct": 0.565,
+   "100pct": 0.575
+  },
+  "probe": {
+   "0pct": 0.365,
+   "10pct": 0.43,
+   "20pct": 0.465,
+   "30pct": 0.505,
+   "40pct": 0.525,
+   "50pct": 0.54,
+   "60pct": 0.55,
+   "80pct": 0.575,
+   "100pct": 0.575
+  },
+  "token_probability": {
+   "0pct": 0.365,
+   "10pct": 0.415,
+   "20pct": 0.465,
+   "30pct": 0.48,
+   "40pct": 0.49,
+   "50pct": 0.49,
+   "60pct": 0.52,
+   "80pct": 0.545,
+   "100pct": 0.575
+  },
+  "random_mean_of_5": {
+   "0pct": 0.365,
+   "10pct": 0.392,
+   "20pct": 0.413,
+   "30pct": 0.425,
+   "40pct": 0.443,
+   "50pct": 0.467,
+   "60pct": 0.489,
+   "80pct": 0.537,
+   "100pct": 0.575
+  }
+ }
+}

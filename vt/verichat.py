@@ -70,7 +70,7 @@ def merge_names(claims, text):
 
 
 class VeriChat:
-    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.6):
+    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3):
         self.model, self.tok = model, tok
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True)
         self.threshold = threshold
@@ -149,10 +149,12 @@ class VeriChat:
 
     @staticmethod
     def doubt_score(r):
-        """The retrieval trigger: the first claim's probe P(correct) averaged with its token probability
-        (the reply's first content token when it has no claim); None for an empty reply."""
+        """The retrieval trigger: the first claim's probe P(correct) (the reply's first content token when it
+        has no claim); None for an empty reply. The probe alone beat its average with token probability
+        as a retrieval trigger (experiments/triggered_retrieval.py); P < 0.3 retrieves for about half of
+        TriviaQA at 1.5B."""
         first = r["claims"][0] if r["claims"] else r.get("first_token")
-        return None if not first else (first["p_correct"] + first["token_p"]) / 2
+        return None if not first else first["p_correct"]
 
     def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True):
         out = self._reply(messages, documents, mode, max_new_tokens)

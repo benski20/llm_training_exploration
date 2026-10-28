@@ -167,7 +167,7 @@ def main():
     ap.add_argument("--head", required=True)
     ap.add_argument("--threshold", type=float, default=0.45)
     ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")
-    ap.add_argument("--retrieve-below", type=float, default=0.6)
+    ap.add_argument("--retrieve-below", type=float, default=0.3)
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
     ap.add_argument("--host", default="127.0.0.1")

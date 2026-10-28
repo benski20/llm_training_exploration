@@ -965,6 +965,31 @@ This is a training-free signal from the smallest reader, and it is promising. Th
 to trust the response-level number. The real test is the 7B detector run (2,700 RAGTruth test
 responses, against the Lookback Lens attention ratio on the same tokens).
 
+**Retrieve only when the model doubts itself** (`experiments/triggered_retrieval.py`, Qwen2.5-1.5B,
+TriviaQA rc.wikipedia validation, 200 questions). Each question is answered closed-book, then again
+with the top two 600-character passages of its Wikipedia evidence pages (simple word-overlap
+retrieval). A policy retrieves for the share of questions it is least sure about.
+
+Baselines: closed-book 36.5%, always retrieve 57.5%, best of both per question (oracle) 64.5%. The
+passages contain the answer for 66% of questions. Retrieval fixes 28% of questions and *breaks* 7%
+that the model knew.
+
+| share of questions that retrieve | 10% | 20% | 30% | 40% | 50% | 60% | 80% |
+|---|---|---|---|---|---|---|---|
+| probe trigger | **43.0** | **46.5** | **50.5** | **52.5** | **54.0** | **55.0** | **57.5** |
+| probe averaged with token probability | 41.5 | 46.5 | 49.5 | 51.0 | 53.5 | 53.0 | 56.5 |
+| token probability (FLARE-style) | 41.5 | 46.5 | 48.0 | 49.0 | 49.0 | 52.0 | 54.5 |
+| random (mean of 5) | 39.2 | 41.3 | 42.5 | 44.3 | 46.7 | 48.9 | 53.7 |
+
+Accuracy %. At half the retrievals the probe trigger gets 83% of the gain of always retrieving
+(54.0 vs 57.5). At 80% it matches always retrieving, because it skips the questions retrieval would
+break. Against random at 50%, the gain is +7.0 points (paired bootstrap 95% CI [+0.5, +13.5]). Against
+token probability it is +4.5 [0.0, +9.5], suggestive at n = 200 but not conclusive. The probe ranks
+closed-book correctness at AUROC 0.83, against 0.72 for token probability.
+
+VeriChat uses this: with a corpus (`--corpus`), a reply whose first claim has probe P < 0.3 is looked
+up and regenerated from the passages, with the closed-book answer kept for display.
+
 **General detector, 3B reader** (`kaggle/detector/run.py`, Qwen2.5-3B-Instruct frozen, 1 h 47 min on
 2×T4; `results/kaggle/detector-3b/detector/`). It is trained on 4,843 responses from six sources and
 judges text from any model, including closed ones. Response probe is at layer 24, on mean hidden
