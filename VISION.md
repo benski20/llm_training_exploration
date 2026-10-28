@@ -1145,6 +1145,27 @@ What this shows:
   provenance's value is explanation (which sentence a claim came from, exactly) and citation, not
   detection; detection should use the probes.
 
+**Result, 14B reader (4-bit)** (`results/kaggle/detector-14b/`; 10 sources, smaller sets for the 12 h
+limit: about 4,900 training and 2,677 test responses; 3.1 h on 2x T4; response layer 26 of 48):
+
+| test source | 3B | 7B | 14B (4-bit) | 14B left out of training |
+|---|---|---|---|---|
+| RAGTruth | 0.864 | 0.858 | 0.853 [0.818, 0.885] | 0.624 |
+| HaluEval general | 0.651 | 0.654 | 0.617 | 0.495 |
+| HaluEval QA / dialogue / summary | 0.992 / 0.929 / 0.987 | 0.984 / 0.924 / 0.978 | 0.987 / 0.929 / 0.967 | 0.88 / 0.84 / 0.89 |
+| TruthfulQA | 0.848 | 0.887 | 0.843 | 0.584 |
+| HaluBench DROP | 0.69 zero-shot | 0.919 | 0.915 | 0.544 |
+| HaluBench PubMedQA | 0.71 zero-shot | 0.849 | 0.847 | 0.784 |
+| HaluBench CovidQA | 0.63 zero-shot | 0.705 | 0.659 | 0.695 |
+| HaluBench FinanceBench | 0.44 zero-shot | 0.622 | 0.685 | 0.581 |
+| token level, RAGTruth | 0.854 | 0.835 | 0.821 | 0.547 |
+
+**Scaling the reader does not help.** From 3B to 7B to 14B, every shared source is flat or within
+noise. The 14B is 4-bit and trained on fewer examples, so it is not a clean comparison, but nothing
+trends upward. Leave-one-source-out stays weak at 14B (0.50-0.89; RAGTruth 0.62). Generality comes from
+training data per domain (or `vt adapt`), not from a bigger reader. The cheapest reader, 3B, is the
+right default for `/judge`.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
