@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (03:18:08 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (03:36:15 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
@@ -441,7 +441,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (03:17:52 UTC check)"
+"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (03:35:59 UTC check)"
 },
 {
 "run": "kaggle-detector-7b",
@@ -453,7 +453,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (03:19:38 UTC check)"
+"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (03:34:44 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -521,9 +521,9 @@
 "title": "CPU: doubt-aware generation with the 1.5B probe",
 "model": "qwen",
 "status": "running",
-"step": 10,
+"step": 240,
 "total_steps": 300,
-"progress": 0.03333333333333333,
+"progress": 0.8,
 "last_loss": null,
 "note": "the 0.5B probe tied token probability; does the stronger 1.5B probe cut hallucinations more?"
 },
