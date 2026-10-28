@@ -4,6 +4,9 @@
   vt verify  runs/dyck16/model.npz --spec dyck              # global proof only
   vt check   runs/dyck16/model.npz runs/dyck16/certificate.json [--exhaustive]
   vt predict runs/dyck16/model.npz "(()())()(())((()))"
+
+  vt verichat --model Qwen/Qwen2.5-7B-Instruct --head <claims head> [--detector <head>] [--corpus docs/]
+  vt judge --detector <head> --question "..." --answer "..." [--doc source.txt]   # any model's answer
 """
 import argparse
 import json
@@ -258,6 +261,20 @@ def cmd_chat_serve(a):
     return 0
 
 
+def cmd_judge(a):
+    import torch
+    from .detector import Detector
+    head = torch.load(a.detector, map_location="cpu", weights_only=True)
+    det = Detector.load(a.model or head["model"], a.detector)
+    docs = [open(f, encoding="utf-8").read() for f in a.doc or []]
+    r = det.judge([{"role": "user", "content": a.question}], a.answer, documents=docs)
+    out = {k: r[k] for k in ("p_hallucinated", "flagged", "spans")}
+    print(json.dumps(out, indent=1) if a.json else
+          f"{'LIKELY HALLUCINATED' if r['flagged'] else 'no hallucination detected'} (P = {r['p_hallucinated']:.2f})" +
+          "".join(f"\n  doubtful: {s['text']!r} ({s['score']:.2f})" for s in r["spans"]))
+    return 0
+
+
 def cmd_keygen(a):
     from .artifact import generate_keypair
     generate_keypair(a.private, a.public)
@@ -370,6 +387,10 @@ def cmd_respond(a):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["verichat"]:                                 # its own argument parser
+        from .verichat_server import main as verichat_main
+        return verichat_main(argv[1:]) or 0
     ap = argparse.ArgumentParser(prog="vt")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prove", help="train with counterexample guidance until proved")
@@ -473,6 +494,14 @@ def main(argv=None):
     p.add_argument("package"); p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8001); p.add_argument("--max-concurrency", type=int, default=4)
     p.set_defaults(fn=cmd_chat_serve)
+    sub.add_parser("verichat", help="VeriChat server: every claim scored, sourced and cited (vt verichat -h)")
+    p = sub.add_parser("judge", help="score an answer from any model for hallucinations (general detector)")
+    p.add_argument("--detector", required=True, help="a kaggle/detector head (*_detector.pt)")
+    p.add_argument("--model", help="its reader model (default: the one in the head)")
+    p.add_argument("--question", required=True); p.add_argument("--answer", required=True)
+    p.add_argument("--doc", action="append", help="a source document file (repeatable)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_judge)
     p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
     p.add_argument("private"); p.add_argument("public")
     p.set_defaults(fn=cmd_keygen)
@@ -486,6 +515,8 @@ def main(argv=None):
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
+        if name in ("verichat", "judge"):
+            continue
         if name not in ("keygen", "respond", "chat-export", "chat", "chat-serve"):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")
         if name not in ("predict", "keygen", "gen-train", "gen-verify", "gen-sample", "respond",

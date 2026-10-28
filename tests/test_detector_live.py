@@ -27,7 +27,8 @@ def test_judge_scores_every_response_token_with_offsets():
     assert 0.0 <= out["p_hallucinated"] <= 1.0 and isinstance(out["flagged"], bool)
     assert "".join(t["text"] for t in out["tokens"]) == resp       # tokens tile the response exactly
     assert all(resp[s["start"]:s["end"]] == s["text"] for s in out["spans"])
-    assert out["spans"] and out["spans"][0]["start"] == 0         # threshold 0: everything flagged, one span
+    assert out["spans"] and out["spans"][0]["start"] == 0         # threshold 0: every word flagged
+    assert all(any(ch.isalnum() for ch in s["text"]) for s in out["spans"])
 
 
 def test_judge_without_documents_and_long_prompt_trimmed():

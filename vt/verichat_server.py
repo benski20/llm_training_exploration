@@ -161,8 +161,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
     return bounded_server(host, port, Handler, 4)
 
 
-def main():
-    ap = argparse.ArgumentParser()
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="vt verichat")
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--threshold", type=float, default=0.45)
@@ -172,7 +172,7 @@ def main():
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
     if a.corpus:

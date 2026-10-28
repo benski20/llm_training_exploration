@@ -5,3 +5,5 @@ results
 build
 *.egg-info
 __pycache__
+!results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt
+!results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt

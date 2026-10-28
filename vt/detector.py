@@ -242,8 +242,8 @@ class Detector:
                    "start": max(s - len(head), 0), "end": e_ - len(head)} for (s, e_), p in zip(offs, p_tok)]
         spans = []                                                 # runs of flagged tokens, as response text
         for t in tokens:
-            if t["score"] < token_threshold:
-                continue
+            if t["score"] < token_threshold or not any(ch.isalnum() for ch in t["text"]):
+                continue                                           # punctuation alone is not a claim
             if spans and t["start"] <= spans[-1]["end"] + 1:
                 spans[-1]["end"], spans[-1]["score"] = t["end"], max(spans[-1]["score"], t["score"])
             else:

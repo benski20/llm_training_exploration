@@ -79,6 +79,55 @@ curl -X POST localhost:8000/predict -d '{"inputs": ["(()(()))()()(())((()))()()(
 
 ---
 
+## VeriChat: a chatbot that reports how sure it is, and where each claim came from
+
+The second half of this repo applies the same idea, verification built into the model, to ordinary
+open-weight chat models (Qwen2.5 0.5B–14B, DeepSeek-R1-Distill). Results with confidence intervals
+are in `VISION.md`.
+
+* **Every claim scored for free.** A linear probe reads the hidden state the model has already
+  computed when it writes a name, number or date, and gives P(correct). It costs no extra pass
+  (measured: about 0% overhead). On Qwen2.5-7B, across five formats (short answers, lists, multi-turn,
+  chain-of-thought, GSM8K), it ranks claims at AUROC 0.856, against 0.760 for token probability. In
+  the most confident quarter of its claims, 7% are wrong, against 18%.
+* **Exact provenance.** With the model's decisions fixed (norm scales, attention patterns, SiLU
+  gates), the network is linear. One extra pass splits each claim's logit exactly between the
+  documents, the question and the model's own memory, and cites the document sentence that
+  contributed most.
+* **Doubt-triggered behaviour.** It can withhold or mark a doubted claim before writing it. It can
+  also look the question up only when it doubts itself: at half the retrievals it gets 83% of the
+  gain of always retrieving, and beats token-probability triggers.
+* **Judge any model's answer.** A frozen 3B reader with probes scores replies written by other models
+  (GPT, Claude, ...). It gets RAGTruth AUROC 0.86 (F1 0.71) and 0.91 over six benchmarks, where
+  output log-probability is at chance. It needs in-domain training data: zero-shot on unseen domains
+  it gets 0.61.
+
+```bash
+pip install -e ".[verichat]"
+vt verichat --model Qwen/Qwen2.5-7B-Instruct --head results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt \
+    --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt [--corpus my_docs/] --port 8080
+#   GET /  chat page    POST /chat {"messages": [...], "documents": [...], "mode": "hedge"|"stop"|"flag"}
+#   POST /judge {"messages": [...], "response": "an answer from any model", "documents": [...]}
+vt judge --detector results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt \
+    --question "Who designed the Eiffel Tower?" --answer "Thomas Edison, in 1920." --doc source.txt
+docker build -f Dockerfile.verichat -t verichat .     # CPU image; heads baked in
+```
+
+```python
+from vt.verichat import VeriChat
+bot = VeriChat.load("Qwen/Qwen2.5-7B-Instruct", "results/kaggle/claims-7b/claims/Qwen2.5-7B-Instruct_claims_head.pt")
+out = bot.reply([{"role": "user", "content": "When was the Eiffel Tower completed?"}],
+                documents=["The Eiffel Tower was completed in 1889 ..."], mode="hedge")
+for c in out["claims"]:
+    print(c["text"], c["verdict"], round(c["score"], 2), c.get("source"), c.get("citation"))
+```
+
+Heads are trained on Kaggle GPUs by `kaggle/claims/run.py` (claim probe, any model) and
+`kaggle/detector/run.py` (general detector), and evaluated with bootstrap CIs and leave-one-out
+splits.
+
+---
+
 ## 1. How `vt prove` works
 
 ```
