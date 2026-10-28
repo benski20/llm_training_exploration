@@ -110,6 +110,10 @@ def test_server_api_key_and_rate_limit():
             return e.code
     assert post(None) == 401 and post("wrong") == 401
     assert post("s3cret") == 200 and post("s3cret") == 200 and post("s3cret") == 429
+    m = urllib.request.urlopen(f"http://127.0.0.1:{srv.server_port}/metrics").read().decode()
+    assert 'verichat_requests_total{path="/chat",code="200"} 2' in m
+    assert 'path="/chat",code="401"} 2' in m and 'code="429"} 1' in m
+    assert 'verichat_batches_total{kind="chat",size="1"} 2' in m and "verichat_latency_seconds_total" in m
     srv.shutdown()
 
 

@@ -5,6 +5,7 @@
   GET  /         the chat page: conversation, optional documents, every claim coloured by P(correct),
                  hover for its source and citation
   GET  /health   status and the head's layer
+  GET  /metrics  Prometheus counters: requests by path and status, latency, batch sizes
   POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag"}
   POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
                  general detector (vt/detector.Detector; only with --detector); {"items": [...]} for up to
@@ -123,13 +124,43 @@ def validate_judge(req):
     return msgs, resp, docs
 
 
+class Metrics:
+    """Counters for GET /metrics (Prometheus text format)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.requests = collections.Counter()                    # (path, status) -> n
+        self.latency = collections.defaultdict(float)            # path -> seconds, successful POSTs
+        self.batches = collections.Counter()                     # (kind, size) -> n
+
+    def request(self, path, code, seconds=None):
+        with self.lock:
+            self.requests[(path, code)] += 1
+            if seconds is not None:
+                self.latency[path] += seconds
+
+    def batch(self, kind, size):
+        with self.lock:
+            self.batches[(kind, size)] += 1
+
+    def text(self):
+        with self.lock:
+            lines = ["# TYPE verichat_requests_total counter"]
+            lines += [f'verichat_requests_total{{path="{p}",code="{c}"}} {n}' for (p, c), n in sorted(self.requests.items())]
+            lines += ["# TYPE verichat_latency_seconds_total counter"]
+            lines += [f'verichat_latency_seconds_total{{path="{p}"}} {v:.3f}' for p, v in sorted(self.latency.items())]
+            lines += ["# TYPE verichat_batches_total counter"]
+            lines += [f'verichat_batches_total{{kind="{k}",size="{n}"}} {c}' for (k, n), c in sorted(self.batches.items())]
+        return "\n".join(lines) + "\n"
+
+
 class Batcher:
     """One worker thread owns the model. Requests wait up to `window` seconds to be grouped with others
     of the same kind ("chat" / "judge") into one batched call (at most `max_batch`). A single owner
     also keeps hooks registered for provenance from seeing another request's forward pass."""
 
-    def __init__(self, handlers, max_batch=8, window=0.02):
-        self.handlers, self.max_batch, self.window = handlers, max_batch, window
+    def __init__(self, handlers, max_batch=8, window=0.02, metrics=None):
+        self.handlers, self.max_batch, self.window, self.metrics = handlers, max_batch, window, metrics
         self.pending, self.cv = collections.deque(), threading.Condition()
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -169,6 +200,8 @@ class Batcher:
     def _run(self):
         while True:
             kind, batch = self._take()
+            if self.metrics:
+                self.metrics.batch(kind, len(batch))
             try:
                 results = self.handlers[kind]([item for _, item, _ in batch])
                 for (_, _, slot), r in zip(batch, results):
@@ -210,13 +243,27 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
     handlers = {"chat": bot.reply_batch}
     if detector is not None:
         handlers["judge"] = lambda items: detector.judge_batch(items)
-    batcher = Batcher(handlers, max_batch=max_batch)
+    metrics = Metrics()
+    batcher = Batcher(handlers, max_batch=max_batch, metrics=metrics)
     limiter = RateLimiter(rate_per_minute)
 
     class Handler(HardenedHandler):
         timeout_s, deadline_s = 15.0, deadline
 
+        def on_response(self, code):
+            metrics.request(self.path if self.path in ("/", "/health", "/metrics", "/chat", "/judge") else "other",
+                            code, time.perf_counter() - self._t0 if code == 200 and hasattr(self, "_t0") else None)
+
         def do_GET(self):
+            if self.path == "/metrics":
+                body = metrics.text().encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                self.on_response(200)
+                return
             if self.path in ("/", "/index.html"):
                 body = PAGE.encode()
                 self.send_response(200)
@@ -233,6 +280,7 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):
+            self._t0 = time.perf_counter()
             if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
                 return self.send_json(404, {"error": "not found"})
             if api_key and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {api_key}"):
