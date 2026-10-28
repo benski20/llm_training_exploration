@@ -2,6 +2,10 @@
 Reports throughput and latency percentiles, 429/503 counts, and whether requests were batched.
 
     python experiments/load_test.py --model Qwen/Qwen2.5-0.5B-Instruct --head <head> --clients 1,8 --per-client 4
+    python experiments/load_test.py --url https://<...>.modal.run --clients 1,8,16 --per-client 4   # a running server
+
+A remote server keeps its own reply length and rate limit (deploy with VERICHAT_RATE=0 for a load test;
+VERICHAT_API_KEY, if set, is sent as the Bearer token).
 """
 import argparse
 import json
@@ -32,17 +36,25 @@ def main():
     ap.add_argument("--per-client", type=int, default=4)
     ap.add_argument("--tokens", type=int, default=48)
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--url", help="load-test a running server instead of starting one")
     ap.add_argument("--out", default="results/load_test.json")
     a = ap.parse_args()
-    torch.set_num_threads(a.threads)
-    bot = VeriChat.load(a.model, a.head)
-    calls = []
-    inner = bot.reply_batch
-    bot.reply_batch = lambda reqs: (calls.append(len(reqs)), inner([dict(r, max_new_tokens=a.tokens) for r in reqs]))[1]
-    srv = make_server(bot, port=0, rate_per_minute=0, max_batch=8, deadline=600)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{srv.server_port}/chat"
-    res = {"model": a.model, "threads": a.threads, "max_new_tokens": a.tokens, "runs": []}
+    calls, srv, headers = [], None, {"Content-Type": "application/json"}
+    if a.url:
+        url = a.url.rstrip("/") + "/chat"
+        if os.environ.get("VERICHAT_API_KEY"):
+            headers["Authorization"] = "Bearer " + os.environ["VERICHAT_API_KEY"]
+        res = {"url": a.url, "runs": []}
+    else:
+        torch.set_num_threads(a.threads)
+        bot = VeriChat.load(a.model, a.head)
+        inner = bot.reply_batch
+        bot.reply_batch = lambda reqs, **kw: (calls.append(len(reqs)),
+                                              inner([dict(r, max_new_tokens=a.tokens) for r in reqs], **kw))[1]
+        srv = make_server(bot, port=0, rate_per_minute=0, max_batch=8, deadline=600)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/chat"
+        res = {"model": a.model, "threads": a.threads, "max_new_tokens": a.tokens, "runs": []}
     for n in [int(x) for x in a.clients.split(",")]:
         calls.clear()
         lat, codes = [], []
@@ -53,8 +65,7 @@ def main():
                 body = json.dumps({"messages": [{"role": "user", "content": q}], "mode": "hedge"}).encode()
                 t = time.perf_counter()
                 try:
-                    code = urllib.request.urlopen(urllib.request.Request(url, body, {"Content-Type": "application/json"}),
-                                                  timeout=600).status
+                    code = urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=600).status
                 except urllib.error.HTTPError as e:
                     code = e.code
                 lat.append(time.perf_counter() - t)
@@ -69,10 +80,11 @@ def main():
         run = {"clients": n, "requests": len(codes), "ok": codes.count(200), "other_codes": sorted(set(codes) - {200}),
                "wall_s": round(wall, 1), "replies_per_s": round(codes.count(200) / wall, 3),
                "latency_p50_s": round(float(np.percentile(lat, 50)), 2), "latency_p95_s": round(float(np.percentile(lat, 95)), 2),
-               "batch_sizes": calls[:]}
+               "batch_sizes": calls[:] if not a.url else None}
         print(json.dumps(run), flush=True)
         res["runs"].append(run)
-    srv.shutdown()
+    if srv is not None:
+        srv.shutdown()
     json.dump(res, open(a.out, "w"), indent=1)
 
 
