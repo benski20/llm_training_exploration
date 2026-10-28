@@ -1,0 +1,87 @@
+{
+ "model": "Qwen/Qwen2.5-1.5B-Instruct",
+ "device": "cpu",
+ "threads": 4,
+ "max_new_tokens": 48,
+ "per_question": [
+  {
+   "q": "Who designed the Eiffel Tower?",
+   "plain_s": 5.918,
+   "plain_tokens": 27,
+   "plain_doc_s": 3.882,
+   "scored_s": 4.698,
+   "scored_tokens": 21,
+   "provenance_s": 11.697,
+   "reply": "Gustave Eiffel designed the Eiffel Tower.",
+   "claims": [
+    [
+     "Gustave Eiffel",
+     0.57,
+     "your documents"
+    ]
+   ]
+  },
+  {
+   "q": "When was the Eiffel Tower completed?",
+   "plain_s": 4.303,
+   "plain_tokens": 20,
+   "plain_doc_s": 4.065,
+   "scored_s": 4.408,
+   "scored_tokens": 19,
+   "provenance_s": 11.162,
+   "reply": "The Eiffel Tower was completed in 1889.",
+   "claims": [
+    [
+     "1889",
+     0.84,
+     "your documents"
+    ]
+   ]
+  },
+  {
+   "q": "How tall is the Eiffel Tower?",
+   "plain_s": 5.555,
+   "plain_tokens": 27,
+   "plain_doc_s": 3.556,
+   "scored_s": 5.412,
+   "scored_tokens": 25,
+   "provenance_s": 10.57,
+   "reply": "The Eiffel Tower is 330 metres tall.",
+   "claims": [
+    [
+     "330",
+     0.8,
+     "your documents"
+    ]
+   ]
+  },
+  {
+   "q": "What was the tallest structure before 1930?",
+   "plain_s": 8.978,
+   "plain_tokens": 44,
+   "plain_doc_s": 6.614,
+   "scored_s": 9.303,
+   "scored_tokens": 48,
+   "provenance_s": 13.66,
+   "reply": "The tallest structure before 1930 was the Eiffel Tower, which was 330 metres tall.",
+   "claims": [
+    [
+     "Eiffel Tower",
+     0.74,
+     "your documents"
+    ],
+    [
+     "330",
+     0.68,
+     "your documents"
+    ]
+   ]
+  }
+ ],
+ "plain_mean_s": 6.188,
+ "plain_doc_mean_s": 4.529,
+ "scored_mean_s": 5.955,
+ "provenance_mean_s": 11.772,
+ "scored_overhead": -0.038,
+ "provenance_overhead": 1.599
+}

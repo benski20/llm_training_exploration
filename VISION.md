@@ -1036,6 +1036,22 @@ tokens: precision 0.37, recall 0.45, token F1 0.41. The threshold was chosen on 
 tokens, so 0.41 is optimistic. Span finding is the weaker half; whole-response judgement is the
 strong one.
 
+**Cost** (`experiments/latency.py`, Qwen2.5-1.5B, CPU, 4 threads, 48-token cap, median of 3 runs, mean of
+4 questions; `results/latency.json`):
+
+| per reply | seconds | vs plain generation |
+|---|---|---|
+| plain generation, no document | 6.19 | - |
+| VeriChat, every claim scored | 5.96 | **about 0%** (same tokens/s) |
+| plain generation, document in the prompt | 4.53 | - |
+| VeriChat with exact provenance and citations | 11.77 | +160% |
+
+Claim scoring is free: the probe is a dot product on a hidden state the model has already computed.
+Provenance is an extra pass that carries one copy of the residual stream per source group (each
+document sentence, the question, the template, the reply, the bias). Its cost grows with the number of
+document sentences, and it runs only when documents are given. Cheaper options, if needed: coarse
+groups first (document / question), then sentence-level detail only for claims the documents drove.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
