@@ -1,0 +1,39 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "threads": 4,
+ "max_new_tokens": 48,
+ "runs": [
+  {
+   "clients": 1,
+   "requests": 4,
+   "ok": 4,
+   "other_codes": [],
+   "wall_s": 8.1,
+   "replies_per_s": 0.492,
+   "latency_p50_s": 2.11,
+   "latency_p95_s": 2.55,
+   "batch_sizes": [
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "clients": 8,
+   "requests": 32,
+   "ok": 32,
+   "other_codes": [],
+   "wall_s": 36.7,
+   "replies_per_s": 0.872,
+   "latency_p50_s": 8.28,
+   "latency_p95_s": 14.94,
+   "batch_sizes": [
+    8,
+    8,
+    8,
+    8
+   ]
+  }
+ ]
+}

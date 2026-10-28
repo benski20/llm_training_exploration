@@ -1122,6 +1122,22 @@ single sequences leave most of the device idle. The batched path keeps only the 
 applies the output layer only at response positions. A first version kept the full-vocabulary logits
 for the padded batch, about 10 GB, and was killed for running out of memory.
 
+**Concurrent chat is batched** (`DoubtAwareGenerator.generate_batch`, `VeriChat.reply_batch`, a
+model-owning worker in the server). Requests arriving within 20 ms share one left-padded KV cache:
+each step is one forward pass for all of them, and a hedge marker is queued per sequence. On 18 real
+replies (0.5B with its trained head, stop / hedge / flag) the batched generator gives exactly the same
+text, claims and scores as the one-at-a-time generator. End to end over HTTP (`experiments/load_test.py`,
+0.5B, CPU, 4 threads, 48-token replies, hedge mode):
+
+| clients | replies/s | latency p50 / p95 | batch sizes seen |
+|---|---|---|---|
+| 1 | 0.49 | 2.1 s / 2.6 s | 1 |
+| 8 | **0.87** (1.8x) | 8.3 s / 14.9 s | 8, 8, 8, 8 |
+
+All 32 requests succeeded. On a CPU the gain is bounded by compute; on a GPU a batch of 8 costs about
+as much as one sequence, so the gain should be close to 8x. Not yet measured there. Provenance (with
+documents) still runs once per reply after the batched generation.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
