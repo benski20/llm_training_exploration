@@ -866,6 +866,23 @@ recomputes each attention pattern in float32 from the module's inputs. It
 matches eager exactly (difference 0.0), and in float16 the parts sum to the
 logit within 0.005 of 18.
 
+**Recalibrating for a new domain** (`experiments/recalibrate_shift.py`, `CorrectnessHead.calibrate`). The
+0.5B head was trained on TriviaQA and answered 600 NQ-open questions it had never seen (11% right).
+Its scale was refit on the first 200 (one scale and one offset on the stacker's logit) and
+tested on the other 400:
+
+| | before | after |
+|---|---|---|
+| calibration error (ECE) | 0.105 | **0.032** |
+| mean P(correct) (true rate 10.8%) | 0.205 | 0.129 |
+| answers released at P >= 0.5 | 6.0% (37.5% right) | 2.5% (30% right) |
+| AUROC (unchanged by design) | 0.778 | 0.778 |
+
+Two hundred labels fix calibration under a dataset shift. For a model this weak (11% right), honest
+probabilities mean almost nothing clears 0.5, and the released counts are too small (24 and 10
+answers) to compare their accuracy. The point is that the threshold means what it says after
+recalibration.
+
 **Doubt-aware generation** (`vt/guided.py`, `experiments/doubt_aware_eval.py`). The probe reads
 the hidden state the model has already computed at each step, so checking a claim before it is
 written costs nothing. In stop mode a doubted claim is never stated. For example, at 0.5B the
