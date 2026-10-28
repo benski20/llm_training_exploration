@@ -1,0 +1,1048 @@
+{
+ "config": {
+  "out": "/kaggle/working/claims",
+  "models": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+  "n_train": [
+   1200,
+   400,
+   600,
+   600,
+   600
+  ],
+  "n_test": 200,
+  "n_pool_train": 20000,
+  "n_pool_test": 1000,
+  "gen_batch": 16,
+  "feat_batch": 4,
+  "dtype": "float16",
+  "attn": "sdpa",
+  "no_system": true,
+  "max_new_scale": 1.0,
+  "thinking": true,
+  "smoke": false
+ },
+ "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": {
+  "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+  "layers": [
+   9,
+   12,
+   14,
+   17,
+   19,
+   22,
+   24,
+   27
+  ],
+  "dtype": "float16",
+  "complete": true,
+  "claims": {
+   "test": {
+    "short": 155,
+    "multi": 423,
+    "multiturn": 163,
+    "reasoning": 143,
+    "math": 200
+   },
+   "nq": {
+    "short": 168,
+    "multi": 484,
+    "multiturn": 165,
+    "reasoning": 157,
+    "math": 0
+   },
+   "train": {
+    "short": 907,
+    "multi": 894,
+    "multiturn": 474,
+    "reasoning": 425,
+    "math": 598
+   }
+  },
+  "examples": {
+   "test": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out the year the Juilliard School was founded in New York. I'm not exactly sure, but I remember that Juilliard is a famous music school. I think it's been around for a long time, maybe in the late 19th or early 20th century. I'm trying to recall if it was established by a n"
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out who killed Lee Harvey Oswald. I remember that Oswald was a significant figure in the early days of the civil rights movement in the US. He was a key person in the 1960s activism, right? I think he was involved in the civil rights movement, maybe even leading some groups"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about Miller Brewing Company. I remember Miller is a well-known beer brand, but I'm not sure where it started. I think it's in the U.S., maybe a mid-sized city. I recall something about it being f"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about a British swimmer who won gold in the 2008 Olympics in the 400m and 800m freestyle. I know that the 2008 Olympics were held in Beijing. I remember that swimmer was quite fast, maybe Michael?"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about the Supreme Governor of the Church of England. I remember that the Church of England has a hierarchy, and the Governor is a significant position. I think it's a layperson, not a clergy membe"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Okay, the user is asking about the minimum age to run for President of the United States. I remember that age restrictions vary by country, so I need to focus on the U.S. specifically. \n\nI think the U.S. Constitution sets the age requirement. Let me recall, I believe it's 35 years old. But wait, I s"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Alright, so the user is asking about a steam locomotive that set a world speed record in July 1938 on the East Coast Mainline in England. Hmm, I remember that steam locomotives were popular in the early to mid-20th century, but I'm not sure about specific records. \n\nLet me think... The East Coast Ma"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Alright, so the user is asking about the novel for which J.K. Rowling won the 1999 Whitbread Children's Book of the Year award. I remember that J.K. Rowling is the author of the Harry Potter series, but I'm not entirely sure which specific book won that particular award. \n\nFirst, I should recall the"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "Okay, so I need to figure out what type of creature a bufflehead is. I'm not entirely sure, but I'll try to think it through. I've heard the term \"bufflehead\" before, maybe in the context of birds or waterfowl. Let me start by breaking down the word itself. \"Buff\" usually refers to a color, like Buf"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "Okay, so I need to figure out the year Edward VIII abdicated. Hmm, I remember Edward VIII was a King of England, but I'm not exactly sure about the details. Let me think. I think he was the last King before the British Empire started expanding more, but I'm not certain. Wait, Edward VIII was known f"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "Okay, so I need to figure out which French king Madame de Pompadour and Madame du Barry were mistresses of. I'm not super familiar with their history, but I remember they were prominent figures in 18th-century France. Let me think about this step by step.\n\nFirst, I know that both of them were involv"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, I note that Suzy's iPhone is 1 year old.\n\nNext, Ben's iPhone is two times older than Suzy's, so Ben's iPhone is 2 * 1 = 2 years old.\n\nThen, Brandon's iPhone is four times as old as Ben's, which means Brandon's iPhone is 4 * 2 = 8 years old.\n</think>\n\nLet's determine the age of Brandon's iPhon"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, determine how many sandwiches Tyson needs to make to serve 20 people. Since each sandwich serves 4 people, he needs to make 5 sandwiches.\n\nNext, calculate the total amount of meat and cheese required. Each sandwich requires 1 pound of meat and 1 pound of cheese, so for 5 sandwiches, he needs "
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, calculate the total cost Becky paid for her apples. She bought 20 apples at 45 cents each, so 20 multiplied by 45 cents equals 900 cents. She received a $1 discount, which is equivalent to 100 cents. Subtracting the discount from the total cost, Becky paid 900 cents minus 100 cents, totaling "
+    }
+   ],
+   "nq": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out where the Lord's Prayer is found in the Bible. I remember hearing about it in church, but I'm not exactly sure which book it's in. Let me think. I know the Bible has the Old Testament and the New Testament. The Lord's Prayer is a key part of Christian worship, so it's p"
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out on which river the exploration of the Louisiana Purchase began. Hmm, I remember that the Louisiana Purchase was a big land deal in the United States, covering a huge area from the Mississippi River to the Rocky Mountains. But when did exploration of that area start?\n\nI "
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out what's on top of the Capitol Building in Washington, D.C. I remember that the Capitol is a prominent building there, and it's where the government meets. I think it's a well-known landmark, so there must be something significant on top of it. \n\nI recall that many famous"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about points on a sphere or angles in a circle. I remember that circles and spheres both have 360 degrees. But wait, in a circle, it's 360 degrees, and on a sphere, I think it's also measured in d"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about the group that officially elects the president of the United States. I remember that the president is elected by a specific body. I think it's the Electoral College, but I'm not 100% sure. W"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about a song called \"Picking Up Pebbles and Throwing Them Into the Sea.\" I'm not exactly sure who sang that, but I think it's a pretty well-known song. I remember it's a protest song, maybe from t"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Alright, the user is asking about the publication date of \"Harry Potter and the Philosopher's Stone.\" I remember that this is the first book in the Harry Potter series. I should provide the exact date, which I think is July 26, 1997. \n\nI also recall that this was the first in a series of seven books"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Okay, the user previously asked about simple squamous epithelium and I told them it's found in the glomeruli. Now they're asking for the second largest country in Asia. \n\nI need to make sure I provide the correct answer. I remember that Russia is the largest country in Asia, so the second should be "
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Alright, the user is asking about the first temple built in Jerusalem. I remember that the first temple was mentioned in the Bible, specifically in the Book of Kings. It was built by King Solomon around 950 BCE. I should make sure to mention that it was the first temple and that it was destroyed by "
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "Okay, so I need to describe the three phases of the normal blood clotting process. Hmm, I remember that blood clotting is a complex process, but I'm a bit fuzzy on the exact phases. Let me try to break it down.\n\nFirst, I think the process starts with something called the initiation phase. I remember"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "Okay, so I'm trying to figure out who sings the song \"Why Does It Hurt When I pee?\" I remember hearing it before, but I'm not exactly sure who the artist is. Let me think about the lyrics. The song talks about the discomfort and pain during urination, which is pretty common, so maybe it's a\u516c\u76ca song o"
+    }
+   ],
+   "train": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out who wrote 'The Boys From Brazil.' I'm not entirely sure, but I'll try to recall. I think it's a poem or a song, maybe by someone famous. I remember hearing it in movies or something. Let me think... I think it's by a Brazilian writer or poet. Maybe it's by Jacob deur? W"
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Okay, so I need to figure out which team from the 2011-12 Premiership (which I think is the same as the 2011-12 English Premier League) was the first to win the FA Cup in 1884. Hmm, I remember that the FA Cup is the oldest football tournament in the world, so it's pretty old. \n\nI think the FA Cup st"
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about a netball team and how many members are allowed to shoot at goal. I'm not too familiar with netball rules, but I know it's similar to basketball in some ways. In basketball, 5 players can sh"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "Okay, so I have these three questions to answer. Let me take them one by one.\n\n1. The first question is about the Little Bear Constellation. I remember that Little Bear is also known as Ursa Minor. The star Alpha in this constellation is the brightest one, right? I think it's Polaris, the North Star"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Okay, so the user is asking about the unit of magnetic flux, specifically the one with the symbol Wb. I remember that magnetic flux is a measure of the total number of magnetic field lines passing through a given area. The unit is named after Michael Faraday, but I think it's spelled Weber, so Wb ma"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Alright, so the user is asking about the Armagnac region of France. They mentioned it lies between the Adour and Garonne rivers and near another feature. I need to figure out what that other feature is.\n\nFirst, I recall that Armagnac is a significant wine region in France. It's known for its terroir"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Alright, so the user is asking, \"The headquarters of Interpol are in which city?\" I need to figure this out. I remember that Interpol is the United Nations organization that deals with intelligence cooperation. But where is its headquarters located?\n\nI think it's somewhere in Europe because a lot of"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "Okay, so I need to figure out who had a hit in 1994 with the song \"Mr. Jones.\" Hmm, I'm not super familiar with all the 90s music, but I remember that \"Mr. Jones\" is a pretty catchy song. Let me think about the artists I know from that era.\n\nI know that Alanis Morissette was pretty popular in the 90"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, I'll identify the costs involved in Wendy's dental treatment. The cleaning costs $70, each filling costs $120, and there's an additional tooth extraction.\n\nNext, I'll calculate the total cost of the cleaning and the two fillings. Adding these together gives the subtotal before the extraction."
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, I'll determine the number of people in each row after some leave.\n\nIn the first row, there are initially 24 people, and 3 get up, leaving 21 people.\n\nIn the second row, there are originally 20 people, and 5 go to join the others, leaving 15 people.\n\nThe third row has 18 people remaining.\n\nFin"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "First, I need to determine how many 15-minute intervals there are in one hour. Since one hour is 60 minutes, dividing 60 by 15 gives me 4 intervals.\n\nNext, I'll calculate the number of actors that can be on stage during each interval. With 5 actors performing for 15 minutes, there are 5 actors on st"
+    }
+   ]
+  },
+  "probe_auroc_by_layer_on_holdout": {
+   "9": 0.7846560846560846,
+   "12": 0.8003174603174603,
+   "14": 0.8155493308434485,
+   "17": 0.781151571739807,
+   "19": 0.835698723934018,
+   "22": 0.8248926237161531,
+   "24": 0.8063492063492064,
+   "27": 0.7776844070961718
+  },
+  "probe_layer": 19,
+  "per_format": {
+   "test/short": {
+    "accuracy": 0.32258063554763794,
+    "probe": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.7481904761904762,
+     "error_at_50pct": 0.5454545021057129,
+     "error_at_25pct": 0.2368420958518982,
+     "aurc": 0.44939765747582006,
+     "auroc_ci": [
+      0.6530073689984579,
+      0.8396492672047579
+     ]
+    },
+    "stack": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.7470476190476191,
+     "error_at_50pct": 0.5584415197372437,
+     "error_at_25pct": 0.2368420958518982,
+     "aurc": 0.45078747599908375,
+     "auroc_ci": [
+      0.6515569970486965,
+      0.8387572265189936
+     ],
+     "ece": 0.21554888763049934
+    },
+    "claim_p": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.6617142857142857,
+     "error_at_50pct": 0.5974025726318359,
+     "error_at_25pct": 0.44736844301223755,
+     "aurc": 0.5582122413442077,
+     "auroc_ci": [
+      0.5618057880619203,
+      0.7557803556006475
+     ]
+    },
+    "word_min_lp": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.5558095238095239,
+     "error_at_50pct": 0.649350643157959,
+     "error_at_25pct": 0.6315789222717285,
+     "aurc": 0.6341326586455603
+    },
+    "reply_mean_lp": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.715047619047619,
+     "error_at_50pct": 0.5454545021057129,
+     "error_at_25pct": 0.4736841917037964,
+     "aurc": 0.5139335172501523
+    }
+   },
+   "test/multi": {
+    "accuracy": 0.2978723347187042,
+    "probe": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.7124686013574902,
+     "error_at_50pct": 0.5829384326934814,
+     "error_at_25pct": 0.43809521198272705,
+     "aurc": 0.524139971629931,
+     "auroc_ci": [
+      0.6533178325157815,
+      0.7682723093543963
+     ]
+    },
+    "stack": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.7130030463363797,
+     "error_at_50pct": 0.5829384326934814,
+     "error_at_25pct": 0.43809521198272705,
+     "aurc": 0.5233744903832136,
+     "auroc_ci": [
+      0.6544818026461727,
+      0.7688958166570664
+     ],
+     "ece": 0.22393596691353257
+    },
+    "claim_p": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.5401234567901234,
+     "error_at_50pct": 0.677725076675415,
+     "error_at_25pct": 0.6380952596664429,
+     "aurc": 0.6719782678055798,
+     "auroc_ci": [
+      0.477622174597975,
+      0.6029297447063037
+     ]
+    },
+    "word_min_lp": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.5268157768157768,
+     "error_at_50pct": 0.7061611413955688,
+     "error_at_25pct": 0.6571428775787354,
+     "aurc": 0.6711862806718134
+    },
+    "reply_mean_lp": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.550251189140078,
+     "error_at_50pct": 0.6540284156799316,
+     "error_at_25pct": 0.6761904954910278,
+     "aurc": 0.6775976327540283
+    }
+   },
+   "test/multiturn": {
+    "accuracy": 0.28834354877471924,
+    "probe": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.7030447542186353,
+     "error_at_50pct": 0.6296296119689941,
+     "error_at_25pct": 0.4750000238418579,
+     "aurc": 0.5209558331358027,
+     "auroc_ci": [
+      0.6115597224387962,
+      0.7963418826077894
+     ]
+    },
+    "stack": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.7023110785033015,
+     "error_at_50pct": 0.6172839403152466,
+     "error_at_25pct": 0.4750000238418579,
+     "aurc": 0.5215760788322208,
+     "auroc_ci": [
+      0.6105856181730377,
+      0.7954613399432612
+     ],
+     "ece": 0.23156473286156376
+    },
+    "claim_p": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.4856933235509905,
+     "error_at_50pct": 0.7283951044082642,
+     "error_at_25pct": 0.7250000238418579,
+     "aurc": 0.6929332108274503,
+     "auroc_ci": [
+      0.38370121248861266,
+      0.6033493774439185
+     ]
+    },
+    "word_min_lp": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.4988994864269993,
+     "error_at_50pct": 0.7037037014961243,
+     "error_at_25pct": 0.6499999761581421,
+     "aurc": 0.7067393723557991
+    },
+    "reply_mean_lp": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.5810711665443874,
+     "error_at_50pct": 0.6419752836227417,
+     "error_at_25pct": 0.6000000238418579,
+     "aurc": 0.6440404989436754
+    }
+   },
+   "test/reasoning": {
+    "accuracy": 0.38461539149284363,
+    "probe": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.7504132231404959,
+     "error_at_50pct": 0.422535240650177,
+     "error_at_25pct": 0.2571428418159485,
+     "aurc": 0.38499285881181194,
+     "auroc_ci": [
+      0.6462612747373884,
+      0.836808732113535
+     ]
+    },
+    "stack": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.75,
+     "error_at_50pct": 0.422535240650177,
+     "error_at_25pct": 0.2571428418159485,
+     "aurc": 0.38461988441740014,
+     "auroc_ci": [
+      0.645407250712097,
+      0.8365713948822374
+     ],
+     "ece": 0.21926011721047411
+    },
+    "claim_p": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.5258264462809917,
+     "error_at_50pct": 0.591549277305603,
+     "error_at_25pct": 0.6285713911056519,
+     "aurc": 0.599902913338587,
+     "auroc_ci": [
+      0.431312358276644,
+      0.6305009680856593
+     ]
+    },
+    "word_min_lp": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.4981404958677686,
+     "error_at_50pct": 0.5774648189544678,
+     "error_at_25pct": 0.7142857313156128,
+     "aurc": 0.6345863805790677
+    },
+    "reply_mean_lp": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.6376033057851239,
+     "error_at_50pct": 0.5352112650871277,
+     "error_at_25pct": 0.48571425676345825,
+     "aurc": 0.5083243030408283
+    }
+   },
+   "test/math": {
+    "accuracy": 0.8849999904632568,
+    "probe": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.9093588798820929,
+     "error_at_50pct": 0.009999990463256836,
+     "error_at_25pct": 0.019999980926513672,
+     "aurc": 0.0206798229657591,
+     "auroc_ci": [
+      0.8378376778767403,
+      0.9659353905496625
+     ]
+    },
+    "stack": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.910587079341685,
+     "error_at_50pct": 0.009999990463256836,
+     "error_at_25pct": 0.019999980926513672,
+     "aurc": 0.020530215783766338,
+     "auroc_ci": [
+      0.8390443735904813,
+      0.9672149265846269
+     ],
+     "ece": 0.06969571560680056
+    },
+    "claim_p": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.7565708671088185,
+     "error_at_50pct": 0.04000002145767212,
+     "error_at_25pct": 0.0,
+     "aurc": 0.04499465580366433,
+     "auroc_ci": [
+      0.6561088891950223,
+      0.8504080303189809
+     ]
+    },
+    "word_min_lp": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.6499631540162122,
+     "error_at_50pct": 0.06999999284744263,
+     "error_at_25pct": 0.04000002145767212,
+     "aurc": 0.07049251878113243
+    },
+    "reply_mean_lp": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.622942765905183,
+     "error_at_50pct": 0.0899999737739563,
+     "error_at_25pct": 0.06000000238418579,
+     "aurc": 0.07684864149992371
+    }
+   },
+   "test/all": {
+    "accuracy": 0.419741690158844,
+    "probe": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.8112685406803054,
+     "error_at_50pct": 0.35793358087539673,
+     "error_at_25pct": 0.10332101583480835,
+     "aurc": 0.31817775041494134,
+     "auroc_ci": [
+      0.78630673370087,
+      0.8377191557357847
+     ]
+    },
+    "stack": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.8110484110484111,
+     "error_at_50pct": 0.35793358087539673,
+     "error_at_25pct": 0.10701107978820801,
+     "aurc": 0.31822358361853037,
+     "auroc_ci": [
+      0.7857052487707581,
+      0.8374856954847051
+     ],
+     "ece": 0.1858983285808123
+    },
+    "claim_p": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.6506630094865389,
+     "error_at_50pct": 0.45387452840805054,
+     "error_at_25pct": 0.38007378578186035,
+     "aurc": 0.4829938336610171,
+     "auroc_ci": [
+      0.6201607672936461,
+      0.6852039686281045
+     ]
+    }
+   },
+   "nq/short": {
+    "accuracy": 0.1428571492433548,
+    "probe": {
+     "n": 168,
+     "positives": 24,
+     "auroc": 0.6678240740740741,
+     "error_at_50pct": 0.7976190447807312,
+     "error_at_25pct": 0.738095223903656,
+     "aurc": 0.7696958683281068,
+     "auroc_ci": [
+      0.5398952546296296,
+      0.7944650955620343
+     ]
+    },
+    "stack": {
+     "n": 168,
+     "positives": 24,
+     "auroc": 0.6675347222222222,
+     "error_at_50pct": 0.7976190447807312,
+     "error_at_25pct": 0.738095223903656,
+     "aurc": 0.7703992963396656,
+     "auroc_ci": [
+      0.5395723905723906,
+      0.7944650955620343
+     ],
+     "ece": 0.2201423737854854
+    },
+    "claim_p": {
+     "n": 168,
+     "positives": 24,
+     "auroc": 0.6481481481481481,
+     "error_at_50pct": 0.8214285373687744,
+     "error_at_25pct": 0.738095223903656,
+     "aurc": 0.7952209997097978,
+     "auroc_ci": [
+      0.5170953996232582,
+      0.7664416743259804
+     ]
+    },
+    "word_min_lp": {
+     "n": 168,
+     "positives": 24,
+     "auroc": 0.6464120370370371,
+     "error_at_50pct": 0.8214285373687744,
+     "error_at_25pct": 0.761904776096344,
+     "aurc": 0.7948539843183763
+    },
+    "reply_mean_lp": {
+     "n": 168,
+     "positives": 24,
+     "auroc": 0.8093171296296297,
+     "error_at_50pct": 0.75,
+     "error_at_25pct": 0.6428571343421936,
+     "aurc": 0.7102730111901517
+    }
+   },
+   "nq/multi": {
+    "accuracy": 0.12603305280208588,
+    "probe": {
+     "n": 484,
+     "positives": 61,
+     "auroc": 0.6783707320854164,
+     "error_at_50pct": 0.8264462947845459,
+     "error_at_25pct": 0.7603305578231812,
+     "aurc": 0.7793533603118836,
+     "auroc_ci": [
+      0.5988947125565453,
+      0.7596680065215802
+     ]
+    },
+    "stack": {
+     "n": 484,
+     "positives": 61,
+     "auroc": 0.6785645080029454,
+     "error_at_50pct": 0.8264462947845459,
+     "error_at_25pct": 0.7520661354064941,
+     "aurc": 0.7787778651055229,
+     "auroc_ci": [
+      0.5999540238596627,
+      0.7604235424226979
+     ],
+     "ece": 0.19555733307214102
+    },
+    "claim_p": {
+     "n": 484,
+     "positives": 61,
+     "auroc": 0.531779250474751,
+     "error_at_50pct": 0.8677685856819153,
+     "error_at_25pct": 0.8677685856819153,
+     "aurc": 0.8426772410004818,
+     "auroc_ci": [
+      0.4531278739840926,
+      0.6146166328594016
+     ]
+    },
+    "word_min_lp": {
+     "n": 484,
+     "positives": 61,
+     "auroc": 0.557900244157656,
+     "error_at_50pct": 0.8595041036605835,
+     "error_at_25pct": 0.8429751992225647,
+     "aurc": 0.8589030631166075
+    },
+    "reply_mean_lp": {
+     "n": 484,
+     "positives": 61,
+     "auroc": 0.581250242219897,
+     "error_at_50pct": 0.8388429880142212,
+     "error_at_25pct": 0.8595041036605835,
+     "aurc": 0.8475794690600933
+    }
+   },
+   "nq/multiturn": {
+    "accuracy": 0.1515151560306549,
+    "probe": {
+     "n": 165,
+     "positives": 25,
+     "auroc": 0.7054285714285714,
+     "error_at_50pct": 0.792682945728302,
+     "error_at_25pct": 0.6829268336296082,
+     "aurc": 0.7467767482300549,
+     "auroc_ci": [
+      0.5842766982679597,
+      0.8179422032420833
+     ]
+    },
+    "stack": {
+     "n": 165,
+     "positives": 25,
+     "auroc": 0.7062857142857143,
+     "error_at_50pct": 0.792682945728302,
+     "error_at_25pct": 0.6829268336296082,
+     "aurc": 0.746708978928522,
+     "auroc_ci": [
+      0.5846658590639321,
+      0.817411928013959
+     ],
+     "ece": 0.22522244838882235
+    },
+    "claim_p": {
+     "n": 165,
+     "positives": 25,
+     "auroc": 0.5288571428571428,
+     "error_at_50pct": 0.8658536672592163,
+     "error_at_25pct": 0.8292682766914368,
+     "aurc": 0.8488233229326863,
+     "auroc_ci": [
+      0.40524227218002634,
+      0.6546813551727534
+     ]
+    },
+    "word_min_lp": {
+     "n": 165,
+     "positives": 25,
+     "auroc": 0.5885714285714285,
+     "error_at_50pct": 0.8292682766914368,
+     "error_at_25pct": 0.7804877758026123,
+     "aurc": 0.7965739620271605
+    },
+    "reply_mean_lp": {
+     "n": 165,
+     "positives": 25,
+     "auroc": 0.5788571428571428,
+     "error_at_50pct": 0.8048780560493469,
+     "error_at_25pct": 0.8536585569381714,
+     "aurc": 0.8185744384177548
+    }
+   },
+   "nq/reasoning": {
+    "accuracy": 0.15286624431610107,
+    "probe": {
+     "n": 157,
+     "positives": 24,
+     "auroc": 0.7130325814536341,
+     "error_at_50pct": 0.7820512652397156,
+     "error_at_25pct": 0.692307710647583,
+     "aurc": 0.751438569742156,
+     "auroc_ci": [
+      0.6010098513133398,
+      0.8104475533365693
+     ]
+    },
+    "stack": {
+     "n": 157,
+     "positives": 24,
+     "auroc": 0.7133458646616542,
+     "error_at_50pct": 0.7820512652397156,
+     "error_at_25pct": 0.692307710647583,
+     "aurc": 0.7511914906147549,
+     "auroc_ci": [
+      0.601897566898827,
+      0.8107758361648523
+     ],
+     "ece": 0.21121941125613358
+    },
+    "claim_p": {
+     "n": 157,
+     "positives": 24,
+     "auroc": 0.38627819548872183,
+     "error_at_50pct": 0.8974359035491943,
+     "error_at_25pct": 0.8974359035491943,
+     "aurc": 0.8829577670064248,
+     "auroc_ci": [
+      0.26674595933646505,
+      0.5093004838298955
+     ]
+    },
+    "word_min_lp": {
+     "n": 157,
+     "positives": 24,
+     "auroc": 0.45050125313283207,
+     "error_at_50pct": 0.8589743375778198,
+     "error_at_25pct": 0.8717948794364929,
+     "aurc": 0.8468461256049266
+    },
+    "reply_mean_lp": {
+     "n": 157,
+     "positives": 24,
+     "auroc": 0.7130325814536341,
+     "error_at_50pct": 0.7564102411270142,
+     "error_at_25pct": 0.692307710647583,
+     "aurc": 0.7765734634109223
+    }
+   },
+   "nq/all": {
+    "accuracy": 0.13757699728012085,
+    "probe": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.6896410803127221,
+     "error_at_50pct": 0.8110883235931396,
+     "error_at_25pct": 0.7160493731498718,
+     "aurc": 0.7677243856043088,
+     "auroc_ci": [
+      0.6320511211229359,
+      0.7386512015264094
+     ]
+    },
+    "stack": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.6898542999289268,
+     "error_at_50pct": 0.8090349435806274,
+     "error_at_25pct": 0.7160493731498718,
+     "aurc": 0.7673427864836339,
+     "auroc_ci": [
+      0.6317484330714238,
+      0.7392534131518353
+     ],
+     "ece": 0.2039158642496794
+    },
+    "claim_p": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.5210732054015637,
+     "error_at_50pct": 0.8562628030776978,
+     "error_at_25pct": 0.8518518209457397,
+     "aurc": 0.8443085318030079,
+     "auroc_ci": [
+      0.4694626387030601,
+      0.5743069516730107
+     ]
+    }
+   }
+  },
+  "leave_one_format_out": {
+   "short": {
+    "held_out": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.7641904761904762,
+     "error_at_50pct": 0.5324675440788269,
+     "error_at_25pct": 0.31578946113586426,
+     "aurc": 0.46533498330222994,
+     "auroc_ci": [
+      0.6786717044523255,
+      0.8450203370891647
+     ]
+    },
+    "with_format": {
+     "n": 155,
+     "positives": 50,
+     "auroc": 0.7481904761904762,
+     "error_at_50pct": 0.5454545021057129,
+     "error_at_25pct": 0.2368420958518982,
+     "aurc": 0.44939765747582006,
+     "auroc_ci": [
+      0.6530073689984579,
+      0.8396492672047579
+     ]
+    }
+   },
+   "multi": {
+    "held_out": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.708994708994709,
+     "error_at_50pct": 0.5734597444534302,
+     "error_at_25pct": 0.4952380657196045,
+     "aurc": 0.5424394158814647,
+     "auroc_ci": [
+      0.65241293030145,
+      0.7604762783912336
+     ]
+    },
+    "with_format": {
+     "n": 423,
+     "positives": 126,
+     "auroc": 0.7124686013574902,
+     "error_at_50pct": 0.5829384326934814,
+     "error_at_25pct": 0.43809521198272705,
+     "aurc": 0.524139971629931,
+     "auroc_ci": [
+      0.6533178325157815,
+      0.7682723093543963
+     ]
+    }
+   },
+   "multiturn": {
+    "held_out": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.6810344827586207,
+     "error_at_50pct": 0.6172839403152466,
+     "error_at_25pct": 0.5,
+     "aurc": 0.5598040854535484,
+     "auroc_ci": [
+      0.5858931432494701,
+      0.7730432467366964
+     ]
+    },
+    "with_format": {
+     "n": 163,
+     "positives": 47,
+     "auroc": 0.7030447542186353,
+     "error_at_50pct": 0.6296296119689941,
+     "error_at_25pct": 0.4750000238418579,
+     "aurc": 0.5209558331358027,
+     "auroc_ci": [
+      0.6115597224387962,
+      0.7963418826077894
+     ]
+    }
+   },
+   "reasoning": {
+    "held_out": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.7291322314049586,
+     "error_at_50pct": 0.43661969900131226,
+     "error_at_25pct": 0.2857142686843872,
+     "aurc": 0.41889327246053915,
+     "auroc_ci": [
+      0.6295256407241026,
+      0.8184862780759066
+     ]
+    },
+    "with_format": {
+     "n": 143,
+     "positives": 55,
+     "auroc": 0.7504132231404959,
+     "error_at_50pct": 0.422535240650177,
+     "error_at_25pct": 0.2571428418159485,
+     "aurc": 0.38499285881181194,
+     "auroc_ci": [
+      0.6462612747373884,
+      0.836808732113535
+     ]
+    }
+   },
+   "math": {
+    "held_out": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.6145910095799558,
+     "error_at_50pct": 0.07999998331069946,
+     "error_at_25pct": 0.06000000238418579,
+     "aurc": 0.07926896356234674,
+     "auroc_ci": [
+      0.4876836402828346,
+      0.7361042494225979
+     ]
+    },
+    "with_format": {
+     "n": 200,
+     "positives": 177,
+     "auroc": 0.9093588798820929,
+     "error_at_50pct": 0.009999990463256836,
+     "error_at_25pct": 0.019999980926513672,
+     "aurc": 0.0206798229657591,
+     "auroc_ci": [
+      0.8378376778767403,
+      0.9659353905496625
+     ]
+    }
+   }
+  },
+  "probe_by_train_size": {
+   "1000": {
+    "test": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.8192211603976309,
+     "error_at_50pct": 0.34317344427108765,
+     "error_at_25pct": 0.1549815535545349,
+     "aurc": 0.31892626276796987
+    },
+    "nq": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.6931592039800994,
+     "error_at_50pct": 0.7926077842712402,
+     "error_at_25pct": 0.7572016716003418,
+     "aurc": 0.7846496020604528
+    }
+   },
+   "3000": {
+    "test": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.8228829993535876,
+     "error_at_50pct": 0.3505535125732422,
+     "error_at_25pct": 0.169741690158844,
+     "aurc": 0.3210721759106316
+    },
+    "nq": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.6728944562899787,
+     "error_at_50pct": 0.8049281239509583,
+     "error_at_25pct": 0.7860082387924194,
+     "aurc": 0.8039388428269852
+    }
+   },
+   "3298": {
+    "test": {
+     "n": 1084,
+     "positives": 455,
+     "auroc": 0.8215727039256451,
+     "error_at_50pct": 0.35793358087539673,
+     "error_at_25pct": 0.1660516858100891,
+     "aurc": 0.3212867413498325
+    },
+    "nq": {
+     "n": 974,
+     "positives": 134,
+     "auroc": 0.6722636815920398,
+     "error_at_50pct": 0.8008213639259338,
+     "error_at_25pct": 0.7818930149078369,
+     "aurc": 0.8024868057790212
+    }
+   }
+  },
+  "multi_reply_level": {
+   "n": 181,
+   "positives": 10,
+   "auroc": 0.6666666666666666,
+   "error_at_50pct": 0.9111111111111111,
+   "error_at_25pct": 0.9111111111111111,
+   "aurc": 0.8876937030525316,
+   "auroc_ci": [
+    0.4566439159395816,
+    0.8558617952356639
+   ]
+  },
+  "seconds": 31783
+ }
+}
