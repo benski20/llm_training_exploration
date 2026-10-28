@@ -544,12 +544,24 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): 32B chat eval with per-token traces (choosing the serving score)",
 "model": "kaggle",
+"status": "done",
+"step": null,
+"total_steps": null,
+"progress": 1.0,
+"last_loss": null,
+"note": "chose the serving score: claims read before written, calibrated (AUROC 0.83, CV 51% wrong / 10% right) (18:19:41 UTC check)"
+},
+{
+"run": "kaggle-chateval-32h",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): held-out 32B chat test of the serving settings",
+"model": "kaggle",
 "status": "running",
 "step": null,
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "45 everyday prompts + 100 TriviaQA; every token's risk, log-prob and claim scores saved (18:04:34 UTC check)"
+"note": "60 new everyday prompts full of facts, 120 new TriviaQA + 80 Natural Questions (18:37:36 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
