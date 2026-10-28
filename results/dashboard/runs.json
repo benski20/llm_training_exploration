@@ -556,12 +556,12 @@
 "experiment": "kaggle",
 "title": "Kaggle (bensliv): held-out 32B chat test of the serving settings",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "60 new everyday prompts full of facts, 120 new TriviaQA + 80 Natural Questions (18:55:45 UTC check)"
+"note": "60 new everyday prompts full of facts, 120 new TriviaQA + 80 Natural Questions (19:07:50 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
