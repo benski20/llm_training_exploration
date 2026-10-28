@@ -513,7 +513,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees (13:18:38 UTC check)"
+"note": "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees (13:36:48 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
