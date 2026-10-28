@@ -44,3 +44,15 @@ def test_converted_explain_is_exact():
     ids = torch.randint(64, (1, 10))
     parts, logit = explain(m, ids, 8, 4)
     assert abs(sum(parts.values()) - logit) < 1e-4
+
+
+def test_explain_all_is_exact_for_every_position():
+    from vt.qwen_glassbox import explain_all
+    m = tiny()
+    ids = torch.randint(64, (1, 12))
+    groups = ["doc"] * 5 + ["question"] * 3 + ["answer"] * 4
+    names, contrib, logits = explain_all(m, ids, groups, start=7)
+    assert names == ["doc", "question", "answer", "bias"] and contrib.shape == (4, 4)
+    assert torch.allclose(contrib.sum(0), logits, atol=1e-4)
+    one, logit = explain(m, ids, 9, int(ids[0, 10]), groups)
+    assert abs(one["doc"] - float(contrib[0, 2])) < 1e-4

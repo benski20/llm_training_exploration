@@ -164,12 +164,10 @@ class PatternRecorder:
             h.remove()
 
 
-@torch.no_grad()
-def explain(model, ids, t, token, groups=None):
-    """Exact decomposition of the raw logit of `token` at position t of ids (1, T):
-    {"token@j": contribution of input token j, "bias@i": of layer i's biases}. Sums to the logit.
-    Works for converted layers (fixed active sets) and dense SwiGLU MLPs (fixed gate values) alike.
-    `groups` (a name per input position) merges tokens into one component per name."""
+def _decompose(model, ids, groups=None, merge_bias=False):
+    """One forward pass, then the exact linear decomposition of the residual stream at every position
+    (the model's decisions fixed): comp (S, T, d) with one component per token group plus one per
+    layer's biases (or a single merged bias component). Returns comp, names, final RMS scales, logits."""
     rec, inp, pat = ScaleRecorder(model), InputRecorder(model), PatternRecorder(model)
     try:
         out = model(ids)
@@ -186,16 +184,17 @@ def explain(model, ids, t, token, groups=None):
     names = list(dict.fromkeys(groups)) if groups else [f"token@{j}" for j in range(T)]
     src = [names.index(g) for g in groups] if groups else list(range(T))
     G = len(names)
-    S = G + L
+    S = G + (1 if merge_bias else L)
     emb = model.model.embed_tokens.weight
     comp = torch.zeros(S, T, d, dtype=torch.float32, device=ids.device)
     comp[torch.tensor(src), torch.arange(T)] = emb[ids[0]].float()
     for i, layer in enumerate(layers_of(model)):
+        b = G if merge_bias else G + i
         at = layer.self_attn
         z = comp * sc[("in", i)][0] * layer.input_layernorm.weight.float()
         v = z @ at.v_proj.weight.float().T
         if at.v_proj.bias is not None:
-            v[G + i] += at.v_proj.bias.float()
+            v[b] += at.v_proj.bias.float()
         v = v.view(S, T, KV, hd).repeat_interleave(H // KV, dim=2).transpose(1, 2)    # (S, H, T, hd)
         A = pat.A[i]                                                                # (H, T, T)
         o = torch.einsum("htu,shud->sthd", A, v).reshape(S, T, d)
@@ -205,15 +204,39 @@ def explain(model, ids, t, token, groups=None):
         if isinstance(sp, SparseMLP):
             mask = sp.trace["mask"][0]
             pre = z2 @ sp.enc.weight.float().T
-            pre[G + i] += sp.enc.bias.float()
+            pre[b] += sp.enc.bias.float()
             comp = comp + (pre * mask) @ sp.dec.weight.float().T
         else:                                                   # SwiGLU with its gate values fixed
             gate = sp.act_fn(F.linear(inp.x[i][0].float(), sp.gate_proj.weight.float()))   # (T, d_ff)
             comp = comp + ((z2 @ sp.up_proj.weight.float().T) * gate) @ sp.down_proj.weight.float().T
-    zf = comp[:, t] * sc[("final", 0)][0, t] * model.model.norm.weight.float()
+    names = names + (["bias"] if merge_bias else [f"bias@{i}" for i in range(L)])
+    return comp, names, sc[("final", 0)][0], out.logits[0]
+
+
+@torch.no_grad()
+def explain(model, ids, t, token, groups=None):
+    """Exact decomposition of the raw logit of `token` at position t of ids (1, T):
+    {"token@j": contribution of input token j, "bias@i": of layer i's biases}. Sums to the logit.
+    Works for converted layers (fixed active sets) and dense SwiGLU MLPs (fixed gate values) alike.
+    `groups` (a name per input position) merges tokens into one component per name."""
+    comp, names, fs, logits = _decompose(model, ids, groups)
+    zf = comp[:, t] * fs[t] * model.model.norm.weight.float()
     contrib = zf @ model.lm_head.weight[token].float()
-    names = names + [f"bias@{i}" for i in range(L)]
-    return dict(zip(names, contrib.tolist())), float(out.logits[0, t, token])
+    return dict(zip(names, contrib.tolist())), float(logits[t, token])
+
+
+@torch.no_grad()
+def explain_all(model, ids, groups, start=0):
+    """Provenance of every written token in one pass: for each position t >= start, the exact split of
+    the logit of the token actually at t+1 into each group's contribution plus one merged bias term.
+    Returns (names, contrib (S, n), logits (n,)) with n = T - 1 - start; columns sum to the logits."""
+    comp, names, fs, logits = _decompose(model, ids, groups, merge_bias=True)
+    T = ids.shape[1]
+    pos = torch.arange(start, T - 1, device=ids.device)
+    tgt = ids[0, start + 1:]
+    zf = comp[:, pos] * fs[pos] * model.model.norm.weight.float()                   # (S, n, d)
+    contrib = torch.einsum("snd,nd->sn", zf, model.lm_head.weight[tgt].float())
+    return names, contrib, logits[pos, tgt].float()
 
 
 @torch.no_grad()
