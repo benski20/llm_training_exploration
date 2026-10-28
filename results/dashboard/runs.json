@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": 1.0,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (03:18:08 UTC check)"
+"note": "all formats: stack 0.856 vs token p 0.760; top-25% error 7% vs 18%; NQ 0.736 (03:18:08 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -442,6 +442,18 @@
 "progress": null,
 "last_loss": null,
 "note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (03:17:52 UTC check)"
+},
+{
+"run": "kaggle-detector-7b",
+"experiment": "kaggle",
+"title": "Kaggle (bensliv): general hallucination detector, Qwen2.5-7B reader",
+"model": "kaggle",
+"status": "running",
+"step": null,
+"total_steps": null,
+"progress": null,
+"last_loss": null,
+"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (03:19:38 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -509,9 +521,9 @@
 "title": "CPU: doubt-aware generation with the 1.5B probe",
 "model": "qwen",
 "status": "running",
-"step": 0,
+"step": 10,
 "total_steps": 300,
-"progress": 0.0,
+"progress": 0.03333333333333333,
 "last_loss": null,
 "note": "the 0.5B probe tied token probability; does the stronger 1.5B probe cut hallucinations more?"
 },
