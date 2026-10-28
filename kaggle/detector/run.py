@@ -172,6 +172,8 @@ def main():
             names, c, _ = explain_all(model, torch.tensor([e["ids"]], device=dev), e["groups"], start=e["r0"] - 1)
             c = c.float().cpu().numpy()
             r["doc_share"] = (c[names.index("document")] / (np.abs(c).sum(0) + 1e-6)).tolist()
+            from vt.qwen_glassbox import lookback_ratio
+            r["lookback"] = lookback_ratio(model, torch.tensor([e["ids"]], device=dev), e["groups"], e["r0"] - 1).tolist()
         return r
 
     def feats(r):
@@ -226,11 +228,21 @@ def main():
             lo = [(sc, lab) for r in rs if r["token_labels"] and s in r["lodo_tok"] for sc, lab in zip(r["lodo_tok"][s], r["token_labels"])]
             if lo:
                 d["token_level"]["left_out_probe_auroc"] = auroc([t[0] for t in lo], [t[1] for t in lo])
-        pv = [(ds, lab, sc) for r in rs if r.get("doc_share") and r["token_labels"]
-              for ds, lab, sc in zip(r["doc_share"], r["token_labels"], r["tok_scores"])]
+        pv = [(ds, lab, sc, lb) for r in rs if r.get("doc_share") and r["token_labels"]
+              for ds, lab, sc, lb in zip(r["doc_share"], r["token_labels"], r["tok_scores"], r["lookback"])]
         if pv and len({t[1] for t in pv}) > 1:
-            d["provenance_tokens"] = {"low_doc_share_auroc": auroc([-t[0] for t in pv], [t[1] for t in pv]),
-                                      "probe_auroc_same_tokens": auroc([t[2] for t in pv], [t[1] for t in pv]), "tokens": len(pv)}
+            py = [t[1] for t in pv]
+            d["provenance_tokens"] = {"low_doc_share_auroc": auroc([-t[0] for t in pv], py),
+                                      "low_doc_share_ci": auroc_ci([-t[0] for t in pv], py, n=200),
+                                      "lookback_lens_low_ratio_auroc": auroc([-t[3] for t in pv], py),
+                                      "lookback_lens_ci": auroc_ci([-t[3] for t in pv], py, n=200),
+                                      "probe_auroc_same_tokens": auroc([t[2] for t in pv], py), "tokens": len(pv)}
+        pr = [r for r in rs if r.get("doc_share")]
+        if pr and len({r["label"] for r in pr}) > 1:                       # response level: the least supported stretch
+            d["provenance_responses"] = {
+                "low_doc_share_auroc": auroc([-np.percentile(r["doc_share"], 10) for r in pr], [r["label"] for r in pr]),
+                "lookback_lens_auroc": auroc([-np.percentile(r["lookback"], 10) for r in pr], [r["label"] for r in pr]),
+                "n": len(pr)}
         R_[s] = d
     res["per_source"], res["seconds"], res["complete"] = R_, round(time.time() - t0), True
     save()

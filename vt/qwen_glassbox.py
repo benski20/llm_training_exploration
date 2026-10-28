@@ -274,3 +274,26 @@ def active_features(model, position):
         nz = a.nonzero().squeeze(-1)
         res[i] = (nz.tolist(), a[nz].float().tolist())
     return res
+
+
+@torch.no_grad()
+def lookback_ratio(model, ids, groups, start):
+    """Lookback Lens's context signal (Chuang et al. 2024), as a baseline for exact provenance: for
+    each position t >= start, the attention mass on document tokens over the mass on document plus
+    already-written response tokens, averaged over all layers and heads."""
+    pat = PatternRecorder(model)
+    try:
+        model(ids)
+    finally:
+        pat.remove()
+    g = groups
+    doc = torch.tensor([x == "document" for x in g])
+    gen = torch.tensor([x == "response" for x in g])
+    out = []
+    for i in sorted(pat.A):
+        A = pat.A[i].float()                                                  # (H, T, T)
+        d, r = doc.to(A.device), gen.to(A.device)
+        md = (A[:, start:-1] * d).sum(-1)
+        mr = (A[:, start:-1] * r).sum(-1)
+        out.append((md / (md + mr + 1e-9)).mean(0).cpu())
+    return torch.stack(out).mean(0)                                           # (n,)

@@ -56,3 +56,11 @@ def test_explain_all_is_exact_for_every_position():
     assert torch.allclose(contrib.sum(0), logits, atol=1e-4)
     one, logit = explain(m, ids, 9, int(ids[0, 10]), groups)
     assert abs(one["doc"] - float(contrib[0, 2])) < 1e-4
+
+
+def test_lookback_ratio_is_a_share():
+    from vt.qwen_glassbox import lookback_ratio
+    m = tiny()
+    ids = torch.randint(64, (1, 12))
+    r = lookback_ratio(m, ids, ["document"] * 6 + ["instruction"] * 2 + ["response"] * 4, start=7)
+    assert r.shape == (4,) and bool(((r >= 0) & (r <= 1)).all())
