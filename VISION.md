@@ -801,6 +801,44 @@ against a GPT student, on 28,672 replies from Qwen2.5-1.5B-Instruct plus
 (accuracy, hallucination, error-bounded release of answers by each signal)
 and on made-up names.
 
+**Any reply, any format: claim-level correctness** (`vt/claims.py`,
+`kaggle/claims/run.py`, `vt.chat_serve.ClaimResponder`). The estimator above
+judges one short answer per question. The product has to judge any reply: a
+paragraph, a list, a reasoning chain, the fifth turn of a conversation. The
+unit is therefore the *claim*: each name, number or date a reply asserts that
+the conversation did not already contain. The probe reads the hidden state at
+each claim's first token, so one forward pass over the reply scores all its
+claims. There is no sampling, and the serving overhead is one pass.
+
+Training data comes in five formats with automatic labels:
+- *short*: one question;
+- *multi*: three questions answered on numbered lines, each line labelled;
+- *multiturn*: the question asked after one to three earlier turns;
+- *reasoning*: step by step, then a final answer;
+- *math*: GSM8K, where the final number is checked.
+
+Final answers are found however the model writes them: `\boxed{}`, "The final
+answer is", or the closing line. Models ignore an instructed "Answer:" line,
+and a strict parser had labelled no math replies at all.
+
+The evaluation reports, per format:
+- TriviaQA / GSM8K test and NQ-open with 95% bootstrap intervals;
+- leave-one-format-out (trained without a format, tested on it);
+- a training-size curve;
+- the risk-coverage area, calibration, and reply-level risk for multi-claim
+  replies.
+
+**Float16 without NaNs.** In float16 the earlier Kaggle run produced garbage
+(0% accuracy, then a CUDA assert). The cause is not Qwen2.5's activations, which
+peak below 7,000. It is its raw attention logits: q.k reaches about 2.6e5 in
+the 1.5B model, beyond float16's 65,504. Hugging Face's eager attention
+multiplies before scaling, so it overflows. sdpa scales first, so it does not.
+Everything now runs float16 with sdpa: about 4-8x cheaper on a T4, and
+the 3B model fits (it ran out of memory in float32). Exact attribution now
+recomputes each attention pattern in float32 from the module's inputs. It
+matches eager exactly (difference 0.0), and in float16 the parts sum to the
+logit within 0.005 of 18.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,
