@@ -400,12 +400,12 @@
 "experiment": "kaggle",
 "title": "Kaggle (benski22): claim-level probe, any format, Qwen2.5-3B",
 "model": "kaggle",
-"status": "running",
+"status": "done",
 "step": null,
 "total_steps": null,
-"progress": null,
+"progress": 1.0,
 "last_loss": null,
-"note": "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out (01:46:46 UTC check)"
+"note": "all formats: stack 0.837 vs token p 0.740 (CIs disjoint); NQ unseen 0.762; held-out formats 0.74-0.82 (02:07:55 UTC check)"
 },
 {
 "run": "kaggle-claims-7b",
@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (01:47:02 UTC check)"
+"note": "same pipeline at 7B; device_map across both T4s (02:08:11 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (01:47:58 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (02:06:06 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -473,9 +473,9 @@
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
 "status": "running",
-"step": 350,
+"step": 425,
 "total_steps": 600,
-"progress": 0.5833333333333334,
+"progress": 0.7083333333333334,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 },

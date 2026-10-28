@@ -167,7 +167,7 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
             "failed after 12 min: out of GPU memory in float32 (12.4 GB of 14.6); fixed by float16 + sdpa"),
            ("kaggle-claims-3b", "Kaggle (benski22): claim-level probe, any format, Qwen2.5-3B",
             "results/kaggle/qwen-claims-3b.log", "results/kaggle/qwen-claims-3b/claims/results.json",
-            "5 formats (short, multi, multi-turn, reasoning, math); float16 + sdpa; leave-one-format-out"),
+            "all formats: stack 0.837 vs token p 0.740 (CIs disjoint); NQ unseen 0.762; held-out formats 0.74-0.82"),
            ("kaggle-claims-7b", "Kaggle (bensliv): claim-level probe, any format, Qwen2.5-7B on 2 GPUs",
             "results/kaggle/claims-7b.log", "results/kaggle/claims-7b/claims/results.json",
             "same pipeline at 7B; device_map across both T4s"),
