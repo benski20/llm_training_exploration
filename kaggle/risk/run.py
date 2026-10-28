@@ -261,13 +261,26 @@ def main():
     if a.smoke:
         a.model, a.own_train, a.own_test, a.gen_batch = "Qwen/Qwen2.5-0.5B-Instruct", 3, 2, 4
     os.makedirs(a.out, exist_ok=True)
+    import subprocess
+    from importlib.metadata import version
+    tv = tuple(int(x) for x in version("transformers").split(".")[:2])
+    if "qwen3" in a.model.lower() and tv < (4, 51):               # Qwen3 needs transformers >= 4.51
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers>=4.51,<4.58"], check=False)
+    prequant = "bnb-4bit" in a.model.lower()
+    if prequant or a.quant != "none":
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "bitsandbytes"], check=False)
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    log(phase="env", transformers=version("transformers"), torch=torch.__version__,
+        gpus=[torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
     cuda = torch.cuda.is_available()
     tok = AutoTokenizer.from_pretrained(a.model)
     kw = dict(torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa")
     if cuda:
         kw["device_map"] = "auto"
-    if a.quant != "none":
+    if a.quant != "none" and not prequant:
         try:
             import bitsandbytes  # noqa: F401
         except ImportError:
@@ -277,6 +290,13 @@ def main():
         kw["quantization_config"] = BitsAndBytesConfig(load_in_8bit=a.quant == "8bit", load_in_4bit=a.quant == "4bit",
                                                        bnb_4bit_compute_dtype=torch.float16)
     model = AutoModelForCausalLM.from_pretrained(a.model, **kw).eval()
+    if cuda and torch.cuda.get_device_capability(0)[0] < 8:          # T4: no bfloat16 matmuls; compute in float16
+        for m in model.modules():
+            if getattr(m, "compute_dtype", None) == torch.bfloat16:
+                m.compute_dtype = torch.float16
+    probe_q = [chat_prompt(tok, [{"role": "user", "content": "What is the capital of France? Answer briefly."}], False)]
+    sanity = tok.decode(generate(model, tok, probe_q, max_new_tokens=16, batch=1)[0], skip_special_tokens=True)
+    log(phase="sanity", reply=sanity, s=round(time.time() - T0))           # garbage here means float16 trouble
     L = model.config.num_hidden_layers
     layers = sorted({int(round(f * (L - 1))) for f in (0.55, 0.7, 0.85)})
     res = {"config": vars(a), "model": a.model, "layers": layers, "complete": False}
