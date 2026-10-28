@@ -200,6 +200,7 @@ class Detector:
         self.tok_probe = Probe.from_state(head["token_probe"])
         self.stacker = Probe.from_state(head["stacker"])
         self.threshold = float(head["threshold"])
+        self.model_name = head.get("model")
 
     @classmethod
     def load(cls, model_name, head_path):
@@ -209,7 +210,9 @@ class Detector:
         model = AutoModelForCausalLM.from_pretrained(
             model_name, torch_dtype=torch.float16 if cuda else torch.float32, attn_implementation="sdpa",
             device_map="auto" if cuda else None).eval()
-        return cls(model, tok, torch.load(head_path, map_location="cpu", weights_only=True))
+        det = cls(model, tok, torch.load(head_path, map_location="cpu", weights_only=True))
+        det.model_name = model_name
+        return det
 
     def item(self, messages, response, documents=None):
         msgs = [dict(m) for m in messages]
@@ -229,17 +232,27 @@ class Detector:
             raise ValueError(r["error"])
         return r
 
-    @torch.no_grad()
     def judge_batch(self, items, max_tokens=4096, token_threshold=0.73, batch_tokens=8192):
         """Judge many replies: right-padded batches of similar length (at most `batch_tokens` padded
         tokens each), one forward pass per batch. items: [{"messages", "response", "documents"?}];
         returns one result per item, or {"error"} for an item that cannot be scored."""
+        out = [None] * len(items)
+        for i, e, h, lp in self._states(items, max_tokens, batch_tokens):
+            out[i] = {"error": "empty response, or the prompt leaves no room for it"} if e is None else \
+                self._finish(items[i], e, h, lp, token_threshold)
+        return out
+
+    @torch.no_grad()
+    def _states(self, items, max_tokens=4096, batch_tokens=8192):
+        """Yields (index, encoding, [response-layer states, token-layer states], token log-probs) per item;
+        encoding None for an item that cannot be scored."""
         enc = []
         for it in items:
-            item = self.item(it["messages"], it["response"], it.get("documents"))
-            e = encode(self.tok, item, max_tokens)
+            e = encode(self.tok, self.item(it["messages"], it["response"], it.get("documents")), max_tokens)
             enc.append(e if e is not None and e["r0"] < len(e["ids"]) else None)
-        out = [{"error": "empty response, or the prompt leaves no room for it"} if e is None else None for e in enc]
+        for i, e in enumerate(enc):
+            if e is None:
+                yield i, None, None, None
         order = sorted((i for i, e in enumerate(enc) if e), key=lambda i: len(enc[i]["ids"]))
         dev = self.model.get_input_embeddings().weight.device
         pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else 0
@@ -273,16 +286,43 @@ class Detector:
                 logits = self.model.lm_head(hs[b, e["r0"] - 1:n - 1]).float()   # response positions only
                 tgt = torch.tensor(e["ids"][e["r0"]:], device=logits.device)
                 lp = logits.log_softmax(-1).gather(-1, tgt[:, None])[:, 0].cpu()
-                out[i] = self._finish(items[i], e, h, lp, token_threshold)
-        return out
+                yield i, e, h, lp
+
+    def _features(self, h, lp):
+        ts = self.tok_probe.logit(h[1].numpy())
+        resp = float(self.resp_probe.logit(h[0].mean(0, keepdim=True).numpy())[0])
+        return [resp, float(ts.max()), float(ts.mean()), float(np.percentile(ts, 95)), float(lp.mean()), float(lp.min())]
+
+    def adapt(self, items, max_tokens=4096):
+        """A copy of this detector adapted to a new domain from labelled replies (items as in
+        judge_batch, each with "label": 1 = hallucinated). The response probe and the stacker are refitted
+        with the current ones as priors (vt.correctness.Probe), and the threshold re-chosen for
+        accuracy. The reader stays frozen; a few hundred labels take seconds after one forward pass each."""
+        import copy
+        from vt.correctness import Probe
+        rows = [(items[i]["label"], h, lp) for i, e, h, lp in self._states(items, max_tokens) if e is not None]
+        y = np.array([r[0] for r in rows], dtype=np.float32)
+        if len(rows) < 10 or len(set(y.tolist())) < 2:
+            raise ValueError("need at least 10 scorable labelled replies of both kinds")
+        new = copy.copy(self)
+        new.resp_probe = Probe(prior=self.resp_probe).fit(np.stack([r[1][0].mean(0).numpy() for r in rows]), y)
+        F_ = np.array([new._features(r[1], r[2]) for r in rows], dtype=np.float32)
+        new.stacker = Probe(prior=self.stacker).fit(F_, y, grid=(float("inf"), 10.0, 1.0, 0.1, 0.01))
+        z = new.stacker.logit(F_)
+        cands = np.unique(z)
+        new.threshold = float(max(cands, key=lambda t: np.mean((z >= t) == (y == 1))))
+        return new
+
+    def state_dict(self):
+        return {"model": self.model_name, "response_layer": self.layers[0], "token_layer": self.layers[1],
+                "response_probe": self.resp_probe.state_dict(), "token_probe": self.tok_probe.state_dict(),
+                "stacker": self.stacker.state_dict(), "threshold": self.threshold,
+                "features": list(self.FEATURES)}
 
     def _finish(self, it, e, h, lp, token_threshold):
         response = it["response"]
-        ht = h[1].numpy()
-        ts = self.tok_probe.logit(ht)
-        resp = float(self.resp_probe.logit(h[0].mean(0, keepdim=True).numpy())[0])
-        f = np.array([[resp, ts.max(), ts.mean(), np.percentile(ts, 95), float(lp.mean()), float(lp.min())]])
-        z = float(self.stacker.logit(f)[0])
+        ts = self.tok_probe.logit(h[1].numpy())
+        z = float(self.stacker.logit(np.array([self._features(h, lp)]))[0])
         p_tok = 1 / (1 + np.exp(-ts))
         head = self.tok.apply_chat_template(self.item(it["messages"], response, it.get("documents"))["messages"],
                                             tokenize=False, add_generation_prompt=True)

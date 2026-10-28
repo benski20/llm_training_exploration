@@ -7,6 +7,7 @@
 
   vt verichat --model Qwen/Qwen2.5-7B-Instruct --head <claims head> [--detector <head>] [--corpus docs/]
   vt judge --detector <head> --question "..." --answer "..." [--doc source.txt]   # any model's answer
+  vt adapt --detector <head> --data labelled.jsonl --out adapted.pt      # fit a new domain from labels
 """
 import argparse
 import json
@@ -275,6 +276,24 @@ def cmd_judge(a):
     return 0
 
 
+def cmd_adapt(a):
+    import torch
+    from .detector import Detector
+    head = torch.load(a.detector, map_location="cpu", weights_only=True)
+    det = Detector.load(a.model or head["model"], a.detector)
+    items = []
+    for ln in open(a.data, encoding="utf-8"):
+        if ln.strip():
+            x = json.loads(ln)
+            msgs = x.get("messages") or [{"role": "user", "content": x["question"]}]
+            items.append({"messages": msgs, "response": x["response"], "documents": x.get("documents"),
+                          "label": int(x["label"])})
+    new = det.adapt(items)
+    torch.save(new.state_dict(), a.out)
+    print(f"adapted on {len(items)} labelled replies; threshold {new.threshold:.3f}; saved {a.out}")
+    return 0
+
+
 def cmd_keygen(a):
     from .artifact import generate_keypair
     generate_keypair(a.private, a.public)
@@ -502,6 +521,11 @@ def main(argv=None):
     p.add_argument("--doc", action="append", help="a source document file (repeatable)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_judge)
+    p = sub.add_parser("adapt", help="adapt a detector to a new domain from labelled replies (JSONL)")
+    p.add_argument("--detector", required=True); p.add_argument("--model")
+    p.add_argument("--data", required=True, help='JSONL: {"question" or "messages", "response", "documents"?, "label": 0/1}')
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_adapt)
     p = sub.add_parser("keygen", help="create an Ed25519 key pair for signing certificates")
     p.add_argument("private"); p.add_argument("public")
     p.set_defaults(fn=cmd_keygen)
@@ -515,7 +539,7 @@ def main(argv=None):
     p.add_argument("--spec", default="dyck", choices=SPECS)
     p.set_defaults(fn=cmd_predict)
     for name, sp_ in sub.choices.items():
-        if name in ("verichat", "judge"):
+        if name in ("verichat", "judge", "adapt"):
             continue
         if name not in ("keygen", "respond", "chat-export", "chat", "chat-serve"):
             sp_.add_argument("--spec-file", help="JSON DFA spec (any regular language); overrides --spec")

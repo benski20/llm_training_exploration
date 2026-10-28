@@ -118,25 +118,40 @@ def report(scores, y, prob=None, ci=False):
 
 # ---------------------------------------------------------------------------------------- probe
 class Probe:
-    """Standardised logistic regression; L2 strength chosen on an inner split of the fitting data."""
+    """Standardised logistic regression; L2 strength chosen on an inner split of the fitting data.
 
-    def __init__(self, device="cpu"):
-        self.device = device
+    With `prior` (a fitted Probe), fitting adapts it to new data: the prior's standardisation is kept,
+    the weights start from the prior's, and the penalty pulls them toward it (l2 * |w - w_prior|^2), so a
+    few hundred labels can move a probe trained on many thousands without overfitting it. The unchanged
+    prior is one of the candidates, so the inner split only accepts an adaptation that helps."""
+
+    def __init__(self, device="cpu", prior=None):
+        self.device, self.prior = device, prior
 
     def _fit(self, X, y, l2, steps):
-        mu, sd = X.mean(0), X.std(0) + 1e-6
+        if self.prior is not None:
+            mu, sd = self.prior.mu.to(X.device), self.prior.sd.to(X.device)
+            w0, b0 = self.prior.w.to(X.device), self.prior.b.to(X.device)
+            if l2 == float("inf"):
+                return mu, sd, w0.clone(), b0.clone()
+        else:
+            mu, sd = X.mean(0), X.std(0) + 1e-6
+            w0 = torch.zeros(X.shape[1], device=self.device)
+            b0 = torch.zeros(1, device=self.device)
         Z = (X - mu) / sd
-        w = torch.zeros(X.shape[1], device=self.device, requires_grad=True)
-        b = torch.zeros(1, device=self.device, requires_grad=True)
-        opt = torch.optim.Adam([w, b], lr=0.05)
+        w = w0.clone().requires_grad_(True)
+        b = b0.clone().requires_grad_(True)
+        opt = torch.optim.Adam([w, b], lr=0.05 if self.prior is None else 0.01)
         for _ in range(steps):
-            loss = F.binary_cross_entropy_with_logits(Z @ w + b, y) + l2 * w.pow(2).sum()
+            loss = F.binary_cross_entropy_with_logits(Z @ w + b, y) + l2 * (w - w0).pow(2).sum()
             opt.zero_grad()
             loss.backward()
             opt.step()
         return mu, sd, w.detach(), b.detach()
 
     def fit(self, X, y, grid=(1e-3, 1e-2, 1e-1, 1.0, 10.0), steps=300, seed=1):
+        if self.prior is not None and grid == (1e-3, 1e-2, 1e-1, 1.0, 10.0):
+            grid = (float("inf"), 10.0, 1.0, 0.1, 0.01)        # inf (first, so it wins ties): keep the prior
         try:
             return self._fit_grid(X, y, grid, steps, seed)
         except torch.OutOfMemoryError:                  # a GPU shared with the model: fall back to the CPU

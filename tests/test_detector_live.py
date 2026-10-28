@@ -99,3 +99,22 @@ def test_batched_features_match_training_features():
     resp_z = float(det.resp_probe.logit(h[0].float().mean(0, keepdim=True).numpy())[0])
     f = np.array([[resp_z, ts.max(), ts.mean(), np.percentile(ts, 95), float(lp.mean()), float(lp.min())]])
     assert abs(float(det.stacker.logit(f)[0]) - det.judge(msgs, resp)["logit"]) < 1e-2   # float16 copy in training
+
+
+def test_adapt_fits_a_new_domain_and_round_trips():
+    from vt.correctness import auroc
+    det = _det()
+    items = []
+    for i in range(30):                                       # a learnable "domain": label = which city is named
+        bad = i % 2
+        items.append({"messages": [{"role": "user", "content": f"Question {i}: where is the office?"}],
+                      "response": ("It is in Lyon." if bad else "It is in Paris.") + " " * (i % 3), "label": bad})
+    y = [it["label"] for it in items]
+    before = auroc([r["logit"] for r in det.judge_batch(items)], y)
+    new = det.adapt(items)
+    after = auroc([r["logit"] for r in new.judge_batch(items)], y)
+    assert after >= before and after > 0.9
+    assert det.resp_probe is not new.resp_probe                # the original is untouched
+    again = Detector(det.model, det.tok, new.state_dict())
+    assert abs(again.judge(items[0]["messages"], items[0]["response"])["logit"] -
+               new.judge(items[0]["messages"], items[0]["response"])["logit"]) < 1e-5
