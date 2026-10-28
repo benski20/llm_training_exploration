@@ -16,5 +16,24 @@
   "factual_auroc": 0.828,
   "note": "Qwen3-32B-bnb-4bit, served sampling; TriviaQA asked conversationally (chateval-32b + chateval-32t); calibration and threshold fitted on these same replies"
  },
- "how": "experiments/serving_score.py; claims are read at the position that writes them (the risk head, negated), calibrated with Platt scaling"
+ "how": "experiments/serving_score.py; claims are read at the position that writes them (the risk head, negated), calibrated with Platt scaling",
+ "held_out": {
+  "source": "results/kaggle/chateval-32h (new prompts and questions, not used for fitting)",
+  "everyday_fact_heavy_replies_flagged": 0.071,
+  "everyday_sentences_flagged": 0.008,
+  "everyday_n": 56,
+  "triviaqa": {
+   "n": 120,
+   "auroc": 0.778,
+   "wrong_flagged": 0.371,
+   "right_flagged": 0.118
+  },
+  "natural_questions": {
+   "n": 80,
+   "auroc": 0.566,
+   "wrong_flagged": 0.214,
+   "right_flagged": 0.132,
+   "note": "answer matching is noisy and many questions are time-sensitive"
+  }
+ }
 }

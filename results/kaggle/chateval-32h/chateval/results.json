@@ -1,0 +1,6242 @@
+{
+ "model": "unsloth/Qwen3-32B-bnb-4bit",
+ "threshold": 0.9847184151411057,
+ "sampling": {
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "top_k": 20,
+  "presence_penalty": 1.5,
+  "seed": 0
+ },
+ "speed": {
+  "replies": 256,
+  "seconds": 1438.1,
+  "seconds_per_reply": 5.62,
+  "tokens_per_second": 16.8,
+  "batch": 16
+ },
+ "everyday": {
+  "by_category": {
+   "history": {
+    "replies": 8,
+    "flagged_replies": 0,
+    "sentences": 62,
+    "flagged_sentences": 0,
+    "flagged_reply_rate": 0.0,
+    "flagged_sentence_rate": 0.0
+   },
+   "travel": {
+    "replies": 8,
+    "flagged_replies": 1,
+    "sentences": 88,
+    "flagged_sentences": 1,
+    "flagged_reply_rate": 0.125,
+    "flagged_sentence_rate": 0.011
+   },
+   "science": {
+    "replies": 8,
+    "flagged_replies": 0,
+    "sentences": 54,
+    "flagged_sentences": 0,
+    "flagged_reply_rate": 0.0,
+    "flagged_sentence_rate": 0.0
+   },
+   "people": {
+    "replies": 8,
+    "flagged_replies": 0,
+    "sentences": 47,
+    "flagged_sentences": 0,
+    "flagged_reply_rate": 0.0,
+    "flagged_sentence_rate": 0.0
+   },
+   "recipes": {
+    "replies": 6,
+    "flagged_replies": 0,
+    "sentences": 77,
+    "flagged_sentences": 0,
+    "flagged_reply_rate": 0.0,
+    "flagged_sentence_rate": 0.0
+   },
+   "howto": {
+    "replies": 6,
+    "flagged_replies": 1,
+    "sentences": 101,
+    "flagged_sentences": 1,
+    "flagged_reply_rate": 0.167,
+    "flagged_sentence_rate": 0.01
+   },
+   "creative": {
+    "replies": 6,
+    "flagged_replies": 0,
+    "sentences": 76,
+    "flagged_sentences": 0,
+    "flagged_reply_rate": 0.0,
+    "flagged_sentence_rate": 0.0
+   },
+   "smalltalk": {
+    "replies": 6,
+    "flagged_replies": 2,
+    "sentences": 26,
+    "flagged_sentences": 2,
+    "flagged_reply_rate": 0.333,
+    "flagged_sentence_rate": 0.077
+   }
+  },
+  "flagged_reply_rate": 0.071,
+  "flagged_sentence_rate": 0.008
+ },
+ "factual": {
+  "n": 200,
+  "wrong": 77,
+  "accuracy": 0.615,
+  "risk_auroc": 0.6569528032942668,
+  "risk_ci": [
+   0.5717904345069255,
+   0.7351214425974854
+  ],
+  "claim_probe_auroc": 0.6935909618836448,
+  "at_threshold": {
+   "wrong_flagged": 0.0,
+   "right_flagged": 0.0
+  },
+  "sweep": {
+   "0.15": {
+    "wrong_flagged": 0.701,
+    "right_flagged": 0.374
+   },
+   "0.28": {
+    "wrong_flagged": 0.403,
+    "right_flagged": 0.236
+   },
+   "0.33": {
+    "wrong_flagged": 0.299,
+    "right_flagged": 0.138
+   },
+   "0.48": {
+    "wrong_flagged": 0.143,
+    "right_flagged": 0.073
+   }
+  },
+  "baselines": {
+   "min_token_logprob_auroc": 0.6079083518107908,
+   "mean_logprob_auroc": 0.6325625593918277,
+   "worst_sentence_min_logprob_auroc": 0.6228486960194277,
+   "risk_plus_min_logprob_rank_mean_auroc": 0.653521275472495,
+   "risk_plus_mean_logprob_rank_mean_auroc": 0.6698342308098406
+  },
+  "threshold_grid": {
+   "0.20": {
+    "everyday_flagged": 0.286,
+    "wrong_flagged": 0.584,
+    "right_flagged": 0.293
+   },
+   "0.25": {
+    "everyday_flagged": 0.143,
+    "wrong_flagged": 0.455,
+    "right_flagged": 0.26
+   },
+   "0.30": {
+    "everyday_flagged": 0.071,
+    "wrong_flagged": 0.351,
+    "right_flagged": 0.203
+   },
+   "0.35": {
+    "everyday_flagged": 0.071,
+    "wrong_flagged": 0.286,
+    "right_flagged": 0.122
+   },
+   "0.40": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.247,
+    "right_flagged": 0.114
+   },
+   "0.45": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.195,
+    "right_flagged": 0.098
+   },
+   "0.50": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.143,
+    "right_flagged": 0.065
+   },
+   "0.55": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.13,
+    "right_flagged": 0.049
+   },
+   "0.60": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.117,
+    "right_flagged": 0.049
+   },
+   "0.65": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.117,
+    "right_flagged": 0.041
+   },
+   "0.70": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.117,
+    "right_flagged": 0.041
+   },
+   "0.75": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.104,
+    "right_flagged": 0.041
+   },
+   "0.80": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.078,
+    "right_flagged": 0.041
+   },
+   "0.85": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.039,
+    "right_flagged": 0.016
+   },
+   "0.90": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.026,
+    "right_flagged": 0.008
+   },
+   "0.95": {
+    "everyday_flagged": 0.0,
+    "wrong_flagged": 0.0,
+    "right_flagged": 0.0
+   }
+  },
+  "served": {
+   "wrong_flagged": 0.286,
+   "right_flagged": 0.122,
+   "threshold": 0.65
+  },
+  "by_source": {
+   "nq": {
+    "n": 80,
+    "accuracy": 0.475,
+    "claim_min_auroc": 0.5657894736842105,
+    "claim_mean_auroc": 0.5667293233082706,
+    "wrong_flagged": 0.214,
+    "right_flagged": 0.132
+   },
+   "triviaqa": {
+    "n": 120,
+    "accuracy": 0.708,
+    "claim_min_auroc": 0.7784873949579832,
+    "claim_mean_auroc": 0.717983193277311,
+    "wrong_flagged": 0.371,
+    "right_flagged": 0.118
+   }
+  }
+ },
+ "raw": {
+  "everyday": [
+   {
+    "cat": "history",
+    "max_risk": 0.0934,
+    "min_logprob": -1.8304,
+    "mean_logprob": -0.0985
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.103,
+    "min_logprob": -2.2937,
+    "mean_logprob": -0.2321
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.0987,
+    "min_logprob": -2.4949,
+    "mean_logprob": -0.1881
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.1805,
+    "min_logprob": -2.2579,
+    "mean_logprob": -0.1787
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.2682,
+    "min_logprob": -2.4165,
+    "mean_logprob": -0.2162
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.0936,
+    "min_logprob": -1.8088,
+    "mean_logprob": -0.1741
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.0833,
+    "min_logprob": -1.8542,
+    "mean_logprob": -0.2053
+   },
+   {
+    "cat": "history",
+    "max_risk": 0.1843,
+    "min_logprob": -2.5759,
+    "mean_logprob": -0.2628
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.1982,
+    "min_logprob": -1.9454,
+    "mean_logprob": -0.2119
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.1999,
+    "min_logprob": -4.0799,
+    "mean_logprob": -0.4425
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.1287,
+    "min_logprob": -2.8258,
+    "mean_logprob": -0.2389
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.3951,
+    "min_logprob": -3.4181,
+    "mean_logprob": -0.4144
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.235,
+    "min_logprob": -2.5664,
+    "mean_logprob": -0.3356
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.2177,
+    "min_logprob": -2.4693,
+    "mean_logprob": -0.2458
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.1561,
+    "min_logprob": -3.5085,
+    "mean_logprob": -0.2993
+   },
+   {
+    "cat": "travel",
+    "max_risk": 0.1398,
+    "min_logprob": -2.716,
+    "mean_logprob": -0.3423
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.1262,
+    "min_logprob": -1.4697,
+    "mean_logprob": -0.1117
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.2153,
+    "min_logprob": -2.2411,
+    "mean_logprob": -0.2366
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.064,
+    "min_logprob": -1.6369,
+    "mean_logprob": -0.1405
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.0047,
+    "min_logprob": -0.6776,
+    "mean_logprob": -0.0352
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.1589,
+    "min_logprob": -1.9425,
+    "mean_logprob": -0.1666
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.0823,
+    "min_logprob": -1.7725,
+    "mean_logprob": -0.1247
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.1094,
+    "min_logprob": -2.4639,
+    "mean_logprob": -0.2016
+   },
+   {
+    "cat": "science",
+    "max_risk": 0.0873,
+    "min_logprob": -1.0672,
+    "mean_logprob": -0.0804
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.1514,
+    "min_logprob": -2.3417,
+    "mean_logprob": -0.1887
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.1776,
+    "min_logprob": -2.198,
+    "mean_logprob": -0.1731
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.0784,
+    "min_logprob": -2.0609,
+    "mean_logprob": -0.2102
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.0905,
+    "min_logprob": -2.0706,
+    "mean_logprob": -0.1594
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.2245,
+    "min_logprob": -1.9065,
+    "mean_logprob": -0.0836
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.1151,
+    "min_logprob": -2.3621,
+    "mean_logprob": -0.1621
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.1241,
+    "min_logprob": -2.0853,
+    "mean_logprob": -0.2416
+   },
+   {
+    "cat": "people",
+    "max_risk": 0.0765,
+    "min_logprob": -3.1046,
+    "mean_logprob": -0.2122
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.2379,
+    "min_logprob": -2.3382,
+    "mean_logprob": -0.2467
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.2672,
+    "min_logprob": -2.5244,
+    "mean_logprob": -0.0847
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.1818,
+    "min_logprob": -2.6669,
+    "mean_logprob": -0.218
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.175,
+    "min_logprob": -2.5915,
+    "mean_logprob": -0.3074
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.1883,
+    "min_logprob": -1.8972,
+    "mean_logprob": -0.2108
+   },
+   {
+    "cat": "recipes",
+    "max_risk": 0.1115,
+    "min_logprob": -2.6665,
+    "mean_logprob": -0.2559
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.1518,
+    "min_logprob": -2.3504,
+    "mean_logprob": -0.2933
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.2588,
+    "min_logprob": -2.0223,
+    "mean_logprob": -0.2415
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.1942,
+    "min_logprob": -1.9612,
+    "mean_logprob": -0.2166
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.3678,
+    "min_logprob": -2.7983,
+    "mean_logprob": -0.2517
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.1701,
+    "min_logprob": -2.7201,
+    "mean_logprob": -0.385
+   },
+   {
+    "cat": "howto",
+    "max_risk": 0.1798,
+    "min_logprob": -3.1018,
+    "mean_logprob": -0.4345
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.1563,
+    "min_logprob": -3.0678,
+    "mean_logprob": -0.5064
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.1824,
+    "min_logprob": -3.437,
+    "mean_logprob": -0.7427
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.2336,
+    "min_logprob": -2.7588,
+    "mean_logprob": -0.5214
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.2401,
+    "min_logprob": -3.0048,
+    "mean_logprob": -0.6079
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.1697,
+    "min_logprob": -2.1102,
+    "mean_logprob": -0.3022
+   },
+   {
+    "cat": "creative",
+    "max_risk": 0.2871,
+    "min_logprob": -2.2225,
+    "mean_logprob": -0.3417
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.0997,
+    "min_logprob": -1.7314,
+    "mean_logprob": -0.2391
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.1034,
+    "min_logprob": -2.3399,
+    "mean_logprob": -0.184
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.1847,
+    "min_logprob": -3.0314,
+    "mean_logprob": -0.3034
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.3587,
+    "min_logprob": -1.3941,
+    "mean_logprob": -0.114
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.3589,
+    "min_logprob": -2.9142,
+    "mean_logprob": -0.3849
+   },
+   {
+    "cat": "smalltalk",
+    "max_risk": 0.2406,
+    "min_logprob": -0.8092,
+    "mean_logprob": -0.0935
+   }
+  ],
+  "factual": [
+   {
+    "wrong": 0,
+    "max_risk": 0.0652,
+    "min_logprob": -0.5128,
+    "mean_logprob": -0.0322,
+    "reply_confidence": 0.9348,
+    "sentences": [
+     [
+      0.0652,
+      -0.4906,
+      -0.0204
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1031,
+    "min_logprob": -1.7407,
+    "mean_logprob": -0.2231,
+    "reply_confidence": 0.8969,
+    "sentences": [
+     [
+      0.0382,
+      -0.0165,
+      -0.0024
+     ],
+     [
+      0.0334,
+      -1.2479,
+      -0.2744
+     ],
+     [
+      0.0033,
+      -1.7407,
+      -0.1533
+     ],
+     [
+      0.1031,
+      -1.6024,
+      -0.3216
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0117,
+    "min_logprob": -0.8925,
+    "mean_logprob": -0.1183,
+    "reply_confidence": 0.9883,
+    "sentences": [
+     [
+      0.0117,
+      -0.8925,
+      -0.1109
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1049,
+    "min_logprob": -2.1658,
+    "mean_logprob": -0.3646,
+    "reply_confidence": 0.8951,
+    "sentences": [
+     [
+      0.1049,
+      -2.1658,
+      -0.2573
+     ],
+     [
+      0.0,
+      -1.8859,
+      -0.3608
+     ],
+     [
+      0.0,
+      -2.018,
+      -0.4029
+     ],
+     [
+      0.0,
+      -1.8905,
+      -0.5301
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0,
+    "min_logprob": -1.8973,
+    "mean_logprob": -0.1898,
+    "reply_confidence": 0.9611,
+    "sentences": [
+     [
+      0.0,
+      -0.9548,
+      -0.1014
+     ],
+     [
+      0.0,
+      -1.4445,
+      -0.2098
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0694,
+    "min_logprob": -1.2009,
+    "mean_logprob": -0.086,
+    "reply_confidence": 0.9306,
+    "sentences": [
+     [
+      0.0284,
+      -0.3071,
+      -0.0204
+     ],
+     [
+      0.0694,
+      -1.2009,
+      -0.1371
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0519,
+    "min_logprob": -0.1317,
+    "mean_logprob": -0.0158,
+    "reply_confidence": 0.9481,
+    "sentences": [
+     [
+      0.0519,
+      -0.0302,
+      -0.0053
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.8427,
+    "min_logprob": -3.3839,
+    "mean_logprob": -0.2727,
+    "reply_confidence": 0.1573,
+    "sentences": [
+     [
+      0.0,
+      -0.8446,
+      -0.8446
+     ],
+     [
+      0.7966,
+      -1.7019,
+      -0.1332
+     ],
+     [
+      0.4156,
+      -1.2796,
+      -0.3008
+     ],
+     [
+      0.3539,
+      -2.4002,
+      -0.8924
+     ],
+     [
+      0.4301,
+      -0.1505,
+      -0.0248
+     ],
+     [
+      0.8427,
+      -3.3839,
+      -0.5703
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1548,
+    "min_logprob": -1.7816,
+    "mean_logprob": -0.1932,
+    "reply_confidence": 0.8452,
+    "sentences": [
+     [
+      0.1548,
+      -1.7816,
+      -0.1301
+     ],
+     [
+      0.0,
+      -1.5692,
+      -0.3173
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -2.5338,
+    "mean_logprob": -0.1891,
+    "reply_confidence": 0.9027,
+    "sentences": [
+     [
+      0.0,
+      -2.5338,
+      -0.1997
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1016,
+    "min_logprob": -0.5946,
+    "mean_logprob": -0.0577,
+    "reply_confidence": 0.8984,
+    "sentences": [
+     [
+      0.1016,
+      -0.5946,
+      -0.0477
+     ],
+     [
+      0.0292,
+      -0.3277,
+      -0.0623
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.436,
+    "min_logprob": -2.9093,
+    "mean_logprob": -0.432,
+    "reply_confidence": 0.564,
+    "sentences": [
+     [
+      0.1478,
+      -2.2711,
+      -0.2806
+     ],
+     [
+      0.2223,
+      -1.4663,
+      -0.2589
+     ],
+     [
+      0.436,
+      -2.6633,
+      -0.6711
+     ],
+     [
+      0.2747,
+      -2.1015,
+      -0.7484
+     ],
+     [
+      0.1777,
+      -1.9788,
+      -0.3323
+     ],
+     [
+      0.1916,
+      -2.7069,
+      -0.4248
+     ],
+     [
+      0.2895,
+      -1.6191,
+      -0.6375
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2624,
+    "min_logprob": -1.2623,
+    "mean_logprob": -0.1175,
+    "reply_confidence": 0.7376,
+    "sentences": [
+     [
+      0.0,
+      -0.755,
+      -0.0509
+     ],
+     [
+      0.2095,
+      -1.2623,
+      -0.2366
+     ],
+     [
+      0.2624,
+      -0.5987,
+      -0.1054
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1,
+    "min_logprob": -1.8573,
+    "mean_logprob": -0.2679,
+    "reply_confidence": 0.9,
+    "sentences": [
+     [
+      0.0,
+      -0.2516,
+      -0.0336
+     ],
+     [
+      0.1,
+      -1.8573,
+      -0.2981
+     ],
+     [
+      0.0,
+      -1.5037,
+      -0.3866
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3714,
+    "min_logprob": -2.9493,
+    "mean_logprob": -0.4828,
+    "reply_confidence": 0.6286,
+    "sentences": [
+     [
+      0.071,
+      -1.3347,
+      -0.2065
+     ],
+     [
+      0.2961,
+      -1.7324,
+      -0.5831
+     ],
+     [
+      0.1485,
+      -2.7826,
+      -0.4735
+     ],
+     [
+      0.3714,
+      -2.5031,
+      -0.5916
+     ],
+     [
+      0.2764,
+      -2.8733,
+      -0.5572
+     ],
+     [
+      0.175,
+      -2.9493,
+      -0.4759
+     ],
+     [
+      0.1426,
+      -1.7034,
+      -0.7375
+     ],
+     [
+      0.2064,
+      -0.3419,
+      -0.171
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2515,
+    "min_logprob": -2.2939,
+    "mean_logprob": -0.3416,
+    "reply_confidence": 0.7485,
+    "sentences": [
+     [
+      0.1235,
+      -2.0176,
+      -0.137
+     ],
+     [
+      0.1651,
+      -2.0555,
+      -0.4777
+     ],
+     [
+      0.1132,
+      -2.1945,
+      -0.494
+     ],
+     [
+      0.0654,
+      -1.69,
+      -0.3646
+     ],
+     [
+      0.2515,
+      -2.2939,
+      -0.4234
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1197,
+    "min_logprob": -2.0685,
+    "mean_logprob": -0.2054,
+    "reply_confidence": 0.8803,
+    "sentences": [
+     [
+      0.0299,
+      -0.9563,
+      -0.0788
+     ],
+     [
+      0.1197,
+      -2.0685,
+      -0.3678
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0945,
+    "min_logprob": -1.3501,
+    "mean_logprob": -0.1344,
+    "reply_confidence": 0.9055,
+    "sentences": [
+     [
+      0.0945,
+      -1.3501,
+      -0.106
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0407,
+    "min_logprob": -1.0605,
+    "mean_logprob": -0.1342,
+    "reply_confidence": 0.9593,
+    "sentences": [
+     [
+      0.0407,
+      -1.0605,
+      -0.124
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0856,
+    "min_logprob": -2.1729,
+    "mean_logprob": -0.1648,
+    "reply_confidence": 0.9144,
+    "sentences": [
+     [
+      0.0543,
+      -0.6402,
+      -0.0406
+     ],
+     [
+      0.0,
+      -1.5086,
+      -0.2985
+     ],
+     [
+      0.0856,
+      -2.1729,
+      -0.3275
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0416,
+    "min_logprob": -1.6305,
+    "mean_logprob": -0.0844,
+    "reply_confidence": 0.9584,
+    "sentences": [
+     [
+      0.0416,
+      -0.1557,
+      -0.0106
+     ],
+     [
+      0.0276,
+      -1.6305,
+      -0.1451
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0475,
+    "min_logprob": -0.1033,
+    "mean_logprob": -0.0062,
+    "reply_confidence": 0.9525,
+    "sentences": [
+     [
+      0.0475,
+      -0.1033,
+      -0.0066
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0288,
+    "min_logprob": -0.9936,
+    "mean_logprob": -0.0896,
+    "reply_confidence": 0.9712,
+    "sentences": [
+     [
+      0.0288,
+      -0.9936,
+      -0.0983
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.508,
+    "min_logprob": -2.5453,
+    "mean_logprob": -0.0988,
+    "reply_confidence": 0.492,
+    "sentences": [
+     [
+      0.468,
+      -0.4806,
+      -0.0536
+     ],
+     [
+      0.508,
+      -0.7139,
+      -0.0753
+     ],
+     [
+      0.3677,
+      -1.0438,
+      -0.0732
+     ],
+     [
+      0.4395,
+      -0.3427,
+      -0.029
+     ],
+     [
+      0.0492,
+      -2.5453,
+      -0.4243
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0776,
+    "min_logprob": -1.9021,
+    "mean_logprob": -0.2236,
+    "reply_confidence": 0.9224,
+    "sentences": [
+     [
+      0.0294,
+      -0.1148,
+      -0.0136
+     ],
+     [
+      0.039,
+      -1.8118,
+      -0.3175
+     ],
+     [
+      0.0776,
+      -1.9021,
+      -0.3249
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.138,
+    "min_logprob": -2.0538,
+    "mean_logprob": -0.249,
+    "reply_confidence": 0.862,
+    "sentences": [
+     [
+      0.0,
+      -0.2259,
+      -0.0406
+     ],
+     [
+      0.0,
+      -1.6112,
+      -0.4223
+     ],
+     [
+      0.138,
+      -0.8797,
+      -0.1987
+     ],
+     [
+      0.0,
+      -2.0538,
+      -0.407
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2711,
+    "min_logprob": -1.1206,
+    "mean_logprob": -0.1317,
+    "reply_confidence": 0.7289,
+    "sentences": [
+     [
+      0.0761,
+      -0.0925,
+      -0.0125
+     ],
+     [
+      0.2711,
+      -1.1206,
+      -0.206
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0906,
+    "min_logprob": -2.2223,
+    "mean_logprob": -0.118,
+    "reply_confidence": 0.9094,
+    "sentences": [
+     [
+      0.0113,
+      -0.3974,
+      -0.0569
+     ],
+     [
+      0.0906,
+      -0.9549,
+      -0.0911
+     ],
+     [
+      0.0,
+      -2.2223,
+      -0.2138
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0,
+    "min_logprob": -0.866,
+    "mean_logprob": -0.2142,
+    "reply_confidence": 0.9616,
+    "sentences": [
+     [
+      0.0,
+      -0.6048,
+      -0.0721
+     ],
+     [
+      0.0,
+      -0.866,
+      -0.3529
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0726,
+    "min_logprob": -0.4901,
+    "mean_logprob": -0.0493,
+    "reply_confidence": 0.9274,
+    "sentences": [
+     [
+      0.0726,
+      -0.4901,
+      -0.0615
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0278,
+    "min_logprob": -1.2032,
+    "mean_logprob": -0.1255,
+    "reply_confidence": 0.9722,
+    "sentences": [
+     [
+      0.0,
+      -0.4015,
+      -0.0362
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.0278,
+      -1.0357,
+      -0.2098
+     ],
+     [
+      0.0,
+      null,
+      null
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1179,
+    "min_logprob": -1.2456,
+    "mean_logprob": -0.1088,
+    "reply_confidence": 0.9308,
+    "sentences": [
+     [
+      0.0,
+      -0.7598,
+      -0.0775
+     ],
+     [
+      0.0512,
+      -0.0012,
+      -0.0012
+     ],
+     [
+      0.0,
+      -0.1947,
+      -0.0419
+     ],
+     [
+      0.0133,
+      -0.5378,
+      -0.1793
+     ],
+     [
+      0.0595,
+      -0.0006,
+      -0.0003
+     ],
+     [
+      0.0445,
+      -0.0298,
+      -0.0149
+     ],
+     [
+      0.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0692,
+      -0.8997,
+      -0.252
+     ],
+     [
+      0.0551,
+      -0.0139,
+      -0.004
+     ],
+     [
+      0.0793,
+      -0.3305,
+      -0.0826
+     ],
+     [
+      0.0629,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0999,
+      -0.7252,
+      -0.2417
+     ],
+     [
+      0.1179,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0437,
+      -1.154,
+      -0.2351
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1529,
+    "min_logprob": -1.4791,
+    "mean_logprob": -0.1435,
+    "reply_confidence": 0.8471,
+    "sentences": [
+     [
+      0.1529,
+      -1.4791,
+      -0.1086
+     ],
+     [
+      0.1513,
+      -1.3645,
+      -0.1914
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1077,
+    "min_logprob": -1.7823,
+    "mean_logprob": -0.1635,
+    "reply_confidence": 0.8923,
+    "sentences": [
+     [
+      0.0,
+      -1.2221,
+      -0.1228
+     ],
+     [
+      0.1077,
+      -1.2702,
+      -0.1065
+     ],
+     [
+      0.1066,
+      -1.698,
+      -0.1833
+     ],
+     [
+      0.0505,
+      -1.7823,
+      -0.2511
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.478,
+    "min_logprob": -0.2436,
+    "mean_logprob": -0.024,
+    "reply_confidence": 0.522,
+    "sentences": [
+     [
+      0.478,
+      -0.2436,
+      -0.0276
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.4772,
+    "min_logprob": -2.9759,
+    "mean_logprob": -0.4552,
+    "reply_confidence": 0.5228,
+    "sentences": [
+     [
+      0.4772,
+      -2.5035,
+      -0.5902
+     ],
+     [
+      0.4508,
+      -2.9759,
+      -0.3735
+     ],
+     [
+      0.0773,
+      -0.2275,
+      -0.2275
+     ],
+     [
+      0.3121,
+      -2.1949,
+      -0.4426
+     ],
+     [
+      0.0,
+      -2.6116,
+      -0.7722
+     ],
+     [
+      0.098,
+      -2.6818,
+      -0.409
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0,
+    "min_logprob": -1.6096,
+    "mean_logprob": -0.1647,
+    "reply_confidence": 0.9778,
+    "sentences": [
+     [
+      0.0,
+      -1.4713,
+      -0.1286
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0558,
+    "min_logprob": -2.891,
+    "mean_logprob": -0.221,
+    "reply_confidence": 0.9442,
+    "sentences": [
+     [
+      0.0558,
+      -1.0136,
+      -0.0536
+     ],
+     [
+      0.0,
+      -1.1557,
+      -0.1625
+     ],
+     [
+      0.0,
+      -2.891,
+      -0.5729
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0538,
+    "min_logprob": -3.3753,
+    "mean_logprob": -0.3213,
+    "reply_confidence": 0.9462,
+    "sentences": [
+     [
+      0.0538,
+      -1.0683,
+      -0.1752
+     ],
+     [
+      0.0,
+      -3.3753,
+      -0.47
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1794,
+    "min_logprob": -1.2685,
+    "mean_logprob": -0.0962,
+    "reply_confidence": 0.8206,
+    "sentences": [
+     [
+      0.0,
+      -0.1444,
+      -0.012
+     ],
+     [
+      0.0,
+      -1.2685,
+      -0.2182
+     ],
+     [
+      0.1511,
+      -0.6627,
+      -0.125
+     ],
+     [
+      0.1794,
+      -0.3987,
+      -0.0647
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1079,
+    "min_logprob": -3.6979,
+    "mean_logprob": -0.3681,
+    "reply_confidence": 0.8921,
+    "sentences": [
+     [
+      0.0558,
+      -3.6979,
+      -0.3688
+     ],
+     [
+      0.1079,
+      -2.6089,
+      -0.3153
+     ],
+     [
+      0.0545,
+      -1.9807,
+      -0.3565
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1054,
+    "min_logprob": -2.5086,
+    "mean_logprob": -0.2861,
+    "reply_confidence": 0.8946,
+    "sentences": [
+     [
+      0.0483,
+      -0.1585,
+      -0.0168
+     ],
+     [
+      0.1054,
+      -2.5086,
+      -0.4208
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.815,
+    "min_logprob": -0.196,
+    "mean_logprob": -0.016,
+    "reply_confidence": 0.185,
+    "sentences": [
+     [
+      0.815,
+      -0.196,
+      -0.0396
+     ],
+     [
+      0.0,
+      -0.0182,
+      -0.0047
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4235,
+    "min_logprob": -2.8097,
+    "mean_logprob": -0.3732,
+    "reply_confidence": 0.5765,
+    "sentences": [
+     [
+      0.4235,
+      -1.8777,
+      -0.1319
+     ],
+     [
+      0.16,
+      -2.0186,
+      -0.6593
+     ],
+     [
+      0.0,
+      -2.8097,
+      -0.6622
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0219,
+    "min_logprob": -1.047,
+    "mean_logprob": -0.078,
+    "reply_confidence": 0.9781,
+    "sentences": [
+     [
+      0.0219,
+      -1.047,
+      -0.0823
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -1.8608,
+    "mean_logprob": -0.2442,
+    "reply_confidence": 0.7777,
+    "sentences": [
+     [
+      0.0,
+      -1.8608,
+      -0.1904
+     ],
+     [
+      0.0,
+      -1.2289,
+      -0.3549
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.003,
+    "min_logprob": -0.6878,
+    "mean_logprob": -0.0794,
+    "reply_confidence": 0.997,
+    "sentences": [
+     [
+      0.0,
+      -0.0172,
+      -0.0058
+     ],
+     [
+      0.003,
+      -0.4025,
+      -0.0811
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0855,
+    "min_logprob": -1.8455,
+    "mean_logprob": -0.1005,
+    "reply_confidence": 0.9145,
+    "sentences": [
+     [
+      0.0143,
+      -0.0068,
+      -0.0004
+     ],
+     [
+      0.0211,
+      -0.5367,
+      -0.5367
+     ],
+     [
+      0.0184,
+      -0.2078,
+      -0.0313
+     ],
+     [
+      0.0,
+      -0.1192,
+      -0.0891
+     ],
+     [
+      0.0,
+      -0.1382,
+      -0.0833
+     ],
+     [
+      0.0855,
+      -0.185,
+      -0.0927
+     ],
+     [
+      0.0,
+      -0.004,
+      -0.002
+     ],
+     [
+      0.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0517,
+      -1.8455,
+      -0.4068
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2807,
+    "min_logprob": -1.4421,
+    "mean_logprob": -0.1163,
+    "reply_confidence": 0.7193,
+    "sentences": [
+     [
+      0.0,
+      -0.569,
+      -0.071
+     ],
+     [
+      0.2807,
+      -0.4057,
+      -0.0815
+     ],
+     [
+      0.0,
+      null,
+      null
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0656,
+    "min_logprob": -3.0102,
+    "mean_logprob": -0.2616,
+    "reply_confidence": 0.9344,
+    "sentences": [
+     [
+      0.0,
+      -0.0555,
+      -0.0102
+     ],
+     [
+      0.0,
+      -2.5504,
+      -0.3484
+     ],
+     [
+      0.0656,
+      -3.0102,
+      -0.3219
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.464,
+    "min_logprob": -1.8082,
+    "mean_logprob": -0.1451,
+    "reply_confidence": 0.536,
+    "sentences": [
+     [
+      0.3755,
+      -1.8082,
+      -0.1409
+     ],
+     [
+      0.0,
+      -0.5766,
+      -0.2356
+     ],
+     [
+      0.332,
+      -1.0886,
+      -0.153
+     ],
+     [
+      0.464,
+      -1.2655,
+      -0.2685
+     ],
+     [
+      0.3606,
+      -0.9884,
+      -0.1763
+     ],
+     [
+      0.2204,
+      -1.6534,
+      -0.355
+     ],
+     [
+      0.1063,
+      -1.1196,
+      -0.1169
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1272,
+    "min_logprob": -1.9641,
+    "mean_logprob": -0.1761,
+    "reply_confidence": 0.8728,
+    "sentences": [
+     [
+      0.0689,
+      -0.4287,
+      -0.026
+     ],
+     [
+      0.0167,
+      -1.054,
+      -0.1298
+     ],
+     [
+      0.0373,
+      -1.9641,
+      -0.2548
+     ],
+     [
+      0.0681,
+      -0.0815,
+      -0.0815
+     ],
+     [
+      0.0,
+      -1.3916,
+      -0.2192
+     ],
+     [
+      0.1272,
+      -1.8572,
+      -0.4187
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2808,
+    "min_logprob": -2.1245,
+    "mean_logprob": -0.1601,
+    "reply_confidence": 0.7192,
+    "sentences": [
+     [
+      0.2808,
+      -2.1245,
+      -0.1665
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4196,
+    "min_logprob": -1.8195,
+    "mean_logprob": -0.2512,
+    "reply_confidence": 0.5804,
+    "sentences": [
+     [
+      0.4196,
+      -1.8195,
+      -0.3107
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0234,
+    "min_logprob": -1.8162,
+    "mean_logprob": -0.1418,
+    "reply_confidence": 0.9766,
+    "sentences": [
+     [
+      0.0234,
+      -1.8162,
+      -0.1683
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3708,
+    "min_logprob": -2.7448,
+    "mean_logprob": -0.3259,
+    "reply_confidence": 0.6292,
+    "sentences": [
+     [
+      0.2073,
+      -0.5287,
+      -0.0505
+     ],
+     [
+      0.3708,
+      -2.4256,
+      -0.4487
+     ],
+     [
+      0.1567,
+      -2.7448,
+      -0.5348
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1795,
+    "min_logprob": -1.1142,
+    "mean_logprob": -0.0781,
+    "reply_confidence": 0.8205,
+    "sentences": [
+     [
+      0.1795,
+      -1.1142,
+      -0.0868
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.9243,
+    "min_logprob": -1.2964,
+    "mean_logprob": -0.144,
+    "reply_confidence": 0.0757,
+    "sentences": [
+     [
+      0.9243,
+      -1.2964,
+      -0.1465
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4561,
+    "min_logprob": -3.2938,
+    "mean_logprob": -0.3292,
+    "reply_confidence": 0.5439,
+    "sentences": [
+     [
+      0.0546,
+      -0.3845,
+      -0.0402
+     ],
+     [
+      0.1374,
+      -1.1596,
+      -0.5144
+     ],
+     [
+      0.4561,
+      -3.2938,
+      -0.5647
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3127,
+    "min_logprob": -2.9093,
+    "mean_logprob": -0.4018,
+    "reply_confidence": 0.6873,
+    "sentences": [
+     [
+      0.0,
+      -0.0798,
+      -0.0259
+     ],
+     [
+      0.1886,
+      -2.1197,
+      -0.1948
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.0,
+      -0.29,
+      -0.2188
+     ],
+     [
+      0.0,
+      -0.0106,
+      -0.0106
+     ],
+     [
+      0.0,
+      -0.9128,
+      -0.2376
+     ],
+     [
+      0.1151,
+      -2.6994,
+      -0.7073
+     ],
+     [
+      0.1282,
+      -2.198,
+      -0.5766
+     ],
+     [
+      0.3127,
+      -2.3283,
+      -0.3302
+     ],
+     [
+      0.1998,
+      -2.9093,
+      -0.8232
+     ],
+     [
+      0.3112,
+      -1.7348,
+      -0.3225
+     ],
+     [
+      0.2575,
+      -2.086,
+      -0.6066
+     ],
+     [
+      0.1653,
+      -1.5202,
+      -0.388
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0757,
+    "min_logprob": -1.2461,
+    "mean_logprob": -0.1073,
+    "reply_confidence": 0.9243,
+    "sentences": [
+     [
+      0.0757,
+      -0.7173,
+      -0.0965
+     ],
+     [
+      0.0,
+      -1.2461,
+      -0.2501
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2314,
+    "min_logprob": -0.2121,
+    "mean_logprob": -0.0375,
+    "reply_confidence": 0.7686,
+    "sentences": [
+     [
+      0.0677,
+      -0.088,
+      -0.0273
+     ],
+     [
+      0.2314,
+      -0.185,
+      -0.0428
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0922,
+    "min_logprob": -2.1,
+    "mean_logprob": -0.3366,
+    "reply_confidence": 0.9078,
+    "sentences": [
+     [
+      0.0,
+      -0.9438,
+      -0.1183
+     ],
+     [
+      0.0922,
+      -2.1,
+      -0.4486
+     ],
+     [
+      0.0625,
+      -1.8349,
+      -0.3813
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1546,
+    "min_logprob": -2.904,
+    "mean_logprob": -0.2303,
+    "reply_confidence": 0.8454,
+    "sentences": [
+     [
+      0.0,
+      -0.7266,
+      -0.2424
+     ],
+     [
+      0.0,
+      -0.0185,
+      -0.0023
+     ],
+     [
+      0.0916,
+      -0.003,
+      -0.0006
+     ],
+     [
+      0.0,
+      -0.0045,
+      -0.0009
+     ],
+     [
+      0.0754,
+      -1.2029,
+      -0.1342
+     ],
+     [
+      0.0387,
+      -1.1833,
+      -0.2268
+     ],
+     [
+      0.0347,
+      -1.9371,
+      -0.2906
+     ],
+     [
+      0.0,
+      -0.0234,
+      -0.0039
+     ],
+     [
+      0.1546,
+      -0.5183,
+      -0.0741
+     ],
+     [
+      0.0,
+      -2.904,
+      -0.7333
+     ],
+     [
+      0.0322,
+      -1.3684,
+      -0.3048
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2316,
+    "min_logprob": -0.252,
+    "mean_logprob": -0.0227,
+    "reply_confidence": 0.7684,
+    "sentences": [
+     [
+      0.2316,
+      -0.252,
+      -0.0206
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.282,
+    "min_logprob": -3.0138,
+    "mean_logprob": -0.2599,
+    "reply_confidence": 0.718,
+    "sentences": [
+     [
+      0.282,
+      -3.0138,
+      -0.288
+     ],
+     [
+      0.2332,
+      -1.3494,
+      -0.2063
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3188,
+    "min_logprob": -1.1591,
+    "mean_logprob": -0.072,
+    "reply_confidence": 0.6812,
+    "sentences": [
+     [
+      0.2313,
+      -0.1375,
+      -0.0122
+     ],
+     [
+      0.3188,
+      -0.8622,
+      -0.1059
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0249,
+    "min_logprob": -1.4006,
+    "mean_logprob": -0.073,
+    "reply_confidence": 0.9751,
+    "sentences": [
+     [
+      0.0249,
+      -0.0356,
+      -0.0026
+     ],
+     [
+      0.0232,
+      -0.9984,
+      -0.1035
+     ],
+     [
+      0.0184,
+      -1.4006,
+      -0.1069
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4789,
+    "min_logprob": -2.7902,
+    "mean_logprob": -0.2172,
+    "reply_confidence": 0.5211,
+    "sentences": [
+     [
+      0.4789,
+      -1.1427,
+      -0.1678
+     ],
+     [
+      0.155,
+      -2.7902,
+      -0.2304
+     ],
+     [
+      0.2705,
+      -1.6947,
+      -0.3374
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1178,
+    "min_logprob": -0.5778,
+    "mean_logprob": -0.0291,
+    "reply_confidence": 0.8822,
+    "sentences": [
+     [
+      0.1178,
+      -0.0193,
+      -0.0008
+     ],
+     [
+      0.0,
+      null,
+      null
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.9392,
+    "min_logprob": -3.7961,
+    "mean_logprob": -0.3248,
+    "reply_confidence": 0.0608,
+    "sentences": [
+     [
+      0.0,
+      -0.4541,
+      -0.4541
+     ],
+     [
+      0.9392,
+      -3.7961,
+      -0.5525
+     ],
+     [
+      0.5706,
+      -1.259,
+      -0.1786
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1296,
+    "min_logprob": -1.9312,
+    "mean_logprob": -0.1789,
+    "reply_confidence": 0.8704,
+    "sentences": [
+     [
+      0.0043,
+      -0.1162,
+      -0.0101
+     ],
+     [
+      0.0545,
+      -0.9149,
+      -0.0681
+     ],
+     [
+      0.0858,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.1296,
+      -1.3062,
+      -0.3441
+     ],
+     [
+      0.0966,
+      -1.1672,
+      -0.1959
+     ],
+     [
+      0.0611,
+      -1.9312,
+      -0.1608
+     ],
+     [
+      0.0515,
+      -1.1951,
+      -0.2928
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.119,
+    "min_logprob": -0.4981,
+    "mean_logprob": -0.0542,
+    "reply_confidence": 0.881,
+    "sentences": [
+     [
+      0.0091,
+      -0.4981,
+      -0.0858
+     ],
+     [
+      0.119,
+      -0.325,
+      -0.0338
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0598,
+    "min_logprob": -2.588,
+    "mean_logprob": -0.1187,
+    "reply_confidence": 0.9402,
+    "sentences": [
+     [
+      0.015,
+      -0.0718,
+      -0.0035
+     ],
+     [
+      0.0598,
+      -2.588,
+      -0.2461
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2775,
+    "min_logprob": -1.0438,
+    "mean_logprob": -0.116,
+    "reply_confidence": 0.7225,
+    "sentences": [
+     [
+      0.2775,
+      -1.0063,
+      -0.1189
+     ],
+     [
+      0.2684,
+      -1.0438,
+      -0.1122
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2074,
+    "min_logprob": -3.0115,
+    "mean_logprob": -0.3448,
+    "reply_confidence": 0.7926,
+    "sentences": [
+     [
+      0.0,
+      -1.7929,
+      -0.1749
+     ],
+     [
+      0.0,
+      -0.1,
+      -0.0344
+     ],
+     [
+      0.1699,
+      -1.2102,
+      -0.1807
+     ],
+     [
+      0.2074,
+      -3.0115,
+      -0.4096
+     ],
+     [
+      0.0,
+      -2.4698,
+      -0.6505
+     ],
+     [
+      0.0,
+      -1.2372,
+      -0.3129
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4013,
+    "min_logprob": -2.1616,
+    "mean_logprob": -0.2348,
+    "reply_confidence": 0.5987,
+    "sentences": [
+     [
+      0.4013,
+      -2.1616,
+      -0.1634
+     ],
+     [
+      0.3931,
+      -1.6623,
+      -0.3745
+     ],
+     [
+      0.2097,
+      -0.6718,
+      -0.0715
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -2.1452,
+    "mean_logprob": -0.3985,
+    "reply_confidence": 0.6426,
+    "sentences": [
+     [
+      0.0,
+      -2.1452,
+      -0.4056
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.017,
+    "min_logprob": -1.2905,
+    "mean_logprob": -0.0775,
+    "reply_confidence": 0.983,
+    "sentences": [
+     [
+      0.017,
+      -0.1032,
+      -0.0074
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.099,
+    "min_logprob": -1.8865,
+    "mean_logprob": -0.2149,
+    "reply_confidence": 0.901,
+    "sentences": [
+     [
+      0.0,
+      -1.4367,
+      -0.1023
+     ],
+     [
+      0.0438,
+      -1.4579,
+      -0.1047
+     ],
+     [
+      0.099,
+      -0.6931,
+      -0.1629
+     ],
+     [
+      0.0674,
+      -1.8865,
+      -0.3746
+     ],
+     [
+      0.0,
+      -1.3237,
+      -0.2587
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1232,
+    "min_logprob": -1.8438,
+    "mean_logprob": -0.2286,
+    "reply_confidence": 0.8768,
+    "sentences": [
+     [
+      0.119,
+      -0.8401,
+      -0.1112
+     ],
+     [
+      0.1232,
+      -1.8438,
+      -0.3437
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.308,
+    "min_logprob": -2.5317,
+    "mean_logprob": -0.4033,
+    "reply_confidence": 0.692,
+    "sentences": [
+     [
+      0.2132,
+      -0.3229,
+      -0.0336
+     ],
+     [
+      0.308,
+      -2.5317,
+      -0.5296
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -0.2095,
+    "mean_logprob": -0.0316,
+    "reply_confidence": 0.9302,
+    "sentences": [
+     [
+      0.0,
+      -0.2095,
+      -0.0368
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.4429,
+    "min_logprob": -3.9053,
+    "mean_logprob": -0.6654,
+    "reply_confidence": 0.5571,
+    "sentences": [
+     [
+      0.4429,
+      -3.2916,
+      -0.6414
+     ],
+     [
+      0.1321,
+      -1.7237,
+      -0.3693
+     ],
+     [
+      0.1732,
+      -2.754,
+      -0.7491
+     ],
+     [
+      0.1501,
+      -1.0045,
+      -0.7604
+     ],
+     [
+      0.1633,
+      -2.8249,
+      -1.1252
+     ],
+     [
+      0.3726,
+      -2.504,
+      -0.5202
+     ],
+     [
+      0.0,
+      -3.9053,
+      -1.3363
+     ],
+     [
+      0.0,
+      -3.0862,
+      -1.3889
+     ],
+     [
+      0.0,
+      -3.275,
+      -0.8788
+     ],
+     [
+      0.1815,
+      -2.0323,
+      -0.5953
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0418,
+    "min_logprob": -1.1725,
+    "mean_logprob": -0.1343,
+    "reply_confidence": 0.9582,
+    "sentences": [
+     [
+      0.0418,
+      -1.1725,
+      -0.146
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.4878,
+    "min_logprob": -1.2568,
+    "mean_logprob": -0.1633,
+    "reply_confidence": 0.5122,
+    "sentences": [
+     [
+      0.4878,
+      -1.2513,
+      -0.1388
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0818,
+    "min_logprob": -0.5625,
+    "mean_logprob": -0.0384,
+    "reply_confidence": 0.9182,
+    "sentences": [
+     [
+      0.0818,
+      -0.1205,
+      -0.007
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0817,
+    "min_logprob": -0.3762,
+    "mean_logprob": -0.0553,
+    "reply_confidence": 0.9183,
+    "sentences": [
+     [
+      0.0193,
+      -0.3471,
+      -0.0372
+     ],
+     [
+      0.0817,
+      -0.3762,
+      -0.0565
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2887,
+    "min_logprob": -2.5114,
+    "mean_logprob": -0.1497,
+    "reply_confidence": 0.7113,
+    "sentences": [
+     [
+      0.2887,
+      -0.4425,
+      -0.1158
+     ],
+     [
+      0.157,
+      -2.5114,
+      -0.2004
+     ],
+     [
+      0.0,
+      -1.075,
+      -0.0868
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2412,
+    "min_logprob": -2.8645,
+    "mean_logprob": -0.1415,
+    "reply_confidence": 0.7588,
+    "sentences": [
+     [
+      0.2412,
+      -0.4206,
+      -0.0596
+     ],
+     [
+      0.2343,
+      -2.8645,
+      -0.1502
+     ],
+     [
+      0.0,
+      null,
+      null
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0941,
+    "min_logprob": -2.4838,
+    "mean_logprob": -0.2755,
+    "reply_confidence": 0.9059,
+    "sentences": [
+     [
+      0.0705,
+      -1.4431,
+      -0.1087
+     ],
+     [
+      0.0941,
+      -2.2038,
+      -0.4294
+     ],
+     [
+      0.0,
+      -1.1262,
+      -0.3638
+     ],
+     [
+      0.0901,
+      -1.5137,
+      -0.3078
+     ],
+     [
+      0.0917,
+      -0.2063,
+      -0.2063
+     ],
+     [
+      0.0158,
+      -1.6284,
+      -0.1786
+     ],
+     [
+      0.079,
+      -0.4749,
+      -0.0735
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3315,
+    "min_logprob": -3.8864,
+    "mean_logprob": -0.3114,
+    "reply_confidence": 0.6685,
+    "sentences": [
+     [
+      0.0,
+      -0.256,
+      -0.1333
+     ],
+     [
+      0.3315,
+      -1.0591,
+      -0.1503
+     ],
+     [
+      0.2201,
+      -3.8864,
+      -0.6786
+     ],
+     [
+      0.2077,
+      -2.4158,
+      -0.3105
+     ],
+     [
+      0.1938,
+      -1.8505,
+      -0.4437
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1085,
+    "min_logprob": -0.3945,
+    "mean_logprob": -0.0251,
+    "reply_confidence": 0.8915,
+    "sentences": [
+     [
+      0.1085,
+      -0.2184,
+      -0.0116
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1046,
+    "min_logprob": -0.7872,
+    "mean_logprob": -0.0273,
+    "reply_confidence": 0.8954,
+    "sentences": [
+     [
+      0.0807,
+      -0.0589,
+      -0.0034
+     ],
+     [
+      0.1046,
+      -0.7872,
+      -0.039
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.7436,
+    "min_logprob": -2.8265,
+    "mean_logprob": -0.5523,
+    "reply_confidence": 0.2564,
+    "sentences": [
+     [
+      0.5277,
+      -1.2669,
+      -0.2221
+     ],
+     [
+      0.2336,
+      -1.6931,
+      -0.3317
+     ],
+     [
+      0.6139,
+      -2.8265,
+      -0.6838
+     ],
+     [
+      0.7436,
+      -2.46,
+      -0.9908
+     ],
+     [
+      0.1182,
+      -2.2769,
+      -0.4762
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1945,
+    "min_logprob": -1.5132,
+    "mean_logprob": -0.2567,
+    "reply_confidence": 0.8055,
+    "sentences": [
+     [
+      0.1945,
+      -0.7173,
+      -0.0966
+     ],
+     [
+      0.0443,
+      -1.0682,
+      -0.3402
+     ],
+     [
+      0.171,
+      -1.5132,
+      -0.3683
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0092,
+    "min_logprob": -1.9621,
+    "mean_logprob": -0.0819,
+    "reply_confidence": 0.9908,
+    "sentences": [
+     [
+      0.0092,
+      -0.0289,
+      -0.0025
+     ],
+     [
+      0.0,
+      -1.9621,
+      -0.1455
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1024,
+    "min_logprob": -2.3531,
+    "mean_logprob": -0.106,
+    "reply_confidence": 0.8976,
+    "sentences": [
+     [
+      0.0,
+      -0.0662,
+      -0.0122
+     ],
+     [
+      0.0,
+      -1.0335,
+      -0.1308
+     ],
+     [
+      0.1024,
+      -2.3531,
+      -0.1295
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1424,
+    "min_logprob": -1.1402,
+    "mean_logprob": -0.1147,
+    "reply_confidence": 0.8576,
+    "sentences": [
+     [
+      0.1424,
+      -0.8455,
+      -0.0546
+     ],
+     [
+      0.0969,
+      -1.1402,
+      -0.141
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3304,
+    "min_logprob": -2.2659,
+    "mean_logprob": -0.2614,
+    "reply_confidence": 0.6696,
+    "sentences": [
+     [
+      0.3304,
+      -0.1427,
+      -0.0254
+     ],
+     [
+      0.1491,
+      -2.2659,
+      -0.3485
+     ],
+     [
+      0.0,
+      -2.0153,
+      -0.3825
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0921,
+    "min_logprob": -1.8543,
+    "mean_logprob": -0.2568,
+    "reply_confidence": 0.9079,
+    "sentences": [
+     [
+      0.0,
+      -1.5044,
+      -0.2582
+     ],
+     [
+      0.0921,
+      -0.5089,
+      -0.1938
+     ],
+     [
+      0.0,
+      -1.8543,
+      -0.2916
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0521,
+    "min_logprob": -2.0727,
+    "mean_logprob": -0.2463,
+    "reply_confidence": 0.9479,
+    "sentences": [
+     [
+      0.0521,
+      -0.4646,
+      -0.0509
+     ],
+     [
+      0.0,
+      -2.0727,
+      -0.3714
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0481,
+    "min_logprob": -0.2738,
+    "mean_logprob": -0.0224,
+    "reply_confidence": 0.9519,
+    "sentences": [
+     [
+      0.0481,
+      -0.0171,
+      -0.0017
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.6188,
+    "min_logprob": -3.0703,
+    "mean_logprob": -0.3579,
+    "reply_confidence": 0.3812,
+    "sentences": [
+     [
+      0.0,
+      -1.8572,
+      -0.1439
+     ],
+     [
+      0.305,
+      -2.3721,
+      -0.5185
+     ],
+     [
+      0.2567,
+      -1.3442,
+      -0.45
+     ],
+     [
+      0.6188,
+      -2.8939,
+      -0.5851
+     ],
+     [
+      0.0482,
+      -3.0703,
+      -0.3599
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.8206,
+    "min_logprob": -1.8603,
+    "mean_logprob": -0.2964,
+    "reply_confidence": 0.1794,
+    "sentences": [
+     [
+      0.0,
+      -1.2827,
+      -0.1559
+     ],
+     [
+      0.8206,
+      -0.5725,
+      -0.1349
+     ],
+     [
+      0.1832,
+      -1.8603,
+      -0.5294
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0431,
+    "min_logprob": -1.1158,
+    "mean_logprob": -0.0616,
+    "reply_confidence": 0.9569,
+    "sentences": [
+     [
+      0.0095,
+      -0.1381,
+      -0.0187
+     ],
+     [
+      0.0431,
+      -1.1158,
+      -0.1492
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0982,
+    "min_logprob": -1.2985,
+    "mean_logprob": -0.1029,
+    "reply_confidence": 0.9018,
+    "sentences": [
+     [
+      0.0351,
+      -0.4298,
+      -0.0638
+     ],
+     [
+      0.0982,
+      -1.2985,
+      -0.1219
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0776,
+    "min_logprob": -2.4653,
+    "mean_logprob": -0.3323,
+    "reply_confidence": 0.9224,
+    "sentences": [
+     [
+      0.0618,
+      -0.9943,
+      -0.1611
+     ],
+     [
+      0.0,
+      -1.2396,
+      -0.1645
+     ],
+     [
+      0.0724,
+      -2.4028,
+      -0.4247
+     ],
+     [
+      0.0776,
+      -2.4653,
+      -0.5122
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3077,
+    "min_logprob": -0.7743,
+    "mean_logprob": -0.072,
+    "reply_confidence": 0.6923,
+    "sentences": [
+     [
+      0.3077,
+      -0.6069,
+      -0.0524
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0884,
+    "min_logprob": -0.259,
+    "mean_logprob": -0.0212,
+    "reply_confidence": 0.9116,
+    "sentences": [
+     [
+      0.0275,
+      -0.259,
+      -0.0488
+     ],
+     [
+      0.0884,
+      -0.0189,
+      -0.0026
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0956,
+    "min_logprob": -2.2101,
+    "mean_logprob": -0.1402,
+    "reply_confidence": 0.9044,
+    "sentences": [
+     [
+      0.0379,
+      -0.9785,
+      -0.124
+     ],
+     [
+      0.049,
+      -0.3927,
+      -0.1214
+     ],
+     [
+      0.0168,
+      -0.1809,
+      -0.0227
+     ],
+     [
+      0.0956,
+      -0.8485,
+      -0.0859
+     ],
+     [
+      0.0327,
+      -0.8825,
+      -0.0589
+     ],
+     [
+      0.0481,
+      -0.0001,
+      -0.0
+     ],
+     [
+      0.0443,
+      -1.7234,
+      -0.3742
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2133,
+    "min_logprob": -2.543,
+    "mean_logprob": -0.2447,
+    "reply_confidence": 0.7867,
+    "sentences": [
+     [
+      0.0863,
+      -0.3714,
+      -0.032
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.1366,
+      -1.5856,
+      -0.3197
+     ],
+     [
+      0.2133,
+      -1.6778,
+      -0.1843
+     ],
+     [
+      0.0,
+      -2.543,
+      -0.4607
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2173,
+    "min_logprob": -2.8477,
+    "mean_logprob": -0.2543,
+    "reply_confidence": 0.7827,
+    "sentences": [
+     [
+      0.0807,
+      -0.7781,
+      -0.0367
+     ],
+     [
+      0.0809,
+      -2.0723,
+      -0.2351
+     ],
+     [
+      0.1283,
+      -0.407,
+      -0.0805
+     ],
+     [
+      0.1187,
+      -0.3206,
+      -0.081
+     ],
+     [
+      0.2173,
+      -2.8477,
+      -0.5024
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.8453,
+    "min_logprob": -2.6084,
+    "mean_logprob": -0.3903,
+    "reply_confidence": 0.1547,
+    "sentences": [
+     [
+      0.8453,
+      -2.6084,
+      -0.2306
+     ],
+     [
+      0.3567,
+      -2.5434,
+      -0.5076
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.9034,
+    "min_logprob": -2.9932,
+    "mean_logprob": -0.4851,
+    "reply_confidence": 0.0966,
+    "sentences": [
+     [
+      0.9034,
+      -1.8608,
+      -0.2973
+     ],
+     [
+      0.7159,
+      -2.9932,
+      -0.9119
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0495,
+    "min_logprob": -1.5075,
+    "mean_logprob": -0.1505,
+    "reply_confidence": 0.9505,
+    "sentences": [
+     [
+      0.0,
+      -0.2433,
+      -0.0407
+     ],
+     [
+      0.0495,
+      -0.1139,
+      -0.0117
+     ],
+     [
+      0.0394,
+      -1.241,
+      -0.1448
+     ],
+     [
+      0.0346,
+      -0.9638,
+      -0.1849
+     ],
+     [
+      0.0,
+      -1.5075,
+      -0.3763
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3233,
+    "min_logprob": -2.2054,
+    "mean_logprob": -0.2369,
+    "reply_confidence": 0.6767,
+    "sentences": [
+     [
+      0.2372,
+      -0.8083,
+      -0.1401
+     ],
+     [
+      0.3233,
+      -2.2054,
+      -0.3854
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1859,
+    "min_logprob": -2.4678,
+    "mean_logprob": -0.156,
+    "reply_confidence": 0.8141,
+    "sentences": [
+     [
+      0.0,
+      -0.2797,
+      -0.05
+     ],
+     [
+      0.1859,
+      -2.4678,
+      -0.2492
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1511,
+    "min_logprob": -1.0343,
+    "mean_logprob": -0.0377,
+    "reply_confidence": 0.8489,
+    "sentences": [
+     [
+      0.1511,
+      -1.0343,
+      -0.0422
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0933,
+    "min_logprob": -2.9057,
+    "mean_logprob": -0.2551,
+    "reply_confidence": 0.9067,
+    "sentences": [
+     [
+      0.0,
+      -0.305,
+      -0.0553
+     ],
+     [
+      0.0507,
+      -1.0734,
+      -0.0848
+     ],
+     [
+      0.0407,
+      -0.0018,
+      -0.0018
+     ],
+     [
+      0.0,
+      -0.01,
+      -0.006
+     ],
+     [
+      0.0405,
+      -1.3281,
+      -0.2829
+     ],
+     [
+      0.0933,
+      -0.8831,
+      -0.2138
+     ],
+     [
+      0.0177,
+      -2.9057,
+      -0.5656
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2416,
+    "min_logprob": -3.7573,
+    "mean_logprob": -0.3652,
+    "reply_confidence": 0.7584,
+    "sentences": [
+     [
+      0.0827,
+      -1.6452,
+      -0.278
+     ],
+     [
+      0.0792,
+      -0.9458,
+      -0.2156
+     ],
+     [
+      0.0,
+      -1.1398,
+      -0.3586
+     ],
+     [
+      0.1649,
+      -0.4102,
+      -0.3698
+     ],
+     [
+      0.1906,
+      -3.7573,
+      -0.6545
+     ],
+     [
+      0.2416,
+      -1.2327,
+      -0.1734
+     ],
+     [
+      0.0611,
+      -2.2967,
+      -0.3636
+     ],
+     [
+      0.2005,
+      -3.0899,
+      -0.7884
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.066,
+    "min_logprob": -0.0799,
+    "mean_logprob": -0.0051,
+    "reply_confidence": 0.934,
+    "sentences": [
+     [
+      0.066,
+      -0.0799,
+      -0.0072
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.4103,
+    "min_logprob": -1.6566,
+    "mean_logprob": -0.1238,
+    "reply_confidence": 0.5897,
+    "sentences": [
+     [
+      0.4103,
+      -0.0944,
+      -0.0107
+     ],
+     [
+      0.1191,
+      -0.2985,
+      -0.177
+     ],
+     [
+      0.1616,
+      -1.6566,
+      -0.4181
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.513,
+    "min_logprob": -2.4605,
+    "mean_logprob": -0.3028,
+    "reply_confidence": 0.487,
+    "sentences": [
+     [
+      0.0,
+      -0.6608,
+      -0.1694
+     ],
+     [
+      0.4591,
+      -0.7432,
+      -0.4306
+     ],
+     [
+      0.2531,
+      -0.9411,
+      -0.3883
+     ],
+     [
+      0.267,
+      -1.3828,
+      -0.2191
+     ],
+     [
+      0.5011,
+      -2.1971,
+      -0.6288
+     ],
+     [
+      0.1635,
+      -0.9868,
+      -0.752
+     ],
+     [
+      0.2658,
+      -0.072,
+      -0.0277
+     ],
+     [
+      0.2572,
+      -1.7381,
+      -0.2965
+     ],
+     [
+      0.513,
+      -2.4605,
+      -0.3927
+     ],
+     [
+      0.1495,
+      -1.6082,
+      -0.2649
+     ],
+     [
+      0.0,
+      -0.0464,
+      -0.0155
+     ],
+     [
+      0.2318,
+      -2.0232,
+      -0.4591
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1732,
+    "min_logprob": -2.4878,
+    "mean_logprob": -0.2741,
+    "reply_confidence": 0.8268,
+    "sentences": [
+     [
+      0.1732,
+      -1.2248,
+      -0.184
+     ],
+     [
+      0.0796,
+      -1.4224,
+      -0.1885
+     ],
+     [
+      0.0,
+      -2.4878,
+      -0.5265
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0304,
+    "min_logprob": -1.7535,
+    "mean_logprob": -0.0986,
+    "reply_confidence": 0.9696,
+    "sentences": [
+     [
+      0.0072,
+      -0.0115,
+      -0.0008
+     ],
+     [
+      0.0,
+      -1.7535,
+      -0.2386
+     ],
+     [
+      0.0304,
+      -0.0054,
+      -0.0008
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1654,
+    "min_logprob": -2.0977,
+    "mean_logprob": -0.2662,
+    "reply_confidence": 0.8346,
+    "sentences": [
+     [
+      0.0,
+      -0.5903,
+      -0.162
+     ],
+     [
+      0.0875,
+      -1.8511,
+      -0.3866
+     ],
+     [
+      0.099,
+      -1.6732,
+      -0.3735
+     ],
+     [
+      0.0701,
+      -1.5607,
+      -0.3652
+     ],
+     [
+      0.0542,
+      -0.2653,
+      -0.0335
+     ],
+     [
+      0.0965,
+      -0.3778,
+      -0.0532
+     ],
+     [
+      0.1055,
+      -1.1328,
+      -0.5664
+     ],
+     [
+      0.1438,
+      -1.64,
+      -0.1898
+     ],
+     [
+      0.1654,
+      -1.6557,
+      -0.8278
+     ],
+     [
+      0.0,
+      -1.3284,
+      -0.4833
+     ],
+     [
+      0.08,
+      -1.9495,
+      -0.632
+     ],
+     [
+      0.0729,
+      -2.0977,
+      -0.3699
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3249,
+    "min_logprob": -2.4601,
+    "mean_logprob": -0.3505,
+    "reply_confidence": 0.6751,
+    "sentences": [
+     [
+      0.2807,
+      -1.6561,
+      -0.1223
+     ],
+     [
+      0.2178,
+      -1.8849,
+      -0.3936
+     ],
+     [
+      0.2053,
+      -1.948,
+      -0.5427
+     ],
+     [
+      0.3249,
+      -2.4601,
+      -0.3691
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.4809,
+    "min_logprob": -4.0056,
+    "mean_logprob": -0.4981,
+    "reply_confidence": 0.5191,
+    "sentences": [
+     [
+      0.2473,
+      -1.8674,
+      -0.3064
+     ],
+     [
+      0.2664,
+      -1.4035,
+      -0.4489
+     ],
+     [
+      0.4809,
+      -4.0056,
+      -0.6014
+     ],
+     [
+      0.2346,
+      -2.8314,
+      -0.9047
+     ],
+     [
+      0.1997,
+      -2.5558,
+      -0.5533
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1774,
+    "min_logprob": -2.256,
+    "mean_logprob": -0.2723,
+    "reply_confidence": 0.8226,
+    "sentences": [
+     [
+      0.0,
+      -0.6935,
+      -0.4319
+     ],
+     [
+      0.1366,
+      -1.607,
+      -0.369
+     ],
+     [
+      0.1774,
+      -0.6875,
+      -0.4465
+     ],
+     [
+      0.1496,
+      -2.256,
+      -0.1945
+     ],
+     [
+      0.1399,
+      -2.1148,
+      -0.4074
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1256,
+    "min_logprob": -1.8579,
+    "mean_logprob": -0.2059,
+    "reply_confidence": 0.9002,
+    "sentences": [
+     [
+      0.0435,
+      -1.8579,
+      -1.8579
+     ],
+     [
+      0.0,
+      -1.0546,
+      -0.359
+     ],
+     [
+      0.0791,
+      -1.2877,
+      -0.2026
+     ],
+     [
+      0.098,
+      -1.1369,
+      -0.1488
+     ],
+     [
+      0.0965,
+      -0.8456,
+      -0.128
+     ],
+     [
+      0.0971,
+      -1.7429,
+      -0.2398
+     ],
+     [
+      0.1256,
+      -0.9416,
+      -0.1639
+     ],
+     [
+      0.0429,
+      -1.6598,
+      -0.5231
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2098,
+    "min_logprob": -2.5976,
+    "mean_logprob": -0.2984,
+    "reply_confidence": 0.7902,
+    "sentences": [
+     [
+      0.2098,
+      -1.0186,
+      -0.0631
+     ],
+     [
+      0.0982,
+      -0.0257,
+      -0.0141
+     ],
+     [
+      0.1566,
+      -2.0895,
+      -0.4992
+     ],
+     [
+      0.1696,
+      -1.1384,
+      -0.2473
+     ],
+     [
+      0.1171,
+      -2.5976,
+      -0.4942
+     ],
+     [
+      0.1107,
+      -1.5354,
+      -0.466
+     ],
+     [
+      0.0,
+      -1.1991,
+      -0.2449
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.134,
+    "min_logprob": -1.4227,
+    "mean_logprob": -0.14,
+    "reply_confidence": 0.866,
+    "sentences": [
+     [
+      0.0288,
+      -1.0983,
+      -0.0978
+     ],
+     [
+      0.134,
+      -1.4227,
+      -0.176
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.5054,
+    "min_logprob": -2.436,
+    "mean_logprob": -0.3544,
+    "reply_confidence": 0.4946,
+    "sentences": [
+     [
+      0.2575,
+      -2.436,
+      -0.2472
+     ],
+     [
+      0.5054,
+      -1.8486,
+      -0.5008
+     ],
+     [
+      0.1867,
+      -1.5821,
+      -0.3716
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -1.069,
+    "mean_logprob": -0.0659,
+    "reply_confidence": 0.944,
+    "sentences": [
+     [
+      0.0,
+      -0.1128,
+      -0.0089
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.0,
+      -0.0225,
+      -0.0025
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.0,
+      -0.2519,
+      -0.0606
+     ],
+     [
+      0.0,
+      -0.305,
+      -0.0433
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1765,
+    "min_logprob": -2.675,
+    "mean_logprob": -0.4132,
+    "reply_confidence": 0.8235,
+    "sentences": [
+     [
+      0.0588,
+      -0.7074,
+      -0.0607
+     ],
+     [
+      0.066,
+      -1.7582,
+      -0.4869
+     ],
+     [
+      0.1422,
+      -2.675,
+      -0.7793
+     ],
+     [
+      0.1765,
+      -1.1127,
+      -0.3276
+     ],
+     [
+      0.1683,
+      -2.3391,
+      -0.556
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2945,
+    "min_logprob": -1.7906,
+    "mean_logprob": -0.1622,
+    "reply_confidence": 0.7055,
+    "sentences": [
+     [
+      0.1208,
+      -1.6753,
+      -0.1853
+     ],
+     [
+      0.0321,
+      -0.9195,
+      -0.3581
+     ],
+     [
+      0.0586,
+      -1.0046,
+      -0.1635
+     ],
+     [
+      0.0621,
+      -0.0109,
+      -0.0025
+     ],
+     [
+      0.1151,
+      -0.0004,
+      -0.0001
+     ],
+     [
+      0.0181,
+      -0.2069,
+      -0.02
+     ],
+     [
+      0.1903,
+      -1.6746,
+      -0.3677
+     ],
+     [
+      0.2945,
+      -0.0029,
+      -0.0005
+     ],
+     [
+      0.0627,
+      -1.7906,
+      -0.4299
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3664,
+    "min_logprob": -2.6528,
+    "mean_logprob": -0.4129,
+    "reply_confidence": 0.6336,
+    "sentences": [
+     [
+      0.1347,
+      -1.4176,
+      -0.2375
+     ],
+     [
+      0.2674,
+      -2.3068,
+      -0.4484
+     ],
+     [
+      0.3664,
+      -1.6102,
+      -0.4088
+     ],
+     [
+      0.2545,
+      -2.093,
+      -0.544
+     ],
+     [
+      0.0,
+      -2.6528,
+      -0.6756
+     ],
+     [
+      0.0875,
+      -1.8352,
+      -0.4146
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3218,
+    "min_logprob": -2.6146,
+    "mean_logprob": -0.4224,
+    "reply_confidence": 0.6782,
+    "sentences": [
+     [
+      0.3218,
+      -2.5908,
+      -0.3307
+     ],
+     [
+      0.1594,
+      -2.1139,
+      -0.5593
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2467,
+    "min_logprob": -2.6477,
+    "mean_logprob": -0.365,
+    "reply_confidence": 0.7533,
+    "sentences": [
+     [
+      0.0,
+      -1.6169,
+      -0.1509
+     ],
+     [
+      0.045,
+      -2.1007,
+      -0.2572
+     ],
+     [
+      0.0,
+      -1.1279,
+      -0.6046
+     ],
+     [
+      0.0997,
+      -2.4733,
+      -0.5324
+     ],
+     [
+      0.2467,
+      -2.486,
+      -0.8864
+     ],
+     [
+      0.1207,
+      -2.2278,
+      -0.5213
+     ],
+     [
+      0.0771,
+      -2.6477,
+      -0.394
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0869,
+    "min_logprob": -0.9392,
+    "mean_logprob": -0.0773,
+    "reply_confidence": 0.9131,
+    "sentences": [
+     [
+      0.0869,
+      -0.8094,
+      -0.0575
+     ],
+     [
+      0.0621,
+      -0.4713,
+      -0.0981
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.07,
+    "min_logprob": -1.8238,
+    "mean_logprob": -0.0966,
+    "reply_confidence": 0.93,
+    "sentences": [
+     [
+      0.0409,
+      -0.0027,
+      -0.0003
+     ],
+     [
+      0.044,
+      -1.8238,
+      -0.2388
+     ],
+     [
+      0.07,
+      -0.2237,
+      -0.0176
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2472,
+    "min_logprob": -2.6755,
+    "mean_logprob": -0.2179,
+    "reply_confidence": 0.7528,
+    "sentences": [
+     [
+      0.2472,
+      -2.6755,
+      -0.2962
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0688,
+    "min_logprob": -2.2027,
+    "mean_logprob": -0.257,
+    "reply_confidence": 0.9312,
+    "sentences": [
+     [
+      0.0,
+      -1.4037,
+      -0.1004
+     ],
+     [
+      0.0,
+      -1.1488,
+      -0.1857
+     ],
+     [
+      0.0289,
+      -1.6776,
+      -1.0823
+     ],
+     [
+      0.0491,
+      -1.3161,
+      -0.2614
+     ],
+     [
+      0.057,
+      -1.1206,
+      -0.2833
+     ],
+     [
+      0.0688,
+      -1.1549,
+      -0.3235
+     ],
+     [
+      0.0485,
+      -2.2027,
+      -0.58
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2654,
+    "min_logprob": -0.5795,
+    "mean_logprob": -0.0912,
+    "reply_confidence": 0.7346,
+    "sentences": [
+     [
+      0.2654,
+      -0.2673,
+      -0.0429
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.156,
+    "min_logprob": -2.2203,
+    "mean_logprob": -0.3314,
+    "reply_confidence": 0.844,
+    "sentences": [
+     [
+      0.0,
+      -1.0572,
+      -0.3048
+     ],
+     [
+      0.0838,
+      -1.623,
+      -0.2857
+     ],
+     [
+      0.0,
+      -0.9505,
+      -0.2852
+     ],
+     [
+      0.0,
+      -0.0066,
+      -0.0017
+     ],
+     [
+      0.0456,
+      -1.994,
+      -0.2491
+     ],
+     [
+      0.156,
+      -2.0031,
+      -0.6048
+     ],
+     [
+      0.1039,
+      -1.772,
+      -0.2903
+     ],
+     [
+      0.1239,
+      -0.3222,
+      -0.0937
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2434,
+    "min_logprob": -2.5705,
+    "mean_logprob": -0.3086,
+    "reply_confidence": 0.7566,
+    "sentences": [
+     [
+      0.1173,
+      -1.8554,
+      -0.2747
+     ],
+     [
+      0.1474,
+      -1.5593,
+      -0.5439
+     ],
+     [
+      0.1426,
+      -1.3646,
+      -0.2027
+     ],
+     [
+      0.223,
+      -1.5603,
+      -0.4131
+     ],
+     [
+      0.0,
+      -2.5705,
+      -0.7796
+     ],
+     [
+      0.2434,
+      -0.8254,
+      -0.0902
+     ],
+     [
+      0.0,
+      -1.7353,
+      -0.4463
+     ],
+     [
+      0.1768,
+      -0.6667,
+      -0.1467
+     ],
+     [
+      0.0,
+      -0.2598,
+      -0.0955
+     ],
+     [
+      0.0,
+      -2.2581,
+      -0.6713
+     ],
+     [
+      0.1212,
+      -0.3978,
+      -0.1428
+     ],
+     [
+      0.1147,
+      -1.3318,
+      -0.5001
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2832,
+    "min_logprob": -2.8564,
+    "mean_logprob": -0.3263,
+    "reply_confidence": 0.7168,
+    "sentences": [
+     [
+      0.2514,
+      -1.2747,
+      -0.0868
+     ],
+     [
+      0.2461,
+      -1.7072,
+      -0.5131
+     ],
+     [
+      0.2832,
+      -1.7227,
+      -0.2453
+     ],
+     [
+      0.2222,
+      -2.8564,
+      -0.4706
+     ],
+     [
+      0.242,
+      -1.9299,
+      -0.519
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1096,
+    "min_logprob": -2.3506,
+    "mean_logprob": -0.2974,
+    "reply_confidence": 0.8904,
+    "sentences": [
+     [
+      0.0572,
+      -1.6644,
+      -0.2312
+     ],
+     [
+      0.0616,
+      -2.3506,
+      -0.279
+     ],
+     [
+      0.1096,
+      -2.1858,
+      -0.4027
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1942,
+    "min_logprob": -2.4325,
+    "mean_logprob": -0.4176,
+    "reply_confidence": 0.8058,
+    "sentences": [
+     [
+      0.1719,
+      -0.7947,
+      -0.0893
+     ],
+     [
+      0.1683,
+      -1.9542,
+      -0.4963
+     ],
+     [
+      0.1942,
+      -2.4325,
+      -0.8541
+     ],
+     [
+      0.0957,
+      -2.0005,
+      -0.6794
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0603,
+    "min_logprob": -1.6097,
+    "mean_logprob": -0.1265,
+    "reply_confidence": 0.9397,
+    "sentences": [
+     [
+      0.0603,
+      -0.6569,
+      -0.0354
+     ],
+     [
+      0.0586,
+      -1.6097,
+      -0.204
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1298,
+    "min_logprob": -2.4384,
+    "mean_logprob": -0.3231,
+    "reply_confidence": 0.8702,
+    "sentences": [
+     [
+      0.1259,
+      -0.9304,
+      -0.1578
+     ],
+     [
+      0.0603,
+      -2.4384,
+      -0.31
+     ],
+     [
+      0.1298,
+      -1.9731,
+      -0.5363
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1309,
+    "min_logprob": -1.9929,
+    "mean_logprob": -0.0731,
+    "reply_confidence": 0.912,
+    "sentences": [
+     [
+      0.0,
+      -0.1199,
+      -0.0089
+     ],
+     [
+      0.0675,
+      -0.0229,
+      -0.0067
+     ],
+     [
+      0.1309,
+      -1.737,
+      -0.5543
+     ],
+     [
+      0.0,
+      -1.253,
+      -0.2446
+     ],
+     [
+      0.0,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.0739,
+      -0.0087,
+      -0.0018
+     ],
+     [
+      0.096,
+      -0.0035,
+      -0.0006
+     ],
+     [
+      0.0574,
+      -0.6073,
+      -0.0409
+     ],
+     [
+      0.088,
+      -0.0015,
+      -0.0001
+     ],
+     [
+      0.0349,
+      -1.251,
+      -0.1289
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1536,
+    "min_logprob": -2.594,
+    "mean_logprob": -0.1399,
+    "reply_confidence": 0.8464,
+    "sentences": [
+     [
+      0.1073,
+      -1.0553,
+      -0.0637
+     ],
+     [
+      0.1536,
+      -2.594,
+      -0.2114
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.4799,
+    "min_logprob": -1.6349,
+    "mean_logprob": -0.1974,
+    "reply_confidence": 0.5201,
+    "sentences": [
+     [
+      0.0726,
+      -0.2139,
+      -0.0294
+     ],
+     [
+      0.4437,
+      -0.3141,
+      -0.0563
+     ],
+     [
+      0.4799,
+      -0.0965,
+      -0.015
+     ],
+     [
+      0.2621,
+      -1.3686,
+      -0.6951
+     ],
+     [
+      0.312,
+      -1.6349,
+      -0.3817
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.8245,
+    "min_logprob": -2.345,
+    "mean_logprob": -0.251,
+    "reply_confidence": 0.1755,
+    "sentences": [
+     [
+      0.8245,
+      -1.7154,
+      -0.137
+     ],
+     [
+      0.7771,
+      -2.345,
+      -0.3572
+     ],
+     [
+      0.821,
+      -1.3881,
+      -0.2108
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.7528,
+    "min_logprob": -2.4755,
+    "mean_logprob": -0.2945,
+    "reply_confidence": 0.2472,
+    "sentences": [
+     [
+      0.7528,
+      -2.4755,
+      -0.2816
+     ],
+     [
+      0.3165,
+      -1.705,
+      -0.2382
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1251,
+    "min_logprob": -2.317,
+    "mean_logprob": -0.1215,
+    "reply_confidence": 0.8749,
+    "sentences": [
+     [
+      0.0336,
+      -0.5258,
+      -0.0398
+     ],
+     [
+      0.0,
+      -0.4795,
+      -0.1265
+     ],
+     [
+      0.1251,
+      -0.4399,
+      -0.0403
+     ],
+     [
+      0.1128,
+      -0.6778,
+      -0.0522
+     ],
+     [
+      0.08,
+      -0.1772,
+      -0.0168
+     ],
+     [
+      0.068,
+      -1.6525,
+      -0.2312
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2613,
+    "min_logprob": -1.6292,
+    "mean_logprob": -0.2113,
+    "reply_confidence": 0.7387,
+    "sentences": [
+     [
+      0.0955,
+      -0.7419,
+      -0.1021
+     ],
+     [
+      0.2049,
+      -1.492,
+      -0.2175
+     ],
+     [
+      0.109,
+      -1.1653,
+      -0.2885
+     ],
+     [
+      0.1232,
+      -0.4698,
+      -0.1409
+     ],
+     [
+      0.136,
+      -0.3351,
+      -0.059
+     ],
+     [
+      0.2613,
+      -1.4196,
+      -0.3235
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2448,
+    "min_logprob": -2.4625,
+    "mean_logprob": -0.4062,
+    "reply_confidence": 0.7552,
+    "sentences": [
+     [
+      0.1828,
+      -2.4625,
+      -0.2838
+     ],
+     [
+      0.1426,
+      -1.2851,
+      -0.6417
+     ],
+     [
+      0.2448,
+      -1.6289,
+      -0.3099
+     ],
+     [
+      0.1156,
+      -1.9764,
+      -0.4827
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1717,
+    "min_logprob": -1.9411,
+    "mean_logprob": -0.2475,
+    "reply_confidence": 0.8283,
+    "sentences": [
+     [
+      0.1485,
+      -0.0894,
+      -0.0104
+     ],
+     [
+      0.1717,
+      -0.8535,
+      -0.2388
+     ],
+     [
+      0.1483,
+      -1.4064,
+      -0.3778
+     ],
+     [
+      0.0,
+      -1.6405,
+      -0.3512
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1305,
+    "min_logprob": -2.4987,
+    "mean_logprob": -0.2251,
+    "reply_confidence": 0.8695,
+    "sentences": [
+     [
+      0.0,
+      -0.9514,
+      -0.2029
+     ],
+     [
+      0.0,
+      -0.472,
+      -0.1463
+     ],
+     [
+      0.0948,
+      -1.9824,
+      -0.296
+     ],
+     [
+      0.1233,
+      -1.8962,
+      -0.1643
+     ],
+     [
+      0.109,
+      -2.4987,
+      -0.2084
+     ],
+     [
+      0.1305,
+      -1.1814,
+      -0.179
+     ],
+     [
+      0.0555,
+      -1.9407,
+      -0.5289
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0111,
+    "min_logprob": -0.2814,
+    "mean_logprob": -0.0122,
+    "reply_confidence": 0.9889,
+    "sentences": [
+     [
+      0.0111,
+      -0.2814,
+      -0.0146
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.5611,
+    "min_logprob": -2.202,
+    "mean_logprob": -0.1387,
+    "reply_confidence": 0.4389,
+    "sentences": [
+     [
+      0.5611,
+      -2.202,
+      -0.1469
+     ],
+     [
+      0.2215,
+      -1.1599,
+      -0.1684
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3209,
+    "min_logprob": -0.91,
+    "mean_logprob": -0.0702,
+    "reply_confidence": 0.6791,
+    "sentences": [
+     [
+      0.0189,
+      -0.1599,
+      -0.0115
+     ],
+     [
+      0.1261,
+      -0.1266,
+      -0.0345
+     ],
+     [
+      0.3209,
+      -0.91,
+      -0.2316
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2943,
+    "min_logprob": -3.255,
+    "mean_logprob": -0.3654,
+    "reply_confidence": 0.7057,
+    "sentences": [
+     [
+      0.1651,
+      -2.2408,
+      -0.3092
+     ],
+     [
+      0.1033,
+      -1.6627,
+      -1.2369
+     ],
+     [
+      0.0542,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.102,
+      -0.4251,
+      -0.1418
+     ],
+     [
+      0.2544,
+      -1.9855,
+      -0.3376
+     ],
+     [
+      0.1339,
+      -2.7507,
+      -0.2394
+     ],
+     [
+      0.0756,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.1622,
+      -0.7797,
+      -0.2599
+     ],
+     [
+      0.259,
+      -1.0755,
+      -0.3541
+     ],
+     [
+      0.2943,
+      -3.255,
+      -0.748
+     ],
+     [
+      0.1448,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.1607,
+      -1.176,
+      -0.2794
+     ],
+     [
+      0.1822,
+      -1.9832,
+      -1.1587
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0482,
+    "min_logprob": -1.6297,
+    "mean_logprob": -0.2042,
+    "reply_confidence": 0.9518,
+    "sentences": [
+     [
+      0.0,
+      -0.1583,
+      -0.0184
+     ],
+     [
+      0.0482,
+      -1.3842,
+      -0.404
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -2.2378,
+    "mean_logprob": -0.2018,
+    "reply_confidence": 0.9142,
+    "sentences": [
+     [
+      0.0,
+      -0.5158,
+      -0.0804
+     ],
+     [
+      0.0,
+      -2.2378,
+      -0.196
+     ],
+     [
+      0.0,
+      -1.6501,
+      -0.1467
+     ],
+     [
+      0.0,
+      -0.9054,
+      -0.2547
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3248,
+    "min_logprob": -1.9761,
+    "mean_logprob": -0.205,
+    "reply_confidence": 0.6752,
+    "sentences": [
+     [
+      0.2365,
+      -1.7541,
+      -0.1494
+     ],
+     [
+      0.3248,
+      -1.9761,
+      -0.4181
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2753,
+    "min_logprob": -0.8981,
+    "mean_logprob": -0.0643,
+    "reply_confidence": 0.7247,
+    "sentences": [
+     [
+      0.2753,
+      -0.8981,
+      -0.0739
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1336,
+    "min_logprob": -0.8085,
+    "mean_logprob": -0.0553,
+    "reply_confidence": 0.8664,
+    "sentences": [
+     [
+      0.1336,
+      -0.5101,
+      -0.0375
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0577,
+    "min_logprob": -2.0722,
+    "mean_logprob": -0.1733,
+    "reply_confidence": 0.9423,
+    "sentences": [
+     [
+      0.0,
+      -0.8325,
+      -0.092
+     ],
+     [
+      0.0,
+      -0.5792,
+      -0.0998
+     ],
+     [
+      0.0,
+      -2.0722,
+      -0.1992
+     ],
+     [
+      0.0577,
+      -1.8601,
+      -0.2423
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0548,
+    "min_logprob": -0.3757,
+    "mean_logprob": -0.0295,
+    "reply_confidence": 0.9452,
+    "sentences": [
+     [
+      0.0482,
+      -0.1237,
+      -0.009
+     ],
+     [
+      0.0548,
+      -0.2185,
+      -0.032
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.2036,
+    "min_logprob": -1.6914,
+    "mean_logprob": -0.1283,
+    "reply_confidence": 0.7964,
+    "sentences": [
+     [
+      0.2036,
+      -1.0127,
+      -0.1393
+     ],
+     [
+      0.099,
+      -0.2545,
+      -0.0203
+     ],
+     [
+      0.1056,
+      -1.6914,
+      -0.3323
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.8378,
+    "min_logprob": -1.7808,
+    "mean_logprob": -0.3298,
+    "reply_confidence": 0.1622,
+    "sentences": [
+     [
+      0.5773,
+      -1.734,
+      -0.1489
+     ],
+     [
+      0.8378,
+      -1.7808,
+      -0.4502
+     ],
+     [
+      0.6378,
+      -1.5805,
+      -0.3883
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1377,
+    "min_logprob": -2.3144,
+    "mean_logprob": -0.1293,
+    "reply_confidence": 0.8623,
+    "sentences": [
+     [
+      0.0757,
+      -0.8401,
+      -0.1134
+     ],
+     [
+      0.0789,
+      -1.7529,
+      -0.2718
+     ],
+     [
+      0.1106,
+      -1.5926,
+      -0.3863
+     ],
+     [
+      0.1118,
+      -0.0583,
+      -0.0072
+     ],
+     [
+      0.1377,
+      -0.0577,
+      -0.0088
+     ],
+     [
+      0.0875,
+      -1.4648,
+      -0.1235
+     ],
+     [
+      0.1359,
+      -2.3144,
+      -0.4277
+     ],
+     [
+      0.0767,
+      -0.0001,
+      -0.0
+     ],
+     [
+      0.0855,
+      -0.5171,
+      -0.081
+     ],
+     [
+      0.0805,
+      -0.0001,
+      -0.0
+     ],
+     [
+      0.1285,
+      -0.0026,
+      -0.0008
+     ],
+     [
+      0.1336,
+      0.0,
+      0.0
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.143,
+    "min_logprob": -1.7292,
+    "mean_logprob": -0.0531,
+    "reply_confidence": 0.857,
+    "sentences": [
+     [
+      0.0,
+      -0.5159,
+      -0.098
+     ],
+     [
+      0.0608,
+      -0.3509,
+      -0.0365
+     ],
+     [
+      0.143,
+      -0.9935,
+      -0.1101
+     ],
+     [
+      0.0758,
+      -1.7292,
+      -0.1474
+     ],
+     [
+      0.0886,
+      -0.0173,
+      -0.0016
+     ],
+     [
+      0.1056,
+      -0.0296,
+      -0.0024
+     ],
+     [
+      0.1066,
+      -0.0206,
+      -0.0018
+     ],
+     [
+      0.0358,
+      -1.26,
+      -0.2008
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0679,
+    "min_logprob": -0.8489,
+    "mean_logprob": -0.1597,
+    "reply_confidence": 0.9321,
+    "sentences": [
+     [
+      0.0,
+      -0.8489,
+      -0.1438
+     ],
+     [
+      0.0679,
+      -0.8409,
+      -0.1886
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.087,
+    "min_logprob": -1.5861,
+    "mean_logprob": -0.1486,
+    "reply_confidence": 0.913,
+    "sentences": [
+     [
+      0.057,
+      -0.5986,
+      -0.049
+     ],
+     [
+      0.087,
+      -0.2917,
+      -0.0795
+     ],
+     [
+      0.0601,
+      -0.2493,
+      -0.0227
+     ],
+     [
+      0.0,
+      null,
+      null
+     ],
+     [
+      0.0,
+      -1.5861,
+      -0.284
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1655,
+    "min_logprob": -2.1633,
+    "mean_logprob": -0.134,
+    "reply_confidence": 0.8345,
+    "sentences": [
+     [
+      0.0538,
+      -2.1633,
+      -0.1684
+     ],
+     [
+      0.1417,
+      -0.9084,
+      -0.1918
+     ],
+     [
+      0.1655,
+      -0.8838,
+      -0.0864
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0,
+    "min_logprob": -0.0166,
+    "mean_logprob": -0.0012,
+    "reply_confidence": 0.9797,
+    "sentences": [
+     [
+      0.0,
+      -0.0166,
+      -0.0012
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1879,
+    "min_logprob": -2.8967,
+    "mean_logprob": -0.3943,
+    "reply_confidence": 0.8121,
+    "sentences": [
+     [
+      0.1879,
+      -0.8108,
+      -0.1079
+     ],
+     [
+      0.0928,
+      -2.8967,
+      -0.5216
+     ],
+     [
+      0.0876,
+      -1.7179,
+      -0.4971
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0,
+    "min_logprob": -1.1452,
+    "mean_logprob": -0.0764,
+    "reply_confidence": 0.9594,
+    "sentences": [
+     [
+      0.0,
+      -0.0242,
+      -0.0038
+     ],
+     [
+      0.0,
+      -1.1452,
+      -0.1378
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.2455,
+    "min_logprob": -2.8016,
+    "mean_logprob": -0.2121,
+    "reply_confidence": 0.7545,
+    "sentences": [
+     [
+      0.0,
+      -0.6984,
+      -0.1331
+     ],
+     [
+      0.0882,
+      -0.0104,
+      -0.0011
+     ],
+     [
+      0.2319,
+      -1.7247,
+      -0.2144
+     ],
+     [
+      0.1027,
+      -0.2662,
+      -0.023
+     ],
+     [
+      0.2089,
+      -2.2206,
+      -0.6134
+     ],
+     [
+      0.1443,
+      -0.019,
+      -0.0014
+     ],
+     [
+      0.1717,
+      -2.8016,
+      -0.5362
+     ],
+     [
+      0.2455,
+      -0.0596,
+      -0.0043
+     ],
+     [
+      0.0978,
+      -1.9701,
+      -0.6733
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.329,
+    "min_logprob": -2.579,
+    "mean_logprob": -0.3419,
+    "reply_confidence": 0.671,
+    "sentences": [
+     [
+      0.0,
+      -1.3241,
+      -0.2512
+     ],
+     [
+      0.2354,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.1622,
+      -0.6089,
+      -0.6089
+     ],
+     [
+      0.3041,
+      -1.2822,
+      -0.3594
+     ],
+     [
+      0.0,
+      -1.7129,
+      -0.6662
+     ],
+     [
+      0.329,
+      -2.579,
+      -0.2575
+     ],
+     [
+      0.0,
+      -1.5895,
+      -0.4749
+     ],
+     [
+      0.2571,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.2308,
+      -0.3383,
+      -0.1789
+     ],
+     [
+      0.278,
+      -2.0676,
+      -0.4953
+     ],
+     [
+      0.2764,
+      -2.563,
+      -0.5215
+     ],
+     [
+      0.2017,
+      -0.0,
+      -0.0
+     ],
+     [
+      0.2862,
+      -0.6627,
+      -0.337
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.1227,
+    "min_logprob": -1.3162,
+    "mean_logprob": -0.0692,
+    "reply_confidence": 0.8773,
+    "sentences": [
+     [
+      0.1227,
+      -1.3162,
+      -0.0696
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3147,
+    "min_logprob": -1.6759,
+    "mean_logprob": -0.0679,
+    "reply_confidence": 0.6853,
+    "sentences": [
+     [
+      0.3147,
+      -1.6759,
+      -0.0611
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.7706,
+    "min_logprob": -3.8151,
+    "mean_logprob": -0.2897,
+    "reply_confidence": 0.2294,
+    "sentences": [
+     [
+      0.7706,
+      -0.5144,
+      -0.0364
+     ],
+     [
+      0.1168,
+      -1.3439,
+      -0.3053
+     ],
+     [
+      0.5613,
+      -0.9918,
+      -0.1878
+     ],
+     [
+      0.2975,
+      -3.8151,
+      -0.6565
+     ],
+     [
+      0.2992,
+      -3.1399,
+      -0.8965
+     ],
+     [
+      0.2308,
+      -2.2004,
+      -0.2466
+     ],
+     [
+      0.2102,
+      -1.7485,
+      -0.2708
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.8665,
+    "min_logprob": -3.888,
+    "mean_logprob": -0.6667,
+    "reply_confidence": 0.1335,
+    "sentences": [
+     [
+      0.0,
+      -1.227,
+      -0.2397
+     ],
+     [
+      0.8258,
+      -2.9665,
+      -1.1732
+     ],
+     [
+      0.6157,
+      -2.4103,
+      -0.8898
+     ],
+     [
+      0.8099,
+      -3.395,
+      -1.5085
+     ],
+     [
+      0.3366,
+      -0.6829,
+      -0.1566
+     ],
+     [
+      0.8665,
+      -3.888,
+      -1.7138
+     ],
+     [
+      0.8257,
+      -3.4458,
+      -1.1937
+     ],
+     [
+      0.3018,
+      -1.5099,
+      -0.127
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.268,
+    "min_logprob": -3.2864,
+    "mean_logprob": -0.1931,
+    "reply_confidence": 0.732,
+    "sentences": [
+     [
+      0.1106,
+      -3.2864,
+      -0.2385
+     ],
+     [
+      0.268,
+      -1.2081,
+      -0.174
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.8515,
+    "min_logprob": -2.6093,
+    "mean_logprob": -0.227,
+    "reply_confidence": 0.1485,
+    "sentences": [
+     [
+      0.0,
+      -0.4626,
+      -0.1233
+     ],
+     [
+      0.81,
+      -0.902,
+      -0.3721
+     ],
+     [
+      0.7863,
+      -2.6093,
+      -0.6276
+     ],
+     [
+      0.843,
+      -0.7442,
+      -0.1725
+     ],
+     [
+      0.8515,
+      -0.0781,
+      -0.0291
+     ],
+     [
+      0.4781,
+      -0.6434,
+      -0.0714
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.114,
+    "min_logprob": -1.3105,
+    "mean_logprob": -0.1323,
+    "reply_confidence": 0.886,
+    "sentences": [
+     [
+      0.114,
+      -0.2383,
+      -0.0267
+     ],
+     [
+      0.1103,
+      -1.169,
+      -0.15
+     ],
+     [
+      0.1094,
+      -1.3105,
+      -0.2281
+     ],
+     [
+      0.0,
+      -0.5408,
+      -0.1056
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.1841,
+    "min_logprob": -1.4838,
+    "mean_logprob": -0.1918,
+    "reply_confidence": 0.8159,
+    "sentences": [
+     [
+      0.097,
+      -0.4315,
+      -0.0736
+     ],
+     [
+      0.073,
+      -1.1663,
+      -0.132
+     ],
+     [
+      0.0981,
+      -0.6997,
+      -0.1073
+     ],
+     [
+      0.1055,
+      -0.5523,
+      -0.2104
+     ],
+     [
+      0.1841,
+      -0.0562,
+      -0.0151
+     ],
+     [
+      0.0,
+      -1.4838,
+      -0.452
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0691,
+    "min_logprob": -0.0135,
+    "mean_logprob": -0.001,
+    "reply_confidence": 0.9309,
+    "sentences": [
+     [
+      0.0691,
+      -0.0135,
+      -0.0013
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0911,
+    "min_logprob": -0.7862,
+    "mean_logprob": -0.1091,
+    "reply_confidence": 0.9089,
+    "sentences": [
+     [
+      0.0256,
+      -0.5259,
+      -0.083
+     ],
+     [
+      0.0911,
+      -0.7709,
+      -0.1248
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.0813,
+    "min_logprob": -2.4052,
+    "mean_logprob": -0.1844,
+    "reply_confidence": 0.9187,
+    "sentences": [
+     [
+      0.0,
+      -0.0327,
+      -0.0039
+     ],
+     [
+      0.0628,
+      -2.4052,
+      -0.2419
+     ],
+     [
+      0.0813,
+      -0.8629,
+      -0.1756
+     ],
+     [
+      0.0,
+      -1.7889,
+      -0.2463
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3066,
+    "min_logprob": -2.2224,
+    "mean_logprob": -0.2519,
+    "reply_confidence": 0.6934,
+    "sentences": [
+     [
+      0.3066,
+      -1.4428,
+      -0.1838
+     ],
+     [
+      0.0,
+      -1.4041,
+      -0.2966
+     ],
+     [
+      0.0933,
+      -2.0404,
+      -0.2692
+     ],
+     [
+      0.1407,
+      -2.2224,
+      -0.4306
+     ]
+    ]
+   },
+   {
+    "wrong": 1,
+    "max_risk": 0.3749,
+    "min_logprob": -1.7677,
+    "mean_logprob": -0.2094,
+    "reply_confidence": 0.6251,
+    "sentences": [
+     [
+      0.3749,
+      -0.587,
+      -0.0903
+     ],
+     [
+      0.2088,
+      -1.7677,
+      -0.3207
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.0957,
+    "min_logprob": -2.4163,
+    "mean_logprob": -0.182,
+    "reply_confidence": 0.9043,
+    "sentences": [
+     [
+      0.0653,
+      -1.0733,
+      -0.1741
+     ],
+     [
+      0.0957,
+      -0.8258,
+      -0.0954
+     ],
+     [
+      0.0494,
+      -0.2066,
+      -0.0587
+     ],
+     [
+      0.0303,
+      -1.7026,
+      -0.2985
+     ]
+    ]
+   },
+   {
+    "wrong": 0,
+    "max_risk": 0.3279,
+    "min_logprob": -2.7442,
+    "mean_logprob": -0.1772,
+    "reply_confidence": 0.6721,
+    "sentences": [
+     [
+      0.1121,
+      -0.8834,
+      -0.0541
+     ],
+     [
+      0.3279,
+      -2.0111,
+      -0.1461
+     ],
+     [
+      0.0189,
+      -1.0484,
+      -0.1239
+     ],
+     [
+      0.0,
+      -2.7442,
+      -0.4823
+     ]
+    ]
+   }
+  ]
+ },
+ "examples": [
+  {
+   "prompt": "Tell me briefly about the French Revolution.",
+   "reply": "The French Revolution (1789\u20131799) was a period of radical political and social upheaval in France, driven by widespread discontent with the monarchy, inequality, and financial crisis. It began with the storming of the Bastille in 1789 and led to the abolition of feudalism, the rise of democratic ideals, and the establishment of a republic. Key events include the execution of King Louis XVI, the Re",
+   "doubted": []
+  },
+  {
+   "prompt": "What is Rome famous for?",
+   "reply": "Rome is famous for its rich history, ancient architecture, and cultural heritage. Key attractions include:\n\n- **Historical Sites**: Colosseum, Roman Forum, and Pantheon.\n- **Religious Significance**: Home to Vatican City, the center of Catholicism, including St. Peter's Basilica and the Sistine Chapel.\n- **Art and Culture**: Renaissance masterpieces by artists like Michelangelo and Botticelli.\n- *",
+   "doubted": []
+  },
+  {
+   "prompt": "Explain the theory of evolution simply.",
+   "reply": "The theory of evolution explains how species change over time through a process called **natural selection**. Here's a simple breakdown:\n\n- **Variation**: Individuals in a population have different traits (e.g., size, color, strength).\n- **Competition**: Resources are limited, so organisms compete to survive and reproduce.\n- **Selection**: Traits that help an organism survive and reproduce more su",
+   "doubted": []
+  },
+  {
+   "prompt": "Who was Frida Kahlo?",
+   "reply": "Frida Kahlo was a Mexican painter known for her vivid, symbolic self-portraits and works inspired by nature and Mexican culture. Born in 1907, she became one of the most influential artists of the 20th century. Her art often reflected her personal pain and emotional struggles, particularly stemming from a severe bus accident in her youth and her tumultuous marriage to muralist Diego Rivera. Kahlo'",
+   "doubted": []
+  },
+  {
+   "prompt": "Explain how to write a cover letter.",
+   "reply": "To write an effective cover letter:\n\n1. **Start with contact information**: Include your name, address, phone number, email, and the date at the top. Add the employer\u2019s name, title, company, and address.\n\n2. **Greeting**: Address the hiring manager by name if possible; otherwise, use \"Dear Hiring Team\" or \"Dear [Company Name] Search Committee.\"\n\n3. **Introduction**: State the position you\u2019re apply",
+   "doubted": []
+  },
+  {
+   "prompt": "What's your favourite season and why?",
+   "reply": "I don\u2019t have personal preferences or feelings, so I don\u2019t have a favorite season! However, I can share that each season has unique qualities people often enjoy: spring for blooming flowers and warmer weather, summer for long days and outdoor activities, autumn for colorful leaves and cooler temperatures, and winter for snow and quiet beauty. What\u2019s your favorite season? \ud83d\ude0a",
+   "doubted": []
+  },
+  {
+   "prompt": "What product is obtained from the tree Hevea Braziliensis' (amongst others)?",
+   "reply": "The product obtained from the tree *Hevea brasiliensis* is **natural rubber** (also called latex). This tree is the primary commercial source of latex, which is used to produce a wide range of rubber products.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - In what card game do you need the queen of spades to shoot the moon?",
+   "reply": "The queen of spades is important in the game of **Hearts**, but it's not used to \"shoot the moon.\" However, you're likely thinking of the game **Oh Hell** or possibly a variant.\n\nBut the key card game where you need the **Queen of Spades to shoot the moon** is:\n\n**Moon Shot (also known as Shoot the Moon)** \u2014 a trick-taking card game where successfully taking all tricks (shooting the moon) often re",
+   "doubted": [
+    "**Moon Shot (also known as Shoot the Moon)** \u2014 a trick-taking card game where successfully taking all tricks (shooting the moon) often requires holding the Queen of Spades, which can be crucial in achieving that goal."
+   ]
+  },
+  {
+   "prompt": "Which teacher taught Helen Keller to communicate?",
+   "reply": "Helen Keller was taught to communicate by **Anne Sullivan**. Sullivan became Keller's teacher and personal assistant in 1887 when Keller was just seven years old. She used tactile sign language and other methods to teach Keller how to read, write, speak, and eventually attend college.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - In Old Possums book of practical cats what is the name of the cat who is the terror of the Thames?",
+   "reply": "The cat who is the terror of the Thames in *Old Possum's Book of Practical Cats* is **Rum Tum Tugger**.",
+   "doubted": [
+    "The cat who is the terror of the Thames in *Old Possum's Book of Practical Cats* is **Rum Tum Tugger**."
+   ]
+  },
+  {
+   "prompt": "Which state was created by the Lateran Treaty of 1929?",
+   "reply": "The Lateran Treaty of 1929 created the **Vatican City State**, recognizing it as an independent sovereign territory under the authority of the Pope.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - Which sea lies between Italy and the former Yugoslavia?",
+   "reply": "The sea that lies between Italy and the former Yugoslavia (now countries such as Croatia, Montenegro, Bosnia and Herzegovina, and Slovenia) is the **Adriatic Sea**.",
+   "doubted": []
+  },
+  {
+   "prompt": "The line 'The mirror crack'd from side to side' comes from which poem?",
+   "reply": "The line \"The mirror crack'd from side to side\" comes from the poem **\"My Last Duchess\"** by **Robert Browning**.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - Who is the only Rugby League player to win two consecutive Lance Todd trophies, doing so in 2007 and 2008?",
+   "reply": "The only Rugby League player to win two consecutive Lance Todd Trophies is **Daryl Hall**. He achieved this feat while playing for St Helens, winning in 2007 and 2008.",
+   "doubted": []
+  },
+  {
+   "prompt": "The world's deepest known cave is in which country?",
+   "reply": "The world's deepest known cave is the Krubera Cave (also known as Voronya Cave), located in **Georgia**.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - Name the fantasy movie directed by Terry Gilliam, where 6 dwarves have stolen a map.",
+   "reply": "The fantasy movie you're referring to is **\"The Brothers Grimaldi\"** (also known as **\"The Man Who Killed Don Quixote\"**, though this is a different film). However, there seems to be some confusion.\n\nIf you're thinking of a Terry Gilliam film featuring six dwarves and a stolen map, the correct title is likely **\"The Brothers Grimaldi\"** (1986), which features a group of eccentric characters on a q",
+   "doubted": [
+    "The fantasy movie you're referring to is **\"The Brothers Grimaldi\"** (also known as **\"The Man Who Killed Don Quixote\"**, though this is a different film).",
+    "If you're thinking of a Terry Gilliam film featuring six dwarves and a stolen map, the correct title is likely **\"The Brothers Grimaldi\"** (1986), which features a group of eccentric characters on a quest involving treasure maps.",
+    "It stars Steve Coogan and Rob Brydon as two bumbling brothers who encounter various bizarre characters during their journey."
+   ]
+  },
+  {
+   "prompt": "Who provided the voice for Bob The Builder on his number one hit Can We Fix It?",
+   "reply": "The voice of Bob the Builder in the song \"Can We Fix It?\" was provided by **Neil Morris**. He voiced Bob for most of the character's appearances, including the popular theme song.",
+   "doubted": [
+    "was provided by **Neil Morris**."
+   ]
+  },
+  {
+   "prompt": "Quick question - Which TV creatures ate Blue String Pudding ?",
+   "reply": "The TV creatures that ate Blue String Pudding were the **Trumptonshire characters** from the British children's television show *Trumpton*. Specifically, the **Clockwork Crocodile** was famously depicted eating blue string pudding in the series.",
+   "doubted": [
+    "The TV creatures that ate Blue String Pudding were the **Trumptonshire characters** from the British children's television show *Trumpton*.",
+    "Specifically, the **Clockwork Crocodile** was famously depicted eating blue string pudding in the series."
+   ]
+  },
+  {
+   "prompt": "who was the editor of the journal jugantor published in the time of swadeshi movement?",
+   "reply": "The editor of the journal **Jugantar**, published during the time of the Swadeshi Movement, was **Barin Ghosh**. He was a key figure in the Indian independence movement and the younger brother of Aurobindo Ghosh. Jugantar played an important role in spreading nationalist ideas and promoting the Swadeshi cause.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - consist of the sum of the fixed and variable costs for any given level of production?",
+   "reply": "Yes, **total cost** consists of the sum of **fixed costs** and **variable costs** for any given level of production.\n\n$$\n\\text{Total Cost} = \\text{Fixed Costs} + \\text{Variable Costs}\n$$\n\n- **Fixed costs** remain constant regardless of production level.\n- **Variable costs** change with the level of output.",
+   "doubted": []
+  },
+  {
+   "prompt": "who sings the rap in baby by justin bieber?",
+   "reply": "The rap in \"Baby\" by Justin Bieber is performed by **Ludacris**.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - who starred in the movie on golden pond?",
+   "reply": "The movie *On Golden Pond* (1981) starred:\n\n- **Katharine Hepburn** as Ethel Thayer  \n- **Henry Fonda** as Norman Thayer  \n- **Powers Boothe** as Charlie Driggs  \n\nThese three actors were the principal cast members in the film adaptation of the play by Ernest Thompson.",
+   "doubted": [
+    "- **Katharine Hepburn** as Ethel Thayer",
+    "- **Henry Fonda** as Norman Thayer"
+   ]
+  },
+  {
+   "prompt": "where is the country music hall of fame located?",
+   "reply": "The Country Music Hall of Fame is located in **Nashville, Tennessee**, USA. Specifically, it is situated at **222 Rep. John Lewis Way S** in downtown Nashville.",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - who is stephanie's mom on the bold and the beautiful?",
+   "reply": "Stephanie Forrester's mom on *The Bold and the Beautiful* is **Hope Logan**. Hope is a long-standing character on the show and has been portrayed by Annika Noor as of recent years. She is married to Liam Spencer, and she adopted Stephanie after Stephanie's biological mother, Taylor Hayes, gave her up for adoption.",
+   "doubted": [
+    "Stephanie Forrester's mom on *The Bold and the Beautiful* is **Hope Logan**.",
+    "Hope is a long-standing character on the show and has been portrayed by Annika Noor as of recent years.",
+    "She is married to Liam Spencer, and she adopted Stephanie after Stephanie's biological mother, Taylor Hayes, gave her up for adoption."
+   ]
+  },
+  {
+   "prompt": "what's the difference between salisbury steak and hamburger steak?",
+   "reply": "The main differences between **Salisbury steak** and **hamburger steak** are in their **ingredients**, **seasoning**, and **preparation**:\n\n### 1. **Ingredients**\n- **Salisbury steak**: Typically made from **ground beef mixed with breadcrumbs, onions, and sometimes eggs**. It often includes additional ingredients like **gravy or mushrooms** served on top.\n- **Hamburger steak**: Usually just **grou",
+   "doubted": []
+  },
+  {
+   "prompt": "Quick question - when did marley die in a christmas carol?",
+   "reply": "In *A Christmas Carol* by Charles Dickens, Marley died seven years before the story begins. Specifically, it is stated that Jacob Marley was \"as dead as a doorknob\" and had been dead for \"seven years to a day.\"",
+   "doubted": []
+  }
+ ]
+}

@@ -1270,12 +1270,43 @@ loaded with the head):
 - Everyday prompts are few (38). The claim heuristic still decides *where* to read, and in 10% of
   everyday replies it finds no claim.
 
+**Held-out test of the serving settings** (`results/kaggle/chateval-32h/`). Nothing here was used
+for fitting.
+- **New everyday prompts, chosen to be hard:** 56 informative replies full of names, dates and numbers
+  (history, travel, science, people, recipes, how-to, stories, small talk). 7.1% of replies had a
+  doubtful sentence (4 of 56: one travel, one how-to, two small talk); 0.8% of sentences.
+- **New TriviaQA questions (120):**
+  - accuracy 0.71;
+  - claim score AUROC **0.78** (log-prob 0.61-0.63 over the whole factual set);
+  - at the served threshold: **37% of wrong replies flagged, 12% of right ones**. That is lower recall
+    than the 51% seen in-sample and cross-validated, on the same kind of question.
+- **Natural Questions (80), a different distribution:**
+  - accuracy 0.48 by alias match;
+  - AUROC **0.57**, close to chance;
+  - 21% of wrong flagged, 13% of right.
+
+  Part of this is label noise. NQ gold answers are narrow ("Americans" for "the American Continental
+  Army"), and several questions are time-sensitive (the next Olympics). But some errors are real
+  confident mistakes the score misses (the actor who plays Saul in *Grace and Frankie*). Do not claim
+  the score generalises beyond TriviaQA-style questions.
+- **Averaging a reply's claim scores is worse held-out** (0.72 against 0.78 for the weakest claim), so
+  the served score stays the weakest claim.
+
+**What this means.**
+- In open chat the system rarely underlines ordinary text (7% of fact-heavy replies, under 1% of
+  sentences).
+- When it does doubt a factual answer, that answer is wrong far more often than the average one.
+- It misses most errors: about a third caught on trivia, a fifth on NQ.
+- It is a useful warning light, not a fact checker. Errors the model is confident about pass
+  unflagged. Documents plus provenance remain the stronger mode, where the head reaches sentence AUROC
+  0.90 on RAGTruth.
+
 **Thinking** (48 questions, 512-token budget, about 340 tokens used):
 - Accuracy 0.85 against 0.83 without thinking.
 - Risk AUROC on answers written after reasoning: 0.80 (interval 0.61-0.96).
 - 28 s per reply on T4.
 
-**Speed on 2x T4:** 13 generated tokens/s in total at batch 16, 5.4 s per reply. The L40S on Modal is
+**Speed on 2x T4:** 13-17 generated tokens/s in total at batch 16, 5.4-5.6 s per reply. The L40S on Modal is
 expected to be several times faster; not yet measured.
 
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
