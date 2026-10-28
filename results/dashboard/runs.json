@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (04:45:46 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (05:03:55 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
@@ -453,7 +453,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (04:47:14 UTC check)"
+"note": "full caps: RAGTruth 6k/2.7k, HaluEval x4, TruthfulQA; provenance vs Lookback Lens on 300 test items (05:02:21 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -545,9 +545,9 @@
 "title": "CPU: retrieve only when the probe doubts (1.5B, TriviaQA + Wikipedia)",
 "model": "qwen",
 "status": "running",
-"step": 130,
+"step": 140,
 "total_steps": 200,
-"progress": 0.65,
+"progress": 0.7,
 "last_loss": null,
 "note": "accuracy per retrieval budget: probe trigger vs token probability (FLARE-style) vs random"
 }
