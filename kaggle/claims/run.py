@@ -81,6 +81,16 @@ def build_sets(a, qa, gsm):
     return sets
 
 
+def adapt(messages, no_system):
+    """Reasoning models (DeepSeek-R1 distills) are meant to run without a system prompt: fold it into
+    the first user turn."""
+    if not no_system or messages[0]["role"] != "system":
+        return messages
+    sys_, rest = messages[0]["content"], [dict(m) for m in messages[1:]]
+    rest[0]["content"] = sys_ + "\n\n" + rest[0]["content"]
+    return rest
+
+
 def run_split(model, tok, items, layers, a):
     """Generate replies, label claims, extract claim features. Returns per-claim rows."""
     rows = []
@@ -88,8 +98,8 @@ def run_split(model, tok, items, layers, a):
         its = [it for it in items if it["format"] == fmt]
         if not its:
             continue
-        prompts = [prompt_of(tok, it["messages"]) for it in its]
-        reps = generate(model, tok, prompts, max_new_tokens=MAX_NEW[fmt], batch=a.gen_batch)
+        prompts = [prompt_of(tok, adapt(it["messages"], a.no_system)) for it in its]
+        reps = generate(model, tok, prompts, max_new_tokens=int(MAX_NEW[fmt] * a.max_new_scale), batch=a.gen_batch)
         labs = [label_claims(tok, it, r) for it, r in zip(its, reps)]
         feats = claim_features(model, tok, [tok(p).input_ids for p in prompts], reps,
                                [[j for j, _ in lab] for lab in labs], layers, batch=a.feat_batch)
@@ -220,6 +230,8 @@ def main():
     ap.add_argument("--feat-batch", type=int, default=4)
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--attn", default="sdpa", help="eager attention overflows in float16 on Qwen2.5")
+    ap.add_argument("--no-system", action="store_true", help="fold the system prompt into the user turn (R1 distills)")
+    ap.add_argument("--max-new-scale", type=float, default=1.0, help="reasoning models think at length: e.g. 6")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:

@@ -6,7 +6,7 @@ import base64
 import os
 import sys
 
-MODULES = ["vt/model.py", "vt/lm.py", "vt/glassbox.py", "vt/glassbox2.py", "vt/glassbox3.py", "vt/qwen_glassbox.py", "vt/correctness.py"]
+MODULES = ["vt/model.py", "vt/lm.py", "vt/glassbox.py", "vt/glassbox2.py", "vt/glassbox3.py", "vt/qwen_glassbox.py", "vt/correctness.py", "vt/claims.py"]
 
 
 def main():
