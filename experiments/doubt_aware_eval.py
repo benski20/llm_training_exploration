@@ -59,15 +59,16 @@ def main():
         if i < len(rows):
             continue
         r = gen.generate([{"role": "system", "content": SYSTEM}, {"role": "user", "content": x["question"]}], 40, "flag")
-        rows.append({"q": x["question"], "reply": r["text"], "claims": r["claims"],
+        rows.append({"q": x["question"], "reply": r["text"], "claims": r["claims"], "first_token": r["first_token"],
                      "right": is_right(r["text"], x["answer"]["normalized_aliases"] + [x["answer"]["value"]])})
         if (i + 1) % 10 == 0:
             json.dump(rows, open(a.partial, "w"))
             print(json.dumps({"done": i + 1, "acc": float(np.mean([r_["right"] for r_ in rows])),
                               "s": round(time.time() - t0)}), flush=True)
     json.dump(rows, open(a.partial, "w"))
-    def probe(r): return min((c["p_correct"] for c in r["claims"]), default=1.0)
-    def tokp(r): return min((c["token_p"] for c in r["claims"]), default=1.0)
+    def first(r, k): return r["claims"][0][k] if r["claims"] else (r.get("first_token") or {}).get(k, 1.0)
+    def probe(r): return first(r, "p_correct")              # the probe was trained at the first claim token
+    def tokp(r): return min((c["token_p"] for c in r["claims"]), default=(r.get("first_token") or {}).get("token_p", 1.0))
     res = {"model": a.model, "n": len(rows), "accuracy": float(np.mean([r["right"] for r in rows])),
            "with_claim": float(np.mean([bool(r["claims"]) for r in rows])), "curves": {}}
     for keep in (1.0, 0.9, 0.8, 0.7, 0.6, 0.5):

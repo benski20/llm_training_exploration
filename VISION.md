@@ -855,6 +855,31 @@ intervals:
 - **Calibration does not transfer** to NQ's lower base rate (ECE 0.20), as before; recalibration on a
   small labelled sample is the remedy (`CorrectnessHead.calibrate`).
 
+**Result, Qwen2.5-7B** (`results/kaggle/claims-7b/claims/results.json`; 2x T4 with device_map, 2.6 h;
+7,941 training claims; best layer 24 of 28). Same setup as 3B:
+
+| format | accuracy | probe | **stack** | claim token p | error in the most confident 25%: stack / token p |
+|---|---|---|---|---|---|
+| short answer | 59% | 0.827 | **0.878** (0.83-0.92) | 0.796 | 7% / 18% |
+| several answers in one reply | 59% | 0.765 | **0.830** (0.80-0.86) | 0.765 | 9% / 18% |
+| question after earlier turns | 48% | 0.761 | **0.835** (0.79-0.88) | 0.758 | 16% / 26% |
+| reasoning, then answer | 63% | 0.802 | **0.819** (0.77-0.87) | 0.600 (0.53-0.68) | 9% / 27% |
+| GSM8K math | 88% | 0.868 | **0.871** (0.79-0.94) | 0.600 (0.50-0.71) | 1% / 13% |
+| **all formats** | 62% | 0.811 | **0.856** (0.84-0.87), ECE 0.086 | 0.760 (0.73-0.78) | 7% / 18% |
+| NQ-open (unseen), all formats | 31% | 0.698 | **0.736** (0.71-0.76), ECE 0.24 | 0.657 (0.63-0.69) | 45% / 58% |
+
+Compared with 3B:
+- **The stack gains with scale** (0.837 to 0.856 in distribution), and its lead over token
+  probability holds at about +0.10.
+- **The output-probability features matter more** at 7B (probe alone 0.811, stack 0.856).
+- **On NQ the stack is a little lower** than at 3B (0.736 vs 0.762, intervals overlap), but still
+  well above token probability.
+- **Leave-one-format-out** still holds for short / multi / multi-turn (held-out 0.873 / 0.815 /
+  0.786) and reasoning (0.745). Math no longer transfers (0.641 left out, 0.868 with it), so math
+  needs its own training data.
+- **Training size** (1,000 / 3,000 / 7,941 claims) gives 0.703 / 0.828 / 0.855, still rising.
+- **Reply level** (multi): 0.818.
+
 **Float16 without NaNs.** In float16 the earlier Kaggle run produced garbage
 (0% accuracy, then a CUDA assert). The cause is not Qwen2.5's activations, which
 peak below 7,000. It is its raw attention logits: q.k reaches about 2.6e5 in
@@ -897,6 +922,19 @@ token probability, the FLARE-style trigger. Hallucination at 90 / 70 / 50% answe
 
 Both point to the general detector below: it scores every token, with no claim heuristic, and
 uses bigger readers.
+
+With the 1.5B probe (49% right, `results/doubt_aware_eval_1p5b_v1.json`) it is still roughly a tie at
+matched abstention: at 50% answered, 15% hallucinated against 17% for token probability. On replies
+that contain a detected claim, though, the probe's first-claim score separates right from wrong far
+better than the first claim's token probability (AUROC 0.828 vs 0.756), as offline. Two things erase
+the gap in the end-to-end numbers:
+- **Claimless replies.** 20% of replies have no detected claim, so neither trigger can ever withhold
+  them, and many of those are wrong. They set a shared floor.
+- **A strong baseline.** The minimum token probability over all of a reply's claims is a harder
+  baseline (0.789) than the first claim's.
+
+The generator now scores the reply's first content token when no claim is found (the probe's
+training fallback), and judges by the first claim. A rerun measures the effect.
 
 **Exact provenance on RAGTruth: first sanity check** (`experiments/ragtruth_provenance.py`, 0.5B
 reader, 40 test responses, 4,845 tokens, 267 inside human-labelled hallucinations, nothing trained).

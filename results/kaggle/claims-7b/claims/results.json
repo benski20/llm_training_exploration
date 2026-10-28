@@ -1,0 +1,1062 @@
+{
+ "config": {
+  "out": "/kaggle/working/claims",
+  "models": "Qwen/Qwen2.5-7B-Instruct",
+  "n_train": [
+   2500,
+   800,
+   1500,
+   1200,
+   1200
+  ],
+  "n_test": 300,
+  "n_pool_train": 20000,
+  "n_pool_test": 1000,
+  "gen_batch": 24,
+  "feat_batch": 4,
+  "dtype": "float16",
+  "attn": "sdpa",
+  "no_system": false,
+  "max_new_scale": 1.0,
+  "smoke": false
+ },
+ "Qwen/Qwen2.5-7B-Instruct": {
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "layers": [
+   9,
+   12,
+   14,
+   17,
+   19,
+   22,
+   24,
+   27
+  ],
+  "dtype": "float16",
+  "complete": true,
+  "claims": {
+   "test": {
+    "short": 275,
+    "multi": 727,
+    "multiturn": 281,
+    "reasoning": 259,
+    "math": 282
+   },
+   "nq": {
+    "short": 269,
+    "multi": 768,
+    "multiturn": 264,
+    "reasoning": 264,
+    "math": 0
+   },
+   "train": {
+    "short": 2309,
+    "multi": 2053,
+    "multiturn": 1389,
+    "reasoning": 1045,
+    "math": 1145
+   }
+  },
+  "examples": {
+   "test": [
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "1905"
+    },
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "Jack Ruby killed Lee Harvey Oswald."
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Frank Lloyd Wright"
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Milwaukee\n2. F. Scott Fitzgerald\n3. Lee Harvey Oswald"
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Rebecca Adlington won Olympic Gold Medals in 2008 in the 400 and 800 m freestyle.\n2. Sufferers, Locksmen, and Dreads are followers of Rastafarianism.\n3. The theme song for the TV show 'Rawhide' was sung by Johnny Cash."
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. The monarch of the United Kingdom always holds the title of the Supreme Governor of the Church of England.\n2. The English word \"sherry\" comes from an old French word meaning sour wine.\n3. The 1986 Peter Weir movie based on a Paul Theroux novel that starred Harrison Ford, Helen Mirren, and River P"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "35 years old"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Bluebird K4"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Harry Potter and the Philosopher's Stone"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To determine the year in which Edward VIII abdicated, I will follow these steps:\n\n1. Recall the key facts about Edward VIII's reign.\n2. Identify the specific year of his abdication.\n\nStep 1: Edward VIII became King of the United Kingdom and the Dominions of the British Empire in January 1936 upon th"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To determine which French King Madame de Pompadour and Madame du Barry were mistresses of, let's break this down step-by-step:\n\n1. **Identify Madame de Pompadour**: Madame de Pompadour was a famous mistress of Louis XV of France.\n\n2. **Identify Madame du Barry**: Madame du Barry was another famous m"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine the age of Brandon's iPhone, we need to follow the relationships given in the problem step by step.\n\n1. **Determine the age of Ben's iPhone:**\n   - We know that Suzy's iPhone is 1 year old.\n   - Ben's iPhone is two times older than Suzy's iPhone.\n   - Therefore, the age of Ben's iPhone "
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine how much money Tyson will spend on meat and cheese, we need to follow these steps:\n\n1. **Calculate the number of sandwiches needed:**\n   - Each sandwich serves 4 people.\n   - There are 20 people in total.\n   \\[\n   \\text{Number of sandwiches} = \\frac{20 \\text{ people}}{4 \\text{ people pe"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine how much more Kelly paid than Becky, we need to calculate the total cost for both Becky and Kelly after applying their respective discounts.\n\n**Step 1: Calculate Becky's total cost.**\n- Becky bought 20 apples at 45 cents each.\n- Total cost before discount: \\( 20 \\times 0.45 = 9 \\) dolla"
+    }
+   ],
+   "nq": [
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "The Lord's Prayer is found in the Bible in Matthew 6:9-13 and Luke 11:2-4."
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Mississippi River"
+    },
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "A statue of Freedom."
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. Points on a sphere or angles in a circle are measured in units called radians or degrees.\n2. The functions of the human skeleton include support, protection of organs, movement, and storage of minerals.\n3. In the Dragon Ball series, Goku gives up during the Cell Game in the Cell Games arc, specif"
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. The group that officially elects the president of the United States is called the Electoral College.\n2. The Eagles last won Super Bowl LII (Super Bowl 52) in 2018.\n3. The type of joint that connects the incus with the malleus is a saddle joint."
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. The song \"Picking Up Pebbles and Throwing Them Into the Sea\" was sung by Sade.\n2. Sri Lanka belongs to South Asia.\n3. Series 7 of Game of Thrones has 10 episodes."
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "1997"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "India"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "The first temple in Jerusalem was built around 957 BCE."
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "The normal blood clotting process, also known as coagulation, is a complex series of reactions that can be divided into three main phases: initiation, propagation, and termination.\n\n1. **Initiation Phase**: This phase begins when tissue damage exposes collagen beneath the endothelium (the inner lini"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To provide an accurate answer, I would need more context about which specific TV show or series you are referring to. \"What happens to my family\" could refer to various shows with similar titles or themes. Could you please specify the name of the show? \n\nStep 1: Identify the show.\nStep 2: Research t"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To determine who sings \"Why Does It Hurt When I Pee?\", I'll follow these steps:\n\n1. Recall if this is a well-known song title.\n2. Search my knowledge base for the artist associated with this title.\n3. Verify the information.\n\nStep 1: This appears to be a less common song title, but it's related to u"
+    }
+   ],
+   "train": [
+    {
+     "format": "short",
+     "label": 1,
+     "reply": "Ira Levin wrote 'The Boys From Brazil'."
+    },
+    {
+     "format": "short",
+     "label": 0,
+     "reply": "Sheffield F.C."
+    },
+    {
+     "format": "multi",
+     "label": 1,
+     "reply": "1. Lois Maxwell played Miss Moneypenny in the first 14 James Bond films.\n2. Born James Newell Osterberg Jr., Iggy Pop fronted a TV campaign for car insurance in 2009.\n3. The poem by Alexander Pope that contains the famous line 'Fools rush in where Angels fear to tread' is \"An Essay on Criticism.\""
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. One member of a netball team is allowed to shoot at goal.\n2. The title/position of Swami represents a religious teacher in Hinduism.\n3. The tune 'Johnny Todd' was the theme to the TV programme \"The Prisoner.\""
+    },
+    {
+     "format": "multi",
+     "label": 0,
+     "reply": "1. Polaris\n2. 10 Hanbury Street; \"Christie's World\"\n3. Liechtenstein"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Weber"
+    },
+    {
+     "format": "multiturn",
+     "label": 1,
+     "reply": "Pyrenees Mountains"
+    },
+    {
+     "format": "multiturn",
+     "label": 0,
+     "reply": "Paris"
+    },
+    {
+     "format": "reasoning",
+     "label": 1,
+     "reply": "To determine the item taxed that caused riots and attacks in Western Pennsylvania in 1794, we need to consider historical events from that period.\n\n1. The event in question is known as the Whiskey Rebellion.\n2. This rebellion was a response to a federal excise tax imposed on distilled spirits, inclu"
+    },
+    {
+     "format": "reasoning",
+     "label": 0,
+     "reply": "To determine who had a hit in 1994 with \"Mr. Jones,\" I'll follow these steps:\n\n1. Recall popular music from 1994:\n   - This was during the grunge and alternative rock era.\n   - Notable artists included Nirvana, Pearl Jam, and Oasis.\n\n2. Search for specific hits related to \"Mr. Jones\":\n   - A quick s"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine the cost of the tooth extraction, we need to follow these steps:\n\n1. **Identify the costs of known services:**\n   - Cleaning: $70\n   - Filling: $120\n\n2. **Calculate the total cost of the cleaning and fillings:**\n   \\[\n   \\text{Total cost of cleaning and fillings} = 70 + 2 \\times 120 = 7"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "Let's break down the problem step by step:\n\n1. **First Row:**\n   - Initially, there are 24 people.\n   - 3 people get up to wade in the water.\n   - Number of people left in the first row: \\( 24 - 3 = 21 \\).\n\n2. **Second Row:**\n   - Initially, there are 20 people.\n   - 5 people get up to join those wa"
+    },
+    {
+     "format": "math",
+     "label": 1,
+     "reply": "To determine how many actors can be on the show in 1 hour, we need to break down the problem step by step.\n\n1. **Determine the duration each group of actors is on stage:**\n   - Each group of 5 actors is on stage for 15 minutes.\n\n2. **Calculate how many 15-minute intervals fit into 1 hour:**\n   - 1 h"
+    }
+   ]
+  },
+  "probe_auroc_by_layer_on_holdout": {
+   "9": 0.7064285093653414,
+   "12": 0.6956746442366392,
+   "14": 0.7745863485719251,
+   "17": 0.6953000080117988,
+   "19": 0.7667754089684753,
+   "22": 0.8244930844635424,
+   "24": 0.8248519227752871,
+   "27": 0.7788258313933872
+  },
+  "probe_layer": 24,
+  "per_format": {
+   "test/short": {
+    "accuracy": 0.589090883731842,
+    "probe": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.82726974762373,
+     "error_at_50pct": 0.1970803141593933,
+     "error_at_25pct": 0.08823531866073608,
+     "aurc": 0.18870598420946283,
+     "auroc_ci": [
+      0.7761495602339828,
+      0.8749876065030461
+     ]
+    },
+    "stack": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.8775811209439528,
+     "error_at_50pct": 0.1313868761062622,
+     "error_at_25pct": 0.07352942228317261,
+     "aurc": 0.16706619081188467,
+     "auroc_ci": [
+      0.828398415719169,
+      0.9180957191317501
+     ],
+     "ece": 0.08631711644882506
+    },
+    "claim_p": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.7961324156014421,
+     "error_at_50pct": 0.18978101015090942,
+     "error_at_25pct": 0.1764705777168274,
+     "aurc": 0.25039594960461936,
+     "auroc_ci": [
+      0.7410929315906755,
+      0.8488979860781714
+     ]
+    },
+    "word_min_lp": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.8140500382388288,
+     "error_at_50pct": 0.1824817657470703,
+     "error_at_25pct": 0.16176468133926392,
+     "aurc": 0.21439090789422635
+    },
+    "reply_mean_lp": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.8095160056811974,
+     "error_at_50pct": 0.1970803141593933,
+     "error_at_25pct": 0.05882352590560913,
+     "aurc": 0.18986589641077473
+    }
+   },
+   "test/multi": {
+    "accuracy": 0.5887207984924316,
+    "probe": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.7646047572906574,
+     "error_at_50pct": 0.22865015268325806,
+     "error_at_25pct": 0.15469610691070557,
+     "aurc": 0.22488014467478726,
+     "auroc_ci": [
+      0.7289727485406252,
+      0.8017891315531195
+     ]
+    },
+    "stack": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.8300956459225456,
+     "error_at_50pct": 0.1680440902709961,
+     "error_at_25pct": 0.0939226746559143,
+     "aurc": 0.19085744189409354,
+     "auroc_ci": [
+      0.7998704101387883,
+      0.8583918877129538
+     ],
+     "ece": 0.07257015891936817
+    },
+    "claim_p": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.7653510142843747,
+     "error_at_50pct": 0.21487605571746826,
+     "error_at_25pct": 0.1767956018447876,
+     "aurc": 0.24917986859446473,
+     "auroc_ci": [
+      0.7282815622323342,
+      0.8003479536065714
+     ]
+    },
+    "word_min_lp": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.8147368174288125,
+     "error_at_50pct": 0.1845729947090149,
+     "error_at_25pct": 0.0939226746559143,
+     "aurc": 0.19481264002525173
+    },
+    "reply_mean_lp": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.6467117807020286,
+     "error_at_50pct": 0.3112947940826416,
+     "error_at_25pct": 0.23204421997070312,
+     "aurc": 0.29895058890650117
+    }
+   },
+   "test/multiturn": {
+    "accuracy": 0.4839857518672943,
+    "probe": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.7607505070993915,
+     "error_at_50pct": 0.30000001192092896,
+     "error_at_25pct": 0.2428571581840515,
+     "aurc": 0.3103092414037523,
+     "auroc_ci": [
+      0.702833182205814,
+      0.8107592133088194
+     ]
+    },
+    "stack": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.8349898580121704,
+     "error_at_50pct": 0.23571425676345825,
+     "error_at_25pct": 0.15714287757873535,
+     "aurc": 0.26681720768354644,
+     "auroc_ci": [
+      0.7862908094370047,
+      0.8775126754294647
+     ],
+     "ece": 0.06750035720125001
+    },
+    "claim_p": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.7580628803245436,
+     "error_at_50pct": 0.30714285373687744,
+     "error_at_25pct": 0.2571428418159485,
+     "aurc": 0.35709444221023323,
+     "auroc_ci": [
+      0.7026408326559738,
+      0.8139383834152442
+     ]
+    },
+    "word_min_lp": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.7944726166328601,
+     "error_at_50pct": 0.2857142686843872,
+     "error_at_25pct": 0.18571430444717407,
+     "aurc": 0.30985281040758184
+    },
+    "reply_mean_lp": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.8045131845841785,
+     "error_at_50pct": 0.29285717010498047,
+     "error_at_25pct": 0.1428571343421936,
+     "aurc": 0.27767721088843256
+    }
+   },
+   "test/reasoning": {
+    "accuracy": 0.6332046389579773,
+    "probe": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.8020539152759949,
+     "error_at_50pct": 0.1550387740135193,
+     "error_at_25pct": 0.109375,
+     "aurc": 0.17840382529117024,
+     "auroc_ci": [
+      0.7413717823395243,
+      0.8579335103141787
+     ]
+    },
+    "stack": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.8189345314505777,
+     "error_at_50pct": 0.14728683233261108,
+     "error_at_25pct": 0.09375,
+     "aurc": 0.16812634130444473,
+     "auroc_ci": [
+      0.764732450718423,
+      0.8684255558450036
+     ],
+     "ece": 0.10577280157781475
+    },
+    "claim_p": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.5995186136071887,
+     "error_at_50pct": 0.3100775480270386,
+     "error_at_25pct": 0.265625,
+     "aurc": 0.29619502480349497,
+     "auroc_ci": [
+      0.5263343405066078,
+      0.6791246577047548
+     ]
+    },
+    "word_min_lp": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.5845956354300386,
+     "error_at_50pct": 0.3100775480270386,
+     "error_at_25pct": 0.296875,
+     "aurc": 0.3155087151659522
+    },
+    "reply_mean_lp": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.6594993581514762,
+     "error_at_50pct": 0.26356589794158936,
+     "error_at_25pct": 0.265625,
+     "aurc": 0.3152495475004177
+    }
+   },
+   "test/math": {
+    "accuracy": 0.8794326186180115,
+    "probe": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.8677656546489564,
+     "error_at_50pct": 0.014184415340423584,
+     "error_at_25pct": 0.014285743236541748,
+     "aurc": 0.03008636217783207,
+     "auroc_ci": [
+      0.7865396994223752,
+      0.9356417220174265
+     ]
+    },
+    "stack": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.8708491461100569,
+     "error_at_50pct": 0.014184415340423584,
+     "error_at_25pct": 0.014285743236541748,
+     "aurc": 0.029454865689352887,
+     "auroc_ci": [
+      0.7928214213695158,
+      0.9374365199213387
+     ],
+     "ece": 0.12590061212685097
+    },
+    "claim_p": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.6004506641366224,
+     "error_at_50pct": 0.07092195749282837,
+     "error_at_25pct": 0.12857145071029663,
+     "aurc": 0.09219802693866358,
+     "auroc_ci": [
+      0.5024120857519393,
+      0.7088654584462512
+     ]
+    },
+    "word_min_lp": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.617350569259962,
+     "error_at_50pct": 0.09219861030578613,
+     "error_at_25pct": 0.11428570747375488,
+     "aurc": 0.0953290278307243
+    },
+    "reply_mean_lp": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.5504032258064516,
+     "error_at_50pct": 0.10638296604156494,
+     "error_at_25pct": 0.15714287757873535,
+     "aurc": 0.10103392557483078
+    }
+   },
+   "test/all": {
+    "accuracy": 0.6239035129547119,
+    "probe": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.8112488279268524,
+     "error_at_50pct": 0.16337716579437256,
+     "error_at_25pct": 0.09210526943206787,
+     "aurc": 0.17175187377887952,
+     "auroc_ci": [
+      0.7903677376435644,
+      0.832119194550881
+     ]
+    },
+    "stack": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.8557120312347887,
+     "error_at_50pct": 0.11622804403305054,
+     "error_at_25pct": 0.0701754093170166,
+     "aurc": 0.151114007821984,
+     "auroc_ci": [
+      0.8374901693328577,
+      0.8721660707959691
+     ],
+     "ece": 0.08586107223629624
+    },
+    "claim_p": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.7595783354767968,
+     "error_at_50pct": 0.19846493005752563,
+     "error_at_25pct": 0.17543858289718628,
+     "aurc": 0.228429271618642,
+     "auroc_ci": [
+      0.7341525449063404,
+      0.7839086473345706
+     ]
+    }
+   },
+   "nq/short": {
+    "accuracy": 0.3271375596523285,
+    "probe": {
+     "n": 269,
+     "positives": 88,
+     "auroc": 0.6901054746358614,
+     "error_at_50pct": 0.5671641826629639,
+     "error_at_25pct": 0.46268653869628906,
+     "aurc": 0.5426972449200056,
+     "auroc_ci": [
+      0.626243088995898,
+      0.7559856749297122
+     ]
+    },
+    "stack": {
+     "n": 269,
+     "positives": 88,
+     "auroc": 0.7261426418884982,
+     "error_at_50pct": 0.5223881006240845,
+     "error_at_25pct": 0.43283581733703613,
+     "aurc": 0.5154924905841537,
+     "auroc_ci": [
+      0.6628190179096322,
+      0.7881978408420224
+     ],
+     "ece": 0.22939233508196463
+    },
+    "claim_p": {
+     "n": 269,
+     "positives": 88,
+     "auroc": 0.6718357609241588,
+     "error_at_50pct": 0.5746268630027771,
+     "error_at_25pct": 0.46268653869628906,
+     "aurc": 0.5573575246213675,
+     "auroc_ci": [
+      0.6038023683967775,
+      0.7335080024102845
+     ]
+    },
+    "word_min_lp": {
+     "n": 269,
+     "positives": 88,
+     "auroc": 0.6997739829231542,
+     "error_at_50pct": 0.5597015023231506,
+     "error_at_25pct": 0.4477611780166626,
+     "aurc": 0.5260511453962216
+    },
+    "reply_mean_lp": {
+     "n": 269,
+     "positives": 88,
+     "auroc": 0.7216850828729282,
+     "error_at_50pct": 0.49253731966018677,
+     "error_at_25pct": 0.4029850959777832,
+     "aurc": 0.5124088819677307
+    }
+   },
+   "nq/multi": {
+    "accuracy": 0.2877604067325592,
+    "probe": {
+     "n": 768,
+     "positives": 221,
+     "auroc": 0.6808341674456311,
+     "error_at_50pct": 0.5963541269302368,
+     "error_at_25pct": 0.5729166269302368,
+     "aurc": 0.6082828627092594,
+     "auroc_ci": [
+      0.6398936337642017,
+      0.7209212613022437
+     ]
+    },
+    "stack": {
+     "n": 768,
+     "positives": 221,
+     "auroc": 0.7281097223026463,
+     "error_at_50pct": 0.5703125,
+     "error_at_25pct": 0.4583333134651184,
+     "aurc": 0.5729683341094315,
+     "auroc_ci": [
+      0.6897473347451726,
+      0.7645617197018828
+     ],
+     "ece": 0.2452888351738996
+    },
+    "claim_p": {
+     "n": 768,
+     "positives": 221,
+     "auroc": 0.6775335644031203,
+     "error_at_50pct": 0.5833333730697632,
+     "error_at_25pct": 0.578125,
+     "aurc": 0.6327903774373779,
+     "auroc_ci": [
+      0.6387936360777704,
+      0.7137370736192179
+     ]
+    },
+    "word_min_lp": {
+     "n": 768,
+     "positives": 221,
+     "auroc": 0.7270219295705908,
+     "error_at_50pct": 0.5677083730697632,
+     "error_at_25pct": 0.4947916865348816,
+     "aurc": 0.5841749196558376
+    },
+    "reply_mean_lp": {
+     "n": 768,
+     "positives": 221,
+     "auroc": 0.6065747350831768,
+     "error_at_50pct": 0.640625,
+     "error_at_25pct": 0.6354166269302368,
+     "aurc": 0.6558936695516591
+    }
+   },
+   "nq/multiturn": {
+    "accuracy": 0.26893940567970276,
+    "probe": {
+     "n": 264,
+     "positives": 71,
+     "auroc": 0.7585930088301832,
+     "error_at_50pct": 0.560606062412262,
+     "error_at_25pct": 0.5,
+     "aurc": 0.5497340427226998,
+     "auroc_ci": [
+      0.6881859572630146,
+      0.8183665008291874
+     ]
+    },
+    "stack": {
+     "n": 264,
+     "positives": 71,
+     "auroc": 0.8027439246880245,
+     "error_at_50pct": 0.5681818127632141,
+     "error_at_25pct": 0.43939393758773804,
+     "aurc": 0.5292905354778382,
+     "auroc_ci": [
+      0.7369917109137775,
+      0.8584006861042506
+     ],
+     "ece": 0.22525383538397198
+    },
+    "claim_p": {
+     "n": 264,
+     "positives": 71,
+     "auroc": 0.70816609501569,
+     "error_at_50pct": 0.6212121248245239,
+     "error_at_25pct": 0.5303030014038086,
+     "aurc": 0.6125911630386718,
+     "auroc_ci": [
+      0.6417500262214716,
+      0.7712542550459577
+     ]
+    },
+    "word_min_lp": {
+     "n": 264,
+     "positives": 71,
+     "auroc": 0.7465883383200759,
+     "error_at_50pct": 0.5833333730697632,
+     "error_at_25pct": 0.5151515007019043,
+     "aurc": 0.5696829887204494
+    },
+    "reply_mean_lp": {
+     "n": 264,
+     "positives": 71,
+     "auroc": 0.7388163175946872,
+     "error_at_50pct": 0.5984848737716675,
+     "error_at_25pct": 0.5151515007019043,
+     "aurc": 0.5690080791260101
+    }
+   },
+   "nq/reasoning": {
+    "accuracy": 0.3863636255264282,
+    "probe": {
+     "n": 264,
+     "positives": 102,
+     "auroc": 0.6699346405228758,
+     "error_at_50pct": 0.5151515007019043,
+     "error_at_25pct": 0.4696969985961914,
+     "aurc": 0.47679771642923374,
+     "auroc_ci": [
+      0.6031733283335241,
+      0.732268191762472
+     ]
+    },
+    "stack": {
+     "n": 264,
+     "positives": 102,
+     "auroc": 0.6736262406197047,
+     "error_at_50pct": 0.5,
+     "error_at_25pct": 0.45454543828964233,
+     "aurc": 0.4845623850493142,
+     "auroc_ci": [
+      0.6058972900702426,
+      0.7368802793552685
+     ],
+     "ece": 0.26733423600142653
+    },
+    "claim_p": {
+     "n": 264,
+     "positives": 102,
+     "auroc": 0.5122246429435972,
+     "error_at_50pct": 0.5984848737716675,
+     "error_at_25pct": 0.6060606241226196,
+     "aurc": 0.615347319255525,
+     "auroc_ci": [
+      0.4376456493408722,
+      0.5787035077141488
+     ]
+    },
+    "word_min_lp": {
+     "n": 264,
+     "positives": 102,
+     "auroc": 0.5040244492858872,
+     "error_at_50pct": 0.5984848737716675,
+     "error_at_25pct": 0.6363636255264282,
+     "aurc": 0.6310506881583561
+    },
+    "reply_mean_lp": {
+     "n": 264,
+     "positives": 102,
+     "auroc": 0.6683006535947712,
+     "error_at_50pct": 0.5227272510528564,
+     "error_at_25pct": 0.45454543828964233,
+     "aurc": 0.5052305118745134
+    }
+   },
+   "nq/all": {
+    "accuracy": 0.3079872131347656,
+    "probe": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.6982276065792348,
+     "error_at_50pct": 0.5652173757553101,
+     "error_at_25pct": 0.5140664577484131,
+     "aurc": 0.5629660914602944,
+     "auroc_ci": [
+      0.6722312933188547,
+      0.7236964454555774
+     ]
+    },
+    "stack": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.7357846461534925,
+     "error_at_50pct": 0.5358055830001831,
+     "error_at_25pct": 0.4526854157447815,
+     "aurc": 0.5367493481308336,
+     "auroc_ci": [
+      0.7110621615073867,
+      0.7607457187342467
+     ],
+     "ece": 0.2423793567695652
+    },
+    "claim_p": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.6566773178852351,
+     "error_at_50pct": 0.5805626511573792,
+     "error_at_25pct": 0.5805626511573792,
+     "aurc": 0.6091902523381938,
+     "auroc_ci": [
+      0.6289340892505948,
+      0.6847708118706338
+     ]
+    }
+   }
+  },
+  "leave_one_format_out": {
+   "short": {
+    "held_out": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.8732109690811756,
+     "error_at_50pct": 0.15328466892242432,
+     "error_at_25pct": 0.05882352590560913,
+     "aurc": 0.16317589034739047,
+     "auroc_ci": [
+      0.8321564545141413,
+      0.9107676146010186
+     ]
+    },
+    "with_format": {
+     "n": 275,
+     "positives": 162,
+     "auroc": 0.82726974762373,
+     "error_at_50pct": 0.1970803141593933,
+     "error_at_25pct": 0.08823531866073608,
+     "aurc": 0.18870598420946283,
+     "auroc_ci": [
+      0.7761495602339828,
+      0.8749876065030461
+     ]
+    }
+   },
+   "multi": {
+    "held_out": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.8150611071171819,
+     "error_at_50pct": 0.1763085126876831,
+     "error_at_25pct": 0.0883978009223938,
+     "aurc": 0.19385720344958363,
+     "auroc_ci": [
+      0.7843830141491345,
+      0.8448306059292722
+     ]
+    },
+    "with_format": {
+     "n": 727,
+     "positives": 428,
+     "auroc": 0.7646047572906574,
+     "error_at_50pct": 0.22865015268325806,
+     "error_at_25pct": 0.15469610691070557,
+     "aurc": 0.22488014467478726,
+     "auroc_ci": [
+      0.7289727485406252,
+      0.8017891315531195
+     ]
+    }
+   },
+   "multiturn": {
+    "held_out": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.7857505070993914,
+     "error_at_50pct": 0.30714285373687744,
+     "error_at_25pct": 0.22857141494750977,
+     "aurc": 0.3061797701299378,
+     "auroc_ci": [
+      0.7325206576361402,
+      0.8359852717083336
+     ]
+    },
+    "with_format": {
+     "n": 281,
+     "positives": 136,
+     "auroc": 0.7607505070993915,
+     "error_at_50pct": 0.30000001192092896,
+     "error_at_25pct": 0.2428571581840515,
+     "aurc": 0.3103092414037523,
+     "auroc_ci": [
+      0.702833182205814,
+      0.8107592133088194
+     ]
+    }
+   },
+   "reasoning": {
+    "held_out": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.7450577663671374,
+     "error_at_50pct": 0.20155036449432373,
+     "error_at_25pct": 0.15625,
+     "aurc": 0.2110842226563035,
+     "auroc_ci": [
+      0.6770853746196034,
+      0.8083405146641155
+     ]
+    },
+    "with_format": {
+     "n": 259,
+     "positives": 164,
+     "auroc": 0.8020539152759949,
+     "error_at_50pct": 0.1550387740135193,
+     "error_at_25pct": 0.109375,
+     "aurc": 0.17840382529117024,
+     "auroc_ci": [
+      0.7413717823395243,
+      0.8579335103141787
+     ]
+    }
+   },
+   "math": {
+    "held_out": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.6413662239089184,
+     "error_at_50pct": 0.08510637283325195,
+     "error_at_25pct": 0.04285717010498047,
+     "aurc": 0.07243214668312539,
+     "auroc_ci": [
+      0.5452725480169089,
+      0.733286765708055
+     ]
+    },
+    "with_format": {
+     "n": 282,
+     "positives": 248,
+     "auroc": 0.8677656546489564,
+     "error_at_50pct": 0.014184415340423584,
+     "error_at_25pct": 0.014285743236541748,
+     "aurc": 0.03008636217783207,
+     "auroc_ci": [
+      0.7865396994223752,
+      0.9356417220174265
+     ]
+    }
+   }
+  },
+  "probe_by_train_size": {
+   "1000": {
+    "test": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.7025854780777488,
+     "error_at_50pct": 0.23793858289718628,
+     "error_at_25pct": 0.23245614767074585,
+     "aurc": 0.25609322249694094
+    },
+    "nq": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.6807105665452121,
+     "error_at_50pct": 0.5690537095069885,
+     "error_at_25pct": 0.5038362741470337,
+     "aurc": 0.5860317960661768
+    }
+   },
+   "3000": {
+    "test": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.8277001234839906,
+     "error_at_50pct": 0.1392543911933899,
+     "error_at_25pct": 0.0701754093170166,
+     "aurc": 0.16472679538665905
+    },
+    "nq": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.7228575916751915,
+     "error_at_50pct": 0.5524296760559082,
+     "error_at_25pct": 0.47826087474823,
+     "aurc": 0.543992009802897
+    }
+   },
+   "7941": {
+    "test": {
+     "n": 1824,
+     "positives": 1138,
+     "auroc": 0.8549831682610277,
+     "error_at_50pct": 0.12938594818115234,
+     "error_at_25pct": 0.046052634716033936,
+     "aurc": 0.14747388602221612
+    },
+    "nq": {
+     "n": 1565,
+     "positives": 482,
+     "auroc": 0.7343957732286602,
+     "error_at_50pct": 0.551150918006897,
+     "error_at_25pct": 0.43989771604537964,
+     "aurc": 0.5288004750661696
+    }
+   }
+  },
+  "multi_reply_level": {
+   "n": 294,
+   "positives": 77,
+   "auroc": 0.818361362140164,
+   "error_at_50pct": 0.5714285714285714,
+   "error_at_25pct": 0.3835616438356164,
+   "aurc": 0.5265970161785364,
+   "auroc_ci": [
+    0.7593104753674222,
+    0.8666736064833731
+   ]
+  },
+  "seconds": 9347
+ }
+}

@@ -50,7 +50,7 @@ class DoubtAwareGenerator:
         tok, dev = self.tok, next(self.model.parameters()).device
         context_words = set(norm(" ".join(m["content"] for m in messages if m["role"] != "system")).split())
         ids = tok(prompt_of(tok, messages), return_tensors="pt").input_ids.to(dev)
-        past, cur, out, claims = None, ids, [], []
+        past, cur, out, claims, first = None, ids, [], [], None
         at_word_start, stopped = True, False
         for _ in range(max_new_tokens):
             o = self.model(input_ids=cur, past_key_values=past, use_cache=True, output_hidden_states=True)
@@ -65,6 +65,9 @@ class DoubtAwareGenerator:
                 cur = torch.tensor([[nxt]], device=dev)
                 continue
             starts_word = at_word_start or piece[:1].isspace()
+            if first is None:                                       # the reply's first content token: scored
+                first = {"p_correct": round(self.p_correct(o.hidden_states[self.layer + 1][0, -1]), 4),  # even when
+                         "token_p": round(float(torch.softmax(o.logits[0, -1].float(), -1)[nxt]), 4)}   # no claim
             if self._is_claim_start(piece, starts_word, context_words):
                 p = self.p_correct(o.hidden_states[self.layer + 1][0, -1])
                 tp = float(torch.softmax(o.logits[0, -1].float(), -1)[nxt])
@@ -89,8 +92,11 @@ class DoubtAwareGenerator:
             while k < len(out) and not tok.decode(out[k:k + 1])[:1].isspace() and tok.decode(out[k:k + 1]) not in (",", ".", "\n"):
                 k += 1
             c["text"] = tok.decode(out[j:k]).strip() if j < len(out) else ""
+        if not claims and first is not None and first["p_correct"] < self.threshold and mode == "stop" and out:
+            stopped = True                                          # no claim found: judge the reply by its first token
+            text = ""
         if stopped:                                                 # keep only whole sentences before the doubt
             cut = max(text.rfind(ch) for ch in ".!?\n")
             text = (text[:cut + 1].strip() + " " if cut >= 0 else "") + STOP_NOTE
-        return {"text": text, "claims": claims, "stopped_on_doubt": stopped,
-                "min_p_correct": min((c["p_correct"] for c in claims), default=None)}
+        return {"text": text, "claims": claims, "first_token": first, "stopped_on_doubt": stopped,
+                "min_p_correct": min((c["p_correct"] for c in claims), default=first["p_correct"] if first else None)}
