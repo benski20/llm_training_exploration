@@ -85,6 +85,11 @@ def main():
     if cuda:
         kw["device_map"] = "auto"
     if a.quant != "none":
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError:                                  # not in every Kaggle image
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "bitsandbytes"], check=False)
         from transformers import BitsAndBytesConfig
         kw["quantization_config"] = BitsAndBytesConfig(load_in_8bit=a.quant == "8bit", load_in_4bit=a.quant == "4bit",
                                                        bnb_4bit_compute_dtype=torch.float16)
