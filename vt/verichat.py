@@ -70,11 +70,12 @@ def merge_names(claims, text):
 
 
 class VeriChat:
-    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3):
+    def __init__(self, model, tok, probe, layer, threshold=0.45, retriever=None, retrieve_below=0.3, moderator=None):
         self.model, self.tok = model, tok
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True)
         self.threshold = threshold
         self.retriever, self.retrieve_below = retriever, retrieve_below
+        self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
 
     @classmethod
     def load(cls, model_name, head_path, threshold=0.45):
@@ -165,6 +166,20 @@ class VeriChat:
         [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?}] -> one reply() result each."""
         reqs = [{"messages": r["messages"], "documents": r.get("documents") or [], "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True)} for r in requests]
+        if self.moderator is not None:                               # refuse flagged messages without generating
+            from vt.moderation import REFUSAL
+            flags = [self.moderator.check(next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user"))
+                     for r in reqs]
+            keep = [i for i, f in enumerate(flags) if not f["flagged"]]
+            kept = self._reply_batch_unmoderated([reqs[i] for i in keep]) if keep else []
+            outs = [{"text": REFUSAL, "claims": [], "withheld": True, "reply_confidence": None, "threshold": self.threshold,
+                     "mode": r["mode"], "moderation": {"input": f}} for r, f in zip(reqs, flags)]
+            for i, o in zip(keep, kept):
+                outs[i] = o
+            return outs
+        return self._reply_batch_unmoderated(reqs)
+
+    def _reply_batch_unmoderated(self, reqs):
         outs = self._reply_batch(reqs)
         again, where = [], []                                        # doubted closed-book replies: look them up
         for i, (r, o) in enumerate(zip(reqs, outs)):
@@ -184,6 +199,13 @@ class VeriChat:
             o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
                               "passages": r["documents"], "closed_book_text": outs[i]["text"]}
             outs[i] = o
+        if self.moderator is not None:                               # and withhold flagged replies
+            from vt.moderation import WITHHELD
+            for o in outs:
+                f = self.moderator.check(o["text"])
+                o["moderation"] = {"output": f}
+                if f["flagged"]:
+                    o.update(text=WITHHELD, claims=[], withheld=True)
         return outs
 
     def _reply_batch(self, reqs):

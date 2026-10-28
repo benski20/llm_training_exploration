@@ -329,6 +329,7 @@ def main(argv=None):
     ap.add_argument("--retrieve-below", type=float, default=0.3)
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
+    ap.add_argument("--moderation", action="store_true", help="screen messages and replies (vt/moderation.py)")
     ap.add_argument("--rate-per-minute", type=int, default=20, help="POSTs per client per minute (0: unlimited)")
     ap.add_argument("--trust-proxy", action="store_true", help="client address from X-Forwarded-For")
     ap.add_argument("--host", default="127.0.0.1")
@@ -336,6 +337,9 @@ def main(argv=None):
     a = ap.parse_args(argv)
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
+    if a.moderation:
+        from .moderation import Moderator
+        bot.moderator = Moderator.load()
     if a.corpus:
         from .retrieval import Corpus
         bot.retriever, bot.retrieve_below = Corpus.from_dir(a.corpus), a.retrieve_below

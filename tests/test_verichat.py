@@ -162,3 +162,21 @@ def test_batched_replies_match_single_replies():
     for r, b in zip(reqs, batch):
         one = bot.reply(r["messages"], documents=r["documents"], mode=r["mode"], max_new_tokens=12)
         assert one["text"] == b["text"] and [c["text"] for c in one["claims"]] == [c["text"] for c in b["claims"]]
+
+
+def test_moderation_refuses_flagged_input_and_withholds_flagged_output():
+    from vt.moderation import REFUSAL, WITHHELD, Moderator
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    mod = Moderator(lambda t: {"toxic": 0.99 if "idiot" in t else 0.0})
+    bot = VeriChat(m, tok, p, layer=1, moderator=mod)
+    out = bot.reply_batch([{"messages": [{"role": "user", "content": "you idiot"}], "max_new_tokens": 4},
+                           {"messages": [{"role": "user", "content": "hello"}], "max_new_tokens": 4}])
+    assert out[0]["text"] == REFUSAL and out[0]["moderation"]["input"]["flagged"]
+    assert out[1]["moderation"]["output"]["flagged"] is False
+    strict = VeriChat(m, tok, p, layer=1, moderator=Moderator(lambda t: {"toxic": 0.0 if t == "hello" else 0.99}))
+    o = strict.reply([{"role": "user", "content": "hello"}], max_new_tokens=4)
+    assert o["text"] == WITHHELD and o["withheld"] and o["claims"] == []

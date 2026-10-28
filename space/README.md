@@ -51,4 +51,7 @@ Full tables with confidence intervals are in `VISION.md` in the source repositor
 - **Source tracing explains one forward pass exactly.** It does not say what would happen if a
   document were removed. It roughly doubles the cost of a reply that comes with documents.
 - **Calibration shifts across domains.** Recalibrate with a few hundred labels where it matters.
+- **Moderation screens toxic language only.** A toxicity classifier (unitary/toxic-bert) blocks
+  abusive messages and replies. Polite requests for harmful content are left to the chat model's own
+  refusals.
 - **Do not rely on it for medical, legal or financial decisions.**

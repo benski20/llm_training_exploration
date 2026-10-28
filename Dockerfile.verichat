@@ -23,5 +23,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=600s --retries=3 \
   CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/health', timeout=2)"
 ENTRYPOINT ["sh", "-c", "exec vt verichat --host 0.0.0.0 --port \"$PORT\" \"$@\"", "vt"]
-CMD ["--model", "Qwen/Qwen2.5-7B-Instruct", "--head", "heads/Qwen2.5-7B-Instruct_claims_head.pt", \
+CMD ["--moderation", "--model", "Qwen/Qwen2.5-7B-Instruct", "--head", "heads/Qwen2.5-7B-Instruct_claims_head.pt", \
      "--detector", "heads/Qwen2.5-3B-Instruct_detector.pt"]

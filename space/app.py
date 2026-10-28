@@ -30,6 +30,9 @@ if os.path.exists(DET_HEAD):
     from vt.detector import Detector
     h = torch.load(DET_HEAD, map_location="cpu", weights_only=True)
     det = Detector(bot.model, bot.tok, h) if h["model"] == MODEL else Detector.load(h["model"], DET_HEAD)
+if os.environ.get("VERICHAT_MODERATION", "1") == "1":             # on by default for a public Space
+    from vt.moderation import Moderator
+    bot.moderator = Moderator.load()
 if os.environ.get("VERICHAT_CORPUS"):                                 # a folder of .txt/.md: look up doubted answers
     from vt.retrieval import Corpus
     bot.retriever = Corpus.from_dir(os.environ["VERICHAT_CORPUS"])
