@@ -6,6 +6,8 @@
                  hover for its source and citation
   GET  /health   status and the head's layer
   POST /chat     {"messages": [{"role", "content"}...], "documents": ["..."], "mode": "hedge"|"stop"|"flag"}
+  POST /judge    {"messages": [...], "response": "...", "documents": [...]}: score a reply from any model with the
+                 general detector (vt/detector.Detector; only with --detector)
 """
 import argparse
 import threading
@@ -42,6 +44,10 @@ Amber: uncertain. Red: doubtful. With documents, each claim shows whether it cam
 <textarea id="msg" rows="3" placeholder="Ask anything"></textarea>
 <div class="row"><select id="mode"><option value="hedge">mark doubtful claims</option><option value="stop">withhold doubtful answers</option>
 <option value="flag">only score</option></select><button id="send">Send</button><span id="busy" class="meta"></span></div>
+<details id="jp" hidden><summary>Check an answer from any AI</summary>
+<textarea id="jq" rows="2" placeholder="The question or prompt it answered"></textarea>
+<textarea id="ja" rows="5" placeholder="Its answer (documents above, if any, are used as the source)"></textarea>
+<div class="row"><button id="jsend">Check</button><span id="jbusy" class="meta"></span></div><div id="jout"></div></details>
 </main><script>
 const log=document.getElementById('log'),msgs=[];
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -56,6 +62,18 @@ function render(r){let t=r.text,html='',pos=0;
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
   '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+'mode '+r.mode+'</div>'}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
+fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false});
+function renderJudge(r,a){let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
+ esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
+ return '<div class="card"><div class="text">'+html+'</div><div class="meta">'+(r.flagged?'Likely contains a hallucination':
+ 'No hallucination detected')+' (P = '+r.p_hallucinated.toFixed(2)+'). Red: the spans the reader doubts most.</div></div>'}
+document.getElementById('jsend').onclick=async()=>{const q=document.getElementById('jq').value.trim(),a=document.getElementById('ja').value.trim();
+ if(!q||!a)return;const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
+ const b=document.getElementById('jsend');b.disabled=true;document.getElementById('jbusy').textContent='reading…';
+ try{const res=await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({messages:[{role:'user',content:q}],response:a,documents:docs})});const r=await res.json();
+  document.getElementById('jout').innerHTML=r.error?esc('Error: '+r.error):renderJudge(r,a)}
+ catch(e){document.getElementById('jout').textContent='Error: '+e}b.disabled=false;document.getElementById('jbusy').textContent=''};
 document.getElementById('send').onclick=async()=>{const m=document.getElementById('msg').value.trim();if(!m)return;
  const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
  msgs.push({role:'user',content:m});add('user',esc(m));document.getElementById('msg').value='';
@@ -86,7 +104,15 @@ def validate(req):
     return msgs, docs, mode
 
 
-def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0):
+def validate_judge(req):
+    resp = req.get("response")
+    if not isinstance(resp, str) or not resp.strip() or len(resp) > MAX_DOC_CHARS:
+        raise ValueError(f"response: a non-empty string of up to {MAX_DOC_CHARS} chars")
+    msgs, docs, _ = validate({"messages": req.get("messages"), "documents": req.get("documents")})
+    return msgs, resp, docs
+
+
+def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120.0, detector=None):
     lock = threading.Lock()
 
     class Handler(HardenedHandler):
@@ -104,15 +130,24 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 17, deadline=120
                 self.wfile.write(body)
                 return
             if self.path == "/health":
-                return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold})
+                return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
+                                            "detector": detector is not None})
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):
-            if self.path != "/chat":
+            if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
                 return self.send_json(404, {"error": "not found"})
             req, err = self.read_json_object(max_body)
             if err:
                 return self.send_json(err[0], {"error": err[1]})
+            if self.path == "/judge":
+                try:
+                    msgs, resp, docs = validate_judge(req)
+                    with lock:
+                        r = detector.judge(msgs, resp, documents=docs)
+                except ValueError as e:
+                    return self.send_json(400, {"error": str(e)[:200]})
+                return self.send_json(200, {k: r[k] for k in ("p_hallucinated", "flagged", "spans")})
             try:
                 msgs, docs, mode = validate(req)
             except ValueError as e:
@@ -129,12 +164,21 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
     ap.add_argument("--threshold", type=float, default=0.45)
+    ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
+    ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args()
     from .verichat import VeriChat
     bot = VeriChat.load(a.model, a.head, a.threshold)
-    srv = make_server(bot, a.host, a.port)
+    det = None
+    if a.detector:
+        import torch
+        from .detector import Detector
+        name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
+        det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
+            if name == a.model else Detector.load(name, a.detector)
+    srv = make_server(bot, a.host, a.port, detector=det)
     print(f"VeriChat on http://{a.host}:{srv.server_port}", flush=True)
     srv.serve_forever()
 

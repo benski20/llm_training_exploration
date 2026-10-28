@@ -1003,6 +1003,14 @@ What this shows, honestly:
   device error. This is fixed in `vt/qwen_glassbox.py`. The 7B run, with untied weights, is the
   provenance-vs-Lookback-Lens test.
 
+**Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
+a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
+exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
+page. Spans use a token threshold of 0.73 (logit 1). On the RAGTruth test tokens that flags 6.6% of
+tokens: precision 0.37, recall 0.45, token F1 0.41. The threshold was chosen on those same test
+tokens, so 0.41 is optimistic. Span finding is the weaker half; whole-response judgement is the
+strong one.
+
 ## Product wedge
 
 Structured-output reliability for AI applications: formats (JSON-like,

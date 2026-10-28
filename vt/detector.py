@@ -197,7 +197,7 @@ class Detector:
                 "spans": None, "label": 0}
 
     @torch.no_grad()
-    def judge(self, messages, response, documents=None, max_tokens=4096, token_threshold=0.5):
+    def judge(self, messages, response, documents=None, max_tokens=4096, token_threshold=0.73):
         e = encode(self.tok, self.item(messages, response, documents), max_tokens)
         if e is None or e["r0"] >= len(e["ids"]):
             raise ValueError("empty response, or the prompt leaves no room for it")

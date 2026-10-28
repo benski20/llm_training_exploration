@@ -34,3 +34,28 @@ def test_judge_without_documents_and_long_prompt_trimmed():
     det = _det()
     out = det.judge([{"role": "user", "content": "word " * 300}], "Paris.", max_tokens=64)
     assert "".join(t["text"] for t in out["tokens"]) == "Paris."
+
+
+def test_server_judge_endpoint():
+    import json
+    import threading
+    import urllib.request
+    from vt.verichat import VeriChat
+    from vt.verichat_server import make_server
+    det = _det()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    srv = make_server(VeriChat(det.model, det.tok, p, layer=1), port=0, detector=det)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_port}"
+    assert json.load(urllib.request.urlopen(base + "/health"))["detector"] is True
+    body = json.dumps({"messages": [{"role": "user", "content": "Capital of France?"}], "response": "Lyon."}).encode()
+    r = json.load(urllib.request.urlopen(urllib.request.Request(base + "/judge", body, {"Content-Type": "application/json"})))
+    assert set(r) == {"p_hallucinated", "flagged", "spans"}
+    bad = urllib.request.Request(base + "/judge", json.dumps({"messages": [{"role": "user", "content": "x"}]}).encode(),
+                                 {"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(bad)
+        assert False
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+    srv.shutdown()
