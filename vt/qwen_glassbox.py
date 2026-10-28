@@ -191,6 +191,7 @@ def _decompose(model, ids, groups=None, merge_bias=False):
     for i, layer in enumerate(layers_of(model)):
         b = G if merge_bias else G + i
         at = layer.self_attn
+        comp = comp.to(at.v_proj.weight.device)                 # models split across GPUs (device_map)
         z = comp * sc[("in", i)][0] * layer.input_layernorm.weight.float()
         v = z @ at.v_proj.weight.float().T
         if at.v_proj.bias is not None:
@@ -210,7 +211,8 @@ def _decompose(model, ids, groups=None, merge_bias=False):
             gate = sp.act_fn(F.linear(inp.x[i][0].float(), sp.gate_proj.weight.float()))   # (T, d_ff)
             comp = comp + ((z2 @ sp.up_proj.weight.float().T) * gate) @ sp.down_proj.weight.float().T
     names = names + (["bias"] if merge_bias else [f"bias@{i}" for i in range(L)])
-    return comp, names, sc[("final", 0)][0], out.logits[0]
+    dev = model.lm_head.weight.device
+    return comp.to(dev), names, sc[("final", 0)][0].to(dev), out.logits[0].to(dev)
 
 
 @torch.no_grad()
@@ -232,8 +234,8 @@ def explain_all(model, ids, groups, start=0):
     Returns (names, contrib (S, n), logits (n,)) with n = T - 1 - start; columns sum to the logits."""
     comp, names, fs, logits = _decompose(model, ids, groups, merge_bias=True)
     T = ids.shape[1]
-    pos = torch.arange(start, T - 1, device=ids.device)
-    tgt = ids[0, start + 1:]
+    pos = torch.arange(start, T - 1, device=comp.device)
+    tgt = ids[0, start + 1:].to(comp.device)
     zf = comp[:, pos] * fs[pos] * model.model.norm.weight.float()                   # (S, n, d)
     contrib = torch.einsum("snd,nd->sn", zf, model.lm_head.weight[tgt].float())
     return names, contrib, logits[pos, tgt].float()

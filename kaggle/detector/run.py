@@ -73,6 +73,8 @@ def main():
         a.model, a.train_caps, a.test_caps, a.provenance = ("Qwen/Qwen2.5-0.5B-Instruct",
                                                             "ragtruth=24,halueval_general=24,halueval_qa=8,halueval_dialogue=8,halueval_summary=4,truthfulqa=10",
                                                             "ragtruth=12,halueval_general=12,halueval_qa=4,halueval_dialogue=4,halueval_summary=3,truthfulqa=6", 3)
+    if a.quant != "none":
+        a.provenance = 0                                    # exact provenance reads float weights
     caps = lambda s: {k: int(v) for k, v in (kv.split("=") for kv in s.split(","))}  # noqa: E731
     os.makedirs(a.out, exist_ok=True)
     from transformers import AutoModelForCausalLM, AutoTokenizer
