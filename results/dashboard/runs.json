@@ -417,7 +417,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "same pipeline at 7B; device_map across both T4s (02:41:52 UTC check)"
+"note": "same pipeline at 7B; device_map across both T4s (03:00:00 UTC check)"
 },
 {
 "run": "kaggle-claims-r1-7b",
@@ -429,7 +429,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (02:41:52 UTC check)"
+"note": "thinks in <think>; claims read from the final answer after </think>; smaller sets for the 12 h limit (03:00:00 UTC check)"
 },
 {
 "run": "kaggle-detector-3b",
@@ -441,7 +441,7 @@
 "total_steps": null,
 "progress": null,
 "last_loss": null,
-"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (02:41:36 UTC check)"
+"note": "RAGTruth + HaluEval x4 + TruthfulQA; token + response probes; leave-one-source-out; provenance vs Lookback Lens (02:59:45 UTC check)"
 },
 {
 "run": "kaggle-distill-train-add",
@@ -484,10 +484,10 @@
 "experiment": "qwen",
 "title": "CPU: recalibrating the correctness head on NQ-open from 200 labels",
 "model": "qwen",
-"status": "running",
-"step": 550,
+"status": "done",
+"step": 600,
 "total_steps": 600,
-"progress": 0.9166666666666666,
+"progress": 1.0,
 "last_loss": null,
 "note": "0.5B head trained on TriviaQA; ECE and released-answer accuracy before/after"
 },
@@ -502,6 +502,18 @@
 "progress": 1.0,
 "last_loss": null,
 "note": "probe on the hidden state already computed vs token probability, at matched abstention"
+},
+{
+"run": "doubt-aware-1p5b",
+"experiment": "qwen",
+"title": "CPU: doubt-aware generation with the 1.5B probe",
+"model": "qwen",
+"status": "running",
+"step": 50,
+"total_steps": 300,
+"progress": 0.16666666666666666,
+"last_loss": null,
+"note": "the 0.5B probe tied token probability; does the stronger 1.5B probe cut hallucinations more?"
 },
 {
 "run": "ragtruth-provenance",
