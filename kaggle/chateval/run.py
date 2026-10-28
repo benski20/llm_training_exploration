@@ -8,6 +8,9 @@ on benchmark items.
                in the reply) against the reply's highest sentence risk (AUROC) and the share of wrong
                replies flagged / right replies flagged at the threshold; a threshold sweep
   speed        seconds per reply and generated tokens per second, batched as the server does
+  thinking     the first --n-think factual questions again with Qwen3 thinking on (reasoning kept apart,
+               --think-budget tokens): accuracy, risk AUROC on answers written after reasoning (the head
+               was trained on direct answers), seconds per reply
 
     python run.py --model unsloth/Qwen3-32B-bnb-4bit --head <risk head> --out /kaggle/working/chateval
     python run.py --smoke --head <0.5B risk head> --out /tmp/ce
@@ -63,11 +66,13 @@ def main():
     ap.add_argument("--n-factual", type=int, default=200)
     ap.add_argument("--max-new", type=int, default=256)
     ap.add_argument("--batch", type=int, default=8)
+    ap.add_argument("--n-think", type=int, default=48)
+    ap.add_argument("--think-budget", type=int, default=512)
     ap.add_argument("--out", default="/kaggle/working/chateval")
     ap.add_argument("--smoke", action="store_true")
     a = ap.parse_args()
     if a.smoke:
-        a.model, a.n_factual, a.max_new, a.batch = "Qwen/Qwen2.5-0.5B-Instruct", 6, 48, 4
+        a.model, a.n_factual, a.max_new, a.batch, a.n_think = "Qwen/Qwen2.5-0.5B-Instruct", 6, 48, 4, 4
     os.makedirs(a.out, exist_ok=True)
     import subprocess
     from importlib.metadata import version
@@ -145,9 +150,41 @@ def main():
     res["examples"] = [{"prompt": rq["messages"][0]["content"], "reply": r["text"][:400],
                         "doubted": [s["text"] for s in r.get("sentences", []) if s["doubted"]]}
                        for rq, r in list(zip(reqs, outs))[:: max(1, len(outs) // 25)]]
+    json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)   # before thinking
+    try:
+        thinking_eval(a, bot, reqs, ev, fq, y, th, res, t0, auroc, auroc_ci, is_right)
+    except Exception as e:                                      # keep the rest of the results
+        res["thinking"] = {"error": repr(e)[:300]}
     json.dump(res, open(os.path.join(a.out, "results.json"), "w"), indent=1, default=float)
     log(phase="done", everyday=res["everyday"]["flagged_reply_rate"], factual=f.get("risk_auroc"),
+        thinking=res.get("thinking", {}).get("risk_auroc"),
         speed=res["speed"], minutes=round((time.time() - t0) / 60, 1))
+
+
+def thinking_eval(a, bot, reqs, ev, fq, y, th, res, t0, auroc, auroc_ci, is_right):
+    if a.n_think and bot.gen.think_open is not None:            # the same questions, thinking first
+        tq = fq[:a.n_think]
+        treqs = [dict(rq, thinking=True) for rq in reqs[len(ev):len(ev) + len(tq)]]
+        bot.gen.think_budget = a.think_budget
+        touts, t = [], time.time()
+        for i in range(0, len(treqs), a.batch):
+            touts += bot.reply_batch(treqs[i:i + a.batch])
+            log(phase="thinking", done=len(touts), of=len(treqs), s=round(time.time() - t0))
+        ty = [1 - is_right(r["text"], al) for r, (_, al) in zip(touts, tq)]
+        trisk = [r.get("max_risk") or 0.0 for r in touts]
+        th_ = {"n": len(ty), "accuracy": round(1 - float(np.mean(ty)), 3),
+               "accuracy_without_thinking": round(1 - float(np.mean(y[:len(ty)])), 3),
+               "seconds_per_reply": round((time.time() - t) / max(1, len(touts)), 2), "think_budget": a.think_budget,
+               "reasoning_tokens_mean": round(float(np.mean([len(bot.tok(r.get("reasoning") or "").input_ids)
+                                                              for r in touts])), 1)}
+        if len(set(ty)) == 2:
+            th_["risk_auroc"], th_["risk_ci"] = auroc(trisk, ty), auroc_ci(trisk, ty)
+            tt, tr = np.array(ty), np.array(trisk)
+            th_["at_threshold"] = {"wrong_flagged": round(float((tr[tt == 1] >= th).mean()), 3),
+                                   "right_flagged": round(float((tr[tt == 0] >= th).mean()), 3)}
+        res["thinking"] = th_
+        res["thinking_examples"] = [{"prompt": rq["messages"][0]["content"], "reasoning": (r.get("reasoning") or "")[:300],
+                                     "reply": r["text"][:300]} for rq, r in list(zip(treqs, touts))[:6]]
 
 
 if __name__ == "__main__":
