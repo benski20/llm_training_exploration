@@ -47,7 +47,7 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 120px}h1{font-size:20px;mar
 .sub{color:var(--muted);margin:0 0 16px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
 .user{border-left:3px solid var(--accent)}.bot .text{white-space:pre-wrap}
 .c{border-radius:4px;padding:0 2px;cursor:help}.c.g{background:var(--goodbg);color:var(--good)}
-.c.m{background:var(--midbg);color:var(--mid)}div.c{display:block;margin:2px 0}.c.b{background:var(--badbg);color:var(--bad)}
+.c.m{background:var(--midbg);color:var(--mid)}.ds{text-decoration:underline wavy var(--bad);text-underline-offset:3px;cursor:help}div.c{display:block;margin:2px 0}.c.b{background:var(--badbg);color:var(--bad)}
 .meta{color:var(--muted);font-size:13px;margin-top:6px}.claims{font-size:13px;margin-top:8px}
 .claims div{padding:2px 0;border-top:1px dashed var(--line)}textarea{width:100%;background:var(--card);color:var(--fg);
 border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}details{margin:8px 0}
@@ -70,19 +70,24 @@ Amber: uncertain. Red: doubtful. With documents, each claim shows whether it cam
 const log=document.getElementById('log'),msgs=[];
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text">'+esc(t)+'</div></details>'}
-function render(r){let t=r.text,html='',pos=0;
- for(const c of r.claims){if(!c.text)continue;const k=(c.start!==undefined&&c.start>=pos)?c.start:t.indexOf(c.text,pos);if(k<0)continue;
-  const cls=c.verdict==='likely right'?'g':(c.verdict==='uncertain'?'m':'b');
-  let tip='P(correct) '+c.score.toFixed(2);if(c.source)tip+=' | from '+c.source+(c.citation?': "'+c.citation.sentence+'"':'');
-  html+=esc(t.slice(pos,k))+'<span class="c '+cls+'" title="'+esc(tip)+'">'+esc(t.slice(k,k+c.text.length))+'</span>';pos=k+c.text.length}
- html+=esc(t.slice(pos));html=html.split('[unsure:] ').join('').split('[unsure:]').join('');
- const bad=(r.sentences||[]).filter(x=>x.doubted);
- if(bad.length)html+='<div class="claims">'+bad.map(x=>'<div class="c b">Doubtful sentence ('+
-  (100*x.risk).toFixed(0)+'% risk): '+esc(x.text)+'</div>').join('')+'</div>';
+function marks(r){const t=r.text,cl=new Array(t.length).fill(-1),ds=new Array(t.length).fill(-1);let pos=0;
+ r.claims.forEach((c,i)=>{if(!c.text)return;const k=(c.start!==undefined&&c.start>=pos)?c.start:t.indexOf(c.text,pos);if(k<0)return;
+  for(let j=k;j<Math.min(t.length,k+c.text.length);j++)cl[j]=i;pos=k+c.text.length});
+ (r.sentences||[]).forEach((x,i)=>{if(x.doubted)for(let j=Math.max(0,x.start);j<Math.min(t.length,x.end);j++)ds[j]=i});
+ let html='',a=0;for(let j=1;j<=t.length;j++){if(j<t.length&&cl[j]===cl[a]&&ds[j]===ds[a])continue;
+  const seg=esc(t.slice(a,j)),c=r.claims[cl[a]],x=(r.sentences||[])[ds[a]];let cls=[],tip=[];
+  if(c){cls.push('c',c.verdict==='likely right'?'g':(c.verdict==='uncertain'?'m':'b'));tip.push('P(correct) '+c.score.toFixed(2)+
+   (c.source?' | from '+c.source+(c.citation?': "'+c.citation.sentence+'"':''):''))}
+  if(x){cls.push('ds');tip.push('doubtful sentence: '+(100*x.risk).toFixed(0)+'% risk')}
+  html+=cls.length?'<span class="'+cls.join(' ')+'" title="'+esc(tip.join(' | '))+'">'+seg+'</span>':seg;a=j}
+ return html.split('[unsure:] ').join('').split('[unsure:]').join('')}
+function render(r){let html=marks(r);
+ const bad=(r.sentences||[]).filter(x=>x.doubted).length;
  const list=r.claims.filter(c=>c.text).map(c=>'<div><b>'+esc(c.text)+'</b> — '+c.verdict+' ('+c.score.toFixed(2)+')'+
   (c.source?' · from '+esc(c.source)+(c.citation?': “'+esc(c.citation.sentence)+'”':''):'')+'</div>').join('');
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
   '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+
+  (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up. ':'')+
   'mode '+r.mode+'</div>'+(r.reasoning?reasonBox(r.reasoning):'')}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
