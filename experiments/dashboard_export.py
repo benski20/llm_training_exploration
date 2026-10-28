@@ -192,6 +192,9 @@ DISTILL = [("kaggle-distill-data", "Kaggle kernel 1: teacher data (Qwen2.5-1.5B)
            ("kaggle-detector-adapt-3b", "Kaggle (bensliv): few-shot adaptation of the 3B detector + GPU throughput",
             "results/kaggle/detector-adapt-3b.log", "results/kaggle/detector-adapt-3b/adapt/results.json",
             "k = 0/25/50/100/200 labels per unseen HaluBench domain; judge and generation batching on a T4"),
+           ("kaggle-risk-32b", "Kaggle (bensliv): Qwen3-32B (4-bit) learned risk head + claim probe",
+            "results/kaggle/risk-32b.log", "results/kaggle/risk-32b/risk/results.json",
+            "heuristic-free token/sentence risk from own replies + labelled spans + Math-Shepherd steps; launches when a slot frees"),
            ("kaggle-distill-train-add", "Kaggle kernel 2b: Glassbox-2.3 student (additive residuals)",
             "results/kaggle/distill_train_add.log", "results/kaggle/glassbox-distill-add/student/glassbox.json",
             "the pilot-2.3 architecture at 146M parameters; compared with kernel 2's GPT student")]
