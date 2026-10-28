@@ -195,14 +195,18 @@ def main():
         want = prov_left > 0 and bool(it["doc"]) and it["source"] in ("ragtruth", "halueval_qa", "halueval_summary")
         try:
             r = score(it, provenance=want)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
+        except Exception as ex:                        # OOM or a provenance failure must not stop the pass
+            if cuda:
+                torch.cuda.empty_cache()
+            log(phase="provenance_skipped", error=repr(ex)[:200]) if want else None
             r = score(it, provenance=False)
         if r:
             rows.append(r)
             prov_left -= int("doc_share" in r)
         if (i + 1) % 500 == 0:
             log(phase="test_pass", done=i + 1, of=len(test), s=round(time.time() - t0))
+    json.dump(rows, open(os.path.join(a.out, "test_rows.json"), "w"))      # raw scores: re-analysable offline
+    json.dump([feats(r) + [r["label"]] for r in S_], open(os.path.join(a.out, "stack_rows.json"), "w"))
     R_ = {}
     for s in SOURCES + ("all",):
         rs = [r for r in rows if s == "all" or r["source"] == s]
