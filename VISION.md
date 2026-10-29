@@ -1345,6 +1345,12 @@ The first load test found two bugs:
   the in-container proxy, which competed with generation for 0.125 CPU cores. Replies now get a 120 s
   write timeout and the container gets 2 CPUs.
 
+Live Wikipedia lookups work from Modal's network (`modal run deploy/modal_app.py::wiki_check`, a CPU
+container). "Who designed the Eiffel Tower?" returns the lead sections of *Gustave Eiffel* and *Eiffel
+Tower*. "What is the capital of Burkina Faso?" returns *September 2022 Burkina Faso coup d'état* first,
+then *Burkina Faso*. Search ranking is Wikipedia's own: the right page is usually there, not always
+first. It has not been measured how often a doubted wrong answer is corrected by the lookup.
+
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
 exposes it as `POST /judge` (`--detector <head>`), with a "check an answer from any AI" panel on the
