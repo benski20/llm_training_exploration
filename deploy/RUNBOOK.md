@@ -111,6 +111,22 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - Raising the lookup threshold is not worth it. At 0.80 it would look up 80% of wrong trivia answers
   (48% at 0.65), but also 29% of everyday replies (7% at 0.65), each about 10 s slower.
 
+## Claim verification (`--verify-claims`, off by default)
+
+Each reply's check-worthy claims (up to 3) are looked up and judged by a chat model reading the evidence:
+P(Yes) that the evidence supports the claim. On the 32B's labeled replies (`experiments/evidence_verify.py`,
+CPU judge Qwen2.5-1.5B, 185 factual and 56 everyday; `results/evidence_verify_v3_judge1.5b.json`):
+
+| AUROC, wrong vs right | TriviaQA | NQ | all | everyday replies marked |
+|---|---|---|---|---|
+| internal probe | 0.778 | 0.573 | 0.705 | 7% |
+| small NLI model (DeBERTa) | 0.71 | 0.61 | 0.675 | 16% |
+| 1.5B judge | 0.77 | 0.626 | 0.712 | 7.1% |
+| judge where evidence exists, averaged with the probe; else the probe | 0.791 | 0.616 | 0.732 | |
+
+Where evidence was found (81% of factual replies), the 1.5B judge beats the probe: 0.741 against 0.706
+(NQ 0.648 against 0.552). The demo's judge would be the 32B itself, untested so far (GPU).
+
 ## What the demo can and cannot claim
 
 These are the held-out numbers (`VISION.md`, `results/kaggle/chateval-32h/`):

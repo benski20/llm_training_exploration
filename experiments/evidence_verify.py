@@ -84,7 +84,12 @@ def main():
     ap.add_argument("--pause", type=float, default=0.2, help="seconds between replies (Wikipedia rate limits)")
     ap.add_argument("--judge", help="a chat model that reads the evidence and says whether it supports the claim, "
                                     "e.g. Qwen/Qwen2.5-3B-Instruct (P(Yes) is the support)")
+    ap.add_argument("--analyze", help="recompute the summary from the rows of an earlier output (no lookups)")
     a = ap.parse_args()
+    if a.analyze:
+        rows = json.load(open(a.analyze))["rows"]
+        has_judge = any("judge" in j for r in rows for j in r["sentences"])
+        return summarize(rows, a, has_judge, {})
     judge = Judge(a.judge) if a.judge else None
     from sentence_transformers import CrossEncoder
     nli = CrossEncoder(a.nli, max_length=512)
@@ -127,13 +132,16 @@ def main():
             print(json.dumps({"done": n + 1, "errors": dict(wiki.errors)}), flush=True)
             json.dump({"partial": True, "rows": rows}, open(a.out, "w"))       # survives a timeout
         time.sleep(a.pause)
+    summarize(rows, a, judge is not None, dict(wiki.errors))
 
+
+def summarize(rows, a, judged_by_model, lookup_errors):
     def first(r, key, default):
-        v = [j[key] for j in r["sentences"] if j[key] is not None]
+        v = [j.get(key) for j in r["sentences"] if j.get(key) is not None]
         return v[0] if v else default
 
     def worst(r, key, default, f):
-        v = [j[key] for j in r["sentences"] if j[key] is not None]
+        v = [j.get(key) for j in r["sentences"] if j.get(key) is not None]
         return f(v) if v else default
     signals = {                                                       # higher = more likely wrong
         "probe (1 - reply_confidence)": lambda r: 1 - (r["reply_confidence"] if r["reply_confidence"] is not None else 1),
@@ -142,11 +150,11 @@ def main():
         "evidence: conflict, first claim": lambda r: first(r, "conflict", 0.0),
         "evidence: conflict - support, first claim": lambda r: first(r, "conflict", 0.0) - first(r, "support", 0.5),
     }
-    if judge is not None:
+    if judged_by_model:
         signals["judge: 1 - P(supported), first claim"] = lambda r: 1 - first(r, "judge", 0.5)
         signals["judge: 1 - P(supported), weakest claim"] = lambda r: 1 - worst(r, "judge", 0.5, min)
     fa = [r for r in rows if r["kind"] == "factual"]
-    res = {"replies": len(rows), "nli": a.nli, "lookup_errors": dict(wiki.errors), "auroc": {}}
+    res = {"replies": len(rows), "nli": a.nli, "lookup_errors": lookup_errors, "auroc": {}}
     for name, f in signals.items():
         res["auroc"][name] = {src: auroc([f(r) for r in fa if r["source"] == src],
                                          [r["wrong"] for r in fa if r["source"] == src]) for src in ("triviaqa", "nq")}
@@ -162,7 +170,7 @@ def main():
     res["everyday"] = {"with_check_worthy_claims": round(np.mean([bool(r["sentences"]) for r in ev]), 3),
                        "any_claim_contradicted_gt_0.5": round(np.mean([any((j["conflict"] or 0) > 0.5 for j in r["sentences"]) for r in ev]), 3),
                        "all_claims_supported_gt_0.5": round(np.mean([bool(r["sentences"]) and all((j["support"] or 0) > 0.5 for j in r["sentences"]) for r in ev]), 3)}
-    if judge is not None:
+    if judged_by_model:
         jz = z([signals["probe (1 - reply_confidence)"](r) for r in fa]) + \
             z([signals["judge: 1 - P(supported), first claim"](r) for r in fa])
         res["auroc"]["probe + judge (z-sum)"] = {"all": auroc(jz, [r["wrong"] for r in fa])}
