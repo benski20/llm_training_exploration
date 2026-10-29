@@ -95,6 +95,16 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
   (`experiments/page_check/`) confirms it: a request stalled at the socket recovers in 47 s, and a slow
   25 s reply arrives intact.
 
+## Live: 40 TriviaQA questions with claim checks on (2026-10-29, run 40919135629)
+
+- Accuracy rose from 0.711 closed-book to 0.789 served. Of 9 lookups, 3 turned wrong answers right and
+  none broke a right one (`results/correction_rate_32b_v5.json`).
+- The claim checks on the live replies: AUROC 0.80 on the 30 judged first claims.
+  - Right answers' first claims: 21 supported, 2 unclear, 2 unsupported, 3 no evidence, 2 no claims.
+  - Wrong answers: 3 supported, 2 unsupported, 3 no evidence.
+- 2 of 40 requests were still lost (RemoteDisconnected after about 270 s). Median reply time 35 s at 4
+  concurrent clients.
+
 ## Lookups (Wikipedia)
 
 - On 200 TriviaQA questions, the share whose answer appears in the 3 passages the model gets
