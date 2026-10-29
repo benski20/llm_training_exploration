@@ -34,6 +34,8 @@ WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubt
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
 ASGI = os.environ.get("VERICHAT_ASGI", "1") == "1"                # serve in-process (0: web_server + local proxy)
+SEARCH = os.environ.get("VERICHAT_SEARCH", "")                    # web search too: "brave" or "tavily" ("" off)
+SEARCH_KEY = os.environ.get("VERICHAT_SEARCH_KEY")                # its API key: never in the repo or the image
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -49,7 +51,8 @@ image = (
                              "VERICHAT_SCALEDOWN": str(SCALEDOWN), "VERICHAT_RISK_THRESHOLD": RISK_THRESHOLD,
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
-                             "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0"}.items() if v is not None})
+                             "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0",
+                             "VERICHAT_SEARCH": SEARCH}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
@@ -170,12 +173,17 @@ def server_args():
             + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
             + (["--wikipedia"] if WIKIPEDIA else [])
             + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
-            + (["--verify-claims"] if WIKIPEDIA and VERIFY else [])
+            + (["--web-search", SEARCH] if SEARCH else [])
+            + (["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
             + (["--revision", REVISION] if REVISION else []))
 
 
+# the search key reaches the container as a Modal secret: from this deploy's environment (a one-off workflow
+# input), else the named secret "verichat-search" made in the Modal dashboard
+SEARCH_SECRETS = ([modal.Secret.from_dict({"VERICHAT_SEARCH_KEY": SEARCH_KEY})] if SEARCH and SEARCH_KEY else
+                  [modal.Secret.from_name("verichat-search")] if SEARCH else [])
 SERVE = dict(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
-             scaledown_window=SCALEDOWN, max_containers=1)
+             scaledown_window=SCALEDOWN, max_containers=1, secrets=SEARCH_SECRETS)
 if ASGI:
     # In-process: Modal calls the handler directly. Through a web_server, Modal's proxy reads each reply
     # back over a local socket, and live it sometimes failed to ("Response payload is not completed"),

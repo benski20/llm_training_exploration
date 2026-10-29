@@ -37,9 +37,10 @@ def check_worthy(s):
 
 
 def source(passage):
-    """A short name for a passage: its Wikipedia title, else its opening words."""
-    if " (Wikipedia):" in passage:
-        return passage.split(" (Wikipedia):")[0]
+    """A short name for a passage: its Wikipedia title, a web page's title and site, else its opening words."""
+    m = re.match(r"(.+?) \(([^()]+)\): ", passage)
+    if m:
+        return m.group(1) if m.group(2) == "Wikipedia" else f"{m.group(1)[:60]} ({m.group(2)})"
     return passage[:60].rsplit(" ", 1)[0] + "…" if len(passage) > 60 else passage
 
 

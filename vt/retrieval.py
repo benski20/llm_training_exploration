@@ -232,29 +232,38 @@ class Wikipedia:
                 continue
             w = text.split()[:30000]
             cands += [(title, j, i, c) for i, c in enumerate(chunks(" ".join(w), self.passage_words, self.passage_words // 2))]
-        if not cands:
-            return []
-        corpus = Corpus([f"{t} {c}" for t, _, _, c in cands])  # the title counts: "Eiffel Tower ... 324 m"
-        s = corpus.scores(query)
-        best = sorted(range(len(cands)), key=lambda i: -s[i])
-        pool = [i for i in best[:self.rerank_pool] if s[i] > 0]
-        if self.rerank is not None and pool:                 # a stronger reader reorders BM25's best few
-            try:
-                r = self.rerank(query, [f"{cands[i][0]}: {cands[i][3]}" for i in pool])
-                r = [float(x) for x in (r.reshape(-1) if hasattr(r, "reshape") else (r if isinstance(r, (list, tuple)) else [r]))]
-                order = [pool[j] for j in sorted(range(len(pool)), key=lambda j: -r[j])]
-                best = order + [i for i in best if i not in set(pool)]
-            except Exception as e:                           # keep BM25's order
-                self.errors["rerank: " + self._why(e)] += 1
-        out, taken = [], []
-        for i in best:
-            if len(out) == k or s[i] <= 0:
-                break
-            t, j, w, c = cands[i]
-            if any(j == j2 and abs(w - w2) <= 1 for j2, w2 in taken):   # windows overlap: a near-repeat
-                continue
-            if self.per_page and sum(j == j2 for j2, _ in taken) >= self.per_page:
-                continue
-            taken.append((j, w))
-            out.append(f"{t} (Wikipedia): {c}")
-        return out
+        return rank_passages(query, [(t, j, w, c, "Wikipedia") for t, j, w, c in cands], k, self.rerank,
+                             self.rerank_pool, self.per_page, self.errors)
+
+
+def rank_passages(query, cands, k, rerank=None, rerank_pool=20, per_page=None, errors=None):
+    """The k candidate passages that best match the query: BM25 over title + text, the best rerank_pool
+    reordered by rerank(query, passages) -> scores when given, overlapping windows of one page skipped.
+    cands: [(title, page, window, text, source)] -> ["title (source): text"]."""
+    if not cands:
+        return []
+    corpus = Corpus([f"{t} {c}" for t, _, _, c, _ in cands])   # the title counts: "Eiffel Tower ... 324 m"
+    s = corpus.scores(query)
+    best = sorted(range(len(cands)), key=lambda i: -s[i])
+    pool = [i for i in best[:rerank_pool] if s[i] > 0]
+    if rerank is not None and pool:                          # a stronger reader reorders BM25's best few
+        try:
+            r = rerank(query, [f"{cands[i][0]}: {cands[i][3]}" for i in pool])
+            r = [float(x) for x in (r.reshape(-1) if hasattr(r, "reshape") else (r if isinstance(r, (list, tuple)) else [r]))]
+            order = [pool[j] for j in sorted(range(len(pool)), key=lambda j: -r[j])]
+            best = order + [i for i in best if i not in set(pool)]
+        except Exception as e:                               # keep BM25's order
+            if errors is not None:
+                errors["rerank: " + (f"HTTP {e.code}" if getattr(e, "code", None) else type(e).__name__)] += 1
+    out, taken = [], []
+    for i in best:
+        if len(out) == k or s[i] <= 0:
+            break
+        t, j, w, c, src = cands[i]
+        if any(j == j2 and abs(w - w2) <= 1 for j2, w2 in taken):   # windows overlap: a near-repeat
+            continue
+        if per_page and sum(j == j2 for j2, _ in taken) >= per_page:
+            continue
+        taken.append((j, w))
+        out.append(f"{t} ({src}): {c}")
+    return out

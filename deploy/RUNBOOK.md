@@ -53,6 +53,7 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
 | `VERICHAT_VERIFY` | `1` | check each reply's claims against Wikipedia, judged by the chat model (0: off) |
+| `VERICHAT_SEARCH` | "" | also search the web: `brave` or `tavily` (needs a key, below) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |
 
@@ -222,6 +223,32 @@ judging):
 - The judge's lead is significant on both datasets.
 - The verdict weights the judge 0.9 (0.9 and 1.0 tie on both halves). Doubt above 0.6 marks a reply likely
   wrong: about 46% of wrong answers and 12% of right ones.
+
+## Web search (`--web-search brave|tavily`, `vt/websearch.py`)
+
+Web search adds a second source next to Wikipedia. Lookups and claim checks query both in parallel, pool
+the passages, and rank them together (BM25, then the reranker). Each passage is labeled with its page
+title and site.
+
+- **Brave Search API:** returns results, and the server fetches each page.
+- **Tavily:** returns the page text with each result.
+
+Page fetching is narrow (protection against server-side request forgery):
+- http(s) only.
+- Every host, redirects included, must resolve to public addresses: no loopback, private, link-local
+  (e.g. the cloud metadata address) or reserved ones.
+- 2 MB cap, 5 s timeout, HTML or plain text only.
+- Page text only reaches the model inside the judging prompt, as quoted evidence.
+- Failures are counted in `/health` `retrieval_errors`.
+
+The key never goes in the repo or the image. Either:
+- create a Modal secret named `verichat-search` holding `VERICHAT_SEARCH_KEY` (dashboard, Secrets), and
+  deploy with the `search` input set; or
+- pass `search_key` as a one-off workflow input. Like the token inputs, it stays in that run's stored
+  event data, so rotate it afterwards.
+
+Both providers have free tiers with monthly limits; check their current pricing. Each lookup costs one
+search per claim, up to 3 per reply.
 
 ## Clients
 

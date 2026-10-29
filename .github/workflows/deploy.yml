@@ -20,6 +20,12 @@ on:
       modal_token_secret:
         description: one-off Modal token secret (rotate it afterwards)
         required: false
+      search:
+        description: web search next to Wikipedia (brave or tavily; empty for none)
+        required: false
+      search_key:
+        description: its API key, one-off (empty uses the Modal secret "verichat-search")
+        required: false
   push:
     paths: [deploy/request.json]
 permissions:
@@ -44,6 +50,11 @@ jobs:
           echo "::add-mask::$ID"
           echo "::add-mask::$SEC"
           { echo "MODAL_TOKEN_ID=$ID"; echo "MODAL_TOKEN_SECRET=$SEC"; } >> "$GITHUB_ENV"
+          SEARCH=$(jq -r '.inputs.search // empty' "$GITHUB_EVENT_PATH")
+          SKEY=$(jq -r '.inputs.search_key // empty' "$GITHUB_EVENT_PATH")
+          case "$SEARCH" in ""|brave|tavily) ;; *) echo "::error::search: brave or tavily"; exit 1;; esac
+          if [ -n "$SKEY" ]; then echo "::add-mask::$SKEY"; echo "VERICHAT_SEARCH_KEY=$SKEY" >> "$GITHUB_ENV"; fi
+          echo "VERICHAT_SEARCH=$SEARCH" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
