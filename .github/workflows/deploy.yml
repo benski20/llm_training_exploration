@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck]
+        options: [deploy, stop, logs, wikicheck, correction]
         default: deploy
       modal_token_id:
         description: one-off Modal token id (rotate it afterwards); empty uses the repository secret
@@ -58,6 +58,22 @@ jobs:
       - name: live Wikipedia lookups from Modal (tiny CPU container)
         if: steps.req.outputs.action == 'wikicheck'
         run: modal run deploy/modal_app.py::wiki_check
+      - name: correction rate - deploy without the rate limit
+        if: steps.req.outputs.action == 'correction'
+        id: cdep
+        run: |
+          VERICHAT_RATE=0 modal deploy deploy/modal_app.py | tee cdeploy.log
+          echo "url=$(grep -o 'https://[^ ]*modal\.run' cdeploy.log | head -1)" >> "$GITHUB_OUTPUT"
+      - name: correction rate - 100 TriviaQA questions through the live demo
+        if: steps.req.outputs.action == 'correction'
+        timeout-minutes: 40
+        run: |
+          pip install numpy datasets
+          python experiments/correction_rate.py --url "${{ steps.cdep.outputs.url }}" --n 100 --workers 4 --out correction.json
+          cat correction.json
+      - name: correction rate - restore the public rate limit
+        if: always() && steps.req.outputs.action == 'correction' && steps.cdep.outcome == 'success'
+        run: modal deploy deploy/modal_app.py
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000
