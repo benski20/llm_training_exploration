@@ -32,6 +32,7 @@ RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: th
 RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per client per minute; 0 for load tests
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
+VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -45,7 +46,8 @@ image = (
     .env({k: v for k, v in {"VERICHAT_MODEL": MODEL, "VERICHAT_HEAD": HEAD, "VERICHAT_GPU": GPU,
                              "VERICHAT_SCALEDOWN": str(SCALEDOWN), "VERICHAT_RISK_THRESHOLD": RISK_THRESHOLD,
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
-                             "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK}.items() if v is not None})
+                             "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
+                             "VERICHAT_VERIFY": "1" if VERIFY else "0"}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
@@ -112,4 +114,5 @@ def serve():
                      + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
                      + (["--wikipedia"] if WIKIPEDIA else [])
                      + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
+                     + (["--verify-claims"] if WIKIPEDIA and VERIFY else [])
                      + (["--revision", REVISION] if REVISION else []), env=env)

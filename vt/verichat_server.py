@@ -60,7 +60,9 @@ border-radius:8px;padding:8px 16px;font:inherit;cursor:pointer}button:disabled{o
 <p class="sub">Every reply is checked by the model's own internals as it is written. A sentence the model doubts is
 underlined in red (hover for its risk). Names, numbers and dates are coloured: green likely right, amber uncertain, red
 doubtful. With documents, each claim shows whether it came from them (with the sentence) or from memory. The scores rank
-how likely the model is to be wrong; they do not prove anything.</p>
+how likely the model is to be wrong; they do not prove anything. <span id="vsub" hidden>After each reply, its factual
+claims are looked up and checked against what the sources say: ✓ supported, ✗ not supported, ? unclear, – nothing
+found.</span></p>
 <div id="log"></div>
 <details><summary>Documents (optional)</summary><textarea id="docs" rows="5" placeholder="Paste source text. Separate documents with a blank line containing ---"></textarea></details>
 <textarea id="msg" rows="3" placeholder="Ask anything"></textarea>
@@ -96,10 +98,11 @@ function render(r){let html=marks(r);
    esc((r.retrieval.passages||[]).map(p=>p.split(' (Wikipedia):')[0].slice(0,60)).join('; '))+'. ':'')+
   'mode '+r.mode+'</div>'+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–'};
- return '<div class="claims">'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
+ return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
 fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
+ if(h.verify_claims)document.getElementById('vsub').hidden=false;
  if(h.thinking_available){document.getElementById('thinkl').hidden=false;document.getElementById('think').checked=!!h.thinking}});
 function renderJudge(r,a){let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
@@ -367,7 +370,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                                             "detector": detector is not None, "thinking": bot.gen.thinking,
                                             "thinking_available": bot.gen.think_open is not None,
                                             "retrieval": type(bot.retriever).__name__ if bot.retriever is not None else None,
-                                            "retrieval_errors": dict(getattr(bot.retriever, "errors", None) or {})})
+                                            "retrieval_errors": dict(getattr(bot.retriever, "errors", None) or {}),
+                                            "verify_claims": getattr(bot, "verifier", None) is not None})
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):

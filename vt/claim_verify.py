@@ -28,6 +28,13 @@ def check_worthy(s):
     return any(ch.isdigit() for ch in s) or any(t[:1].isupper() for t in w[1:])
 
 
+def source(passage):
+    """A short name for a passage: its Wikipedia title, else its opening words."""
+    if " (Wikipedia):" in passage:
+        return passage.split(" (Wikipedia):")[0]
+    return passage[:60].rsplit(" ", 1)[0] + "…" if len(passage) > 60 else passage
+
+
 class ClaimVerifier:
     def __init__(self, model, tok, retriever, max_claims=3, supported=0.6, unsupported=0.2, max_tokens=1500,
                  batch=4):
@@ -70,21 +77,26 @@ class ClaimVerifier:
         return out
 
     def verify(self, question, text):
+        return self.verify_batch([(question, text)])[0]
+
+    def verify_batch(self, pairs):
+        """[(question, reply text)] -> one verification list each: every claim of every reply looked up in
+        parallel (the lookups wait on the network), then all of them judged in batched forward passes."""
         from concurrent.futures import ThreadPoolExecutor
-        cs = self.claims(text)
-        if not cs:
-            return []
-        with ThreadPoolExecutor(max_workers=len(cs)) as pool:   # lookups wait on the network: in parallel
-            found = list(zip(cs, pool.map(lambda c: self.retriever(f"{question} {c}"), cs)))
-        ask = [(question, c, ps) for c, ps in found if ps]
+        claims = [(k, q, c) for k, (q, text) in enumerate(pairs) for c in self.claims(text)]
+        out = [[] for _ in pairs]
+        if not claims:
+            return out
+        with ThreadPoolExecutor(max_workers=min(8, len(claims))) as pool:
+            found = list(pool.map(lambda kqc: self.retriever(f"{kqc[1]} {kqc[2]}"), claims))
+        ask = [(q, c, ps) for (_, q, c), ps in zip(claims, found) if ps]
         probs = iter(self.judge(ask)) if ask else iter(())
-        out = []
-        for c, ps in found:
+        for (k, _, c), ps in zip(claims, found):
             if not ps:
-                out.append({"claim": c, "verdict": "no evidence", "p_supported": None, "sources": []})
+                out[k].append({"claim": c, "verdict": "no evidence", "p_supported": None, "sources": []})
                 continue
             p = next(probs)
             verdict = "supported" if p >= self.supported else "unsupported" if p < self.unsupported else "unclear"
-            out.append({"claim": c, "verdict": verdict, "p_supported": round(p, 4),
-                        "sources": sorted({s.split(" (Wikipedia)")[0] for s in ps})})
+            out[k].append({"claim": c, "verdict": verdict, "p_supported": round(p, 4),
+                           "sources": sorted({source(s) for s in ps})})
         return out

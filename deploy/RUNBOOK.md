@@ -52,6 +52,7 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_REVISION` | latest | the model's Hugging Face commit; pin it for a stable public demo (supply chain) |
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
+| `VERICHAT_VERIFY` | `1` | check each reply's claims against Wikipedia, judged by the chat model (0: off) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |
 
@@ -111,7 +112,7 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - Raising the lookup threshold is not worth it. At 0.80 it would look up 80% of wrong trivia answers
   (48% at 0.65), but also 29% of everyday replies (7% at 0.65), each about 10 s slower.
 
-## Claim verification (`--verify-claims`, off by default)
+## Claim verification (`--verify-claims`; on for Modal)
 
 Each reply's check-worthy claims (up to 3) are looked up and judged by a chat model reading the evidence:
 P(Yes) that the evidence supports the claim. On the 32B's labeled replies (`experiments/evidence_verify.py`,

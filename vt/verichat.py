@@ -301,20 +301,28 @@ class VeriChat:
             return outs
         return self._reply_batch_unmoderated(reqs, on_text, on_reasoning, on_ready)
 
-    def _finish(self, o, question=None):
-        """Screen a final reply (moderation), check its claims against sources (the verifier), return it."""
+    def _finish(self, o):
+        """Screen a final reply (moderation) and return it."""
         if self.moderator is not None:                               # withhold flagged replies
             from vt.moderation import WITHHELD
             f = self.moderator.check(o["text"])
             o["moderation"] = {"output": f}
             if f["flagged"]:
                 o.update(text=WITHHELD, claims=[], withheld=True)
-        if self.verifier is not None and question and not o.get("withheld"):
-            try:
-                o["verification"] = self.verifier.verify(question, o["text"].replace("[unsure:]", ""))
-            except Exception as e:                                   # a check that fails must not fail the reply
-                print(f"verification failed: {e!r}", flush=True)
         return o
+
+    def _verify(self, items):
+        """Check the claims of several final replies against sources at once (the verifier): items are
+        (reply, question). A check that fails never fails the replies."""
+        todo = [(o, q) for o, q in items if q and not o.get("withheld")]
+        if self.verifier is None or not todo:
+            return
+        try:
+            vs = self.verifier.verify_batch([(q, o["text"].replace("[unsure:]", "")) for o, q in todo])
+            for (o, _), v in zip(todo, vs):
+                o["verification"] = v
+        except Exception as e:
+            print(f"verification failed: {e!r}", flush=True)
 
     def _reply_batch_unmoderated(self, reqs, on_text=None, on_reasoning=None, on_ready=None):
         outs = self._reply_batch(reqs, on_text, on_reasoning)
@@ -324,7 +332,12 @@ class VeriChat:
                 on_ready(i, outs[i])
         def ask(r):
             return next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), None)
-        doubted = []                                                 # closed-book replies the model doubts
+
+        def deliver(ids):                                            # verified together, then sent
+            self._verify([(outs[i], ask(reqs[i])) for i in ids])
+            for i in ids:
+                send(i)
+        doubted, final = [], []                                      # closed-book replies the model doubts
         for i, (r, o) in enumerate(zip(reqs, outs)):
             score, claim = o.pop("_trigger"), o.pop("_claim", None)
             if not (r["documents"] or not r["retrieve"] or self.retriever is None):
@@ -332,8 +345,9 @@ class VeriChat:
                 if score is not None and score < self.retrieve_below:
                     doubted.append((i, claim))
                     continue
-            self._finish(o, ask(r))                                  # final now: it does not wait for lookups
-            send(i)
+            self._finish(o)                                          # final now: it does not wait for lookups
+            final.append(i)
+        deliver(final)
         again, where = [], []                                        # look the doubted ones up
         for i, claim in doubted:
             r = reqs[i]
@@ -348,15 +362,15 @@ class VeriChat:
                 again.append(dict(r, documents=passages))
                 where.append(i)
             else:                                                    # nothing found: the closed-book reply stands
-                self._finish(outs[i], question)
-                send(i)
+                self._finish(outs[i])
+                deliver([i])
         looked = self._reply_batch(again, provenance=self.provenance_on_lookup) if again else []
         for i, r, o in zip(where, again, looked):
             o.pop("_trigger"), o.pop("_claim", None)
             o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
                               "passages": r["documents"], "closed_book_text": outs[i]["text"]}
-            outs[i] = self._finish(o, ask(r))
-            send(i)
+            outs[i] = self._finish(o)
+        deliver(where)
         return outs
 
     def _reply_batch(self, reqs, on_text=None, on_reasoning=None, provenance=True):

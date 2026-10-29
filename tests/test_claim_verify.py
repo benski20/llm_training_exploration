@@ -35,3 +35,24 @@ def test_verifier_tells_supported_from_unsupported_and_no_evidence(small):
     assert got[2]["verdict"] == "no evidence"
     b = v.judge([("q", "Gustave Eiffel's company built it.", ev), ("q", "Le Corbusier built it.", ev)])
     assert len(b) == 2 and b[0] > b[1]                       # batched (left-padded) agrees
+
+
+def test_verify_batch_looks_everything_up_once_and_judges_in_one_go(small):
+    import threading
+    model, tok = small
+    ev = ["Eiffel Tower (Wikipedia): The tower is named after the engineer Gustave Eiffel, whose company "
+          "designed and built it between 1887 and 1889."]
+    calls, lock = [], threading.Lock()
+
+    def retriever(q):
+        with lock:
+            calls.append(q)
+        return ev
+    v = ClaimVerifier(model, tok, retriever)
+    judged = []
+    inner = v.judge
+    v.judge = lambda items: (judged.append(len(items)), inner(items))[1]
+    out = v.verify_batch([("Who designed it?", "Gustave Eiffel's company designed the Eiffel Tower."),
+                          ("Hi", "Hope you are well."),
+                          ("When?", "It was built between 1887 and 1889 in Paris.")])
+    assert [len(o) for o in out] == [1, 0, 1] and len(calls) == 2 and judged == [2]

@@ -573,15 +573,15 @@ def test_final_replies_carry_claim_verification_and_survive_its_failure():
     seen = []
 
     class Fake:
-        def verify(self, question, text):
-            seen.append(question)
-            return [{"claim": "x", "verdict": "supported", "p_supported": 0.9, "sources": ["X"]}]
+        def verify_batch(self, pairs):
+            seen.extend(q for q, _ in pairs)
+            return [[{"claim": "x", "verdict": "supported", "p_supported": 0.9, "sources": ["X"]}] for _ in pairs]
     bot.verifier = Fake()
     out = bot.reply([{"role": "user", "content": "Who built it?"}], max_new_tokens=8)
     assert out["verification"][0]["verdict"] == "supported" and seen == ["Who built it?"]
 
     class Broken:
-        def verify(self, question, text):
+        def verify_batch(self, pairs):
             raise RuntimeError("lookup down")
     bot.verifier = Broken()
     out = bot.reply([{"role": "user", "content": "Who built it?"}], max_new_tokens=8)
