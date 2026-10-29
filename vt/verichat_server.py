@@ -99,7 +99,7 @@ function render(r){let html=marks(r);
   'mode '+r.mode+'</div>'+assess(r.assessment)+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
 function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e'}[a.verdict]||'';
  return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
-function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–'};
+function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
  return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}

@@ -132,7 +132,7 @@ def _run_study(args, stdin_json):
         with open(src, "w") as f:
             f.write(stdin_json)
         r = subprocess.run(["python", "/app/experiments/study_32b.py", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
-                            "--rows", src, "--out", out] + args,
+                            "--questions", "/app/eval/study_questions.json", "--rows", src, "--out", out] + args,
                            env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
         print(r.stdout[-8000:], r.stderr[-3000:] if r.returncode else "", flush=True)
         if r.returncode:
@@ -148,7 +148,8 @@ def study_gather(rows_json: str):
 
 @app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=30 * 60)
 def study_judge(gathered_json: str):
-    """The served model judges the gathered evidence: a few GPU minutes."""
+    """The served model judges the gathered evidence (yes/no and three-way) and grades the answers against
+    their reference answers: about 10 GPU minutes for 600."""
     return _run_study(["--judge-gathered"], gathered_json)
 
 

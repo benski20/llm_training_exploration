@@ -60,16 +60,25 @@ def gather(pairs, retriever, max_claims=3):
     return out
 
 
+THREE_WAY = ("What does the evidence say about the claim?\nA) it supports the claim\nB) it contradicts the claim\n"
+             "C) it does not say whether the claim is true\nAnswer with one letter.")
+
+
 class ClaimVerifier:
     def __init__(self, model, tok, retriever, max_claims=3, supported=0.6, unsupported=0.2, max_tokens=1500,
-                 batch=4):
+                 batch=4, three_way=False):
         """supported / unsupported: P(Yes) at or above which a claim is supported, below which it is not
-        (in between: the evidence is unclear, reported as "unclear")."""
+        (in between: the evidence is unclear, reported as "unclear"). three_way: ask whether the evidence
+        supports, contradicts or does not say: evidence that is merely off the point then reads "not in the
+        sources" instead of "unsupported", and the verdict leans on the model's own doubt there."""
         self.model, self.tok, self.retriever = model, tok, retriever
         self.max_claims, self.supported, self.unsupported = max_claims, supported, unsupported
-        self.max_tokens, self.batch = max_tokens, batch
-        self.yes = sorted({tok.encode(w, add_special_tokens=False)[0] for w in ("Yes", " Yes")})
-        self.no = sorted({tok.encode(w, add_special_tokens=False)[0] for w in ("No", " No")})
+        self.max_tokens, self.batch, self.three_way = max_tokens, batch, three_way
+
+        def ids(*words):
+            return sorted({tok.encode(w, add_special_tokens=False)[0] for w in words})
+        self.yes, self.no = ids("Yes", " Yes"), ids("No", " No")
+        self.letters = [ids(c, " " + c) for c in "ABC"]
 
     def claims(self, text):
         return [s.rstrip(BOLD) for s in sentences(text) if check_worthy(s)][:self.max_claims]
@@ -81,15 +90,21 @@ class ClaimVerifier:
                                             "Does the evidence support the claim? Answer Yes or No."}]
         return prompt_of(self.tok, msgs, thinking=False)
 
-    def judge(self, items):
-        """items: [(question, claim, passages)] -> P(Yes) each; batched, left-padded, one forward pass."""
+    def _prompt3(self, question, claim, passages):
+        ev = "\n\n".join(p[:900] for p in passages)
+        msgs = [{"role": "system", "content": "You check claims against evidence. Answer only A, B or C."},
+                {"role": "user", "content": f"Evidence:\n{ev}\n\nQuestion: {question}\nClaim: {claim}\n\n{THREE_WAY}"}]
+        return prompt_of(self.tok, msgs, thinking=False)
+
+    def _choices(self, prompts, options):
+        """The model's probabilities of each option (lists of token ids) as the next token of each prompt;
+        batched, left-padded, one forward pass per batch."""
         import torch
         dev = next(self.model.parameters()).device
         pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else self.tok.eos_token_id
         out = []
-        for i in range(0, len(items), self.batch):
-            ids = [self.tok(self._prompt(*it), add_special_tokens=False).input_ids[-self.max_tokens:]
-                   for it in items[i:i + self.batch]]
+        for i in range(0, len(prompts), self.batch):
+            ids = [self.tok(p, add_special_tokens=False).input_ids[-self.max_tokens:] for p in prompts[i:i + self.batch]]
             n = max(len(x) for x in ids)
             x = torch.full((len(ids), n), pad, dtype=torch.long)
             m = torch.zeros((len(ids), n), dtype=torch.long)
@@ -97,9 +112,23 @@ class ClaimVerifier:
                 x[b, n - len(t):], m[b, n - len(t):] = torch.tensor(t), 1
             with torch.no_grad():
                 z = self.model(input_ids=x.to(dev), attention_mask=m.to(dev)).logits[:, -1].float()
-            y, no = torch.logsumexp(z[:, self.yes], -1), torch.logsumexp(z[:, self.no], -1)
-            out += [float(p) for p in torch.sigmoid(y - no).cpu()]
+            lg = torch.stack([torch.logsumexp(z[:, o], -1) for o in options], -1)
+            out += [[float(v) for v in row] for row in torch.softmax(lg, -1).cpu()]
         return out
+
+    def judge(self, items):
+        """items: [(question, claim, passages)] -> P(Yes) each."""
+        return [p[0] for p in self._choices([self._prompt(*it) for it in items], [self.yes, self.no])]
+
+    def judge3(self, items):
+        """items: [(question, claim, passages)] -> (P(supports), P(contradicts), P(does not say)) each."""
+        return [tuple(p) for p in self._choices([self._prompt3(*it) for it in items], self.letters)]
+
+    def ask_yes_no(self, system, questions):
+        """P(Yes) for plain yes/no questions (e.g. grading an answer against reference answers)."""
+        return [p[0] for p in self._choices([prompt_of(self.tok, [{"role": "system", "content": system},
+                                                                  {"role": "user", "content": q}], thinking=False)
+                                             for q in questions], [self.yes, self.no])]
 
     def verify(self, question, text):
         return self.verify_batch([(question, text)])[0]
@@ -117,13 +146,21 @@ class ClaimVerifier:
         if not claims:
             return out
         ask = [(q, c, ps) for (_, q, c), ps in zip(claims, found) if ps]
-        probs = iter(self.judge(ask)) if ask else iter(())
+        probs = iter((self.judge3(ask) if self.three_way else self.judge(ask)) if ask else ())
         for (k, _, c), ps in zip(claims, found):
             if not ps:
                 out[k].append({"claim": c, "verdict": "no evidence", "p_supported": None, "sources": []})
                 continue
             p = next(probs)
-            verdict = "supported" if p >= self.supported else "unsupported" if p < self.unsupported else "unclear"
-            out[k].append({"claim": c, "verdict": verdict, "p_supported": round(p, 4),
-                           "sources": sorted({source(s) for s in ps})})
+            row = {"claim": c, "sources": sorted({source(s) for s in ps})}
+            if self.three_way:
+                a, b, n = p
+                verdict = "supported" if a >= self.supported else "unsupported" if b >= self.supported else \
+                    "not in the sources" if n >= 0.5 else "unclear"
+                row.update(verdict=verdict, p_supported=round(a, 4), p_contradicted=round(b, 4),
+                           p_not_stated=round(n, 4))
+            else:
+                verdict = "supported" if p >= self.supported else "unsupported" if p < self.unsupported else "unclear"
+                row.update(verdict=verdict, p_supported=round(p, 4))
+            out[k].append(row)
         return out

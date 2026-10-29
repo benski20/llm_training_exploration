@@ -56,3 +56,18 @@ def test_verify_batch_looks_everything_up_once_and_judges_in_one_go(small):
                           ("Hi", "Hope you are well."),
                           ("When?", "It was built between 1887 and 1889 in Paris.")])
     assert [len(o) for o in out] == [1, 0, 1] and len(calls) == 2 and judged == [2]
+
+
+def test_three_way_judging_tells_contradiction_from_silence(small):
+    model, tok = small
+    ev = ["Eiffel Tower (Wikipedia): The tower is named after the engineer Gustave Eiffel, whose company "
+          "designed and built it between 1887 and 1889."]
+    v = ClaimVerifier(model, tok, lambda q: ev, three_way=True)
+    sup, con, silent = v.judge3([("Who designed it?", "Gustave Eiffel's company designed the Eiffel Tower.", ev),
+                                 ("Who designed it?", "Le Corbusier designed the Eiffel Tower.", ev),
+                                 ("What does it cost?", "A ticket to the top costs 29 euros.", ev)])
+    assert all(abs(sum(p) - 1) < 1e-4 for p in (sup, con, silent))
+    assert sup[0] > con[0] and sup[0] > silent[0]           # supported reads A
+    assert silent[2] > sup[2]                               # the price is not in the evidence: C rises
+    got = v.verify("Who designed the Eiffel Tower?", "Gustave Eiffel's company designed the Eiffel Tower.")
+    assert {"p_supported", "p_contradicted", "p_not_stated"} <= set(got[0])

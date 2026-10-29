@@ -340,9 +340,15 @@ class VeriChat:
             return None
         score, _ = self.doubt_score(o)
         own = 1 - score if score is not None else 0.5
-        judged = [c["p_supported"] for c in o.get("verification") or [] if c.get("p_supported") is not None]
-        if judged:
-            d, basis = self.JUDGE_WEIGHT * (1 - judged[0]) + (1 - self.JUDGE_WEIGHT) * own, "sources"
+        judged = [c for c in o.get("verification") or [] if c.get("p_supported") is not None]
+        if judged and "p_contradicted" in judged[0]:             # three-way: the sources' silence is not doubt
+            c = judged[0]
+            a, b, n = c["p_supported"], c["p_contradicted"], c["p_not_stated"]
+            w = self.JUDGE_WEIGHT * (1 - n)
+            d = w * b / max(a + b, 1e-6) + (1 - w) * own
+            basis = "sources" if n < 0.5 else "the model's own confidence (the sources do not say)"
+        elif judged:
+            d, basis = self.JUDGE_WEIGHT * (1 - judged[0]["p_supported"]) + (1 - self.JUDGE_WEIGHT) * own, "sources"
         else:
             d, basis = own, "the model's own confidence"
         verdict = "likely wrong" if d > self.LIKELY_WRONG else "uncertain" if d > self.UNCERTAIN else "likely right"
