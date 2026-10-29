@@ -80,6 +80,11 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - One user, short question: 1.1 s per reply (p95 1.45 s).
 - Four users at once: all succeed, 13 s median (p95 14 s); a batch ends with its longest reply.
 - My testing so far: about 25 GPU minutes over three deploys, roughly 80 cents, plus cents of CPU.
+- Lost requests: about 1 in 40-100 got no reply. On 2026-10-29 one of 7 load-test requests reached the
+  server (logged on arrival) and was never answered, while the others were. The client gave up about
+  4 minutes later. The server now logs `recv #n` and `sent <code> #n <s>` for each POST. A request body
+  that stops arriving gets a 408 and an `http error` line instead of a silent close. The page retries a
+  dropped connection once and says so when a stream ends early. So the next loss shows where it stopped.
 
 ## What the demo can and cannot claim
 

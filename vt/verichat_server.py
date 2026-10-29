@@ -24,6 +24,7 @@ at once, 20 ms window); connections beyond the limit get 503.
 import argparse
 import collections
 import hmac
+import itertools
 import json
 import os
 import queue
@@ -114,18 +115,22 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
  const b=document.getElementById('send');b.disabled=true;document.getElementById('busy').textContent='thinking…';
  const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div><div class="meta"></div>';log.appendChild(card);
  const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
- try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked})});
-  if(!res.ok){const r=await res.json();card.innerHTML=esc('Error: '+(r.error||res.status))}
+ let ok=false;
+ try{const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked});
+  let res=null;for(let t=0;!res;t++){try{res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body})}
+   catch(e){if(t)throw e;await new Promise(z=>setTimeout(z,1500))}}  // a dropped connection is retried once
+  if(!res.ok){const r=await res.json().catch(()=>({}));card.innerHTML=esc('Error: '+(r.error||res.status))}
   else{const rd=res.body.getReader(),dec=new TextDecoder();let buf='',r=null;
    while(true){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
     let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
      if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
      if(m.reasoning){reasoned+=m.reasoning;rlive.textContent='Thinking: '+reasoned.slice(-300);card.scrollIntoView()}
      if(m.delta){rlive.textContent='';shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
-     if(m.done){if(m.error){card.innerHTML=esc('Error: '+m.error)}else{r=m.reply}}}}
-   if(r){msgs.push({role:'assistant',content:r.text});card.innerHTML=render(r)}}}
- catch(e){card.innerHTML=esc('Error: '+e)}b.disabled=false;document.getElementById('busy').textContent=''};
+     if(m.done){if(m.error){card.innerHTML='<div class="err">'+esc('Error: '+m.error)+'</div>'}else{r=m.reply}}}}
+   if(r){msgs.push({role:'assistant',content:r.text});card.innerHTML=render(r);ok=true}
+   else if(!card.querySelector('.err'))card.insertAdjacentHTML('beforeend','<div class="meta err">The connection dropped before the reply finished. Please send it again.</div>')}}
+ catch(e){card.innerHTML=esc('Error: '+e)}
+ if(!ok)msgs.pop();b.disabled=false;document.getElementById('busy').textContent=''};
 </script></body></html>"""
 
 
@@ -312,11 +317,16 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
     metrics = Metrics()
     batcher = Batcher(handlers, max_batch=max_batch, metrics=metrics)
     limiter = RateLimiter(rate_per_minute)
+    arrivals = itertools.count(1)
 
     class Handler(HardenedHandler):
         timeout_s, deadline_s = 15.0, deadline
+        log_errors = log_requests
 
         def on_response(self, code):
+            if log_requests and self.command == "POST":           # pairs with "recv": a recv with no sent line
+                print(f"sent {self.path} {code} #{getattr(self, '_rid', '?')} "  # is stuck in the model or the write
+                      f"{time.perf_counter() - self._t0:.1f}s", flush=True)
             metrics.request(self.path if self.path in ("/", "/health", "/metrics", "/chat", "/judge") else "other",
                             code, time.perf_counter() - self._t0 if code == 200 and hasattr(self, "_t0") else None)
 
@@ -351,7 +361,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
         def do_POST(self):
             self._t0 = time.perf_counter()
             if log_requests:                                     # arrival, so lost requests can be told apart
-                print(f"recv {self.path} {threading.get_ident() % 100000}", flush=True)
+                self._rid = next(arrivals)
+                print(f"recv {self.path} #{self._rid}", flush=True)
             if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
                 return self.send_json(404, {"error": "not found"})
             if api_key and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {api_key}"):

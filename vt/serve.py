@@ -128,6 +128,7 @@ class HardenedHandler(BaseHTTPRequestHandler):
     timeout_s = 10.0
     deadline_s = 30.0
     write_timeout_s = 120.0     # once a response starts: a slow reader (e.g. a busy proxy) must not truncate it
+    log_errors = False          # print the server's own errors (a request line or body that timed out, ...)
 
     def setup(self):
         super().setup()
@@ -183,6 +184,14 @@ class HardenedHandler(BaseHTTPRequestHandler):
             return None, (413, f"body must be at most {max_body} bytes")
         try:
             body = self.rfile.read(n)
+        except OSError:                                  # the body stopped arriving: say so, not a silent close
+            self.close_connection = True
+            self.log_error("timed out reading a %d-byte body", n)
+            return None, (408, "timed out reading the request body")
+        if len(body) < n:
+            self.close_connection = True
+            return None, (400, "request body shorter than its Content-Length")
+        try:
             if not json_depth_ok(body):
                 raise ValueError("JSON nested too deeply")
             req = json.loads(body.decode("utf-8"))
@@ -194,6 +203,10 @@ class HardenedHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # quiet
         pass
+
+    def log_error(self, format, *args):
+        if self.log_errors:
+            print(f"http error {self.client_address[0]}: " + format % args, flush=True)
 
 
 def bounded_server(host, port, handler, max_concurrency):

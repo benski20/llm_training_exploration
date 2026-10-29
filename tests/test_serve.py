@@ -226,3 +226,29 @@ def test_deep_json_is_400_not_dropped(server):
     r = _raw(srv.server_port, b"POST /predict HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n"
              % len(body) + body)
     assert b" 400 " in r
+
+
+def test_stalled_body_gets_408_not_a_silent_close():
+    import socket
+    from vt.serve import HardenedHandler, bounded_server
+
+    class H(HardenedHandler):
+        timeout_s = 0.5
+
+        def do_POST(self):
+            req, err = self.read_json_object(1000)
+            self.send_json(*(err if err else (200, req)))
+
+    srv = bounded_server("127.0.0.1", 0, H, 4)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        s = socket.create_connection(("127.0.0.1", srv.server_port), timeout=5)
+        s.sendall(b"POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n{\"a\": 1")    # 93 bytes never come
+        assert s.recv(200).split(b" ")[1] == b"408"
+        s.close()
+        s = socket.create_connection(("127.0.0.1", srv.server_port), timeout=5)
+        s.sendall(b"POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 8\r\n\r\n{\"a\": 1}")
+        assert s.recv(200).split(b" ")[1] == b"200"
+        s.close()
+    finally:
+        srv.shutdown()
