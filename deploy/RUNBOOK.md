@@ -112,6 +112,19 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - Fix: the demo now serves in-process as an ASGI app (`vt/asgi.py`, `VERICHAT_ASGI=1`). Modal calls the
   same handler directly, with no socket in between. Locally behind uvicorn, the stress test lost 0 of 640
   (`results/server_stress_asgi.json`).
+- First in-process deploy (run 40923362259):
+  - The smoke test passed. 9 of 10 load-test requests were answered (1 client about 3 s, 4 clients 3-20 s).
+  - One request never reached the container: no `recv` line.
+  - The container scaled down 2 minutes after the last reply while that client was still waiting. Modal
+    had not counted the request as pending work, so it was lost in Modal's routing, before our code.
+- So far both loss modes sit in Modal's layer:
+  - web_server: its proxy failed reading a finished reply.
+  - asgi_app: it never delivered the request.
+- Our server answered every request that reached it: all logged live requests, and 640 + 640 in the
+  local stress tests.
+- The page copes with a lost request: no bytes or heartbeat for 45 s, then it aborts and retries once
+  (`experiments/page_check`). API clients should stream, or set a timeout and retry.
+- `VERICHAT_ASGI=0` restores the web_server route.
 
 ## Lookups (Wikipedia)
 
