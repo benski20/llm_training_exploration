@@ -41,12 +41,13 @@ class Judge:
     """A chat model as the verifier: given the evidence, the question and a claim, P("Yes") against P("No")
     for "does the evidence support the claim?" (one forward pass, no generation)."""
 
-    def __init__(self, name):
+    def __init__(self, name, dtype="float32"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         torch.set_num_threads(os.cpu_count() or 4)
         self.torch, self.tok = torch, AutoTokenizer.from_pretrained(name)
-        self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.bfloat16).eval()
+        # float32 on CPU: bfloat16 matmuls are many times slower on CPUs without native support
+        self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=getattr(torch, dtype)).eval()
         self.yes = [self.tok.encode(w, add_special_tokens=False)[0] for w in ("Yes", " Yes")]
         self.no = [self.tok.encode(w, add_special_tokens=False)[0] for w in ("No", " No")]
 
