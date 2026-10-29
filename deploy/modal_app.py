@@ -39,6 +39,12 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("torch==2.5.1", "transformers==4.51.3", "accelerate==1.1.1", "bitsandbytes==0.45.0",
                  "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece")
+    # Modal re-imports this file inside the container: bake the deploy-time settings into its environment
+    # so the server there sees the same values (otherwise every VERICHAT_* silently reverts to its default)
+    .env({k: v for k, v in {"VERICHAT_MODEL": MODEL, "VERICHAT_HEAD": HEAD, "VERICHAT_GPU": GPU,
+                             "VERICHAT_SCALEDOWN": str(SCALEDOWN), "VERICHAT_RISK_THRESHOLD": RISK_THRESHOLD,
+                             "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
+                             "VERICHAT_REVISION": REVISION}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")

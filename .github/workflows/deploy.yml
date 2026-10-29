@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop]
+        options: [deploy, stop, logs]
         default: deploy
       modal_token_id:
         description: one-off Modal token id (rotate it afterwards); empty uses the repository secret
@@ -55,6 +55,9 @@ jobs:
       - name: stop
         if: steps.req.outputs.action == 'stop'
         run: modal app stop verichat
+      - name: recent server logs (no GPU started)
+        if: steps.req.outputs.action == 'logs'
+        run: modal app logs verichat --since 3h --tail 1000
       - name: fill the model cache on a CPU container (no GPU billed)
         if: steps.req.outputs.action == 'deploy'
         run: modal run deploy/modal_app.py::download
