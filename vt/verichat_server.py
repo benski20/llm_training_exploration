@@ -363,7 +363,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                                             "risk_threshold": bot.gen.risk_threshold if bot.gen.risk_probe is not None else None,
                                             "detector": detector is not None, "thinking": bot.gen.thinking,
                                             "thinking_available": bot.gen.think_open is not None,
-                                            "retrieval": type(bot.retriever).__name__ if bot.retriever is not None else None})
+                                            "retrieval": type(bot.retriever).__name__ if bot.retriever is not None else None,
+                                            "retrieval_errors": dict(getattr(bot.retriever, "errors", None) or {})})
             self.send_json(404, {"error": "not found"})
 
         def do_POST(self):

@@ -43,7 +43,8 @@ def main():
             row[name] = {"found": is_right(" ".join(ps), al), "n": len(ps), "words": sum(len(p.split()) for p in ps),
                          "seconds": round(time.time() - t, 2), "titles": [p.split(" (Wikipedia)")[0] for p in ps]}
         rows.append(row)
-        print(json.dumps({"i": i, **{s: row[s]["found"] for s in systems}}), flush=True)
+        print(json.dumps({"i": i, **{s: row[s]["found"] for s in systems},
+                          "errors": {s: dict(w.errors) for s, w in systems.items()}}), flush=True)
         time.sleep(a.pause)
     res = {"n": len(rows), "k": a.k}
     for s in systems:
@@ -51,6 +52,7 @@ def main():
         res[s] = {"recall": round(sum(x["found"] for x in r) / len(r), 3), "no_passages": failed[s],
                   "words_mean": round(sum(x["words"] for x in r) / len(r), 1),
                   "seconds_median": sorted(x["seconds"] for x in r)[len(r) // 2]}
+    res["errors"] = {s: dict(w.errors) for s, w in systems.items()}
     res["only_full_text_found"] = sum(r["full_text"]["found"] and not r["lead"]["found"] for r in rows)
     res["only_lead_found"] = sum(r["lead"]["found"] and not r["full_text"]["found"] for r in rows)
     res["rows"] = rows

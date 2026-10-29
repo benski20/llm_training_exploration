@@ -1,0 +1,3646 @@
+{
+ "summary": {
+  "n": 200,
+  "k": 3,
+  "lead": {
+   "recall": 0.01,
+   "no_passages": 196,
+   "words_mean": 4.9,
+   "seconds_median": 0.12
+  },
+  "full_text": {
+   "recall": 0.005,
+   "no_passages": 198,
+   "words_mean": 3.0,
+   "seconds_median": 0.12
+  },
+  "only_full_text_found": 0,
+  "only_lead_found": 1
+ },
+ "rows": [
+  {
+   "i": 0,
+   "q": "Who was part man, part machine, all cop and hailed from a futuristic Detroit?",
+   "lead": {
+    "found": true,
+    "n": 3,
+    "words": 227,
+    "seconds": 0.94,
+    "titles": [
+     "RoboCop",
+     "George Michael",
+     "List of stock characters"
+    ]
+   },
+   "full_text": {
+    "found": true,
+    "n": 3,
+    "words": 307,
+    "seconds": 1.25,
+    "titles": [
+     "RoboCop",
+     "RoboCop",
+     "George Michael"
+    ]
+   }
+  },
+  {
+   "i": 1,
+   "q": "What is the French name for the English channel?",
+   "lead": {
+    "found": true,
+    "n": 3,
+    "words": 188,
+    "seconds": 1.29,
+    "titles": [
+     "English Channel",
+     "English Channel illegal migrant crossings (2018\u2013present)",
+     "Channel Tunnel"
+    ]
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 2,
+   "q": "Which winter sport was contested as an Olympic sport only once, at the 1908 Summer Olympics?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 3,
+   "q": "What was the first airship to cross the Atlantic, in 1919?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 4,
+   "q": "What year did the cable television network ESPN made its debut broadcasting and producing sports-related programming 24 hours a day?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 5,
+   "q": "What is zoophobia a fear of?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 6,
+   "q": "This 1993 film won Oscars, Bafta and Golden Globe Awards despite its sometimes harrowing portrayal of hardships and stress, including the butchering of its heroine's hand; which film was it?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 7,
+   "q": "\"Which 19th century English writer wrote \"\"Swallows and Amazons\"\", \"\"Peter Duck\"\" and \"\"Secret Water\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 8,
+   "q": "Who played the role of George Carter in The Sweeney?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 9,
+   "q": "Who was the Muse of Comedy?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 10,
+   "q": "Who was the 11th and 12th century ruler of Georgia, celebrated by Georgians as their most successful, leading them out from Turkish domination, reuniting the country, and subsequently being canonised by the Georgian Orthodox Church?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 11,
+   "q": "What is both a golf term and slang for an enemy plane?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.13,
+    "titles": []
+   }
+  },
+  {
+   "i": 12,
+   "q": "By what nickname was English serial killer and armed robber Donald Neilson known?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 13,
+   "q": "Weighing-in at up 48 stone, who wrestled under the ring-name Giant Haystacks?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 14,
+   "q": "In the books by A A Milne, what was Eeyore?",
+   "lead": {
+    "found": false,
+    "n": 3,
+    "words": 305,
+    "seconds": 0.92,
+    "titles": [
+     "A. A. Milne",
+     "Owl (Winnie-the-Pooh)",
+     "Winnie-the-Pooh (book)"
+    ]
+   },
+   "full_text": {
+    "found": false,
+    "n": 3,
+    "words": 299,
+    "seconds": 1.16,
+    "titles": [
+     "A. A. Milne",
+     "A. A. Milne",
+     "A. A. Milne"
+    ]
+   }
+  },
+  {
+   "i": 15,
+   "q": "Protons and Neutrons are both examples of which class of sub-atomic particle that takes its name from the Greek for 'heavy'?",
+   "lead": {
+    "found": false,
+    "n": 3,
+    "words": 269,
+    "seconds": 1.89,
+    "titles": [
+     "Neutrino",
+     "Meson",
+     "Glossary of physics"
+    ]
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 16,
+   "q": "Bring on the Empty Horses was the sequel to which other David Niven Autobiography/Memoir ?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 17,
+   "q": "In 2004, Chechen terrorists took schoolchildren hostage resulting in a shoot-out in which hundreds died, in which city was it?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 18,
+   "q": "At which British golf course could you find yourself in Hell Bunker",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 19,
+   "q": "When were the first Winter Paralympics held?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 20,
+   "q": "Which Shakespeare play is set in the Forest of Arden?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 21,
+   "q": "Suya, Puff Puff, and Moin Moin (or Moyi-Moyi) are well-known Nigerian?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 22,
+   "q": "If someone has a BA, they are a Bachelor of what?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 23,
+   "q": "In which film series would you expect to film Katniss Everdeen and Peeta Malark?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 24,
+   "q": "What is the literal translation of the name Las Vegas?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 25,
+   "q": "What is the name of the official British coronation crown?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 26,
+   "q": "The line 'The mirror crack'd from side to side' comes from which poem?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.13,
+    "titles": []
+   }
+  },
+  {
+   "i": 27,
+   "q": "In which year did Alcock and Brown make the first flight across the Atlantic?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 28,
+   "q": "Bullfighting is central to which Ernest Hemingway non-fiction book?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 29,
+   "q": "What word is applied to someone who is equally capable with both hands?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 30,
+   "q": "In which TV establishment were Miss Gatsby and Miss Tibbs residents ?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 31,
+   "q": "What instrument was played by jazz musician Bix Beiderbeck?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 32,
+   "q": "Which TV presenter, who died in February 2013, was for over 20 years the host of 'Mr & Mrs'?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 33,
+   "q": "Michelangelo Merisi (or Amerighi) is the birth name of which artist?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 34,
+   "q": "What type of sausage is usually sold in a flat circular coil?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 35,
+   "q": "What is the name of the giraffe that Toys-r-us uses as its' mascot?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 36,
+   "q": "Which Italian demonstrated the first modern electric battery?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 37,
+   "q": "Which medical condition is sometimes known as Daltonism?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 38,
+   "q": "Who played Hotlips Houlihan in the 1972 film MASH?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 39,
+   "q": "Luzon is an island of which country?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 40,
+   "q": "Areas on the Canadian eastern coast share their name with two breeds of dog, Newfoundland and which other?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 41,
+   "q": "The Alfred Hitchcock films Rebecca and The Birds were based on novels by which author?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 42,
+   "q": "What company purchased Skype in 2011?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 43,
+   "q": "Norovirus causes illness in humans described by what body part?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 44,
+   "q": "What is the name of the village druid in the comic strip \u2018Asterix\u2019?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 45,
+   "q": "What alcoholic drink whose name means 'little water' was first distilled from grain in the 8-9th centuries in NE Europe?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 46,
+   "q": "Who is currently the Supreme Governor of the Church of England?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 47,
+   "q": "Which river runs through Hamburg?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 48,
+   "q": "The 1982 Time Magazine Man of the Year was awarded to which device?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 49,
+   "q": "Who was the lyre-playing muse of tragedy in Greek mythology?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 50,
+   "q": "\"Who wrote the TV series \"\"Pennies From Heaven\"\", and \"\"The Singing Detective\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 51,
+   "q": "Which 1988 children\u2019s novel by Roald Dahl features a hostile school headmistress named Miss Trunchbull ?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 52,
+   "q": "Which Russian composer wrote the ballets 'The Stone Flower' and 'Romeo and Juliet'?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 53,
+   "q": "Elliot Carver is the villain in which James Bond film?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 54,
+   "q": "In 2006, who became the UK's first woman Secretary of State for Foreign and Commonwealth Affairs?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 55,
+   "q": "In 1919, which Dadaist created L.H.O.O.Q., a parody of the Mona Lisa, in which a moustache and goatee beard were added to a reproduction of the painting?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 56,
+   "q": "Soul Patch, Reed, Lincoln and Monkey Tail are all types of what?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 57,
+   "q": "For which 1960 film did Billy Wilder become the first person to win three Oscars for the same film?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 58,
+   "q": "In 1746, Scottish naval surgeon James Lind pioneered the treatment of which disease?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 59,
+   "q": "What is the lowest level of the Earth's atmosphere?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 60,
+   "q": "How is the number ten written in Roman numerals?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 61,
+   "q": "The borders of which European country, that were set under the reign of Afonso III (1248 to 1279), are the same today?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 62,
+   "q": "The name of which Spanish city is in the full title of Costa del Sol Airport?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 63,
+   "q": "Which character has been played by Jack Lord, Cec Linder, Rik Van Nutter, Norman Burton, David Hedison, John Terry, David Hedison and Jeffrey Wright?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 64,
+   "q": "The United Nations Organisation UNHRC looks at what specific issue?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 65,
+   "q": "Toot, Percy, Charlie, ching and chang all refer informally to what?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 66,
+   "q": "Which legendary dancer was Oscar-nominated for The Towering Inferno?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 67,
+   "q": "Nine of the ten tallest buildings in Germany are in which city?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 68,
+   "q": "In what Virginia town is the Central Intelligence Agency located?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 69,
+   "q": "Who is the most famous character created by Sir Arthur Conan Doyle?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 70,
+   "q": "In which activity were hickory and persimmon replaced by graphite and titanium?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 71,
+   "q": "Which bird, in relation to its size, has the thickest skull?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 72,
+   "q": "Supposedly a hangover cure, which drink consists of a raw egg, Worcestershire sauce and typically a hot sauce with condiments?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 73,
+   "q": "The Cuatro Torres Business Area is in which European city?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 74,
+   "q": "The word husband is derived from the ancient Old Norse meanings of 'house' and what activity?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 75,
+   "q": "Which creature is mythically said to sing before it dies, hence an expression for a grand final performance before retirement?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 76,
+   "q": "If you travelled down the Missouri River from Bismarck, North Dakota, which city would you be in when you reached the ocean?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 77,
+   "q": "What is 'The Old Lady of Threadneedle Street'?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 78,
+   "q": "What was the profession of Paul Strand (1890 - 1976)?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 79,
+   "q": "\"What name is given to the maxim \"\"employees tend to rise to their level of incompetence.\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 80,
+   "q": "\"Which game has been played in England since Tudor Times, with the earliest reference being in 1744 in \"\"A Little Pretty Pocketbook\"\" where it is called Baseball?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 81,
+   "q": "Name the Danny Boyle biopic about a climber trapped by a boulder for more than five days?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 82,
+   "q": "Who was the first cricketer to score 10,000 test runs?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 83,
+   "q": "The city of Baghdad lies on which river?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 84,
+   "q": "\"Which actor, best known for his role in \"\"The Godfather\"\" series of films, shares his name with a member of TV's \"\"Dragon's Den\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 85,
+   "q": "Arkansas Black is a variety of which fruit?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 86,
+   "q": "Canberra is the capital of which country?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 87,
+   "q": "The 'Subway Army' are/were a gang of football hooligans who supported which Midlands club?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 88,
+   "q": "What is the world's third largest desert?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 89,
+   "q": "What style of American Football founded in 2003 is a full-contact 7 a side game where uniforms consist of helmets, shoulder pads, elbow pads, knee pads, bras, and panties?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 90,
+   "q": "Which opera star was born Claire Mary Teresa Rawstron in 1944?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 91,
+   "q": "Which actor took Russian citizenship in January 2013 amid a row over taxes in his native country?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 92,
+   "q": "Which 2008 musical film is set on the fictional Greek island of Kalokairi?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 93,
+   "q": "\"Which opera features the \"\"Humming Chorus\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 94,
+   "q": "Phil Collins was a drummer and singer in what band?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 95,
+   "q": "Who is the presenter of the TV series The School of Hard Sums?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 96,
+   "q": "Which English town/city did the Romans call Dubris?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 97,
+   "q": "In which year was the Royal British Legion founded?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 98,
+   "q": "The Livadia Palace near which Crimean city was the site of a 1945 Peace Conference?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 99,
+   "q": "What alphabetically is the first station on the London underground",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 100,
+   "q": "Colin Firth starred in the film of the famous book, Girl with a Pearl.. (what?)?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 101,
+   "q": "In 'Harry Potter and the Philosopher's Stone' what is the name of the three-headed dog provided by 'Hagrid' to guard the trapdoor leading to the chamber where the stone was kept?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 102,
+   "q": "Which Greek philosopher was said to have lived inside a barrel?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 103,
+   "q": "\"What is the last name of \"\"Oprah\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 104,
+   "q": "Shirley Temple served as US Ambassador to which African country from 1974 \u2013 1976?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 105,
+   "q": "What is the commercial capital of India?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 106,
+   "q": "Who did 'Eastenders' character 'Dot Cotton' marry in 2001?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 107,
+   "q": "How many pounds are in a UK (long) ton?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 108,
+   "q": "What name is given to the song of a Venetian Gondolier?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 109,
+   "q": "Prior to the introduction of the Euro, which coin was equal to one-hundredth of a German Mark?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 110,
+   "q": "Which Sheffield United player scored the first ever goal in English Premiership football?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 111,
+   "q": "In which disaster film do the heroes take off to the song Leaving on a Jet Plane?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 112,
+   "q": "What is the name of 'Jim Hacker's' department in the TV comedy, 'Yes Minister'?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 113,
+   "q": "Which act won the Eurovision Song Contest for the United Kingdom singing Love Shine A Light?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 114,
+   "q": "If a square sheet of paper is folded diagonally in half, the resulting two sharp corners are each how many degrees?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 115,
+   "q": "Three what feature on the insignia or badge of the abortive Apollo 13 lunar misson?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 116,
+   "q": "What does lager literally mean in German?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 117,
+   "q": "Which English football league club play their home games at Gigg Lane?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 118,
+   "q": "On TV who played the private eye Jim Rockford?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 119,
+   "q": "In Greek mythology, how many heads does Cerberus, the dog who guards the entrance to Hades, usually have?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 1.03,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 120,
+   "q": "A nectarine is a shiny-skinned variety of what?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.52,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.44,
+    "titles": []
+   }
+  },
+  {
+   "i": 121,
+   "q": "What is the minimum number of points needed to win a tiebreak in tennis, such as in the Hopman Cup for mixed doubles, on the ATP and WTA tours for doubles and sometmes in USTA league play?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.6,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.52,
+    "titles": []
+   }
+  },
+  {
+   "i": 122,
+   "q": "In the George Orwell novel \u2018Animal Farm\u2019 who is the owner of Foxwood Farm?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.6,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.96,
+    "titles": []
+   }
+  },
+  {
+   "i": 123,
+   "q": "In which city are Argentine, Bel-Air, Bolivar, Liege, Rome and Stalingrad all found within a few miles of each other?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.38,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 124,
+   "q": "What was the name of Gary Puckett's backing group?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 125,
+   "q": "What local rich boy is responsible for founding the Science Fiction Museum and Hall of fame?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 126,
+   "q": "Which music act took its name from a Bernard Cribbins hit record?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 127,
+   "q": "Which English king stole The Stone of Scone from Scone Palace?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 128,
+   "q": "Anne of Bohemia was the wife of which English king?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 129,
+   "q": "Which American gang of outlaws from the old west had the christian names Robert, Grattan and Emett",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 130,
+   "q": "Alex Turner is the lead vocalist of which rock band?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 131,
+   "q": "The Rio Grande forms the border of Texas with what other area?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 132,
+   "q": "What product invented by Frederick Walton in 1864 became so widely used and 'stepped on' that the name became generic just 14 years after its invention?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.14,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 133,
+   "q": "What was the name of Catherine Zeta Jones character in The Darling Buds of May",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 134,
+   "q": "Which British island was known to the Romans as Vectis?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 135,
+   "q": "In Greek mythology who was the god of the north winds?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 136,
+   "q": "In what year was the first Tarzan novel published?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 137,
+   "q": "What type of fish is used in the production of Worcestershire sauce?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 138,
+   "q": "Composer Giacomo Puccini died leaving which opera unfinished?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 139,
+   "q": "\"Which car company, in 1986, comissioned \"\"Cars\"\", a series of artworks to track the evolution of its designs, from Andy Warhol?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.13,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 140,
+   "q": "Which country's coalition government, led by Jan-Peter Balkenende, collapsed in 2010 when disagreeing about extending military action in Afghanistan?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 141,
+   "q": "\"What sport is featured in \"\"Invictus\"\", a 2009 film directed by Clint Eastwood?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 142,
+   "q": "What nationality was Che Guevara",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 143,
+   "q": "Which old English coin was equal to four pence?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 144,
+   "q": "If a cricket match is curtailed because of inclement weather, what system is used to determine a result?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 145,
+   "q": "What company made headlines last week by claiming to own a trademark on the word \"footlong\"?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 146,
+   "q": "What maritime exclamation did Alexander Graham Bell suggest be the standard telephone answering greeting before Edison's 'Hello'?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 147,
+   "q": "On which river does Newport (Gwent) stand?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 148,
+   "q": "Which Scottish physician and novelist created Dr Finlay?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 149,
+   "q": "\"In the TV series \"\"Thunderbirds\"\", Parker was chauffeur to whom?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 150,
+   "q": "\"What event was the song \"\"Waka Waka\"\" written for?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 151,
+   "q": "The 'Angel of Christian Charity' in London is more commonly known by what name?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 152,
+   "q": "Zirconium, hafnium and rutherfordium are elements in the same group in the periodic table of elements, and transition metals; what is the fourth member of this group?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 153,
+   "q": "In Norse mythology, what kind of creatures were 'Hugin' and 'Munin' who sat on Odin's shoulder?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 154,
+   "q": "Sergio Leone, Otto Preminger, Fritz Lang and Fred Zinnemann are famous 20thC?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 155,
+   "q": "How many of his 45 races did Mike Hawthorn, a former Formula One motor racing world champion, win?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 156,
+   "q": "\"Tom and Ben Cooper play international cricket for which \"\"non-test playing\"\" country?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 157,
+   "q": "What is the most common surname in Korea?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 158,
+   "q": "What was Warren Beatty's first movie?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 159,
+   "q": "Used as an alloy in making high-speed cutting tools, mo is the symbol for what silver-white metallic element?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 160,
+   "q": "'Signal Failures' written by Dr. B. Ching is the title of a column that has appeared in which magazine?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 161,
+   "q": "\"Who composed the \"\"Christmas Oratorio\"\" and \"\"The Coffee Cantata\"\"?\"",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 162,
+   "q": "Who published a 1754 book of his designs entitled \u2018The Gentleman and Cabinet-Maker\u2019s Director\u2019?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 163,
+   "q": "Bullfighting is central to which Ernest Hemingway non-fiction book?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 164,
+   "q": "After he left Barcelona, football manager Pep Guardiola went on to manage which European club in 2013?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 165,
+   "q": "What is the art of clipping bushes into shapes known as",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 166,
+   "q": "In which German city is the newspaper 'Suddeutsche Zeitung' published?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 167,
+   "q": "What type of tree was Newton supposedly sitting under when he formulated his theory of gravity?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.13,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 168,
+   "q": "Tahini paste is made by grinding which seeds?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 169,
+   "q": "What electrical property, the reciprocal of resistivity, has the SI units Siemens per metre?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 170,
+   "q": "Which 20th century British prime minister had the longest surname ?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 171,
+   "q": "Prior to Viginia Wade in 1977 who was the last British player to win a tennis Grand Slam title?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 172,
+   "q": "The rings of which planet were first detected in 1980 but only identified in 1989 by the Voyager 2 spacecraft? .",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 173,
+   "q": "What is the official language of Barbados?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 174,
+   "q": "In the Bible, where was Jesus betrayed by Judas, and subsequently arrested?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 175,
+   "q": "Who won the 2007 Nobel Peace Prize for his environmental work including the controversial film An Inconvenient Truth?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 176,
+   "q": "Which British comic included Desperate Dan and Korky the Cat?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 177,
+   "q": "Three Liverpool players were in the 1966 England World Cup winning squad. Roger Hunt and Ian Callaghan were two \u2013 who was the third?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 178,
+   "q": "Which handheld electronic toy had to be treated as a pet?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.14,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 179,
+   "q": "The Hotel Matignon is the official residence of the Prime Minister of which European country?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 180,
+   "q": "Which Michael Frayn play features a \u2018play within a play\u2019 entitled Nothing On?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 181,
+   "q": "The term gustatory refers to which of the 5 senses?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 182,
+   "q": "In which contact sport do two rikishi compete inside a dohyo ?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 183,
+   "q": "Which British TV series starring John Simm as DCI Sam Tyler and Philip Glenister as DCI Gene Hunt was remade in the USA starring Jason O'Mara and Harvey Keitel?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 184,
+   "q": "What was the first name of the jazz trombonist Kid Ory?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 185,
+   "q": "At the time the Spice Girls became famous, what was Scary Spice\u2019s surname?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.13,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 186,
+   "q": "Who was the German mathematician who developed differential calculus independently of Newton in 1675?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 187,
+   "q": "According to the rules of golf, what is the maximum number of golf clubs that a player is permitted to carry in his bag?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 188,
+   "q": "Who was Margaret Thatcher's first Chancellor of the Exchequer?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 189,
+   "q": "Hong Kong is one of two 'special administrative regions' of China; what is the other?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 190,
+   "q": "What is the capital of the Navarre region of northern Spain",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 191,
+   "q": "Who was the son of Edward III and father of Henry IV?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 192,
+   "q": "Which city is sited on the Absheron Peninsula which juts into the Caspian Sea?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 193,
+   "q": "In fashion Straight Cut, Boot Cut and Skinny are all types of what?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 194,
+   "q": "To whom did human-rights lawyer Amal Alamuddin become engaged in April 2014?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 195,
+   "q": "Who was King of England in 1350?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 196,
+   "q": "What Roman wall lies near the boundary of Scotland and England?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 197,
+   "q": "What Latin phrase, which translates to English as \"for this\", is taken to mean something designed for a specific problem or task?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.11,
+    "titles": []
+   }
+  },
+  {
+   "i": 198,
+   "q": "In which town did the Co-operative Movement begin?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  },
+  {
+   "i": 199,
+   "q": "Where was the American venue of the Live Aid concert?",
+   "lead": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   },
+   "full_text": {
+    "found": false,
+    "n": 0,
+    "words": 0,
+    "seconds": 0.12,
+    "titles": []
+   }
+  }
+ ]
+}
