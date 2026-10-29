@@ -66,7 +66,7 @@ def download():
     print("cache ready", flush=True)
 
 
-@app.function(gpu=GPU, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
+@app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
               scaledown_window=SCALEDOWN, max_containers=1)
 @modal.concurrent(max_inputs=32)                          # the server batches concurrent requests itself
 @modal.web_server(PORT, startup_timeout=1200)

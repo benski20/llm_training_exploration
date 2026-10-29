@@ -127,6 +127,7 @@ class HardenedHandler(BaseHTTPRequestHandler):
     sys_version = ""
     timeout_s = 10.0
     deadline_s = 30.0
+    write_timeout_s = 120.0     # once a response starts: a slow reader (e.g. a busy proxy) must not truncate it
 
     def setup(self):
         super().setup()
@@ -151,6 +152,12 @@ class HardenedHandler(BaseHTTPRequestHandler):
 
     def on_response(self, code):
         pass
+
+    def send_response(self, code, message=None):
+        """Responses get a longer socket timeout than requests: the short one cuts off clients trickling a
+        request in, but a reader slow to drain the reply would otherwise leave it half-written."""
+        self.request.settimeout(self.write_timeout_s)
+        super().send_response(code, message)
 
     def send_json(self, code, obj):
         body = json.dumps(obj).encode()
