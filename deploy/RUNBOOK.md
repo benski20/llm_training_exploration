@@ -126,6 +126,14 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - The page copes with a lost request: no bytes or heartbeat for 45 s, then it aborts and retries once
   (`experiments/page_check`). API clients should stream, or set a timeout and retry.
 - `VERICHAT_ASGI=0` restores the web_server route.
+- Deploy with the paced lookups and the overall verdict (2026-10-29):
+  - First attempt (run 40969988659): chat and stream passed, then the long-chat check failed 0.3 s after
+    sending. The server log has no `recv` line for it: Modal's edge rejected it before it reached the
+    app.
+  - The smoke test now prints status codes and retries a gateway-type failure once, counting it.
+  - Second attempt (run 40970971211): every check passed with no retries, including thinking mode,
+    moderation, /judge, the page and /metrics.
+  - Load test: 10 of 10 (1 client 4.3 s, 4 clients 19.7 s median, p95 23.5 s).
 
 ## Lookups (Wikipedia)
 
