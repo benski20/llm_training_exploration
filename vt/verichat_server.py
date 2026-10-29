@@ -241,19 +241,31 @@ class Batcher:
             kind, batch = self._take()
             if self.metrics:
                 self.metrics.batch(kind, len(batch))
-            try:
-                results = self.handlers[kind]([item for _, item, _ in batch])
-                for (_, _, slot), r in zip(batch, results):
+
+            def ready(j, r, batch=batch):                        # a handler may hand results over early
+                slot = batch[j][2]
+                if not slot["done"].is_set():
                     slot["result"] = r
+                    slot["done"].set()
+            handler = self.handlers[kind]
+            try:
+                results = handler([item for _, item, _ in batch], ready) if getattr(handler, "early", False) \
+                    else handler([item for _, item, _ in batch])
+                for (_, _, slot), r in zip(batch, results):
+                    slot.setdefault("result", r)
             except Exception as e:                               # one bad request must not fail the others:
-                if len(batch) == 1:                              # retry them one by one (the worker lives on)
-                    batch[0][2]["error"] = e
-                else:
-                    for _, item, slot in batch:
-                        try:
-                            slot["result"] = self.handlers[kind]([item])[0]
-                        except Exception as e1:
-                            slot["error"] = e1
+                traceback.print_exc()                            # retry the unfinished ones one by one
+                for _, item, slot in batch:
+                    if slot["done"].is_set():
+                        continue
+                    if len(batch) == 1:
+                        slot["error"] = e
+                        continue
+                    try:
+                        slot["result"] = handler([item])[0]
+                    except Exception as e1:
+                        traceback.print_exc()
+                        slot["error"] = e1
             for _, _, slot in batch:
                 slot["done"].set()
 
@@ -285,13 +297,14 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16):
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
-    def chat(items):                                             # items may carry a "_stream" callback
+    def chat(items, ready=None):                                 # items may carry a "_stream" callback
         reqs = [{k: v for k, v in it.items() if k != "_stream"} for it in items]
         sinks = [it.get("_stream") for it in items]
         if not any(sinks):
-            return bot.reply_batch(reqs)
+            return bot.reply_batch(reqs, on_ready=ready)
         return bot.reply_batch(reqs, on_text=lambda i, d: sinks[i] and sinks[i]({"delta": d}),
-                               on_reasoning=lambda i, d: sinks[i] and sinks[i]({"reasoning": d}))
+                               on_reasoning=lambda i, d: sinks[i] and sinks[i]({"reasoning": d}), on_ready=ready)
+    chat.early = True                                            # replies go out as soon as each is final
     handlers = {"chat": chat}
     if detector is not None:
         handlers["judge"] = lambda items: detector.judge_batch(items)

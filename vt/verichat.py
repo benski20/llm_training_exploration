@@ -258,11 +258,12 @@ class VeriChat:
         return self.reply_batch([{"messages": messages, "documents": documents, "mode": mode,
                                   "max_new_tokens": max_new_tokens, "retrieve": retrieve, "thinking": thinking}])[0]
 
-    def reply_batch(self, requests, on_text=None, on_reasoning=None):
+    def reply_batch(self, requests, on_text=None, on_reasoning=None, on_ready=None):
         """Several conversations at once (one batched generation; provenance per reply). requests:
         [{"messages", "documents"?, "mode"?, "max_new_tokens"?, "retrieve"?, "thinking"?}] -> one reply()
         result each. thinking (None: the bot's default) lets a reasoning model think first; its reasoning
-        is returned apart from the reply and streamed to on_reasoning(i, delta)."""
+        is returned apart from the reply and streamed to on_reasoning(i, delta). on_ready(i, reply) gets each
+        reply as soon as it is final: replies that need no lookup do not wait for the batch's lookups."""
         reqs = [{"messages": r["messages"], "documents": self._fit_documents(r.get("documents") or []),
                  "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
@@ -286,24 +287,48 @@ class VeriChat:
                         return
                     on_text(i, d)
             reason = None if on_reasoning is None else (lambda j, d: on_reasoning(keep[j], d))
-            kept = self._reply_batch_unmoderated([reqs[i] for i in keep], screened, reason) if keep else []
             outs = [{"text": REFUSAL, "claims": [], "withheld": True, "reply_confidence": None, "threshold": self.threshold,
                      "mode": r["mode"], "moderation": {"input": f}} for r, f in zip(reqs, flags)]
+            if on_ready is not None:
+                for i, f in enumerate(flags):
+                    if f["flagged"]:
+                        on_ready(i, outs[i])
+            ready = None if on_ready is None else (lambda j, o: on_ready(keep[j], o))
+            kept = self._reply_batch_unmoderated([reqs[i] for i in keep], screened, reason, ready) if keep else []
             for i, o in zip(keep, kept):
                 outs[i] = o
             return outs
-        return self._reply_batch_unmoderated(reqs, on_text, on_reasoning)
+        return self._reply_batch_unmoderated(reqs, on_text, on_reasoning, on_ready)
 
-    def _reply_batch_unmoderated(self, reqs, on_text=None, on_reasoning=None):
+    def _finish(self, o):
+        """Screen a final reply (moderation) and return it."""
+        if self.moderator is not None:                               # withhold flagged replies
+            from vt.moderation import WITHHELD
+            f = self.moderator.check(o["text"])
+            o["moderation"] = {"output": f}
+            if f["flagged"]:
+                o.update(text=WITHHELD, claims=[], withheld=True)
+        return o
+
+    def _reply_batch_unmoderated(self, reqs, on_text=None, on_reasoning=None, on_ready=None):
         outs = self._reply_batch(reqs, on_text, on_reasoning)
-        again, where = [], []                                        # doubted closed-book replies: look them up
+
+        def send(i):
+            if on_ready is not None:
+                on_ready(i, outs[i])
+        doubted = []                                                 # closed-book replies the model doubts
         for i, (r, o) in enumerate(zip(reqs, outs)):
             score, claim = o.pop("_trigger"), o.pop("_claim", None)
-            if r["documents"] or not r["retrieve"] or self.retriever is None:
-                continue
-            o["retrieval"] = {"trigger_score": score, "retrieved": False}
-            if score is None or score >= self.retrieve_below:
-                continue
+            if not (r["documents"] or not r["retrieve"] or self.retriever is None):
+                o["retrieval"] = {"trigger_score": score, "retrieved": False}
+                if score is not None and score < self.retrieve_below:
+                    doubted.append((i, claim))
+                    continue
+            self._finish(o)                                          # final now: it does not wait for lookups
+            send(i)
+        again, where = [], []                                        # look the doubted ones up
+        for i, claim in doubted:
+            r = reqs[i]
             question = next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user")
             passages = []                                        # the question, then the question with the doubted
             for q in [question] + ([f"{question} {claim}"] if claim else []):   # claim (its page)
@@ -314,19 +339,16 @@ class VeriChat:
             if passages:
                 again.append(dict(r, documents=passages))
                 where.append(i)
+            else:                                                    # nothing found: the closed-book reply stands
+                self._finish(outs[i])
+                send(i)
         looked = self._reply_batch(again, provenance=self.provenance_on_lookup) if again else []
         for i, r, o in zip(where, again, looked):
             o.pop("_trigger"), o.pop("_claim", None)
             o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
                               "passages": r["documents"], "closed_book_text": outs[i]["text"]}
-            outs[i] = o
-        if self.moderator is not None:                               # and withhold flagged replies
-            from vt.moderation import WITHHELD
-            for o in outs:
-                f = self.moderator.check(o["text"])
-                o["moderation"] = {"output": f}
-                if f["flagged"]:
-                    o.update(text=WITHHELD, claims=[], withheld=True)
+            outs[i] = self._finish(o)
+            send(i)
         return outs
 
     def _reply_batch(self, reqs, on_text=None, on_reasoning=None, provenance=True):

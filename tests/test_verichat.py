@@ -441,3 +441,41 @@ def test_server_answers_500_cleanly_when_the_model_fails():
             assert e.code == 500 and "internal error" in json.loads(e.read())["error"]
     finally:
         srv.shutdown()
+
+
+def test_replies_without_lookup_are_ready_before_the_batch_lookups():
+    bot = _tiny_bot()
+    events = []
+    bot.retriever = lambda q: (events.append("lookup"), ["Some passage."])[1]
+    bot.retrieve_below = 1.01                                       # every retrieving request is looked up
+    reqs = [{"messages": [{"role": "user", "content": "Hi"}], "mode": "flag", "max_new_tokens": 6, "retrieve": False},
+            {"messages": [{"role": "user", "content": "Who wrote Hamlet?"}], "mode": "flag", "max_new_tokens": 6}]
+    outs = bot.reply_batch(reqs, on_ready=lambda i, o: events.append(("ready", i)))
+    assert events.index(("ready", 0)) < events.index("lookup") < events.index(("ready", 1))
+    assert len(outs) == 2 and outs[1]["retrieval"]["retrieved"]
+
+
+def test_batcher_releases_early_results():
+    import threading
+    import time as _t
+    from vt.verichat_server import Batcher
+
+    def handler(items, ready=None):
+        ready(0, "first")
+        _t.sleep(1.0)
+        return ["first", "second"]
+    handler.early = True
+    b = Batcher({"x": handler}, max_batch=8, window=0.2)
+    got = {}
+
+    def go(v):
+        t = _t.time()
+        got[v] = (b.submit("x", v, 5), _t.time() - t)
+    ts = [threading.Thread(target=go, args=(v,)) for v in ("a", "b")]
+    for t in ts:
+        t.start()
+        _t.sleep(0.01)
+    for t in ts:
+        t.join()
+    (r0, t0), (r1, t1) = got["a"], got["b"]
+    assert {r0, r1} == {"first", "second"} and min(t0, t1) < 0.8 < max(t0, t1)
