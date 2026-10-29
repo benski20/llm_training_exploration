@@ -1349,7 +1349,31 @@ Live Wikipedia lookups work from Modal's network (`modal run deploy/modal_app.py
 container). "Who designed the Eiffel Tower?" returns the lead sections of *Gustave Eiffel* and *Eiffel
 Tower*. "What is the capital of Burkina Faso?" returns *September 2022 Burkina Faso coup d'état* first,
 then *Burkina Faso*. Search ranking is Wikipedia's own: the right page is usually there, not always
-first. It has not been measured how often a doubted wrong answer is corrected by the lookup.
+first.
+
+**The lookup on the live demo, measured** (`experiments/correction_rate.py`; new TriviaQA questions, 4
+users at once; `results/correction_rate_32b*.json`). The first run found the lookup path broken:
+- 17 of 100 requests failed. Exact provenance multiplied bitsandbytes 4-bit weights that were still
+  packed, and one failure failed its whole batch.
+- The trigger read the first claim, not the weakest, so only 2 replies were looked up.
+
+After the fixes (dequantized provenance, failures isolated, trigger = the weakest claim, search also
+with the doubted claim, replies sent as soon as each is final):
+
+| run | looked up | wrong -> right | right -> wrong | accuracy closed-book -> served | median s (no lookup / lookup) | failed |
+|---|---|---|---|---|---|---|
+| 100 questions | 14% | 5 | 2 | 0.747 -> 0.778 | 20.5 / 43 | 1 |
+| 40, no provenance on lookups | 21% | 3 | 1 | 0.718 -> 0.769 | 17.5 / 34 | 1 |
+| 40, replies sent when final | 22% | 2 | 1 | 0.703 -> 0.730 | 12.4 / 23 | 3 |
+
+Over the three runs the lookup fixed 10 wrong answers and broke 4. Accuracy rose 3-5 points: small
+numbers, but every run gained.
+
+A few requests in a long concurrent run (1-3 in 40-100) get no answer. The client times out at
+400 s, or the connection closes at about 300 s. Modal's proxy logs every completed request, and these
+never appear: no error, no traceback, no slow request. So they are lost between the proxy and the
+standard-library HTTP server. Short bursts never show it. A sturdier server (an ASGI app under
+uvicorn, Modal's native web endpoint) is the likely fix; not done yet.
 
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server
