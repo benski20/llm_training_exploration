@@ -158,6 +158,8 @@ class HardenedHandler(BaseHTTPRequestHandler):
         request in, but a reader slow to drain the reply would otherwise leave it half-written."""
         self.request.settimeout(self.write_timeout_s)
         super().send_response(code, message)
+        self.send_header("Connection", "close")          # one request per connection, said out loud: a pooling
+                                                         # proxy must not reuse a socket this server closes
 
     def send_json(self, code, obj):
         body = json.dumps(obj).encode()

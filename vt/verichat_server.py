@@ -294,7 +294,8 @@ class RateLimiter:
 
 
 def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120.0, detector=None,
-                api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16):
+                api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16,
+                log_requests=False):
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
     def chat(items, ready=None):                                 # items may carry a "_stream" callback
@@ -349,6 +350,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
 
         def do_POST(self):
             self._t0 = time.perf_counter()
+            if log_requests:                                     # arrival, so lost requests can be told apart
+                print(f"recv {self.path} {threading.get_ident() % 100000}", flush=True)
             if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
                 return self.send_json(404, {"error": "not found"})
             if api_key and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {api_key}"):
@@ -458,6 +461,7 @@ def main(argv=None):
     ap.add_argument("--top-k", type=int, default=20)
     ap.add_argument("--presence-penalty", type=float, default=1.5, help="against loops (1.5: 7x fewer repeated 4-grams, same accuracy)")
     ap.add_argument("--deadline", type=float, default=120.0, help="seconds a request may wait and run")
+    ap.add_argument("--log-requests", action="store_true", help="log each POST as it arrives")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     a = ap.parse_args(argv)
@@ -482,7 +486,7 @@ def main(argv=None):
         name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
-    srv = make_server(bot, a.host, a.port, deadline=a.deadline, detector=det,
+    srv = make_server(bot, a.host, a.port, deadline=a.deadline, detector=det, log_requests=a.log_requests,
                       api_key=os.environ.get("VERICHAT_API_KEY") or None,
                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
     print(f"VeriChat on http://{a.host}:{srv.server_port}", flush=True)
