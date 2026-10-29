@@ -23,6 +23,10 @@ STOP = set("the a an of in on at to for and or is was were who what which when w
            "from as that this it its be are".split())
 
 
+QUESTION_WORDS = set("whom whose which name named known called famous first year city country film book "
+                     "would could you your someone".split())
+
+
 def words(text):
     return [w for w in norm(text).split() if w not in STOP]
 
@@ -118,7 +122,11 @@ class Wikipedia:
             return self.cache[key]
         try:
             n = max(k, self.pages) if self.full_text else k
-            hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(query), n=n)).get("pages", [])
+            hits = []
+            for q in self._queries(query):                   # a long question can match no page as a whole
+                hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(q), n=n)).get("pages", [])
+                if hits:
+                    break
             out = self._passages(query, hits[:n], k) if self.full_text else self._leads(hits[:k])
         except Exception as e:                               # network, rate limit, bad JSON: no lookup
             self.errors[self._why(e)] += 1
@@ -126,6 +134,18 @@ class Wikipedia:
         if len(self.cache) >= self.cache_size:
             self.cache.pop(next(iter(self.cache)))
         self.cache[key] = out
+        return out
+
+    @staticmethod
+    def _queries(query):
+        """The query, then its content words, then only its names and numbers (each if different)."""
+        toks = [t.strip(".,;:!?\"'()") for t in query.replace('"', " ").split()]
+        content = [t for t in toks if t and t.lower() not in STOP | QUESTION_WORDS]
+        names = [t for t in content if t[:1].isupper() or t[:1].isdigit()]
+        out = []
+        for q in (query, " ".join(content), " ".join(names)):
+            if q and q not in out:
+                out.append(q)
         return out
 
     @staticmethod
