@@ -96,7 +96,9 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.split(' (Wikipedia):')[0].slice(0,60)).join('; '))+'. ':'')+
-  'mode '+r.mode+'</div>'+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
+  'mode '+r.mode+'</div>'+assess(r.assessment)+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
+function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e'}[a.verdict]||'';
+ return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–'};
  return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}

@@ -313,16 +313,39 @@ class VeriChat:
 
     def _verify(self, items):
         """Check the claims of several final replies against sources at once (the verifier): items are
-        (reply, question). A check that fails never fails the replies."""
+        (reply, question). A check that fails never fails the replies. Then each reply's assessment."""
         todo = [(o, q) for o, q in items if q and not o.get("withheld")]
-        if self.verifier is None or not todo:
-            return
-        try:
-            vs = self.verifier.verify_batch([(q, o["text"].replace("[unsure:]", "")) for o, q in todo])
-            for (o, _), v in zip(todo, vs):
-                o["verification"] = v
-        except Exception as e:
-            print(f"verification failed: {e!r}", flush=True)
+        if self.verifier is not None and todo:
+            try:
+                vs = self.verifier.verify_batch([(q, o["text"].replace("[unsure:]", "")) for o, q in todo])
+                for (o, _), v in zip(todo, vs):
+                    o["verification"] = v
+            except Exception as e:
+                print(f"verification failed: {e!r}", flush=True)
+        for o, _ in items:
+            a = self.assess(o)
+            if a is not None:
+                o["assessment"] = a
+
+    # weights and bands from 600 answers of the served 32B (results/study_32b_v1.json, deploy/RUNBOOK.md): where a
+    # source was found, 0.8 judge + 0.2 probe beat either alone on held-out answers (AUROC 0.738 vs probe 0.675);
+    # doubt above 0.6 flagged 31% of the wrong answers and 8% of the right ones (precision 0.78)
+    JUDGE_WEIGHT, LIKELY_WRONG, UNCERTAIN = 0.8, 0.6, 0.3
+
+    def assess(self, o):
+        """One verdict for a factual reply: the doubt of its first sourced claim mixed with the model's own,
+        or the model's own alone when no source was found; None for replies without claims (small talk)."""
+        if o.get("withheld") or not o.get("claims"):
+            return None
+        score, _ = self.doubt_score(o)
+        own = 1 - score if score is not None else 0.5
+        judged = [c["p_supported"] for c in o.get("verification") or [] if c.get("p_supported") is not None]
+        if judged:
+            d, basis = self.JUDGE_WEIGHT * (1 - judged[0]) + (1 - self.JUDGE_WEIGHT) * own, "sources"
+        else:
+            d, basis = own, "the model's own confidence"
+        verdict = "likely wrong" if d > self.LIKELY_WRONG else "uncertain" if d > self.UNCERTAIN else "likely right"
+        return {"doubt": round(float(d), 4), "verdict": verdict, "basis": basis}
 
     def _reply_batch_unmoderated(self, reqs, on_text=None, on_reasoning=None, on_ready=None):
         outs = self._reply_batch(reqs, on_text, on_reasoning)

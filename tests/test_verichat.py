@@ -1,4 +1,5 @@
 import numpy as np
+from types import SimpleNamespace
 import torch
 from transformers import AutoTokenizer, Qwen2Config, Qwen2ForCausalLM
 
@@ -586,3 +587,15 @@ def test_final_replies_carry_claim_verification_and_survive_its_failure():
     bot.verifier = Broken()
     out = bot.reply([{"role": "user", "content": "Who built it?"}], max_new_tokens=8)
     assert "text" in out and "verification" not in out
+
+
+def test_assessment_mixes_the_source_check_with_the_models_own_doubt():
+    a = VeriChat.assess
+    bot = SimpleNamespace(JUDGE_WEIGHT=0.8, LIKELY_WRONG=0.6, UNCERTAIN=0.3, doubt_score=VeriChat.doubt_score)
+    claims = [{"score": 0.9, "text": "Paris"}]
+    sourced_wrong = a(bot, {"claims": claims, "verification": [{"p_supported": 0.05}]})
+    assert sourced_wrong["verdict"] == "likely wrong" and sourced_wrong["basis"] == "sources"
+    assert a(bot, {"claims": claims, "verification": [{"p_supported": 0.99}]})["verdict"] == "likely right"
+    own = a(bot, {"claims": [{"score": 0.2, "text": "x"}], "verification": [{"p_supported": None}]})
+    assert own["verdict"] == "likely wrong" and own["basis"] == "the model's own confidence"
+    assert a(bot, {"claims": []}) is None                       # small talk: no verdict
