@@ -475,6 +475,8 @@ def main(argv=None):
                                                          "(default: the risk head's own, chosen for F1)")
     ap.add_argument("--corpus", help="a folder of .txt/.md files: look questions up there when the model doubts itself")
     ap.add_argument("--wikipedia", action="store_true", help="look doubted questions up on Wikipedia (live, no key)")
+    ap.add_argument("--rerank", help="a sentence-transformers cross-encoder that reorders Wikipedia passages (with "
+                                     "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--wikipedia-leads", action="store_true", help="use only each page's lead section, not the best "
                                                                  "passages of its whole text")
     ap.add_argument("--retrieve-below", type=float, help="look up when the reply's doubt score is below this "
@@ -507,7 +509,15 @@ def main(argv=None):
         bot.moderator = Moderator.load()
     if a.corpus or a.wikipedia:
         from .retrieval import Corpus, Wikipedia
-        bot.retriever = Corpus.from_dir(a.corpus) if a.corpus else Wikipedia(full_text=not a.wikipedia_leads)
+        rerank = None
+        if a.rerank and not a.corpus:                   # 0.71 against 0.59 answer recall (results/retrieval_recall_v4)
+            from sentence_transformers import CrossEncoder
+            ce = CrossEncoder(a.rerank, max_length=256)
+
+            def rerank(q, ps):
+                return ce.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False)
+        bot.retriever = Corpus.from_dir(a.corpus) if a.corpus else \
+            Wikipedia(full_text=not a.wikipedia_leads, pages=5 if rerank else 3, rerank=rerank)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
     det = None
     if a.detector:

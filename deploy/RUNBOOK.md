@@ -51,6 +51,7 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_SCALEDOWN` | `120` | idle seconds before the GPU container stops (each idle minute is billed) |
 | `VERICHAT_REVISION` | latest | the model's Hugging Face commit; pin it for a stable public demo (supply chain) |
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
+| `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |
 
@@ -100,6 +101,8 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
   - lead sections: 0.42
   - best passages of the top pages' full text: 0.56 (now the default)
   - at most one passage per page: 0.53
+  - a later run, among the 140 questions Wikipedia did not rate-limit: full text 0.59, 5 pages 0.60,
+    reranked 0.66, 5 pages reranked 0.71 (now the default; `results/retrieval_recall_v4.json`)
 - The full text costs about 0.4 s more per lookup and about 90 more prompt words.
 - Wikimedia throttles clients without a contactable User-Agent. With the old one, lookups from a
   GitHub runner found nothing for 196 of 200 questions. The User-Agent now names the project URL.

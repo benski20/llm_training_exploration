@@ -116,14 +116,25 @@ class Wikipedia:
             raise TimeoutError("lookup time budget spent")
         return self.fetch(url)
 
-    def _fetch(self, url):
+    def _fetch(self, url, retries=1):
         import json
+        import urllib.error
         import urllib.request
         if not url.startswith("https://"):                  # only the fixed https endpoints above
             raise ValueError("Wikipedia URLs must be https")
         req = urllib.request.Request(url, headers={"User-Agent": self.ua, "Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:  # nosec B310: https checked above
-            return json.loads(r.read().decode())
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:  # nosec B310: https checked above
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:                  # rate-limited: wait as asked (at most 2 s), once
+            if e.code != 429 or retries <= 0:
+                raise
+            try:
+                wait = min(2.0, float(e.headers.get("Retry-After") or 1))
+            except ValueError:
+                wait = 1.0
+            time.sleep(wait)
+            return self._fetch(url, retries - 1)
 
     def __call__(self, query, k=None):
         import urllib.parse

@@ -32,19 +32,20 @@ RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: th
 RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per client per minute; 0 for load tests
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
+RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("torch==2.5.1", "transformers==4.51.3", "accelerate==1.1.1", "bitsandbytes==0.45.0",
-                 "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece")
+                 "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece", "sentence-transformers==3.3.1")
     # Modal re-imports this file inside the container: bake the deploy-time settings into its environment
     # so the server there sees the same values (otherwise every VERICHAT_* silently reverts to its default)
     .env({k: v for k, v in {"VERICHAT_MODEL": MODEL, "VERICHAT_HEAD": HEAD, "VERICHAT_GPU": GPU,
                              "VERICHAT_SCALEDOWN": str(SCALEDOWN), "VERICHAT_RISK_THRESHOLD": RISK_THRESHOLD,
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
-                             "VERICHAT_REVISION": REVISION}.items() if v is not None})
+                             "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
@@ -59,7 +60,8 @@ def download():
     """Fill the model cache on a cheap CPU container, so no GPU is billed while ~25 GB download:
     modal run deploy/modal_app.py::download (once, before the first deploy)."""
     from huggingface_hub import snapshot_download
-    for repo, rev in ((MODEL, REVISION), ("Qwen/Qwen2.5-3B-Instruct", None), ("unitary/toxic-bert", None)):
+    for repo, rev in ((MODEL, REVISION), ("Qwen/Qwen2.5-3B-Instruct", None), ("unitary/toxic-bert", None)) + \
+            (((RERANK, None),) if RERANK else ()):
         print("downloading", repo, flush=True)
         snapshot_download(repo, revision=rev, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py"])
     hf_cache.commit()
@@ -92,4 +94,5 @@ def serve():
                       "--trust-proxy", "--deadline", "300", "--log-requests", "--host", "0.0.0.0", "--port", str(PORT)]
                      + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
                      + (["--wikipedia"] if WIKIPEDIA else [])
+                     + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
                      + (["--revision", REVISION] if REVISION else []), env=env)

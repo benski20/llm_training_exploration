@@ -1,0 +1,39 @@
+{
+ "n": 200,
+ "k": 3,
+ "seed": 31,
+ "where": "GitHub runner, 2026-10-29 (run 40872210214); ~52 searches rate-limited (HTTP 429), the same questions for every system (fetches shared)",
+ "recall_all_200": {
+  "lead": 0.28,
+  "full_text": 0.415,
+  "full_text_5_pages": 0.42,
+  "full_text_rerank": 0.46,
+  "full_text_5_pages_rerank": 0.495
+ },
+ "recall_of_the_140_with_passages": {
+  "lead": 0.4,
+  "full_text": 0.59,
+  "full_text_5_pages": 0.6,
+  "full_text_rerank": 0.66,
+  "full_text_5_pages_rerank": 0.71
+ },
+ "vs_lead": {
+  "full_text": [
+   33,
+   6
+  ],
+  "full_text_5_pages": [
+   37,
+   9
+  ],
+  "full_text_rerank": [
+   38,
+   2
+  ],
+  "full_text_5_pages_rerank": [
+   45,
+   2
+  ]
+ },
+ "reranker": "cross-encoder/ms-marco-MiniLM-L-6-v2 over BM25's best 20"
+}
