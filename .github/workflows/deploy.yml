@@ -1,7 +1,9 @@
 name: deploy-demo
 # Deploys (or stops) the VeriChat demo on Modal. GitHub's runners reach Modal's gRPC API directly.
-# Needs repository secrets MODAL_TOKEN_ID and MODAL_TOKEN_SECRET. Runs only when asked: from the
-# Actions tab, or when deploy/request.json changes ({"action": "deploy" | "stop"}).
+# Credentials: repository secrets MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, or the one-off inputs of a manual
+# run. Inputs are read from the event file and masked before any step can print them, but they stay in
+# the run's stored event data, visible to the repo's readers: rotate the token after such a run.
+# Runs only when asked: manually, or when deploy/request.json changes ({"action": "deploy" | "stop"}).
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +11,12 @@ on:
         type: choice
         options: [deploy, stop]
         default: deploy
+      modal_token_id:
+        description: one-off Modal token id (rotate it afterwards); empty uses the repository secret
+        required: false
+      modal_token_secret:
+        description: one-off Modal token secret (rotate it afterwards)
+        required: false
   push:
     paths: [deploy/request.json]
 permissions:
@@ -20,10 +28,19 @@ jobs:
   modal:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
-      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
     steps:
+      - name: credentials (masked)
+        env:
+          SECRET_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          SECRET_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: |
+          ID=$(jq -r '.inputs.modal_token_id // empty' "$GITHUB_EVENT_PATH")
+          SEC=$(jq -r '.inputs.modal_token_secret // empty' "$GITHUB_EVENT_PATH")
+          if [ -z "$SEC" ]; then ID="$SECRET_ID"; SEC="$SECRET_SECRET"; fi
+          if [ -z "$SEC" ]; then echo "::error::no Modal credentials: add the repository secrets or pass the inputs"; exit 1; fi
+          echo "::add-mask::$ID"
+          echo "::add-mask::$SEC"
+          { echo "MODAL_TOKEN_ID=$ID"; echo "MODAL_TOKEN_SECRET=$SEC"; } >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -35,7 +52,6 @@ jobs:
           A="${{ github.event.inputs.action }}"
           if [ -z "$A" ]; then A=$(python3 -c "import json; print(json.load(open('deploy/request.json')).get('action', 'deploy'))"); fi
           echo "action=$A" >> "$GITHUB_OUTPUT"
-          test -n "$MODAL_TOKEN_ID" || { echo "::error::add the MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets"; exit 1; }
       - name: stop
         if: steps.req.outputs.action == 'stop'
         run: modal app stop verichat
