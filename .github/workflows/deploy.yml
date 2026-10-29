@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs]
+        options: [deploy, stop, logs, wikicheck]
         default: deploy
       modal_token_id:
         description: one-off Modal token id (rotate it afterwards); empty uses the repository secret
@@ -55,6 +55,9 @@ jobs:
       - name: stop
         if: steps.req.outputs.action == 'stop'
         run: modal app stop verichat
+      - name: live Wikipedia lookups from Modal (tiny CPU container)
+        if: steps.req.outputs.action == 'wikicheck'
+        run: modal run deploy/modal_app.py::wiki_check
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000

@@ -66,6 +66,21 @@ def download():
     print("cache ready", flush=True)
 
 
+@app.function(cpu=0.25, timeout=120)
+def wiki_check():
+    """Live Wikipedia lookups from Modal's network, on a tiny CPU container (no GPU):
+    modal run deploy/modal_app.py::wiki_check"""
+    import sys
+    sys.path.insert(0, "/app")
+    from vt.retrieval import Wikipedia
+    w = Wikipedia(k=2)
+    for q in ("Who designed the Eiffel Tower?", "What is the capital of Burkina Faso?"):
+        got = w(q)
+        print(q, "->", len(got), "passages:", [p[:90] for p in got], flush=True)
+        if not got:
+            raise SystemExit("no passages: Wikipedia unreachable or rate-limited from Modal")
+
+
 @app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
               scaledown_window=SCALEDOWN, max_containers=1)
 @modal.concurrent(max_inputs=32)                          # the server batches concurrent requests itself
