@@ -237,8 +237,8 @@ class Wikipedia:
         corpus = Corpus([f"{t} {c}" for t, _, _, c in cands])  # the title counts: "Eiffel Tower ... 324 m"
         s = corpus.scores(query)
         best = sorted(range(len(cands)), key=lambda i: -s[i])
-        if self.rerank is not None:                          # a stronger reader reorders BM25's best few
-            pool = [i for i in best[:self.rerank_pool] if s[i] > 0]
+        pool = [i for i in best[:self.rerank_pool] if s[i] > 0]
+        if self.rerank is not None and pool:                 # a stronger reader reorders BM25's best few
             try:
                 r = self.rerank(query, [f"{cands[i][0]}: {cands[i][3]}" for i in pool])
                 r = [float(x) for x in (r.reshape(-1) if hasattr(r, "reshape") else (r if isinstance(r, (list, tuple)) else [r]))]

@@ -208,6 +208,21 @@ The served 32B answered 300 TriviaQA and 300 NQ questions closed-book. Accuracy 
 - The `rejudge` action redoes the lookups for the saved answers on CPU (no GPU billed), then only the
   judging on GPU, a few minutes.
 
+Rejudged with those fixes (run 40965200357, `results/study_32b_v2_rejudge.json`; about 3.5 GPU minutes of
+judging):
+- Evidence was found for 90% of answers (46% before). HTTP 429s fell from about 1000 to 16.
+
+| AUROC, wrong vs right | TriviaQA | NQ | all |
+|---|---|---|---|
+| probe, replies with evidence | 0.747 | 0.624 | 0.686 |
+| 32B judge, replies with evidence | 0.871 | 0.727 | 0.802 |
+| judge minus probe (95% CI) | +0.124 (0.049, 0.194) | +0.103 (0.027, 0.179) | +0.117 (0.066, 0.168) |
+| best combination, held-out half | 0.864 (probe 0.751) | 0.738 (probe 0.615) | 0.813 (probe 0.675) |
+
+- The judge's lead is significant on both datasets.
+- The verdict weights the judge 0.9 (0.9 and 1.0 tie on both halves). Doubt above 0.6 marks a reply likely
+  wrong: about 46% of wrong answers and 12% of right ones.
+
 ## Clients
 
 `vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a

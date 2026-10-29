@@ -327,10 +327,11 @@ class VeriChat:
             if a is not None:
                 o["assessment"] = a
 
-    # weights and bands from 600 answers of the served 32B (results/study_32b_v1.json, deploy/RUNBOOK.md): where a
-    # source was found, 0.8 judge + 0.2 probe beat either alone on held-out answers (AUROC 0.738 vs probe 0.675);
-    # doubt above 0.6 flagged 31% of the wrong answers and 8% of the right ones (precision 0.78)
-    JUDGE_WEIGHT, LIKELY_WRONG, UNCERTAIN = 0.8, 0.6, 0.3
+    # weights and bands from 600 answers of the served 32B with sources found for 90% (results/study_32b_v2_rejudge.json,
+    # deploy/RUNBOOK.md): the judge leads the probe by +0.12 AUROC (95% CI 0.07-0.17); weights 0.9-1.0 on the judge
+    # tie on both halves (0.9 keeps the model's own doubt as a tie-break); doubt above 0.6 flags about 46% of the
+    # wrong answers and 12% of the right ones
+    JUDGE_WEIGHT, LIKELY_WRONG, UNCERTAIN = 0.9, 0.6, 0.3
 
     def assess(self, o):
         """One verdict for a factual reply: the doubt of its first sourced claim mixed with the model's own,
