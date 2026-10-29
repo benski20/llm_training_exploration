@@ -1,0 +1,27 @@
+name: retrieval-eval
+# Answer recall of the demo's Wikipedia lookups (no model, no GPU, no credentials): GitHub's runners reach
+# Wikipedia without the rate limits of shared sandboxes. Runs only when asked.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: TriviaQA questions
+        default: "200"
+permissions:
+  contents: read
+jobs:
+  recall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install numpy datasets
+      - name: recall of lead sections against full-text passages
+        run: |
+          cd experiments
+          python retrieval_recall.py --n "${{ github.event.inputs.n || 200 }}" --out ../retrieval_recall.json | tail -n 3
+          cd ..
+          python -c "import json; d = json.load(open('retrieval_recall.json')); [print(json.dumps(r)) for r in d['rows']]" | head -n 400

@@ -10,9 +10,14 @@ Wikipedia() looks pages up live.
 """
 import math
 import os
+import re
+import string
 from collections import Counter
 
-from vt.correctness import norm
+
+def norm(s):                                             # as vt.correctness.norm, without importing torch
+    s = "".join(ch for ch in s.lower() if ch not in string.punctuation)
+    return " ".join(re.sub(r"\b(a|an|the)\b", " ", s).split())
 
 STOP = set("the a an of in on at to for and or is was were who what which when where how why did does do by with "
            "from as that this it its be are".split())
@@ -70,7 +75,8 @@ class Corpus:
 
 
 class Wikipedia:
-    """Live Wikipedia lookups, no key and no index: search titles, then fetch each page's lead section.
+    """Live Wikipedia lookups, no key and no index: search titles, then fetch each page's lead section
+    (or, with full_text=True, the best-matching passages of the top pages' whole text).
     Fails quietly (no passages, so the reply is simply not looked up); answers are cached.
 
         r = Wikipedia(k=2)
@@ -78,10 +84,15 @@ class Wikipedia:
     """
     SEARCH = "https://{lang}.wikipedia.org/w/rest.php/v1/search/page?q={q}&limit={n}"
     SUMMARY = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
+    TEXT = ("https://{lang}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&redirects=1"
+            "&format=json&formatversion=2&titles={title}")
 
     def __init__(self, k=2, lang="en", timeout=4.0, user_agent="VeriChat/0.1 (research demo)", cache_size=2048,
-                 fetch=None):
+                 fetch=None, full_text=False, pages=3, passage_words=100):
+        """full_text: search the whole text of the top `pages` hits and return the k passages that best match
+        the query (BM25), instead of each hit's lead section: the answer is often further down a page."""
         self.k, self.lang, self.timeout, self.ua = k, lang, timeout, user_agent
+        self.full_text, self.pages, self.passage_words = full_text, pages, passage_words
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
 
@@ -101,17 +112,59 @@ class Wikipedia:
         if key in self.cache:
             return self.cache[key]
         try:
-            hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(query), n=k)).get("pages", [])
-            out = []
-            for h in hits[:k]:
-                title = urllib.parse.quote(h.get("key") or h.get("title", "").replace(" ", "_"), safe="")
-                s = self.fetch(self.SUMMARY.format(lang=self.lang, title=title))
-                text = (s.get("extract") or "").strip()
-                if text:
-                    out.append(f"{s.get('title', h.get('title', ''))} (Wikipedia): {text}")
+            n = max(k, self.pages) if self.full_text else k
+            hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(query), n=n)).get("pages", [])
+            out = self._passages(query, hits[:n], k) if self.full_text else self._leads(hits[:k])
         except Exception:                                    # network, rate limit, bad JSON: no lookup
             return []
         if len(self.cache) >= self.cache_size:
             self.cache.pop(next(iter(self.cache)))
         self.cache[key] = out
+        return out
+
+    @staticmethod
+    def _key(h):
+        import urllib.parse
+        return urllib.parse.quote(h.get("key") or h.get("title", "").replace(" ", "_"), safe="")
+
+    def _leads(self, hits):
+        out = []
+        for h in hits:
+            s = self.fetch(self.SUMMARY.format(lang=self.lang, title=self._key(h)))
+            text = (s.get("extract") or "").strip()
+            if text:
+                out.append(f"{s.get('title', h.get('title', ''))} (Wikipedia): {text}")
+        return out
+
+    def _passages(self, query, hits, k):
+        """The k passages of the hits' full texts that best match the query; a page whose text cannot be
+        fetched contributes its lead instead."""
+        cands = []                                           # (title, page, window, text)
+        for j, h in enumerate(hits):
+            title = h.get("title", "")
+            try:
+                page = self.fetch(self.TEXT.format(lang=self.lang, title=self._key(h)))["query"]["pages"][0]
+                text, title = (page.get("extract") or "").strip(), page.get("title", title)
+            except Exception:                                # rate limit, missing page: fall back to the lead
+                text = ""
+            if not text:
+                lead = self._leads([h])
+                cands += [(title, j, 0, p.split(": ", 1)[-1]) for p in lead]
+                continue
+            w = text.split()[:30000]
+            cands += [(title, j, i, c) for i, c in enumerate(chunks(" ".join(w), self.passage_words, self.passage_words // 2))]
+        if not cands:
+            return []
+        corpus = Corpus([f"{t} {c}" for t, _, _, c in cands])  # the title counts: "Eiffel Tower ... 324 m"
+        s = corpus.scores(query)
+        best = sorted(range(len(cands)), key=lambda i: -s[i])
+        out, taken = [], []
+        for i in best:
+            if len(out) == k or s[i] <= 0:
+                break
+            t, j, w, c = cands[i]
+            if any(j == j2 and abs(w - w2) <= 1 for j2, w2 in taken):   # windows overlap: a near-repeat
+                continue
+            taken.append((j, w))
+            out.append(f"{t} (Wikipedia): {c}")
         return out

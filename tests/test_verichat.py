@@ -508,3 +508,23 @@ def test_stream_sends_heartbeats_while_the_model_is_slow():
         assert text.startswith(": ping\n\n") and '"done": true' in text
     finally:
         srv.shutdown()
+
+
+def test_wikipedia_full_text_finds_the_passage_with_the_answer():
+    import urllib.parse
+    from vt.retrieval import Wikipedia
+    film = ("MASH is a 1970 American black comedy war film directed by Robert Altman. " + "plot words " * 120 +
+            "Cast: Sally Kellerman as Major Margaret Houlihan, Robert Duvall as Major Frank Burns. " + "other " * 80)
+    pages = {"MASH_(film)": film, "Houlihan": "Margaret Houlihan is a character in the M*A*S*H franchise."}
+
+    def fake(url):
+        if "search" in url:
+            return {"pages": [{"key": "MASH_(film)", "title": "MASH (film)"}, {"key": "Houlihan", "title": "Houlihan"}]}
+        if "extracts" in url:
+            k = urllib.parse.unquote(url.split("titles=")[1])
+            return {"query": {"pages": [{"title": k, "extract": pages[k]}]}}
+        raise OSError("no lead endpoint in this test")
+    got = Wikipedia(k=2, fetch=fake, full_text=True)("Who played Margaret Houlihan in the film MASH cast?")
+    assert any("Sally Kellerman" in p for p in got) and len(got) == 2
+    lead_only = Wikipedia(k=2, fetch=fake)("Who played Margaret Houlihan in the film MASH cast?")
+    assert lead_only == []                       # the lead endpoint failed: no lookup, quietly
