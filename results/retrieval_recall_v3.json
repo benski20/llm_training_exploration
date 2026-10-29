@@ -1,0 +1,32 @@
+{
+ "n": 200,
+ "k": 3,
+ "seed": 31,
+ "where": "GitHub runner, 2026-10-29 (run 40868262577)",
+ "lead": {
+  "recall": 0.42,
+  "no_passages": 8,
+  "words_mean": 202.9,
+  "seconds_median": 0.9
+ },
+ "full_text": {
+  "recall": 0.56,
+  "no_passages": 10,
+  "words_mean": 293.0,
+  "seconds_median": 1.31
+ },
+ "full_text_per_page": {
+  "recall": 0.53,
+  "no_passages": 10,
+  "words_mean": 270.1,
+  "seconds_median": 1.34
+ },
+ "full_text_vs_lead": {
+  "only_this": 39,
+  "only_lead": 11
+ },
+ "full_text_per_page_vs_lead": {
+  "only_this": 32,
+  "only_lead": 10
+ }
+}

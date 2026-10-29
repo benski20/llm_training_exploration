@@ -93,6 +93,21 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
   (`experiments/page_check/`) confirms it: a request stalled at the socket recovers in 47 s, and a slow
   25 s reply arrives intact.
 
+## Lookups (Wikipedia)
+
+- On 200 TriviaQA questions, the share whose answer appears in the 3 passages the model gets
+  (`experiments/retrieval_recall.py`, GitHub runner, no model):
+  - lead sections: 0.42
+  - best passages of the top pages' full text: 0.56 (now the default)
+  - at most one passage per page: 0.53
+- The full text costs about 0.4 s more per lookup and about 90 more prompt words.
+- Wikimedia throttles clients without a contactable User-Agent. With the old one, lookups from a
+  GitHub runner found nothing for 196 of 200 questions. The User-Agent now names the project URL.
+  `/health` shows `retrieval_errors`, so throttling on Modal is visible.
+- A search with no hits is retried with the question's content words, then its names and numbers.
+- Raising the lookup threshold is not worth it. At 0.80 it would look up 80% of wrong trivia answers
+  (48% at 0.65), but also 29% of everyday replies (7% at 0.65), each about 10 s slower.
+
 ## What the demo can and cannot claim
 
 These are the held-out numbers (`VISION.md`, `results/kaggle/chateval-32h/`):
