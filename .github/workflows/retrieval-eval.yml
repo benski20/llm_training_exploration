@@ -24,5 +24,7 @@ jobs:
           set -o pipefail
           cd experiments
           python retrieval_recall.py --n "${{ github.event.inputs.n || 200 }}" --out ../retrieval_recall.json | tail -n 3
-          cd ..
-          python -c "import json; d = json.load(open('retrieval_recall.json')); [print(json.dumps(r)) for r in d['rows']]" | head -n 40
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-recall
+          path: retrieval_recall.json

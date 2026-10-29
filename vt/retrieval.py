@@ -96,11 +96,12 @@ class Wikipedia:
     UA = "VeriChat/0.2 (https://github.com/benski20/llm_training_exploration; research demo) python-urllib"
 
     def __init__(self, k=2, lang="en", timeout=4.0, user_agent=UA, cache_size=2048,
-                 fetch=None, full_text=False, pages=3, passage_words=100):
+                 fetch=None, full_text=False, pages=3, passage_words=100, per_page=None):
         """full_text: search the whole text of the top `pages` hits and return the k passages that best match
         the query (BM25), instead of each hit's lead section: the answer is often further down a page."""
         self.k, self.lang, self.timeout, self.ua = k, lang, timeout, user_agent
         self.full_text, self.pages, self.passage_words = full_text, pages, passage_words
+        self.per_page = per_page                             # at most this many passages from one page (None: any)
         self.errors = Counter()                              # why lookups failed (e.g. "HTTP 429"), for /health
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
@@ -196,6 +197,8 @@ class Wikipedia:
                 break
             t, j, w, c = cands[i]
             if any(j == j2 and abs(w - w2) <= 1 for j2, w2 in taken):   # windows overlap: a near-repeat
+                continue
+            if self.per_page and sum(j == j2 for j2, _ in taken) >= self.per_page:
                 continue
             taken.append((j, w))
             out.append(f"{t} (Wikipedia): {c}")

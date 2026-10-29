@@ -32,7 +32,8 @@ def main():
     d = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
     qs = [(x["question"], x["answer"]["normalized_aliases"] + [x["answer"]["value"]])
           for x in d.select(random.Random(a.seed).sample(range(len(d)), a.n))]
-    systems = {"lead": Wikipedia(k=a.k), "full_text": Wikipedia(k=a.k, full_text=True)}
+    systems = {"lead": Wikipedia(k=a.k), "full_text": Wikipedia(k=a.k, full_text=True),
+               "full_text_per_page": Wikipedia(k=a.k, full_text=True, per_page=1)}
     rows, failed = [], {s: 0 for s in systems}
     for i, (q, al) in enumerate(qs):
         row = {"i": i, "q": q}
@@ -53,8 +54,10 @@ def main():
                   "words_mean": round(sum(x["words"] for x in r) / len(r), 1),
                   "seconds_median": sorted(x["seconds"] for x in r)[len(r) // 2]}
     res["errors"] = {s: dict(w.errors) for s, w in systems.items()}
-    res["only_full_text_found"] = sum(r["full_text"]["found"] and not r["lead"]["found"] for r in rows)
-    res["only_lead_found"] = sum(r["lead"]["found"] and not r["full_text"]["found"] for r in rows)
+    for s in systems:
+        if s != "lead":
+            res[f"{s}_vs_lead"] = {"only_this": sum(r[s]["found"] and not r["lead"]["found"] for r in rows),
+                                   "only_lead": sum(r["lead"]["found"] and not r[s]["found"] for r in rows)}
     res["rows"] = rows
     json.dump(res, open(a.out, "w"), indent=1)
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}))
