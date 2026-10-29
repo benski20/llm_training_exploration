@@ -53,12 +53,21 @@ def main():
     ap.add_argument("--max-sentences", type=int, default=3)
     ap.add_argument("--out", default="evidence_verify.json")
     ap.add_argument("--limit", type=int, help="only the first n factual and n everyday replies (smoke test)")
+    ap.add_argument("--rerank", help="cross-encoder for lookups (5 pages) and for keeping only relevant passages")
+    ap.add_argument("--relevant", type=float, default=0.0, help="reranker logit a passage needs to count as evidence")
+    ap.add_argument("--pause", type=float, default=0.2, help="seconds between replies (Wikipedia rate limits)")
     a = ap.parse_args()
     from sentence_transformers import CrossEncoder
     nli = CrossEncoder(a.nli, max_length=512)
     labels = {v.lower(): int(k) for k, v in nli.model.config.id2label.items()}
     ent, con = labels["entailment"], labels["contradiction"]
-    wiki = Wikipedia(k=3, full_text=True)
+    rel = None
+    if a.rerank:
+        rel = CrossEncoder(a.rerank, max_length=256)
+        wiki = Wikipedia(k=3, full_text=True, pages=5,
+                         rerank=lambda q, ps: rel.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False))
+    else:
+        wiki = Wikipedia(k=3, full_text=True)
     T = json.load(open(a.traces))
     if a.limit:
         T = [x for x in T if x["kind"] == "factual"][:a.limit] + [x for x in T if x["kind"] == "everyday"][:a.limit]
@@ -68,6 +77,9 @@ def main():
         judged = []
         for s in sents:
             ps = wiki(f"{x['prompt']} {s}")
+            if ps and rel is not None:                       # evidence only where it is about the claim
+                r = rel.predict([(s, p.split(": ", 1)[-1]) for p in ps], show_progress_bar=False)
+                ps = [p for p, v in zip(ps, r) if float(v) > a.relevant]
             if not ps:
                 judged.append({"s": s, "support": None, "conflict": None, "passages": 0})
                 continue
@@ -80,7 +92,7 @@ def main():
                      "reply_confidence": x.get("reply_confidence"), "sentences": judged})
         if n % 20 == 0:
             print(json.dumps({"done": n + 1, "errors": dict(wiki.errors)}), flush=True)
-        time.sleep(0.2)
+        time.sleep(a.pause)
 
     def first(r, key, default):
         v = [j[key] for j in r["sentences"] if j[key] is not None]

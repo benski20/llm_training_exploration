@@ -1,0 +1,44 @@
+{
+ "run": "verify-eval 40872632769 (2026-10-29), NLI cross-encoder/nli-deberta-v3-base, BM25 full text over 3 pages; 163 searches rate-limited (HTTP 429), claims without evidence scored 0.5",
+ "auroc": {
+  "probe": {
+   "triviaqa": 0.778,
+   "nq": 0.566,
+   "all": 0.694
+  },
+  "evidence 1-support first claim": {
+   "triviaqa": 0.635,
+   "nq": 0.577,
+   "all": 0.632
+  },
+  "evidence 1-support weakest claim": {
+   "triviaqa": 0.586,
+   "nq": 0.659,
+   "all": 0.639
+  },
+  "evidence conflict first claim": {
+   "triviaqa": 0.547,
+   "nq": 0.538,
+   "all": 0.619
+  },
+  "evidence conflict-support first claim": {
+   "triviaqa": 0.645,
+   "nq": 0.539,
+   "all": 0.648
+  },
+  "probe + evidence z-sum": {
+   "triviaqa": 0.796,
+   "nq": 0.559,
+   "all": 0.711
+  }
+ },
+ "everyday": {
+  "with_check_worthy_claims": 0.982,
+  "any_claim_contradicted_gt_0.5": 0.375,
+  "all_claims_supported_gt_0.5": 0.054
+ },
+ "factual_any_contradicted": {
+  "right": 0.301,
+  "wrong": 0.506
+ }
+}
