@@ -1,0 +1,32 @@
+name: verify-eval
+# Evidence-based verification (Wikipedia + an NLI model) against the internal probe, on the 32B's labeled
+# replies; CPU only, no credentials. Runs only when asked.
+on:
+  workflow_dispatch:
+    inputs:
+      nli:
+        description: sentence-transformers NLI cross-encoder
+        default: cross-encoder/nli-deberta-v3-base
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy scipy sentence-transformers
+      - name: verify the labeled replies
+        run: |
+          set -o pipefail
+          python experiments/evidence_verify.py --nli "${{ github.event.inputs.nli || 'cross-encoder/nli-deberta-v3-base' }}" \
+            --out evidence_verify.json | tail -n 60
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-verify
+          path: evidence_verify.json
