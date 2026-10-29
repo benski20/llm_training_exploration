@@ -124,6 +124,8 @@ class VeriChat:
                  thinking=False, think_budget=1024, max_prompt_tokens=8192):
         self.model, self.tok = model, tok
         self.max_prompt_tokens = max_prompt_tokens     # longer prompts: documents cut, oldest turns dropped
+        self.provenance_on_lookup = False              # exact per-claim attribution for looked-up passages too
+                                                       # (costly on a 32B: one pass per source group per layer)
         self.gen = DoubtAwareGenerator(model, tok, probe, layer, threshold=threshold, combine=True,
                                        thinking=thinking, think_budget=think_budget)
         self.threshold = threshold
@@ -312,7 +314,8 @@ class VeriChat:
             if passages:
                 again.append(dict(r, documents=passages))
                 where.append(i)
-        for i, r, o in zip(where, again, self._reply_batch(again) if again else []):
+        looked = self._reply_batch(again, provenance=self.provenance_on_lookup) if again else []
+        for i, r, o in zip(where, again, looked):
             o.pop("_trigger"), o.pop("_claim", None)
             o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
                               "passages": r["documents"], "closed_book_text": outs[i]["text"]}
@@ -326,7 +329,7 @@ class VeriChat:
                     o.update(text=WITHHELD, claims=[], withheld=True)
         return outs
 
-    def _reply_batch(self, reqs, on_text=None, on_reasoning=None):
+    def _reply_batch(self, reqs, on_text=None, on_reasoning=None, provenance=True):
         prepared = [(self._messages(r["messages"], r["documents"]),
                      " ".join(m["content"] for m in r["messages"] if m["role"] != "system")) for r in reqs]  # context
         gens = self.gen.generate_batch([{"messages": msgs, "max_new_tokens": r["max_new_tokens"], "mode": r["mode"],
@@ -334,12 +337,12 @@ class VeriChat:
                                          **{k: r[k] for k in ("sampling", "think_sampling") if k in r}}
                                         for r, (msgs, ctx) in zip(reqs, prepared)],          # context without docs
                                        on_text=on_text, on_reasoning=on_reasoning)
-        return [self._post(r["messages"], r["documents"], r["mode"], msgs, g, r.get("thinking", self.gen.thinking))
-                for r, (msgs, _), g in zip(reqs, prepared, gens)]
+        return [self._post(r["messages"], r["documents"], r["mode"], msgs, g, r.get("thinking", self.gen.thinking),
+                           provenance) for r, (msgs, _), g in zip(reqs, prepared, gens)]
 
-    def _post(self, messages, documents, mode, msgs, r, thinking=False):
+    def _post(self, messages, documents, mode, msgs, r, thinking=False, provenance=True):
         claims = r["claims"]
-        if documents and claims and not r["stopped_on_doubt"]:
+        if provenance and documents and claims and not r["stopped_on_doubt"]:
             ids = r["ids"]                                           # the generated tokens themselves
             idx = [min(c["token_index"], len(ids) - 1) for c in claims]
             question = next(m["content"] for m in reversed(messages) if m["role"] == "user")

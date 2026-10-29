@@ -1,0 +1,990 @@
+{
+ "url": "https://sandboxtesting101--verichat-serve.us-east.modal.run",
+ "n": 100,
+ "errors": 1,
+ "looked_up": 14,
+ "looked_up_share": 0.141,
+ "accuracy_closed_book": 0.747,
+ "accuracy_served": 0.778,
+ "among_looked_up": {
+  "wrong_to_right": 5,
+  "right_to_wrong": 2,
+  "stayed_right": 2,
+  "stayed_wrong": 5
+ },
+ "seconds_median": 27.1,
+ "rows": [
+  {
+   "i": 0,
+   "q": "Who was part man, part machine, all cop and hailed from a futuristic Detroit?",
+   "seconds": 64.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7802,
+   "final_right": true
+  },
+  {
+   "i": 1,
+   "q": "What is the French name for the English channel?",
+   "seconds": 64.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.986,
+   "final_right": true
+  },
+  {
+   "i": 2,
+   "q": "Which winter sport was contested as an Olympic sport only once, at the 1908 Summer Olympics?",
+   "seconds": 64.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8531,
+   "final_right": false
+  },
+  {
+   "i": 3,
+   "q": "What was the first airship to cross the Atlantic, in 1919?",
+   "seconds": 64.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7773,
+   "final_right": true
+  },
+  {
+   "i": 4,
+   "q": "What year did the cable television network ESPN made its debut broadcasting and producing sports-related programming 24 hours a day?",
+   "seconds": 10.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8285,
+   "final_right": true
+  },
+  {
+   "i": 5,
+   "q": "What is zoophobia a fear of?",
+   "seconds": 10.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9689,
+   "final_right": true
+  },
+  {
+   "i": 6,
+   "q": "This 1993 film won Oscars, Bafta and Golden Globe Awards despite its sometimes harrowing portrayal of hardships and stress, including the butchering of its heroine's hand; which film was it?",
+   "seconds": 10.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.5699,
+   "final_right": true
+  },
+  {
+   "i": 7,
+   "q": "\"Which 19th century English writer wrote \"\"Swallows and Amazons\"\", \"\"Peter Duck\"\" and \"\"Secret Water\"\"?\"",
+   "seconds": 10.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7197,
+   "final_right": true
+  },
+  {
+   "i": 8,
+   "q": "Who played the role of George Carter in The Sweeney?",
+   "seconds": 61.3,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.1902,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "The Sweeney (Wikipedia): The Sweeney is a British police drama television series",
+    "Sweeney Todd: The Demon Barber of Fleet Street (2007 film) (Wikipedia): Sweeney ",
+    "List of Coronation Street characters introduced in 2023 (Wikipedia): Coronation "
+   ]
+  },
+  {
+   "i": 9,
+   "q": "Who was the Muse of Comedy?",
+   "seconds": 61.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9226,
+   "final_right": true
+  },
+  {
+   "i": 10,
+   "q": "Who was the 11th and 12th century ruler of Georgia, celebrated by Georgians as their most successful, leading them out from Turkish domination, reuniting the country, and subsequently being canonised by the Georgian Orthodox Church?",
+   "seconds": 61.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8317,
+   "final_right": true
+  },
+  {
+   "i": 11,
+   "q": "What is both a golf term and slang for an enemy plane?",
+   "seconds": 61.3,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.6033,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "List of words having different meanings in American and British English (A\u2013L) (W",
+    "Pete Hegseth (Wikipedia): Peter Brian Hegseth is an American government official"
+   ]
+  },
+  {
+   "i": 12,
+   "q": "By what nickname was English serial killer and armed robber Donald Neilson known?",
+   "seconds": 38.1,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.6108,
+   "final_right": false,
+   "closed_book_right": true,
+   "passages": [
+    "List of serial killers by number of victims (Wikipedia): A serial killer is typi",
+    "Royal Mail Group Security (Wikipedia): Royal Mail Group Security (RMGS), the inv"
+   ]
+  },
+  {
+   "i": 13,
+   "q": "Weighing-in at up 48 stone, who wrestled under the ring-name Giant Haystacks?",
+   "seconds": 38.1,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.5232,
+   "final_right": true,
+   "closed_book_right": true,
+   "passages": [
+    "Giant Haystacks (Wikipedia): Martin Austin Ruane was a British professional wres",
+    "Haystacks Calhoun (Wikipedia): William Dee Calhoun was an American professional "
+   ]
+  },
+  {
+   "i": 14,
+   "q": "In the books by A A Milne, what was Eeyore?",
+   "seconds": 38.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8381,
+   "final_right": true
+  },
+  {
+   "i": 15,
+   "q": "Protons and Neutrons are both examples of which class of sub-atomic particle that takes its name from the Greek for 'heavy'?",
+   "seconds": 38.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.963,
+   "final_right": true
+  },
+  {
+   "i": 16,
+   "q": "Bring on the Empty Horses was the sequel to which other David Niven Autobiography/Memoir ?",
+   "seconds": 20.5,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4919,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "Michael Curtiz (Wikipedia): Michael Curtiz was a Hungarian and American film dir"
+   ]
+  },
+  {
+   "i": 17,
+   "q": "In 2004, Chechen terrorists took schoolchildren hostage resulting in a shoot-out in which hundreds died, in which city was it?",
+   "seconds": 20.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9623,
+   "final_right": true
+  },
+  {
+   "i": 18,
+   "q": "At which British golf course could you find yourself in Hell Bunker",
+   "seconds": 20.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7329,
+   "final_right": true
+  },
+  {
+   "i": 19,
+   "q": "When were the first Winter Paralympics held?",
+   "seconds": 20.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9372,
+   "final_right": true
+  },
+  {
+   "i": 20,
+   "q": "Which Shakespeare play is set in the Forest of Arden?",
+   "seconds": 22.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8566,
+   "final_right": true
+  },
+  {
+   "i": 21,
+   "q": "Suya, Puff Puff, and Moin Moin (or Moyi-Moyi) are well-known Nigerian?",
+   "seconds": 22.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9597,
+   "final_right": true
+  },
+  {
+   "i": 22,
+   "q": "If someone has a BA, they are a Bachelor of what?",
+   "seconds": 22.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9822,
+   "final_right": true
+  },
+  {
+   "i": 23,
+   "q": "In which film series would you expect to film Katniss Everdeen and Peeta Malark?",
+   "seconds": 22.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9178,
+   "final_right": true
+  },
+  {
+   "i": 24,
+   "q": "What is the literal translation of the name Las Vegas?",
+   "seconds": 14.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9366,
+   "final_right": true
+  },
+  {
+   "i": 25,
+   "q": "What is the name of the official British coronation crown?",
+   "seconds": 14.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9401,
+   "final_right": true
+  },
+  {
+   "i": 26,
+   "q": "The line 'The mirror crack'd from side to side' comes from which poem?",
+   "seconds": 14.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7694,
+   "final_right": false
+  },
+  {
+   "i": 27,
+   "q": "In which year did Alcock and Brown make the first flight across the Atlantic?",
+   "seconds": 14.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.89,
+   "final_right": true
+  },
+  {
+   "i": 28,
+   "q": "Bullfighting is central to which Ernest Hemingway non-fiction book?",
+   "seconds": 64.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9393,
+   "final_right": true
+  },
+  {
+   "i": 29,
+   "q": "What word is applied to someone who is equally capable with both hands?",
+   "seconds": 64.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9644,
+   "final_right": true
+  },
+  {
+   "i": 30,
+   "q": "In which TV establishment were Miss Gatsby and Miss Tibbs residents ?",
+   "seconds": 64.9,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.0439,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "Fawlty Towers (Wikipedia): Fawlty Towers is a British television sitcom written "
+   ]
+  },
+  {
+   "i": 31,
+   "q": "What instrument was played by jazz musician Bix Beiderbeck?",
+   "seconds": 64.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8297,
+   "final_right": false
+  },
+  {
+   "i": 32,
+   "q": "Which TV presenter, who died in February 2013, was for over 20 years the host of 'Mr & Mrs'?",
+   "seconds": 31.8,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.0544,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "Judith Chalmers (Wikipedia): Judith Rosemary Locke Chalmers was a British televi",
+    "Phillip Schofield (Wikipedia): Phillip Bryan Schofield is an English television ",
+    "List of television performers who died during production (Wikipedia): The follow"
+   ]
+  },
+  {
+   "i": 33,
+   "q": "Michelangelo Merisi (or Amerighi) is the birth name of which artist?",
+   "seconds": 12.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9756,
+   "final_right": true
+  },
+  {
+   "i": 34,
+   "q": "What type of sausage is usually sold in a flat circular coil?",
+   "seconds": 12.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7503,
+   "final_right": false
+  },
+  {
+   "i": 35,
+   "q": "What is the name of the giraffe that Toys-r-us uses as its' mascot?",
+   "seconds": 12.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7965,
+   "final_right": false
+  },
+  {
+   "i": 36,
+   "q": "Which Italian demonstrated the first modern electric battery?",
+   "seconds": 41.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9166,
+   "final_right": true
+  },
+  {
+   "i": 37,
+   "q": "Which medical condition is sometimes known as Daltonism?",
+   "seconds": 41.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9015,
+   "final_right": true
+  },
+  {
+   "i": 38,
+   "q": "Who played Hotlips Houlihan in the 1972 film MASH?",
+   "seconds": 41.4,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4335,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "List of M*A*S*H characters (Wikipedia): This is a list of characters from the M*"
+   ]
+  },
+  {
+   "i": 39,
+   "q": "Luzon is an island of which country?",
+   "seconds": 22.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9928,
+   "final_right": true
+  },
+  {
+   "i": 40,
+   "q": "Areas on the Canadian eastern coast share their name with two breeds of dog, Newfoundland and which other?",
+   "seconds": 11.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9151,
+   "final_right": true
+  },
+  {
+   "i": 41,
+   "q": "The Alfred Hitchcock films Rebecca and The Birds were based on novels by which author?",
+   "seconds": 11.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9267,
+   "final_right": true
+  },
+  {
+   "i": 42,
+   "q": "What company purchased Skype in 2011?",
+   "seconds": 11.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9567,
+   "final_right": true
+  },
+  {
+   "i": 43,
+   "q": "Norovirus causes illness in humans described by what body part?",
+   "seconds": 12.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.959,
+   "final_right": true
+  },
+  {
+   "i": 44,
+   "q": "What is the name of the village druid in the comic strip \u2018Asterix\u2019?",
+   "seconds": 27.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9183,
+   "final_right": true
+  },
+  {
+   "i": 45,
+   "q": "What alcoholic drink whose name means 'little water' was first distilled from grain in the 8-9th centuries in NE Europe?",
+   "seconds": 27.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8794,
+   "final_right": false
+  },
+  {
+   "i": 46,
+   "q": "Who is currently the Supreme Governor of the Church of England?",
+   "seconds": 27.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9682,
+   "final_right": false
+  },
+  {
+   "i": 47,
+   "q": "Which river runs through Hamburg?",
+   "seconds": 26.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9784,
+   "final_right": true
+  },
+  {
+   "i": 48,
+   "q": "The 1982 Time Magazine Man of the Year was awarded to which device?",
+   "seconds": 14.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8065,
+   "final_right": true
+  },
+  {
+   "i": 49,
+   "q": "Who was the lyre-playing muse of tragedy in Greek mythology?",
+   "seconds": 14.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9541,
+   "final_right": true
+  },
+  {
+   "i": 50,
+   "q": "\"Who wrote the TV series \"\"Pennies From Heaven\"\", and \"\"The Singing Detective\"\"?\"",
+   "seconds": 14.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.4212,
+   "final_right": true
+  },
+  {
+   "i": 51,
+   "q": "Which 1988 children\u2019s novel by Roald Dahl features a hostile school headmistress named Miss Trunchbull ?",
+   "seconds": 15.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9089,
+   "final_right": true
+  },
+  {
+   "i": 52,
+   "q": "Which Russian composer wrote the ballets 'The Stone Flower' and 'Romeo and Juliet'?",
+   "seconds": 9.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8856,
+   "final_right": true
+  },
+  {
+   "i": 53,
+   "q": "Elliot Carver is the villain in which James Bond film?",
+   "seconds": 9.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8819,
+   "final_right": true
+  },
+  {
+   "i": 54,
+   "q": "In 2006, who became the UK's first woman Secretary of State for Foreign and Commonwealth Affairs?",
+   "seconds": 9.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8286,
+   "final_right": true
+  },
+  {
+   "i": 55,
+   "q": "In 1919, which Dadaist created L.H.O.O.Q., a parody of the Mona Lisa, in which a moustache and goatee beard were added to a reproduction of the painting?",
+   "seconds": 12.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8741,
+   "final_right": true
+  },
+  {
+   "i": 56,
+   "q": "Soul Patch, Reed, Lincoln and Monkey Tail are all types of what?",
+   "seconds": 19.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9575,
+   "final_right": true
+  },
+  {
+   "i": 57,
+   "q": "For which 1960 film did Billy Wilder become the first person to win three Oscars for the same film?",
+   "seconds": 19.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7699,
+   "final_right": false
+  },
+  {
+   "i": 58,
+   "q": "In 1746, Scottish naval surgeon James Lind pioneered the treatment of which disease?",
+   "seconds": 19.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.906,
+   "final_right": true
+  },
+  {
+   "i": 59,
+   "q": "What is the lowest level of the Earth's atmosphere?",
+   "seconds": 18.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9505,
+   "final_right": true
+  },
+  {
+   "i": 60,
+   "q": "How is the number ten written in Roman numerals?",
+   "seconds": 19.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9971,
+   "final_right": true
+  },
+  {
+   "i": 61,
+   "q": "The borders of which European country, that were set under the reign of Afonso III (1248 to 1279), are the same today?",
+   "seconds": 19.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8872,
+   "final_right": true
+  },
+  {
+   "i": 62,
+   "q": "The name of which Spanish city is in the full title of Costa del Sol Airport?",
+   "seconds": 19.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9163,
+   "final_right": true
+  },
+  {
+   "i": 63,
+   "q": "Which character has been played by Jack Lord, Cec Linder, Rik Van Nutter, Norman Burton, David Hedison, John Terry, David Hedison and Jeffrey Wright?",
+   "seconds": 28.7,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4967,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "Felix Leiter (Wikipedia): Felix Leiter is a fictional character created by Ian F",
+    "List of James Bond allies (Wikipedia): This is a list of allies of James Bond wh"
+   ]
+  },
+  {
+   "i": 64,
+   "q": "The United Nations Organisation UNHRC looks at what specific issue?",
+   "seconds": 56.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8577,
+   "final_right": true
+  },
+  {
+   "i": 65,
+   "q": "Toot, Percy, Charlie, ching and chang all refer informally to what?",
+   "seconds": 56.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7756,
+   "final_right": false
+  },
+  {
+   "i": 66,
+   "q": "Which legendary dancer was Oscar-nominated for The Towering Inferno?",
+   "seconds": 56.3,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.3801,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "John Williams (Wikipedia): John Towner Williams is an American composer and cond",
+    "List of Academy Award\u2013nominated films (Wikipedia): This is a list of Academy Awa",
+    "List of British films of 2015 (Wikipedia): The British film industry produced ov"
+   ]
+  },
+  {
+   "i": 67,
+   "q": "Nine of the ten tallest buildings in Germany are in which city?",
+   "seconds": 44.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9275,
+   "final_right": true
+  },
+  {
+   "i": 68,
+   "q": "In what Virginia town is the Central Intelligence Agency located?",
+   "seconds": 11.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9956,
+   "final_right": true
+  },
+  {
+   "i": 69,
+   "q": "Who is the most famous character created by Sir Arthur Conan Doyle?",
+   "seconds": 11.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.922,
+   "final_right": true
+  },
+  {
+   "i": 70,
+   "q": "In which activity were hickory and persimmon replaced by graphite and titanium?",
+   "seconds": 11.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8856,
+   "final_right": true
+  },
+  {
+   "i": 71,
+   "q": "Which bird, in relation to its size, has the thickest skull?",
+   "seconds": 15.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.852,
+   "final_right": false
+  },
+  {
+   "i": 72,
+   "q": "Supposedly a hangover cure, which drink consists of a raw egg, Worcestershire sauce and typically a hot sauce with condiments?",
+   "seconds": 50.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.5606,
+   "final_right": false
+  },
+  {
+   "i": 73,
+   "q": "The Cuatro Torres Business Area is in which European city?",
+   "seconds": 50.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9877,
+   "final_right": true
+  },
+  {
+   "i": 74,
+   "q": "The word husband is derived from the ancient Old Norse meanings of 'house' and what activity?",
+   "seconds": 50.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7607,
+   "final_right": false
+  },
+  {
+   "i": 75,
+   "q": "Which creature is mythically said to sing before it dies, hence an expression for a grand final performance before retirement?",
+   "seconds": 52.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7383,
+   "final_right": true
+  },
+  {
+   "i": 76,
+   "q": "If you travelled down the Missouri River from Bismarck, North Dakota, which city would you be in when you reached the ocean?",
+   "seconds": 30.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9013,
+   "final_right": true
+  },
+  {
+   "i": 77,
+   "q": "What is 'The Old Lady of Threadneedle Street'?",
+   "seconds": 30.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7305,
+   "final_right": true
+  },
+  {
+   "i": 78,
+   "q": "What was the profession of Paul Strand (1890 - 1976)?",
+   "seconds": 30.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9198,
+   "final_right": true
+  },
+  {
+   "i": 79,
+   "q": "\"What name is given to the maxim \"\"employees tend to rise to their level of incompetence.\"\"?\"",
+   "seconds": 27.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8462,
+   "final_right": true
+  },
+  {
+   "i": 80,
+   "q": "\"Which game has been played in England since Tudor Times, with the earliest reference being in 1744 in \"\"A Little Pretty Pocketbook\"\" where it is called Baseball?\"",
+   "seconds": 44.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8458,
+   "final_right": true
+  },
+  {
+   "i": 81,
+   "q": "Name the Danny Boyle biopic about a climber trapped by a boulder for more than five days?",
+   "seconds": 44.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8595,
+   "final_right": true
+  },
+  {
+   "i": 82,
+   "q": "Who was the first cricketer to score 10,000 test runs?",
+   "seconds": 44.5,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.591,
+   "final_right": true,
+   "closed_book_right": true,
+   "passages": [
+    "List of players who have scored 10,000 or more runs in Test cricket (Wikipedia):",
+    "Joe Root (Wikipedia): Joseph Edward Root is an English international cricketer w",
+    "Sunil Gavaskar (Wikipedia): Sunil Manohar Gavaskar, is an Indian cricket comment"
+   ]
+  },
+  {
+   "i": 83,
+   "q": "The city of Baghdad lies on which river?",
+   "seconds": 42.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9984,
+   "final_right": true
+  },
+  {
+   "i": 84,
+   "q": "\"Which actor, best known for his role in \"\"The Godfather\"\" series of films, shares his name with a member of TV's \"\"Dragon's Den\"\"?\"",
+   "seconds": 4.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.4628,
+   "final_right": false
+  },
+  {
+   "i": 85,
+   "q": "Arkansas Black is a variety of which fruit?",
+   "seconds": 4.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9672,
+   "final_right": true
+  },
+  {
+   "i": 86,
+   "q": "Canberra is the capital of which country?",
+   "seconds": 4.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9986,
+   "final_right": true
+  },
+  {
+   "i": 87,
+   "q": "The 'Subway Army' are/were a gang of football hooligans who supported which Midlands club?",
+   "seconds": 258.6,
+   "error": "RemoteDisconnected('Remote end closed connection without response')",
+   "looked_up": false,
+   "trigger_score": null,
+   "final_right": null
+  },
+  {
+   "i": 88,
+   "q": "What is the world's third largest desert?",
+   "seconds": 51.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7351,
+   "final_right": false
+  },
+  {
+   "i": 89,
+   "q": "What style of American Football founded in 2003 is a full-contact 7 a side game where uniforms consist of helmets, shoulder pads, elbow pads, knee pads, bras, and panties?",
+   "seconds": 51.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7543,
+   "final_right": false
+  },
+  {
+   "i": 90,
+   "q": "Which opera star was born Claire Mary Teresa Rawstron in 1944?",
+   "seconds": 51.9,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4769,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "Kiri Te Kanawa (Wikipedia): Dame Kiri Jeanette Claire Te Kanawa is a New Zealand"
+   ]
+  },
+  {
+   "i": 91,
+   "q": "Which actor took Russian citizenship in January 2013 amid a row over taxes in his native country?",
+   "seconds": 64.8,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.201,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "United States (Wikipedia): The United States of America (USA), also known as the",
+    "List of former United States citizens who relinquished their nationality (Wikipe",
+    "Abkhazia (Wikipedia): Abkhazia, officially the Republic of Abkhazia, is a partia"
+   ]
+  },
+  {
+   "i": 92,
+   "q": "Which 2008 musical film is set on the fictional Greek island of Kalokairi?",
+   "seconds": 64.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8329,
+   "final_right": true
+  },
+  {
+   "i": 93,
+   "q": "\"Which opera features the \"\"Humming Chorus\"\"?\"",
+   "seconds": 64.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7931,
+   "final_right": true
+  },
+  {
+   "i": 94,
+   "q": "Phil Collins was a drummer and singer in what band?",
+   "seconds": 40.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9445,
+   "final_right": true
+  },
+  {
+   "i": 95,
+   "q": "Who is the presenter of the TV series The School of Hard Sums?",
+   "seconds": 40.3,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.0358,
+   "final_right": false,
+   "closed_book_right": true,
+   "passages": [
+    "Dara \u00d3 Briain (Wikipedia): Dara \u00d3 Briain is an Irish comedian and television pre",
+    "Richard Osman (Wikipedia): Richard Thomas Osman is an English television present",
+    "Josh Widdicombe (Wikipedia): Joshua Michael Widdicombe is an English comedian, p"
+   ]
+  },
+  {
+   "i": 96,
+   "q": "Which English town/city did the Romans call Dubris?",
+   "seconds": 40.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9746,
+   "final_right": true
+  },
+  {
+   "i": 97,
+   "q": "In which year was the Royal British Legion founded?",
+   "seconds": 4.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8676,
+   "final_right": true
+  },
+  {
+   "i": 98,
+   "q": "The Livadia Palace near which Crimean city was the site of a 1945 Peace Conference?",
+   "seconds": 6.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9163,
+   "final_right": true
+  },
+  {
+   "i": 99,
+   "q": "What alphabetically is the first station on the London underground",
+   "seconds": 4.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.6954,
+   "final_right": true
+  }
+ ]
+}

@@ -91,7 +91,8 @@ function render(r){let html=marks(r);
  return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
   '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
-  (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up. ':'')+
+  (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
+   esc((r.retrieval.passages||[]).map(p=>p.split(' (Wikipedia):')[0].slice(0,60)).join('; '))+'. ':'')+
   'mode '+r.mode+'</div>'+(r.reasoning?reasonBox(r.reasoning):'')}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
 fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
