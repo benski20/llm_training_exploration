@@ -50,6 +50,11 @@ image = (
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
     .add_local_file(os.path.join(ROOT, DETECTOR), "/app/heads/detector.pt")
+    # the claim-verification evaluation: the 32B judges evidence saved by a CPU run (no lookups)
+    .add_local_file(os.path.join(ROOT, "experiments", "evidence_verify.py"), "/app/experiments/evidence_verify.py")
+    .add_local_file(os.path.join(ROOT, "results", "evidence_verify_v3_judge1.5b.json"), "/app/eval/rows.json")
+    .add_local_file(os.path.join(ROOT, "results", "kaggle", "chateval-32h", "chateval", "traces.json"),
+                    "/app/eval/traces.json")
 )
 app = modal.App("verichat", image=image)
 hf_cache = modal.Volume.from_name("verichat-hf-cache", create_if_missing=True)
@@ -81,6 +86,18 @@ def wiki_check():
         print(q, "->", len(got), "passages:", [p[:90] for p in got], flush=True)
         if not got:
             raise SystemExit(f"no passages: Wikipedia unreachable or rate-limited from Modal ({dict(w.errors)})")
+
+
+@app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=30 * 60)
+def judge_eval():
+    """The 32B as the claim verifier on the 32B's labeled replies, from saved evidence (a few GPU minutes):
+    modal run deploy/modal_app.py::judge_eval"""
+    out = subprocess.run(["python", "/app/experiments/evidence_verify.py", "--rejudge", "/app/eval/rows.json",
+                          "--traces", "/app/eval/traces.json", "--judge", MODEL, "--out", "/tmp/judge32.json"],
+                         env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
+    print(out.stdout[-6000:], out.stderr[-3000:] if out.returncode else "", flush=True)
+    if out.returncode:
+        raise SystemExit(out.returncode)
 
 
 @app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,

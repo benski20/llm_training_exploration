@@ -85,11 +85,15 @@ def main():
     ap.add_argument("--judge", help="a chat model that reads the evidence and says whether it supports the claim, "
                                     "e.g. Qwen/Qwen2.5-3B-Instruct (P(Yes) is the support)")
     ap.add_argument("--analyze", help="recompute the summary from the rows of an earlier output (no lookups)")
+    ap.add_argument("--rejudge", help="judge the evidence saved in an earlier output again, with --judge loaded "
+                                      "as the demo loads it (vt.claim_verify on GPU; no lookups)")
     a = ap.parse_args()
     if a.analyze:
         rows = json.load(open(a.analyze))["rows"]
         has_judge = any("judge" in j for r in rows for j in r["sentences"])
         return summarize(rows, a, has_judge, {})
+    if a.rejudge:
+        return rejudge(a)
     judge = Judge(a.judge) if a.judge else None
     from sentence_transformers import CrossEncoder
     nli = CrossEncoder(a.nli, max_length=512)
@@ -126,13 +130,42 @@ def main():
             if judge is not None:
                 j["judge"] = round(judge(x["prompt"], s, ps), 4)
             judged.append(j)
-        rows.append({"kind": x["kind"], "source": x.get("source", x.get("cat")), "wrong": x.get("wrong"),
+        rows.append({"kind": x["kind"], "source": x.get("source", x.get("cat")), "wrong": x.get("wrong"), "prompt": x["prompt"],
                      "reply_confidence": x.get("reply_confidence"), "sentences": judged})
         if n % 20 == 0:
             print(json.dumps({"done": n + 1, "errors": dict(wiki.errors)}), flush=True)
             json.dump({"partial": True, "rows": rows}, open(a.out, "w"))       # survives a timeout
         time.sleep(a.pause)
     summarize(rows, a, judge is not None, dict(wiki.errors))
+
+
+def rejudge(a):
+    """The saved evidence judged by the serving path: vt.claim_verify.ClaimVerifier.judge (batched, the chat
+    template with thinking off), the model loaded like the demo's (4-bit checkpoints need bitsandbytes)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from vt.claim_verify import ClaimVerifier
+    rows = json.load(open(a.rejudge))["rows"]
+    from vt.verichat import gpu_dtype
+    cuda = torch.cuda.is_available()
+    tok = AutoTokenizer.from_pretrained(a.judge)
+    model = AutoModelForCausalLM.from_pretrained(                    # as VeriChat.load
+        a.judge, torch_dtype=gpu_dtype() if cuda else torch.float32, attn_implementation="sdpa",
+        device_map="auto" if cuda else None).eval()
+    v = ClaimVerifier(model, tok, retriever=None, batch=8)
+    T = {i: x for i, x in enumerate(json.load(open(a.traces)))}
+    items, where = [], []
+    for ri, r in enumerate(rows):
+        for si, j in enumerate(r["sentences"]):
+            if j.get("evidence"):
+                items.append((r.get("prompt") or T[ri]["prompt"], j["s"], j["evidence"]))
+                where.append((ri, si))
+    t = time.time()
+    ps = v.judge(items)
+    for (ri, si), p in zip(where, ps):
+        rows[ri]["sentences"][si]["judge"] = round(p, 4)
+    print(json.dumps({"judged": len(items), "seconds": round(time.time() - t, 1)}), flush=True)
+    summarize(rows, a, True, {})
 
 
 def summarize(rows, a, judged_by_model, lookup_errors):

@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction]
+        options: [deploy, stop, logs, wikicheck, correction, judge32]
         default: deploy
       n:
         description: questions for the correction test
@@ -77,6 +77,10 @@ jobs:
       - name: correction rate - restore the public rate limit
         if: always() && steps.req.outputs.action == 'correction' && steps.cdep.outcome == 'success'
         run: modal deploy deploy/modal_app.py
+      - name: the 32B as claim verifier on saved evidence (a few GPU minutes)
+        if: steps.req.outputs.action == 'judge32'
+        timeout-minutes: 30
+        run: modal run deploy/modal_app.py::judge_eval
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000
