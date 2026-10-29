@@ -42,8 +42,23 @@ jobs:
       - name: fill the model cache on a CPU container (no GPU billed)
         if: steps.req.outputs.action == 'deploy'
         run: modal run deploy/modal_app.py::download
-      - name: deploy (scales to zero when idle)
+      - name: deploy without the rate limit, for the checks
+        if: steps.req.outputs.action == 'deploy'
+        id: dep
+        run: |
+          VERICHAT_RATE=0 modal deploy deploy/modal_app.py | tee deploy.log
+          echo "url=$(grep -o 'https://[^ ]*modal\.run' deploy.log | head -1)" >> "$GITHUB_OUTPUT"
+      - name: smoke test (cold start, chat, stream, long chat, judge, page, metrics)
+        if: steps.req.outputs.action == 'deploy'
+        run: bash deploy/smoke_test.sh "${{ steps.dep.outputs.url }}"
+      - name: short load test (1 then 4 clients)
         if: steps.req.outputs.action == 'deploy'
         run: |
-          modal deploy deploy/modal_app.py | tee deploy.log
-          echo "URL: $(grep -o 'https://[^ ]*modal\.run' deploy.log | head -1)"
+          pip install numpy
+          python experiments/load_test.py --url "${{ steps.dep.outputs.url }}" --clients 1,4 --per-client 2 --out load_test.json
+          cat load_test.json
+      - name: redeploy with the public rate limit (also if a check failed)
+        if: always() && steps.req.outputs.action == 'deploy' && steps.dep.outcome == 'success'
+        run: |
+          modal deploy deploy/modal_app.py
+          echo "Demo: ${{ steps.dep.outputs.url }}"

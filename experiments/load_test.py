@@ -17,11 +17,8 @@ import urllib.error
 import urllib.request
 
 import numpy as np
-import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from vt.verichat import VeriChat  # noqa: E402
-from vt.verichat_server import make_server  # noqa: E402
 
 QS = ["Who wrote Pride and Prejudice?", "What is the capital of Australia?", "In which year did the Berlin Wall fall?",
       "Who painted the Mona Lisa?", "What is the largest planet in the Solar System?", "Who discovered penicillin?",
@@ -45,7 +42,10 @@ def main():
         if os.environ.get("VERICHAT_API_KEY"):
             headers["Authorization"] = "Bearer " + os.environ["VERICHAT_API_KEY"]
         res = {"url": a.url, "runs": []}
-    else:
+    else:                                                # a local server (needs torch and the model)
+        import torch
+        from vt.verichat import VeriChat
+        from vt.verichat_server import make_server
         torch.set_num_threads(a.threads)
         bot = VeriChat.load(a.model, a.head)
         inner = bot.reply_batch
