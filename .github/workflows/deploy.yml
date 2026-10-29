@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study]
         default: deploy
       n:
         description: questions for the correction test
@@ -81,6 +81,16 @@ jobs:
         if: steps.req.outputs.action == 'judge32'
         timeout-minutes: 30
         run: modal run deploy/modal_app.py::judge_eval
+      - name: judge vs probe study (about 25-30 GPU minutes for 300 + 300 questions)
+        if: steps.req.outputs.action == 'study'
+        timeout-minutes: 80
+        run: modal run deploy/modal_app.py::study_main --per-source "${{ github.event.inputs.n || 300 }}"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.req.outputs.action == 'study'
+        with:
+          name: study
+          path: study.json
+          if-no-files-found: ignore
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000

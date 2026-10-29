@@ -59,6 +59,9 @@ image = (
     .add_local_file(os.path.join(ROOT, "results", "evidence_verify_v3_judge1.5b.json"), "/app/eval/rows.json")
     .add_local_file(os.path.join(ROOT, "results", "kaggle", "chateval-32h", "chateval", "traces.json"),
                     "/app/eval/traces.json")
+    # the judge-vs-probe study: the served model answers, its probe scores, it judges looked-up evidence
+    .add_local_file(os.path.join(ROOT, "experiments", "study_32b.py"), "/app/experiments/study_32b.py")
+    .add_local_file(os.path.join(ROOT, "results", "study_questions.json"), "/app/eval/study_questions.json")
 )
 app = modal.App("verichat", image=image)
 hf_cache = modal.Volume.from_name("verichat-hf-cache", create_if_missing=True)
@@ -102,6 +105,28 @@ def judge_eval():
     print(out.stdout[-60000:], out.stderr[-3000:] if out.returncode else "", flush=True)
     if out.returncode:
         raise SystemExit(out.returncode)
+
+
+@app.function(gpu=GPU, cpu=4.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=75 * 60)
+def study(per_source: int = 300):
+    """Judge vs probe on fresh TriviaQA and NQ answers of the served model (experiments/study_32b.py);
+    returns the result JSON. About 25-30 GPU minutes for 300 + 300."""
+    out = subprocess.run(["python", "/app/experiments/study_32b.py", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
+                          "--questions", "/app/eval/study_questions.json", "--limit", str(per_source),
+                          "--out", "/tmp/study.json"],
+                         env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
+    print("\n".join(line for line in out.stdout.splitlines() if not line.startswith("ROWS"))[-8000:],
+          out.stderr[-3000:] if out.returncode else "", flush=True)
+    if out.returncode:
+        raise SystemExit(out.returncode)
+    return open("/tmp/study.json").read()
+
+
+@app.local_entrypoint()
+def study_main(per_source: int = 300):
+    with open("study.json", "w") as f:
+        f.write(study.remote(per_source))
+    print("wrote study.json")
 
 
 def server_args():
