@@ -561,3 +561,28 @@ def test_wikipedia_rerank_reorders_bm25s_best_passages():
     assert "Zeta" not in plain[0] and "Zeta" in ranked[0]
     broken = Wikipedia(k=1, fetch=fake, full_text=True, passage_words=20, rerank=lambda q, ps: 1 / 0)
     assert broken("alpha words") == plain and broken.errors      # a failing reranker keeps BM25's order
+
+
+def test_final_replies_carry_claim_verification_and_survive_its_failure():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
+    seen = []
+
+    class Fake:
+        def verify(self, question, text):
+            seen.append(question)
+            return [{"claim": "x", "verdict": "supported", "p_supported": 0.9, "sources": ["X"]}]
+    bot.verifier = Fake()
+    out = bot.reply([{"role": "user", "content": "Who built it?"}], max_new_tokens=8)
+    assert out["verification"][0]["verdict"] == "supported" and seen == ["Who built it?"]
+
+    class Broken:
+        def verify(self, question, text):
+            raise RuntimeError("lookup down")
+    bot.verifier = Broken()
+    out = bot.reply([{"role": "user", "content": "Who built it?"}], max_new_tokens=8)
+    assert "text" in out and "verification" not in out

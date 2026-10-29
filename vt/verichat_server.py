@@ -94,7 +94,10 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.split(' (Wikipedia):')[0].slice(0,60)).join('; '))+'. ':'')+
-  'mode '+r.mode+'</div>'+(r.reasoning?reasonBox(r.reasoning):'')}
+  'mode '+r.mode+'</div>'+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
+function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–'};
+ return '<div class="claims">'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
+  (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
 function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
 fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
  if(h.thinking_available){document.getElementById('thinkl').hidden=false;document.getElementById('think').checked=!!h.thinking}});
@@ -477,6 +480,8 @@ def main(argv=None):
     ap.add_argument("--wikipedia", action="store_true", help="look doubted questions up on Wikipedia (live, no key)")
     ap.add_argument("--rerank", help="a sentence-transformers cross-encoder that reorders Wikipedia passages (with "
                                      "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
+    ap.add_argument("--verify-claims", action="store_true", help="check each reply's claims against Wikipedia, "
+                                                                "judged by the chat model (needs --wikipedia)")
     ap.add_argument("--wikipedia-leads", action="store_true", help="use only each page's lead section, not the best "
                                                                  "passages of its whole text")
     ap.add_argument("--retrieve-below", type=float, help="look up when the reply's doubt score is below this "
@@ -518,6 +523,9 @@ def main(argv=None):
                 return ce.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False)
         bot.retriever = Corpus.from_dir(a.corpus) if a.corpus else \
             Wikipedia(full_text=not a.wikipedia_leads, pages=5 if rerank else 3, rerank=rerank)
+        if a.verify_claims:
+            from .claim_verify import ClaimVerifier
+            bot.verifier = ClaimVerifier(bot.model, bot.tok, bot.retriever)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
     det = None
     if a.detector:

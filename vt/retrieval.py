@@ -108,11 +108,13 @@ class Wikipedia:
         self.budget_s = budget_s                             # a lookup starts no new fetch after this long: the
                                                              # socket timeout does not cover a slow DNS answer
         self.errors = Counter()                              # why lookups failed (e.g. "HTTP 429"), for /health
+        import threading
+        self._local = threading.local()
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
 
     def _get(self, url):
-        if time.monotonic() - getattr(self, "_t0", time.monotonic()) > self.budget_s:
+        if time.monotonic() - getattr(self._local, "t0", time.monotonic()) > self.budget_s:
             raise TimeoutError("lookup time budget spent")
         return self.fetch(url)
 
@@ -142,7 +144,7 @@ class Wikipedia:
         key = (norm(query), k)
         if key in self.cache:
             return self.cache[key]
-        self._t0 = time.monotonic()
+        self._local.t0 = time.monotonic()                   # per thread: lookups may run in parallel
         try:
             n = max(k, self.pages) if self.full_text else k
             hits = []

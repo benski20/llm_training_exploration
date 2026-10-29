@@ -70,10 +70,12 @@ class ClaimVerifier:
         return out
 
     def verify(self, question, text):
-        found = []
-        for c in self.claims(text):
-            ps = self.retriever(f"{question} {c}")
-            found.append((c, ps))
+        from concurrent.futures import ThreadPoolExecutor
+        cs = self.claims(text)
+        if not cs:
+            return []
+        with ThreadPoolExecutor(max_workers=len(cs)) as pool:   # lookups wait on the network: in parallel
+            found = list(zip(cs, pool.map(lambda c: self.retriever(f"{question} {c}"), cs)))
         ask = [(question, c, ps) for c, ps in found if ps]
         probs = iter(self.judge(ask)) if ask else iter(())
         out = []
