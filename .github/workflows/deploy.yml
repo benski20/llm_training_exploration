@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32, study]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge]
         default: deploy
       n:
         description: questions for the correction test
@@ -85,8 +85,12 @@ jobs:
         if: steps.req.outputs.action == 'study'
         timeout-minutes: 80
         run: modal run deploy/modal_app.py::study_main --per-source "${{ github.event.inputs.n || 300 }}"
+      - name: the study's saved answers, looked up again on CPU and judged on GPU (a few GPU minutes)
+        if: steps.req.outputs.action == 'rejudge'
+        timeout-minutes: 80
+        run: modal run deploy/modal_app.py::study_rejudge
       - uses: actions/upload-artifact@v4
-        if: always() && steps.req.outputs.action == 'study'
+        if: always() && (steps.req.outputs.action == 'study' || steps.req.outputs.action == 'rejudge')
         with:
           name: study
           path: study.json

@@ -16,16 +16,24 @@ from vt.claims import prompt_of
 SYSTEM = "You check claims against evidence. Answer only Yes or No."
 
 
+BOLD = "\x01"                                                   # marks a sentence the model put in bold
+
+
 def sentences(text):
-    text = re.sub(r"[*_#`>]+", "", text)                           # markdown
     parts = re.split(r"(?<=[.!?])\s+|\n+", text)
-    return [p.strip(" -•\t") for p in parts if len(p.strip()) > 3]
+    out = []
+    for p in parts:
+        bold = bool(re.search(r"\*\*[^*]+\*\*", p))              # the model bolds its answer
+        p = re.sub(r"[*_#`>]+", "", p).strip(" -•\t")             # markdown
+        if len(p) > 3:
+            out.append(p + BOLD if bold else p)
+    return out
 
 
 def check_worthy(s):
-    """Names something or gives a number: a word capitalized mid-sentence, or a digit."""
-    w = s.split()
-    return any(ch.isdigit() for ch in s) or any(t[:1].isupper() for t in w[1:])
+    """Names something, gives a number, or holds what the model put in bold (its answer: "**fresco**")."""
+    w = s.rstrip(BOLD).split()
+    return s.endswith(BOLD) or any(ch.isdigit() for ch in s) or any(t[:1].isupper() for t in w[1:])
 
 
 def source(passage):
@@ -33,6 +41,22 @@ def source(passage):
     if " (Wikipedia):" in passage:
         return passage.split(" (Wikipedia):")[0]
     return passage[:60].rsplit(" ", 1)[0] + "…" if len(passage) > 60 else passage
+
+
+def gather(pairs, retriever, max_claims=3):
+    """The lookup half, no model needed: [(question, reply text)] -> [{"question", "claims": [{"claim",
+    "passages"}]}], every claim looked up in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+    claims = [(k, q, c) for k, (q, text) in enumerate(pairs)
+              for c in [s.rstrip(BOLD) for s in sentences(text) if check_worthy(s)][:max_claims]]
+    found = []
+    if claims:
+        with ThreadPoolExecutor(max_workers=min(8, len(claims))) as pool:
+            found = list(pool.map(lambda kqc: retriever(f"{kqc[1]} {kqc[2]}"), claims))
+    out = [{"question": q, "claims": []} for q, _ in pairs]
+    for (k, _, c), ps in zip(claims, found):
+        out[k]["claims"].append({"claim": c, "passages": ps})
+    return out
 
 
 class ClaimVerifier:
@@ -47,7 +71,7 @@ class ClaimVerifier:
         self.no = sorted({tok.encode(w, add_special_tokens=False)[0] for w in ("No", " No")})
 
     def claims(self, text):
-        return [s for s in sentences(text) if check_worthy(s)][:self.max_claims]
+        return [s.rstrip(BOLD) for s in sentences(text) if check_worthy(s)][:self.max_claims]
 
     def _prompt(self, question, claim, passages):
         ev = "\n\n".join(p[:900] for p in passages)
@@ -82,13 +106,15 @@ class ClaimVerifier:
     def verify_batch(self, pairs):
         """[(question, reply text)] -> one verification list each: every claim of every reply looked up in
         parallel (the lookups wait on the network), then all of them judged in batched forward passes."""
-        from concurrent.futures import ThreadPoolExecutor
-        claims = [(k, q, c) for k, (q, text) in enumerate(pairs) for c in self.claims(text)]
-        out = [[] for _ in pairs]
+        return self.judge_gathered(gather(pairs, self.retriever, self.max_claims))
+
+    def judge_gathered(self, gathered):
+        """gather()'s output -> one verification list per reply (the judging half: needs the model only)."""
+        out = [[] for _ in gathered]
+        claims = [(k, g["question"], c["claim"]) for k, g in enumerate(gathered) for c in g["claims"]]
+        found = [c["passages"] for g in gathered for c in g["claims"]]
         if not claims:
             return out
-        with ThreadPoolExecutor(max_workers=min(8, len(claims))) as pool:
-            found = list(pool.map(lambda kqc: self.retriever(f"{kqc[1]} {kqc[2]}"), claims))
         ask = [(q, c, ps) for (_, q, c), ps in zip(claims, found) if ps]
         probs = iter(self.judge(ask)) if ask else iter(())
         for (k, _, c), ps in zip(claims, found):

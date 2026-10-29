@@ -53,22 +53,22 @@ def main():
     ap.add_argument("--rerank", default="cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--corpus", help="look up in a local folder instead of Wikipedia (smoke test)")
     ap.add_argument("--out", default="study.json")
+    ap.add_argument("--rows", help="the answers of an earlier run (its JSON): skip answering")
+    ap.add_argument("--gather-only", action="store_true", help="with --rows: only look the claims up (no model, CPU)")
+    ap.add_argument("--judge-gathered", action="store_true", help="with --rows from --gather-only: only judge")
     a = ap.parse_args()
+    if a.rows and a.gather_only:
+        return gather_rows(a)
+    if a.rows and a.judge_gathered:
+        return judge_rows(a)
     from vt.claim_verify import ClaimVerifier
-    from vt.retrieval import Corpus, Wikipedia
     from vt.verichat import VeriChat, apply_sampling
     qs = json.load(open(a.questions))
     if a.limit:
         qs = [q for q in qs if q["source"] == "triviaqa"][:a.limit] + [q for q in qs if q["source"] == "nq"][:a.limit]
     bot = VeriChat.load(a.model, a.head)
     apply_sampling(bot, 0.7, 0.8, 20, 1.5)                     # the demo's decoding
-    if a.corpus:
-        retriever = Corpus.from_dir(a.corpus)
-    else:
-        from sentence_transformers import CrossEncoder
-        ce = CrossEncoder(a.rerank, max_length=256)
-        retriever = Wikipedia(full_text=True, pages=5,
-                              rerank=lambda q, ps: ce.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False))
+    retriever = make_retriever(a)
     verifier = ClaimVerifier(bot.model, bot.tok, retriever, batch=16)
     rows, t0 = [], time.time()
     for k in range(0, len(qs), a.batch):                      # closed-book answers, as served (no lookup)
@@ -92,6 +92,53 @@ def main():
     res.update(model=a.model, seconds={"answers": round(t1 - t0), "verification": round(time.time() - t1)})
     json.dump(dict(res, rows=rows), open(a.out, "w"), indent=1)
     print("ROWS " + json.dumps(rows), flush=True)
+    print(json.dumps(res, indent=1), flush=True)
+
+
+def make_retriever(a):
+    from vt.retrieval import Corpus, Wikipedia
+    if a.corpus:
+        return Corpus.from_dir(a.corpus)
+    from sentence_transformers import CrossEncoder
+    ce = CrossEncoder(a.rerank, max_length=256)
+    return Wikipedia(full_text=True, pages=5,
+                     rerank=lambda q, ps: ce.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False))
+
+
+def gather_rows(a):
+    """The lookups for saved answers, on CPU: every check-worthy claim's evidence, saved for judging."""
+    from vt.claim_verify import gather
+    rows = json.load(open(a.rows))["rows"]
+    retriever, t = make_retriever(a), time.time()
+    for k in range(0, len(rows), 16):
+        for r, g in zip(rows[k:k + 16], gather([(r["q"], r["text"]) for r in rows[k:k + 16]], retriever)):
+            r["gathered"] = g
+        print(json.dumps({"gathered": min(k + 16, len(rows)), "seconds": round(time.time() - t),
+                          "lookup_errors": dict(getattr(retriever, "errors", {}) or {})}), flush=True)
+    json.dump({"rows": rows, "lookup_errors": dict(getattr(retriever, "errors", {}) or {})}, open(a.out, "w"))
+
+
+def judge_rows(a):
+    """The judging of gathered evidence with the served model (vt.claim_verify, as served)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from vt.claim_verify import ClaimVerifier
+    from vt.verichat import gpu_dtype
+    d = json.load(open(a.rows))
+    rows, cuda = d["rows"], torch.cuda.is_available()
+    tok = AutoTokenizer.from_pretrained(a.model)
+    model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=gpu_dtype() if cuda else torch.float32,
+                                                 attn_implementation="sdpa", device_map="auto" if cuda else None).eval()
+    v, t = ClaimVerifier(model, tok, retriever=None, batch=16), time.time()
+    for k in range(0, len(rows), 64):
+        for r, ver in zip(rows[k:k + 64], v.judge_gathered([r["gathered"] for r in rows[k:k + 64]])):
+            r["verification"] = [{kk: c[kk] for kk in ("verdict", "p_supported", "sources")} for c in ver]
+        print(json.dumps({"judged": min(k + 64, len(rows)), "seconds": round(time.time() - t)}), flush=True)
+    for r in rows:
+        r.pop("gathered", None)
+    res = summarize(rows)
+    res.update(model=a.model, lookup_errors=d.get("lookup_errors"), seconds={"judging": round(time.time() - t)})
+    json.dump(dict(res, rows=rows), open(a.out, "w"), indent=1)
     print(json.dumps(res, indent=1), flush=True)
 
 

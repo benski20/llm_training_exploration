@@ -182,6 +182,32 @@ judge minus probe):
 Settling it needs several hundred more labeled 32B replies. `judge_eval` now prints per-reply scores
 (`ROWS ...`) for the same paired test.
 
+## Judge vs probe at scale (2026-10-29, `study` action, `results/study_32b_v1.json`)
+
+The served 32B answered 300 TriviaQA and 300 NQ questions closed-book. Accuracy was 70.7% and 37.0%.
+
+| AUROC, wrong vs right | TriviaQA | NQ | all |
+|---|---|---|---|
+| probe, all replies | 0.736 | 0.624 | 0.681 |
+| probe, replies with evidence | 0.756 | 0.643 | 0.699 |
+| 32B judge, replies with evidence | 0.845 | 0.676 | 0.767 |
+| judge minus probe (95% CI) | +0.089 (-0.007, +0.192) | +0.034 (-0.079, +0.151) | +0.069 (-0.006, +0.144) |
+| P(judge better) | 0.965 | 0.72 | 0.962 |
+| combined, fitted on half, tested on half | 0.820 (probe 0.751) | 0.657 (probe 0.615) | 0.738 (probe 0.675) |
+
+- The best combination weights the judge 0.8 to 0.9 where evidence exists and uses the probe elsewhere.
+- Only 46% of replies got judged evidence:
+  - 49% had claims, but Wikipedia rate-limited the run (about 550 search and 480 page HTTP 429s, plus
+    timeouts).
+  - 5.5% had no claim the filter recognised: lowercase answers like "fresco" or "blue".
+- Fixes since:
+  - Wikipedia requests are paced, at most 4 in flight and 50 ms apart.
+  - Page texts are cached.
+  - A sentence with bold text (the model bolds its answer) counts as check-worthy.
+  - A rerank crash on a single passage is fixed.
+- The `rejudge` action redoes the lookups for the saved answers on CPU (no GPU billed), then only the
+  judging on GPU, a few minutes.
+
 ## Clients
 
 `vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a

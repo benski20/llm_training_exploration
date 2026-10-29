@@ -110,13 +110,23 @@ class Wikipedia:
         self.errors = Counter()                              # why lookups failed (e.g. "HTTP 429"), for /health
         import threading
         self._local = threading.local()
+        self.pages_cache = {}                                # page key -> (title, full text)
+        self._gate, self._pace, self._last = threading.BoundedSemaphore(4), threading.Lock(), 0.0
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
 
     def _get(self, url):
+        """One request, paced: at most 4 in flight per process and 50 ms between starts (Wikipedia throttles
+        bursts from cloud addresses: a 600-reply study drew about 1000 HTTP 429s without this)."""
         if time.monotonic() - getattr(self._local, "t0", time.monotonic()) > self.budget_s:
             raise TimeoutError("lookup time budget spent")
-        return self.fetch(url)
+        with self._gate:
+            with self._pace:
+                wait = self._last + 0.05 - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
+                self._last = time.monotonic()
+            return self.fetch(url)
 
     def _fetch(self, url, retries=1):
         import json
@@ -198,12 +208,20 @@ class Wikipedia:
         cands = []                                           # (title, page, window, text)
         for j, h in enumerate(hits):
             title = h.get("title", "")
-            try:
-                page = self._get(self.TEXT.format(lang=self.lang, title=self._key(h)))["query"]["pages"][0]
-                text, title = (page.get("extract") or "").strip(), page.get("title", title)
-            except Exception as e:                           # rate limit, missing page: fall back to the lead
-                self.errors["text: " + self._why(e)] += 1
-                text = ""
+            key = self._key(h)
+            if key in self.pages_cache:                      # a reply's claims mostly land on the same pages
+                title, text = self.pages_cache[key]
+            else:
+                try:
+                    page = self._get(self.TEXT.format(lang=self.lang, title=key))["query"]["pages"][0]
+                    text, title = (page.get("extract") or "").strip(), page.get("title", title)
+                    if text:
+                        if len(self.pages_cache) >= 256:
+                            self.pages_cache.pop(next(iter(self.pages_cache)))
+                        self.pages_cache[key] = (title, text)
+                except Exception as e:                       # rate limit, missing page: fall back to the lead
+                    self.errors["text: " + self._why(e)] += 1
+                    text = ""
             if not text:
                 try:
                     lead = self._leads([h])
@@ -223,7 +241,8 @@ class Wikipedia:
             pool = [i for i in best[:self.rerank_pool] if s[i] > 0]
             try:
                 r = self.rerank(query, [f"{cands[i][0]}: {cands[i][3]}" for i in pool])
-                order = [pool[j] for j in sorted(range(len(pool)), key=lambda j: -float(r[j]))]
+                r = [float(x) for x in (r.reshape(-1) if hasattr(r, "reshape") else (r if isinstance(r, (list, tuple)) else [r]))]
+                order = [pool[j] for j in sorted(range(len(pool)), key=lambda j: -r[j])]
                 best = order + [i for i in best if i not in set(pool)]
             except Exception as e:                           # keep BM25's order
                 self.errors["rerank: " + self._why(e)] += 1

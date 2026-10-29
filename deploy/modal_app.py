@@ -122,6 +122,41 @@ def study(per_source: int = 300):
     return open("/tmp/study.json").read()
 
 
+def _run_study(args, stdin_json):
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        src, out = os.path.join(d, "in.json"), os.path.join(d, "out.json")
+        with open(src, "w") as f:
+            f.write(stdin_json)
+        r = subprocess.run(["python", "/app/experiments/study_32b.py", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
+                            "--rows", src, "--out", out] + args,
+                           env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
+        print(r.stdout[-8000:], r.stderr[-3000:] if r.returncode else "", flush=True)
+        if r.returncode:
+            raise SystemExit(r.returncode)
+        return open(out).read()
+
+
+@app.function(cpu=4.0, memory=8192, volumes={"/root/.cache/huggingface": hf_cache}, timeout=60 * 60)
+def study_gather(rows_json: str):
+    """The lookups for saved answers, on CPU (paced Wikipedia requests, reranked): no GPU billed."""
+    return _run_study(["--gather-only"], rows_json)
+
+
+@app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=30 * 60)
+def study_judge(gathered_json: str):
+    """The served model judges the gathered evidence: a few GPU minutes."""
+    return _run_study(["--judge-gathered"], gathered_json)
+
+
+@app.local_entrypoint()
+def study_rejudge(rows: str = "results/study_32b_v1.json"):
+    gathered = study_gather.remote(open(rows).read())
+    with open("study.json", "w") as f:
+        f.write(study_judge.remote(gathered))
+    print("wrote study.json")
+
+
 @app.local_entrypoint()
 def study_main(per_source: int = 300):
     with open("study.json", "w") as f:
