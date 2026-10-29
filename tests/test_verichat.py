@@ -358,3 +358,86 @@ def test_wikipedia_retriever_parses_caches_and_fails_quietly():
     def broken(url):
         raise OSError("429 Too Many Requests")
     assert Wikipedia(fetch=broken)("anything") == []
+
+
+def _tiny_bot():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    return VeriChat(m, tok, p, layer=1)
+
+
+def test_batcher_isolates_a_failing_request():
+    from vt.verichat_server import Batcher
+
+    def handler(items):
+        if any(it == "bad" for it in items):
+            raise RuntimeError("boom")
+        return [it.upper() for it in items]
+    b = Batcher({"x": handler}, max_batch=8, window=0.2)
+    import threading
+    out = {}
+
+    def go(v):
+        try:
+            out[v] = b.submit("x", v, 5)
+        except RuntimeError as e:
+            out[v] = e
+    ts = [threading.Thread(target=go, args=(v,)) for v in ("a", "bad", "c")]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert out["a"] == "A" and out["c"] == "C" and isinstance(out["bad"], RuntimeError)
+
+
+def test_doubt_trigger_is_the_weakest_claim_and_lookup_uses_it():
+    bot = _tiny_bot()
+    r = {"claims": [{"score": 0.9, "text": "Paris"}, {"score": 0.2, "text": "Depardieu"}], "first_token": None}
+    assert bot.doubt_score(r) == (0.2, "Depardieu")
+    assert bot.doubt_score({"claims": [], "first_token": None}) == (None, None)
+    queries = []
+    bot.retriever = lambda q: (queries.append(q), [f"passage for {q}"])[1]
+    bot.retrieve_below = 1.01                                       # look everything up
+    bot.reply([{"role": "user", "content": "Who took Russian citizenship?"}], mode="flag", max_new_tokens=8)
+    assert queries and queries[0] == "Who took Russian citizenship?"
+    assert all(q.startswith("Who took Russian citizenship?") for q in queries) and len(queries) <= 2
+
+
+def test_reply_survives_a_provenance_failure():
+    bot = _tiny_bot()
+
+    def broken(*a, **k):
+        raise RuntimeError("mat1 and mat2 shapes cannot be multiplied")
+    bot.provenance = broken
+    out = bot.reply([{"role": "user", "content": "Tell me about Paris."}], documents=["Paris is the capital of France."],
+                    mode="flag", max_new_tokens=12)
+    assert isinstance(out["text"], str) and all("source" not in c for c in out["claims"])
+    assert "_claim" not in out and "_trigger" not in out
+
+
+def test_server_answers_500_cleanly_when_the_model_fails():
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    from vt.verichat_server import make_server
+    bot = _tiny_bot()
+
+    def broken(reqs, **kw):
+        raise RuntimeError("model failure")
+    bot.reply_batch = broken
+    srv = make_server(bot, port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = json.dumps({"messages": [{"role": "user", "content": "Hi"}]}).encode()
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{srv.server_port}/chat", body,
+                                                          {"Content-Type": "application/json"}))
+            raise AssertionError("expected a 500")
+        except urllib.error.HTTPError as e:
+            assert e.code == 500 and "internal error" in json.loads(e.read())["error"]
+    finally:
+        srv.shutdown()

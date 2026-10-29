@@ -64,3 +64,21 @@ def test_lookback_ratio_is_a_share():
     ids = torch.randint(64, (1, 12))
     r = lookback_ratio(m, ids, ["document"] * 6 + ["instruction"] * 2 + ["response"] * 4, start=7)
     assert r.shape == (4,) and bool(((r >= 0) & (r <= 1)).all())
+
+
+def test_dense_dequantizes_4bit_weights(monkeypatch):
+    import sys
+    import types
+
+    import torch
+    from vt.qwen_glassbox import _dense
+    full = torch.randn(6, 4)
+    lin = torch.nn.Linear(4, 6, bias=False)
+    assert torch.equal(_dense(lin), lin.weight.float())            # an ordinary layer: its own weight
+    packed = torch.zeros(12, 1, dtype=torch.uint8)                  # what a bitsandbytes 4-bit layer stores
+    q = types.SimpleNamespace(weight=types.SimpleNamespace(data=packed, quant_state="state"))
+    fake = types.ModuleType("bitsandbytes.functional")
+    fake.dequantize_4bit = lambda data, state: full if data is packed and state == "state" else None
+    monkeypatch.setitem(sys.modules, "bitsandbytes", types.ModuleType("bitsandbytes"))
+    monkeypatch.setitem(sys.modules, "bitsandbytes.functional", fake)
+    assert torch.equal(_dense(q), full)

@@ -52,6 +52,17 @@ class SparseMLP(nn.Module):
         return F.mse_loss(self.rec(self.trace["acts"]).float(), x) / (x.var() + 1e-6)
 
 
+
+def _dense(lin):
+    """A linear layer's weight as a dense float matrix. bitsandbytes 4-bit layers store packed weights
+    (shape (n, 1)); they are dequantized here, one layer at a time."""
+    w = lin.weight
+    qs = getattr(w, "quant_state", None)
+    if qs is not None:
+        import bitsandbytes.functional as bnbf
+        return bnbf.dequantize_4bit(w.data, qs).float()
+    return w.float()
+
 def layers_of(model):
     return model.model.layers
 
@@ -161,8 +172,8 @@ class PatternRecorder:
         x = x.float()
         rope = sys.modules[type(mod).__module__].apply_rotary_pos_emb
         B, T, _ = x.shape
-        q = F.linear(x, mod.q_proj.weight.float(), None if mod.q_proj.bias is None else mod.q_proj.bias.float())
-        k = F.linear(x, mod.k_proj.weight.float(), None if mod.k_proj.bias is None else mod.k_proj.bias.float())
+        q = F.linear(x, _dense(mod.q_proj), None if mod.q_proj.bias is None else mod.q_proj.bias.float())
+        k = F.linear(x, _dense(mod.k_proj), None if mod.k_proj.bias is None else mod.k_proj.bias.float())
         q = q.view(B, T, self.H, self.hd)
         k = k.view(B, T, self.KV, self.hd)
         if getattr(mod, "q_norm", None) is not None:                              # Qwen3: per-head RMS norm
@@ -228,13 +239,13 @@ def _decompose(model, ids, groups=None, merge_bias=False):
         at = layer.self_attn
         comp = comp.to(at.v_proj.weight.device)                 # models split across GPUs (device_map)
         z = comp * sc[("in", i)][0] * layer.input_layernorm.weight.float()
-        v = z @ at.v_proj.weight.float().T
+        v = z @ _dense(at.v_proj).T
         if at.v_proj.bias is not None:
             v[b] += at.v_proj.bias.float()
         v = v.view(S, T, KV, hd).repeat_interleave(H // KV, dim=2).transpose(1, 2)    # (S, H, T, hd)
         A = pat.A[i]                                                                # (H, T, T)
         o = torch.einsum("htu,shud->sthd", A, v).reshape(S, T, H * hd)               # H*hd != d in Qwen3
-        comp = comp + o @ at.o_proj.weight.float().T
+        comp = comp + o @ _dense(at.o_proj).T
         sp = layer.mlp
         z2 = comp * sc[("post", i)][0] * layer.post_attention_layernorm.weight.float()
         if isinstance(sp, SparseMLP):
@@ -243,8 +254,8 @@ def _decompose(model, ids, groups=None, merge_bias=False):
             pre[b] += sp.enc.bias.float()
             comp = comp + (pre * mask) @ sp.dec.weight.float().T
         else:                                                   # SwiGLU with its gate values fixed
-            gate = sp.act_fn(F.linear(inp.x[i][0].float(), sp.gate_proj.weight.float()))   # (T, d_ff)
-            comp = comp + ((z2 @ sp.up_proj.weight.float().T) * gate) @ sp.down_proj.weight.float().T
+            gate = sp.act_fn(F.linear(inp.x[i][0].float(), _dense(sp.gate_proj)))   # (T, d_ff)
+            comp = comp + ((z2 @ _dense(sp.up_proj).T) * gate) @ _dense(sp.down_proj).T
     names = names + (["bias"] if merge_bias else [f"bias@{i}" for i in range(L)])
     dev = model.lm_head.weight.device
     return comp.to(dev), names, sc[("final", 0)][0].to(dev), out.logits[0].to(dev)

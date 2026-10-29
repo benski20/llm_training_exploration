@@ -243,12 +243,14 @@ class VeriChat:
 
     @staticmethod
     def doubt_score(r):
-        """The retrieval trigger: the first claim's probe P(correct) (the reply's first content token when it
-        has no claim); None for an empty reply. The probe alone beat its average with token probability
-        as a retrieval trigger (experiments/triggered_retrieval.py); P < 0.3 retrieves for about half of
-        TriviaQA at 1.5B."""
-        first = r["claims"][0] if r["claims"] else r.get("first_token")
-        return None if not first else first["p_correct"]
+        """The retrieval trigger: the weakest claim's score, the same score that marks a claim doubtful (the
+        reply's first content token when it has no claim), and that claim; (None, None) for an empty reply.
+        So every reply that shows a doubtful claim is looked up."""
+        if r["claims"]:
+            c = min(r["claims"], key=lambda c: c["score"])
+            return c["score"], c.get("text")
+        first = r.get("first_token")
+        return (None, None) if not first else (first["p_correct"], None)
 
     def reply(self, messages, documents=None, mode="hedge", max_new_tokens=192, retrieve=True, thinking=None):
         return self.reply_batch([{"messages": messages, "documents": documents, "mode": mode,
@@ -294,19 +296,24 @@ class VeriChat:
         outs = self._reply_batch(reqs, on_text, on_reasoning)
         again, where = [], []                                        # doubted closed-book replies: look them up
         for i, (r, o) in enumerate(zip(reqs, outs)):
-            score = o.pop("_trigger")
+            score, claim = o.pop("_trigger"), o.pop("_claim", None)
             if r["documents"] or not r["retrieve"] or self.retriever is None:
                 continue
             o["retrieval"] = {"trigger_score": score, "retrieved": False}
             if score is None or score >= self.retrieve_below:
                 continue
             question = next(m["content"] for m in reversed(r["messages"]) if m["role"] == "user")
-            passages = list(self.retriever(question))
+            passages = []                                        # the question, then the question with the doubted
+            for q in [question] + ([f"{question} {claim}"] if claim else []):   # claim (its page)
+                for p in self.retriever(q):
+                    if p not in passages:
+                        passages.append(p)
+            passages = passages[:3]
             if passages:
                 again.append(dict(r, documents=passages))
                 where.append(i)
         for i, r, o in zip(where, again, self._reply_batch(again) if again else []):
-            o.pop("_trigger")
+            o.pop("_trigger"), o.pop("_claim", None)
             o["retrieval"] = {"trigger_score": outs[i]["retrieval"]["trigger_score"], "retrieved": True,
                               "passages": r["documents"], "closed_book_text": outs[i]["text"]}
             outs[i] = o
@@ -336,17 +343,24 @@ class VeriChat:
             ids = r["ids"]                                           # the generated tokens themselves
             idx = [min(c["token_index"], len(ids) - 1) for c in claims]
             question = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-            for c, p in zip(claims, self.provenance(msgs, ids, idx, documents, question, r.get("prefix_ids", ()), thinking)):
+            try:
+                prov = self.provenance(msgs, ids, idx, documents, question, r.get("prefix_ids", ()), thinking)
+            except Exception as e:                               # never lose the reply over its attribution
+                print(f"provenance failed ({type(e).__name__}: {str(e)[:120]}); claims left unsourced", flush=True)
+                prov = []
+                if torch.cuda.is_available():                    # e.g. out of memory: free it for the next reply
+                    torch.cuda.empty_cache()
+            for c, p in zip(claims, prov):
                 c.update(p)
                 c["source"] = "your documents" if p["doc_share"] >= 0.5 else "the model's memory"
-        trigger = self.doubt_score(r)
+        trigger, trigger_claim = self.doubt_score(r)
         claims = merge_names(claims, r["text"])
         for c in claims:
             c["verdict"] = "doubtful" if c["doubted"] else ("likely right" if c["score"] >= self.likely_right else "uncertain")
             if c.get("source") != "your documents":
                 c.pop("citation", None)                           # a citation only for claims the documents drove
         out = {"text": r["text"], "claims": claims, "withheld": r["stopped_on_doubt"],
-               "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger}
+               "reply_confidence": r["min_p_correct"], "threshold": self.threshold, "mode": mode, "_trigger": trigger, "_claim": trigger_claim}
         out["mean_logprob"], out["min_logprob"] = r.get("mean_logprob"), r.get("min_logprob")
         if "trace" in r:
             out["trace"] = r["trace"]

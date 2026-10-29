@@ -29,6 +29,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 
 from .serve import HardenedHandler, bounded_server
 
@@ -243,9 +244,15 @@ class Batcher:
                 results = self.handlers[kind]([item for _, item, _ in batch])
                 for (_, _, slot), r in zip(batch, results):
                     slot["result"] = r
-            except Exception as e:                               # every waiter gets the error, the worker lives
-                for _, _, slot in batch:
-                    slot["error"] = e
+            except Exception as e:                               # one bad request must not fail the others:
+                if len(batch) == 1:                              # retry them one by one (the worker lives on)
+                    batch[0][2]["error"] = e
+                else:
+                    for _, item, slot in batch:
+                        try:
+                            slot["result"] = self.handlers[kind]([item])[0]
+                        except Exception as e1:
+                            slot["error"] = e1
             for _, _, slot in batch:
                 slot["done"].set()
 
@@ -352,6 +359,9 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                                                        for m, r, d in parsed], deadline)
                 except TimeoutError as e:
                     return self.send_json(503, {"error": str(e)})
+                except Exception:                                # the model failed: a clean error, not a dropped line
+                    traceback.print_exc()
+                    return self.send_json(500, {"error": "internal error while judging"})
                 rs = [r if "error" in r else {k: r[k] for k in ("p_hallucinated", "flagged", "spans")} for r in rs]
                 return self.send_json(200, {"items": rs} if batch is not None else rs[0])
             try:
@@ -369,6 +379,9 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 r = batcher.submit("chat", item, deadline)
             except TimeoutError as e:
                 return self.send_json(503, {"error": str(e)})
+            except Exception:                                    # the model failed: a clean error, not a dropped line
+                traceback.print_exc()
+                return self.send_json(500, {"error": "internal error while answering"})
             self.send_json(200, r)
 
         def stream_chat(self, item):
