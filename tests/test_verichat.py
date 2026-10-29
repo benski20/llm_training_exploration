@@ -479,3 +479,32 @@ def test_batcher_releases_early_results():
         t.join()
     (r0, t0), (r1, t1) = got["a"], got["b"]
     assert {r0, r1} == {"first", "second"} and min(t0, t1) < 0.8 < max(t0, t1)
+
+
+def test_stream_sends_heartbeats_while_the_model_is_slow():
+    """A slow reply keeps the stream alive with SSE comments, so the page can tell it from a stuck one."""
+    import json
+    import threading
+    import time as _time
+    import urllib.request
+    from types import SimpleNamespace
+    from vt.verichat_server import make_server
+
+    class Slow:
+        gen = SimpleNamespace(layer=1, risk_probe=None, thinking=False, think_open=None, sampling=None, think_sampling=None)
+        threshold, retriever = 0.65, None
+
+        def reply_batch(self, reqs, on_text=None, on_reasoning=None, on_ready=None):
+            _time.sleep(11)
+            return [{"text": "ok", "claims": []} for _ in reqs]
+
+    srv = make_server(Slow(), port=0, rate_per_minute=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        body = json.dumps({"messages": [{"role": "user", "content": "hi"}], "stream": True}).encode()
+        r = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{srv.server_port}/chat", body,
+                                                          {"Content-Type": "application/json"}), timeout=30)
+        text = r.read().decode()
+        assert text.startswith(": ping\n\n") and '"done": true' in text
+    finally:
+        srv.shutdown()

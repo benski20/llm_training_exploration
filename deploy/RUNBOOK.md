@@ -85,6 +85,13 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
   4 minutes later. The server now logs `recv #n` and `sent <code> #n <s>` for each POST. A request body
   that stops arriving gets a 408 and an `http error` line instead of a silent close. The page retries a
   dropped connection once and says so when a stream ends early. So the next loss shows where it stopped.
+- The earlier losses ended at about 258-309 s ("RemoteDisconnected") or at the client's own 400 s
+  timeout, so requests sat on the server about 300 s. The connection cut-off equalled the model
+  deadline (both 300 s), so the socket was shut just before the 503 could be written. The cut-off now
+  comes 30 s later. Streams send a `: ping` every 10 s. The page aborts after 45 s of silence and
+  retries once if no text has arrived. A browser check against a fake server
+  (`experiments/page_check/`) confirms it: a request stalled at the socket recovers in 47 s, and a slow
+  25 s reply arrives intact.
 
 ## What the demo can and cannot claim
 

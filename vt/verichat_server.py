@@ -116,20 +116,27 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
  const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div><div class="meta"></div>';log.appendChild(card);
  const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
  let ok=false;
- try{const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked});
-  let res=null;for(let t=0;!res;t++){try{res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body})}
-   catch(e){if(t)throw e;await new Promise(z=>setTimeout(z,1500))}}  // a dropped connection is retried once
-  if(!res.ok){const r=await res.json().catch(()=>({}));card.innerHTML=esc('Error: '+(r.error||res.status))}
-  else{const rd=res.body.getReader(),dec=new TextDecoder();let buf='',r=null;
-   while(true){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+ const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked});
+ // The server sends a heartbeat every 10 s, so 45 s of silence means the request is stuck: abort it.
+ // A request that drops or sticks before any text arrived is retried once; after that, say what happened.
+ async function attempt(){const ac=new AbortController();let wd=null,r=null,err=null,buf='';
+  const arm=()=>{clearTimeout(wd);wd=setTimeout(()=>ac.abort(),45000)};arm();
+  try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body,signal:ac.signal});
+   if(!res.ok){const j=await res.json().catch(()=>({}));return {final:'Error: '+(j.error||res.status)}}
+   const rd=res.body.getReader(),dec=new TextDecoder();
+   while(true){arm();const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
     let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
      if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
      if(m.reasoning){reasoned+=m.reasoning;rlive.textContent='Thinking: '+reasoned.slice(-300);card.scrollIntoView()}
      if(m.delta){rlive.textContent='';shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
-     if(m.done){if(m.error){card.innerHTML='<div class="err">'+esc('Error: '+m.error)+'</div>'}else{r=m.reply}}}}
-   if(r){msgs.push({role:'assistant',content:r.text});card.innerHTML=render(r);ok=true}
-   else if(!card.querySelector('.err'))card.insertAdjacentHTML('beforeend','<div class="meta err">The connection dropped before the reply finished. Please send it again.</div>')}}
- catch(e){card.innerHTML=esc('Error: '+e)}
+     if(m.done){if(m.error)return {final:'Error: '+m.error};r=m.reply}}}}
+  catch(e){err=e}finally{clearTimeout(wd)}
+  return r?{reply:r}:{dropped:true,err}}
+ let out=await attempt();
+ if(out.dropped&&!shown){document.getElementById('busy').textContent='reconnecting…';await new Promise(z=>setTimeout(z,1500));out=await attempt()}
+ if(out.reply){msgs.push({role:'assistant',content:out.reply.text});card.innerHTML=render(out.reply);ok=true}
+ else if(out.final)card.innerHTML=esc(out.final);
+ else card.insertAdjacentHTML('beforeend','<div class="meta">'+esc('The reply did not arrive ('+(out.err?out.err.name:'the connection closed')+'). Please send it again.')+'</div>');
  if(!ok)msgs.pop();b.disabled=false;document.getElementById('busy').textContent=''};
 </script></body></html>"""
 
@@ -320,7 +327,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
     arrivals = itertools.count(1)
 
     class Handler(HardenedHandler):
-        timeout_s, deadline_s = 15.0, deadline
+        timeout_s = 15.0
+        deadline_s = deadline + 30.0                             # after the model's deadline, so its 503 gets out
         log_errors = log_requests
 
         def on_response(self, code):
@@ -432,7 +440,12 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             self.end_headers()
             try:
                 while True:
-                    d = q.get()
+                    try:
+                        d = q.get(timeout=10)
+                    except queue.Empty:                          # a heartbeat: the page can tell a slow reply
+                        self.wfile.write(b": ping\n\n")         # from a stuck one, and proxies keep the line open
+                        self.wfile.flush()
+                        continue
                     if d is None:
                         break
                     self.wfile.write(b"data: " + json.dumps(d).encode() + b"\n\n")
