@@ -544,3 +544,20 @@ def test_wikipedia_lookup_stops_fetching_when_its_time_budget_is_spent():
     w = Wikipedia(k=2, fetch=slow, full_text=True, budget_s=0.5)
     got = w("alpha answer")
     assert len(calls) <= 3 and got and "Alpha" in got[0]       # stopped early, kept what it had found
+
+
+def test_wikipedia_rerank_reorders_bm25s_best_passages():
+    import urllib.parse
+    from vt.retrieval import Wikipedia
+    text = "Alpha alpha alpha words. " * 30 + "The answer is Zeta. " + "alpha filler " * 60
+
+    def fake(url):
+        if "search" in url:
+            return {"pages": [{"key": "P", "title": "P"}]}
+        return {"query": {"pages": [{"title": urllib.parse.unquote(url.split("titles=")[1]), "extract": text}]}}
+    plain = Wikipedia(k=1, fetch=fake, full_text=True, passage_words=20)("alpha words")
+    ranked = Wikipedia(k=1, fetch=fake, full_text=True, passage_words=20,
+                       rerank=lambda q, ps: [("Zeta" in p) * 1.0 for p in ps])("alpha words")
+    assert "Zeta" not in plain[0] and "Zeta" in ranked[0]
+    broken = Wikipedia(k=1, fetch=fake, full_text=True, passage_words=20, rerank=lambda q, ps: 1 / 0)
+    assert broken("alpha words") == plain and broken.errors      # a failing reranker keeps BM25's order

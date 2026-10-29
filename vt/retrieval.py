@@ -97,12 +97,14 @@ class Wikipedia:
     UA = "VeriChat/0.2 (https://github.com/benski20/llm_training_exploration; research demo) python-urllib"
 
     def __init__(self, k=2, lang="en", timeout=4.0, user_agent=UA, cache_size=2048,
-                 fetch=None, full_text=False, pages=3, passage_words=100, per_page=None, budget_s=10.0):
+                 fetch=None, full_text=False, pages=3, passage_words=100, per_page=None, budget_s=10.0,
+                 rerank=None, rerank_pool=20):
         """full_text: search the whole text of the top `pages` hits and return the k passages that best match
         the query (BM25), instead of each hit's lead section: the answer is often further down a page."""
         self.k, self.lang, self.timeout, self.ua = k, lang, timeout, user_agent
         self.full_text, self.pages, self.passage_words = full_text, pages, passage_words
         self.per_page = per_page                             # at most this many passages from one page (None: any)
+        self.rerank, self.rerank_pool = rerank, rerank_pool  # (query, passages) -> scores: reorders BM25's best
         self.budget_s = budget_s                             # a lookup starts no new fetch after this long: the
                                                              # socket timeout does not cover a slow DNS answer
         self.errors = Counter()                              # why lookups failed (e.g. "HTTP 429"), for /health
@@ -204,6 +206,14 @@ class Wikipedia:
         corpus = Corpus([f"{t} {c}" for t, _, _, c in cands])  # the title counts: "Eiffel Tower ... 324 m"
         s = corpus.scores(query)
         best = sorted(range(len(cands)), key=lambda i: -s[i])
+        if self.rerank is not None:                          # a stronger reader reorders BM25's best few
+            pool = [i for i in best[:self.rerank_pool] if s[i] > 0]
+            try:
+                r = self.rerank(query, [f"{cands[i][0]}: {cands[i][3]}" for i in pool])
+                order = [pool[j] for j in sorted(range(len(pool)), key=lambda j: -float(r[j]))]
+                best = order + [i for i in best if i not in set(pool)]
+            except Exception as e:                           # keep BM25's order
+                self.errors["rerank: " + self._why(e)] += 1
         out, taken = [], []
         for i in best:
             if len(out) == k or s[i] <= 0:

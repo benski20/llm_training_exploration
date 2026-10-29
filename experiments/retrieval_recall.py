@@ -27,13 +27,31 @@ def main():
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--pause", type=float, default=0.3)
     ap.add_argument("--out", default="retrieval_recall.json")
+    ap.add_argument("--rerank", help="a sentence-transformers cross-encoder, e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     a = ap.parse_args()
     from datasets import load_dataset
     d = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
     qs = [(x["question"], x["answer"]["normalized_aliases"] + [x["answer"]["value"]])
           for x in d.select(random.Random(a.seed).sample(range(len(d)), a.n))]
-    systems = {"lead": Wikipedia(k=a.k), "full_text": Wikipedia(k=a.k, full_text=True),
-               "full_text_per_page": Wikipedia(k=a.k, full_text=True, per_page=1)}
+    memo, base = {}, Wikipedia()
+
+    def fetch(url):                                          # one request per URL for all systems
+        if url not in memo:
+            try:
+                memo[url] = base._fetch(url)
+            except Exception as e:
+                memo[url] = e
+        if isinstance(memo[url], Exception):
+            raise memo[url]
+        return memo[url]
+    systems = {"lead": Wikipedia(k=a.k, fetch=fetch), "full_text": Wikipedia(k=a.k, full_text=True, fetch=fetch),
+               "full_text_5_pages": Wikipedia(k=a.k, full_text=True, pages=5, fetch=fetch)}
+    if a.rerank:
+        from sentence_transformers import CrossEncoder
+        ce = CrossEncoder(a.rerank, max_length=256)
+        rr = lambda q, ps: ce.predict([(q, p) for p in ps], batch_size=32)  # noqa: E731
+        systems["full_text_rerank"] = Wikipedia(k=a.k, full_text=True, fetch=fetch, rerank=rr)
+        systems["full_text_5_pages_rerank"] = Wikipedia(k=a.k, full_text=True, pages=5, fetch=fetch, rerank=rr)
     rows, failed = [], {s: 0 for s in systems}
     for i, (q, al) in enumerate(qs):
         row = {"i": i, "q": q}

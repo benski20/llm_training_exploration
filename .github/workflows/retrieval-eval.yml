@@ -18,12 +18,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install numpy scipy datasets
+      - run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy scipy datasets sentence-transformers
       - name: recall of lead sections against full-text passages
         run: |
           set -o pipefail
           cd experiments
-          python retrieval_recall.py --n "${{ github.event.inputs.n || 200 }}" --out ../retrieval_recall.json | tail -n 3
+          python retrieval_recall.py --n "${{ github.event.inputs.n || 200 }}" --out ../retrieval_recall.json \
+            --rerank cross-encoder/ms-marco-MiniLM-L-6-v2 | tail -n 3
       - uses: actions/upload-artifact@v4
         with:
           name: retrieval-recall
