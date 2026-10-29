@@ -252,3 +252,30 @@ def test_stalled_body_gets_408_not_a_silent_close():
         s.close()
     finally:
         srv.shutdown()
+
+
+def test_expect_100_continue_gets_its_interim_response():
+    import socket
+    from vt.serve import HardenedHandler, bounded_server
+
+    class H(HardenedHandler):
+        timeout_s = 2.0
+
+        def do_POST(self):
+            req, err = self.read_json_object(1000)
+            self.send_json(*(err if err else (200, req)))
+
+    srv = bounded_server("127.0.0.1", 0, H, 4)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        s = socket.create_connection(("127.0.0.1", srv.server_port), timeout=5)
+        s.sendall(b"POST /x HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 8\r\n\r\n")
+        assert s.recv(100).startswith(b"HTTP/1.1 100 Continue")      # the body is sent only after this
+        s.sendall(b"{\"a\": 1}")
+        data = b""
+        while b"\r\n\r\n" not in data:
+            data += s.recv(200)
+        assert data.split(b" ")[1] == b"200"
+        s.close()
+    finally:
+        srv.shutdown()

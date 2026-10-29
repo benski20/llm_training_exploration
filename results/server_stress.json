@@ -1,0 +1,20 @@
+{
+ "requests": 160,
+ "outcomes": {
+  "ok": 159,
+  "stream error": 1
+ },
+ "model_calls": 43,
+ "wall_s": 36.4,
+ "max_seconds": 7.28,
+ "lost": [],
+ "settings": {
+  "clients": 8,
+  "per_client": 20,
+  "scale": 0.3,
+  "fail_rate": 0.05,
+  "deadline": 60,
+  "seed": 5,
+  "out": "results/server_stress.json"
+ }
+}

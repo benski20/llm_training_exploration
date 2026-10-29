@@ -381,6 +381,9 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             if not limiter.allow(client):
                 return self.send_json(429, {"error": f"rate limit: {rate_per_minute} requests per minute"})
             req, err = self.read_json_object(max_body)
+            if log_requests:                                     # recv, body, sent: where a lost one stopped
+                print(f"body #{self._rid} {getattr(self, 'body_seconds', 0):.2f}s"
+                      + (" (expect 100-continue)" if self.headers.get("Expect") else ""), flush=True)
             if err:
                 return self.send_json(err[0], {"error": err[1]})
             if self.path == "/judge":                          # one item, or {"items": [...]} (up to MAX_BATCH)

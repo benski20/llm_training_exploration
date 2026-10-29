@@ -528,3 +528,19 @@ def test_wikipedia_full_text_finds_the_passage_with_the_answer():
     assert any("Sally Kellerman" in p for p in got) and len(got) == 2
     lead_only = Wikipedia(k=2, fetch=fake)("Who played Margaret Houlihan in the film MASH cast?")
     assert lead_only == []                       # the lead endpoint failed: no lookup, quietly
+
+
+def test_wikipedia_lookup_stops_fetching_when_its_time_budget_is_spent():
+    import time as _time
+    from vt.retrieval import Wikipedia
+    calls = []
+
+    def slow(url):
+        calls.append(url)
+        _time.sleep(0.3)
+        if "search" in url:
+            return {"pages": [{"key": "A", "title": "A"}, {"key": "B", "title": "B"}, {"key": "C", "title": "C"}]}
+        return {"query": {"pages": [{"title": "A", "extract": "Alpha answer text here."}]}}
+    w = Wikipedia(k=2, fetch=slow, full_text=True, budget_s=0.5)
+    got = w("alpha answer")
+    assert len(calls) <= 3 and got and "Alpha" in got[0]       # stopped early, kept what it had found

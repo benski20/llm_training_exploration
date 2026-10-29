@@ -12,6 +12,7 @@ import math
 import os
 import re
 import string
+import time
 from collections import Counter
 
 
@@ -96,15 +97,22 @@ class Wikipedia:
     UA = "VeriChat/0.2 (https://github.com/benski20/llm_training_exploration; research demo) python-urllib"
 
     def __init__(self, k=2, lang="en", timeout=4.0, user_agent=UA, cache_size=2048,
-                 fetch=None, full_text=False, pages=3, passage_words=100, per_page=None):
+                 fetch=None, full_text=False, pages=3, passage_words=100, per_page=None, budget_s=10.0):
         """full_text: search the whole text of the top `pages` hits and return the k passages that best match
         the query (BM25), instead of each hit's lead section: the answer is often further down a page."""
         self.k, self.lang, self.timeout, self.ua = k, lang, timeout, user_agent
         self.full_text, self.pages, self.passage_words = full_text, pages, passage_words
         self.per_page = per_page                             # at most this many passages from one page (None: any)
+        self.budget_s = budget_s                             # a lookup starts no new fetch after this long: the
+                                                             # socket timeout does not cover a slow DNS answer
         self.errors = Counter()                              # why lookups failed (e.g. "HTTP 429"), for /health
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
+
+    def _get(self, url):
+        if time.monotonic() - getattr(self, "_t0", time.monotonic()) > self.budget_s:
+            raise TimeoutError("lookup time budget spent")
+        return self.fetch(url)
 
     def _fetch(self, url):
         import json
@@ -121,11 +129,12 @@ class Wikipedia:
         key = (norm(query), k)
         if key in self.cache:
             return self.cache[key]
+        self._t0 = time.monotonic()
         try:
             n = max(k, self.pages) if self.full_text else k
             hits = []
             for q in self._queries(query):                   # a long question can match no page as a whole
-                hits = self.fetch(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(q), n=n)).get("pages", [])
+                hits = self._get(self.SEARCH.format(lang=self.lang, q=urllib.parse.quote(q), n=n)).get("pages", [])
                 if hits:
                     break
             out = self._passages(query, hits[:n], k) if self.full_text else self._leads(hits[:k])
@@ -162,7 +171,7 @@ class Wikipedia:
     def _leads(self, hits):
         out = []
         for h in hits:
-            s = self.fetch(self.SUMMARY.format(lang=self.lang, title=self._key(h)))
+            s = self._get(self.SUMMARY.format(lang=self.lang, title=self._key(h)))
             text = (s.get("extract") or "").strip()
             if text:
                 out.append(f"{s.get('title', h.get('title', ''))} (Wikipedia): {text}")
@@ -175,13 +184,17 @@ class Wikipedia:
         for j, h in enumerate(hits):
             title = h.get("title", "")
             try:
-                page = self.fetch(self.TEXT.format(lang=self.lang, title=self._key(h)))["query"]["pages"][0]
+                page = self._get(self.TEXT.format(lang=self.lang, title=self._key(h)))["query"]["pages"][0]
                 text, title = (page.get("extract") or "").strip(), page.get("title", title)
             except Exception as e:                           # rate limit, missing page: fall back to the lead
                 self.errors["text: " + self._why(e)] += 1
                 text = ""
             if not text:
-                lead = self._leads([h])
+                try:
+                    lead = self._leads([h])
+                except Exception as e:                       # out of time too: rank what was found
+                    self.errors["lead: " + self._why(e)] += 1
+                    lead = []
                 cands += [(title, j, 0, p.split(": ", 1)[-1]) for p in lead]
                 continue
             w = text.split()[:30000]

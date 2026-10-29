@@ -182,12 +182,20 @@ class HardenedHandler(BaseHTTPRequestHandler):
         if n < 0 or n > max_body:
             self.close_connection = True
             return None, (413, f"body must be at most {max_body} bytes")
+        if self.headers.get("Expect", "").lower() == "100-continue":   # a proxy may hold the body back until
+            try:                                                        # it hears this (HTTP/1.0 handlers never
+                self.wfile.write(b"HTTP/1.1 100 Continue\r\n\r\n")    # send it on their own)
+                self.wfile.flush()
+            except OSError:
+                pass
+        t = time.monotonic()
         try:
             body = self.rfile.read(n)
         except OSError:                                  # the body stopped arriving: say so, not a silent close
             self.close_connection = True
             self.log_error("timed out reading a %d-byte body", n)
             return None, (408, "timed out reading the request body")
+        self.body_seconds = time.monotonic() - t
         if len(body) < n:
             self.close_connection = True
             return None, (400, "request body shorter than its Content-Length")
