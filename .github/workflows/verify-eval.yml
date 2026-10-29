@@ -31,6 +31,7 @@ jobs:
             --rerank cross-encoder/ms-marco-MiniLM-L-6-v2 --pause 1.5 --out evidence_verify.json \
             ${{ github.event.inputs.judge && format('--judge {0}', github.event.inputs.judge) || '' }} | tail -n 80
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: evidence-verify
           path: evidence_verify.json

@@ -124,6 +124,7 @@ def main():
                      "reply_confidence": x.get("reply_confidence"), "sentences": judged})
         if n % 20 == 0:
             print(json.dumps({"done": n + 1, "errors": dict(wiki.errors)}), flush=True)
+            json.dump({"partial": True, "rows": rows}, open(a.out, "w"))       # survives a timeout
         time.sleep(a.pause)
 
     def first(r, key, default):
