@@ -126,7 +126,18 @@ CPU judge Qwen2.5-1.5B, 185 factual and 56 everyday; `results/evidence_verify_v3
 | judge where evidence exists, averaged with the probe; else the probe | 0.791 | 0.616 | 0.732 | |
 
 Where evidence was found (81% of factual replies), the 1.5B judge beats the probe: 0.741 against 0.706
-(NQ 0.648 against 0.552). The demo's judge would be the 32B itself, untested so far (GPU).
+(NQ 0.648 against 0.552).
+
+The 32B as the judge, through the serving code on the same saved evidence (`judge32` action, about 3 GPU
+minutes; `results/evidence_verify_v4_judge32b.json`):
+
+| AUROC, wrong vs right | TriviaQA | NQ | all | everyday replies marked |
+|---|---|---|---|---|
+| internal probe | 0.778 | 0.573 | 0.705 | 7% |
+| 32B judge, first claim | 0.793 | 0.64 | 0.74 | 3.6% |
+| 32B judge + probe | 0.81 | 0.621 | 0.741 | |
+
+It judged 329 claims in 88 s (batches of 8), about 0.3 s each.
 
 ## What the demo can and cannot claim
 

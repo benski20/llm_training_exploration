@@ -1,0 +1,39 @@
+{
+ "run": "deploy-demo judge32 40916422406 (2026-10-29, Modal L40S): unsloth/Qwen3-32B-bnb-4bit judging the evidence saved by the CPU run, through vt.claim_verify.ClaimVerifier.judge (thinking off); 329 claims in 88 s",
+ "replies": 241,
+ "auroc": {
+  "probe (1 - reply_confidence)": {
+   "triviaqa": 0.778,
+   "nq": 0.573,
+   "all": 0.705
+  },
+  "judge 32B: first claim": {
+   "triviaqa": 0.793,
+   "nq": 0.64,
+   "all": 0.74
+  },
+  "judge 32B: weakest claim": {
+   "triviaqa": 0.772,
+   "nq": 0.571,
+   "all": 0.715
+  },
+  "probe + judge 32B (z-sum)": {
+   "triviaqa": 0.81,
+   "nq": 0.621,
+   "all": 0.741
+  },
+  "judge 1.5B: first claim (CPU run)": {
+   "triviaqa": 0.77,
+   "nq": 0.626,
+   "all": 0.712
+  }
+ },
+ "everyday": {
+  "any_claim_judged_unsupported_lt_0.2": 0.036,
+  "probe_flagged_at_0.65": 0.07
+ },
+ "factual_any_judged_unsupported_lt_0.2": {
+  "right": 0.154,
+  "wrong": 0.338
+ }
+}
