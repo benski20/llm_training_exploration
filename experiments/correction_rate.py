@@ -29,6 +29,28 @@ def is_right(text, aliases):
     return any(f" {norm(a)} " in t for a in aliases if norm(a))
 
 
+def verification_summary(ok):
+    """How the demo's source checks of each final answer line up with whether it was right."""
+    v = [r for r in ok if r.get("verdicts") is not None]
+    if not v:
+        return None
+
+    def first(r):
+        return r["verdicts"][0] if r["verdicts"] else "no claims"
+    out = {"replies_checked": len(v), "by_answer": {}}
+    for name, grp in (("right", [r for r in v if r["final_right"]]), ("wrong", [r for r in v if not r["final_right"]])):
+        counts = {}
+        for r in grp:
+            counts[first(r)] = counts.get(first(r), 0) + 1
+        out["by_answer"][name] = {"n": len(grp), "first_claim_verdicts": counts}
+    scored = [(1 - r["p_supported"][0], not r["final_right"]) for r in v if r["p_supported"] and r["p_supported"][0] is not None]
+    pos, neg = [s for s, w in scored if w], [s for s, w in scored if not w]
+    if pos and neg:
+        out["auroc_first_claim"] = round(sum((p > n) + 0.5 * (p == n) for p in pos for n in neg) / (len(pos) * len(neg)), 3)
+    out["judged"] = len(scored)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
@@ -61,6 +83,10 @@ def main():
             row = {"i": i, "q": q, "seconds": round(time.time() - t, 1), "error": r.get("error"),
                    "looked_up": bool(ret.get("retrieved")), "trigger_score": ret.get("trigger_score"),
                    "final_right": is_right(r.get("text", ""), al) if "text" in r else None}
+            ver = r.get("verification")
+            if ver is not None:                                   # the demo's source checks of this reply
+                row["verdicts"] = [v.get("verdict") for v in ver]
+                row["p_supported"] = [v.get("p_supported") for v in ver]
             if ret.get("retrieved"):
                 row["closed_book_right"] = is_right(ret.get("closed_book_text", ""), al)
                 row["passages"] = [p[:80] for p in ret.get("passages", [])]
@@ -85,6 +111,7 @@ def main():
                                "stayed_right": sum(r["closed_book_right"] and r["final_right"] for r in lk),
                                "stayed_wrong": sum(not r["closed_book_right"] and not r["final_right"] for r in lk)},
            "seconds_median": sorted(r["seconds"] for r in rows)[len(rows) // 2] if rows else None,
+           "verification": verification_summary(ok),
            "rows": sorted(rows, key=lambda r: r["i"])}
     json.dump(res, open(a.out, "w"), indent=1)
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}))
