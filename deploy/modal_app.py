@@ -73,12 +73,12 @@ def wiki_check():
     import sys
     sys.path.insert(0, "/app")
     from vt.retrieval import Wikipedia
-    w = Wikipedia(k=2)
+    w = Wikipedia(k=2, full_text=True)
     for q in ("Who designed the Eiffel Tower?", "What is the capital of Burkina Faso?"):
         got = w(q)
         print(q, "->", len(got), "passages:", [p[:90] for p in got], flush=True)
         if not got:
-            raise SystemExit("no passages: Wikipedia unreachable or rate-limited from Modal")
+            raise SystemExit(f"no passages: Wikipedia unreachable or rate-limited from Modal ({dict(w.errors)})")
 
 
 @app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
