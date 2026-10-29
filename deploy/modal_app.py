@@ -27,7 +27,7 @@ MODEL = os.environ.get("VERICHAT_MODEL", "unsloth/Qwen3-32B-bnb-4bit")
 HEAD = os.environ.get("VERICHAT_HEAD", "results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt")
 DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
 GPU = os.environ.get("VERICHAT_GPU", "L40S")
-SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "300"))
+SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "120"))       # idle seconds before the GPU stops (billing)
 RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: the head's own
 RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per client per minute; 0 for load tests
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
@@ -46,6 +46,18 @@ image = (
 )
 app = modal.App("verichat", image=image)
 hf_cache = modal.Volume.from_name("verichat-hf-cache", create_if_missing=True)
+
+
+@app.function(volumes={"/root/.cache/huggingface": hf_cache}, timeout=2 * 3600, cpu=2.0, memory=4096)
+def download():
+    """Fill the model cache on a cheap CPU container, so no GPU is billed while ~25 GB download:
+    modal run deploy/modal_app.py::download (once, before the first deploy)."""
+    from huggingface_hub import snapshot_download
+    for repo, rev in ((MODEL, REVISION), ("Qwen/Qwen2.5-3B-Instruct", None), ("unitary/toxic-bert", None)):
+        print("downloading", repo, flush=True)
+        snapshot_download(repo, revision=rev, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py"])
+    hf_cache.commit()
+    print("cache ready", flush=True)
 
 
 @app.function(gpu=GPU, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,

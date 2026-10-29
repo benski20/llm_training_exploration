@@ -22,6 +22,7 @@ python -m vt.verichat_server --model Qwen/Qwen2.5-0.5B-Instruct --head <0.5B ris
 ## Deploy, check, stop
 
 ```bash
+modal run deploy/modal_app.py::download          # once: fill the model cache on a CPU container (no GPU billed)
 modal deploy deploy/modal_app.py                 # prints https://<workspace>--verichat-serve.modal.run
 bash deploy/smoke_test.sh https://<workspace>--verichat-serve.modal.run
 VERICHAT_RATE=0 modal deploy deploy/modal_app.py   # for a load test only (no per-client rate limit)
@@ -35,6 +36,11 @@ The first request after idle triggers a cold start. The first deploy downloads a
 `verichat-hf-cache` volume, which takes several minutes. Later cold starts only load the model, about
 a minute. Until it is ready, `/health` fails and the smoke test keeps waiting (up to 15 minutes).
 
+From GitHub instead (the Modal client speaks gRPC, which some sandboxes cannot reach): add the
+repository secrets `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, then run the `deploy-demo` workflow from
+the Actions tab, or commit `deploy/request.json` with `{"action": "deploy"}` or `{"action": "stop"}`.
+The workflow fills the cache on CPU and deploys; the job log prints the URL.
+
 ## Settings (environment variables at deploy time)
 
 | variable | default | meaning |
@@ -42,7 +48,7 @@ a minute. Until it is ready, `/health` fails and the smoke test keeps waiting (u
 | `VERICHAT_MODEL` | `unsloth/Qwen3-32B-bnb-4bit` | the chat model; the head was trained on this checkpoint |
 | `VERICHAT_HEAD` | `results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt` | the risk head; its `.serving.json` ships with it |
 | `VERICHAT_GPU` | `L40S` | 48 GB fits the 4-bit 32B model, the 3B detector and the KV cache |
-| `VERICHAT_SCALEDOWN` | `300` | idle seconds before the container stops |
+| `VERICHAT_SCALEDOWN` | `120` | idle seconds before the GPU container stops (each idle minute is billed) |
 | `VERICHAT_REVISION` | latest | the model's Hugging Face commit; pin it for a stable public demo (supply chain) |
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
@@ -59,9 +65,14 @@ off by default, with a per-request switch in the page and the API.
 
 ## Costs
 
-An L40S is about $1.95 per hour while a container is up. With scale-to-zero you pay for traffic plus
-5 idle minutes after the last request. Set a spending limit in the Modal dashboard before sharing the
-URL.
+An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a GPU container is up:
+- Nobody using it costs nothing. The container scales to zero 2 minutes after the last request.
+- A cold start loads about 25 GB from the cache volume onto the GPU, about 1-2 minutes, roughly 5 cents.
+- A typical tester (a few messages over a few minutes) costs roughly 20-40 cents.
+- `max_containers=1` caps it at one GPU, so continuous traffic tops out near $47 a day.
+- Weights download on a CPU container (cents), not the GPU. The cache volume holds about 25 GB.
+- Set a workspace spending limit in the Modal dashboard (Settings, usage and billing) before sharing
+  the URL. That limit is the real guard against runaway cost.
 
 ## What the demo can and cannot claim
 

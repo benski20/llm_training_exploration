@@ -1,0 +1,49 @@
+name: deploy-demo
+# Deploys (or stops) the VeriChat demo on Modal. GitHub's runners reach Modal's gRPC API directly.
+# Needs repository secrets MODAL_TOKEN_ID and MODAL_TOKEN_SECRET. Runs only when asked: from the
+# Actions tab, or when deploy/request.json changes ({"action": "deploy" | "stop"}).
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        options: [deploy, stop]
+        default: deploy
+  push:
+    paths: [deploy/request.json]
+permissions:
+  contents: read
+concurrency:
+  group: modal-deploy
+  cancel-in-progress: false
+jobs:
+  modal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "modal==1.6.3"
+      - name: what to do
+        id: req
+        run: |
+          A="${{ github.event.inputs.action }}"
+          if [ -z "$A" ]; then A=$(python3 -c "import json; print(json.load(open('deploy/request.json')).get('action', 'deploy'))"); fi
+          echo "action=$A" >> "$GITHUB_OUTPUT"
+          test -n "$MODAL_TOKEN_ID" || { echo "::error::add the MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets"; exit 1; }
+      - name: stop
+        if: steps.req.outputs.action == 'stop'
+        run: modal app stop verichat
+      - name: fill the model cache on a CPU container (no GPU billed)
+        if: steps.req.outputs.action == 'deploy'
+        run: modal run deploy/modal_app.py::download
+      - name: deploy (scales to zero when idle)
+        if: steps.req.outputs.action == 'deploy'
+        run: |
+          modal deploy deploy/modal_app.py | tee deploy.log
+          echo "URL: $(grep -o 'https://[^ ]*modal\.run' deploy.log | head -1)"
