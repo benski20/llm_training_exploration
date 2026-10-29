@@ -1321,8 +1321,29 @@ for no shown gain.
 - Risk AUROC on answers written after reasoning: 0.80 (interval 0.61-0.96).
 - 28 s per reply on T4.
 
-**Speed on 2x T4:** 13-17 generated tokens/s in total at batch 16, 5.4-5.6 s per reply. The L40S on Modal is
-expected to be several times faster; not yet measured.
+**Speed on 2x T4:** 13-17 generated tokens/s in total at batch 16, 5.4-5.6 s per reply.
+
+**Deployed on Modal (one L40S, 4-bit 32B, served settings)**: https://sandboxtesting101--verichat-serve.us-east.modal.run
+(`deploy-demo` workflow runs 3 and 5). The end-to-end smoke test passes on the real model:
+- claims scored, with the Wikipedia retriever active;
+- streaming finishes in 7.7 s;
+- a 31-message chat;
+- thinking ("17 x 23": 1,953 characters of reasoning, then 391);
+- abuse refused;
+- `/judge` flags "Thomas Edison designed it in 1920" (P 0.99);
+- the page and metrics load.
+
+Short factual questions take 1.1 s (p95 1.45 s) for one user. With 4 users at once, all 8 requests
+succeed at 13 s median (p95 14 s). A batch returns when its longest reply ends; streaming users still
+see text as it is written. A cold start (first request after idle) took 48 s to load the model.
+
+The first load test found two bugs:
+- Settings set at deploy time (`VERICHAT_*`) silently reverted inside the container, because Modal
+  re-imports the app file there. They are now baked into the image environment.
+- One response in four was truncated under concurrency ("not enough data to satisfy content length";
+  the client waited 7.5 minutes). The cause: the 15 s socket timeout also applied to writing replies to
+  the in-container proxy, which competed with generation for 0.125 CPU cores. Replies now get a 120 s
+  write timeout and the container gets 2 CPUs.
 
 **Live use.** `vt.detector.Detector.judge(messages, response, documents)` loads this head and scores
 a reply from any model. It returns P(hallucinated) and the flagged spans. The VeriChat server

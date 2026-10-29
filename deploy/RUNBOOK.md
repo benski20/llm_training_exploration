@@ -74,6 +74,13 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
 - Set a workspace spending limit in the Modal dashboard (Settings, usage and billing) before sharing
   the URL. That limit is the real guard against runaway cost.
 
+## Measured (Modal, one L40S)
+
+- Cold start: about 48 s to load the model; the first request after idle waits that long.
+- One user, short question: 1.1 s per reply (p95 1.45 s).
+- Four users at once: all succeed, 13 s median (p95 14 s); a batch ends with its longest reply.
+- My testing so far: about 25 GPU minutes over three deploys, roughly 80 cents, plus cents of CPU.
+
 ## What the demo can and cannot claim
 
 These are the held-out numbers (`VISION.md`, `results/kaggle/chateval-32h/`):
