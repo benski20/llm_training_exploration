@@ -99,7 +99,7 @@ def judge_eval():
     out = subprocess.run(["python", "/app/experiments/evidence_verify.py", "--rejudge", "/app/eval/rows.json",
                           "--traces", "/app/eval/traces.json", "--judge", MODEL, "--out", "/tmp/judge32.json"],
                          env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
-    print(out.stdout[-6000:], out.stderr[-3000:] if out.returncode else "", flush=True)
+    print(out.stdout[-60000:], out.stderr[-3000:] if out.returncode else "", flush=True)
     if out.returncode:
         raise SystemExit(out.returncode)
 

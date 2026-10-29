@@ -165,6 +165,8 @@ def rejudge(a):
     for (ri, si), p in zip(where, ps):
         rows[ri]["sentences"][si]["judge"] = round(p, 4)
     print(json.dumps({"judged": len(items), "seconds": round(time.time() - t, 1)}), flush=True)
+    print("ROWS " + json.dumps([[r["kind"], r["source"], r["wrong"], r["reply_confidence"],      # for paired stats
+                                 [j.get("judge") for j in r["sentences"]]] for r in rows]), flush=True)
     summarize(rows, a, True, {})
 
 

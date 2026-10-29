@@ -29,6 +29,14 @@ def is_right(text, aliases):
     return any(f" {norm(a)} " in t for a in aliases if norm(a))
 
 
+def client_chat(url, messages):
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    from vt.client import chat
+    return chat(url, messages)
+
+
 def verification_summary(ok):
     """How the demo's source checks of each final answer line up with whether it was right."""
     v = [r for r in ok if r.get("verdicts") is not None]
@@ -58,6 +66,8 @@ def main():
     ap.add_argument("--seed", type=int, default=31)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--out", default="correction.json")
+    ap.add_argument("--retry", action="store_true", help="send through vt.client (streamed; a request silent for "
+                                                         "45 s is sent again once), as the page does")
     a = ap.parse_args()
     from datasets import load_dataset
     d = load_dataset("mandarjoshi/trivia_qa", "rc.nocontext", split="validation")
@@ -75,12 +85,16 @@ def main():
             body = json.dumps({"messages": [{"role": "user", "content": q}], "mode": "hedge"}).encode()
             t = time.time()
             try:
-                r = json.loads(urllib.request.urlopen(urllib.request.Request(
-                    url, body, {"Content-Type": "application/json"}), timeout=400).read())
-            except (urllib.error.URLError, OSError, ValueError) as e:
+                if a.retry:
+                    r = client_chat(a.url, [{"role": "user", "content": q}])
+                else:
+                    r = json.loads(urllib.request.urlopen(urllib.request.Request(
+                        url, body, {"Content-Type": "application/json"}), timeout=400).read())
+            except Exception as e:                                # lost, timed out, or a server error
                 r = {"error": repr(e)[:200]}
             ret = r.get("retrieval") or {}
             row = {"i": i, "q": q, "seconds": round(time.time() - t, 1), "error": r.get("error"),
+                   "attempts": r.get("_attempts"),
                    "looked_up": bool(ret.get("retrieved")), "trigger_score": ret.get("trigger_score"),
                    "final_right": is_right(r.get("text", ""), al) if "text" in r else None}
             ver = r.get("verification")
@@ -103,6 +117,7 @@ def main():
     lk = [r for r in ok if r["looked_up"]]
     closed = [r.get("closed_book_right", r["final_right"]) for r in ok]
     res = {"url": a.url, "n": len(rows), "errors": len(rows) - len(ok), "looked_up": len(lk),
+           "retried_and_answered": sum((r.get("attempts") or 1) > 1 for r in ok),
            "looked_up_share": round(len(lk) / max(1, len(ok)), 3),
            "accuracy_closed_book": round(sum(closed) / max(1, len(ok)), 3),
            "accuracy_served": round(sum(r["final_right"] for r in ok) / max(1, len(ok)), 3),

@@ -170,6 +170,25 @@ minutes; `results/evidence_verify_v4_judge32b.json`):
 
 It judged 329 claims in 88 s (batches of 8), about 0.3 s each.
 
+These differences are not yet significant. A paired bootstrap over the 149 replies with evidence (1.5B
+judge minus probe):
+
+| | difference | 95% interval | P(judge better) |
+|---|---|---|---|
+| all | +0.035 | -0.06 to +0.12 | 0.77 |
+| NQ | +0.096 | -0.06 to +0.26 | 0.88 |
+| TriviaQA | +0.013 | -0.09 to +0.12 | 0.61 |
+
+Settling it needs several hundred more labeled 32B replies. `judge_eval` now prints per-reply scores
+(`ROWS ...`) for the same paired test.
+
+## Clients
+
+`vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a
+heartbeat every 10 s), it abandons the request and sends it again once, as the page does. A request lost
+in the platform's routing then costs about 45 s instead of a timeout. `experiments/correction_rate.py
+--retry` uses it and counts `retried_and_answered`.
+
 ## What the demo can and cannot claim
 
 These are the held-out numbers (`VISION.md`, `results/kaggle/chateval-32h/`):
