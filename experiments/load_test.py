@@ -57,7 +57,7 @@ def main():
         res = {"model": a.model, "threads": a.threads, "max_new_tokens": a.tokens, "runs": []}
     for n in [int(x) for x in a.clients.split(",")]:
         calls.clear()
-        lat, codes = [], []
+        lat, codes, errors = [], [], []
 
         def client(c):
             for k in range(a.per_client):
@@ -68,6 +68,9 @@ def main():
                     code = urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=600).status
                 except urllib.error.HTTPError as e:
                     code = e.code
+                except Exception as e:                   # a dropped connection or timeout: count it, keep going
+                    code = "error"
+                    errors.append({"q": q, "after_s": round(time.perf_counter() - t, 1), "error": repr(e)[:200]})
                 lat.append(time.perf_counter() - t)
                 codes.append(code)
         t0 = time.perf_counter()
@@ -77,7 +80,8 @@ def main():
         for t in ts:
             t.join()
         wall = time.perf_counter() - t0
-        run = {"clients": n, "requests": len(codes), "ok": codes.count(200), "other_codes": sorted(set(codes) - {200}),
+        run = {"clients": n, "requests": len(codes), "ok": codes.count(200),
+               "other_codes": sorted({str(c) for c in codes} - {"200"}), "errors": errors,
                "wall_s": round(wall, 1), "replies_per_s": round(codes.count(200) / wall, 3),
                "latency_p50_s": round(float(np.percentile(lat, 50)), 2), "latency_p95_s": round(float(np.percentile(lat, 95)), 2),
                "batch_sizes": calls[:] if not a.url else None}
