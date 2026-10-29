@@ -1,0 +1,417 @@
+{
+ "url": "https://sandboxtesting101--verichat-serve.us-east.modal.run",
+ "n": 40,
+ "errors": 3,
+ "looked_up": 8,
+ "looked_up_share": 0.216,
+ "accuracy_closed_book": 0.703,
+ "accuracy_served": 0.73,
+ "among_looked_up": {
+  "wrong_to_right": 2,
+  "right_to_wrong": 1,
+  "stayed_right": 1,
+  "stayed_wrong": 4
+ },
+ "seconds_median": 15.9,
+ "rows": [
+  {
+   "i": 0,
+   "q": "Who was part man, part machine, all cop and hailed from a futuristic Detroit?",
+   "seconds": 53.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8044,
+   "final_right": true
+  },
+  {
+   "i": 1,
+   "q": "What is the French name for the English channel?",
+   "seconds": 53.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9883,
+   "final_right": true
+  },
+  {
+   "i": 2,
+   "q": "Which winter sport was contested as an Olympic sport only once, at the 1908 Summer Olympics?",
+   "seconds": 53.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8728,
+   "final_right": false
+  },
+  {
+   "i": 3,
+   "q": "What was the first airship to cross the Atlantic, in 1919?",
+   "seconds": 53.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7287,
+   "final_right": true
+  },
+  {
+   "i": 4,
+   "q": "What year did the cable television network ESPN made its debut broadcasting and producing sports-related programming 24 hours a day?",
+   "seconds": 2.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8302,
+   "final_right": true
+  },
+  {
+   "i": 5,
+   "q": "What is zoophobia a fear of?",
+   "seconds": 401.2,
+   "error": "TimeoutError('The read operation timed out')",
+   "looked_up": false,
+   "trigger_score": null,
+   "final_right": null
+  },
+  {
+   "i": 6,
+   "q": "This 1993 film won Oscars, Bafta and Golden Globe Awards despite its sometimes harrowing portrayal of hardships and stress, including the butchering of its heroine's hand; which film was it?",
+   "seconds": 12.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.5712,
+   "final_right": true
+  },
+  {
+   "i": 7,
+   "q": "\"Which 19th century English writer wrote \"\"Swallows and Amazons\"\", \"\"Peter Duck\"\" and \"\"Secret Water\"\"?\"",
+   "seconds": 11.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7202,
+   "final_right": true
+  },
+  {
+   "i": 8,
+   "q": "Who played the role of George Carter in The Sweeney?",
+   "seconds": 24.0,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.1799,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "The Sweeney (Wikipedia): The Sweeney is a British police drama television series",
+    "Sweeney Todd: The Demon Barber of Fleet Street (2007 film) (Wikipedia): Sweeney ",
+    "Dennis Waterman (Wikipedia): Dennis Waterman was an English actor and singer. He"
+   ]
+  },
+  {
+   "i": 9,
+   "q": "Who was the Muse of Comedy?",
+   "seconds": 12.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9232,
+   "final_right": true
+  },
+  {
+   "i": 10,
+   "q": "Who was the 11th and 12th century ruler of Georgia, celebrated by Georgians as their most successful, leading them out from Turkish domination, reuniting the country, and subsequently being canonised by the Georgian Orthodox Church?",
+   "seconds": 35.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8313,
+   "final_right": true
+  },
+  {
+   "i": 11,
+   "q": "What is both a golf term and slang for an enemy plane?",
+   "seconds": 36.2,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.6182,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "List of words having different meanings in American and British English (A\u2013L) (W",
+    "Pete Hegseth (Wikipedia): Peter Brian Hegseth is an American government official"
+   ]
+  },
+  {
+   "i": 12,
+   "q": "By what nickname was English serial killer and armed robber Donald Neilson known?",
+   "seconds": 60.1,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.6049,
+   "final_right": false,
+   "closed_book_right": true,
+   "passages": [
+    "List of serial killers by number of victims (Wikipedia): A serial killer is typi",
+    "Royal Mail Group Security (Wikipedia): Royal Mail Group Security (RMGS), the inv"
+   ]
+  },
+  {
+   "i": 13,
+   "q": "Weighing-in at up 48 stone, who wrestled under the ring-name Giant Haystacks?",
+   "seconds": 38.8,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.5183,
+   "final_right": true,
+   "closed_book_right": true,
+   "passages": [
+    "Giant Haystacks (Wikipedia): Martin Austin Ruane was a British professional wres",
+    "Haystacks Calhoun (Wikipedia): William Dee Calhoun was an American professional "
+   ]
+  },
+  {
+   "i": 14,
+   "q": "In the books by A A Milne, what was Eeyore?",
+   "seconds": 33.1,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.844,
+   "final_right": false
+  },
+  {
+   "i": 15,
+   "q": "Protons and Neutrons are both examples of which class of sub-atomic particle that takes its name from the Greek for 'heavy'?",
+   "seconds": 14.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9632,
+   "final_right": true
+  },
+  {
+   "i": 16,
+   "q": "Bring on the Empty Horses was the sequel to which other David Niven Autobiography/Memoir ?",
+   "seconds": 17.9,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4934,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "Michael Curtiz (Wikipedia): Michael Curtiz was a Hungarian and American film dir"
+   ]
+  },
+  {
+   "i": 17,
+   "q": "In 2004, Chechen terrorists took schoolchildren hostage resulting in a shoot-out in which hundreds died, in which city was it?",
+   "seconds": 24.2,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9572,
+   "final_right": true
+  },
+  {
+   "i": 18,
+   "q": "At which British golf course could you find yourself in Hell Bunker",
+   "seconds": 15.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7337,
+   "final_right": true
+  },
+  {
+   "i": 19,
+   "q": "When were the first Winter Paralympics held?",
+   "seconds": 308.7,
+   "error": "RemoteDisconnected('Remote end closed connection without response')",
+   "looked_up": false,
+   "trigger_score": null,
+   "final_right": null
+  },
+  {
+   "i": 20,
+   "q": "Which Shakespeare play is set in the Forest of Arden?",
+   "seconds": 23.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8575,
+   "final_right": true
+  },
+  {
+   "i": 21,
+   "q": "Suya, Puff Puff, and Moin Moin (or Moyi-Moyi) are well-known Nigerian?",
+   "seconds": 23.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8798,
+   "final_right": true
+  },
+  {
+   "i": 22,
+   "q": "If someone has a BA, they are a Bachelor of what?",
+   "seconds": 5.8,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9281,
+   "final_right": true
+  },
+  {
+   "i": 23,
+   "q": "In which film series would you expect to film Katniss Everdeen and Peeta Malark?",
+   "seconds": 4.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9128,
+   "final_right": true
+  },
+  {
+   "i": 24,
+   "q": "What is the literal translation of the name Las Vegas?",
+   "seconds": 6.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9308,
+   "final_right": true
+  },
+  {
+   "i": 25,
+   "q": "What is the name of the official British coronation crown?",
+   "seconds": 7.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9407,
+   "final_right": true
+  },
+  {
+   "i": 26,
+   "q": "The line 'The mirror crack'd from side to side' comes from which poem?",
+   "seconds": 5.0,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.7687,
+   "final_right": false
+  },
+  {
+   "i": 27,
+   "q": "In which year did Alcock and Brown make the first flight across the Atlantic?",
+   "seconds": 3.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.983,
+   "final_right": true
+  },
+  {
+   "i": 28,
+   "q": "Bullfighting is central to which Ernest Hemingway non-fiction book?",
+   "seconds": 5.7,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9049,
+   "final_right": true
+  },
+  {
+   "i": 29,
+   "q": "What word is applied to someone who is equally capable with both hands?",
+   "seconds": 5.6,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9645,
+   "final_right": true
+  },
+  {
+   "i": 30,
+   "q": "In which TV establishment were Miss Gatsby and Miss Tibbs residents ?",
+   "seconds": 21.5,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.0453,
+   "final_right": true,
+   "closed_book_right": false,
+   "passages": [
+    "Fawlty Towers (Wikipedia): Fawlty Towers is a British television sitcom written "
+   ]
+  },
+  {
+   "i": 31,
+   "q": "What instrument was played by jazz musician Bix Beiderbeck?",
+   "seconds": 21.3,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8322,
+   "final_right": false
+  },
+  {
+   "i": 32,
+   "q": "Which TV presenter, who died in February 2013, was for over 20 years the host of 'Mr & Mrs'?",
+   "seconds": 9.4,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.0544,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "Phillip Schofield (Wikipedia): Phillip Bryan Schofield is an English television ",
+    "Judith Chalmers (Wikipedia): Judith Rosemary Locke Chalmers was a British televi",
+    "List of television performers who died during production (Wikipedia): The follow"
+   ]
+  },
+  {
+   "i": 33,
+   "q": "Michelangelo Merisi (or Amerighi) is the birth name of which artist?",
+   "seconds": 9.9,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9754,
+   "final_right": true
+  },
+  {
+   "i": 34,
+   "q": "What type of sausage is usually sold in a flat circular coil?",
+   "seconds": 6.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.8768,
+   "final_right": false
+  },
+  {
+   "i": 35,
+   "q": "What is the name of the giraffe that Toys-r-us uses as its' mascot?",
+   "seconds": 400.3,
+   "error": "TimeoutError('The read operation timed out')",
+   "looked_up": false,
+   "trigger_score": null,
+   "final_right": null
+  },
+  {
+   "i": 36,
+   "q": "Which Italian demonstrated the first modern electric battery?",
+   "seconds": 12.4,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9163,
+   "final_right": true
+  },
+  {
+   "i": 37,
+   "q": "Which medical condition is sometimes known as Daltonism?",
+   "seconds": 3.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9064,
+   "final_right": true
+  },
+  {
+   "i": 38,
+   "q": "Who played Hotlips Houlihan in the 1972 film MASH?",
+   "seconds": 13.6,
+   "error": null,
+   "looked_up": true,
+   "trigger_score": 0.4312,
+   "final_right": false,
+   "closed_book_right": false,
+   "passages": [
+    "List of M*A*S*H characters (Wikipedia): This is a list of characters from the M*"
+   ]
+  },
+  {
+   "i": 39,
+   "q": "Luzon is an island of which country?",
+   "seconds": 1.5,
+   "error": null,
+   "looked_up": false,
+   "trigger_score": 0.9928,
+   "final_right": true
+  }
+ ]
+}
