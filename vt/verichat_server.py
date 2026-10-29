@@ -472,6 +472,14 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
 
 
 def main(argv=None):
+    srv = build(argv)
+    print(f"VeriChat on http://{srv.server_address[0]}:{srv.server_port}", flush=True)
+    srv.serve_forever()
+
+
+def build(argv=None, host=None, port=None):
+    """The configured server, loaded and ready but not serving: serve_forever() it, or hand it to
+    vt.asgi.asgi_from to serve in-process."""
     ap = argparse.ArgumentParser(prog="vt verichat")
     ap.add_argument("--model", required=True)
     ap.add_argument("--head", required=True)
@@ -538,11 +546,9 @@ def main(argv=None):
         name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
-    srv = make_server(bot, a.host, a.port, deadline=a.deadline, detector=det, log_requests=a.log_requests,
-                      api_key=os.environ.get("VERICHAT_API_KEY") or None,
-                      rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
-    print(f"VeriChat on http://{a.host}:{srv.server_port}", flush=True)
-    srv.serve_forever()
+    return make_server(bot, host or a.host, a.port if port is None else port, deadline=a.deadline, detector=det,
+                       log_requests=a.log_requests, api_key=os.environ.get("VERICHAT_API_KEY") or None,
+                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
 
 
 if __name__ == "__main__":

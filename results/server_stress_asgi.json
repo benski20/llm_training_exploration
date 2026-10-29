@@ -1,0 +1,22 @@
+{
+ "requests": 640,
+ "outcomes": {
+  "ok": 617,
+  "stream error": 12,
+  "HTTP 500": 11
+ },
+ "model_calls": 200,
+ "wall_s": 63.7,
+ "max_seconds": 6.53,
+ "lost": [],
+ "settings": {
+  "clients": 16,
+  "per_client": 40,
+  "scale": 0.15,
+  "fail_rate": 0.15,
+  "deadline": 60,
+  "seed": 3,
+  "out": "results/server_stress_asgi.json",
+  "asgi": true
+ }
+}

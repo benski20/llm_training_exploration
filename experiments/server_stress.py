@@ -65,11 +65,26 @@ def main():
     ap.add_argument("--deadline", type=float, default=60)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="results/server_stress.json")
+    ap.add_argument("--asgi", action="store_true", help="serve the handler in-process through vt.asgi and uvicorn")
     a = ap.parse_args()
     bot = FakeBot(random.Random(a.seed), a.scale, a.fail_rate)
     srv = make_server(bot, port=0, rate_per_minute=0, deadline=a.deadline, log_requests=False)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{srv.server_port}/chat"
+    if a.asgi:
+        import socket
+        import uvicorn
+        from vt.asgi import asgi_from
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        us = uvicorn.Server(uvicorn.Config(asgi_from(srv), host="127.0.0.1", port=port, log_level="warning"))
+        threading.Thread(target=us.run, daemon=True).start()
+        while not us.started:
+            time.sleep(0.05)
+        url = f"http://127.0.0.1:{port}/chat"
+    else:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/chat"
     rows, lock = [], threading.Lock()
 
     def client(c):
@@ -103,7 +118,8 @@ def main():
         t.start()
     for t in ts:
         t.join()
-    srv.shutdown()
+    if not a.asgi:
+        srv.shutdown()
     counts = {}
     for r in rows:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1

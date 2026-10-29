@@ -157,7 +157,8 @@ class HardenedHandler(BaseHTTPRequestHandler):
     def send_response(self, code, message=None):
         """Responses get a longer socket timeout than requests: the short one cuts off clients trickling a
         request in, but a reader slow to drain the reply would otherwise leave it half-written."""
-        self.request.settimeout(self.write_timeout_s)
+        if self.request is not None:                     # None: served in-process (vt.asgi), no socket
+            self.request.settimeout(self.write_timeout_s)
         super().send_response(code, message)
         self.send_header("Connection", "close")          # one request per connection, said out loud: a pooling
                                                          # proxy must not reuse a socket this server closes

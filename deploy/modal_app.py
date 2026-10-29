@@ -33,6 +33,7 @@ RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per 
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
+ASGI = os.environ.get("VERICHAT_ASGI", "1") == "1"                # serve in-process (0: web_server + local proxy)
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -40,14 +41,15 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("torch==2.5.1", "transformers==4.51.3", "accelerate==1.1.1", "bitsandbytes==0.45.0",
-                 "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece", "sentence-transformers==3.3.1")
+                 "numpy==2.1.3", "scipy==1.14.1", "safetensors", "sentencepiece", "sentence-transformers==3.3.1",
+                 "fastapi==0.115.6")                      # for Modal's web endpoints (asgi_app)
     # Modal re-imports this file inside the container: bake the deploy-time settings into its environment
     # so the server there sees the same values (otherwise every VERICHAT_* silently reverts to its default)
     .env({k: v for k, v in {"VERICHAT_MODEL": MODEL, "VERICHAT_HEAD": HEAD, "VERICHAT_GPU": GPU,
                              "VERICHAT_SCALEDOWN": str(SCALEDOWN), "VERICHAT_RISK_THRESHOLD": RISK_THRESHOLD,
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
-                             "VERICHAT_VERIFY": "1" if VERIFY else "0"}.items() if v is not None})
+                             "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0"}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
@@ -102,17 +104,35 @@ def judge_eval():
         raise SystemExit(out.returncode)
 
 
-@app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
-              scaledown_window=SCALEDOWN, max_containers=1)
-@modal.concurrent(max_inputs=32)                          # the server batches concurrent requests itself
-@modal.web_server(PORT, startup_timeout=1200)
-def serve():
-    env = dict(os.environ, PYTHONPATH="/app")
-    subprocess.Popen(["python", "-m", "vt.verichat_server", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
-                      "--detector", "/app/heads/detector.pt", "--moderation", "--rate-per-minute", RATE,
-                      "--trust-proxy", "--deadline", "300", "--log-requests", "--host", "0.0.0.0", "--port", str(PORT)]
-                     + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
-                     + (["--wikipedia"] if WIKIPEDIA else [])
-                     + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
-                     + (["--verify-claims"] if WIKIPEDIA and VERIFY else [])
-                     + (["--revision", REVISION] if REVISION else []), env=env)
+def server_args():
+    return (["--model", MODEL, "--head", "/app/heads/risk_head.pt", "--detector", "/app/heads/detector.pt",
+             "--moderation", "--rate-per-minute", RATE, "--trust-proxy", "--deadline", "300", "--log-requests"]
+            + (["--risk-threshold", RISK_THRESHOLD] if RISK_THRESHOLD else [])
+            + (["--wikipedia"] if WIKIPEDIA else [])
+            + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
+            + (["--verify-claims"] if WIKIPEDIA and VERIFY else [])
+            + (["--revision", REVISION] if REVISION else []))
+
+
+SERVE = dict(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=24 * 3600,
+             scaledown_window=SCALEDOWN, max_containers=1)
+if ASGI:
+    # In-process: Modal calls the handler directly. Through a web_server, Modal's proxy reads each reply
+    # back over a local socket, and live it sometimes failed to ("Response payload is not completed"),
+    # leaving the client to wait about 270 s for nothing (deploy/RUNBOOK.md, lost requests).
+    @app.function(**SERVE)
+    @modal.concurrent(max_inputs=32)                      # the server batches concurrent requests itself
+    @modal.asgi_app()
+    def serve():
+        import sys
+        sys.path.insert(0, "/app")
+        from vt.asgi import asgi_from
+        from vt.verichat_server import build
+        return asgi_from(build(server_args(), port=0))
+else:
+    @app.function(**SERVE)
+    @modal.concurrent(max_inputs=32)
+    @modal.web_server(PORT, startup_timeout=1200)
+    def serve():
+        subprocess.Popen(["python", "-m", "vt.verichat_server"] + server_args()
+                         + ["--host", "0.0.0.0", "--port", str(PORT)], env=dict(os.environ, PYTHONPATH="/app"))

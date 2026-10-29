@@ -104,6 +104,14 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
   - Wrong answers: 3 supported, 2 unsupported, 3 no evidence.
 - 2 of 40 requests were still lost (RemoteDisconnected after about 270 s). Median reply time 35 s at 4
   concurrent clients.
+- The per-request log (`recv`/`body`/`sent`) found the cause:
+  - The server sent a complete 200 for all 40 requests.
+  - For one of the two lost ones, Modal's proxy then failed while reading the reply back from the local
+    socket (`ClientPayloadError: Response payload is not completed`).
+  - That client got nothing and was dropped about 270 s later.
+- Fix: the demo now serves in-process as an ASGI app (`vt/asgi.py`, `VERICHAT_ASGI=1`). Modal calls the
+  same handler directly, with no socket in between. Locally behind uvicorn, the stress test lost 0 of 640
+  (`results/server_stress_asgi.json`).
 
 ## Lookups (Wikipedia)
 
