@@ -7,12 +7,15 @@ on:
       nli:
         description: sentence-transformers NLI cross-encoder
         default: cross-encoder/nli-deberta-v3-base
+      judge:
+        description: a chat model as the verifier (empty for none)
+        default: Qwen/Qwen2.5-3B-Instruct
 permissions:
   contents: read
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,12 +23,13 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy scipy sentence-transformers
+          pip install numpy scipy sentence-transformers "transformers==4.51.3" accelerate
       - name: verify the labeled replies
         run: |
           set -o pipefail
           python experiments/evidence_verify.py --nli "${{ github.event.inputs.nli || 'cross-encoder/nli-deberta-v3-base' }}" \
-            --rerank cross-encoder/ms-marco-MiniLM-L-6-v2 --pause 1.5 --out evidence_verify.json | tail -n 60
+            --rerank cross-encoder/ms-marco-MiniLM-L-6-v2 --pause 1.5 --out evidence_verify.json \
+            ${{ github.event.inputs.judge && format('--judge {0}', github.event.inputs.judge) || '' }} | tail -n 80
       - uses: actions/upload-artifact@v4
         with:
           name: evidence-verify

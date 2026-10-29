@@ -1,0 +1,44 @@
+{
+ "run": "verify-eval 40875571483 (2026-10-29): NLI cross-encoder/nli-deberta-v3-base; lookups reranked over 5 pages (MiniLM); only passages with reranker logit > 0 count; 12 lookups failed (HTTP 500), none rate-limited",
+ "auroc": {
+  "probe": {
+   "triviaqa": 0.778,
+   "nq": 0.566,
+   "all": 0.694
+  },
+  "evidence 1-support first claim": {
+   "triviaqa": 0.698,
+   "nq": 0.601,
+   "all": 0.661
+  },
+  "evidence 1-support weakest claim": {
+   "triviaqa": 0.612,
+   "nq": 0.6,
+   "all": 0.623
+  },
+  "evidence conflict first claim": {
+   "triviaqa": 0.474,
+   "nq": 0.569,
+   "all": 0.533
+  },
+  "evidence conflict-support first claim": {
+   "triviaqa": 0.648,
+   "nq": 0.632,
+   "all": 0.648
+  },
+  "probe + evidence z-sum": {
+   "triviaqa": 0.753,
+   "nq": 0.615,
+   "all": 0.7
+  }
+ },
+ "everyday": {
+  "with_check_worthy_claims": 0.982,
+  "any_claim_contradicted_gt_0.5": 0.161,
+  "all_claims_supported_gt_0.5": 0.089
+ },
+ "factual_any_contradicted": {
+  "right": 0.366,
+  "wrong": 0.442
+ }
+}

@@ -37,6 +37,31 @@ def check_worthy(s):
     return any(ch.isdigit() for ch in s) or any(t[:1].isupper() for t in w[1:])
 
 
+class Judge:
+    """A chat model as the verifier: given the evidence, the question and a claim, P("Yes") against P("No")
+    for "does the evidence support the claim?" (one forward pass, no generation)."""
+
+    def __init__(self, name):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        torch.set_num_threads(os.cpu_count() or 4)
+        self.torch, self.tok = torch, AutoTokenizer.from_pretrained(name)
+        self.model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.bfloat16).eval()
+        self.yes = [self.tok.encode(w, add_special_tokens=False)[0] for w in ("Yes", " Yes")]
+        self.no = [self.tok.encode(w, add_special_tokens=False)[0] for w in ("No", " No")]
+
+    def __call__(self, question, claim, passages):
+        ev = "\n\n".join(p[:900] for p in passages)
+        msg = [{"role": "system", "content": "You check claims against evidence. Answer only Yes or No."},
+               {"role": "user", "content": f"Evidence:\n{ev}\n\nQuestion: {question}\nClaim: {claim}\n\n"
+                                           "Does the evidence support the claim? Answer Yes or No."}]
+        ids = self.tok.apply_chat_template(msg, add_generation_prompt=True, return_tensors="pt")
+        with self.torch.no_grad():
+            z = self.model(ids[:, -1500:]).logits[0, -1].float()
+        y, n = self.torch.logsumexp(z[self.yes], 0), self.torch.logsumexp(z[self.no], 0)
+        return float(self.torch.sigmoid(y - n))
+
+
 def auroc(scores, y):
     s, y = np.asarray(scores, float), np.asarray(y, int)
     pos, neg = s[y == 1], s[y == 0]
@@ -56,7 +81,10 @@ def main():
     ap.add_argument("--rerank", help="cross-encoder for lookups (5 pages) and for keeping only relevant passages")
     ap.add_argument("--relevant", type=float, default=0.0, help="reranker logit a passage needs to count as evidence")
     ap.add_argument("--pause", type=float, default=0.2, help="seconds between replies (Wikipedia rate limits)")
+    ap.add_argument("--judge", help="a chat model that reads the evidence and says whether it supports the claim, "
+                                    "e.g. Qwen/Qwen2.5-3B-Instruct (P(Yes) is the support)")
     a = ap.parse_args()
+    judge = Judge(a.judge) if a.judge else None
     from sentence_transformers import CrossEncoder
     nli = CrossEncoder(a.nli, max_length=512)
     labels = {v.lower(): int(k) for k, v in nli.model.config.id2label.items()}
@@ -86,8 +114,12 @@ def main():
             logits = np.asarray(nli.predict([(p.split(": ", 1)[-1], s) for p in ps]))
             pr = np.exp(logits - logits.max(-1, keepdims=True))
             pr /= pr.sum(-1, keepdims=True)
-            judged.append({"s": s[:160], "support": round(float(pr[:, ent].max()), 4),
-                           "conflict": round(float(pr[:, con].max()), 4), "passages": len(ps)})
+            j = {"s": s[:160], "support": round(float(pr[:, ent].max()), 4),
+                 "conflict": round(float(pr[:, con].max()), 4), "passages": len(ps),
+                 "evidence": [p[:700] for p in ps]}
+            if judge is not None:
+                j["judge"] = round(judge(x["prompt"], s, ps), 4)
+            judged.append(j)
         rows.append({"kind": x["kind"], "source": x.get("source", x.get("cat")), "wrong": x.get("wrong"),
                      "reply_confidence": x.get("reply_confidence"), "sentences": judged})
         if n % 20 == 0:
@@ -108,6 +140,9 @@ def main():
         "evidence: conflict, first claim": lambda r: first(r, "conflict", 0.0),
         "evidence: conflict - support, first claim": lambda r: first(r, "conflict", 0.0) - first(r, "support", 0.5),
     }
+    if judge is not None:
+        signals["judge: 1 - P(supported), first claim"] = lambda r: 1 - first(r, "judge", 0.5)
+        signals["judge: 1 - P(supported), weakest claim"] = lambda r: 1 - worst(r, "judge", 0.5, min)
     fa = [r for r in rows if r["kind"] == "factual"]
     res = {"replies": len(rows), "nli": a.nli, "lookup_errors": dict(wiki.errors), "auroc": {}}
     for name, f in signals.items():
@@ -125,6 +160,19 @@ def main():
     res["everyday"] = {"with_check_worthy_claims": round(np.mean([bool(r["sentences"]) for r in ev]), 3),
                        "any_claim_contradicted_gt_0.5": round(np.mean([any((j["conflict"] or 0) > 0.5 for j in r["sentences"]) for r in ev]), 3),
                        "all_claims_supported_gt_0.5": round(np.mean([bool(r["sentences"]) and all((j["support"] or 0) > 0.5 for j in r["sentences"]) for r in ev]), 3)}
+    if judge is not None:
+        jz = z([signals["probe (1 - reply_confidence)"](r) for r in fa]) + \
+            z([signals["judge: 1 - P(supported), first claim"](r) for r in fa])
+        res["auroc"]["probe + judge (z-sum)"] = {"all": auroc(jz, [r["wrong"] for r in fa])}
+        for src in ("triviaqa", "nq"):
+            idx = [i for i, r in enumerate(fa) if r["source"] == src]
+            res["auroc"]["probe + judge (z-sum)"][src] = auroc(jz[idx], [fa[i]["wrong"] for i in idx])
+        res["everyday"]["any_claim_judged_unsupported_lt_0.2"] = round(np.mean(
+            [any(j.get("judge") is not None and j["judge"] < 0.2 for j in r["sentences"]) for r in ev]), 3)
+        res["factual_any_judged_unsupported_lt_0.2"] = {w: round(np.mean(
+            [any(j.get("judge") is not None and j["judge"] < 0.2 for j in r["sentences"]) for r in fa if r["wrong"] == w]), 3)
+            for w in (0, 1)}
+        res["judge"] = a.judge
     res["factual_any_contradicted"] = {w: round(np.mean([any((j["conflict"] or 0) > 0.5 for j in r["sentences"]) for r in fa if r["wrong"] == w]), 3) for w in (0, 1)}
     res["rows"] = rows
     json.dump(res, open(a.out, "w"), indent=1)
