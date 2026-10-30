@@ -35,6 +35,8 @@ def test_unambiguous_signals_decide_without_the_model():
     assert rule(article) == "text"                                  # a task on pasted text
     assert rule("Summarize the plot of Hamlet.") is None            # short: a question, nothing pasted
     assert rule("word " * 320) == "text"                            # very long: text to work on
+    assert rule("Who did Prince William marry?\n\n" + "The royal family rebounded in popularity. " * 12) == "text"
+    assert rule("Who did Prince William marry?") is None
 
 
 def test_text_router_sorts_with_a_trained_layer(tmp_path):

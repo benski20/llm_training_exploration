@@ -319,11 +319,13 @@ anywhere but a search goes out unchecked, the dearest mistake. Held out (`result
 |---|---|---|---|---|---|
 | mixed (TriviaQA, NQ, GSM8K, how-to, code, creative, advice) | 120 | 94% | 95% | 95% | 2 |
 | written apart from the rules, casual wording | 80 | 76% | 94% | 93% | 2 |
-| no_robots test, human categories (never trained on) | 500 | 78% | 80% | 95% | 3 |
+| no_robots test, human categories (never trained on) | 500 | 79% (85%*) | 80% | 95% | 3 |
 
-"Harmlessly" also counts code or math questions answered from a search. Weak spots: casual sums ("15% tip on
-$48") go to a search 45% of the time (their arithmetic is still re-computed), and short pasted texts without
-"summarize"/"the text below" are missed (text recall 62%). The chat model's own choice (`--route model`, one
+"Harmlessly" also counts code or math questions answered from a search. *Counting the 29 rewrites of pasted
+text (no_robots files them under Rewrite) that go to "text", where they are checked against the original.
+Pasted text is found by its shape too (a short instruction, a blank line, a body of 60+ words): 94% of the
+tasks on pasted text, none of the other 200 messages. Weak spot: casual sums ("15% tip on $48") go to a
+search 45% of the time (their arithmetic is still re-computed). The chat model's own choice (`--route model`, one
 forward pass) sorted 76% of the 80 at 0.5B and sent most chat to a search; at 32B it is unmeasured.
 
 ## Clients
