@@ -102,22 +102,28 @@ def load(no_robots, per_kind, seed=0, sources=()):
     return out
 
 
-def train(X, y, n_classes, l2=1e-3, epochs=300, lr=0.5):
-    """Softmax regression, class-balanced, full-batch gradient descent (numpy only)."""
-    n, d = X.shape
-    W, b = np.zeros((d, n_classes)), np.zeros(n_classes)
-    counts = np.bincount(y, minlength=n_classes)
-    w = (n / (n_classes * np.maximum(counts, 1)))[y]
-    Y = np.eye(n_classes)[y]
-    for _ in range(epochs):
-        Z = X @ W + b
-        Z -= Z.max(1, keepdims=True)
-        P = np.exp(Z)
-        P /= P.sum(1, keepdims=True)
-        G = (P - Y) * w[:, None] / n
-        W -= lr * (X.T @ G + l2 * W)
-        b -= lr * G.sum(0)
-    return W, b
+def train(X, y, n_classes, l2=1e-4, steps=1500, lr=0.05):
+    """Softmax regression, class-balanced cross-entropy with L2, full-batch Adam (torch)."""
+    import torch
+    Xt, yt = torch.tensor(X, dtype=torch.float32), torch.tensor(y)
+    counts = torch.bincount(yt, minlength=n_classes).clamp(min=1).float()
+    weight = len(y) / (n_classes * counts)
+    W = torch.zeros(X.shape[1], n_classes, requires_grad=True)
+    b = torch.zeros(n_classes, requires_grad=True)
+    opt = torch.optim.Adam([W, b], lr=lr)
+    for _ in range(steps):
+        opt.zero_grad()
+        loss = torch.nn.functional.cross_entropy(Xt @ W + b, yt, weight=weight) + l2 * (W ** 2).sum()
+        loss.backward()
+        opt.step()
+    return W.detach().numpy(), b.detach().numpy()
+
+
+def log_loss(X, y, W, b):
+    Z = X @ W + b
+    Z -= Z.max(1, keepdims=True)
+    logp = Z - np.log(np.exp(Z).sum(1, keepdims=True))
+    return float(-logp[np.arange(len(y)), y].mean())
 
 
 def no_robots_test():
@@ -133,7 +139,8 @@ def main():
     ap.add_argument("--per-kind", type=int, default=2000)
     ap.add_argument("--no-robots", action="store_true")
     ap.add_argument("--extra", nargs="*", default=[], choices=["so", "eli5", "yahoo"])
-    ap.add_argument("--epochs", type=int, default=300)
+    ap.add_argument("--steps", type=int, default=1500)
+    ap.add_argument("--cache", help="save / reuse the training embeddings here (.npz)")
     ap.add_argument("--out", default="vt/router_head.npz")
     ap.add_argument("--report", default="results/router_train.json")
     a = ap.parse_args()
@@ -143,18 +150,28 @@ def main():
     data = load(a.no_robots, a.per_kind, sources=a.extra)
     print("training messages:", dict(Counter(k for _, k in data)), flush=True)
     emb = SentenceTransformer(a.embed)
-    X = emb.encode([q[:2000] for q, _ in data], batch_size=64, normalize_embeddings=True, show_progress_bar=False)
     y = np.array([KINDS.index(k) for _, k in data])
+    if a.cache and os.path.exists(a.cache):
+        X = np.load(a.cache)["X"]
+    else:
+        X = emb.encode([q[:2000] for q, _ in data], batch_size=64, normalize_embeddings=True, show_progress_bar=False)
+        if a.cache:
+            np.savez(a.cache, X=X)
     cut = int(0.9 * len(data))
-    W, b = train(X[:cut], y[:cut], len(KINDS), epochs=a.epochs)
-    val = float(((X[cut:] @ W + b).argmax(1) == y[cut:]).mean())
-    W, b = train(X, y, len(KINDS), epochs=a.epochs)        # then on everything
+    fits = {}
+    for l2 in (1e-5, 1e-4, 1e-3, 1e-2):                     # L2 strength by held-out log loss
+        W, b = train(X[:cut], y[:cut], len(KINDS), l2=l2, steps=a.steps)
+        fits[l2] = (log_loss(X[cut:], y[cut:], W, b), float(((X[cut:] @ W + b).argmax(1) == y[cut:]).mean()))
+        print(f"l2 {l2:g}: validation log loss {fits[l2][0]:.3f}, accuracy {fits[l2][1]:.3f}", flush=True)
+    l2 = min(fits, key=lambda k: fits[k][0])
+    val = fits[l2][1]
+    W, b = train(X, y, len(KINDS), l2=l2, steps=a.steps)    # then on everything
     np.savez(a.out, W=W.astype(np.float32), b=b.astype(np.float32), kinds=np.array(KINDS), embed=np.array(a.embed))
     router = TextRouter(a.out, embedder=emb)
     from experiments.router_eval import summarize
     from vt.router import rule
     report = {"embed": a.embed, "no_robots": a.no_robots, "extra": a.extra, "train": dict(Counter(k for _, k in data)),
-              "validation_accuracy": round(val, 3)}
+              "validation_accuracy": round(val, 3), "l2": l2}
     sets = {p: json.load(open(p)) for p in ("results/mixed_eval_items.json", "results/router_holdout.json")}
     if not a.no_robots:                                     # human-labeled categories, never trained on here
         sets["no_robots_test"] = no_robots_test()
