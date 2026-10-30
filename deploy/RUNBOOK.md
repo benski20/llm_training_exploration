@@ -298,6 +298,34 @@ grading and 37% by string match.
 - Bulk lookups from Modal trip Wikipedia's limits even when paced. Demo traffic is far lighter, but a
   search API with a key (`--web-search`) is the robust source for production.
 
+## Routing (any message, not just questions)
+
+`--route` (on in the deploy) sorts each message before answering, and each kind gets the check that fits it:
+
+| kind | check | cost |
+|---|---|---|
+| information | one search before answering; the reply is written from it and judged by whether its claims are in it | one lookup |
+| text (a task on pasted text) | the user's own text is the source: the reply is checked against it | nothing extra |
+| math | the arithmetic in the reply is re-computed exactly (every routed reply's explicit `=` equations too) | nothing |
+| code, chat | no fact verdict, no markers | nothing |
+
+The sorter is a small sentence embedding (bge-small, CPU, 2-8 ms a message) and a softmax layer trained on
+human-written prompts from permissively licensed sets (Dolly, GSM8K, MATH, MBPP, glaive code questions;
+`experiments/train_router.py`, 7 KB in `vt/router_head.npz`), after a few unambiguous rules (code, poems,
+pasted text). It picks the kind that costs least in expectation (`vt.router.COSTS`): a factual question sent
+anywhere but a search goes out unchecked, the dearest mistake. Held out (`results/router_eval_cost.json`):
+
+| set | messages | sorted as labeled | sorted harmlessly | factual questions recognised | left unchecked |
+|---|---|---|---|---|---|
+| mixed (TriviaQA, NQ, GSM8K, how-to, code, creative, advice) | 120 | 94% | 95% | 95% | 2 |
+| written apart from the rules, casual wording | 80 | 76% | 94% | 93% | 2 |
+| no_robots test, human categories (never trained on) | 500 | 78% | 80% | 95% | 3 |
+
+"Harmlessly" also counts code or math questions answered from a search. Weak spots: casual sums ("15% tip on
+$48") go to a search 45% of the time (their arithmetic is still re-computed), and short pasted texts without
+"summarize"/"the text below" are missed (text recall 62%). The chat model's own choice (`--route model`, one
+forward pass) sorted 76% of the 80 at 0.5B and sent most chat to a search; at 32B it is unmeasured.
+
 ## Clients
 
 `vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a

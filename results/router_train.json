@@ -1,0 +1,814 @@
+{
+ "embed": "BAAI/bge-small-en-v1.5",
+ "no_robots": false,
+ "extra": [],
+ "train": {
+  "chat": 2000,
+  "math": 2000,
+  "code": 2000,
+  "information": 2000
+ },
+ "validation_accuracy": 0.809,
+ "l2": 1e-05,
+ "mixed_eval_items.json": {
+  "n": 120,
+  "accuracy": 0.942,
+  "rules": {
+   "decided": 31,
+   "accuracy": 1.0
+  },
+  "model": {
+   "decided": 89,
+   "accuracy": 0.921
+  },
+  "acceptable": 0.95,
+  "unchecked_information": 2,
+  "per_kind": {
+   "chat": {
+    "n": 30,
+    "accuracy": 0.9
+   },
+   "code": {
+    "n": 15,
+    "accuracy": 0.933
+   },
+   "information": {
+    "n": 55,
+    "accuracy": 0.945
+   },
+   "math": {
+    "n": 20,
+    "accuracy": 1.0
+   }
+  },
+  "confusion": {
+   "chat -> information": 3,
+   "code -> information": 1,
+   "information -> chat": 2,
+   "information -> math": 1
+  },
+  "wrong": [
+   [
+    "information",
+    "math",
+    "Which musical instrument can have 21, 22, or 23 strings?"
+   ],
+   [
+    "information",
+    "chat",
+    "What should I pack for a week-long hiking trip?"
+   ],
+   [
+    "information",
+    "chat",
+    "How do I write a good cover letter?"
+   ],
+   [
+    "code",
+    "information",
+    "How do I undo the last git commit?"
+   ],
+   [
+    "chat",
+    "information",
+    "I'm feeling stressed about exams. Any advice?"
+   ],
+   [
+    "chat",
+    "information",
+    "What's a good name for a golden retriever puppy?"
+   ],
+   [
+    "chat",
+    "information",
+    "What hobby should I pick up this year?"
+   ]
+  ]
+ },
+ "router_holdout.json": {
+  "n": 80,
+  "accuracy": 0.762,
+  "rules": {
+   "decided": 10,
+   "accuracy": 1.0
+  },
+  "model": {
+   "decided": 70,
+   "accuracy": 0.729
+  },
+  "acceptable": 0.938,
+  "unchecked_information": 2,
+  "per_kind": {
+   "chat": {
+    "n": 15,
+    "accuracy": 0.8
+   },
+   "code": {
+    "n": 15,
+    "accuracy": 0.667
+   },
+   "information": {
+    "n": 30,
+    "accuracy": 0.933
+   },
+   "math": {
+    "n": 20,
+    "accuracy": 0.55
+   }
+  },
+  "confusion": {
+   "chat -> information": 3,
+   "code -> information": 5,
+   "information -> chat": 2,
+   "math -> information": 9
+  },
+  "wrong": [
+   [
+    "information",
+    "chat",
+    "what are the symptoms of low iron"
+   ],
+   [
+    "information",
+    "chat",
+    "what's the best way to store fresh basil"
+   ],
+   [
+    "math",
+    "information",
+    "if i drive 240 miles at 60 mph how long does it take"
+   ],
+   [
+    "math",
+    "information",
+    "what's a 15% tip on $48"
+   ],
+   [
+    "math",
+    "information",
+    "convert 5 miles to km"
+   ],
+   [
+    "math",
+    "information",
+    "what is 17 squared"
+   ],
+   [
+    "math",
+    "information",
+    "if a shirt is $40 and it's 30% off what do i pay"
+   ],
+   [
+    "math",
+    "information",
+    "what's the area of a circle with radius 4"
+   ],
+   [
+    "math",
+    "information",
+    "a train leaves at 9:40 and the trip is 2h 35m, when does it arrive"
+   ],
+   [
+    "math",
+    "information",
+    "how many 1.5 litre bottles do i need for 12 litres"
+   ],
+   [
+    "math",
+    "information",
+    "compound interest on 5000 at 4% for 3 years"
+   ],
+   [
+    "code",
+    "information",
+    "what does git rebase do compared to merge"
+   ],
+   [
+    "code",
+    "information",
+    "how do I center a div"
+   ],
+   [
+    "code",
+    "information",
+    "what's the difference between == and === "
+   ],
+   [
+    "code",
+    "information",
+    "explain big O notation with an example"
+   ],
+   [
+    "code",
+    "information",
+    "my docker container exits immediately after starting, why"
+   ],
+   [
+    "chat",
+    "information",
+    "i'm really nervous about my job interview tomorrow"
+   ],
+   [
+    "chat",
+    "information",
+    "I feel lonely since moving to a new city"
+   ],
+   [
+    "chat",
+    "information",
+    "good morning!"
+   ]
+  ]
+ },
+ "no_robots_test": {
+  "n": 484,
+  "accuracy": 0.775,
+  "rules": {
+   "decided": 134,
+   "accuracy": 0.821
+  },
+  "model": {
+   "decided": 350,
+   "accuracy": 0.757
+  },
+  "acceptable": 0.804,
+  "unchecked_information": 3,
+  "per_kind": {
+   "chat": {
+    "n": 363,
+    "accuracy": 0.763
+   },
+   "code": {
+    "n": 16,
+    "accuracy": 0.875
+   },
+   "information": {
+    "n": 58,
+    "accuracy": 0.948
+   },
+   "text": {
+    "n": 47,
+    "accuracy": 0.617
+   }
+  },
+  "confusion": {
+   "chat -> code": 10,
+   "chat -> information": 56,
+   "chat -> math": 2,
+   "chat -> text": 18,
+   "code -> information": 2,
+   "information -> chat": 2,
+   "information -> code": 1,
+   "text -> chat": 3,
+   "text -> code": 3,
+   "text -> information": 12
+  },
+  "wrong": [
+   [
+    "chat",
+    "information",
+    "Aster is a chatbot who answers questions with rhymes."
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite this like it's a personal letter from Tina Turner to a friend explaining her early"
+   ],
+   [
+    "chat",
+    "code",
+    "Compile a list of the top 5 freshwater fish to own for beginners. The bullet list should b"
+   ],
+   [
+    "chat",
+    "information",
+    "William is a weather bot and responds in a playfully silly way."
+   ],
+   [
+    "chat",
+    "information",
+    "Write a book review for \u201cSoggy Yellow Spuds,\u201d a book about the fateful journey of a sack o"
+   ],
+   [
+    "text",
+    "information",
+    "Condense the key points of William Martin Leggett's early life, in chronological order in "
+   ],
+   [
+    "text",
+    "information",
+    "Name all of the people who are in the photograph described below, along with their ages. F"
+   ],
+   [
+    "chat",
+    "text",
+    "I'm about to graduate high school and I'm having anxiety because I haven't picked a major "
+   ],
+   [
+    "chat",
+    "text",
+    "Write a multiple-choice quiz about the Importance of Online Learning, please make the arti"
+   ],
+   [
+    "chat",
+    "information",
+    "Gaia is an informational climate change bot that answers questions on climate change."
+   ],
+   [
+    "chat",
+    "information",
+    "Grammy is a grammar helper bot that fixes spelling and grammar errors in sentences that us"
+   ],
+   [
+    "chat",
+    "information",
+    "Write a news report with Rose Nylund as the anchor reporting on a MMA Fight while she babb"
+   ],
+   [
+    "chat",
+    "information",
+    "Could you rewrite this article snippet for me, but as if it's part of a first-person femal"
+   ],
+   [
+    "chat",
+    "information",
+    "Alex is a scientific chatbot that loves all things science."
+   ],
+   [
+    "chat",
+    "information",
+    "George is a chatbot that gives comically false answers to questions."
+   ],
+   [
+    "text",
+    "chat",
+    "Create a list of negative effects of the writer's strike mentioned here: format in shorten"
+   ],
+   [
+    "chat",
+    "information",
+    "Can you give me step-by-step instructions on how to take screenshots on a Macbook Air?"
+   ],
+   [
+    "code",
+    "information",
+    "How do I listen for an event in Discord.js?"
+   ],
+   [
+    "chat",
+    "information",
+    "Fred is a chatbot that answers questions with cryptic responses."
+   ],
+   [
+    "chat",
+    "information",
+    "Carson is a salesman chatbot that is always trying to close a car deal."
+   ],
+   [
+    "chat",
+    "text",
+    "Turn the pasted text into a 10-question quiz that has answers.\n\nIt\u2019s important to recogniz"
+   ],
+   [
+    "code",
+    "information",
+    "May you explain what's going on in this snippet of code? I am not familiar with it.\n\n.acti"
+   ],
+   [
+    "chat",
+    "information",
+    "Gerald is a bot who constantly apologizes."
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite this recipe for chocolate chip cookies in paragraph form.\n\nEquipment\nmeasuring spo"
+   ],
+   [
+    "chat",
+    "information",
+    "Rewrite these three paragraphs as a soliloquy from the perspective of the artist Basquiat."
+   ],
+   [
+    "chat",
+    "information",
+    "Dan is a chatbot that likes to stick to one subject."
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite the article as study notes. Each section should include bullet points\n\nGlorious hu"
+   ],
+   [
+    "chat",
+    "code",
+    "hi can i have an idea for a short story? Give me the main character's background, a starti"
+   ],
+   [
+    "chat",
+    "information",
+    "Mrs. Pavlova is a chatbot for adult beginner ballet students and answers questions that ad"
+   ],
+   [
+    "chat",
+    "code",
+    "I would like a quick description of the basic creation of a statistical learning model. Th"
+   ],
+   [
+    "text",
+    "information",
+    "How much has the City of Los Angeles spent fighting dust pollution from Owens Lake?\n\nOnce "
+   ],
+   [
+    "chat",
+    "information",
+    "I'm an American going to France for the first time, and I know a little French I learned i"
+   ],
+   [
+    "chat",
+    "information",
+    "Connie is a condescending chatbot that seems to lose concern for how offensive her remarks"
+   ],
+   [
+    "chat",
+    "information",
+    "Helen is a southern belle bot who gives fashion advice."
+   ],
+   [
+    "chat",
+    "information",
+    "I'm making a text adventure. My character is blocked by a chasm. How might they get across"
+   ],
+   [
+    "chat",
+    "text",
+    "Write a tl:dr review of this book review in the voice of a Gen X mom talking to her Gen Z "
+   ],
+   [
+    "chat",
+    "information",
+    "Rewrite the text with more descriptive information about Rasputin. Make it more of an atte"
+   ],
+   [
+    "chat",
+    "information",
+    "Anne is a chatbot that can help answer questions about Medicare and Medicaid."
+   ],
+   [
+    "chat",
+    "information",
+    "Rainey is a weather bot whose mood changes based on the forecast."
+   ],
+   [
+    "chat",
+    "code",
+    "Where are three places that I can dig for gemstones in the western part of Nova Scotia? I "
+   ],
+   [
+    "chat",
+    "code",
+    "Come up with some review criteria for my game review site. What sections would I split the"
+   ],
+   [
+    "text",
+    "code",
+    "Write an executive summary of the attached biography of Lillian Gish that focuses on her p"
+   ],
+   [
+    "chat",
+    "information",
+    "Travis answers questions with a Southern accent."
+   ],
+   [
+    "text",
+    "information",
+    "What does the article say about Brittney Griner?\n\n\nBrittney Griner caught a flight to Wash"
+   ],
+   [
+    "chat",
+    "math",
+    "I\u2019m trying to write a scene, but I have a plot ready. Please help me write a scene where D"
+   ],
+   [
+    "chat",
+    "information",
+    "Martha is a chatbot that gives recipes and cleaning tips but doesn't know anything else."
+   ],
+   [
+    "text",
+    "information",
+    "Who did Prince William marry?\n\nThe queen\u2019s popularity, and that of the entire royal family"
+   ],
+   [
+    "chat",
+    "information",
+    "\u201cLove means never having to say you\u2019re sorry.\u201d What does the quote mean and what movie is "
+   ],
+   [
+    "chat",
+    "information",
+    "Spendi is a chatbot that helps with online order management and online payments."
+   ],
+   [
+    "text",
+    "information",
+    "What type of job does the main character of this movie have?\n\n50 First Dates is a 2004 Ame"
+   ],
+   [
+    "chat",
+    "code",
+    "I'm creating a moving checklist and want to make sure my address is changed with every res"
+   ],
+   [
+    "chat",
+    "information",
+    "Nancy is a chatbot that answers John's questions with rude responses."
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite this recipe as a story from the perspective of a blender who makes this cheesecake"
+   ],
+   [
+    "chat",
+    "information",
+    "Alice is a bot that specializes in suggesting self-care and self-help activities while exp"
+   ],
+   [
+    "chat",
+    "information",
+    "Bobby is a tired and bored chatbot that answers questions in a tired and bored way."
+   ],
+   [
+    "chat",
+    "text",
+    "Construct a Poem for me about SEVENTEEN's Popularity based on this Wikipedia article\n\nSeve"
+   ],
+   [
+    "chat",
+    "information",
+    "Jack is a bulldog bot who responds to everything with \"Woof!\""
+   ],
+   [
+    "chat",
+    "information",
+    "Gail is a chatbot that encourages people to think more positively of themselves."
+   ],
+   [
+    "chat",
+    "text",
+    "Use the titles of the books listed above to write true Tumblr shitposts. Each post should "
+   ],
+   [
+    "chat",
+    "information",
+    "Martin is an educational bot that helps a Queen learn, treating her with total respect and"
+   ],
+   [
+    "chat",
+    "text",
+    "Reimagine this text as a diary entry of a person from the future who has just landed on Ma"
+   ],
+   [
+    "chat",
+    "code",
+    "I am writing a quiz for my graduate course on Shakespeare's plays. Please create a numbere"
+   ],
+   [
+    "text",
+    "chat",
+    "Sum up the positive aspect of this review: \n\n\tsg\n3.0 out of 5 stars Made Entirely of Plast"
+   ],
+   [
+    "information",
+    "chat",
+    "Tell me what the five largest ocean animals are. Place in a numbered list from largest to "
+   ],
+   [
+    "chat",
+    "information",
+    "Rewrite this text as if its part of a futuristic science fiction story:\n\nTesla disabled th"
+   ],
+   [
+    "text",
+    "information",
+    "From what is mentioned below, how long does the quaking aspen live on average?\n\nThe quakin"
+   ],
+   [
+    "chat",
+    "information",
+    "Henry is a chatbot who is too eager to help"
+   ],
+   [
+    "chat",
+    "information",
+    "Elmer is a chatbot that doesn't give you the right answer but just makes things up."
+   ],
+   [
+    "chat",
+    "information",
+    "Brodie is a chatbot that can answer questions about surfing and the oceans."
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite this negative review so that it is gushingly positive. Please use 2 paragraphs.\n\nA"
+   ],
+   [
+    "chat",
+    "information",
+    "What are three questions and answers to ask middle schoolers about Memorial Day?\n\nMemorial"
+   ],
+   [
+    "chat",
+    "information",
+    "What is a practical application for exponents?"
+   ],
+   [
+    "chat",
+    "code",
+    "Rewrite this paragraph but make it sound supportive of Holmes.\n\nThe Theranos founder turne"
+   ],
+   [
+    "text",
+    "information",
+    "How many times has Lawrence worked with David O. Russell and on what films?\n\nUse this pass"
+   ],
+   [
+    "chat",
+    "information",
+    "Alice is a happy, go-lucky chatbot that loves to spread cheer everywhere she goes."
+   ],
+   [
+    "text",
+    "code",
+    "What's the cause of the increase in unportable assembly code which targets the 64-bit ARM "
+   ],
+   [
+    "chat",
+    "information",
+    "Here's an answer to the FAQ \"Why did Walter kill Brock?\" regarding the TV show Breaking Ba"
+   ],
+   [
+    "text",
+    "information",
+    "What are the main points of this article? Please write a bulleted list \n\nPHILADELPHIA -- A"
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite the article as if it's written by someone remembering the events of the past.\n\nThe"
+   ],
+   [
+    "chat",
+    "text",
+    "Rewrite the main family as aliens trying to blend in with humans\n\n\u201cThe All-American Slurp\u201d"
+   ],
+   [
+    "chat",
+    "text",
+    "My family is wanting to visit Solvang, California and I have been tasked with figuring out"
+   ],
+   [
+    "chat",
+    "text",
+    "Recreate the above article so it is a little more exciting.\n\nForty years ago this month, t"
+   ],
+   [
+    "chat",
+    "code",
+    "Write a message board for Unity developers asking for help with a problem I've been having"
+   ],
+   [
+    "text",
+    "information",
+    "Tell me what this says in five words:\n\nIt wasn\u2019t long ago that record collecting seemed to"
+   ],
+   [
+    "chat",
+    "math",
+    "Make this short paragraph into the past tense.\n\nHe stands on the corner. He sells purses. "
+   ],
+   [
+    "chat",
+    "information",
+    "Nick is a teenage chatbot that finds questions boring."
+   ],
+   [
+    "chat",
+    "code",
+    "Create a will for a pirate. Create a unique name for the pirate and divide his assets amon"
+   ],
+   [
+    "text",
+    "information",
+    "How much is a 1971 silver dollar worth in weight and in mint condition? \n\nThis coin, regar"
+   ],
+   [
+    "chat",
+    "text",
+    "Write a letter to the newspaper editor of the Daily mail, regarding the article about gett"
+   ],
+   [
+    "chat",
+    "information",
+    "Ivy is a marathon coach bot and uses positivity to motivate James."
+   ],
+   [
+    "chat",
+    "information",
+    "Can you write up a side quest for a made-up NPC in The Legend of Zelda: Breath of the Wild"
+   ],
+   [
+    "chat",
+    "information",
+    "Zara is a fashion chatbot that helps the user come up with an outfit to wear."
+   ],
+   [
+    "text",
+    "code",
+    "Summarize the below 5 points for me.\n\n#1 Geopolitics\nAs 2018 showed us, global trade is an"
+   ],
+   [
+    "information",
+    "code",
+    "What is a false flag event? How is it defined, and what is an example of a false flag even"
+   ],
+   [
+    "chat",
+    "information",
+    "Write a question for each sentence in this article. Put the answers after each question in"
+   ],
+   [
+    "chat",
+    "information",
+    "Teddy is a vocabulary wonder of a chatbot. He knows the definition of every word in the di"
+   ],
+   [
+    "chat",
+    "information",
+    "JK is a chatbot that initially gives a completely random incorrect answer before immediate"
+   ],
+   [
+    "chat",
+    "information",
+    "Turn this into a poem about a seagull instead\n\nThe Sandpiper\nFrances Frost\n\nAt the edge of"
+   ],
+   [
+    "information",
+    "chat",
+    "What are the five stages of grief? And how long does each stage last?"
+   ],
+   [
+    "chat",
+    "text",
+    "I need dinner ideas that take under an hour. I have ground chicken in the fridge and some "
+   ],
+   [
+    "chat",
+    "information",
+    "I just built a little house for my mom behind my house. She is nervous about moving to Cha"
+   ],
+   [
+    "chat",
+    "information",
+    "Write an About Us page for a marketing agency called Junior Jones Marketing. Keep the word"
+   ],
+   [
+    "text",
+    "chat",
+    "Sum up what this person says in their review. \n\n\tLisa L.\n5.0 out of 5 stars Really awesome"
+   ],
+   [
+    "chat",
+    "information",
+    "A boy likes a girl and she comes over to his house. They get along and she has to stay for"
+   ],
+   [
+    "chat",
+    "information",
+    "Can you recommend ski resorts in Japan for families with kids?"
+   ],
+   [
+    "chat",
+    "information",
+    "Harris is a chatbot that answers questions like a disgruntled high school teacher."
+   ],
+   [
+    "chat",
+    "information",
+    "Rewrite this with the focus being on Mark Twain's connection to Ulysses Grant.\n\nIn June 18"
+   ],
+   [
+    "text",
+    "information",
+    "What is the capital of Tasmania? What is the population?\n\nTasmania (/t\u00e6z\u02c8me\u026ani\u0259/; Palawa k"
+   ],
+   [
+    "chat",
+    "information",
+    "Dexter is a chatbot who only responds with questions"
+   ]
+  ]
+ }
+}

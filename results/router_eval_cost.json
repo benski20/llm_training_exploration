@@ -1,0 +1,125 @@
+{
+ "results/mixed_eval_items.json": {
+  "n": 120,
+  "accuracy": 0.942,
+  "rules": {
+   "decided": 31,
+   "accuracy": 1.0
+  },
+  "model": {
+   "decided": 89,
+   "accuracy": 0.921
+  },
+  "acceptable": 0.95,
+  "unchecked_information": 2,
+  "per_kind": {
+   "chat": {
+    "n": 30,
+    "accuracy": 0.9
+   },
+   "code": {
+    "n": 15,
+    "accuracy": 0.933
+   },
+   "information": {
+    "n": 55,
+    "accuracy": 0.945
+   },
+   "math": {
+    "n": 20,
+    "accuracy": 1.0
+   }
+  },
+  "confusion": {
+   "chat -> information": 3,
+   "code -> information": 1,
+   "information -> chat": 2,
+   "information -> math": 1
+  },
+  "ms_per_message": 7.4
+ },
+ "results/router_holdout.json": {
+  "n": 80,
+  "accuracy": 0.762,
+  "rules": {
+   "decided": 10,
+   "accuracy": 1.0
+  },
+  "model": {
+   "decided": 70,
+   "accuracy": 0.729
+  },
+  "acceptable": 0.938,
+  "unchecked_information": 2,
+  "per_kind": {
+   "chat": {
+    "n": 15,
+    "accuracy": 0.8
+   },
+   "code": {
+    "n": 15,
+    "accuracy": 0.667
+   },
+   "information": {
+    "n": 30,
+    "accuracy": 0.933
+   },
+   "math": {
+    "n": 20,
+    "accuracy": 0.55
+   }
+  },
+  "confusion": {
+   "chat -> information": 3,
+   "code -> information": 5,
+   "information -> chat": 2,
+   "math -> information": 9
+  },
+  "ms_per_message": 2.2
+ },
+ "no_robots_test": {
+  "n": 484,
+  "accuracy": 0.775,
+  "rules": {
+   "decided": 134,
+   "accuracy": 0.821
+  },
+  "model": {
+   "decided": 350,
+   "accuracy": 0.757
+  },
+  "acceptable": 0.804,
+  "unchecked_information": 3,
+  "per_kind": {
+   "chat": {
+    "n": 363,
+    "accuracy": 0.763
+   },
+   "code": {
+    "n": 16,
+    "accuracy": 0.875
+   },
+   "information": {
+    "n": 58,
+    "accuracy": 0.948
+   },
+   "text": {
+    "n": 47,
+    "accuracy": 0.617
+   }
+  },
+  "confusion": {
+   "chat -> code": 10,
+   "chat -> information": 56,
+   "chat -> math": 2,
+   "chat -> text": 18,
+   "code -> information": 2,
+   "information -> chat": 2,
+   "information -> code": 1,
+   "text -> chat": 3,
+   "text -> code": 3,
+   "text -> information": 12
+  },
+  "ms_per_message": 8.5
+ }
+}
