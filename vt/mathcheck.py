@@ -15,7 +15,8 @@ OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast
 NUM = r"\d+(?:,\d{3})*(?:\.\d+)?"
 # an arithmetic expression with at least one operator, then "=" or "is"/"equals", then a number
 EQUATION = re.compile(rf"((?:\(?\s*-?{NUM}\s*\)?\s*[-+*/×÷x^·]\s*)+\(?\s*-?{NUM}\s*\)?)\s*(?:=|equals|is)\s*\$?\s*(-?{NUM})(%?)")
-PERCENT = re.compile(rf"({NUM})\s*%\s*of\s*\$?\s*({NUM})\s*(?:=|equals|is)\s*\$?\s*(-?{NUM})")
+PERCENT = re.compile(rf"({NUM})\s*%\s*(?:\w+\s+)?(?:of|on)\s*\$?\s*({NUM})\s*(?:\w+\s+)?"
+                     rf"(?:=|equals|is|would be|comes to|will be)\s*\$?\s*(-?{NUM})")    # "20% tip on $45 would be $9"
 
 
 def _eval(node):

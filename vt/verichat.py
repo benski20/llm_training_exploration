@@ -386,10 +386,10 @@ class VeriChat:
         if o.get("route") == "information" and not o.get("grounded") and not any(
                 c.get("p_supported") is not None for c in o.get("verification") or []):
             return {"doubt": None, "verdict": "unverified", "basis": "no sources found for this question"}
-        if o.get("withheld") or not o.get("claims"):
+        if o.get("withheld") or not (o.get("claims") or o.get("grounded") and o.get("sentences")):
             return None
         if o.get("grounded"):                                    # answered from sources: are its claims in them?
-            claims = o["claims"]
+            claims = o.get("claims") or []                       # (none marked: its sentences are still checked)
             label = o.get("source_label", "the sources found")
             sourced = [c for c in claims if c.get("source") == label]
             doubted = [s for s in o.get("sentences") or [] if s.get("doubted")]

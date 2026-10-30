@@ -39,3 +39,9 @@ def test_explicit_mode_reads_prose_as_prose():
     assert check_arithmetic(prose, explicit=True) == []             # "is" is prose, a range of years no sum
     assert not check_arithmetic("so 12 * 4 = 50 dollars", explicit=True)[0]["ok"]
     assert check_arithmetic("12 * 4 is 50", explicit=True) == []
+
+
+def test_percent_in_everyday_wording():
+    from vt.mathcheck import check_arithmetic
+    assert check_arithmetic("A 20% tip on $45 would be $9.")[0]["ok"]
+    assert not check_arithmetic("15% of 80 comes to 14")[0]["ok"]

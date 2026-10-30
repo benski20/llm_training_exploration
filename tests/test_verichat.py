@@ -637,6 +637,10 @@ def test_routing_grounds_information_and_rechecks_math():
     yours = {"grounded": True, "source_label": "your text",
              "claims": [{"text": "1889", "source": "your text", "score": 0.4}]}
     assert VeriChat.assess(bot, yours)["basis"] == "every claim is in your text"
+    plain = {"grounded": True, "source_label": "your text", "claims": [], "sentences": [{"text": "It closed.", "doubted": False}]}
+    assert VeriChat.assess(bot, plain)["verdict"] == "likely right"         # no claim spans: its sentences decide
+    off = dict(plain, sentences=[{"text": "It closes in October.", "doubted": True}])
+    assert VeriChat.assess(bot, off)["basis"] == "1 sentence(s) doubted against your text"
 
     class TextRouter:
         def route_batch(self, convs):

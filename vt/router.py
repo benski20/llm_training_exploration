@@ -45,12 +45,13 @@ PASTE_CUE = re.compile(r"\b(summari[sz]e|summary|tl;?dr|extract|according to|bas
 
 def pasted(text):
     """True for a task on text the user supplies (summarize this, what does the passage say about...): a cue
-    word, a very long message, or the shape of a paste: a short instruction, a blank line, then a body."""
+    word, a very long message, or the shape of a paste: a short instruction, a blank line, then a body of
+    40+ words."""
     words = len(text.split())
     if words >= 300 or (words >= 40 and PASTE_CUE.search(text)):
         return True
     parts = re.split(r"\n\s*\n", text.strip(), maxsplit=1)
-    return len(parts) == 2 and len(parts[0].split()) <= 40 and len(parts[1].split()) >= 60
+    return len(parts) == 2 and len(parts[0].split()) <= 40 and len(parts[1].split()) >= 40
 
 
 def rule(text):

@@ -2,7 +2,8 @@
 leave open. Reports accuracy overall, per expected kind, for the rules alone and for the model alone, and the
 confusion, on any items file of {"q", "expect"} (results/mixed_eval_items.json, results/router_holdout.json).
 
-    python experiments/router_eval.py --model Qwen/Qwen3-0.6B --items results/router_holdout.json --out r.json
+    python experiments/router_eval.py --out results/router_eval_cost.json          # the shipped router
+    python experiments/router_eval.py --router model --model Qwen/Qwen3-0.6B --out r.json
 """
 import argparse
 import json
@@ -40,28 +41,41 @@ def summarize(rows):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--router", choices=["text", "model"], default="text",
+                    help="text: the shipped embedding router (vt/router_head.npz); model: the chat model's choice")
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
-    ap.add_argument("--items", nargs="+", default=["results/mixed_eval_items.json", "results/router_holdout.json"])
+    ap.add_argument("--items", nargs="+", default=["results/mixed_eval_items.json", "results/router_holdout.json",
+                                                   "no_robots_test"])
     ap.add_argument("--out", default="router_eval.json")
     a = ap.parse_args()
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    from vt.router import Router, rule
-    tok = AutoTokenizer.from_pretrained(a.model)
-    model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=torch.float32 if not torch.cuda.is_available()
-                                                 else torch.bfloat16, device_map="auto" if torch.cuda.is_available() else None)
-    model.eval()
-    router = Router(model, tok)
-    res = {"model": a.model}
+    from vt.router import Router, TextRouter, rule
+    if a.router == "text":
+        router = TextRouter()
+    else:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(a.model)
+        model = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.float32 if not torch.cuda.is_available()
+                                                     else torch.bfloat16,
+                                                     device_map="auto" if torch.cuda.is_available() else None)
+        router = Router(model.eval(), tok)
+    res = {"router": a.router, "model": a.model if a.router == "model" else None}
     for path in a.items:
-        items = json.load(open(path))
+        if path == "no_robots_test":                        # human-labeled categories (CC-BY-NC: evaluation only)
+            from experiments.train_router import no_robots_test
+            items = no_robots_test()
+        else:
+            items = json.load(open(path))
         t = time.time()
         routed = router.route_batch([[{"role": "user", "content": x["q"]}] for x in items])
         rows = [{"q": x["q"][:200], "expect": x["expect"], "kind": x.get("kind"), "rule": rule(x["q"]),
                  "route": k, "probs": p} for x, (k, p) in zip(items, routed)]
         s = summarize(rows)
-        s["seconds"] = round(time.time() - t, 1)
+        s["ms_per_message"] = round(1000 * (time.time() - t) / max(1, len(rows)), 1)
+        if any(r["kind"] == "Rewrite" for r in rows):      # rewrites of pasted text are checked against it
+            s["accuracy_counting_rewrites_of_pasted_text"] = round(
+                sum(r["route"] == r["expect"] or (r["kind"] == "Rewrite" and r["route"] == "text") for r in rows)
+                / len(rows), 3)
         print(path, json.dumps(s, indent=1), flush=True)
         res[os.path.basename(path)] = dict(s, rows=rows)
     json.dump(res, open(a.out, "w"), indent=1)
