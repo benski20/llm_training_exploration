@@ -20,6 +20,9 @@ on:
       modal_token_secret:
         description: one-off Modal token secret (rotate it afterwards)
         required: false
+      rows:
+        description: for rejudge, the saved answers to look up and judge (default results/study_32b_v1.json)
+        required: false
       search:
         description: web search next to Wikipedia (brave or tavily; empty for none)
         required: false
@@ -36,7 +39,7 @@ concurrency:
 jobs:
   modal:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360                                # the job's limit caps every step's (a study's lookups take hours)
     steps:
       - name: credentials (masked)
         env:
@@ -98,8 +101,8 @@ jobs:
         run: modal run deploy/modal_app.py::study_main --per-source "${{ github.event.inputs.n || 300 }}"
       - name: the study's saved answers, looked up again on CPU and judged on GPU (a few GPU minutes)
         if: steps.req.outputs.action == 'rejudge'
-        timeout-minutes: 80
-        run: modal run deploy/modal_app.py::study_rejudge
+        timeout-minutes: 330
+        run: modal run deploy/modal_app.py::study_rejudge --rows "${{ github.event.inputs.rows || 'results/study_32b_v1.json' }}"
       - name: 1000 fresh questions - answers (GPU), lookups (CPU, slow), judging and grading (GPU)
         if: steps.req.outputs.action == 'study2'
         timeout-minutes: 330
