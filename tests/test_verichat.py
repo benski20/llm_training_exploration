@@ -634,3 +634,15 @@ def test_routing_grounds_information_and_rechecks_math():
     assert VeriChat.assess(bot, memory)["verdict"] == "uncertain"
     unsourced = {"route": "information", "claims": [{"text": "x", "score": 0.1}]}
     assert VeriChat.assess(bot, unsourced)["verdict"] == "unverified"       # never a guess from the fact probe
+    yours = {"grounded": True, "source_label": "your text",
+             "claims": [{"text": "1889", "source": "your text", "score": 0.4}]}
+    assert VeriChat.assess(bot, yours)["basis"] == "every claim is in your text"
+
+    class TextRouter:
+        def route_batch(self, convs):
+            return [("text", {}) for _ in convs]
+    bot.router, looked[:] = TextRouter(), []
+    note = "Summarize the text below.\n\nThe Eiffel Tower was built in 1889 by Gustave Eiffel's company."
+    out = bot.reply_batch([{"messages": [{"role": "user", "content": note}], "max_new_tokens": 8}])[0]
+    assert looked == [] and out["route"] == "text" and out["grounded"]   # no search: the pasted text is the source
+    assert out["source_label"] == "your text" and "sources" not in out      # not shown back to the user

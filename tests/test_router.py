@@ -18,7 +18,7 @@ def small():
 def test_routes_are_probabilities_over_the_four_kinds(small):
     r = Router(*small)
     kind, p = r.route([{"role": "user", "content": "Write a short poem about autumn leaves."}])
-    assert kind in KINDS and set(p) == set(KINDS) and abs(sum(p.values()) - 1) < 1e-3
+    assert kind in KINDS and set(p) == set(KINDS) | {"text"} and abs(sum(p.values()) - 1) < 1e-3
     batch = r.route_batch([[{"role": "user", "content": q}] for q in
                            ("What is 17 times 23?", "Write a Python function that reverses a list.")])
     assert len(batch) == 2
@@ -31,3 +31,25 @@ def test_unambiguous_signals_decide_without_the_model():
     assert rule("Should I learn guitar or piano?") == "chat"
     assert rule("What year did the Berlin Wall fall?") is None
     assert rule("Explain how vaccines work.") is None
+    article = "Summarize the article below.\n\n" + "The council voted on Tuesday to extend the tram line. " * 6
+    assert rule(article) == "text"                                  # a task on pasted text
+    assert rule("Summarize the plot of Hamlet.") is None            # short: a question, nothing pasted
+    assert rule("word " * 320) == "text"                            # very long: text to work on
+
+
+def test_text_router_sorts_with_a_trained_layer(tmp_path):
+    import numpy as np
+
+    from vt.router import TextRouter
+
+    class Embed:                                                    # two directions: "poem" and "number"
+        def encode(self, texts, **kw):
+            return np.array([[float("poem" in t), float("number" in t)] for t in texts], dtype=np.float32)
+    path = tmp_path / "head.npz"
+    W = np.array([[0, 0, 0, 5], [0, 5, 0, 0]], dtype=np.float32)     # poem -> chat, number -> math
+    np.savez(path, W=W, b=np.zeros(4, np.float32), kinds=np.array(KINDS), embed=np.array("fake"))
+    r = TextRouter(str(path), embedder=Embed())
+    (k1, p1), (k2, _), (k3, _) = r.route_batch([[{"role": "user", "content": q}] for q in
+                                                ("a poem please", "add this number", "def f(x): return x")])
+    assert (k1, k2, k3) == ("chat", "math", "code")                 # the rules still decide first
+    assert abs(sum(p1.values()) - 1) < 1e-3 and set(p1) == set(KINDS) | {"text"}

@@ -271,7 +271,7 @@ class VeriChat:
                  "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
                  "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"]),
-                 **{k: r[k] for k in ("sampling", "think_sampling", "route", "grounded") if r.get(k) is not None}}
+                 **{k: r[k] for k in ("sampling", "think_sampling", "route", "grounded", "source_label") if r.get(k) is not None}}
                 for r in requests]
         if self.moderator is not None:                               # refuse flagged messages without generating
             from vt.moderation import REFUSAL
@@ -319,7 +319,10 @@ class VeriChat:
                 if r.get("mode", "hedge") == "hedge":           # routed replies are judged by sources or by
                     r["mode"] = "flag"                          # arithmetic, never by in-line markers from a
                                                                 # probe trained on facts (it does not transfer)
-                if r["route"] != "information":                 # nothing to look up for a poem, a sum or code
+                if r["route"] == "text":                        # a task on pasted text: that text is the source
+                    q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
+                    r.update(documents=[q], grounded=True, source_label="your text", retrieve=False)
+                elif r["route"] != "information":               # nothing to look up for a poem, a sum or code
                     r["retrieve"] = False
                 elif self.retriever is not None and r.get("retrieve", True):
                     q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
@@ -387,13 +390,15 @@ class VeriChat:
             return None
         if o.get("grounded"):                                    # answered from sources: are its claims in them?
             claims = o["claims"]
-            sourced = [c for c in claims if c.get("source") == "the sources found"]
+            label = o.get("source_label", "the sources found")
+            sourced = [c for c in claims if c.get("source") == label]
             doubted = [s for s in o.get("sentences") or [] if s.get("doubted")]
+            where = "your text" if label == "your text" else "the sources"
             if len(sourced) == len(claims) and not doubted:
-                return {"doubt": 0.1, "verdict": "likely right", "basis": "every claim is in the sources"}
+                return {"doubt": 0.1, "verdict": "likely right", "basis": f"every claim is in {where}"}
             missing = len(claims) - len(sourced)
-            basis = (f"{missing} of {len(claims)} claims are not in the sources" if missing else
-                     f"{len(doubted)} sentence(s) doubted against the sources")
+            basis = (f"{missing} of {len(claims)} claims are not in {where}" if missing else
+                     f"{len(doubted)} sentence(s) doubted against {where}")
             return {"doubt": 0.5, "verdict": "uncertain", "basis": basis}
         score, _ = self.doubt_score(o)
         own = 1 - score if score is not None else 0.5
@@ -425,10 +430,12 @@ class VeriChat:
                 o["route"] = r["route"]
             if r.get("grounded"):
                 o["grounded"] = True                                 # written from sources fetched first
-                o["sources"] = r["documents"]
+                o["source_label"] = r.get("source_label", "the sources found")
+                if o["source_label"] == "the sources found":         # the user's own text is not shown back
+                    o["sources"] = r["documents"]
                 for c in o.get("claims") or []:
                     if c.get("source") == "your documents":
-                        c["source"] = "the sources found"
+                        c["source"] = o["source_label"]
             if r.get("route") == "math":
                 from vt.mathcheck import check_arithmetic
                 o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""))

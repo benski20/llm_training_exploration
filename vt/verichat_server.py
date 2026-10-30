@@ -99,6 +99,7 @@ function render(r){let html=marks(r);
   'mode '+r.mode+(r.route?' · '+esc(r.route):'')+'</div>'+routeInfo(r)+assess(r.assessment)+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
 function routeInfo(r){let h='';
  if(r.grounded&&r.sources&&r.sources.length)h+='<div class="meta">Answered from: '+esc(r.sources.map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'</div>';
+ if(r.grounded&&r.source_label==='your text')h+='<div class="meta">Checked against the text you gave</div>';
  if(r.math_check&&r.math_check.length)h+='<div class="meta">Arithmetic re-computed: '+r.math_check.map(m=>esc(m.expression)+(m.ok?' ✓':' ✗ (is '+m.computed+', not '+m.stated+')')).join('; ')+'</div>';
  return h}
 function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a'}[a.verdict]||'';

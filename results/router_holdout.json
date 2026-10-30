@@ -1,0 +1,322 @@
+[
+ {
+  "q": "is it ok to take ibuprofen and tylenol together",
+  "expect": "information"
+ },
+ {
+  "q": "whats the difference between a roth ira and a traditional ira",
+  "expect": "information"
+ },
+ {
+  "q": "why is the sky blue",
+  "expect": "information"
+ },
+ {
+  "q": "who won the world cup in 2014",
+  "expect": "information"
+ },
+ {
+  "q": "how do i get red wine out of a carpet",
+  "expect": "information"
+ },
+ {
+  "q": "what are the symptoms of low iron",
+  "expect": "information"
+ },
+ {
+  "q": "can dogs eat grapes",
+  "expect": "information"
+ },
+ {
+  "q": "how does a mortgage work",
+  "expect": "information"
+ },
+ {
+  "q": "what time zone is phoenix in",
+  "expect": "information"
+ },
+ {
+  "q": "explain how vaccines train the immune system",
+  "expect": "information"
+ },
+ {
+  "q": "what's the capital of australia, i always forget",
+  "expect": "information"
+ },
+ {
+  "q": "how long should i boil an egg for a runny yolk",
+  "expect": "information"
+ },
+ {
+  "q": "what does GDP measure",
+  "expect": "information"
+ },
+ {
+  "q": "is pluto still a planet",
+  "expect": "information"
+ },
+ {
+  "q": "how do noise cancelling headphones work",
+  "expect": "information"
+ },
+ {
+  "q": "what is the tallest mountain in africa",
+  "expect": "information"
+ },
+ {
+  "q": "tell me about the french revolution in a few sentences",
+  "expect": "information"
+ },
+ {
+  "q": "what's the best way to store fresh basil",
+  "expect": "information"
+ },
+ {
+  "q": "how do i reset a tripped circuit breaker",
+  "expect": "information"
+ },
+ {
+  "q": "what causes inflation",
+  "expect": "information"
+ },
+ {
+  "q": "when did the berlin wall fall",
+  "expect": "information"
+ },
+ {
+  "q": "what language do they speak in brazil",
+  "expect": "information"
+ },
+ {
+  "q": "how many bones are in the human body",
+  "expect": "information"
+ },
+ {
+  "q": "what's a good temperature to set my fridge to",
+  "expect": "information"
+ },
+ {
+  "q": "how do solar panels generate electricity",
+  "expect": "information"
+ },
+ {
+  "q": "who wrote pride and prejudice",
+  "expect": "information"
+ },
+ {
+  "q": "what does a cover letter usually include",
+  "expect": "information"
+ },
+ {
+  "q": "how do I renew a US passport",
+  "expect": "information"
+ },
+ {
+  "q": "what is the speed of light",
+  "expect": "information"
+ },
+ {
+  "q": "why do cats purr",
+  "expect": "information"
+ },
+ {
+  "q": "if i drive 240 miles at 60 mph how long does it take",
+  "expect": "math"
+ },
+ {
+  "q": "what's a 15% tip on $48",
+  "expect": "math"
+ },
+ {
+  "q": "convert 5 miles to km",
+  "expect": "math"
+ },
+ {
+  "q": "I have 3 boxes with 12 apples each and eat 5. how many are left?",
+  "expect": "math"
+ },
+ {
+  "q": "solve 2x + 7 = 19",
+  "expect": "math"
+ },
+ {
+  "q": "what is 17 squared",
+  "expect": "math"
+ },
+ {
+  "q": "split a $126 bill between 4 people evenly",
+  "expect": "math"
+ },
+ {
+  "q": "if a shirt is $40 and it's 30% off what do i pay",
+  "expect": "math"
+ },
+ {
+  "q": "how much is 1200 a month over 3 years",
+  "expect": "math"
+ },
+ {
+  "q": "what's the area of a circle with radius 4",
+  "expect": "math"
+ },
+ {
+  "q": "a recipe for 4 needs 300g flour, how much for 6 people",
+  "expect": "math"
+ },
+ {
+  "q": "how many seconds are in a day",
+  "expect": "math"
+ },
+ {
+  "q": "what is the derivative of x^3 + 2x",
+  "expect": "math"
+ },
+ {
+  "q": "if i save $250 a week how long until i have $10,000",
+  "expect": "math"
+ },
+ {
+  "q": "average of 82, 91, 77 and 88",
+  "expect": "math"
+ },
+ {
+  "q": "what's 3/8 as a percentage",
+  "expect": "math"
+ },
+ {
+  "q": "a train leaves at 9:40 and the trip is 2h 35m, when does it arrive",
+  "expect": "math"
+ },
+ {
+  "q": "how many 1.5 litre bottles do i need for 12 litres",
+  "expect": "math"
+ },
+ {
+  "q": "compound interest on 5000 at 4% for 3 years",
+  "expect": "math"
+ },
+ {
+  "q": "what's the probability of rolling two sixes with two dice",
+  "expect": "math"
+ },
+ {
+  "q": "my for loop never ends, here it is: while i < 10: print(i)",
+  "expect": "code"
+ },
+ {
+  "q": "why does modifying a copy of my list also change the original in python",
+  "expect": "code"
+ },
+ {
+  "q": "how do i reverse a string in javascript",
+  "expect": "code"
+ },
+ {
+  "q": "write a function that checks if a number is prime",
+  "expect": "code"
+ },
+ {
+  "q": "what does git rebase do compared to merge",
+  "expect": "code"
+ },
+ {
+  "q": "getting 'undefined is not a function' in my react app, what could cause it",
+  "expect": "code"
+ },
+ {
+  "q": "how do I center a div",
+  "expect": "code"
+ },
+ {
+  "q": "write a SQL query to get the top 5 customers by total spend",
+  "expect": "code"
+ },
+ {
+  "q": "what's the difference between == and === ",
+  "expect": "code"
+ },
+ {
+  "q": "explain big O notation with an example",
+  "expect": "code"
+ },
+ {
+  "q": "my docker container exits immediately after starting, why",
+  "expect": "code"
+ },
+ {
+  "q": "how do i read a csv file with pandas",
+  "expect": "code"
+ },
+ {
+  "q": "write a regex that matches an email address",
+  "expect": "code"
+ },
+ {
+  "q": "what's a null pointer exception",
+  "expect": "code"
+ },
+ {
+  "q": "how can I make my node server handle more requests",
+  "expect": "code"
+ },
+ {
+  "q": "I need a birthday message for my mom, she's turning 60",
+  "expect": "chat"
+ },
+ {
+  "q": "can you help me come up with a name for my bakery",
+  "expect": "chat"
+ },
+ {
+  "q": "i'm really nervous about my job interview tomorrow",
+  "expect": "chat"
+ },
+ {
+  "q": "tell me a joke about penguins",
+  "expect": "chat"
+ },
+ {
+  "q": "should i break up with my boyfriend if we keep fighting about money",
+  "expect": "chat"
+ },
+ {
+  "q": "what's your favorite movie",
+  "expect": "chat"
+ },
+ {
+  "q": "write a short bedtime story about a dragon who is afraid of the dark",
+  "expect": "chat"
+ },
+ {
+  "q": "I feel lonely since moving to a new city",
+  "expect": "chat"
+ },
+ {
+  "q": "give me a motivational quote to start my day",
+  "expect": "chat"
+ },
+ {
+  "q": "rewrite this to sound more professional: hey can u send me the file asap",
+  "expect": "chat"
+ },
+ {
+  "q": "help me write a toast for my best friend's wedding",
+  "expect": "chat"
+ },
+ {
+  "q": "what should i get my dad for christmas, he likes fishing",
+  "expect": "chat"
+ },
+ {
+  "q": "pretend you're a pirate and say hi",
+  "expect": "chat"
+ },
+ {
+  "q": "good morning!",
+  "expect": "chat"
+ },
+ {
+  "q": "make this sentence funnier: the meeting was moved to tuesday",
+  "expect": "chat"
+ }
+]
