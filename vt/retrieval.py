@@ -98,6 +98,7 @@ class Wikipedia:
 
     def __init__(self, k=2, lang="en", timeout=4.0, user_agent=UA, cache_size=2048,
                  fetch=None, full_text=False, pages=3, passage_words=100, per_page=None, budget_s=10.0,
+                 in_flight=4, interval=0.05,
                  rerank=None, rerank_pool=20):
         """full_text: search the whole text of the top `pages` hits and return the k passages that best match
         the query (BM25), instead of each hit's lead section: the answer is often further down a page."""
@@ -111,18 +112,21 @@ class Wikipedia:
         import threading
         self._local = threading.local()
         self.pages_cache = {}                                # page key -> (title, full text)
-        self._gate, self._pace, self._last = threading.BoundedSemaphore(4), threading.Lock(), 0.0
+        # interactive defaults; bulk runs (studies) should go much slower: in_flight=1, interval=0.4
+        self._gate, self._pace, self._last = threading.BoundedSemaphore(in_flight), threading.Lock(), 0.0
+        self.interval = interval
         self.cache, self.cache_size = {}, cache_size
         self.fetch = fetch or self._fetch                    # url -> parsed JSON (injectable for tests)
 
     def _get(self, url):
-        """One request, paced: at most 4 in flight per process and 50 ms between starts (Wikipedia throttles
-        bursts from cloud addresses: a 600-reply study drew about 1000 HTTP 429s without this)."""
+        """One request, paced: at most in_flight at once per process and interval seconds between starts
+        (Wikipedia throttles bursts from cloud addresses: a 600-reply study drew about 1000 HTTP 429s unpaced
+        and about 600 at the interactive pace)."""
         if time.monotonic() - getattr(self._local, "t0", time.monotonic()) > self.budget_s:
             raise TimeoutError("lookup time budget spent")
         with self._gate:
             with self._pace:
-                wait = self._last + 0.05 - time.monotonic()
+                wait = self._last + self.interval - time.monotonic()
                 if wait > 0:
                     time.sleep(wait)
                 self._last = time.monotonic()

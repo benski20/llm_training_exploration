@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2]
         default: deploy
       n:
         description: questions for the correction test
@@ -100,11 +100,17 @@ jobs:
         if: steps.req.outputs.action == 'rejudge'
         timeout-minutes: 80
         run: modal run deploy/modal_app.py::study_rejudge
+      - name: 1000 fresh questions - answers (GPU), lookups (CPU, slow), judging and grading (GPU)
+        if: steps.req.outputs.action == 'study2'
+        timeout-minutes: 330
+        run: modal run deploy/modal_app.py::study_full --per-source "${{ github.event.inputs.n || 500 }}"
       - uses: actions/upload-artifact@v4
-        if: always() && (steps.req.outputs.action == 'study' || steps.req.outputs.action == 'rejudge')
+        if: always() && (steps.req.outputs.action == 'study' || steps.req.outputs.action == 'rejudge' || steps.req.outputs.action == 'study2')
         with:
           name: study
-          path: study.json
+          path: |
+            study.json
+            study_answers.json
           if-no-files-found: ignore
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'

@@ -65,6 +65,7 @@ image = (
     # the judge-vs-probe study: the served model answers, its probe scores, it judges looked-up evidence
     .add_local_file(os.path.join(ROOT, "experiments", "study_32b.py"), "/app/experiments/study_32b.py")
     .add_local_file(os.path.join(ROOT, "results", "study_questions.json"), "/app/eval/study_questions.json")
+    .add_local_file(os.path.join(ROOT, "results", "study_questions_2.json"), "/app/eval/study_questions_2.json")
 )
 app = modal.App("verichat", image=image)
 hf_cache = modal.Volume.from_name("verichat-hf-cache", create_if_missing=True)
@@ -140,10 +141,36 @@ def _run_study(args, stdin_json):
         return open(out).read()
 
 
-@app.function(cpu=4.0, memory=8192, volumes={"/root/.cache/huggingface": hf_cache}, timeout=60 * 60)
+@app.function(cpu=4.0, memory=8192, volumes={"/root/.cache/huggingface": hf_cache}, timeout=4 * 3600)
 def study_gather(rows_json: str):
-    """The lookups for saved answers, on CPU (paced Wikipedia requests, reranked): no GPU billed."""
+    """The lookups for saved answers, on CPU at a gentle bulk pace (Wikipedia throttles bursts): hours of CPU,
+    cents; no GPU billed."""
     return _run_study(["--gather-only"], rows_json)
+
+
+@app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=60 * 60)
+def study_answer(questions: str = "/app/eval/study_questions_2.json", per_source: int = 500):
+    """The served model answers the questions closed-book (no lookups): about 1.4 s of GPU per answer."""
+    r = subprocess.run(["python", "/app/experiments/study_32b.py", "--model", MODEL, "--head", "/app/heads/risk_head.pt",
+                        "--questions", questions, "--limit", str(per_source), "--answers-only", "--out", "/tmp/answers.json"],
+                       env=dict(os.environ, PYTHONPATH="/app"), capture_output=True, text=True)
+    print(r.stdout[-4000:], r.stderr[-3000:] if r.returncode else "", flush=True)
+    if r.returncode:
+        raise SystemExit(r.returncode)
+    return open("/tmp/answers.json").read()
+
+
+@app.local_entrypoint()
+def study_full(per_source: int = 500):
+    """Fresh answers (GPU), their lookups (CPU, slow and cheap), the judging and grading (GPU): the GPU never
+    waits on the network."""
+    answers = study_answer.remote(per_source=per_source)
+    with open("study_answers.json", "w") as f:
+        f.write(answers)
+    gathered = study_gather.remote(answers)
+    with open("study.json", "w") as f:
+        f.write(study_judge.remote(gathered))
+    print("wrote study.json")
 
 
 @app.function(gpu=GPU, cpu=2.0, volumes={"/root/.cache/huggingface": hf_cache}, timeout=30 * 60)

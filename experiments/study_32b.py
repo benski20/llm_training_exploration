@@ -59,9 +59,11 @@ def main():
     ap.add_argument("--rerank", default="cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--corpus", help="look up in a local folder instead of Wikipedia (smoke test)")
     ap.add_argument("--out", default="study.json")
+    ap.add_argument("--interval", type=float, default=0.4, help="seconds between Wikipedia requests (bulk pace)")
     ap.add_argument("--rows", help="the answers of an earlier run (its JSON): skip answering")
     ap.add_argument("--gather-only", action="store_true", help="with --rows: only look the claims up (no model, CPU)")
     ap.add_argument("--judge-gathered", action="store_true", help="with --rows from --gather-only: only judge")
+    ap.add_argument("--answers-only", action="store_true", help="only answer (GPU); gather and judge separately")
     a = ap.parse_args()
     if a.rows and a.gather_only:
         return gather_rows(a)
@@ -74,8 +76,6 @@ def main():
         qs = [q for q in qs if q["source"] == "triviaqa"][:a.limit] + [q for q in qs if q["source"] == "nq"][:a.limit]
     bot = VeriChat.load(a.model, a.head)
     apply_sampling(bot, 0.7, 0.8, 20, 1.5)                     # the demo's decoding
-    retriever = make_retriever(a)
-    verifier = ClaimVerifier(bot.model, bot.tok, retriever, batch=16)
     rows, t0 = [], time.time()
     for k in range(0, len(qs), a.batch):                      # closed-book answers, as served (no lookup)
         chunk = qs[k:k + a.batch]
@@ -85,8 +85,13 @@ def main():
             text = o["text"].replace("[unsure:]", "").strip()
             score, claim = VeriChat.doubt_score(o)
             rows.append({"source": q["source"], "q": q["q"], "text": text[:400], "right": is_right(text, q["aliases"]),
-                         "probe": score, "reply_confidence": o.get("reply_confidence")})
+                         "probe": score, "reply_confidence": o.get("reply_confidence"), "aliases": q["aliases"][:12]})
         print(json.dumps({"answered": len(rows), "seconds": round(time.time() - t0)}), flush=True)
+    if a.answers_only:
+        json.dump({"rows": rows, "seconds": {"answers": round(time.time() - t0)}}, open(a.out, "w"))
+        return
+    retriever = make_retriever(a)
+    verifier = ClaimVerifier(bot.model, bot.tok, retriever, batch=16)
     t1 = time.time()
     for k in range(0, len(rows), 32):                          # look up and judge every answer's claims
         vs = verifier.verify_batch([(r["q"], r["text"]) for r in rows[k:k + 32]])
@@ -107,7 +112,7 @@ def make_retriever(a):
         return Corpus.from_dir(a.corpus)
     from sentence_transformers import CrossEncoder
     ce = CrossEncoder(a.rerank, max_length=256)
-    return Wikipedia(full_text=True, pages=5,
+    return Wikipedia(full_text=True, pages=5, in_flight=1, interval=a.interval, budget_s=60.0,  # bulk: gentle
                      rerank=lambda q, ps: ce.predict([(q, p) for p in ps], batch_size=32, show_progress_bar=False))
 
 
@@ -137,7 +142,10 @@ def judge_rows(a):
     from vt.verichat import gpu_dtype
     d = json.load(open(a.rows))
     rows, cuda = d["rows"], torch.cuda.is_available()
-    aliases = {q["q"]: q["aliases"] for q in json.load(open(a.questions))}
+    aliases = {q["q"]: q["aliases"] for q in json.load(open(a.questions))} if os.path.exists(a.questions) else {}
+    for r in rows:                                             # rows answered by this script carry their own
+        if r.get("aliases"):
+            aliases[r["q"]] = r["aliases"]
     tok = AutoTokenizer.from_pretrained(a.model)
     model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=gpu_dtype() if cuda else torch.float32,
                                                  attn_implementation="sdpa", device_map="auto" if cuda else None).eval()
