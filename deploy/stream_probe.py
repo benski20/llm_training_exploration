@@ -30,7 +30,7 @@ class SlowBot:
 '''
 
 
-def measure(url, seconds=90):
+def measure(url, seconds=180):
     """Prints when each chunk of a streamed /chat reply arrives."""
     import json
     import time
