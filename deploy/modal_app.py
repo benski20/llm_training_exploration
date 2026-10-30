@@ -56,7 +56,7 @@ image = (
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
                              "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0",
-                             "VERICHAT_SEARCH": SEARCH}.items() if v is not None})
+                             "VERICHAT_SEARCH": SEARCH, "VERICHAT_ROUTE": "1" if ROUTE else "0"}.items() if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
