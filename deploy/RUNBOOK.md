@@ -258,6 +258,27 @@ The key never goes in the repo or the image. Either:
 Both providers have free tiers with monthly limits; check their current pricing. Each lookup costs one
 search per claim, up to 3 per reply.
 
+### Three-way judging and fairer labels (run 40975943782, `results/study_32b_v3_threeway.json`)
+
+The saved 600 answers were looked up again (Wikipedia rate-limited the burst: about 600 HTTP 429s;
+evidence for 47%) and judged both ways on the same evidence. Each answer was also graded against its
+reference answers by the 32B; this agrees with string matching on 87% of answers. NQ accuracy is 48% by
+grading and 37% by string match.
+
+| AUROC (graded labels) | TriviaQA | NQ | all |
+|---|---|---|---|
+| probe, all replies | 0.759 | 0.745 | 0.751 |
+| judge vs probe, replies with evidence | 0.905 vs 0.792 | 0.754 vs 0.742 | 0.835 vs 0.769 |
+| judge minus probe (95% CI) | +0.113 (0.034, 0.204) | +0.013 (-0.100, +0.123) | +0.066 (-0.003, +0.135) |
+| combination, held-out half | 0.833 | 0.742 | 0.802 |
+
+- Three-way judging is no better than yes/no (difference -0.009 to +0.001, CIs span 0). It answers "does
+  not say" for two thirds of claims. Yes/no stays the default; `three_way=True` remains an option.
+- String labels made the probe look weak on NQ (0.62); graded, it is 0.75. The judge's clear advantage is
+  on TriviaQA-style facts (+0.11, significant). Overall it is about +0.07, borderline.
+- Bulk lookups from Modal trip Wikipedia's limits even when paced. Demo traffic is far lighter, but a
+  search API with a key (`--web-search`) is the robust source for production.
+
 ## Clients
 
 `vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a
