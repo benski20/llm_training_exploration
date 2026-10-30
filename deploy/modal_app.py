@@ -33,7 +33,10 @@ RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per 
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
-ASGI = os.environ.get("VERICHAT_ASGI", "1") == "1"                # serve in-process (0: web_server + local proxy)
+# web_server by default: through it a streamed reply arrives as written (deploy/stream_probe.py: a ping every 10 s);
+# through asgi_app not even its status line came back within 90 s, so long replies looked dead to clients and were
+# sent again (13 of 200 live requests). 1 serves in-process instead.
+ASGI = os.environ.get("VERICHAT_ASGI", "0") == "1"
 SEARCH = os.environ.get("VERICHAT_SEARCH", "")                    # web search too: "brave" or "tavily" ("" off)
 SEARCH_KEY = os.environ.get("VERICHAT_SEARCH_KEY")                # its API key: never in the repo or the image
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off

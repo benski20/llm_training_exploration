@@ -135,6 +135,24 @@ An L40S is about $1.95 per hour (about 3.3 cents a minute), billed only while a 
     moderation, /judge, the page and /metrics.
   - Load test: 10 of 10 (1 client 4.3 s, 4 clients 19.7 s median, p95 23.5 s).
 
+## Streaming through Modal (2026-10-30)
+
+200 live questions through the retrying client (run 40983398601, `results/correction_rate_32b_v6_200.json`):
+- Accuracy rose from 0.744 closed-book to 0.805 served. Of 33 lookups, 13 fixed a wrong answer and 1 broke
+  a right one.
+- Live source checks: AUROC 0.813 on the 172 judged first claims.
+- 13 requests went silent for 45 s and were answered on the retry; 5 failed.
+
+The server log has a `recv` but no `sent` for each silent request: they arrived and were being answered,
+but the client heard nothing. A CPU-only probe (`deploy/stream_probe.py`, `streamprobe` action) served the
+same handler around a 50 s fake bot both ways:
+- web_server: headers after 4 s, a ping every 10 s, the reply at 54 s.
+- asgi_app: not even a status line within 90 s.
+
+Modal does not pass the in-process route's stream through as written, so every reply longer than the
+client's 45 s watchdog looked dead and was sent again, adding load. The default is back to web_server
+(`VERICHAT_ASGI=0`). Its rare proxy-read failure remains, and the page and `vt.client` retry it.
+
 ## Lookups (Wikipedia)
 
 - On 200 TriviaQA questions, the share whose answer appears in the 3 passages the model gets
