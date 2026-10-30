@@ -59,16 +59,23 @@ def plain(text):
     return re.sub(r"\\[a-zA-Z]+", " ", t)
 
 
-def check_arithmetic(text):
-    """Every equation written in the text, re-computed: [{"expression", "stated", "computed", "ok"}]."""
+YEARS = re.compile(r"^\(?\s*\d{4}\s*\)?\s*[-–]\s*\(?\s*\d{4}\s*\)?$")      # 1914-1918: a range, not a sum
+
+
+def check_arithmetic(text, explicit=False):
+    """Every equation written in the text, re-computed: [{"expression", "stated", "computed", "ok"}].
+    explicit: only equations written with "=" or "equals" (for replies that are not about a calculation,
+    where "1914-1918 is 4 years" is prose), and never a range of years."""
     text = plain(text)
     out = []
-    for m in PERCENT.finditer(text):
+    for m in [] if explicit else PERCENT.finditer(text):
         computed, stated = _num(m.group(1)) / 100 * _num(m.group(2)), _num(m.group(3))
         out.append({"expression": f"{m.group(1)}% of {m.group(2)}", "stated": stated, "computed": round(computed, 6),
                     "ok": close(computed, stated)})
     for m in EQUATION.finditer(text):
         expr = m.group(1).strip()
+        if explicit and (re.search(r"\bis\b", text[m.end(1):m.start(2)]) or YEARS.match(expr)):
+            continue
         try:
             computed = evaluate(expr)
         except (ValueError, SyntaxError, ZeroDivisionError, OverflowError):

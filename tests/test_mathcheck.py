@@ -31,3 +31,11 @@ def test_the_evaluator_refuses_anything_but_arithmetic(bad):
 def test_latex_arithmetic_is_read():
     got = check_arithmetic(r"\( 17 \times 23 = 391 \) and \frac{10}{4} = 2.5, so $3 \cdot 4 = 13$")
     assert [(g["ok"]) for g in got] == [True, True, False]
+
+
+def test_explicit_mode_reads_prose_as_prose():
+    from vt.mathcheck import check_arithmetic
+    prose = "The war (1914-1918) is 4 years long. In 1914 - 1918 = 4 years of fighting."
+    assert check_arithmetic(prose, explicit=True) == []             # "is" is prose, a range of years no sum
+    assert not check_arithmetic("so 12 * 4 = 50 dollars", explicit=True)[0]["ok"]
+    assert check_arithmetic("12 * 4 is 50", explicit=True) == []

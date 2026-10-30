@@ -436,9 +436,10 @@ class VeriChat:
                 for c in o.get("claims") or []:
                     if c.get("source") == "your documents":
                         c["source"] = o["source_label"]
-            if r.get("route") == "math":
-                from vt.mathcheck import check_arithmetic
-                o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""))
+            if r.get("route"):                                       # every routed reply: a calculation in a how-to
+                from vt.mathcheck import check_arithmetic            # or a misrouted sum is checked too (free)
+                o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""),
+                                                   explicit=r["route"] != "math")
 
         def deliver(ids):                                            # verified together, then sent
             self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])

@@ -501,8 +501,10 @@ def build(argv=None, host=None, port=None):
                                      "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--web-search", choices=["brave", "tavily"], help="also search the web (the API key in the "
                                                                     "VERICHAT_SEARCH_KEY environment variable)")
-    ap.add_argument("--route", action="store_true", help="sort messages (information / math / code / chat): answer "
-                                                         "information from one lookup made first, re-compute math")
+    ap.add_argument("--route", nargs="?", const="text", choices=["text", "model"],
+                    help="sort messages (information / math / code / chat / pasted text): answer information from one "
+                         "lookup made first, re-compute math, check tasks on pasted text against it. text (default): "
+                         "a small embedding classifier on CPU (vt/router_head.npz); model: the chat model's own choice")
     ap.add_argument("--verify-claims", action="store_true", help="check each reply's claims against Wikipedia, "
                                                                 "judged by the chat model (needs --wikipedia)")
     ap.add_argument("--wikipedia-leads", action="store_true", help="use only each page's lead section, not the best "
@@ -557,9 +559,12 @@ def build(argv=None, host=None, port=None):
             from .claim_verify import ClaimVerifier
             bot.verifier = ClaimVerifier(bot.model, bot.tok, bot.retriever)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
-    if a.route:
+    if a.route == "model":
         from .router import Router
         bot.router = Router(bot.model, bot.tok)
+    elif a.route:
+        from .router import TextRouter
+        bot.router = TextRouter()
     det = None
     if a.detector:
         import torch

@@ -89,17 +89,30 @@ class Router:
         return self.route_batch([messages])[0]
 
 
+# what sending a message of one kind (row) the way of another (column) costs, in the order of KINDS. A factual
+# question sent anywhere but a search is answered unchecked: the dearest mistake. A programming question or a
+# calculation answered from a search costs little (and the arithmetic is re-computed in every reply anyway).
+COSTS = ((0.0, 1.0, 1.0, 1.0),      # information
+         (0.4, 0.0, 0.6, 0.6),      # math
+         (0.2, 0.6, 0.0, 0.6),      # code
+         (0.6, 0.6, 0.6, 0.0))      # chat
+
+
 class TextRouter:
     """The same sorting without the chat model: a small sentence embedding (CPU, a few ms) and a softmax layer
-    trained on human-written prompts (experiments/train_router.py), after the same rules.
+    trained on human-written prompts (experiments/train_router.py), after the same rules; the kind chosen is
+    the one that costs least in expectation (COSTS), so a doubtful factual question still gets its search.
 
         TextRouter("vt/router_head.npz").route(messages)   # -> ("chat", {"information": 0.08, ...})
     """
 
-    def __init__(self, path=None, embedder=None):
+    def __init__(self, path=None, embedder=None, costs=COSTS):
         import numpy as np
         z = np.load(path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "router_head.npz"))
         self.W, self.b, self.kinds = z["W"], z["b"], tuple(str(k) for k in z["kinds"])
+        # the cheapest kind in expectation, not the likeliest; None: the likeliest
+        self.costs = None if costs is None else np.array([[costs[KINDS.index(t)][KINDS.index(g)] for g in self.kinds]
+                                                          for t in self.kinds])
         if embedder is None:
             from sentence_transformers import SentenceTransformer
             embedder = SentenceTransformer(str(z["embed"]), device="cpu")
@@ -124,7 +137,8 @@ class TextRouter:
                 out.append((r, {k: float(k == r) for k in self.kinds + ("text",)}))
             else:
                 p = next(probs)
-                out.append((self.kinds[int(p.argmax())], dict({k: round(float(v), 4) for k, v in zip(self.kinds, p)}, text=0.0)))
+                j = int(p.argmax()) if self.costs is None else int((p @ self.costs).argmin())
+                out.append((self.kinds[j], dict({k: round(float(v), 4) for k, v in zip(self.kinds, p)}, text=0.0)))
         return out
 
     def route(self, messages):
