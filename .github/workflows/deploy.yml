@@ -82,7 +82,7 @@ jobs:
         if: steps.req.outputs.action == 'correction'
         timeout-minutes: 40
         run: |
-          pip install numpy datasets
+          pip install numpy scipy datasets
           python experiments/correction_rate.py --url "${{ steps.cdep.outputs.url }}" --n "${{ github.event.inputs.n || 100 }}" --workers 4 --retry --out correction.json
           cat correction.json
       - name: correction rate - restore the public rate limit

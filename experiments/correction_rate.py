@@ -130,6 +130,8 @@ def main():
            "rows": sorted(rows, key=lambda r: r["i"])}
     json.dump(res, open(a.out, "w"), indent=1)
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}))
+    if res["errors"] > len(rows) / 2:                          # a broken run must not look like a result
+        raise SystemExit(f"{res['errors']} of {len(rows)} requests failed, e.g. {rows[0].get('error')}")
 
 
 if __name__ == "__main__":
