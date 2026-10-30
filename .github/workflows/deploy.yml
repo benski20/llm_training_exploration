@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2, streamprobe]
         default: deploy
       n:
         description: questions for the correction test
@@ -115,6 +115,13 @@ jobs:
             study.json
             study_answers.json
           if-no-files-found: ignore
+      - name: does Modal pass streamed replies through? (CPU-only probe app, cents)
+        if: steps.req.outputs.action == 'streamprobe'
+        timeout-minutes: 20
+        run: |
+          modal deploy deploy/stream_probe.py | tee probe.log
+          for u in $(grep -o 'https://[^ ]*modal\.run' probe.log); do echo "== $u"; python deploy/stream_probe.py "$u" || true; done
+          modal app stop verichat-stream-probe
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000
