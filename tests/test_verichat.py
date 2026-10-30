@@ -621,6 +621,7 @@ def test_routing_grounds_information_and_rechecks_math():
     info, math, chat = outs
     assert looked == ["Who built it?"]                           # one lookup, before answering, information only
     assert info["route"] == "information" and info["grounded"] and info["sources"][0].startswith("Eiffel")
+    assert info["mode"] == "flag"                                # judged by its sources, no hedge markers
     assert math["route"] == "math" and isinstance(math["math_check"], list) and not math.get("grounded")
     assert chat["route"] == "chat" and chat.get("assessment") is None and chat["mode"] == "flag"   # no markers in a poem
     wrong = {"claims": [], "math_check": [{"expression": "17 * 23", "stated": 401.0, "computed": 391.0, "ok": False}]}

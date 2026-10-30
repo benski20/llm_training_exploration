@@ -327,8 +327,10 @@ class VeriChat:
                     except Exception as e:                      # no sources: answered as before
                         print(f"grounding lookup failed: {e!r}", flush=True)
                         passages = []
-                    if passages:
+                    if passages:                                # judged by its sources, not by hedge markers
                         r.update(documents=passages[:3], grounded=True)
+                        if r.get("mode", "hedge") == "hedge":
+                            r["mode"] = "flag"
             out.append(r)
         return out
 
