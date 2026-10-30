@@ -54,3 +54,30 @@ def test_gives_up_after_its_retries():
         assert len(posts) == 2
     finally:
         srv.shutdown()
+
+
+def test_a_reply_cut_off_midway_is_retried():
+    import socket as _s
+    srv, url, posts = serve(drop_first=0)
+    base = srv.RequestHandlerClass
+    cuts = []
+
+    class Cut(base):                                         # first reply: headers promise more, then the line drops
+        def do_POST(self):
+            cuts.append(1)
+            if len(cuts) == 1:
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", "1000")
+                self.end_headers()
+                self.wfile.write(b"data: ")
+                self.request.shutdown(_s.SHUT_RDWR)
+                return
+            return base.do_POST(self)
+    srv.RequestHandlerClass = Cut
+    try:
+        r = chat(url, [{"role": "user", "content": "q"}], silence=2.0)
+        assert r["text"] == "Paris." and r["_attempts"] == 2
+    finally:
+        srv.shutdown()

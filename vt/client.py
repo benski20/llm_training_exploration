@@ -7,6 +7,7 @@ without a byte, the request is abandoned and sent again, at most `retries` times
     reply = chat("https://<...>.modal.run", [{"role": "user", "content": "Who designed the Eiffel Tower?"}])
     reply["text"], reply.get("verification"), reply["_attempts"]
 """
+import http.client
 import json
 import socket
 import time
@@ -58,7 +59,8 @@ def chat(url, messages, mode="hedge", documents=None, silence=45.0, retries=1, a
             raise RuntimeError(f"HTTP {e.code}: {e.read()[:200].decode(errors='replace')}") from None
         except ValueError:
             raise
-        except (socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError, OSError) as e:
+        except (socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError, OSError,
+                http.client.HTTPException) as e:                # incl. a reply cut off mid-way (IncompleteRead)
             errors.append(repr(e)[:120])
             time.sleep(min(2.0, attempt))
     raise Lost(f"no reply after {retries + 1} attempts: {errors}")
