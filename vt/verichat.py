@@ -377,6 +377,10 @@ class VeriChat:
         if wrong and not o.get("withheld"):
             return {"doubt": 1.0, "verdict": "likely wrong",
                     "basis": f"arithmetic: {wrong[0]['expression']} is {wrong[0]['computed']:g}, not {wrong[0]['stated']:g}"}
+        broken = [c for c in o.get("code_check") or [] if not c["ok"]]
+        if broken and not o.get("withheld"):
+            return {"doubt": 1.0, "verdict": "likely wrong",
+                    "basis": f"its {broken[0]['language']} does not parse: {broken[0]['error']}"}
         if o.get("route") in ("chat", "code"):
             return None                                          # opinions, creative writing, code: no fact verdict
         if o.get("route") == "math":                             # judged by its arithmetic only: the confidence
@@ -440,6 +444,8 @@ class VeriChat:
                 from vt.mathcheck import check_arithmetic            # or a misrouted sum is checked too (free)
                 o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""),
                                                    explicit=r["route"] != "math")
+                from vt.codecheck import check_code                  # and its Python / JSON parsed, never run
+                o["code_check"] = check_code(o["text"])
 
         def deliver(ids):                                            # verified together, then sent
             self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])

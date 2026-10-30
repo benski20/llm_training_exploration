@@ -307,7 +307,8 @@ grading and 37% by string match.
 | information | one search before answering; the reply is written from it and judged by whether its claims are in it | one lookup |
 | text (a task on pasted text) | the user's own text is the source: the reply is checked against it | nothing extra |
 | math | the arithmetic in the reply is re-computed exactly (every routed reply's explicit `=` equations too) | nothing |
-| code, chat | no fact verdict, no markers | nothing |
+| code | its Python and JSON parsed (never run): a block that does not parse makes it likely wrong | nothing |
+| chat | no fact verdict, no markers | nothing |
 
 The sorter is a small sentence embedding (bge-small, CPU, 2-8 ms a message) and a softmax layer trained on
 human-written prompts from permissively licensed sets (Dolly, GSM8K, MATH, MBPP, glaive code questions;
