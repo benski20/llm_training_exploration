@@ -599,3 +599,35 @@ def test_assessment_mixes_the_source_check_with_the_models_own_doubt():
     own = a(bot, {"claims": [{"score": 0.2, "text": "x"}], "verification": [{"p_supported": None}]})
     assert own["verdict"] == "likely wrong" and own["basis"] == "the model's own confidence"
     assert a(bot, {"claims": []}) is None                       # small talk: no verdict
+
+
+def test_routing_grounds_information_and_rechecks_math():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
+    looked = []
+
+    class FakeRouter:
+        def route_batch(self, convs):
+            kinds = {"Who built it?": "information", "What is 17 * 23?": "math", "Write a poem.": "chat"}
+            return [(kinds[c[-1]["content"]], {}) for c in convs]
+    bot.router = FakeRouter()
+    bot.retriever = lambda q: looked.append(q) or ["Eiffel Tower (Wikipedia): Gustave Eiffel's company built it in 1889."]
+    outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8}
+                            for q in ("Who built it?", "What is 17 * 23?", "Write a poem.")])
+    info, math, chat = outs
+    assert looked == ["Who built it?"]                           # one lookup, before answering, information only
+    assert info["route"] == "information" and info["grounded"] and info["sources"][0].startswith("Eiffel")
+    assert math["route"] == "math" and isinstance(math["math_check"], list) and not math.get("grounded")
+    assert chat["route"] == "chat" and chat.get("assessment") is None and chat["mode"] == "flag"   # no markers in a poem
+    wrong = {"claims": [], "math_check": [{"expression": "17 * 23", "stated": 401.0, "computed": 391.0, "ok": False}]}
+    assert VeriChat.assess(bot, wrong)["verdict"] == "likely wrong"
+    right = {"claims": [], "route": "math", "math_check": [{"expression": "17 * 23", "stated": 391.0, "computed": 391.0, "ok": True}]}
+    assert VeriChat.assess(bot, right)["verdict"] == "likely right"
+    sourced = {"grounded": True, "claims": [{"text": "Gustave Eiffel", "source": "the sources found", "score": 0.4}]}
+    assert VeriChat.assess(bot, sourced)["basis"] == "every claim is in the sources"
+    memory = {"grounded": True, "claims": [{"text": "Le Corbusier", "source": "the model's memory", "score": 0.9}]}
+    assert VeriChat.assess(bot, memory)["verdict"] == "uncertain"

@@ -133,6 +133,7 @@ class VeriChat:
         self.retriever, self.retrieve_below = retriever, retrieve_below
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
         self.verifier = None                           # vt.claim_verify.ClaimVerifier: check claims against sources
+        self.router = None                             # vt.router.Router: information / math / code / chat
 
     @classmethod
     def load(cls, model_name, head_path, threshold=None, revision=None):
@@ -265,11 +266,12 @@ class VeriChat:
         result each. thinking (None: the bot's default) lets a reasoning model think first; its reasoning
         is returned apart from the reply and streamed to on_reasoning(i, delta). on_ready(i, reply) gets each
         reply as soon as it is final: replies that need no lookup do not wait for the batch's lookups."""
+        requests = self._route(requests)
         reqs = [{"messages": r["messages"], "documents": self._fit_documents(r.get("documents") or []),
                  "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
                  "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"]),
-                 **{k: r[k] for k in ("sampling", "think_sampling") if r.get(k) is not None}}
+                 **{k: r[k] for k in ("sampling", "think_sampling", "route", "grounded") if r.get(k) is not None}}
                 for r in requests]
         if self.moderator is not None:                               # refuse flagged messages without generating
             from vt.moderation import REFUSAL
@@ -300,6 +302,35 @@ class VeriChat:
                 outs[i] = o
             return outs
         return self._reply_batch_unmoderated(reqs, on_text, on_reasoning, on_ready)
+
+    def _route(self, requests):
+        """Sort each message (vt.router) and ground information requests in one lookup made before answering:
+        the reply is then written from those passages, with provenance and citations, and checked against
+        them, instead of looked up claim by claim afterwards. Messages with documents of their own keep them."""
+        if self.router is None:
+            return requests
+        todo = [i for i, r in enumerate(requests) if not r.get("documents")]
+        routes = dict(zip(todo, self.router.route_batch([requests[i]["messages"] for i in todo]))) if todo else {}
+        out = []
+        for i, r in enumerate(requests):
+            r = dict(r)
+            if i in routes:
+                r["route"] = routes[i][0]
+                if r["route"] != "information":                 # nothing to look up for a poem, a sum or code,
+                    r["retrieve"] = False                       # and no [unsure:] markers inside them
+                    if r.get("mode", "hedge") == "hedge":
+                        r["mode"] = "flag"
+                elif self.retriever is not None and r.get("retrieve", True):
+                    q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
+                    try:
+                        passages = self.retriever(q)
+                    except Exception as e:                      # no sources: answered as before
+                        print(f"grounding lookup failed: {e!r}", flush=True)
+                        passages = []
+                    if passages:
+                        r.update(documents=passages[:3], grounded=True)
+            out.append(r)
+        return out
 
     def _finish(self, o):
         """Screen a final reply (moderation) and return it."""
@@ -335,9 +366,30 @@ class VeriChat:
 
     def assess(self, o):
         """One verdict for a factual reply: the doubt of its first sourced claim mixed with the model's own,
-        or the model's own alone when no source was found; None for replies without claims (small talk)."""
+        or the model's own alone when no source was found; None for replies without claims (small talk). A
+        calculation that does not add up makes a reply likely wrong whatever else is said."""
+        wrong = [m for m in o.get("math_check") or [] if not m["ok"]]
+        if wrong and not o.get("withheld"):
+            return {"doubt": 1.0, "verdict": "likely wrong",
+                    "basis": f"arithmetic: {wrong[0]['expression']} is {wrong[0]['computed']:g}, not {wrong[0]['stated']:g}"}
+        if o.get("route") in ("chat", "code"):
+            return None                                          # opinions, creative writing, code: no fact verdict
+        if o.get("route") == "math":                             # judged by its arithmetic only: the confidence
+            checked = o.get("math_check") or []                  # probe was trained on facts, not on calculations
+            return {"doubt": 0.0, "verdict": "likely right", "basis": f"arithmetic re-computed ({len(checked)} steps)"} \
+                if checked else None
         if o.get("withheld") or not o.get("claims"):
             return None
+        if o.get("grounded"):                                    # answered from sources: are its claims in them?
+            claims = o["claims"]
+            sourced = [c for c in claims if c.get("source") == "the sources found"]
+            doubted = [s for s in o.get("sentences") or [] if s.get("doubted")]
+            if len(sourced) == len(claims) and not doubted:
+                return {"doubt": 0.1, "verdict": "likely right", "basis": "every claim is in the sources"}
+            missing = len(claims) - len(sourced)
+            basis = (f"{missing} of {len(claims)} claims are not in the sources" if missing else
+                     f"{len(doubted)} sentence(s) doubted against the sources")
+            return {"doubt": 0.5, "verdict": "uncertain", "basis": basis}
         score, _ = self.doubt_score(o)
         own = 1 - score if score is not None else 0.5
         judged = [c for c in o.get("verification") or [] if c.get("p_supported") is not None]
@@ -363,8 +415,21 @@ class VeriChat:
         def ask(r):
             return next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), None)
 
+        for r, o in zip(reqs, outs):
+            if r.get("route"):
+                o["route"] = r["route"]
+            if r.get("grounded"):
+                o["grounded"] = True                                 # written from sources fetched first
+                o["sources"] = r["documents"]
+                for c in o.get("claims") or []:
+                    if c.get("source") == "your documents":
+                        c["source"] = "the sources found"
+            if r.get("route") == "math":
+                from vt.mathcheck import check_arithmetic
+                o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""))
+
         def deliver(ids):                                            # verified together, then sent
-            self._verify([(outs[i], ask(reqs[i])) for i in ids])
+            self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])
             for i in ids:
                 send(i)
         doubted, final = [], []                                      # closed-book replies the model doubts

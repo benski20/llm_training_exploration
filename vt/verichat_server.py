@@ -96,7 +96,11 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'. ':'')+
-  'mode '+r.mode+'</div>'+assess(r.assessment)+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
+  'mode '+r.mode+(r.route?' · '+esc(r.route):'')+'</div>'+routeInfo(r)+assess(r.assessment)+verif(r.verification)+(r.reasoning?reasonBox(r.reasoning):'')}
+function routeInfo(r){let h='';
+ if(r.grounded&&r.sources&&r.sources.length)h+='<div class="meta">Answered from: '+esc(r.sources.map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'</div>';
+ if(r.math_check&&r.math_check.length)h+='<div class="meta">Arithmetic re-computed: '+r.math_check.map(m=>esc(m.expression)+(m.ok?' ✓':' ✗ (is '+m.computed+', not '+m.stated+')')).join('; ')+'</div>';
+ return h}
 function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e'}[a.verdict]||'';
  return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
@@ -496,6 +500,8 @@ def build(argv=None, host=None, port=None):
                                      "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--web-search", choices=["brave", "tavily"], help="also search the web (the API key in the "
                                                                     "VERICHAT_SEARCH_KEY environment variable)")
+    ap.add_argument("--route", action="store_true", help="sort messages (information / math / code / chat): answer "
+                                                         "information from one lookup made first, re-compute math")
     ap.add_argument("--verify-claims", action="store_true", help="check each reply's claims against Wikipedia, "
                                                                 "judged by the chat model (needs --wikipedia)")
     ap.add_argument("--wikipedia-leads", action="store_true", help="use only each page's lead section, not the best "
@@ -550,6 +556,9 @@ def build(argv=None, host=None, port=None):
             from .claim_verify import ClaimVerifier
             bot.verifier = ClaimVerifier(bot.model, bot.tok, bot.retriever)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
+    if a.route:
+        from .router import Router
+        bot.router = Router(bot.model, bot.tok)
     det = None
     if a.detector:
         import torch

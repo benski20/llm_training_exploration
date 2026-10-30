@@ -44,6 +44,33 @@ def source(passage):
     return passage[:60].rsplit(" ", 1)[0] + "…" if len(passage) > 60 else passage
 
 
+def option_ids(tok, *words):
+    """The first token ids of each word, with and without a leading space."""
+    return sorted({tok.encode(w, add_special_tokens=False)[0] for w in words} |
+                  {tok.encode(" " + w, add_special_tokens=False)[0] for w in words})
+
+
+def choice_probs(model, tok, prompts, options, batch=8, max_tokens=1500):
+    """The model's probabilities of each option (lists of token ids) as the next token of each prompt;
+    batched, left-padded, one forward pass per batch (no generation)."""
+    import torch
+    dev = next(model.parameters()).device
+    pad = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
+    out = []
+    for i in range(0, len(prompts), batch):
+        ids = [tok(p, add_special_tokens=False).input_ids[-max_tokens:] for p in prompts[i:i + batch]]
+        n = max(len(x) for x in ids)
+        x = torch.full((len(ids), n), pad, dtype=torch.long)
+        m = torch.zeros((len(ids), n), dtype=torch.long)
+        for b, t in enumerate(ids):
+            x[b, n - len(t):], m[b, n - len(t):] = torch.tensor(t), 1
+        with torch.no_grad():
+            z = model(input_ids=x.to(dev), attention_mask=m.to(dev)).logits[:, -1].float()
+        lg = torch.stack([torch.logsumexp(z[:, o], -1) for o in options], -1)
+        out += [[float(v) for v in row] for row in torch.softmax(lg, -1).cpu()]
+    return out
+
+
 def gather(pairs, retriever, max_claims=3):
     """The lookup half, no model needed: [(question, reply text)] -> [{"question", "claims": [{"claim",
     "passages"}]}], every claim looked up in parallel."""
@@ -97,24 +124,7 @@ class ClaimVerifier:
         return prompt_of(self.tok, msgs, thinking=False)
 
     def _choices(self, prompts, options):
-        """The model's probabilities of each option (lists of token ids) as the next token of each prompt;
-        batched, left-padded, one forward pass per batch."""
-        import torch
-        dev = next(self.model.parameters()).device
-        pad = self.tok.pad_token_id if self.tok.pad_token_id is not None else self.tok.eos_token_id
-        out = []
-        for i in range(0, len(prompts), self.batch):
-            ids = [self.tok(p, add_special_tokens=False).input_ids[-self.max_tokens:] for p in prompts[i:i + self.batch]]
-            n = max(len(x) for x in ids)
-            x = torch.full((len(ids), n), pad, dtype=torch.long)
-            m = torch.zeros((len(ids), n), dtype=torch.long)
-            for b, t in enumerate(ids):
-                x[b, n - len(t):], m[b, n - len(t):] = torch.tensor(t), 1
-            with torch.no_grad():
-                z = self.model(input_ids=x.to(dev), attention_mask=m.to(dev)).logits[:, -1].float()
-            lg = torch.stack([torch.logsumexp(z[:, o], -1) for o in options], -1)
-            out += [[float(v) for v in row] for row in torch.softmax(lg, -1).cpu()]
-        return out
+        return choice_probs(self.model, self.tok, prompts, options, self.batch, self.max_tokens)
 
     def judge(self, items):
         """items: [(question, claim, passages)] -> P(Yes) each."""
