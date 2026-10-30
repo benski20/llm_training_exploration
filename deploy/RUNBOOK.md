@@ -53,6 +53,7 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
 | `VERICHAT_VERIFY` | `1` | check each reply's claims against Wikipedia, judged by the chat model (0: off) |
+| `VERICHAT_ROUTE` | `1` | sort each message (information / math / code / chat): information answered from one lookup and judged by its sources, math by re-computed arithmetic, code and chat get no fact verdict (0: off) |
 | `VERICHAT_SEARCH` | "" | also search the web: `brave` or `tavily` (needs a key, below) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |

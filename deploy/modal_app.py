@@ -39,6 +39,7 @@ VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each r
 ASGI = os.environ.get("VERICHAT_ASGI", "0") == "1"
 SEARCH = os.environ.get("VERICHAT_SEARCH", "")                    # web search too: "brave" or "tavily" ("" off)
 SEARCH_KEY = os.environ.get("VERICHAT_SEARCH_KEY")                # its API key: never in the repo or the image
+ROUTE = os.environ.get("VERICHAT_ROUTE", "1") == "1"              # sort messages: information / math / code / chat
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -206,6 +207,7 @@ def server_args():
             + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
             + (["--web-search", SEARCH] if SEARCH else [])
             + (["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
+            + (["--route"] if ROUTE else [])
             + (["--revision", REVISION] if REVISION else []))
 
 

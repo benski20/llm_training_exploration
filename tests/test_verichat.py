@@ -632,3 +632,5 @@ def test_routing_grounds_information_and_rechecks_math():
     assert VeriChat.assess(bot, sourced)["basis"] == "every claim is in the sources"
     memory = {"grounded": True, "claims": [{"text": "Le Corbusier", "source": "the model's memory", "score": 0.9}]}
     assert VeriChat.assess(bot, memory)["verdict"] == "uncertain"
+    unsourced = {"route": "information", "claims": [{"text": "x", "score": 0.1}]}
+    assert VeriChat.assess(bot, unsourced)["verdict"] == "unverified"       # never a guess from the fact probe

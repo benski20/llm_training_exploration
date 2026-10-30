@@ -101,7 +101,7 @@ function routeInfo(r){let h='';
  if(r.grounded&&r.sources&&r.sources.length)h+='<div class="meta">Answered from: '+esc(r.sources.map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'</div>';
  if(r.math_check&&r.math_check.length)h+='<div class="meta">Arithmetic re-computed: '+r.math_check.map(m=>esc(m.expression)+(m.ok?' ✓':' ✗ (is '+m.computed+', not '+m.stated+')')).join('; ')+'</div>';
  return h}
-function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e'}[a.verdict]||'';
+function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a'}[a.verdict]||'';
  return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
  return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+

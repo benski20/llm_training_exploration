@@ -316,10 +316,11 @@ class VeriChat:
             r = dict(r)
             if i in routes:
                 r["route"] = routes[i][0]
-                if r["route"] != "information":                 # nothing to look up for a poem, a sum or code,
-                    r["retrieve"] = False                       # and no [unsure:] markers inside them
-                    if r.get("mode", "hedge") == "hedge":
-                        r["mode"] = "flag"
+                if r.get("mode", "hedge") == "hedge":           # routed replies are judged by sources or by
+                    r["mode"] = "flag"                          # arithmetic, never by in-line markers from a
+                                                                # probe trained on facts (it does not transfer)
+                if r["route"] != "information":                 # nothing to look up for a poem, a sum or code
+                    r["retrieve"] = False
                 elif self.retriever is not None and r.get("retrieve", True):
                     q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
                     try:
@@ -327,10 +328,9 @@ class VeriChat:
                     except Exception as e:                      # no sources: answered as before
                         print(f"grounding lookup failed: {e!r}", flush=True)
                         passages = []
-                    if passages:                                # judged by its sources, not by hedge markers
+                    if passages:                                # judged by its sources
                         r.update(documents=passages[:3], grounded=True)
-                        if r.get("mode", "hedge") == "hedge":
-                            r["mode"] = "flag"
+                    r["retrieve"] = False                       # one lookup per message, made here
             out.append(r)
         return out
 
@@ -380,6 +380,9 @@ class VeriChat:
             checked = o.get("math_check") or []                  # probe was trained on facts, not on calculations
             return {"doubt": 0.0, "verdict": "likely right", "basis": f"arithmetic re-computed ({len(checked)} steps)"} \
                 if checked else None
+        if o.get("route") == "information" and not o.get("grounded") and not any(
+                c.get("p_supported") is not None for c in o.get("verification") or []):
+            return {"doubt": None, "verdict": "unverified", "basis": "no sources found for this question"}
         if o.get("withheld") or not o.get("claims"):
             return None
         if o.get("grounded"):                                    # answered from sources: are its claims in them?
