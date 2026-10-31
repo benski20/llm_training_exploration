@@ -181,8 +181,12 @@ def main():
             score = np.mean([pole_values(s["X"], i) / (np.abs(pole_values(Xc, i)).std() + 1e-6) for i in order[:k]], 0)
             res.setdefault("sparse_poles_from_contrast", {}).setdefault(f"k={k}", {})[name] = \
                 round(float(auroc(score, s["wrong"])), 3)
+    z = lambda v: (v - v.mean()) / (v.std() + 1e-9)                # noqa: E731
     for name, s in sets.items():
         res.setdefault("answer_logprob", {})[name] = round(float(auroc(-s["logprob"], s["wrong"])), 3)
+        k10 = np.mean([pole_values(s["X"], i) / (np.abs(pole_values(Xc, i)).std() + 1e-6) for i in order[:10]], 0)
+        s["scores"] = {"logprob": s["logprob"].tolist(), "poles10": k10.tolist(), "wrong": s["wrong"].tolist()}
+        res.setdefault("logprob_plus_poles10", {})[name] = round(float(auroc(z(-s["logprob"]) + z(k10), s["wrong"])), 3)
 
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -199,7 +203,8 @@ def main():
             round(float(auroc(f(sets[dst]["X"]), sets[dst]["wrong"])), 3)
     res["seconds"] = round(time.time() - t0)
     print(json.dumps(res, indent=1))
-    json.dump(dict(res, answers={k: v["texts"] for k, v in sets.items()}), open(a.out, "w"), indent=1)
+    json.dump(dict(res, answers={k: v["texts"] for k, v in sets.items()},
+                   scores={k: v["scores"] for k, v in sets.items()}), open(a.out, "w"), indent=1)
 
 
 if __name__ == "__main__":

@@ -69,3 +69,19 @@ hallucinations, Qwen3-4B, no training): AUROC for "hallucinated"
 
 A real signal with no training, better than the trained head's transfer and than the model's plain confidence,
 but well short of provenance and of a detector trained on the same data. It is one ingredient, not the method.
+
+**The recall path and clean neurons** (`experiments/recall_neurons.py`, Qwen3-4B, 200 TriviaQA and 200 NQ
+questions answered closed-book by the same model, 39% and 19% right): AUROC for "wrong"
+
+| signal | labels used | TriviaQA | NQ |
+|---|---|---|---|
+| 10 neuron poles picked by the real-vs-invented-entity contrast (layers 19-23) | none about correctness | 0.72 | 0.69 |
+| a dense probe on all neurons, fit to the same contrast | none about correctness | 0.68 | 0.65 |
+| a dense probe fit to the other dataset's correctness labels | the other dataset's | 0.66 | 0.70 |
+| the model's own probability of its answer | none | 0.78 | 0.77 |
+
+The clean-neurons prediction partly holds: ten poles found without one correctness label transfer as well as a
+probe trained on real labels does (and better than a dense probe on the same contrast), and the contrast itself
+is separated perfectly by single poles. But they are not the strongest signal: the model's plain confidence
+in its own answer beats every internal reading here. On RAGTruth, the evidence shift combined with confidence
+does not beat the shift alone (0.67-0.68 against 0.69).
