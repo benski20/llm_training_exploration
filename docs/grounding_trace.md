@@ -184,3 +184,14 @@ question alone found Eiffel Tower passages without its date or designers (the re
 the pages that settle the claim); a code-parse failure needs to be in the evidence to count. Two margins are
 thin, and this is a 4B reading; the served model is the 32B the clean-neurons audit is about, and its probe
 has to be trained on it (a GPU run of `experiments/grounding_probe.py --export`).
+
+## In the server
+
+`--grounding heads/grounding_probe_qwen3_4b.npz --grounding-model Qwen/Qwen3-4B` (the deploy's default): every
+final reply is read by the 4B with its evidence, and each sentence reads consistent (nothing in the evidence
+against it, nothing missing: a poem line can be consistent), not grounded, or contradicted; the reply reads
+likely wrong (a sentence contradicted), not grounded, or nothing flagged. A local run through HTTP (0.5B
+writing, 4B reading, live Wikipedia): a summary of a pasted article (sentences at z -0.1 to -2.7), "Jane
+Austen" (-1.2), a haiku and "17 times 23 is 391" all read nothing flagged. The reader is a second model, read
+from its neurons and asked nothing; once a probe is trained on the 32B (`experiments/grounding_probe.py --model
+unsloth/Qwen3-32B-bnb-4bit --export ...`, a GPU run), the served model reads its own replies.

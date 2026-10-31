@@ -637,12 +637,12 @@ def test_grounding_gives_each_reply_its_verdict():
 
         def check(self, messages, reply, documents=()):
             self.calls.append((messages[-1]["content"], list(documents)))
-            v = {"Who built it?": "contradicted", "Write a poem.": "not grounded"}.get(messages[-1]["content"], "grounded")
+            v = {"Who built it?": "contradicted", "Write a poem.": "not grounded"}.get(messages[-1]["content"], "consistent")
             return {"sentences": [{"text": reply[:20], "verdict": v, "z": 2.0}], "total": 2.0, "verdict": v}
     bot.grounding = G()
     outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8, "retrieve": False}
                             for q in ("Who built it?", "Write a poem.")]
                            + [{"messages": [{"role": "user", "content": "Summarize."}], "max_new_tokens": 8,
                                "documents": ["The tower opened in 1889."]}])
-    assert [o["assessment"]["verdict"] for o in outs] == ["likely wrong", "not grounded", "grounded"]
+    assert [o["assessment"]["verdict"] for o in outs] == ["likely wrong", "not grounded", "nothing flagged"]
     assert bot.grounding.calls[2] == ("Summarize.", ["The tower opened in 1889."])   # the user's documents are the evidence

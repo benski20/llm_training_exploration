@@ -136,12 +136,12 @@ class Grounding:
                 kind = "contradicted" if zd >= max(zp, -zsh) else "not grounded"
             else:
                 zs, kind = (score - self.score_mean) / max(self.score_std, 1e-9), "not grounded"
-            row.update(z=round(zs, 3), verdict=kind if zs >= self.flag_z else "grounded")
+            row.update(z=round(zs, 3), verdict=kind if zs >= self.flag_z else "consistent")
             rows.append(row)
         total = round(float(sum(max(r["z"], 0.0) for r in rows)), 3)
-        flagged = [r["verdict"] for r in rows if r["verdict"] != "grounded"]
+        flagged = [r["verdict"] for r in rows if r["verdict"] != "consistent"]
         verdict = None if not rows else "contradicted" if "contradicted" in flagged else \
-            "not grounded" if flagged else "grounded"
+            "not grounded" if flagged else "consistent"
         return {"sentences": rows, "total": total, "verdict": verdict}
 
     def _z(self, name, v):

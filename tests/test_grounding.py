@@ -36,7 +36,7 @@ def test_every_sentence_scored_from_one_pass(tmp_path):
     g = Grounding(m, tok, probe(tmp_path, np.ones(128)), flag_z=1e9)
     out = g.check([{"role": "user", "content": "Summarize."}], "It opened in 1889. It is tall.", documents=["A doc."])
     assert len(out["sentences"]) == 2 and len(calls) == 1                 # one forward pass for the whole reply
-    assert out["verdict"] == "grounded" and all(s["verdict"] == "grounded" for s in out["sentences"])
+    assert out["verdict"] == "consistent" and all(s["verdict"] == "consistent" for s in out["sentences"])
     assert not m.model.layers[1].mlp.down_proj._forward_pre_hooks           # hooks removed after reading
 
 
@@ -62,4 +62,4 @@ def test_with_natural_scales_the_evidence_signals_join(tmp_path):
     out = Grounding(m, tok, p, flag_z=1e9).check([{"role": "user", "content": "Summarize."}], "It opened in 1889.",
                                                  documents=["The tower opened in 1889."])
     s = out["sentences"][0]
-    assert {"z_probe", "z_shift", "z_disagreement"} <= set(s) and out["verdict"] == "grounded"
+    assert {"z_probe", "z_shift", "z_disagreement"} <= set(s) and out["verdict"] == "consistent"

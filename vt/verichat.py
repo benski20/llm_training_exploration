@@ -316,7 +316,7 @@ class VeriChat:
     def _ground(self, items):
         """Every sentence of several final replies read against its evidence by the grounding probe (vt.grounding):
         the user's documents, else the passages a doubted reply was re-answered from, else a lookup; exact
-        arithmetic and parsed code. The reply's verdict: contradicted (likely wrong), not grounded, or grounded.
+        arithmetic and parsed code. The reply's verdict: contradicted (likely wrong), not grounded, or nothing flagged.
         A check that fails never fails the replies."""
         for o, r in items:
             if o.get("withheld") or not o.get("text"):
@@ -328,7 +328,7 @@ class VeriChat:
                 print(f"grounding failed: {e!r}", flush=True)
                 continue
             o["grounding"] = g
-            off = [x for x in g["sentences"] if x["verdict"] != "grounded"]
+            off = [x for x in g["sentences"] if x["verdict"] != "consistent"]
             if g["verdict"] == "contradicted":
                 x = next(x for x in off if x["verdict"] == "contradicted")
                 o["assessment"] = {"verdict": "likely wrong", "doubt": min(1.0, round(x["z"] / 3, 3)),
@@ -336,9 +336,10 @@ class VeriChat:
             elif g["verdict"] == "not grounded":
                 o["assessment"] = {"verdict": "not grounded", "doubt": None,
                                    "basis": f"{len(off)} of {len(g['sentences'])} sentence(s) not in the evidence"}
-            elif g["verdict"] == "grounded":
-                o["assessment"] = {"verdict": "grounded", "doubt": 0.1,
-                                   "basis": f"all {len(g['sentences'])} sentence(s) grounded in the evidence"}
+            elif g["verdict"] == "consistent":
+                o["assessment"] = {"verdict": "nothing flagged", "doubt": 0.1,
+                                   "basis": f"none of {len(g['sentences'])} sentence(s) contradicted by or missing "
+                                            "from the evidence"}
 
     def _ledger(self, items):
         """Every statement of several final replies judged at once (vt.ledger): items are (reply, request).
