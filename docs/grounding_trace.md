@@ -139,3 +139,18 @@ worst sentence) do worse combined (0.68): the worst-sentence rule amplifies nois
 Responses scored by their total ungroundedness (the sum of each sentence's positive z-score) instead of their
 worst sentence: 0.76 for the dense probe, the single pole and every combination (0.68-0.72 by the worst
 sentence). The rule was picked among seven on this test set, so read it as slightly optimistic.
+
+**Constructed replies worded like answers** (`--phrasing`, `results/grounding_probe_qwen3_4b_phrasing.json`: a
+lead-in such as "According to the text," and parentheses dropped, alike for every kind, so a verbatim copy
+cannot give grounding away):
+
+| RAGTruth | before | worded like answers |
+|---|---|---|
+| dense probe, sentences | 0.73 | **0.75** |
+| dense probe, responses (total ungroundedness) | 0.76 | **0.82** |
+| dense probe, contradictions | 0.65 | **0.72** |
+| probe + evidence shift, sentences | 0.74 | **0.77** |
+| probe + evidence shift, responses | 0.77 | **0.82** |
+
+0.82 per response with nothing from RAGTruth, against 0.86 for a detector trained on RAGTruth itself: the probe
+had partly learned "copied verbatim means grounded"; without that shortcut it learns grounding.
