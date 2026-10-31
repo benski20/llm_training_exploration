@@ -6,13 +6,16 @@ a silent request sent again once) and scored per kind:
     factual,     answer correctness (reference answers), and whether the verdict tells right from wrong:
     open, math   caught = wrong answers called likely wrong; false alarms = right ones called likely wrong
     the rest     false alarms (any "likely wrong" verdict), and what the ledger made of their statements
-    every kind   verdicts, statements judged and how (vt/ledger.py: one judge for every reply, no routing)
+    every kind   verdicts, and how the grounding check (vt/grounding.py) read each sentence: wrong vs right
+                 answers flagged (likely wrong or not grounded), and how well its total separates them
     serving      errors, retried requests, seconds
 
     python experiments/mixed_eval.py --url https://<...>.modal.run --workers 4 --out mixed.json
 """
 import argparse
 import json
+
+import numpy as np
 import os
 import re
 import sys
@@ -43,12 +46,20 @@ def score(rows):
         k = {"n": len(sub), "verdicts": dict(Counter((r.get("assessment") or {}).get("verdict", "none") for r in sub)),
              "statements": dict(Counter(u["verdict"] for r in sub for u in r.get("ledger") or [])),
              "looked_up": sum(bool(u.get("sources")) for r in sub for u in r.get("ledger") or []),
+             "sentences": dict(Counter(u["verdict"] for r in sub for u in (r.get("grounding") or {}).get("sentences", []))),
              "markers_left": sum("[unsure" in r["text"] for r in sub)}
         judged = [r for r in sub if r.get("right") is not None]
         if judged:
             right = [r for r in judged if r["right"]]
             wrong = [r for r in judged if not r["right"]]
             lw = lambda r: (r.get("assessment") or {}).get("verdict") == "likely wrong"  # noqa: E731
+            flag = lambda r: (r.get("assessment") or {}).get("verdict") in ("likely wrong", "not grounded")  # noqa: E731
+            totals = [(r.get("grounding") or {}).get("total") for r in judged]
+            if right and wrong and all(t is not None for t in totals):
+                from vt.correctness import auroc
+                k["grounding_total_auroc_wrong"] = round(float(auroc(np.array(totals, float),
+                                                                     np.array([not r["right"] for r in judged], float))), 3)
+            k.update(wrong_flagged=f"{sum(map(flag, wrong))}/{len(wrong)}", right_flagged=f"{sum(map(flag, right))}/{len(right)}")
             k.update(accuracy=round(len(right) / len(judged), 3),
                      wrong_caught=f"{sum(map(lw, wrong))}/{len(wrong)}",
                      right_false_alarm=f"{sum(map(lw, right))}/{len(right)}")
@@ -83,7 +94,7 @@ def main():
             try:
                 r = chat(a.url, [{"role": "user", "content": x["q"]}], max_new_tokens=384)
                 row = {"i": i, "kind": x["kind"], "q": x["q"][:200], "assessment": r.get("assessment"),
-                       "ledger": r.get("ledger"), "text": r.get("text", "")[:1200],
+                       "ledger": r.get("ledger"), "grounding": r.get("grounding"), "text": r.get("text", "")[:1200],
                        "attempts": r.get("_attempts"), "seconds": round(time.time() - t, 1)}
                 if "aliases" in x:
                     row["right"] = is_right(row["text"], x["aliases"])
