@@ -14,9 +14,9 @@
  "synthetic": {
   "n": 600,
   "kinds": {
-   "grounded": 200,
+   "contradicted": 200,
    "unsupported": 200,
-   "contradicted": 200
+   "grounded": 200
   }
  },
  "ragtruth": {
@@ -9015,5 +9015,5 @@
    "synthetic_auroc": 0.154
   }
  ],
- "seconds": 1233
+ "seconds": 1371
 }
