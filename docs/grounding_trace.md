@@ -117,3 +117,21 @@ scored on RAGTruth's human-labeled hallucinations in news, passages and reviews 
 The first signal here that catches unsupported additions, and it transfers better than the head trained on
 human labels. Sparse poles do not beat the dense probe on this model. The synthetic task was too easy (0.99
 held out): its unsupported sentences came from unrelated paragraphs, which a topic change gives away.
+
+**With on-topic unsupported examples, and combined** (`results/grounding_probe_qwen3_4b.json`: unsupported
+examples are sentences taken out of the paragraph shown; the evidence shift and disagreement computed on the
+same RAGTruth sentences; nothing from RAGTruth used in training):
+
+| RAGTruth sentences | all | contradictions | unsupported additions | responses |
+|---|---|---|---|---|
+| dense probe on constructions | 0.73 | 0.65 | **0.78** | 0.72 |
+| **one neuron pole** picked on the constructions | 0.72 | 0.69 | 0.74 | 0.70 |
+| evidence shift (untrained) | 0.68 | 0.64 | 0.72 | 0.66 |
+| disagreement (untrained) | 0.61 | 0.72 | 0.53 | 0.63 |
+| **probe + shift + disagreement** (z-scores summed, untuned) | **0.76** | **0.77** | 0.75 | 0.68 |
+
+A single neuron pole does nearly all the dense probe does on natural data from other domains: grounding is
+mostly one readable unit on this model, which is what the clean-neurons view predicts. The probe is strongest on
+what the context does not say, the disagreement on what it contradicts, and together they reach 0.76 per
+sentence with no RAGTruth data; a detector trained on RAGTruth itself reaches 0.86. Responses (scored by their
+worst sentence) do worse combined (0.68): the worst-sentence rule amplifies noise.
