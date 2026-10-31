@@ -350,6 +350,13 @@ found 53% (AUROC 0.72). On held-out ClaimBuster debate sentences: AUROC 0.89. In
 requests a sentence must score 0.9 to count as a fact, and only evidence that contradicts a claim counts
 against it, so a line of a poem is never "wrong" for not being in Wikipedia; a wrong date inside a poem is.
 
+What the fact verdicts mean on the served 32B (its three-way judge on the first claim of 600 graded TriviaQA
+and NQ answers, `results/study_32b_v3_threeway.json`, claims with evidence found): "supported" was given to
+82% of right answers and 27% of wrong ones (84% of answers it supported were right); "not in the sources" to
+16% and 48% (64% of those were wrong); "contradicted" to 2% and 25% (88% of those were wrong). In that bulk run
+55-61% of claims found no evidence at all, mostly Wikipedia refusing paced bulk lookups; a search key fixes
+that in production.
+
 The reply's verdict comes from its ledger: anything contradicted, miscalculated or unparseable makes it
 likely wrong; every fact supported likely right; facts unconfirmed uncertain (some supported) or unverified
 (none); no factual claims says so. Cost: the classifier on CPU, one forward pass per fact (no generation),
