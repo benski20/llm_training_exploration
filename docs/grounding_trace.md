@@ -154,3 +154,10 @@ cannot give grounding away):
 
 0.82 per response with nothing from RAGTruth, against 0.86 for a detector trained on RAGTruth itself: the probe
 had partly learned "copied verbatim means grounded"; without that shortcut it learns grounding.
+
+95% bootstrap intervals over responses (`--phrasing`, 600 constructions): the probe 0.82 [0.76, 0.88] per
+response and 0.75 [0.70, 0.79] per sentence; with the evidence shift 0.82 [0.76, 0.88] and 0.77 [0.72, 0.81];
+the untrained shift alone 0.70 [0.62, 0.78] and 0.68 [0.64, 0.73]. The trained-on-RAGTruth detector's 0.86 lies
+inside the probe's interval. More of the same constructions does not help: 1,500 instead of 600 gave 0.77-0.79
+per response while the synthetic held-out score rose to 0.99, the probe learning the constructions' artefacts.
+More varied constructions, not more of them, is the lever.
