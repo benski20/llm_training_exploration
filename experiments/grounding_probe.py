@@ -3,7 +3,8 @@ labels made by construction, then scored on human-labeled hallucinations from a 
 
     train   Dolly's reference paragraphs (Wikipedia-style text, CC-BY-SA), no human labels: for each paragraph a
             reply that is one of its sentences (grounded), that sentence with a number or a name swapped
-            (contradicted), or a sentence from an unrelated paragraph (unsupported)
+            (contradicted), or one of its sentences taken out of the paragraph shown (unsupported: on topic,
+            but not in the context)
     read    the model's MLP neurons (down_proj inputs) averaged over the reply's tokens, every 4th layer, with
             the paragraph in the context
     test    RAGTruth's test answers (news summaries, QA from passages, data-to-text from reviews; written by
@@ -75,11 +76,10 @@ def synthetic(n, seed=0):
             if s2 is None or s2 == s:
                 continue
             s = s2
-        elif kind == "unsupported":
-            other = sent_split(ctxs[(i + 997) % len(ctxs)])
-            if not other:
+        elif kind == "unsupported":                          # on topic but not in the context: taken out of it
+            if len(ss) < 3:
                 continue
-            s = rng.choice(other)
+            c = c.replace(s, " ").strip()
         out.append({"context": c, "reply": s, "kind": kind, "y": int(kind != "grounded")})
         if len(out) >= n:
             break
@@ -146,12 +146,19 @@ def main():
     ds = load_dataset("wandb/RAGTruth-processed", split="test").shuffle(seed=0)
     bad, good = [r for r in ds if spans(r)], [r for r in ds if not spans(r)]
     rows = bad[:a.test // 2] + good[:a.test - a.test // 2]
-    Xt, yt, kt, resp = [], [], [], []
+    Xt, yt, kt, resp, ev = [], [], [], [], []
     for i, r in enumerate(rows):
         out = r["output"]
         pre = prefix(tok, f"{r['query']}\n\n{r['context'][:a.max_context_chars]}")
         enc = tok(out, add_special_tokens=False, return_offsets_mapping=True)
+        from evidence_shift import disagreement, token_logprobs
         reader.run(pre + enc.input_ids)
+        acts = {i_: v.clone() for i_, v in reader.acts.items()}
+        lw, dw = token_logprobs(model, tok, pre, enc.input_ids)
+        lo, do = token_logprobs(model, tok, prefix(tok, r["query"]), enc.input_ids)
+        dis, shift = disagreement(dw, do, enc.input_ids), lw - lo
+        del dw, do
+        reader.acts = acts
         sp = spans(r)
         for s, e in sentences(out):
             js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
@@ -159,12 +166,13 @@ def main():
                 continue
             kinds = [k for a_, b_, k in sp if s < b_ and a_ < e]
             Xt.append(reader.mean(len(pre) + js[0], len(pre) + js[-1] + 1))
+            ev.append((float(shift[js].mean()), float(dis[js].max())))
             yt.append(int(bool(kinds)))
             kt.append(kinds[0] if kinds else "")
             resp.append(i)
         if (i + 1) % 50 == 0:
             print(f"ragtruth {i + 1}/{len(rows)} {time.time() - t0:.0f}s", flush=True)
-    Xt, yt, resp = np.stack(Xt), np.array(yt), np.array(resp)
+    Xt, yt, resp, ev = np.stack(Xt), np.array(yt), np.array(resp), np.array(ev)
     resp_y = np.array([int(bool(spans(r))) for r in rows])
 
     def report(score):
@@ -186,6 +194,15 @@ def main():
         clf = LogisticRegression(C=C, max_iter=3000).fit(sc.transform(Xs), ys)
         res.setdefault("dense_probe", {})[f"C={C}"] = dict(report(clf.decision_function(sc.transform(Xt))),
                                                             synthetic_heldout=round(held, 3))
+    z = lambda v: (v - v.mean()) / (v.std() + 1e-9)                # noqa: E731
+    clf = LogisticRegression(C=0.01, max_iter=3000).fit(sc.transform(Xs), ys)
+    probe = clf.decision_function(sc.transform(Xt))
+    res["evidence"] = {"mean_shift": report(-ev[:, 0]), "max_disagreement": report(ev[:, 1])}
+    res["combined"] = {"probe+disagreement": report(z(probe) + z(ev[:, 1])),
+                       "probe+shift": report(z(probe) - z(ev[:, 0])),
+                       "probe+shift+disagreement": report(z(probe) - z(ev[:, 0]) + z(ev[:, 1]))}
+    res["per_sentence"] = {"y": yt.tolist(), "kind": kt, "response": resp.tolist(), "probe": probe.tolist(),
+                           "mean_shift": ev[:, 0].tolist(), "max_disagreement": ev[:, 1].tolist()}
     from recall_neurons import fast_pole_auroc
     pa = fast_pole_auroc(Xs, ys.astype(float))
     order = np.argsort(-np.abs(pa - 0.5))
@@ -201,7 +218,7 @@ def main():
                          "pole": "negative" if i >= n else "positive", "synthetic_auroc": round(float(pa[i]), 3)}
                         for i in order[:10]]
     res["seconds"] = round(time.time() - t0)
-    print(json.dumps(res, indent=1))
+    print(json.dumps({k: v for k, v in res.items() if k != "per_sentence"}, indent=1))
     json.dump(res, open(a.out, "w"), indent=1)
 
 

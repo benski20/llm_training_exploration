@@ -101,3 +101,19 @@ evidence, 0.78 for closed-book answers from the model's own confidence); detecto
 mechanism. Next: train on the mechanism itself, with labels made by construction in any domain (a sentence
 taken from a document is grounded, the same sentence with an entity or number swapped is contradicted, a
 sentence from an unrelated document is unsupported), and test synthetic to natural on RAGTruth's human labels.
+
+**Trained on the mechanism, tested on nature** (`experiments/grounding_probe.py`, `results/grounding_probe_qwen3_4b_v1.json`):
+a probe on the 4B's MLP neurons, trained only on constructed examples from Dolly's Wikipedia-style paragraphs
+(a sentence from the paragraph, the same with a number or name swapped, a sentence from an unrelated one),
+scored on RAGTruth's human-labeled hallucinations in news, passages and reviews it never saw:
+
+| RAGTruth | dense probe | 10 neuron poles | best training-free | 32B head trained on labels, unseen source |
+|---|---|---|---|---|
+| sentences | **0.71** | 0.68 | 0.69 | 0.58 |
+| responses | **0.74** | 0.72 | 0.69 | |
+| unsupported additions | **0.73** | 0.73 | 0.56 | |
+| contradictions | 0.68 | 0.60 | 0.72 (disagreement) | |
+
+The first signal here that catches unsupported additions, and it transfers better than the head trained on
+human labels. Sparse poles do not beat the dense probe on this model. The synthetic task was too easy (0.99
+held out): its unsupported sentences came from unrelated paragraphs, which a topic change gives away.

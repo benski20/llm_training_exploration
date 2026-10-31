@@ -1,0 +1,139 @@
+{
+ "model": "Qwen/Qwen3-4B",
+ "layers_read": [
+  3,
+  7,
+  11,
+  15,
+  19,
+  23,
+  27,
+  31,
+  35
+ ],
+ "synthetic": {
+  "n": 600,
+  "kinds": {
+   "unsupported": 200,
+   "grounded": 200,
+   "contradicted": 200
+  }
+ },
+ "ragtruth": {
+  "responses": 200,
+  "sentences": 1470,
+  "hallucinated_sentences": 154
+ },
+ "dense_probe": {
+  "C=0.001": {
+   "sentence": 0.707,
+   "response": 0.739,
+   "sentence_conflicts_only": 0.677,
+   "sentence_baseless_only": 0.728,
+   "synthetic_heldout": 0.99
+  },
+  "C=0.01": {
+   "sentence": 0.704,
+   "response": 0.742,
+   "sentence_conflicts_only": 0.683,
+   "sentence_baseless_only": 0.72,
+   "synthetic_heldout": 0.992
+  },
+  "C=0.1": {
+   "sentence": 0.704,
+   "response": 0.734,
+   "sentence_conflicts_only": 0.688,
+   "sentence_baseless_only": 0.715,
+   "synthetic_heldout": 0.996
+  }
+ },
+ "sparse_poles": {
+  "k=1": {
+   "sentence": 0.64,
+   "response": 0.676,
+   "sentence_conflicts_only": 0.579,
+   "sentence_baseless_only": 0.684
+  },
+  "k=10": {
+   "sentence": 0.675,
+   "response": 0.722,
+   "sentence_conflicts_only": 0.604,
+   "sentence_baseless_only": 0.725
+  },
+  "k=30": {
+   "sentence": 0.61,
+   "response": 0.613,
+   "sentence_conflicts_only": 0.51,
+   "sentence_baseless_only": 0.682
+  },
+  "k=100": {
+   "sentence": 0.625,
+   "response": 0.612,
+   "sentence_conflicts_only": 0.521,
+   "sentence_baseless_only": 0.699
+  }
+ },
+ "top_poles": [
+  {
+   "layer": 15,
+   "neuron": 244,
+   "pole": "negative",
+   "synthetic_auroc": 0.049
+  },
+  {
+   "layer": 19,
+   "neuron": 217,
+   "pole": "positive",
+   "synthetic_auroc": 0.05
+  },
+  {
+   "layer": 15,
+   "neuron": 2013,
+   "pole": "positive",
+   "synthetic_auroc": 0.063
+  },
+  {
+   "layer": 35,
+   "neuron": 4187,
+   "pole": "positive",
+   "synthetic_auroc": 0.925
+  },
+  {
+   "layer": 15,
+   "neuron": 103,
+   "pole": "positive",
+   "synthetic_auroc": 0.088
+  },
+  {
+   "layer": 35,
+   "neuron": 0,
+   "pole": "negative",
+   "synthetic_auroc": 0.09
+  },
+  {
+   "layer": 35,
+   "neuron": 443,
+   "pole": "positive",
+   "synthetic_auroc": 0.905
+  },
+  {
+   "layer": 23,
+   "neuron": 2,
+   "pole": "positive",
+   "synthetic_auroc": 0.099
+  },
+  {
+   "layer": 15,
+   "neuron": 5175,
+   "pole": "positive",
+   "synthetic_auroc": 0.1
+  },
+  {
+   "layer": 35,
+   "neuron": 17,
+   "pole": "negative",
+   "synthetic_auroc": 0.102
+  }
+ ],
+ "seconds": 3421
+}
