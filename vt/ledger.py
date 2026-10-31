@@ -58,7 +58,8 @@ def exact_checks(unit):
                          f"This {c['language']} does not parse: {c['error']}.")
     else:
         for m in check_arithmetic(unit["claim"]):
-            lines.append(f"{m['expression']} = {m['computed']:g} exactly (the statement says {m['stated']:g}).")
+            lines.append(f"{m['expression']} = {m['computed']:g} exactly, so the statement's {m['stated']:g} is "
+                         + ("right." if m["ok"] else "wrong."))
     return lines
 
 

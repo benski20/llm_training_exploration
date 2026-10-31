@@ -21,7 +21,7 @@ class Judged(Ledger):
             ev = p.split("Statement from the reply")[0].split("Code from the reply")[0]
             if "hope" in stmt or "waves" in stmt:
                 out.append(D)
-            elif "does not parse" in ev or "(the statement says 401)" in ev or "rome" in stmt and "Paris" in ev:
+            elif "does not parse" in ev or "401 is wrong" in ev or "rome" in stmt and "Paris" in ev:
                 out.append(B)
             elif "parses." in ev or "= 391 exactly" in ev or "1889" in stmt and "1889" in ev:
                 out.append(A)
@@ -34,7 +34,7 @@ def test_units_and_exact_checks():
     us = units("So 12 * 4 = 50.\n```python\ndef f(x)\n    return x\n```\nHope this helps!")
     assert [("code" in u) for u in us] == [True, False, False]
     assert "does not parse" in exact_checks(us[0])[0]
-    assert exact_checks(us[1]) == ["12 × 4 = 48 exactly (the statement says 50)."]
+    assert exact_checks(us[1]) == ["12 × 4 = 48 exactly, so the statement's 50 is wrong."]
     assert exact_checks(us[2]) == []
 
 

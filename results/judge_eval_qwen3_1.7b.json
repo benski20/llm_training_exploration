@@ -1,0 +1,319 @@
+{
+ "model": "Qwen/Qwen3-1.7B",
+ "kind": {
+  "facts_not_D": 9,
+  "others_D": 60,
+  "n_each": 60,
+  "verdicts": {
+   "fact": {
+    "not a factual claim": 51,
+    "contradicted": 3,
+    "supported": 6
+   },
+   "not": {
+    "not a factual claim": 60
+   }
+  },
+  "wrong": [
+   [
+    "fact",
+    "not a factual claim",
+    "The Eiffel Tower was completed in 1889 for the World's Fair."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Water boils at 100 degrees Celsius at sea level."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The human body has 206 bones."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Canberra is the capital of Australia."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Ibuprofen is a nonsteroidal anti-inflammatory drug."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Grapes can cause kidney failure in dogs."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "A traditional IRA is funded with pre-tax dollars."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Phoenix does not observe daylight saving time."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The Berlin Wall fell on November 9, 1989."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Light travels at about 300,000 kilometres per second."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Cast iron rusts if it is left wet."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Inflation is a general rise in prices over time."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Portuguese is the official language of Brazil."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "A runny yolk usually takes about six minutes of boiling."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Vaccines train the immune system to recognise a pathogen."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Cats purr at frequencies between 25 and 150 hertz."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Python lists are mutable, so a second name for the list sees every change."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "git rebase rewrites commit history, while git merge preserves it."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Pandas reads CSV files with the read_csv function."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The French Revolution began in 1789."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "GDP measures the market value of all final goods and services produced in a country."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Basil keeps longer at room temperature than in the fridge."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "A tripped breaker can be reset by switching it fully off and then on."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Low iron can cause fatigue and pale skin."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The recommended fridge temperature is below 4 degrees Celsius."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "US passports for adults are valid for ten years."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The Great Wall of China is not visible to the naked eye from the Moon."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Mitochondria produce most of a cell's ATP."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The Amazon is the largest rainforest in the world."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Shakespeare was born in Stratford-upon-Avon."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Most cover letters run to one page."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Electric cars have fewer moving parts than petrol cars."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The Pacific is the largest ocean on Earth."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The bridge will reopen in October."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The repairs will cost 4.2 million dollars."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Engineers found cracks in two support beams."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The article says the council voted on Tuesday."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "According to the report, sales fell by 12 percent in the second quarter."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Sourdough starter is a mix of flour and water fermented by wild yeast and bacteria."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Snake plants need watering only every two to three weeks."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Touch typing means typing without looking at the keyboard."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The 2014 World Cup was won by Germany."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Lithium-ion batteries degrade faster when kept at full charge."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The speed limit on most UK motorways is 70 miles per hour."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Docker containers stop when their main process exits."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Honey never spoils if it is stored sealed."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "React components re-render when their state changes."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "The Roth IRA was established in 1997."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Penguins live almost exclusively in the Southern Hemisphere."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Dragons are not real animals."
+   ],
+   [
+    "fact",
+    "not a factual claim",
+    "Ottawa, not Toronto, is the capital of Canada."
+   ]
+  ]
+ },
+ "arithmetic": {
+  "n": 16,
+  "correct": 13,
+  "confusion": {
+   "supported -> contradicted": 3
+  },
+  "wrong": [
+   [
+    "supported",
+    "contradicted",
+    "The total is 126 / 4 = 31.5 dollars each."
+   ],
+   [
+    "supported",
+    "contradicted",
+    "3 \u00d7 12 - 5 = 31 apples are left."
+   ],
+   [
+    "supported",
+    "contradicted",
+    "86400 = 24 \u00d7 60 \u00d7 60 seconds in a day."
+   ]
+  ]
+ },
+ "text": {
+  "n": 14,
+  "correct": 12,
+  "confusion": {
+   "contradicted -> supported": 2
+  },
+  "wrong": [
+   [
+    "contradicted",
+    "supported",
+    "The bridge will close in October."
+   ],
+   [
+    "contradicted",
+    "supported",
+    "The city budget pays for the repairs."
+   ]
+  ]
+ },
+ "seconds": 284.1
+}
