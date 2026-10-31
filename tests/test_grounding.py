@@ -49,3 +49,16 @@ def test_flags_follow_the_probe_and_evidence_reaches_the_context(tmp_path):
     assert seen == ["When?"]
     ev = g.evidence([{"role": "user", "content": "When?"}], "17 × 23 = 401.", documents=["Doc."])
     assert ev.startswith("When?") and "Doc." in ev and "Exact arithmetic: 17 × 23 = 391" in ev
+
+
+def test_with_natural_scales_the_evidence_signals_join(tmp_path):
+    m, tok = tiny()
+    p = tmp_path / "probe.npz"
+    np.savez(p, layers=np.array([1, 3]), mean=np.zeros(128, np.float32), scale=np.ones(128, np.float32),
+             coef=np.ones(128, np.float32), intercept=np.float32(0), score_mean=np.float32(0), score_std=np.float32(1),
+             model=np.array("tiny"), **{f"nat_{k}_{s}": np.float32(v) for k in ("probe", "mean_shift", "max_disagreement")
+                                        for s, v in (("mean", 0.0), ("std", 1.0))})
+    out = Grounding(m, tok, p, flag_z=1e9).check([{"role": "user", "content": "Summarize."}], "It opened in 1889.",
+                                                 documents=["The tower opened in 1889."])
+    s = out["sentences"][0]
+    assert {"z_probe", "z_shift", "z_disagreement"} <= set(s) and out["verdict"] == "grounded"

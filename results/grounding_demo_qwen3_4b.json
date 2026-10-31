@@ -1,0 +1,237 @@
+{
+ "model": "Qwen/Qwen3-4B",
+ "n": 13,
+ "wrong": 6,
+ "total_auroc_wrong": 0.571,
+ "rows": [
+  {
+   "q": "Who designed the Eiffel Tower and when was it finished?",
+   "wrong": false,
+   "total": 1.127,
+   "verdict": "not grounded",
+   "sentences": [
+    [
+     "not grounded",
+     1.127,
+     "The Eiffel Tower was designed by engineers of Gustave Eiffel's company"
+    ]
+   ]
+  },
+  {
+   "q": "Who designed the Eiffel Tower and when was it finished?",
+   "wrong": true,
+   "total": 1.07,
+   "verdict": "not grounded",
+   "sentences": [
+    [
+     "not grounded",
+     1.07,
+     "The Eiffel Tower was designed by Gustave Eiffel's company and finished"
+    ]
+   ]
+  },
+  {
+   "q": "Who wrote Pride and Prejudice?",
+   "wrong": false,
+   "total": 0.269,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.269,
+     "Pride and Prejudice was written by Jane Austen and published in 1813."
+    ]
+   ]
+  },
+  {
+   "q": "Who wrote Pride and Prejudice?",
+   "wrong": true,
+   "total": 0.077,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.077,
+     "Pride and Prejudice was written by Charlotte Bront\u00eb."
+    ]
+   ]
+  },
+  {
+   "q": "Write a short poem about the sea.",
+   "wrong": false,
+   "total": 2.117,
+   "verdict": "not grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.871,
+     "Whispering waves dance on the shore,"
+    ],
+    [
+     "not grounded",
+     1.246,
+     "the moon hums softly, nothing more."
+    ]
+   ]
+  },
+  {
+   "q": "Write a short poem about Paris.",
+   "wrong": true,
+   "total": 3.322,
+   "verdict": "not grounded",
+   "sentences": [
+    [
+     "not grounded",
+     1.531,
+     "Oh Paris, capital of Italy, your lights shine bright."
+    ],
+    [
+     "not grounded",
+     1.791,
+     "I dream of you by night."
+    ]
+   ]
+  },
+  {
+   "q": "What is 17 times 23?",
+   "wrong": false,
+   "total": 0.0,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     -0.36,
+     "17 \u00d7 23 = 391."
+    ]
+   ]
+  },
+  {
+   "q": "What is 17 times 23?",
+   "wrong": true,
+   "total": 0.621,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.621,
+     "17 \u00d7 23 = 401."
+    ]
+   ]
+  },
+  {
+   "q": "Write a Python function that reverses a string.",
+   "wrong": false,
+   "total": 1.356,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.382,
+     "Here you go:"
+    ],
+    [
+     "grounded",
+     0.592,
+     "```python"
+    ],
+    [
+     "grounded",
+     0.22,
+     "def reverse(s):"
+    ],
+    [
+     "grounded",
+     0.162,
+     "return s[::-1]"
+    ]
+   ]
+  },
+  {
+   "q": "Write a Python function that reverses a string.",
+   "wrong": true,
+   "total": 1.918,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.382,
+     "Here you go:"
+    ],
+    [
+     "grounded",
+     0.592,
+     "```python"
+    ],
+    [
+     "grounded",
+     0.503,
+     "def reverse(s)"
+    ],
+    [
+     "grounded",
+     0.441,
+     "return s[::-1]"
+    ]
+   ]
+  },
+  {
+   "q": "I'm nervous about my job interview tomorrow.",
+   "wrong": false,
+   "total": 1.894,
+   "verdict": "not grounded",
+   "sentences": [
+    [
+     "grounded",
+     0.033,
+     "It's completely normal to feel nervous."
+    ],
+    [
+     "grounded",
+     0.744,
+     "Take a deep breath and remember your strengths."
+    ],
+    [
+     "not grounded",
+     1.117,
+     "You've got this!"
+    ]
+   ]
+  },
+  {
+   "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
+   "wrong": false,
+   "total": 0.0,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     -0.803,
+     "The council voted to close the Elm Street bridge for repairs after eng"
+    ],
+    [
+     "grounded",
+     -0.261,
+     "It reopens in October and the repairs cost 4.2 million dollars."
+    ]
+   ]
+  },
+  {
+   "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
+   "wrong": true,
+   "total": 0.966,
+   "verdict": "grounded",
+   "sentences": [
+    [
+     "grounded",
+     -0.974,
+     "The council voted to close the Elm Street bridge for repairs."
+    ],
+    [
+     "grounded",
+     0.966,
+     "It reopens in June and the city pays 4.2 million dollars."
+    ]
+   ]
+  }
+ ]
+}
