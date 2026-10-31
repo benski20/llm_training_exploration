@@ -195,3 +195,25 @@ writing, 4B reading, live Wikipedia): a summary of a pasted article (sentences a
 Austen" (-1.2), a haiku and "17 times 23 is 391" all read nothing flagged. The reader is a second model, read
 from its neurons and asked nothing; once a probe is trained on the 32B (`experiments/grounding_probe.py --model
 unsloth/Qwen3-32B-bnb-4bit --export ...`, a GPU run), the served model reads its own replies.
+
+## 120 everyday messages through the server (`results/mixed_eval_grounding_local.json`)
+
+Local, CPU: the 0.5B writing (so many answers are wrong), the 4B reading, live Wikipedia (no rerank), the 120
+mixed messages one at a time; no errors, median 19 s, 95th percentile 42 s.
+
+| kind (n) | the 0.5B right | wrong answers flagged | right answers flagged | wrong vs right, total |
+|---|---|---|---|---|
+| TriviaQA (20) | 35% | **1 of 13** | 1 of 7 | 0.66 |
+| Natural Questions (20) | 5% | 8 of 19 | 0 of 1 | 0.87 (one right answer) |
+| GSM8K (20) | 20% | 5 of 16 | 1 of 4 | 0.52 |
+| how-to (15) | | 10 of 15 flagged (mostly not grounded) | | |
+| code (15) | | 4 of 15 flagged | | |
+| creative (15) | | 7 of 15 not grounded | | |
+| advice and chat (15) | | 5 of 15 flagged | | |
+
+Closed-book errors mostly pass: the probe was strong on RAGTruth (0.82) with the right documents in context,
+but a quick Wikipedia lookup for a trivia question often misses the deciding fact, and a wrong answer that
+nothing in the evidence addresses is not marked. Reasoning errors in word problems are barely separated. For
+how-to, creative and advice replies "not grounded" is often the plain truth: Wikipedia does not hold a pep talk.
+Next: better evidence (the cross-encoder rerank, off in this run), and the reader's own belief in each sentence
+without the evidence (already computed for the shift; on its own it marked the 4B's closed-book errors at 0.78).
