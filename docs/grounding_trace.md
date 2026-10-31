@@ -217,3 +217,11 @@ nothing in the evidence addresses is not marked. Reasoning errors in word proble
 how-to, creative and advice replies "not grounded" is often the plain truth: Wikipedia does not hold a pep talk.
 Next: better evidence (the cross-encoder rerank, off in this run), and the reader's own belief in each sentence
 without the evidence (already computed for the shift; on its own it marked the 4B's closed-book errors at 0.78).
+
+With the cross-encoder rerank (`results/mixed_eval_grounding_local_rerank.json`, the 60 graded messages again):
+TriviaQA wrong answers flagged 2 of 14 (AUROC 0.48, from 0.66), GSM8K 7 of 15 (0.74, from 0.52), NQ 7 of 19
+(0.95, one right answer). The 0.5B's answers moved too (TriviaQA 35% to 30% right), and at 20 questions a kind
+these swings are mostly noise. What holds either way: closed-book trivia errors mostly pass. A second model's
+belief in the answer does not rescue them (0.46 on TriviaQA, `mixed_eval` rows re-read by the 4B). The check is
+strong where the evidence holds the deciding fact (RAGTruth 0.82, pasted text, arithmetic) and weak where a
+quick lookup does not find it.
