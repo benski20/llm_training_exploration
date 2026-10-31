@@ -75,10 +75,13 @@ def main():
     ap.add_argument("--items", default="results/mixed_eval_items.json")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, help="first n of each kind (smoke test)")
+    ap.add_argument("--kinds", nargs="+", help="only these kinds (e.g. factual open_question math)")
     ap.add_argument("--out", default="mixed.json")
     a = ap.parse_args()
     from vt.client import chat
     items = json.load(open(a.items))
+    if a.kinds:
+        items = [x for x in items if x["kind"] in a.kinds]
     if a.limit:
         seen = Counter()
         items = [x for x in items if (seen.update([x["kind"]]) or seen[x["kind"]] <= a.limit)]
