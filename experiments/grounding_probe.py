@@ -57,7 +57,18 @@ def corrupt(s, rng, names):
     return None
 
 
-def synthetic(n, seed=0):
+LEADS = ("", "", "According to the text, ", "The passage says that ", "It notes that ", "In short, ", "Notably, ")
+
+
+def phrase(s, rng):
+    """The sentence worded like part of an answer: a lead-in, its parentheses dropped, its first letter lowered
+    after a lead-in. Applied alike to every kind, so the form says nothing about the label."""
+    s = re.sub(r"\s*\([^()]*\)", "", s).strip()
+    lead = rng.choice(LEADS)
+    return lead + (s[0].lower() + s[1:] if lead and s[:1].isupper() and not s[:2].isupper() else s)
+
+
+def synthetic(n, seed=0, phrasing=False):
     from datasets import load_dataset
     rng = random.Random(seed)
     ctxs = [r["context"] for r in load_dataset("databricks/databricks-dolly-15k")["train"]
@@ -80,7 +91,7 @@ def synthetic(n, seed=0):
             if len(ss) < 3:
                 continue
             c = c.replace(s, " ").strip()
-        out.append({"context": c, "reply": s, "kind": kind, "y": int(kind != "grounded")})
+        out.append({"context": c, "reply": phrase(s, rng) if phrasing else s, "kind": kind, "y": int(kind != "grounded")})
         if len(out) >= n:
             break
     return out
@@ -110,6 +121,44 @@ class Reader:
         return np.concatenate([self.acts[i][a:b].mean(0).cpu().numpy() for i in self.layers]).astype(np.float32)
 
 
+def ragtruth_features(model, tok, reader, n, max_chars, t0):
+    """Each sentence of RAGTruth test answers: its mean MLP activations (context in view), its mean evidence
+    shift and its largest disagreement, its label; read before the other passes (no copy of the activations)."""
+    from datasets import load_dataset
+
+    from evidence_shift import disagreement, token_logprobs
+    ds = load_dataset("wandb/RAGTruth-processed", split="test").shuffle(seed=0)
+    bad, good = [r for r in ds if spans(r)], [r for r in ds if not spans(r)]
+    rows = bad[:n // 2] + good[:n - n // 2]
+    Xt, yt, kt, resp, ev = [], [], [], [], []
+    for i, r in enumerate(rows):
+        out = r["output"]
+        pre = prefix(tok, f"{r['query']}\n\n{r['context'][:max_chars]}")
+        enc = tok(out, add_special_tokens=False, return_offsets_mapping=True)
+        reader.run(pre + enc.input_ids)
+        sp, here = spans(r), []
+        for s, e in sentences(out):
+            js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
+            if not js:
+                continue
+            kinds = [k for a_, b_, k in sp if s < b_ and a_ < e]
+            Xt.append(reader.mean(len(pre) + js[0], len(pre) + js[-1] + 1))
+            yt.append(int(bool(kinds)))
+            kt.append(kinds[0] if kinds else "")
+            resp.append(i)
+            here.append(js)
+        reader.acts = {}
+        lw, dw = token_logprobs(model, tok, pre, enc.input_ids)
+        lo, do = token_logprobs(model, tok, prefix(tok, r["query"]), enc.input_ids)
+        dis, shift = disagreement(dw, do, enc.input_ids), lw - lo
+        del dw, do
+        ev += [(float(shift[js].mean()), float(dis[js].max())) for js in here]
+        if (i + 1) % 50 == 0:
+            print(f"ragtruth {i + 1}/{len(rows)} {time.time() - t0:.0f}s", flush=True)
+    return (np.stack(Xt), np.array(yt), kt, np.array(resp), np.array(ev),
+            np.array([int(bool(spans(r))) for r in rows]))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B")
@@ -117,9 +166,11 @@ def main():
     ap.add_argument("--test", type=int, default=200)
     ap.add_argument("--max-context-chars", type=int, default=4000)
     ap.add_argument("--out", default="grounding_probe.json")
+    ap.add_argument("--test-cache", help="save / reuse the RAGTruth side here (.npz; depends only on the model)")
+    ap.add_argument("--phrasing", action="store_true", help="give every constructed reply the wording of an "
+                    "answer (a lead-in, parentheses dropped), so copied text cannot be told by its form")
     a = ap.parse_args()
     import torch
-    from datasets import load_dataset
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -130,7 +181,7 @@ def main():
     reader = Reader(model)
     t0 = time.time()
 
-    syn = synthetic(a.train)
+    syn = synthetic(a.train, phrasing=a.phrasing)
     Xs, ys, ks = [], [], []
     for i, ex in enumerate(syn):
         pre = prefix(tok, "Answer from this text.\n\n" + ex["context"])
@@ -143,49 +194,30 @@ def main():
             print(f"synthetic {i + 1}/{len(syn)} {time.time() - t0:.0f}s", flush=True)
     Xs, ys = np.stack(Xs), np.array(ys)
 
-    ds = load_dataset("wandb/RAGTruth-processed", split="test").shuffle(seed=0)
-    bad, good = [r for r in ds if spans(r)], [r for r in ds if not spans(r)]
-    rows = bad[:a.test // 2] + good[:a.test - a.test // 2]
-    Xt, yt, kt, resp, ev = [], [], [], [], []
-    for i, r in enumerate(rows):
-        out = r["output"]
-        pre = prefix(tok, f"{r['query']}\n\n{r['context'][:a.max_context_chars]}")
-        enc = tok(out, add_special_tokens=False, return_offsets_mapping=True)
-        from evidence_shift import disagreement, token_logprobs
-        reader.run(pre + enc.input_ids)
-        acts = {i_: v.clone() for i_, v in reader.acts.items()}
-        lw, dw = token_logprobs(model, tok, pre, enc.input_ids)
-        lo, do = token_logprobs(model, tok, prefix(tok, r["query"]), enc.input_ids)
-        dis, shift = disagreement(dw, do, enc.input_ids), lw - lo
-        del dw, do
-        reader.acts = acts
-        sp = spans(r)
-        for s, e in sentences(out):
-            js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
-            if not js:
-                continue
-            kinds = [k for a_, b_, k in sp if s < b_ and a_ < e]
-            Xt.append(reader.mean(len(pre) + js[0], len(pre) + js[-1] + 1))
-            ev.append((float(shift[js].mean()), float(dis[js].max())))
-            yt.append(int(bool(kinds)))
-            kt.append(kinds[0] if kinds else "")
-            resp.append(i)
-        if (i + 1) % 50 == 0:
-            print(f"ragtruth {i + 1}/{len(rows)} {time.time() - t0:.0f}s", flush=True)
-    Xt, yt, resp, ev = np.stack(Xt), np.array(yt), np.array(resp), np.array(ev)
-    resp_y = np.array([int(bool(spans(r))) for r in rows])
+    if a.test_cache and os.path.exists(a.test_cache):           # the test side depends only on the model
+        z_ = np.load(a.test_cache, allow_pickle=True)
+        Xt, yt, kt, resp, ev, resp_y = (z_[k] for k in ("Xt", "yt", "kt", "resp", "ev", "resp_y"))
+        Xt, kt = Xt.astype(np.float32), list(kt)
+    else:
+        Xt, yt, kt, resp, ev, resp_y = ragtruth_features(model, tok, reader, a.test, a.max_context_chars, t0)
+        if a.test_cache:
+            np.savez(a.test_cache, Xt=Xt.astype(np.float16), yt=yt, kt=np.array(kt), resp=resp, ev=ev, resp_y=resp_y)
+    n_resp = len(resp_y)
 
     def report(score):
         sent = round(float(auroc(score, yt.astype(float))), 3)
-        per = np.array([score[resp == i].max() if (resp == i).any() else -1e9 for i in range(len(rows))])
+        per = np.array([score[resp == i].max() if (resp == i).any() else -1e9 for i in range(n_resp)])
+        zs = (score - score.mean()) / (score.std() + 1e-9)          # how much ungroundedness a reply holds in all
+        tot = np.array([np.clip(zs[resp == i], 0, None).sum() for i in range(n_resp)])
         conflict = (yt == 0) | np.array(["Conflict" in k for k in kt])
         baseless = (yt == 0) | np.array(["Baseless" in k for k in kt])
         return {"sentence": sent, "response": round(float(auroc(per, resp_y.astype(float))), 3),
+                "response_sum": round(float(auroc(tot, resp_y.astype(float))), 3),
                 "sentence_conflicts_only": round(float(auroc(score[conflict], yt[conflict].astype(float))), 3),
                 "sentence_baseless_only": round(float(auroc(score[baseless], yt[baseless].astype(float))), 3)}
 
     res = {"model": a.model, "layers_read": reader.layers, "synthetic": {"n": len(syn), "kinds": {k: ks.count(k) for k in set(ks)}},
-           "ragtruth": {"responses": len(rows), "sentences": len(yt), "hallucinated_sentences": int(yt.sum())}}
+           "ragtruth": {"responses": n_resp, "sentences": len(yt), "hallucinated_sentences": int(yt.sum())}}
     sc = StandardScaler().fit(Xs)
     cut = int(0.8 * len(ys))
     for C in (0.001, 0.01, 0.1):
