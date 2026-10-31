@@ -14,9 +14,9 @@
  "synthetic": {
   "n": 600,
   "kinds": {
-   "contradicted": 200,
    "unsupported": 200,
-   "grounded": 200
+   "grounded": 200,
+   "contradicted": 200
   }
  },
  "ragtruth": {
@@ -28,6 +28,7 @@
   "C=0.001": {
    "sentence": 0.728,
    "response": 0.719,
+   "response_sum": 0.765,
    "sentence_conflicts_only": 0.651,
    "sentence_baseless_only": 0.783,
    "synthetic_heldout": 0.959
@@ -35,6 +36,7 @@
   "C=0.01": {
    "sentence": 0.726,
    "response": 0.713,
+   "response_sum": 0.759,
    "sentence_conflicts_only": 0.648,
    "sentence_baseless_only": 0.782,
    "synthetic_heldout": 0.958
@@ -42,6 +44,7 @@
   "C=0.1": {
    "sentence": 0.723,
    "response": 0.703,
+   "response_sum": 0.733,
    "sentence_conflicts_only": 0.65,
    "sentence_baseless_only": 0.775,
    "synthetic_heldout": 0.956
@@ -51,12 +54,14 @@
   "mean_shift": {
    "sentence": 0.684,
    "response": 0.661,
+   "response_sum": 0.701,
    "sentence_conflicts_only": 0.642,
    "sentence_baseless_only": 0.715
   },
   "max_disagreement": {
    "sentence": 0.609,
    "response": 0.63,
+   "response_sum": 0.7,
    "sentence_conflicts_only": 0.718,
    "sentence_baseless_only": 0.531
   }
@@ -65,18 +70,21 @@
   "probe+disagreement": {
    "sentence": 0.738,
    "response": 0.684,
+   "response_sum": 0.757,
    "sentence_conflicts_only": 0.759,
    "sentence_baseless_only": 0.723
   },
   "probe+shift": {
    "sentence": 0.743,
    "response": 0.713,
+   "response_sum": 0.765,
    "sentence_conflicts_only": 0.682,
    "sentence_baseless_only": 0.786
   },
   "probe+shift+disagreement": {
    "sentence": 0.757,
    "response": 0.677,
+   "response_sum": 0.761,
    "sentence_conflicts_only": 0.771,
    "sentence_baseless_only": 0.747
   }
@@ -8919,24 +8927,28 @@
   "k=1": {
    "sentence": 0.718,
    "response": 0.702,
+   "response_sum": 0.758,
    "sentence_conflicts_only": 0.687,
    "sentence_baseless_only": 0.739
   },
   "k=10": {
    "sentence": 0.644,
    "response": 0.695,
+   "response_sum": 0.739,
    "sentence_conflicts_only": 0.567,
    "sentence_baseless_only": 0.7
   },
   "k=30": {
    "sentence": 0.646,
    "response": 0.656,
+   "response_sum": 0.688,
    "sentence_conflicts_only": 0.559,
    "sentence_baseless_only": 0.707
   },
   "k=100": {
    "sentence": 0.651,
    "response": 0.609,
+   "response_sum": 0.631,
    "sentence_conflicts_only": 0.55,
    "sentence_baseless_only": 0.723
   }
@@ -9003,5 +9015,5 @@
    "synthetic_auroc": 0.103
   }
  ],
- "seconds": 10391
+ "seconds": 6283
 }

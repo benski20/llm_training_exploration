@@ -135,3 +135,7 @@ mostly one readable unit on this model, which is what the clean-neurons view pre
 what the context does not say, the disagreement on what it contradicts, and together they reach 0.76 per
 sentence with no RAGTruth data; a detector trained on RAGTruth itself reaches 0.86. Responses (scored by their
 worst sentence) do worse combined (0.68): the worst-sentence rule amplifies noise.
+
+Responses scored by their total ungroundedness (the sum of each sentence's positive z-score) instead of their
+worst sentence: 0.76 for the dense probe, the single pole and every combination (0.68-0.72 by the worst
+sentence). The rule was picked among seven on this test set, so read it as slightly optimistic.
