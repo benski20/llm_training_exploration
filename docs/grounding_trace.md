@@ -85,3 +85,6 @@ probe trained on real labels does (and better than a dense probe on the same con
 is separated perfectly by single poles. But they are not the strongest signal: the model's plain confidence
 in its own answer beats every internal reading here. On RAGTruth, the evidence shift combined with confidence
 does not beat the shift alone (0.67-0.68 against 0.69).
+
+Together, confidence and the ten poles: TriviaQA 0.78, NQ 0.75 (confidence alone 0.78, 0.77). On this model
+the familiarity neurons carry the same information as the model's confidence, not more.

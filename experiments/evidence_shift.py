@@ -8,7 +8,8 @@ Evidence that supports a claim makes its words more likely (shift > 0), evidence
 much less likely (shift << 0), evidence that does not bear on it leaves them alone (shift ~ 0). Scored on
 RAGTruth's test set (answers written from documents, hallucinated spans labeled by people: "evident conflict"
 contradicts the documents, "baseless info" is not in them), at token, sentence and response level, next to the
-plain context-conditioned log-probability (no second pass). Reference points from this repo: the 32B's trained
+plain context-conditioned log-probability (no second pass), and a disagreement signal: where the evidence makes
+the model prefer a different token than the one written (and raised that token itself), by how much. Reference points from this repo: the 32B's trained
 risk head left-out-source RAGTruth sentence AUROC 0.58 (results/kaggle/risk-32b2), trained in-distribution
 detector response AUROC 0.86, provenance (document share) token AUROC 0.76 (VISION.md).
 
@@ -35,13 +36,26 @@ def spans(row):
 
 
 def token_logprobs(model, tok, prefix_ids, reply_ids):
-    """log p of each reply token given the prefix and the reply so far (one forward pass)."""
+    """log p of each reply token given the prefix and the reply so far (one forward pass), and the whole
+    distribution at each position."""
     import torch
     ids = torch.tensor([prefix_ids + reply_ids])
     with torch.no_grad():
         logits = model(input_ids=ids).logits[0, len(prefix_ids) - 1:-1].float()
     lp = torch.log_softmax(logits, -1)
-    return lp[torch.arange(len(reply_ids)), torch.tensor(reply_ids)].numpy()
+    return lp[torch.arange(len(reply_ids)), torch.tensor(reply_ids)].numpy(), lp
+
+
+def disagreement(lp_with, lp_without, reply_ids, min_boost=0.5):
+    """Where the evidence makes the model prefer another token: log p(evidence's favourite) - log p(written),
+    counted only where the evidence itself raised that favourite (by min_boost nats or more); 0 elsewhere."""
+    import torch
+    top = lp_with.argmax(-1)
+    rows = torch.arange(len(reply_ids))
+    written = torch.tensor(reply_ids)
+    gap = lp_with[rows, top] - lp_with[rows, written]
+    boost = lp_with[rows, top] - lp_without[rows, top]
+    return torch.where((top != written) & (boost >= min_boost), gap, torch.zeros_like(gap)).numpy()
 
 
 def prefix(tok, user):
@@ -89,9 +103,11 @@ def main():
         enc = tok(out, add_special_tokens=False, return_offsets_mapping=True)
         reply_ids, offs = enc.input_ids, enc.offset_mapping
         ctx = r["context"][:a.max_context_chars]
-        with_ev = token_logprobs(model, tok, prefix(tok, f"{r['query']}\n\n{ctx}"), reply_ids)
-        without = token_logprobs(model, tok, prefix(tok, r["query"]), reply_ids)
+        with_ev, dist_with = token_logprobs(model, tok, prefix(tok, f"{r['query']}\n\n{ctx}"), reply_ids)
+        without, dist_without = token_logprobs(model, tok, prefix(tok, r["query"]), reply_ids)
         shift = with_ev - without
+        dis = disagreement(dist_with, dist_without, reply_ids)
+        del dist_with, dist_without
         sp = spans(r)
 
         def label(s, e):
@@ -101,7 +117,7 @@ def main():
         for j, (s, e) in enumerate(offs):
             if content[j]:
                 y, kind = label(s, e)
-                tok_rows.append((y, kind, float(with_ev[j]), float(shift[j])))
+                tok_rows.append((y, kind, float(with_ev[j]), float(shift[j]), float(dis[j])))
         sent_scores = []
         for s, e in sentences(out):
             js = [j for j, (ts, te) in enumerate(offs) if content[j] and ts >= s and te <= e]
@@ -109,12 +125,13 @@ def main():
                 continue
             y, kind = label(s, e)
             lw, sh = with_ev[js], shift[js]
-            row = (y, kind, float(lw.min()), float(sh.min()), float(np.sort(sh)[:3].mean()), float(sh.mean()))
+            row = (y, kind, float(lw.min()), float(sh.min()), float(np.sort(sh)[:3].mean()), float(sh.mean()),
+                   float(dis[js].max()), float(dis[js].mean()))
             sent_rows.append(row)
             sent_scores.append(row)
         if sent_scores:
             resp_rows.append((int(bool(sp)), min(x[2] for x in sent_scores), min(x[3] for x in sent_scores),
-                              min(x[4] for x in sent_scores)))
+                              min(x[4] for x in sent_scores), max(x[6] for x in sent_scores)))
         if (i + 1) % 20 == 0:
             print(f"{i + 1}/{len(rows)} {time.time() - t0:.0f}s", flush=True)
 
@@ -125,14 +142,19 @@ def main():
     baseless = lambda r: r[0] == 0 or "Baseless" in r[1]               # noqa: E731
     res = {"model": a.model, "n_responses": len(resp_rows), "seconds": round(time.time() - t0),
            "token": {"n": len(tok_rows), "positives": sum(r[0] for r in tok_rows),
-                     "logprob_with_evidence": au(tok_rows, 2), "evidence_shift": au(tok_rows, 3)},
+                     "logprob_with_evidence": au(tok_rows, 2), "evidence_shift": au(tok_rows, 3),
+                     "disagreement": au(tok_rows, 4, sign=1)},
            "sentence": {"n": len(sent_rows), "positives": sum(r[0] for r in sent_rows),
                         "min_logprob_with_evidence": au(sent_rows, 2), "min_shift": au(sent_rows, 3),
                         "lowest3_shift": au(sent_rows, 4), "mean_shift": au(sent_rows, 5),
                         "min_shift_conflicts_only": au(sent_rows, 3, keep=conflict),
-                        "min_shift_baseless_only": au(sent_rows, 3, keep=baseless)},
+                        "min_shift_baseless_only": au(sent_rows, 3, keep=baseless),
+                        "max_disagreement": au(sent_rows, 6, sign=1), "mean_disagreement": au(sent_rows, 7, sign=1),
+                        "max_disagreement_conflicts_only": au(sent_rows, 6, sign=1, keep=conflict),
+                        "max_disagreement_baseless_only": au(sent_rows, 6, sign=1, keep=baseless)},
            "response": {"n": len(resp_rows), "min_logprob_with_evidence": au(resp_rows, 1),
-                        "min_shift": au(resp_rows, 2), "lowest3_shift": au(resp_rows, 3)}}
+                        "min_shift": au(resp_rows, 2), "lowest3_shift": au(resp_rows, 3),
+                        "max_disagreement": au(resp_rows, 4, sign=1)}}
     print(json.dumps(res, indent=1))
     json.dump(dict(res, sentence_rows=sent_rows), open(a.out, "w"))
 
