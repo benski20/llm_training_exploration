@@ -133,8 +133,7 @@ class VeriChat:
         self.retriever, self.retrieve_below = retriever, retrieve_below
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
         self.verifier = None                           # vt.claim_verify.ClaimVerifier: check claims against sources
-        self.router = None                             # vt.router.Router: information / math / code / chat
-        self.ledger = None                             # vt.ledger.Ledger: a verdict on every claim of every reply
+        self.ledger = None                             # vt.ledger.Ledger: a verdict on every statement of every reply
 
     @classmethod
     def load(cls, model_name, head_path, threshold=None, revision=None):
@@ -267,12 +266,11 @@ class VeriChat:
         result each. thinking (None: the bot's default) lets a reasoning model think first; its reasoning
         is returned apart from the reply and streamed to on_reasoning(i, delta). on_ready(i, reply) gets each
         reply as soon as it is final: replies that need no lookup do not wait for the batch's lookups."""
-        requests = self._route(requests)
         reqs = [{"messages": r["messages"], "documents": self._fit_documents(r.get("documents") or []),
                  "mode": r.get("mode", "hedge"),
                  "max_new_tokens": r.get("max_new_tokens", 192), "retrieve": r.get("retrieve", True),
                  "thinking": self.gen.thinking if r.get("thinking") is None else bool(r["thinking"]),
-                 **{k: r[k] for k in ("sampling", "think_sampling", "route", "grounded", "source_label") if r.get(k) is not None}}
+                 **{k: r[k] for k in ("sampling", "think_sampling") if r.get(k) is not None}}
                 for r in requests]
         if self.moderator is not None:                               # refuse flagged messages without generating
             from vt.moderation import REFUSAL
@@ -304,40 +302,6 @@ class VeriChat:
             return outs
         return self._reply_batch_unmoderated(reqs, on_text, on_reasoning, on_ready)
 
-    def _route(self, requests):
-        """Sort each message (vt.router) and ground information requests in one lookup made before answering:
-        the reply is then written from those passages, with provenance and citations, and checked against
-        them, instead of looked up claim by claim afterwards. Messages with documents of their own keep them."""
-        if self.router is None:
-            return requests
-        todo = [i for i, r in enumerate(requests) if not r.get("documents")]
-        routes = dict(zip(todo, self.router.route_batch([requests[i]["messages"] for i in todo]))) if todo else {}
-        out = []
-        for i, r in enumerate(requests):
-            r = dict(r)
-            if i in routes:
-                r["route"] = routes[i][0]
-                if r.get("mode", "hedge") == "hedge":           # routed replies are judged by sources or by
-                    r["mode"] = "flag"                          # arithmetic, never by in-line markers from a
-                                                                # probe trained on facts (it does not transfer)
-                if r["route"] == "text":                        # a task on pasted text: that text is the source
-                    q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
-                    r.update(documents=[q], grounded=True, source_label="your text", retrieve=False)
-                elif r["route"] != "information":               # nothing to look up for a poem, a sum or code
-                    r["retrieve"] = False
-                elif self.retriever is not None and r.get("retrieve", True):
-                    q = next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), "")
-                    try:
-                        passages = self.retriever(q)
-                    except Exception as e:                      # no sources: answered as before
-                        print(f"grounding lookup failed: {e!r}", flush=True)
-                        passages = []
-                    if passages:                                # judged by its sources
-                        r.update(documents=passages[:3], grounded=True)
-                    r["retrieve"] = False                       # one lookup per message, made here
-            out.append(r)
-        return out
-
     def _finish(self, o):
         """Screen a final reply (moderation) and return it."""
         if self.moderator is not None:                               # withhold flagged replies
@@ -349,29 +313,26 @@ class VeriChat:
         return o
 
     def _ledger(self, items):
-        """Every claim of several final replies checked the way that fits it (vt.ledger): items are
-        (reply, request, question). Facts are judged against the documents the reply was written from (the
-        user's text, the sources found first, the lookup after doubt), else looked up. The reply's verdict
-        comes from its ledger. A check that fails never fails the replies."""
+        """Every statement of several final replies judged at once (vt.ledger): items are (reply, request).
+        The evidence is the conversation, the user's documents, the passages a doubted reply was re-answered
+        from, exact re-computation of arithmetic and parses of code, and a search for what that leaves
+        unsettled. The reply's verdict comes from its ledger. A check that fails never fails the replies."""
         from vt.ledger import overall
-        todo, built = [(o, r, q) for o, r, q in items if not o.get("withheld")], []
-        if todo:
-            rows = []
-            for o, r, q in todo:
-                docs = r.get("documents") or (o.get("retrieval") or {}).get("passages") or None
-                label = r.get("source_label") or ("the sources found" if r.get("grounded") or not r.get("documents")
-                                                  else "your documents")
-                rows.append({"text": o["text"], "question": q, "documents": docs, "source_label": label,
-                             "calculation": r.get("route") == "math",
-                             **({"fact_threshold": 0.9} if r.get("route") == "chat" else {})})  # fiction: facts only
-            try:                                                           # when the typer is sure
-                built = self.ledger.build_batch(rows)
-            except Exception as e:                                         # the older checks instead
-                print(f"ledger failed: {e!r}", flush=True)
-                return self._verify([(o, None if r.get("grounded") else q) for o, r, q in items])
-        for (o, _, _), led in zip(todo, built):
+        todo = [(o, r) for o, r in items if not o.get("withheld")]
+        if not todo:
+            return
+        try:
+            built = self.ledger.build_batch([{"text": o["text"], "messages": r["messages"], "documents": r["documents"],
+                                              "found": (o.get("retrieval") or {}).get("passages") or ()}
+                                             for o, r in todo])
+        except Exception as e:
+            print(f"ledger failed: {e!r}", flush=True)
+            return
+        for (o, _), led in zip(todo, built):
             o["ledger"] = led
-            o["assessment"] = overall(led)
+            a = overall(led)
+            if a is not None:
+                o["assessment"] = a
 
     def _verify(self, items):
         """Check the claims of several final replies against sources at once (the verifier): items are
@@ -397,39 +358,9 @@ class VeriChat:
 
     def assess(self, o):
         """One verdict for a factual reply: the doubt of its first sourced claim mixed with the model's own,
-        or the model's own alone when no source was found; None for replies without claims (small talk). A
-        calculation that does not add up makes a reply likely wrong whatever else is said."""
-        wrong = [m for m in o.get("math_check") or [] if not m["ok"]]
-        if wrong and not o.get("withheld"):
-            return {"doubt": 1.0, "verdict": "likely wrong",
-                    "basis": f"arithmetic: {wrong[0]['expression']} is {wrong[0]['computed']:g}, not {wrong[0]['stated']:g}"}
-        broken = [c for c in o.get("code_check") or [] if not c["ok"]]
-        if broken and not o.get("withheld"):
-            return {"doubt": 1.0, "verdict": "likely wrong",
-                    "basis": f"its {broken[0]['language']} does not parse: {broken[0]['error']}"}
-        if o.get("route") in ("chat", "code"):
-            return None                                          # opinions, creative writing, code: no fact verdict
-        if o.get("route") == "math":                             # judged by its arithmetic only: the confidence
-            checked = o.get("math_check") or []                  # probe was trained on facts, not on calculations
-            return {"doubt": 0.0, "verdict": "likely right", "basis": f"arithmetic re-computed ({len(checked)} steps)"} \
-                if checked else None
-        if o.get("route") == "information" and not o.get("grounded") and not any(
-                c.get("p_supported") is not None for c in o.get("verification") or []):
-            return {"doubt": None, "verdict": "unverified", "basis": "no sources found for this question"}
-        if o.get("withheld") or not (o.get("claims") or o.get("grounded") and o.get("sentences")):
+        or the model's own alone when no source was found; None for replies without claims (small talk)."""
+        if o.get("withheld") or not o.get("claims"):
             return None
-        if o.get("grounded"):                                    # answered from sources: are its claims in them?
-            claims = o.get("claims") or []                       # (none marked: its sentences are still checked)
-            label = o.get("source_label", "the sources found")
-            sourced = [c for c in claims if c.get("source") == label]
-            doubted = [s for s in o.get("sentences") or [] if s.get("doubted")]
-            where = "your text" if label == "your text" else "the sources"
-            if len(sourced) == len(claims) and not doubted:
-                return {"doubt": 0.1, "verdict": "likely right", "basis": f"every claim is in {where}"}
-            missing = len(claims) - len(sourced)
-            basis = (f"{missing} of {len(claims)} claims are not in {where}" if missing else
-                     f"{len(doubted)} sentence(s) doubted against {where}")
-            return {"doubt": 0.5, "verdict": "uncertain", "basis": basis}
         score, _ = self.doubt_score(o)
         own = 1 - score if score is not None else 0.5
         judged = [c for c in o.get("verification") or [] if c.get("p_supported") is not None]
@@ -455,29 +386,11 @@ class VeriChat:
         def ask(r):
             return next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), None)
 
-        for r, o in zip(reqs, outs):
-            if r.get("route"):
-                o["route"] = r["route"]
-            if r.get("grounded"):
-                o["grounded"] = True                                 # written from sources fetched first
-                o["source_label"] = r.get("source_label", "the sources found")
-                if o["source_label"] == "the sources found":         # the user's own text is not shown back
-                    o["sources"] = r["documents"]
-                for c in o.get("claims") or []:
-                    if c.get("source") == "your documents":
-                        c["source"] = o["source_label"]
-            if r.get("route"):                                       # every routed reply: a calculation in a how-to
-                from vt.mathcheck import check_arithmetic            # or a misrouted sum is checked too (free)
-                o["math_check"] = check_arithmetic(o["text"].replace("[unsure:]", ""),
-                                                   explicit=r["route"] != "math")
-                from vt.codecheck import check_code                  # and its Python / JSON parsed, never run
-                o["code_check"] = check_code(o["text"])
-
         def deliver(ids):                                            # verified together, then sent
             if self.ledger is not None:
-                self._ledger([(outs[i], reqs[i], ask(reqs[i])) for i in ids])
+                self._ledger([(outs[i], reqs[i]) for i in ids])
             else:
-                self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])
+                self._verify([(outs[i], ask(reqs[i])) for i in ids])
             for i in ids:
                 send(i)
         doubted, final = [], []                                      # closed-book replies the model doubts

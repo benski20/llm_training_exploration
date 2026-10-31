@@ -1,12 +1,12 @@
-"""The routed chatbot on a mix of everyday requests, not just trivia: 120 messages across factual questions
+"""The chatbot on a mix of everyday requests, not just trivia: 120 messages across factual questions
 (TriviaQA), open questions (Natural Questions), math word problems (GSM8K), how-to, code, creative writing and
 advice / small talk (results/mixed_eval_items.json). Sent to a running server through vt.client (streamed,
 a silent request sent again once) and scored per kind:
 
-    routing      share sent the way each kind should go, and the confusion
     factual,     answer correctness (reference answers), and whether the verdict tells right from wrong:
     open, math   caught = wrong answers called likely wrong; false alarms = right ones called likely wrong
-    the rest     false alarms (any "likely wrong" verdict), [unsure:] markers left in, grounding of how-to
+    the rest     false alarms (any "likely wrong" verdict), and what the ledger made of their statements
+    every kind   verdicts, statements judged and how (vt/ledger.py: one judge for every reply, no routing)
     serving      errors, retried requests, seconds
 
     python experiments/mixed_eval.py --url https://<...>.modal.run --workers 4 --out mixed.json
@@ -38,14 +38,12 @@ def score(rows):
     secs = sorted(r["seconds"] for r in ok)
     out["seconds_median"] = secs[len(secs) // 2] if secs else None
     out["seconds_p95"] = secs[int(0.95 * (len(secs) - 1))] if secs else None
-    out["routing"] = {"accuracy": round(sum(r["route"] == r["expect"] for r in ok) / max(1, len(ok)), 3)}
     for kind in sorted({r["kind"] for r in ok}):
         sub = [r for r in ok if r["kind"] == kind]
-        k = {"n": len(sub), "routed_as": dict(Counter(r["route"] for r in sub)),
-             "routing_accuracy": round(sum(r["route"] == r["expect"] for r in sub) / len(sub), 3),
-             "verdicts": dict(Counter((r.get("assessment") or {}).get("verdict", "none") for r in sub)),
-             "markers_left": sum("[unsure" in r["text"] for r in sub),
-             "grounded": sum(bool(r.get("grounded")) for r in sub)}
+        k = {"n": len(sub), "verdicts": dict(Counter((r.get("assessment") or {}).get("verdict", "none") for r in sub)),
+             "statements": dict(Counter(u["verdict"] for r in sub for u in r.get("ledger") or [])),
+             "looked_up": sum(bool(u.get("sources")) for r in sub for u in r.get("ledger") or []),
+             "markers_left": sum("[unsure" in r["text"] for r in sub)}
         judged = [r for r in sub if r.get("right") is not None]
         if judged:
             right = [r for r in judged if r["right"]]
@@ -84,9 +82,8 @@ def main():
             t = time.time()
             try:
                 r = chat(a.url, [{"role": "user", "content": x["q"]}], max_new_tokens=384)
-                row = {"i": i, "kind": x["kind"], "expect": x["expect"], "q": x["q"][:200], "route": r.get("route"),
-                       "grounded": r.get("grounded", False), "assessment": r.get("assessment"),
-                       "math_check": r.get("math_check"), "text": r.get("text", "")[:1200],
+                row = {"i": i, "kind": x["kind"], "q": x["q"][:200], "assessment": r.get("assessment"),
+                       "ledger": r.get("ledger"), "text": r.get("text", "")[:1200],
                        "attempts": r.get("_attempts"), "seconds": round(time.time() - t, 1)}
                 if "aliases" in x:
                     row["right"] = is_right(row["text"], x["aliases"])
@@ -94,11 +91,11 @@ def main():
                     n = last_number(row["text"])
                     row["right"] = n is not None and abs(n - x["answer"]) < 1e-6 * max(1, abs(x["answer"])) + 1e-6
             except Exception as e:                              # lost after the retry, or a server error
-                row = {"i": i, "kind": x["kind"], "expect": x["expect"], "q": x["q"][:200], "route": None,
+                row = {"i": i, "kind": x["kind"], "q": x["q"][:200],
                        "error": repr(e)[:200], "seconds": round(time.time() - t, 1), "text": ""}
             with lock:
                 rows.append(row)
-                print(json.dumps({k: row.get(k) for k in ("i", "kind", "route", "seconds", "error")}), flush=True)
+                print(json.dumps({k: row.get(k) for k in ("i", "kind", "seconds", "error")}), flush=True)
 
     ts = [threading.Thread(target=worker) for _ in range(a.workers)]
     for t in ts:

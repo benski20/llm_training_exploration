@@ -33,14 +33,13 @@ RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per 
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
+LEDGER = os.environ.get("VERICHAT_LEDGER", "1") == "1"            # a verdict on every statement of every reply
 # web_server by default: through it a streamed reply arrives as written (deploy/stream_probe.py: a ping every 10 s);
 # through asgi_app not even its status line came back within 90 s, so long replies looked dead to clients and were
 # sent again (13 of 200 live requests). 1 serves in-process instead.
 ASGI = os.environ.get("VERICHAT_ASGI", "0") == "1"
 SEARCH = os.environ.get("VERICHAT_SEARCH", "")                    # web search too: "brave" or "tavily" ("" off)
 SEARCH_KEY = os.environ.get("VERICHAT_SEARCH_KEY")                # its API key: never in the repo or the image
-LEDGER = os.environ.get("VERICHAT_LEDGER", "1") == "1"            # a verdict on every claim of every reply
-ROUTE = os.environ.get("VERICHAT_ROUTE", "1") == "1"              # sort messages: information / math / code / chat
 RERANK = os.environ.get("VERICHAT_RERANK", "cross-encoder/ms-marco-MiniLM-L-6-v2")  # reorders lookup passages; "" off
 PORT = 8000
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -57,8 +56,8 @@ image = (
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
                              "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0",
-                             "VERICHAT_SEARCH": SEARCH, "VERICHAT_ROUTE": "1" if ROUTE else "0",
-                             "VERICHAT_LEDGER": "1" if LEDGER else "0"}.items() if v is not None})
+                             "VERICHAT_SEARCH": SEARCH, "VERICHAT_LEDGER": "1" if LEDGER else "0"}.items()
+               if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
     .add_local_file(os.path.join(ROOT, os.path.splitext(HEAD)[0] + ".serving.json"), "/app/heads/risk_head.serving.json")
@@ -208,9 +207,8 @@ def server_args():
             + (["--wikipedia"] if WIKIPEDIA else [])
             + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
             + (["--web-search", SEARCH] if SEARCH else [])
-            + (["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
-            + (["--route"] if ROUTE else [])
-            + (["--ledger"] if LEDGER else [])
+            + (["--ledger"] if LEDGER else
+               ["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
             + (["--revision", REVISION] if REVISION else []))
 
 

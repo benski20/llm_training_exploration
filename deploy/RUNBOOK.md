@@ -53,7 +53,6 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
 | `VERICHAT_VERIFY` | `1` | check each reply's claims against Wikipedia, judged by the chat model (0: off) |
-| `VERICHAT_ROUTE` | `1` | sort each message (information / math / code / chat): information answered from one lookup and judged by its sources, math by re-computed arithmetic, code and chat get no fact verdict (0: off) |
 | `VERICHAT_SEARCH` | "" | also search the web: `brave` or `tavily` (needs a key, below) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |
@@ -298,57 +297,27 @@ grading and 37% by string match.
 - Bulk lookups from Modal trip Wikipedia's limits even when paced. Demo traffic is far lighter, but a
   search API with a key (`--web-search`) is the robust source for production.
 
-## Routing (any message, not just questions)
+## A verdict on every statement of every reply (`--ledger`, on in the deploy)
 
-`--route` (on in the deploy) sorts each message before answering, and each kind gets the check that fits it:
-
-| kind | check | cost |
-|---|---|---|
-| information | one search before answering; the reply is written from it and judged by whether its claims are in it | one lookup |
-| text (a task on pasted text) | the user's own text is the source: the reply is checked against it | nothing extra |
-| math | the arithmetic in the reply is re-computed exactly (every routed reply's explicit `=` equations too) | nothing |
-| code | its Python and JSON parsed (never run): a block that does not parse makes it likely wrong | nothing |
-| chat | no fact verdict, no markers | nothing |
-
-The sorter is a small sentence embedding (bge-small, CPU, 2-8 ms a message) and a softmax layer trained on
-human-written prompts from permissively licensed sets (Dolly, GSM8K, MATH, MBPP, glaive code questions;
-`experiments/train_router.py`, 7 KB in `vt/router_head.npz`), after a few unambiguous rules (code, poems,
-pasted text). It picks the kind that costs least in expectation (`vt.router.COSTS`): a factual question sent
-anywhere but a search goes out unchecked, the dearest mistake. Held out (`results/router_eval_cost.json`):
-
-| set | messages | sorted as labeled | sorted harmlessly | factual questions recognised | left unchecked |
-|---|---|---|---|---|---|
-| mixed (TriviaQA, NQ, GSM8K, how-to, code, creative, advice) | 120 | 94% | 95% | 95% | 2 |
-| written apart from the rules, casual wording | 80 | 76% | 94% | 93% | 2 |
-| no_robots test, human categories (never trained on) | 500 | 79% (86%*) | 80% | 95% | 3 |
-
-"Harmlessly" also counts code or math questions answered from a search. *Counting the 29 rewrites of pasted
-text (no_robots files them under Rewrite) that go to "text", where they are checked against the original.
-Pasted text is found by its shape too (a short instruction, a blank line, a body of 40+ words): 96% of the
-tasks on pasted text, none of the other 200 messages. `python experiments/router_eval.py` reproduces the table. Weak spot: casual sums ("15% tip on $48") go to a
-search 45% of the time (their arithmetic is still re-computed). The chat model's own choice (`--route model`, one
-forward pass) sorted 76% of the 80 at 0.5B and sent most chat to a search; at 32B it is unmeasured.
-
-## A verdict on every claim (`--ledger`, on in the deploy)
-
-Routing decides how a reply is written; the ledger decides what of it is true. Every reply, whatever was
-asked, is cut into units (code blocks, then sentences) and each unit is sorted and checked
+One way for every query, nothing sorted first: each sentence and code block of every reply is put to the
+same judge (the chat model already loaded) with the same question, given all the evidence there is
 (`vt/ledger.py`):
 
-| unit | check | verdicts |
-|---|---|---|
-| code | parsed, never run | parses (not run), does not parse, not checked (other languages) |
-| arithmetic | re-computed exactly ("17 times 23 is 391" too, in answers to calculations) | correct, wrong |
-| fact | judged three-way by the chat model against the documents the reply was written from (the user's text, the sources found first), else a lookup of its own (at most 4 a reply, 12 facts) | supported, contradicted, not in the sources, no evidence, not checked |
-| anything else | opinion, advice, fiction, greetings | not a factual claim |
+- the conversation: what the user said and gave (a pasted article, documents), and passages a doubted
+  reply was re-answered from;
+- exact checks: arithmetic the statement states, re-computed (`vt/mathcheck.py`); code, parsed, never run
+  (`vt/codecheck.py`). Tools only add evidence; the judge decides what it means;
+- a search, only for what that leaves unsettled, then judged once more (at most 3 lookups a reply).
 
-Which sentences are facts is decided by a classifier on CPU (bge-small and a layer trained on ClaimBuster's
-human labels plus factual vs creative Dolly answers; `experiments/train_claim_type.py`, 4 KB in
-`vt/claim_type_head.npz`). On 120 chatbot-reply sentences labeled by hand and never trained on, it finds 95%
-of the facts and takes 15% of the rest for facts (AUROC 0.97); the old rule (a number or a capitalised word)
-found 53% (AUROC 0.72). On held-out ClaimBuster debate sentences: AUROC 0.89. In replies to creative
-requests a sentence must score 0.9 to count as a fact, and only evidence that contradicts a claim counts
-against it, so a line of a poem is never "wrong" for not being in Wikipedia; a wrong date inside a poem is.
+Does the evidence A) support it, B) contradict it, C) not settle it, or is it D) not a statement of fact (an
+opinion, a suggestion, a question, a greeting, fiction)? The verdicts: supported, contradicted, unverified,
+not a factual claim. One forward pass per statement (no generation); a poem's lines come back D and are never
+looked up, a wrong date inside one is looked up and contradicted, "17 x 23 = 401" is contradicted by its own
+re-computation, and a summary is checked against the text it summarizes.
+
+The reply's verdict comes from its ledger: anything contradicted makes it likely wrong; every factual
+statement supported likely right; some unsettled uncertain (unverified when none is supported); no factual
+statement says so. The page lists every statement judged and why.
 
 What the fact verdicts mean on the served 32B (its three-way judge on the first claim of 600 graded TriviaQA
 and NQ answers, `results/study_32b_v3_threeway.json`, claims with evidence found): "supported" was given to
@@ -357,13 +326,7 @@ and NQ answers, `results/study_32b_v3_threeway.json`, claims with evidence found
 55-61% of claims found no evidence at all, mostly Wikipedia refusing paced bulk lookups; a search key fixes
 that in production.
 
-The reply's verdict comes from its ledger: anything contradicted, miscalculated or unparseable makes it
-likely wrong; every fact supported likely right; facts unconfirmed uncertain (some supported) or unverified
-(none); no factual claims says so. Cost: the classifier on CPU, one forward pass per fact (no generation),
-and lookups only for facts the reply's own documents do not cover. A local run (0.5B, Wikipedia): a summary
-of a pasted article had all 3 claims supported by the user's text; a 16-line poem read "no factual claims";
-code "parses (not run)"; the 0.5B judge found the Eiffel Tower answer "unclear" against its Wikipedia pages
-(the judge is the served model: the 32B's judging is measured in the study above, the ledger live is not).
+Offline, on a small model as a lower bound: `experiments/judge_eval.py` (CPU, no spend).
 
 ## Clients
 

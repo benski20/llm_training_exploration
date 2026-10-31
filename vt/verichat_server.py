@@ -96,20 +96,14 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'. ':'')+
-  'mode '+r.mode+(r.route?' · '+esc(r.route):'')+'</div>'+routeInfo(r)+assess(r.assessment)+(r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
-function routeInfo(r){let h='';
- if(r.grounded&&r.sources&&r.sources.length)h+='<div class="meta">Answered from: '+esc(r.sources.map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'</div>';
- if(r.grounded&&r.source_label==='your text')h+='<div class="meta">Checked against the text you gave</div>';
- if(r.code_check&&r.code_check.length)h+='<div class="meta">Code parsed (not run): '+r.code_check.map(c=>esc(c.language)+(c.ok?' ✓':' ✗ ('+esc(c.error)+')')).join('; ')+'</div>';
- if(r.math_check&&r.math_check.length)h+='<div class="meta">Arithmetic re-computed: '+r.math_check.map(m=>esc(m.expression)+(m.ok?' ✓':' ✗ (is '+m.computed+', not '+m.stated+')')).join('; ')+'</div>';
- return h}
+  'mode '+r.mode+'</div>'+assess(r.assessment)+(r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
 function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a','no factual claims':'#57606a'}[a.verdict]||'';
  return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
-function ledger(l){if(!l||!l.length)return '';const sym={'supported':'✓','correct':'✓','parses (not run)':'✓','contradicted':'✗','wrong':'✗','does not parse':'✗'};
- const shown=l.filter(u=>u.type!=='not a claim'),rest=l.length-shown.length;
- return '<div class="claims"><div class="meta">Every claim, checked:</div>'+shown.map(u=>'<div>'+(sym[u.verdict]||'–')+' <b>'+esc(u.verdict)+'</b> <span class="meta">('+esc(u.type)+')</span>: '+esc(u.claim.slice(0,160))+
-  (u.basis?' <span class="meta">('+esc(u.basis)+')</span>':'')+(u.sources&&u.sources.length?' <span class="meta">('+esc(u.sources.join('; '))+')</span>':'')+'</div>').join('')+
-  (rest?'<div class="meta">'+rest+' sentence(s): not a factual claim (opinion, advice, wording)</div>':'')+'</div>'}
+function ledger(l){if(!l||!l.length)return '';const sym={'supported':'✓','contradicted':'✗','unverified':'?'};
+ const shown=l.filter(u=>u.verdict!=='not a factual claim'),rest=l.length-shown.length;
+ return '<div class="claims"><div class="meta">Every statement, checked:</div>'+shown.map(u=>'<div>'+sym[u.verdict]+' <b>'+esc(u.verdict)+'</b>: '+esc(u.claim.slice(0,160))+
+  (u.evidence?' <span class="meta">('+esc(u.evidence.join(' '))+')</span>':'')+(u.sources&&u.sources.length?' <span class="meta">('+esc(u.sources.join('; '))+')</span>':'')+'</div>').join('')+
+  (rest?'<div class="meta">'+rest+' sentence(s): not a statement of fact (opinion, advice, wording, fiction)</div>':'')+'</div>'}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
  return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
@@ -507,13 +501,9 @@ def build(argv=None, host=None, port=None):
                                      "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--web-search", choices=["brave", "tavily"], help="also search the web (the API key in the "
                                                                     "VERICHAT_SEARCH_KEY environment variable)")
-    ap.add_argument("--route", nargs="?", const="text", choices=["text", "model"],
-                    help="sort messages (information / math / code / chat / pasted text): answer information from one "
-                         "lookup made first, re-compute math, check tasks on pasted text against it. text (default): "
-                         "a small embedding classifier on CPU (vt/router_head.npz); model: the chat model's own choice")
-    ap.add_argument("--ledger", action="store_true", help="a verdict on every claim of every reply: each sentence and "
-                    "code block sorted (fact, arithmetic, code, not a claim) and checked the way that fits it "
-                    "(vt/ledger.py); facts judged against the reply's documents or looked up")
+    ap.add_argument("--ledger", action="store_true", help="a verdict on every statement of every reply: each is "
+                    "judged by the chat model against the conversation, exact checks of its arithmetic and code, and a "
+                    "lookup for what those leave unsettled (vt/ledger.py; replaces --verify-claims)")
     ap.add_argument("--verify-claims", action="store_true", help="check each reply's claims against Wikipedia, "
                                                                 "judged by the chat model (needs --wikipedia)")
     ap.add_argument("--wikipedia-leads", action="store_true", help="use only each page's lead section, not the best "
@@ -569,16 +559,8 @@ def build(argv=None, host=None, port=None):
             bot.verifier = ClaimVerifier(bot.model, bot.tok, bot.retriever)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
     if a.ledger:
-        from .claim_verify import ClaimVerifier
-        from .ledger import ClaimTyper, Ledger
-        judge = bot.verifier or ClaimVerifier(bot.model, bot.tok, bot.retriever)
-        bot.ledger = Ledger(ClaimTyper(), judge, bot.retriever)
-    if a.route == "model":
-        from .router import Router
-        bot.router = Router(bot.model, bot.tok)
-    elif a.route:
-        from .router import TextRouter
-        bot.router = TextRouter()
+        from .ledger import Ledger
+        bot.ledger = Ledger(bot.model, bot.tok, bot.retriever)
     det = None
     if a.detector:
         import torch

@@ -601,62 +601,7 @@ def test_assessment_mixes_the_source_check_with_the_models_own_doubt():
     assert a(bot, {"claims": []}) is None                       # small talk: no verdict
 
 
-def test_routing_grounds_information_and_rechecks_math():
-    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-    torch.manual_seed(0)
-    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-                                     num_attention_heads=4, num_key_value_heads=2)).eval()
-    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
-    bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
-    looked = []
-
-    class FakeRouter:
-        def route_batch(self, convs):
-            kinds = {"Who built it?": "information", "What is 17 * 23?": "math", "Write a poem.": "chat"}
-            return [(kinds[c[-1]["content"]], {}) for c in convs]
-    bot.router = FakeRouter()
-    bot.retriever = lambda q: looked.append(q) or ["Eiffel Tower (Wikipedia): Gustave Eiffel's company built it in 1889."]
-    outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8}
-                            for q in ("Who built it?", "What is 17 * 23?", "Write a poem.")])
-    info, math, chat = outs
-    assert looked == ["Who built it?"]                           # one lookup, before answering, information only
-    assert info["route"] == "information" and info["grounded"] and info["sources"][0].startswith("Eiffel")
-    assert info["mode"] == "flag"                                # judged by its sources, no hedge markers
-    assert math["route"] == "math" and isinstance(math["math_check"], list) and not math.get("grounded")
-    assert chat["route"] == "chat" and chat.get("assessment") is None and chat["mode"] == "flag"   # no markers in a poem
-    wrong = {"claims": [], "math_check": [{"expression": "17 * 23", "stated": 401.0, "computed": 391.0, "ok": False}]}
-    assert VeriChat.assess(bot, wrong)["verdict"] == "likely wrong"
-    right = {"claims": [], "route": "math", "math_check": [{"expression": "17 * 23", "stated": 391.0, "computed": 391.0, "ok": True}]}
-    assert VeriChat.assess(bot, right)["verdict"] == "likely right"
-    sourced = {"grounded": True, "claims": [{"text": "Gustave Eiffel", "source": "the sources found", "score": 0.4}]}
-    assert VeriChat.assess(bot, sourced)["basis"] == "every claim is in the sources"
-    memory = {"grounded": True, "claims": [{"text": "Le Corbusier", "source": "the model's memory", "score": 0.9}]}
-    assert VeriChat.assess(bot, memory)["verdict"] == "uncertain"
-    unsourced = {"route": "information", "claims": [{"text": "x", "score": 0.1}]}
-    assert VeriChat.assess(bot, unsourced)["verdict"] == "unverified"       # never a guess from the fact probe
-    yours = {"grounded": True, "source_label": "your text",
-             "claims": [{"text": "1889", "source": "your text", "score": 0.4}]}
-    assert VeriChat.assess(bot, yours)["basis"] == "every claim is in your text"
-    broken = {"route": "code", "claims": [], "code_check": [{"language": "python", "ok": False, "error": "x (line 2)"}]}
-    assert VeriChat.assess(bot, broken)["verdict"] == "likely wrong"
-    assert VeriChat.assess(bot, dict(broken, code_check=[{"language": "python", "ok": True}])) is None
-    plain = {"grounded": True, "source_label": "your text", "claims": [], "sentences": [{"text": "It closed.", "doubted": False}]}
-    assert VeriChat.assess(bot, plain)["verdict"] == "likely right"         # no claim spans: its sentences decide
-    off = dict(plain, sentences=[{"text": "It closes in October.", "doubted": True}])
-    assert VeriChat.assess(bot, off)["basis"] == "1 sentence(s) doubted against your text"
-
-    class TextRouter:
-        def route_batch(self, convs):
-            return [("text", {}) for _ in convs]
-    bot.router, looked[:] = TextRouter(), []
-    note = "Summarize the text below.\n\nThe Eiffel Tower was built in 1889 by Gustave Eiffel's company."
-    out = bot.reply_batch([{"messages": [{"role": "user", "content": note}], "max_new_tokens": 8}])[0]
-    assert looked == [] and out["route"] == "text" and out["grounded"]   # no search: the pasted text is the source
-    assert out["source_label"] == "your text" and "sources" not in out      # not shown back to the user
-
-
-def test_ledger_gives_every_reply_a_verdict():
-    from vt.ledger import Ledger
+def test_ledger_judges_every_reply():
     tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
     torch.manual_seed(0)
     m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
@@ -664,24 +609,15 @@ def test_ledger_gives_every_reply_a_verdict():
     p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
     bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
 
-    class Typer:
-        def p_fact(self, texts):
-            return np.full(len(texts), 0.9)
-
-    class Judge:
-        supported = 0.6
-
-        def judge3(self, items):
-            self.seen = items
-            return [(0.1, 0.1, 0.8) for _ in items]
-    judge = Judge()
-    bot.ledger = Ledger(Typer(), judge, retriever=lambda q: ["Some page: some text."])
+    class Ledger:
+        def build_batch(self, items):
+            self.items = items
+            return [[{"claim": it["text"][:20], "verdict": "contradicted", "p": {"contradicted": 0.9}}] for it in items]
+    bot.ledger = Ledger()
     outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8, "retrieve": False}
-                            for q in ("Who built it?", "Write a poem.")])
-    for o in outs:                                               # whatever was asked: a ledger and a verdict
-        assert "ledger" in o and o["assessment"]["verdict"] in ("unverified", "no factual claims", "uncertain",
-                                                                "likely right", "likely wrong")
-    docs = bot.reply_batch([{"messages": [{"role": "user", "content": "Summarize."}], "max_new_tokens": 8,
-                             "documents": ["The tower opened in 1889."]}])[0]
-    if docs["ledger"] and any(u["type"] == "fact" for u in docs["ledger"]):
-        assert judge.seen[0][2] == ["The tower opened in 1889."]   # judged against the documents, not a lookup
+                            for q in ("Who built it?", "Write a poem.")]
+                           + [{"messages": [{"role": "user", "content": "Summarize."}], "max_new_tokens": 8,
+                               "documents": ["The tower opened in 1889."]}])
+    assert all(o["ledger"] and o["assessment"]["verdict"] == "likely wrong" for o in outs)   # one way for all
+    assert [it["documents"] for it in bot.ledger.items][2] == ["The tower opened in 1889."]
+    assert bot.ledger.items[0]["messages"][-1]["content"] == "Who built it?"

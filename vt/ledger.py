@@ -1,195 +1,176 @@
-"""A verdict on every claim of every reply, whatever the message was: the reply is cut into units (code
-blocks, then sentences), each unit is sorted by what kind of claim it is, and each is checked the way that
-fits it:
+"""A verdict on every claim of every reply, one way for every query: each sentence (and code block) of the
+reply is put to the same judge, the chat model already loaded, with the same question and all the evidence
+there is:
 
-    code          parsed, never run (vt.codecheck)                     parses (not run) | does not parse
-    arithmetic    re-computed exactly (vt.mathcheck)                   correct | wrong
-    fact          judged against evidence by the chat model (three-way: supports / contradicts / does not say):
-                  the documents the reply was written from (the user's text, sources found first), else a
-                  lookup of its own (at most max_lookups a reply)     supported | contradicted | not in the
-                                                                       sources | no evidence | not checked
-    not a claim   an opinion, a suggestion, a question, fiction, a greeting: nothing to be true or false
-                                                                       not a factual claim
+    the conversation       what the user said and gave (a pasted article, documents): checked against first
+    exact checks           any arithmetic the sentence states, re-computed (vt.mathcheck); any code, parsed
+                           (vt.codecheck). Tools only add evidence; the judge decides what it means.
+    a search               only for what the first pass leaves unsettled, then judged once more
 
-Which sentences are facts is decided by a small classifier (ClaimTyper: a sentence embedding and a layer
-trained on ClaimBuster's human labels and on factual vs creative answers, experiments/train_claim_type.py),
-so this works on any reply: a wrong date inside a poem is still a fact, "I hope this helps" never is. Only
-evidence that contradicts a claim counts against it: a line of fiction the typer takes for a fact reads
-"not in the sources", not "wrong".
+    Does the evidence  A) support it   B) contradict it   C) not settle it   or is it  D) not a statement of fact
+                       (an opinion, a suggestion, a question, a greeting, fiction)?
 
-    Ledger(ClaimTyper(), verifier, retriever).build_batch([{"text": reply, "question": q, "documents": docs}])
-    # -> [[{"claim", "type", "verdict", "basis"?, "sources"?, "p_fact"?}, ...]]
+One forward pass per sentence (no generation), batched; lookups only for unsettled facts. A poem's lines come
+back D and are never looked up, a wrong date inside one comes back C, is looked up, and is contradicted,
+"17 x 23 = 401" is contradicted by its own re-computation, and a summary is checked against the text it
+summarizes, without anything deciding beforehand what kind of message or sentence it was.
+
+    Ledger(model, tok, retriever).build_batch([{"text": reply, "messages": conversation}])
+    # -> [[{"claim", "verdict", "p": {...}, "evidence"?, "sources"?}, ...]]
 """
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
-from vt.claim_verify import BOLD, sentences, source
+from vt.claim_verify import BOLD, choice_probs, option_ids, sentences, source
+from vt.claims import prompt_of
 from vt.codecheck import FENCE, check_code
 from vt.mathcheck import check_arithmetic
 
-NOT_A_CLAIM = "not a factual claim"
+VERDICTS = ("supported", "contradicted", "unverified", "not a factual claim")
+QUESTION = ("Does the evidence support the statement?\n"
+            "A) yes, the evidence supports it\n"
+            "B) no, the evidence contradicts it (or shows it is wrong)\n"
+            "C) the evidence does not settle it\n"
+            "D) it is not a statement of fact: an opinion, a suggestion, an instruction, a question, a greeting, "
+            "or fiction\n"
+            "Answer with one letter.")
+SYSTEM = "You check each statement of a chatbot's reply against evidence. Answer only A, B, C or D."
 
 
-class ClaimTyper:
-    """P(a sentence is a factual claim), from a sentence embedding (CPU) and a trained two-way layer."""
-
-    def __init__(self, path=None, embedder=None):
-        import numpy as np
-        z = np.load(path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "claim_type_head.npz"))
-        self.W, self.b = z["W"], z["b"]
-        if embedder is None:
-            from sentence_transformers import SentenceTransformer
-            embedder = SentenceTransformer(str(z["embed"]), device="cpu")
-        self.embedder = embedder
-
-    def p_fact(self, texts):
-        import numpy as np
-        if not texts:
-            return np.zeros(0)
-        X = self.embedder.encode([t[:1000] for t in texts], batch_size=32, normalize_embeddings=True,
-                                 show_progress_bar=False)
-        Z = X @ self.W + self.b
-        P = np.exp(Z - Z.max(1, keepdims=True))
-        return (P / P.sum(1, keepdims=True))[:, 1]
-
-
-def units(text, explicit=True):
-    """The reply cut into checkable units: [{"claim", "type": "code" | "arithmetic" | None, ...}] in order;
-    type None: a sentence still to be sorted (fact or not). explicit=False also reads "17 times 23 is 391"
-    as arithmetic (in an answer to a calculation; elsewhere "1914-1918 is 4 years" is prose)."""
-    out = []
-    for m in FENCE.finditer(text):
-        block = m.group(0)
-        c = check_code(block)
-        u = {"claim": m.group(2).strip()[:300], "type": "code"}
-        if not c:                                             # a language it does not parse
-            u.update(verdict="not checked", basis=f"{m.group(1) or 'unlabeled'} code is not parsed")
-        elif c[0]["ok"]:
-            u["verdict"] = "parses (not run)"
-        else:
-            u.update(verdict="does not parse", basis=c[0]["error"])
-        out.append(u)
+def units(text, max_units=24):
+    """The reply cut into what can be judged: code blocks whole, then its sentences."""
+    out = [{"claim": m.group(2).strip()[:1500], "code": m.group(0)} for m in FENCE.finditer(text)]
     prose = FENCE.sub(" ", text.replace("[unsure:]", ""))
-    prose = re.sub(r"(?<=\d)\s*\*\s*(?=[\d(])", " × ", prose)      # 12 * 4: a product, not markdown emphasis
+    prose = re.sub(r"(?<=\d)\s*\*\s*(?=[\d(])", " × ", prose)        # 12 * 4: a product, not markdown emphasis
     for s in sentences(prose):
         s = s.rstrip(BOLD)
-        sums = check_arithmetic(s, explicit=explicit)
-        if not sums and len(re.findall(r"[A-Za-z]", s)) < 3:  # bullets, numbers alone, stray symbols
-            continue
-        if sums:
-            bad = [x for x in sums if not x["ok"]]
-            out.append({"claim": s, "type": "arithmetic", "verdict": "wrong" if bad else "correct",
-                        "basis": (f"{bad[0]['expression']} is {bad[0]['computed']:g}, not {bad[0]['stated']:g}" if bad
-                                  else f"{len(sums)} step(s) re-computed")})
-        else:
-            out.append({"claim": s, "type": None})
-    return out
+        if len(re.findall(r"[A-Za-z0-9]", s)) >= 3:
+            out.append({"claim": s})
+    return out[:max_units]
+
+
+def exact_checks(unit):
+    """Evidence no model can doubt: the arithmetic the statement states, re-computed; its code, parsed."""
+    lines = []
+    if "code" in unit:
+        for c in check_code(unit["code"]):
+            lines.append(f"This {c['language']} parses." if c["ok"] else
+                         f"This {c['language']} does not parse: {c['error']}.")
+    else:
+        for m in check_arithmetic(unit["claim"]):
+            lines.append(f"{m['expression']} = {m['computed']:g} exactly (the statement says {m['stated']:g}).")
+    return lines
+
+
+def conversation(messages, max_chars=6000):
+    """The user's side of the conversation, newest last, as evidence."""
+    said = [m["content"] for m in messages if m.get("role") == "user"]
+    text = "\n\n".join(said)
+    return text[-max_chars:]
 
 
 class Ledger:
-    def __init__(self, typer, verifier=None, retriever=None, fact_threshold=0.5, max_lookups=4, max_facts=12):
-        """verifier: a vt.claim_verify.ClaimVerifier (its judge3 does the judging; None: facts are typed but
-        not judged). retriever: looks up facts of replies written without documents."""
-        self.typer, self.verifier, self.retriever = typer, verifier, retriever
-        self.fact_threshold, self.max_lookups, self.max_facts = fact_threshold, max_lookups, max_facts
+    def __init__(self, model, tok, retriever=None, batch=4, max_tokens=2000, max_lookups=3, max_units=24):
+        self.model, self.tok, self.retriever = model, tok, retriever
+        self.batch, self.max_tokens, self.max_lookups, self.max_units = batch, max_tokens, max_lookups, max_units
+        self.letters = [option_ids(tok, c) for c in "ABCD"]
+
+    def _prompt(self, said, documents, unit, found=()):
+        parts = []
+        if said:
+            parts.append(f"The conversation (the user's messages):\n{said}")
+        if documents:
+            parts.append("Documents the user gave:\n" + "\n\n".join(d[:1500] for d in documents))
+        checks = exact_checks(unit)
+        if checks:
+            parts.append("Exact checks:\n" + "\n".join(checks))
+        if found:
+            parts.append("Found by search:\n" + "\n\n".join(p[:900] for p in found))
+        what = f"Code from the reply:\n{unit['code']}" if "code" in unit else f"Statement from the reply: {unit['claim']}"
+        msgs = [{"role": "system", "content": SYSTEM},
+                {"role": "user", "content": "Evidence:\n\n" + "\n\n".join(parts or ["(none)"]) +
+                 f"\n\n{what}\n\n{QUESTION}"}]
+        return prompt_of(self.tok, msgs, thinking=False)
+
+    def _judge(self, prompts):
+        return choice_probs(self.model, self.tok, prompts, self.letters, self.batch, self.max_tokens)
 
     def build_batch(self, items):
-        """items: [{"text", "question", "documents"?, "source_label"?, "fact_threshold"?, "calculation"?}] -> one
-        ledger each (calculation: the message asked for one)."""
-        ledgers = [units(it["text"], explicit=not it.get("calculation")) for it in items]
-        todo = [(k, u) for k, led in enumerate(ledgers) for u in led if u["type"] is None]
-        probs = self.typer.p_fact([u["claim"] for _, u in todo])
-        facts = []
-        for (k, u), p in zip(todo, probs):
-            u["p_fact"] = round(float(p), 3)
-            if p >= items[k].get("fact_threshold", self.fact_threshold):
-                u["type"] = "fact"
-                facts.append((k, u))
-            else:
-                u.update(type="not a claim", verdict=NOT_A_CLAIM)
-        per = {}
-        for k, u in facts:                                     # the most factual first when there are many
-            per.setdefault(k, []).append(u)
-        checked = []
-        for k, fs in per.items():
-            fs.sort(key=lambda u: -u["p_fact"])
-            for u in fs[self.max_facts:]:
-                u.update(verdict="not checked", basis="too many claims in one reply")
-            checked += [(k, u) for u in fs[:self.max_facts]]
-        self._evidence(items, checked)
-        self._judge(items, checked)
+        """items: [{"text": reply, "messages": conversation, "documents"?: the user's, "found"?: passages already
+        looked up, "question"?}] -> a ledger each."""
+        ledgers, todo = [], []
+        for k, it in enumerate(items):
+            said = conversation(it.get("messages") or ([{"role": "user", "content": it["question"]}]
+                                                        if it.get("question") else []))
+            it["_said"] = said
+            us = units(it["text"], self.max_units)
+            ledgers.append(us)
+            todo += [(k, u) for u in us]
+        if not todo:
+            return ledgers
+        first = self._judge([self._prompt(items[k]["_said"], items[k].get("documents"), u, items[k].get("found") or ())
+                             for k, u in todo])
+        for (_, u), p in zip(todo, first):
+            self._set(u, p)
+        self._search(items, [(k, u) for k, u in todo if u["verdict"] == "unverified"])
+        for it in items:
+            it.pop("_said", None)
         return ledgers
 
-    def _evidence(self, items, checked):
-        """Each fact's passages: its reply's documents, else a lookup of its own (in parallel, a few a reply)."""
-        lookups, used = [], {}
-        for k, u in checked:
-            docs = items[k].get("documents")
-            if docs:
-                u["_passages"], u["_label"] = docs, items[k].get("source_label") or "the sources"
-            elif self.retriever is not None and used.get(k, 0) < self.max_lookups:
-                used[k] = used.get(k, 0) + 1
-                lookups.append(u)
-                u["_label"] = "the sources found"
-            else:
-                u["_passages"] = []
-                u["_label"] = None if self.retriever is None else "limit"
+    def _set(self, u, p, sources=None):
+        j = max(range(4), key=lambda i: p[i])
+        u.update(verdict=VERDICTS[j], p={v: round(float(x), 4) for v, x in zip(VERDICTS, p)})
+        checks = exact_checks(u)
+        if checks:
+            u["evidence"] = checks
+        if sources:
+            u["sources"] = sources
 
-        def find(u):
-            k = next(k for k, v in checked if v is u)
+    def _search(self, items, unsettled):
+        """Look up what the conversation and exact checks left unsettled (a few a reply), and judge it again."""
+        if self.retriever is None or not unsettled:
+            return
+        per, picked = {}, []
+        for k, u in unsettled:
+            if per.get(k, 0) < self.max_lookups:
+                per[k] = per.get(k, 0) + 1
+                picked.append((k, u))
+
+        def find(ku):
+            k, u = ku
+            q = items[k].get("question") or (items[k]["_said"].rsplit("\n\n", 1)[-1][:300])
             try:
-                return self.retriever(f"{items[k].get('question') or ''} {u['claim']}".strip())
-            except Exception as e:                             # a failed lookup: no evidence, not a failed reply
+                return self.retriever(f"{q} {u['claim'][:300]}".strip())
+            except Exception as e:                                   # no lookup: the claim stays unverified
                 print(f"ledger lookup failed: {e!r}", flush=True)
                 return []
-        if lookups:
-            with ThreadPoolExecutor(max_workers=min(8, len(lookups))) as pool:
-                for u, ps in zip(lookups, pool.map(find, lookups)):
-                    u["_passages"] = ps
-
-    def _judge(self, items, checked):
-        ask = [(k, u) for k, u in checked if u.get("_passages") and self.verifier is not None]
-        probs = self.verifier.judge3([(items[k].get("question") or "", u["claim"], u["_passages"]) for k, u in ask]) \
-            if ask else []
-        for (k, u), (a, b, n) in zip(ask, probs):
-            where = u["_label"]
-            u.update(p_supported=round(a, 4), p_contradicted=round(b, 4), p_not_stated=round(n, 4),
-                     sources=sorted({source(p) for p in u["_passages"]}) if where == "the sources found" else [],
-                     verdict="supported" if a >= self.verifier.supported else
-                     "contradicted" if b >= self.verifier.supported else
-                     f"not in {where}" if n >= 0.5 else "unclear")
-        for _, u in checked:
-            if "verdict" not in u:
-                why = u.get("_label")
-                u["verdict"] = ("not checked" if why == "limit" or self.verifier is None or why is None and
-                                self.retriever is None else "no evidence")
-                if why == "limit":
-                    u["basis"] = "lookup limit for one reply"
-            u.pop("_passages", None)
-            u.pop("_label", None)
+        with ThreadPoolExecutor(max_workers=min(8, len(picked))) as pool:
+            found = list(pool.map(find, picked))
+        again = [(k, u, ps) for (k, u), ps in zip(picked, found) if ps]
+        if not again:
+            return
+        probs = self._judge([self._prompt(items[k]["_said"], items[k].get("documents"), u, ps) for k, u, ps in again])
+        for (_, u, ps), p in zip(again, probs):
+            self._set(u, p, sorted({source(x) for x in ps}))
 
 
 def overall(ledger):
-    """One verdict for a reply from its ledger: anything shown wrong makes it likely wrong; facts all
-    supported (and nothing wrong) likely right; facts unconfirmed uncertain or unverified; no factual claims
-    at all (a poem, advice, code that parses) says so."""
-    def of(t):
-        return [u for u in ledger if u["type"] == t]
-    wrong = [u for u in ledger if u["verdict"] in ("wrong", "does not parse", "contradicted")]
+    """One verdict for a reply from its ledger: anything contradicted makes it likely wrong; every factual
+    statement supported likely right; some unsettled uncertain (or unverified when none is supported); no
+    factual statement at all says so."""
+    if not ledger:
+        return None
+    wrong = [u for u in ledger if u["verdict"] == "contradicted"]
     if wrong:
         u = wrong[0]
-        what = {"wrong": "arithmetic", "does not parse": "code", "contradicted": "the sources contradict"}[u["verdict"]]
-        return {"verdict": "likely wrong", "doubt": 1.0,
-                "basis": f"{what}: {u['claim'][:120]}" + (f" ({u['basis']})" if u.get("basis") else "")}
-    facts = of("fact")
+        why = f" ({u['evidence'][0]})" if u.get("evidence") else ""
+        return {"verdict": "likely wrong", "doubt": round(u["p"]["contradicted"], 4),
+                "basis": f"contradicted: {u['claim'][:120]}{why}"}
+    facts = [u for u in ledger if u["verdict"] != "not a factual claim"]
     supported = [u for u in facts if u["verdict"] == "supported"]
-    if facts and len(supported) == len(facts):
-        return {"verdict": "likely right", "doubt": 0.1, "basis": f"all {len(facts)} factual claim(s) supported"}
-    if facts:
-        return {"verdict": "uncertain" if supported else "unverified", "doubt": 0.5 if supported else None,
-                "basis": f"{len(supported)} of {len(facts)} factual claim(s) supported"}
-    if of("arithmetic"):
-        return {"verdict": "likely right", "doubt": 0.0, "basis": f"arithmetic re-computed ({len(of('arithmetic'))})"}
-    return {"verdict": "no factual claims", "doubt": None,
-            "basis": "code parses (not run)" if of("code") else "opinion, advice or creative writing"}
+    if not facts:
+        return {"verdict": "no factual claims", "doubt": None, "basis": "opinion, advice, wording or fiction"}
+    if len(supported) == len(facts):
+        return {"verdict": "likely right", "doubt": 0.1, "basis": f"all {len(facts)} factual statement(s) supported"}
+    return {"verdict": "uncertain" if supported else "unverified", "doubt": 0.5 if supported else None,
+            "basis": f"{len(supported)} of {len(facts)} factual statement(s) supported"}
