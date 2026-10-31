@@ -107,18 +107,23 @@ class Reader:
             model.model.layers[i].mlp.down_proj.register_forward_pre_hook(self._hook(i))
 
     def _hook(self, i):
-        def f(mod, inp):
-            self.acts[i] = inp[0][0].float()
+        def f(mod, inp):                                        # kept on the CPU, in float16: GPU memory is the
+            import torch                                        # model's (a 32B on two T4s)
+            self.acts[i] = inp[0][0].detach().to("cpu", torch.float16)
         return f
 
     def run(self, ids):
         import torch
+        x = torch.tensor([ids], device=next(self.model.parameters()).device)
         with torch.no_grad():
-            self.model(input_ids=torch.tensor([ids]))
+            try:                                                # no logits needed here: keep only the last one
+                self.model(input_ids=x, logits_to_keep=1)
+            except TypeError:
+                self.model(input_ids=x)
 
     def mean(self, a, b):
         """Mean activation of positions [a, b) in every read layer, concatenated."""
-        return np.concatenate([self.acts[i][a:b].mean(0).cpu().numpy() for i in self.layers]).astype(np.float32)
+        return np.concatenate([self.acts[i][a:b].float().mean(0).numpy() for i in self.layers]).astype(np.float32)
 
 
 def ragtruth_features(model, tok, reader, n, max_chars, t0):
@@ -178,7 +183,15 @@ def main():
 
     from vt.correctness import auroc
     tok = AutoTokenizer.from_pretrained(a.model)
-    model = AutoModelForCausalLM.from_pretrained(a.model, dtype=torch.bfloat16).eval()
+    if torch.cuda.is_available():                               # e.g. the 4-bit 32B over two T4s (Kaggle)
+        model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=torch.float16, device_map="auto",
+                                                     attn_implementation="sdpa").eval()
+        if torch.cuda.get_device_capability(0)[0] < 8:          # T4: no bfloat16 matmuls
+            for mod in model.modules():
+                if getattr(mod, "compute_dtype", None) == torch.bfloat16:
+                    mod.compute_dtype = torch.float16
+    else:
+        model = AutoModelForCausalLM.from_pretrained(a.model, torch_dtype=torch.bfloat16).eval()
     reader = Reader(model)
     t0 = time.time()
 
@@ -236,7 +249,13 @@ def main():
                  scale=sc.scale_.astype(np.float32), coef=clf.coef_[0].astype(np.float32),
                  intercept=np.float32(clf.intercept_[0]), score_mean=np.float32(own.mean()),
                  score_std=np.float32(own.std()), model=np.array(a.model),
-                 grounded_mean=np.float32(own[ys == 0].mean()), ungrounded_mean=np.float32(own[ys == 1].mean()))
+                 grounded_mean=np.float32(own[ys == 0].mean()), ungrounded_mean=np.float32(own[ys == 1].mean()),
+                 # each signal's scale over natural answer sentences (RAGTruth's, no labels used): what
+                 # vt/grounding.py sums them on
+                 nat_probe_mean=np.float32(probe.mean()), nat_probe_std=np.float32(probe.std()),
+                 nat_mean_shift_mean=np.float32(ev[:, 0].mean()), nat_mean_shift_std=np.float32(ev[:, 0].std()),
+                 nat_max_disagreement_mean=np.float32(ev[:, 1].mean()),
+                 nat_max_disagreement_std=np.float32(ev[:, 1].std()))
     res["evidence"] = {"mean_shift": report(-ev[:, 0]), "max_disagreement": report(ev[:, 1])}
     res["combined"] = {"probe+disagreement": report(z(probe) + z(ev[:, 1])),
                        "probe+shift": report(z(probe) - z(ev[:, 0])),

@@ -37,25 +37,31 @@ def spans(row):
 
 def token_logprobs(model, tok, prefix_ids, reply_ids):
     """log p of each reply token given the prefix and the reply so far (one forward pass), and the whole
-    distribution at each position."""
+    distribution at each position (on the model's device; only the reply's logits are kept)."""
     import torch
-    ids = torch.tensor([prefix_ids + reply_ids])
+    dev = next(model.parameters()).device
+    ids = torch.tensor([prefix_ids + reply_ids], device=dev)
     with torch.no_grad():
-        logits = model(input_ids=ids).logits[0, len(prefix_ids) - 1:-1].float()
+        try:                                                    # only the positions that predict the reply
+            logits = model(input_ids=ids, logits_to_keep=len(reply_ids) + 1).logits[0, :-1].float()
+        except TypeError:
+            logits = model(input_ids=ids).logits[0, len(prefix_ids) - 1:-1].float()
     lp = torch.log_softmax(logits, -1)
-    return lp[torch.arange(len(reply_ids)), torch.tensor(reply_ids)].numpy(), lp
+    rows = torch.arange(len(reply_ids), device=dev)
+    return lp[rows, torch.tensor(reply_ids, device=dev)].cpu().numpy(), lp
 
 
 def disagreement(lp_with, lp_without, reply_ids, min_boost=0.5):
     """Where the evidence makes the model prefer another token: log p(evidence's favourite) - log p(written),
     counted only where the evidence itself raised that favourite (by min_boost nats or more); 0 elsewhere."""
     import torch
+    dev = lp_with.device
     top = lp_with.argmax(-1)
-    rows = torch.arange(len(reply_ids))
-    written = torch.tensor(reply_ids)
+    rows = torch.arange(len(reply_ids), device=dev)
+    written = torch.tensor(reply_ids, device=dev)
     gap = lp_with[rows, top] - lp_with[rows, written]
     boost = lp_with[rows, top] - lp_without[rows, top]
-    return torch.where((top != written) & (boost >= min_boost), gap, torch.zeros_like(gap)).numpy()
+    return torch.where((top != written) & (boost >= min_boost), gap, torch.zeros_like(gap)).cpu().numpy()
 
 
 def prefix(tok, user):
