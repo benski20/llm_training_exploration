@@ -621,3 +621,28 @@ def test_ledger_judges_every_reply():
     assert all(o["ledger"] and o["assessment"]["verdict"] == "likely wrong" for o in outs)   # one way for all
     assert [it["documents"] for it in bot.ledger.items][2] == ["The tower opened in 1889."]
     assert bot.ledger.items[0]["messages"][-1]["content"] == "Who built it?"
+
+
+def test_grounding_gives_each_reply_its_verdict():
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
+
+    class G:
+        def __init__(self):
+            self.calls = []
+
+        def check(self, messages, reply, documents=()):
+            self.calls.append((messages[-1]["content"], list(documents)))
+            v = {"Who built it?": "contradicted", "Write a poem.": "not grounded"}.get(messages[-1]["content"], "grounded")
+            return {"sentences": [{"text": reply[:20], "verdict": v, "z": 2.0}], "total": 2.0, "verdict": v}
+    bot.grounding = G()
+    outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8, "retrieve": False}
+                            for q in ("Who built it?", "Write a poem.")]
+                           + [{"messages": [{"role": "user", "content": "Summarize."}], "max_new_tokens": 8,
+                               "documents": ["The tower opened in 1889."]}])
+    assert [o["assessment"]["verdict"] for o in outs] == ["likely wrong", "not grounded", "grounded"]
+    assert bot.grounding.calls[2] == ("Summarize.", ["The tower opened in 1889."])   # the user's documents are the evidence

@@ -96,9 +96,11 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'. ':'')+
-  'mode '+r.mode+'</div>'+assess(r.assessment)+(r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
-function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a','no factual claims':'#57606a'}[a.verdict]||'';
+  'mode '+r.mode+'</div>'+assess(r.assessment)+(r.grounding?grounding(r.grounding):r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
+function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a','no factual claims':'#57606a','grounded':'#1a7f37','not grounded':'#9a6700'}[a.verdict]||'';
  return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
+function grounding(g){if(!g||!g.sentences||!g.sentences.length)return '';const sym={'grounded':'✓','not grounded':'–','contradicted':'✗'};
+ return '<div class="claims"><div class="meta">Each sentence, read against the evidence:</div>'+g.sentences.map(x=>'<div>'+sym[x.verdict]+' <b>'+esc(x.verdict)+'</b>: '+esc(x.text.slice(0,160))+'</div>').join('')+'</div>'}
 function ledger(l){if(!l||!l.length)return '';const sym={'supported':'✓','contradicted':'✗','unverified':'?'};
  const shown=l.filter(u=>u.verdict!=='not a factual claim'),rest=l.length-shown.length;
  return '<div class="claims"><div class="meta">Every statement, checked:</div>'+shown.map(u=>'<div>'+sym[u.verdict]+' <b>'+esc(u.verdict)+'</b>: '+esc(u.claim.slice(0,160))+
@@ -501,6 +503,10 @@ def build(argv=None, host=None, port=None):
                                      "it, the top 5 pages are searched), e.g. cross-encoder/ms-marco-MiniLM-L-6-v2")
     ap.add_argument("--web-search", choices=["brave", "tavily"], help="also search the web (the API key in the "
                                                                     "VERICHAT_SEARCH_KEY environment variable)")
+    ap.add_argument("--grounding", help="a grounding probe (experiments/grounding_probe.py --export): every sentence of "
+                    "every reply read against its evidence from a model's own neurons, no judge (vt/grounding.py)")
+    ap.add_argument("--grounding-model", help="the model whose neurons the probe reads, if not the chat model (a "
+                    "reader: it reads each reply with its evidence, nothing is asked of it)")
     ap.add_argument("--ledger", action="store_true", help="a verdict on every statement of every reply: each is "
                     "judged by the chat model against the conversation, exact checks of its arithmetic and code, and a "
                     "lookup for what those leave unsettled (vt/ledger.py; replaces --verify-claims)")
@@ -558,6 +564,17 @@ def build(argv=None, host=None, port=None):
             from .claim_verify import ClaimVerifier
             bot.verifier = ClaimVerifier(bot.model, bot.tok, bot.retriever)
         bot.retrieve_below = a.retrieve_below if a.retrieve_below is not None else bot.threshold
+    if a.grounding:
+        from .grounding import Grounding
+        if a.grounding_model and a.grounding_model != a.model:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            rtok = AutoTokenizer.from_pretrained(a.grounding_model)
+            reader = AutoModelForCausalLM.from_pretrained(
+                a.grounding_model, torch_dtype=torch.bfloat16, device_map="auto" if torch.cuda.is_available() else None).eval()
+        else:
+            reader, rtok = bot.model, bot.tok
+        bot.grounding = Grounding(reader, rtok, a.grounding, retriever=bot.retriever)
     if a.ledger:
         from .ledger import Ledger
         bot.ledger = Ledger(bot.model, bot.tok, bot.retriever)

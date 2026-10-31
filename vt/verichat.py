@@ -134,6 +134,7 @@ class VeriChat:
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
         self.verifier = None                           # vt.claim_verify.ClaimVerifier: check claims against sources
         self.ledger = None                             # vt.ledger.Ledger: a verdict on every statement of every reply
+        self.grounding = None                          # vt.grounding.Grounding: each sentence read against the evidence
 
     @classmethod
     def load(cls, model_name, head_path, threshold=None, revision=None):
@@ -312,6 +313,33 @@ class VeriChat:
                 o.update(text=WITHHELD, claims=[], withheld=True)
         return o
 
+    def _ground(self, items):
+        """Every sentence of several final replies read against its evidence by the grounding probe (vt.grounding):
+        the user's documents, else the passages a doubted reply was re-answered from, else a lookup; exact
+        arithmetic and parsed code. The reply's verdict: contradicted (likely wrong), not grounded, or grounded.
+        A check that fails never fails the replies."""
+        for o, r in items:
+            if o.get("withheld") or not o.get("text"):
+                continue
+            docs = r.get("documents") or (o.get("retrieval") or {}).get("passages") or ()
+            try:
+                g = self.grounding.check(r["messages"], o["text"].replace("[unsure:]", ""), documents=docs)
+            except Exception as e:
+                print(f"grounding failed: {e!r}", flush=True)
+                continue
+            o["grounding"] = g
+            off = [x for x in g["sentences"] if x["verdict"] != "grounded"]
+            if g["verdict"] == "contradicted":
+                x = next(x for x in off if x["verdict"] == "contradicted")
+                o["assessment"] = {"verdict": "likely wrong", "doubt": min(1.0, round(x["z"] / 3, 3)),
+                                   "basis": f"the evidence contradicts: {x['text'][:120]}"}
+            elif g["verdict"] == "not grounded":
+                o["assessment"] = {"verdict": "not grounded", "doubt": None,
+                                   "basis": f"{len(off)} of {len(g['sentences'])} sentence(s) not in the evidence"}
+            elif g["verdict"] == "grounded":
+                o["assessment"] = {"verdict": "grounded", "doubt": 0.1,
+                                   "basis": f"all {len(g['sentences'])} sentence(s) grounded in the evidence"}
+
     def _ledger(self, items):
         """Every statement of several final replies judged at once (vt.ledger): items are (reply, request).
         The evidence is the conversation, the user's documents, the passages a doubted reply was re-answered
@@ -387,7 +415,9 @@ class VeriChat:
             return next((m["content"] for m in reversed(r["messages"]) if m["role"] == "user"), None)
 
         def deliver(ids):                                            # verified together, then sent
-            if self.ledger is not None:
+            if self.grounding is not None:
+                self._ground([(outs[i], reqs[i]) for i in ids])
+            elif self.ledger is not None:
                 self._ledger([(outs[i], reqs[i]) for i in ids])
             else:
                 self._verify([(outs[i], ask(reqs[i])) for i in ids])

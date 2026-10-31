@@ -33,7 +33,9 @@ RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per 
 WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubted answers up on Wikipedia
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
-LEDGER = os.environ.get("VERICHAT_LEDGER", "1") == "1"            # a verdict on every statement of every reply
+LEDGER = os.environ.get("VERICHAT_LEDGER", "0") == "1"            # the LLM-judge ledger (superseded; 1: on)
+GROUNDING = os.environ.get("VERICHAT_GROUNDING", "heads/grounding_probe_qwen3_4b.npz")   # "" off
+GROUNDING_MODEL = os.environ.get("VERICHAT_GROUNDING_MODEL", "Qwen/Qwen3-4B")          # the probe's reader
 # web_server by default: through it a streamed reply arrives as written (deploy/stream_probe.py: a ping every 10 s);
 # through asgi_app not even its status line came back within 90 s, so long replies looked dead to clients and were
 # sent again (13 of 200 live requests). 1 serves in-process instead.
@@ -56,7 +58,8 @@ image = (
                              "VERICHAT_RATE": RATE, "VERICHAT_WIKIPEDIA": "1" if WIKIPEDIA else "0",
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
                              "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0",
-                             "VERICHAT_SEARCH": SEARCH, "VERICHAT_LEDGER": "1" if LEDGER else "0"}.items()
+                             "VERICHAT_SEARCH": SEARCH, "VERICHAT_LEDGER": "1" if LEDGER else "0",
+                             "VERICHAT_GROUNDING": GROUNDING, "VERICHAT_GROUNDING_MODEL": GROUNDING_MODEL}.items()
                if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
@@ -72,6 +75,8 @@ image = (
     .add_local_file(os.path.join(ROOT, "results", "study_questions.json"), "/app/eval/study_questions.json")
     .add_local_file(os.path.join(ROOT, "results", "study_questions_2.json"), "/app/eval/study_questions_2.json")
 )
+if GROUNDING:                                                       # the grounding probe the reader serves
+    image = image.add_local_file(os.path.join(ROOT, GROUNDING), "/app/heads/grounding_probe.npz")
 app = modal.App("verichat", image=image)
 hf_cache = modal.Volume.from_name("verichat-hf-cache", create_if_missing=True)
 
@@ -207,7 +212,9 @@ def server_args():
             + (["--wikipedia"] if WIKIPEDIA else [])
             + (["--rerank", RERANK] if WIKIPEDIA and RERANK else [])
             + (["--web-search", SEARCH] if SEARCH else [])
-            + (["--ledger"] if LEDGER else
+            + (["--grounding", "/app/heads/grounding_probe.npz"]
+               + (["--grounding-model", GROUNDING_MODEL] if GROUNDING_MODEL else []) if GROUNDING else [])
+            + (["--ledger"] if LEDGER and not GROUNDING else
                ["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
             + (["--revision", REVISION] if REVISION else []))
 

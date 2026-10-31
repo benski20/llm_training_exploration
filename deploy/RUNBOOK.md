@@ -53,6 +53,9 @@ The workflow fills the cache on CPU and deploys; the job log prints the URL.
 | `VERICHAT_WIKIPEDIA` | `1` | look doubted answers up on Wikipedia and answer again from it, with citations (0: off) |
 | `VERICHAT_RERANK` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | reorders lookup passages and searches 5 pages ("" for BM25 over 3 pages) |
 | `VERICHAT_VERIFY` | `1` | check each reply's claims against Wikipedia, judged by the chat model (0: off) |
+| `VERICHAT_GROUNDING` | `heads/grounding_probe_qwen3_4b.npz` | the grounding probe: every sentence of every reply read against its evidence from a model's own neurons, no judge (`vt/grounding.py`, `docs/grounding_trace.md`; "" off) |
+| `VERICHAT_GROUNDING_MODEL` | `Qwen/Qwen3-4B` | the model the probe reads (a reader beside the 32B: about 8 GB more on the L40S); "" reads the chat model itself, once a probe has been trained on it |
+| `VERICHAT_LEDGER` | `0` | the LLM-judge ledger instead (superseded by the grounding probe) |
 | `VERICHAT_SEARCH` | "" | also search the web: `brave` or `tavily` (needs a key, below) |
 | `VERICHAT_RATE` | `10` | POSTs per client per minute (0 only for load tests) |
 | `VERICHAT_RISK_THRESHOLD` | the head's | only for the sentence-risk mode; the served mode judges sentences by their claims |
