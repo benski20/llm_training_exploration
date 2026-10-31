@@ -88,3 +88,16 @@ does not beat the shift alone (0.67-0.68 against 0.69).
 
 Together, confidence and the ten poles: TriviaQA 0.78, NQ 0.75 (confidence alone 0.78, 0.77). On this model
 the familiarity neurons carry the same information as the model's confidence, not more.
+
+**Where the evidence prefers another word** (`experiments/evidence_shift.py`, the disagreement signal: the
+evidence makes the model prefer a different token than the one written, and raised that token itself):
+RAGTruth sentences 0.64 overall, **0.72 on contradictions** (the best of these signals there), 0.53 on
+unsupported additions. No training-free signal tested detects unsupported additions (0.53-0.56): they leave no
+mark in the model's probabilities when the evidence is simply silent.
+
+**Where this leaves it.** Untrained internal readings plateau near 0.7 on a 4B model (0.69 for faithfulness to
+evidence, 0.78 for closed-book answers from the model's own confidence); detectors trained on labels reach
+0.86-0.90 on the data they learned from and 0.35-0.80 on new sources. They learn the dataset, not the
+mechanism. Next: train on the mechanism itself, with labels made by construction in any domain (a sentence
+taken from a document is grounded, the same sentence with an entity or number swapped is contradicted, a
+sentence from an unrelated document is unsupported), and test synthetic to natural on RAGTruth's human labels.
