@@ -326,7 +326,21 @@ and NQ answers, `results/study_32b_v3_threeway.json`, claims with evidence found
 55-61% of claims found no evidence at all, mostly Wikipedia refusing paced bulk lookups; a search key fixes
 that in production.
 
-Offline, on a small model as a lower bound: `experiments/judge_eval.py` (CPU, no spend).
+Offline, with Qwen3-4B as the judge (a lower bound for the 32B; CPU, no spend; `experiments/judge_eval.py
+--wikipedia`, `results/judge_eval_qwen3_4b.json`):
+
+| test | result |
+|---|---|
+| 60 facts from chatbot replies, labeled by hand, no evidence given | 55 left unsettled (so looked up), 5 settled from memory, none taken for non-facts |
+| 60 non-facts (advice, greetings, poetry, opinions) | 55 called not a statement of fact |
+| 16 calculations, right and wrong | 16 judged right (the exact re-computation decides) |
+| 14 statements about a pasted article, true and false | 13 judged right |
+| 13 whole replies, live Wikipedia lookups | 11 got the expected verdict: all 6 wrong replies (wrong date, wrong author, "Paris, capital of Italy" in a poem, 17 x 23 = 401, code that does not parse, a summary contradicting the article) likely wrong; none of the 7 right or harmless ones; the 2 misses were reassurance and a poem line read as "supported" (likely right instead of no factual claims) |
+
+The question's wording matters at this size: asking plainly "does the evidence support it" left 51 of 60 facts
+filed as non-facts on Qwen3-1.7B and 25 on Qwen3-4B; "it states a fact, but the evidence does not settle it"
+against "it states no fact at all", and "judge only by the evidence above, not by what you know", fixed both.
+Known limit: well-known facts are sometimes still settled from the model's memory without a lookup.
 
 ## Clients
 

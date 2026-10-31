@@ -5,7 +5,11 @@ there is:
     the conversation       what the user said and gave (a pasted article, documents): checked against first
     exact checks           any arithmetic the sentence states, re-computed (vt.mathcheck); any code, parsed
                            (vt.codecheck). Tools only add evidence; the judge decides what it means.
-    a search               only for what the first pass leaves unsettled, then judged once more
+    a search               only for what the first pass leaves unsettled (a few lookups a reply, their
+                           passages pooled for every unsettled statement of the reply), then judged once more
+
+The judge is told to use only the evidence, not what it knows: a fact nothing above mentions is unsettled
+and gets looked up, rather than "supported" from the model's memory.
 
     Does the evidence  A) support it   B) contradict it   C) not settle it   or is it  D) not a statement of fact
                        (an opinion, a suggestion, a question, a greeting, fiction)?
@@ -27,11 +31,11 @@ from vt.codecheck import FENCE, check_code
 from vt.mathcheck import check_arithmetic
 
 VERDICTS = ("supported", "contradicted", "unverified", "not a factual claim")
-QUESTION = ("Does the evidence support the statement?\n"
-            "A) yes, the evidence supports it\n"
-            "B) no, the evidence contradicts it (or shows it is wrong)\n"
-            "C) the evidence does not settle it\n"
-            "D) it is not a statement of fact: an opinion, a suggestion, an instruction, a question, a greeting, "
+QUESTION = ("Judge the statement only by the evidence above, not by what you know.\n"
+            "A) the evidence supports it\n"
+            "B) the evidence contradicts it (or shows it is wrong)\n"
+            "C) it states a fact, but the evidence above does not mention it or settle it\n"
+            "D) it states no fact at all: it is an opinion, a suggestion, an instruction, a question, a greeting, "
             "or fiction\n"
             "Answer with one letter.")
 SYSTEM = "You check each statement of a chatbot's reply against evidence. Answer only A, B, C or D."
@@ -71,9 +75,11 @@ def conversation(messages, max_chars=6000):
 
 
 class Ledger:
-    def __init__(self, model, tok, retriever=None, batch=4, max_tokens=2000, max_lookups=3, max_units=24):
+    def __init__(self, model, tok, retriever=None, batch=4, max_tokens=3000, max_lookups=3, max_units=24,
+                 max_passages=6):
         self.model, self.tok, self.retriever = model, tok, retriever
         self.batch, self.max_tokens, self.max_lookups, self.max_units = batch, max_tokens, max_lookups, max_units
+        self.max_passages = max_passages
         self.letters = [option_ids(tok, c) for c in "ABCD"]
 
     def _prompt(self, said, documents, unit, found=()):
@@ -128,7 +134,8 @@ class Ledger:
             u["sources"] = sources
 
     def _search(self, items, unsettled):
-        """Look up what the conversation and exact checks left unsettled (a few a reply), and judge it again."""
+        """Look up what the evidence left unsettled (a few lookups a reply) and judge every unsettled statement
+        of the reply again against all the passages its lookups found: more statements checked than lookups."""
         if self.retriever is None or not unsettled:
             return
         per, picked = {}, []
@@ -139,15 +146,25 @@ class Ledger:
 
         def find(ku):
             k, u = ku
-            q = items[k].get("question") or (items[k]["_said"].rsplit("\n\n", 1)[-1][:300])
+            q = (items[k].get("question") or items[k]["_said"].rsplit("\n\n", 1)[-1])[:150]
             try:
                 return self.retriever(f"{q} {u['claim'][:300]}".strip())
             except Exception as e:                                   # no lookup: the claim stays unverified
                 print(f"ledger lookup failed: {e!r}", flush=True)
                 return []
         with ThreadPoolExecutor(max_workers=min(8, len(picked))) as pool:
-            found = list(pool.map(find, picked))
-        again = [(k, u, ps) for (k, u), ps in zip(picked, found) if ps]
+            found = dict(zip([id(u) for _, u in picked], pool.map(find, picked)))
+        pooled = {}
+        for k, u in picked:
+            for p in found[id(u)]:
+                if p not in pooled.setdefault(k, []):
+                    pooled[k].append(p)
+        again = []
+        for k, u in unsettled:                                       # its own passages first, then the reply's
+            own = found.get(id(u), [])
+            ps = (own + [p for p in pooled.get(k, []) if p not in own])[:self.max_passages]
+            if ps:
+                again.append((k, u, ps))
         if not again:
             return
         probs = self._judge([self._prompt(items[k]["_said"], items[k].get("documents"), u, ps) for k, u, ps in again])

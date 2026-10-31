@@ -1,25 +1,194 @@
-{"article": "The city council voted on Tuesday to close the Elm Street bridge for repairs. Engineers found cracks in two support beams during an inspection in March. The bridge will reopen in October, and buses will use a detour along Oak Avenue until then. The repairs will cost 4.2 million dollars, paid from the state budget.",
+{
+ "article": "The city council voted on Tuesday to close the Elm Street bridge for repairs. Engineers found cracks in two support beams during an inspection in March. The bridge will reopen in October, and buses will use a detour along Oak Avenue until then. The repairs will cost 4.2 million dollars, paid from the state budget.",
  "article_claims": [
-  ["The council voted on Tuesday to close the bridge.", "supported"],
-  ["Engineers found cracks in two support beams.", "supported"],
-  ["The bridge will reopen in October.", "supported"],
-  ["Buses will take a detour along Oak Avenue.", "supported"],
-  ["The repairs will cost 4.2 million dollars.", "supported"],
-  ["The state budget pays for the repairs.", "supported"],
-  ["The inspection took place in March.", "supported"],
-  ["The bridge will close in October.", "contradicted"],
-  ["Engineers found cracks in four support beams.", "contradicted"],
-  ["The repairs will cost 2.4 million dollars.", "contradicted"],
-  ["The city budget pays for the repairs.", "contradicted"],
-  ["The council voted on Friday.", "contradicted"],
-  ["Buses will detour along Maple Street.", "contradicted"],
-  ["The inspection took place in June.", "contradicted"]],
+  [
+   "The council voted on Tuesday to close the bridge.",
+   "supported"
+  ],
+  [
+   "Engineers found cracks in two support beams.",
+   "supported"
+  ],
+  [
+   "The bridge will reopen in October.",
+   "supported"
+  ],
+  [
+   "Buses will take a detour along Oak Avenue.",
+   "supported"
+  ],
+  [
+   "The repairs will cost 4.2 million dollars.",
+   "supported"
+  ],
+  [
+   "The state budget pays for the repairs.",
+   "supported"
+  ],
+  [
+   "The inspection took place in March.",
+   "supported"
+  ],
+  [
+   "The bridge will close in October.",
+   "contradicted"
+  ],
+  [
+   "Engineers found cracks in four support beams.",
+   "contradicted"
+  ],
+  [
+   "The repairs will cost 2.4 million dollars.",
+   "contradicted"
+  ],
+  [
+   "The city budget pays for the repairs.",
+   "contradicted"
+  ],
+  [
+   "The council voted on Friday.",
+   "contradicted"
+  ],
+  [
+   "Buses will detour along Maple Street.",
+   "contradicted"
+  ],
+  [
+   "The inspection took place in June.",
+   "contradicted"
+  ]
+ ],
  "arithmetic": [
-  ["17 × 23 = 391.", "supported"], ["17 × 23 = 401.", "contradicted"],
-  ["A 20% tip on $45 is $9.", "supported"], ["A 20% tip on $45 is $8.", "contradicted"],
-  ["12 * 4 = 48, so you need 48 eggs.", "supported"], ["12 * 4 = 52, so you need 52 eggs.", "contradicted"],
-  ["The total is 126 / 4 = 31.5 dollars each.", "supported"], ["The total is 126 / 4 = 32.5 dollars each.", "contradicted"],
-  ["240 / 60 = 4, so the drive takes 4 hours.", "supported"], ["240 / 60 = 5, so the drive takes 5 hours.", "contradicted"],
-  ["15% of 80 is 12.", "supported"], ["15% of 80 is 14.", "contradicted"],
-  ["3 × 12 - 5 = 31 apples are left.", "supported"], ["3 × 12 - 5 = 29 apples are left.", "contradicted"],
-  ["86400 = 24 × 60 × 60 seconds in a day.", "supported"], ["24 × 60 × 60 = 84600 seconds in a day.", "contradicted"]]}
+  [
+   "17 \u00d7 23 = 391.",
+   "supported"
+  ],
+  [
+   "17 \u00d7 23 = 401.",
+   "contradicted"
+  ],
+  [
+   "A 20% tip on $45 is $9.",
+   "supported"
+  ],
+  [
+   "A 20% tip on $45 is $8.",
+   "contradicted"
+  ],
+  [
+   "12 * 4 = 48, so you need 48 eggs.",
+   "supported"
+  ],
+  [
+   "12 * 4 = 52, so you need 52 eggs.",
+   "contradicted"
+  ],
+  [
+   "The total is 126 / 4 = 31.5 dollars each.",
+   "supported"
+  ],
+  [
+   "The total is 126 / 4 = 32.5 dollars each.",
+   "contradicted"
+  ],
+  [
+   "240 / 60 = 4, so the drive takes 4 hours.",
+   "supported"
+  ],
+  [
+   "240 / 60 = 5, so the drive takes 5 hours.",
+   "contradicted"
+  ],
+  [
+   "15% of 80 is 12.",
+   "supported"
+  ],
+  [
+   "15% of 80 is 14.",
+   "contradicted"
+  ],
+  [
+   "3 \u00d7 12 - 5 = 31 apples are left.",
+   "supported"
+  ],
+  [
+   "3 \u00d7 12 - 5 = 29 apples are left.",
+   "contradicted"
+  ],
+  [
+   "86400 = 24 \u00d7 60 \u00d7 60 seconds in a day.",
+   "supported"
+  ],
+  [
+   "24 \u00d7 60 \u00d7 60 = 84600 seconds in a day.",
+   "contradicted"
+  ]
+ ],
+ "replies": [
+  {
+   "q": "Who designed the Eiffel Tower and when was it finished?",
+   "reply": "The Eiffel Tower was designed by engineers of Gustave Eiffel's company and finished in 1889.",
+   "expect": "likely right"
+  },
+  {
+   "q": "Who designed the Eiffel Tower and when was it finished?",
+   "reply": "The Eiffel Tower was designed by Gustave Eiffel's company and finished in 1925.",
+   "expect": "likely wrong"
+  },
+  {
+   "q": "Who wrote Pride and Prejudice?",
+   "reply": "Pride and Prejudice was written by Jane Austen and published in 1813.",
+   "expect": "likely right"
+  },
+  {
+   "q": "Who wrote Pride and Prejudice?",
+   "reply": "Pride and Prejudice was written by Charlotte Bront\u00eb.",
+   "expect": "likely wrong"
+  },
+  {
+   "q": "Write a short poem about the sea.",
+   "reply": "Whispering waves dance on the shore,\nthe moon hums softly, nothing more.",
+   "expect": "no factual claims"
+  },
+  {
+   "q": "Write a short poem about Paris.",
+   "reply": "Oh Paris, capital of Italy, your lights shine bright.\nI dream of you by night.",
+   "expect": "likely wrong"
+  },
+  {
+   "q": "What is 17 times 23?",
+   "reply": "17 \u00d7 23 = 391.",
+   "expect": "likely right"
+  },
+  {
+   "q": "What is 17 times 23?",
+   "reply": "17 \u00d7 23 = 401.",
+   "expect": "likely wrong"
+  },
+  {
+   "q": "Write a Python function that reverses a string.",
+   "reply": "Here you go:\n```python\ndef reverse(s):\n    return s[::-1]\n```",
+   "expect": "not wrong"
+  },
+  {
+   "q": "Write a Python function that reverses a string.",
+   "reply": "Here you go:\n```python\ndef reverse(s)\n    return s[::-1]\n```",
+   "expect": "likely wrong"
+  },
+  {
+   "q": "I'm nervous about my job interview tomorrow.",
+   "reply": "It's completely normal to feel nervous. Take a deep breath and remember your strengths. You've got this!",
+   "expect": "no factual claims"
+  },
+  {
+   "q": "Summarize this article.\n\nThe city council voted on Tuesday to close the Elm Street bridge for repairs. Engineers found cracks in two support beams during an inspection in March. The bridge will reopen in October, and buses will use a detour along Oak Avenue until then. The repairs will cost 4.2 million dollars, paid from the state budget.",
+   "reply": "The council voted to close the Elm Street bridge for repairs after engineers found cracks in two beams. It reopens in October and the repairs cost 4.2 million dollars.",
+   "expect": "likely right"
+  },
+  {
+   "q": "Summarize this article.\n\nThe city council voted on Tuesday to close the Elm Street bridge for repairs. Engineers found cracks in two support beams during an inspection in March. The bridge will reopen in October, and buses will use a detour along Oak Avenue until then. The repairs will cost 4.2 million dollars, paid from the state budget.",
+   "reply": "The council voted to close the Elm Street bridge for repairs. It reopens in June and the city pays 4.2 million dollars.",
+   "expect": "likely wrong"
+  }
+ ]
+}

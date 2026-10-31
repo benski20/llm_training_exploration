@@ -10,7 +10,7 @@ class Judged(Ledger):
     def __init__(self, retriever=None):
         from transformers import AutoTokenizer
         self.tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-        self.retriever, self.max_lookups, self.max_units = retriever, 3, 24
+        self.retriever, self.max_lookups, self.max_units, self.max_passages = retriever, 3, 24, 6
         self.prompts = []
 
     def _judge(self, prompts):
@@ -67,3 +67,12 @@ def test_documents_and_earlier_lookups_are_evidence():
     led.build_batch([{"text": "It opened in 1889.", "messages": [{"role": "user", "content": "When?"}],
                       "documents": ["Doc text."], "found": ["Page (Wikipedia): passage."]}])
     assert "Documents the user gave:\nDoc text." in led.prompts[0] and "Found by search:\nPage" in led.prompts[0]
+
+
+def test_lookups_are_pooled_across_a_reply():
+    looked = []
+    led = Judged(retriever=lambda q: looked.append(q) or [f"Page {len(looked)} (Wikipedia): Paris 1889."])
+    led.max_lookups = 1
+    out = led.build_batch([{"text": "It was in Rome. It opened in 1889.", "question": "Where and when?"}])[0]
+    assert len(looked) == 1                                                    # one lookup for the reply
+    assert [u["verdict"] for u in out] == ["contradicted", "supported"]        # both judged against what it found

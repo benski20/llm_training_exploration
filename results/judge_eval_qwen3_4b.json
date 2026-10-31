@@ -1,0 +1,272 @@
+{
+ "model": "Qwen/Qwen3-4B",
+ "kind": {
+  "facts_not_D": 60,
+  "others_D": 55,
+  "n_each": 60,
+  "verdicts": {
+   "fact": {
+    "unverified": 55,
+    "supported": 5
+   },
+   "not": {
+    "not a factual claim": 55,
+    "supported": 3,
+    "unverified": 2
+   }
+  },
+  "wrong": [
+   [
+    "not",
+    "supported",
+    "Sure, here's a haiku about the sea."
+   ],
+   [
+    "not",
+    "unverified",
+    "Use a soft brush to avoid scratching the surface."
+   ],
+   [
+    "not",
+    "supported",
+    "I can help with that."
+   ],
+   [
+    "not",
+    "unverified",
+    "The meeting was moved to Tuesday, or so the calendar claims, in a desperate bid for attention."
+   ],
+   [
+    "not",
+    "supported",
+    "A riddle for you: what has hands but cannot clap?"
+   ]
+  ]
+ },
+ "arithmetic": {
+  "n": 16,
+  "correct": 16,
+  "confusion": {},
+  "wrong": []
+ },
+ "text": {
+  "n": 14,
+  "correct": 13,
+  "confusion": {
+   "contradicted -> supported": 1
+  },
+  "wrong": [
+   [
+    "contradicted",
+    "supported",
+    "The city budget pays for the repairs."
+   ]
+  ]
+ },
+ "replies": {
+  "n": 13,
+  "correct": 11,
+  "rows": [
+   {
+    "q": "Who designed the Eiffel Tower and when was it finished?",
+    "expect": "likely right",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "The Eiffel Tower was designed by engineers of Gustave Eiffel's company",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Who designed the Eiffel Tower and when was it finished?",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "contradicted",
+      "The Eiffel Tower was designed by Gustave Eiffel's company and finished",
+      [
+       "Eiffel Tower",
+       "Exposition Universelle (1889)"
+      ]
+     ]
+    ]
+   },
+   {
+    "q": "Who wrote Pride and Prejudice?",
+    "expect": "likely right",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "Pride and Prejudice was written by Jane Austen and published in 1813.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Who wrote Pride and Prejudice?",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "contradicted",
+      "Pride and Prejudice was written by Charlotte Bront\u00eb.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Write a short poem about the sea.",
+    "expect": "no factual claims",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "Whispering waves dance on the shore,",
+      null
+     ],
+     [
+      "not a factual claim",
+      "the moon hums softly, nothing more.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Write a short poem about Paris.",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "contradicted",
+      "Oh Paris, capital of Italy, your lights shine bright.",
+      null
+     ],
+     [
+      "not a factual claim",
+      "I dream of you by night.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "What is 17 times 23?",
+    "expect": "likely right",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "17 \u00d7 23 = 391.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "What is 17 times 23?",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "contradicted",
+      "17 \u00d7 23 = 401.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Write a Python function that reverses a string.",
+    "expect": "not wrong",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "def reverse(s):\n    return s[::-1]",
+      null
+     ],
+     [
+      "supported",
+      "Here you go:",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Write a Python function that reverses a string.",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "contradicted",
+      "def reverse(s)\n    return s[::-1]",
+      null
+     ],
+     [
+      "supported",
+      "Here you go:",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "I'm nervous about my job interview tomorrow.",
+    "expect": "no factual claims",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "It's completely normal to feel nervous.",
+      null
+     ],
+     [
+      "supported",
+      "Take a deep breath and remember your strengths.",
+      null
+     ],
+     [
+      "not a factual claim",
+      "You've got this!",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
+    "expect": "likely right",
+    "got": "likely right",
+    "ledger": [
+     [
+      "supported",
+      "The council voted to close the Elm Street bridge for repairs after eng",
+      null
+     ],
+     [
+      "supported",
+      "It reopens in October and the repairs cost 4.2 million dollars.",
+      null
+     ]
+    ]
+   },
+   {
+    "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
+    "expect": "likely wrong",
+    "got": "likely wrong",
+    "ledger": [
+     [
+      "supported",
+      "The council voted to close the Elm Street bridge for repairs.",
+      null
+     ],
+     [
+      "contradicted",
+      "It reopens in June and the city pays 4.2 million dollars.",
+      null
+     ]
+    ]
+   }
+  ]
+ },
+ "seconds": 132.7
+}
