@@ -1,0 +1,91 @@
+{
+ "embed": "BAAI/bge-small-en-v1.5",
+ "l2": 1e-05,
+ "train": {
+  "n": 33179,
+  "facts": 13315
+ },
+ "claimbuster_heldout": {
+  "n": 2354,
+  "accuracy": 0.818,
+  "fact_recall": 0.778,
+  "not_a_claim_taken_for_fact": 0.162,
+  "auroc": 0.89
+ },
+ "chatbot_sentences_heldout": {
+  "n": 120,
+  "accuracy": 0.9,
+  "fact_recall": 0.95,
+  "not_a_claim_taken_for_fact": 0.15,
+  "auroc": 0.966
+ },
+ "heuristic_on_chatbot_sentences": {
+  "n": 120,
+  "accuracy": 0.717,
+  "fact_recall": 0.533,
+  "not_a_claim_taken_for_fact": 0.1,
+  "auroc": 0.717
+ },
+ "chatbot_sentences_wrong": [
+  [
+   true,
+   0.42,
+   "Phoenix does not observe daylight saving time."
+  ],
+  [
+   true,
+   0.5,
+   "Vaccines train the immune system to recognise a pathogen."
+  ],
+  [
+   true,
+   0.5,
+   "Honey never spoils if it is stored sealed."
+  ],
+  [
+   false,
+   0.93,
+   "Here's a short summary of the article."
+  ],
+  [
+   false,
+   0.52,
+   "What kind of fishing does your dad enjoy?"
+  ],
+  [
+   false,
+   0.64,
+   "Whispering waves dance on the moonlit shore."
+  ],
+  [
+   false,
+   0.53,
+   "The little dragon pulled the blanket over his eyes."
+  ],
+  [
+   false,
+   0.61,
+   "Once upon a time, a penguin dreamed of flying."
+  ],
+  [
+   false,
+   0.51,
+   "In my opinion, Python is easier for beginners."
+  ],
+  [
+   false,
+   0.87,
+   "The stars whispered secrets to the sleeping sea."
+  ],
+  [
+   false,
+   0.53,
+   "Keep practising and you'll get faster."
+  ],
+  [
+   false,
+   0.53,
+   "The meeting was moved to Tuesday, or so the calendar claims, in a desperate bid for attention."
+  ]
+ ]
+}

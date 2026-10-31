@@ -134,6 +134,7 @@ class VeriChat:
         self.moderator = moderator                     # vt.moderation.Moderator: screen inputs and replies
         self.verifier = None                           # vt.claim_verify.ClaimVerifier: check claims against sources
         self.router = None                             # vt.router.Router: information / math / code / chat
+        self.ledger = None                             # vt.ledger.Ledger: a verdict on every claim of every reply
 
     @classmethod
     def load(cls, model_name, head_path, threshold=None, revision=None):
@@ -347,6 +348,31 @@ class VeriChat:
                 o.update(text=WITHHELD, claims=[], withheld=True)
         return o
 
+    def _ledger(self, items):
+        """Every claim of several final replies checked the way that fits it (vt.ledger): items are
+        (reply, request, question). Facts are judged against the documents the reply was written from (the
+        user's text, the sources found first, the lookup after doubt), else looked up. The reply's verdict
+        comes from its ledger. A check that fails never fails the replies."""
+        from vt.ledger import overall
+        todo, built = [(o, r, q) for o, r, q in items if not o.get("withheld")], []
+        if todo:
+            rows = []
+            for o, r, q in todo:
+                docs = r.get("documents") or (o.get("retrieval") or {}).get("passages") or None
+                label = r.get("source_label") or ("the sources found" if r.get("grounded") or not r.get("documents")
+                                                  else "your documents")
+                rows.append({"text": o["text"], "question": q, "documents": docs, "source_label": label,
+                             "calculation": r.get("route") == "math",
+                             **({"fact_threshold": 0.9} if r.get("route") == "chat" else {})})  # fiction: facts only
+            try:                                                           # when the typer is sure
+                built = self.ledger.build_batch(rows)
+            except Exception as e:                                         # the older checks instead
+                print(f"ledger failed: {e!r}", flush=True)
+                return self._verify([(o, None if r.get("grounded") else q) for o, r, q in items])
+        for (o, _, _), led in zip(todo, built):
+            o["ledger"] = led
+            o["assessment"] = overall(led)
+
     def _verify(self, items):
         """Check the claims of several final replies against sources at once (the verifier): items are
         (reply, question). A check that fails never fails the replies. Then each reply's assessment."""
@@ -448,7 +474,10 @@ class VeriChat:
                 o["code_check"] = check_code(o["text"])
 
         def deliver(ids):                                            # verified together, then sent
-            self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])
+            if self.ledger is not None:
+                self._ledger([(outs[i], reqs[i], ask(reqs[i])) for i in ids])
+            else:
+                self._verify([(outs[i], None if reqs[i].get("grounded") else ask(reqs[i])) for i in ids])
             for i in ids:
                 send(i)
         doubted, final = [], []                                      # closed-book replies the model doubts

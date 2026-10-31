@@ -1,0 +1,482 @@
+[
+ {
+  "s": "The Eiffel Tower was completed in 1889 for the World's Fair.",
+  "fact": true
+ },
+ {
+  "s": "Water boils at 100 degrees Celsius at sea level.",
+  "fact": true
+ },
+ {
+  "s": "Jane Austen published Pride and Prejudice in 1813.",
+  "fact": true
+ },
+ {
+  "s": "The human body has 206 bones.",
+  "fact": true
+ },
+ {
+  "s": "Canberra is the capital of Australia.",
+  "fact": true
+ },
+ {
+  "s": "Ibuprofen is a nonsteroidal anti-inflammatory drug.",
+  "fact": true
+ },
+ {
+  "s": "Grapes can cause kidney failure in dogs.",
+  "fact": true
+ },
+ {
+  "s": "A traditional IRA is funded with pre-tax dollars.",
+  "fact": true
+ },
+ {
+  "s": "Phoenix does not observe daylight saving time.",
+  "fact": true
+ },
+ {
+  "s": "The Berlin Wall fell on November 9, 1989.",
+  "fact": true
+ },
+ {
+  "s": "Light travels at about 300,000 kilometres per second.",
+  "fact": true
+ },
+ {
+  "s": "Cast iron rusts if it is left wet.",
+  "fact": true
+ },
+ {
+  "s": "Solar panels convert sunlight into electricity using photovoltaic cells.",
+  "fact": true
+ },
+ {
+  "s": "Inflation is a general rise in prices over time.",
+  "fact": true
+ },
+ {
+  "s": "Mount Kilimanjaro is the tallest mountain in Africa.",
+  "fact": true
+ },
+ {
+  "s": "Portuguese is the official language of Brazil.",
+  "fact": true
+ },
+ {
+  "s": "A runny yolk usually takes about six minutes of boiling.",
+  "fact": true
+ },
+ {
+  "s": "Vaccines train the immune system to recognise a pathogen.",
+  "fact": true
+ },
+ {
+  "s": "Cats purr at frequencies between 25 and 150 hertz.",
+  "fact": true
+ },
+ {
+  "s": "Python lists are mutable, so a second name for the list sees every change.",
+  "fact": true
+ },
+ {
+  "s": "In JavaScript, === compares both value and type.",
+  "fact": true
+ },
+ {
+  "s": "git rebase rewrites commit history, while git merge preserves it.",
+  "fact": true
+ },
+ {
+  "s": "Pandas reads CSV files with the read_csv function.",
+  "fact": true
+ },
+ {
+  "s": "A null pointer exception happens when code dereferences a null reference.",
+  "fact": true
+ },
+ {
+  "s": "The French Revolution began in 1789.",
+  "fact": true
+ },
+ {
+  "s": "GDP measures the market value of all final goods and services produced in a country.",
+  "fact": true
+ },
+ {
+  "s": "Basil keeps longer at room temperature than in the fridge.",
+  "fact": true
+ },
+ {
+  "s": "A tripped breaker can be reset by switching it fully off and then on.",
+  "fact": true
+ },
+ {
+  "s": "Low iron can cause fatigue and pale skin.",
+  "fact": true
+ },
+ {
+  "s": "Pluto was reclassified as a dwarf planet in 2006.",
+  "fact": true
+ },
+ {
+  "s": "Noise-cancelling headphones use microphones to produce sound waves that cancel incoming noise.",
+  "fact": true
+ },
+ {
+  "s": "The recommended fridge temperature is below 4 degrees Celsius.",
+  "fact": true
+ },
+ {
+  "s": "US passports for adults are valid for ten years.",
+  "fact": true
+ },
+ {
+  "s": "The Great Wall of China is not visible to the naked eye from the Moon.",
+  "fact": true
+ },
+ {
+  "s": "Mitochondria produce most of a cell's ATP.",
+  "fact": true
+ },
+ {
+  "s": "The Amazon is the largest rainforest in the world.",
+  "fact": true
+ },
+ {
+  "s": "Shakespeare was born in Stratford-upon-Avon.",
+  "fact": true
+ },
+ {
+  "s": "Most cover letters run to one page.",
+  "fact": true
+ },
+ {
+  "s": "Electric cars have fewer moving parts than petrol cars.",
+  "fact": true
+ },
+ {
+  "s": "The Pacific is the largest ocean on Earth.",
+  "fact": true
+ },
+ {
+  "s": "The bridge will reopen in October.",
+  "fact": true
+ },
+ {
+  "s": "The repairs will cost 4.2 million dollars.",
+  "fact": true
+ },
+ {
+  "s": "Engineers found cracks in two support beams.",
+  "fact": true
+ },
+ {
+  "s": "The article says the council voted on Tuesday.",
+  "fact": true
+ },
+ {
+  "s": "According to the report, sales fell by 12 percent in the second quarter.",
+  "fact": true
+ },
+ {
+  "s": "Sourdough starter is a mix of flour and water fermented by wild yeast and bacteria.",
+  "fact": true
+ },
+ {
+  "s": "Snake plants need watering only every two to three weeks.",
+  "fact": true
+ },
+ {
+  "s": "Touch typing means typing without looking at the keyboard.",
+  "fact": true
+ },
+ {
+  "s": "The 2014 World Cup was won by Germany.",
+  "fact": true
+ },
+ {
+  "s": "Lithium-ion batteries degrade faster when kept at full charge.",
+  "fact": true
+ },
+ {
+  "s": "The speed limit on most UK motorways is 70 miles per hour.",
+  "fact": true
+ },
+ {
+  "s": "Docker containers stop when their main process exits.",
+  "fact": true
+ },
+ {
+  "s": "Big O notation describes how an algorithm's running time grows with its input.",
+  "fact": true
+ },
+ {
+  "s": "Honey never spoils if it is stored sealed.",
+  "fact": true
+ },
+ {
+  "s": "React components re-render when their state changes.",
+  "fact": true
+ },
+ {
+  "s": "The Roth IRA was established in 1997.",
+  "fact": true
+ },
+ {
+  "s": "Penguins live almost exclusively in the Southern Hemisphere.",
+  "fact": true
+ },
+ {
+  "s": "Dragons are not real animals.",
+  "fact": true
+ },
+ {
+  "s": "Ottawa, not Toronto, is the capital of Canada.",
+  "fact": true
+ },
+ {
+  "s": "SQL's ORDER BY clause sorts the result set.",
+  "fact": true
+ },
+ {
+  "s": "I hope this helps!",
+  "fact": false
+ },
+ {
+  "s": "Great question!",
+  "fact": false
+ },
+ {
+  "s": "Here's a short summary of the article.",
+  "fact": false
+ },
+ {
+  "s": "Let me know if you'd like more detail.",
+  "fact": false
+ },
+ {
+  "s": "I think the second option is the better choice.",
+  "fact": false
+ },
+ {
+  "s": "You should talk to your partner about money before deciding.",
+  "fact": false
+ },
+ {
+  "s": "Try drying the pan on the stove after washing it.",
+  "fact": false
+ },
+ {
+  "s": "Consider setting a monthly budget.",
+  "fact": false
+ },
+ {
+  "s": "Good luck with your interview tomorrow!",
+  "fact": false
+ },
+ {
+  "s": "It's completely normal to feel nervous.",
+  "fact": false
+ },
+ {
+  "s": "I'm sorry you're feeling lonely.",
+  "fact": false
+ },
+ {
+  "s": "Would you like me to write another version?",
+  "fact": false
+ },
+ {
+  "s": "What kind of fishing does your dad enjoy?",
+  "fact": false
+ },
+ {
+  "s": "Whispering waves dance on the moonlit shore.",
+  "fact": false
+ },
+ {
+  "s": "The little dragon pulled the blanket over his eyes.",
+  "fact": false
+ },
+ {
+  "s": "Once upon a time, a penguin dreamed of flying.",
+  "fact": false
+ },
+ {
+  "s": "Ahoy, matey!",
+  "fact": false
+ },
+ {
+  "s": "Happy 60th birthday, Mom!",
+  "fact": false
+ },
+ {
+  "s": "May your marriage be full of laughter and love.",
+  "fact": false
+ },
+ {
+  "s": "Here are a few name ideas for your bakery:",
+  "fact": false
+ },
+ {
+  "s": "Rise and Shine Bakery has a warm ring to it.",
+  "fact": false
+ },
+ {
+  "s": "Personally, I love The Shawshank Redemption.",
+  "fact": false
+ },
+ {
+  "s": "That sounds like a wonderful plan.",
+  "fact": false
+ },
+ {
+  "s": "Take a deep breath and remember your strengths.",
+  "fact": false
+ },
+ {
+  "s": "Start each morning with a glass of water.",
+  "fact": false
+ },
+ {
+  "s": "Here's the function:",
+  "fact": false
+ },
+ {
+  "s": "Feel free to adjust the numbers to your needs.",
+  "fact": false
+ },
+ {
+  "s": "In my opinion, Python is easier for beginners.",
+  "fact": false
+ },
+ {
+  "s": "Life is like a river, always moving forward.",
+  "fact": false
+ },
+ {
+  "s": "Your mom is lucky to have you.",
+  "fact": false
+ },
+ {
+  "s": "Let's break this down step by step.",
+  "fact": false
+ },
+ {
+  "s": "First, preheat the oven.",
+  "fact": false
+ },
+ {
+  "s": "Pick a quiet place to study.",
+  "fact": false
+ },
+ {
+  "s": "You might enjoy reading more science fiction.",
+  "fact": false
+ },
+ {
+  "s": "Thanks for asking!",
+  "fact": false
+ },
+ {
+  "s": "The stars whispered secrets to the sleeping sea.",
+  "fact": false
+ },
+ {
+  "s": "Every ending is a new beginning.",
+  "fact": false
+ },
+ {
+  "s": "Why did the penguin cross the road?",
+  "fact": false
+ },
+ {
+  "s": "I'd recommend a fishing tackle box as a gift.",
+  "fact": false
+ },
+ {
+  "s": "Don't be too hard on yourself.",
+  "fact": false
+ },
+ {
+  "s": "Keep practising and you'll get faster.",
+  "fact": false
+ },
+ {
+  "s": "Here is a more professional version:",
+  "fact": false
+ },
+ {
+  "s": "Could you please send me the file at your earliest convenience?",
+  "fact": false
+ },
+ {
+  "s": "Cheers to the happy couple!",
+  "fact": false
+ },
+ {
+  "s": "Remember to save your work often.",
+  "fact": false
+ },
+ {
+  "s": "This is a great opportunity to learn something new.",
+  "fact": false
+ },
+ {
+  "s": "Sure, here's a haiku about the sea.",
+  "fact": false
+ },
+ {
+  "s": "Imagine a world without plastic.",
+  "fact": false
+ },
+ {
+  "s": "Use a soft brush to avoid scratching the surface.",
+  "fact": false
+ },
+ {
+  "s": "Don't forget to drink enough water.",
+  "fact": false
+ },
+ {
+  "s": "I can help with that.",
+  "fact": false
+ },
+ {
+  "s": "It depends on what matters most to you.",
+  "fact": false
+ },
+ {
+  "s": "The meeting was moved to Tuesday, or so the calendar claims, in a desperate bid for attention.",
+  "fact": false
+ },
+ {
+  "s": "You've got this!",
+  "fact": false
+ },
+ {
+  "s": "Choose the colour that makes you happiest.",
+  "fact": false
+ },
+ {
+  "s": "A riddle for you: what has hands but cannot clap?",
+  "fact": false
+ },
+ {
+  "s": "Breathe in, breathe out, and let the day begin.",
+  "fact": false
+ },
+ {
+  "s": "Let me know which option you prefer.",
+  "fact": false
+ },
+ {
+  "s": "Overall, both are good choices.",
+  "fact": false
+ },
+ {
+  "s": "To be honest, I'd go with the cheaper one.",
+  "fact": false
+ }
+]

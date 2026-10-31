@@ -57,7 +57,10 @@ def plain(text):
     for a, b in (("\\times", "×"), ("\\cdot", "·"), ("\\div", "÷"), ("\\left", ""), ("\\right", ""),
                  ("\\(", " "), ("\\)", " "), ("\\[", " "), ("\\]", " "), ("$", " "), ("{", ""), ("}", "")):
         t = t.replace(a, b)
-    return re.sub(r"\\[a-zA-Z]+", " ", t)
+    t = re.sub(r"\\[a-zA-Z]+", " ", t)
+    for word, op in ((r"times|multiplied by", "×"), (r"divided by", "÷"), (r"plus", "+"), (r"minus", "-")):
+        t = re.sub(rf"(?<=\d)\s+(?:{word})\s+(?=[\d(])", f" {op} ", t)     # "17 times 23 is 391"
+    return t
 
 
 YEARS = re.compile(r"^\(?\s*\d{4}\s*\)?\s*[-–]\s*\(?\s*\d{4}\s*\)?$")      # 1914-1918: a range, not a sum

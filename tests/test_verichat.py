@@ -653,3 +653,35 @@ def test_routing_grounds_information_and_rechecks_math():
     out = bot.reply_batch([{"messages": [{"role": "user", "content": note}], "max_new_tokens": 8}])[0]
     assert looked == [] and out["route"] == "text" and out["grounded"]   # no search: the pasted text is the source
     assert out["source_label"] == "your text" and "sources" not in out      # not shown back to the user
+
+
+def test_ledger_gives_every_reply_a_verdict():
+    from vt.ledger import Ledger
+    tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+    torch.manual_seed(0)
+    m = Qwen2ForCausalLM(Qwen2Config(vocab_size=len(tok), hidden_size=32, intermediate_size=64, num_hidden_layers=2,
+                                     num_attention_heads=4, num_key_value_heads=2)).eval()
+    p = Probe().fit(np.random.default_rng(0).normal(size=(40, 32)).astype(np.float32), np.r_[np.zeros(20), np.ones(20)].astype(np.float32))
+    bot = VeriChat(m, tok, p, layer=1, threshold=0.0)
+
+    class Typer:
+        def p_fact(self, texts):
+            return np.full(len(texts), 0.9)
+
+    class Judge:
+        supported = 0.6
+
+        def judge3(self, items):
+            self.seen = items
+            return [(0.1, 0.1, 0.8) for _ in items]
+    judge = Judge()
+    bot.ledger = Ledger(Typer(), judge, retriever=lambda q: ["Some page: some text."])
+    outs = bot.reply_batch([{"messages": [{"role": "user", "content": q}], "max_new_tokens": 8, "retrieve": False}
+                            for q in ("Who built it?", "Write a poem.")])
+    for o in outs:                                               # whatever was asked: a ledger and a verdict
+        assert "ledger" in o and o["assessment"]["verdict"] in ("unverified", "no factual claims", "uncertain",
+                                                                "likely right", "likely wrong")
+    docs = bot.reply_batch([{"messages": [{"role": "user", "content": "Summarize."}], "max_new_tokens": 8,
+                             "documents": ["The tower opened in 1889."]}])[0]
+    if docs["ledger"] and any(u["type"] == "fact" for u in docs["ledger"]):
+        assert judge.seen[0][2] == ["The tower opened in 1889."]   # judged against the documents, not a lookup

@@ -45,3 +45,10 @@ def test_percent_in_everyday_wording():
     from vt.mathcheck import check_arithmetic
     assert check_arithmetic("A 20% tip on $45 would be $9.")[0]["ok"]
     assert not check_arithmetic("15% of 80 comes to 14")[0]["ok"]
+
+
+def test_operations_in_words():
+    from vt.mathcheck import check_arithmetic
+    assert check_arithmetic("17 times 23 is 391.")[0]["ok"]
+    assert not check_arithmetic("100 divided by 4 equals 20")[0]["ok"]
+    assert check_arithmetic("I visited 3 times in 2019.") == []

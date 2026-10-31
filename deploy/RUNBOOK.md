@@ -329,6 +329,35 @@ tasks on pasted text, none of the other 200 messages. `python experiments/router
 search 45% of the time (their arithmetic is still re-computed). The chat model's own choice (`--route model`, one
 forward pass) sorted 76% of the 80 at 0.5B and sent most chat to a search; at 32B it is unmeasured.
 
+## A verdict on every claim (`--ledger`, on in the deploy)
+
+Routing decides how a reply is written; the ledger decides what of it is true. Every reply, whatever was
+asked, is cut into units (code blocks, then sentences) and each unit is sorted and checked
+(`vt/ledger.py`):
+
+| unit | check | verdicts |
+|---|---|---|
+| code | parsed, never run | parses (not run), does not parse, not checked (other languages) |
+| arithmetic | re-computed exactly ("17 times 23 is 391" too, in answers to calculations) | correct, wrong |
+| fact | judged three-way by the chat model against the documents the reply was written from (the user's text, the sources found first), else a lookup of its own (at most 4 a reply, 12 facts) | supported, contradicted, not in the sources, no evidence, not checked |
+| anything else | opinion, advice, fiction, greetings | not a factual claim |
+
+Which sentences are facts is decided by a classifier on CPU (bge-small and a layer trained on ClaimBuster's
+human labels plus factual vs creative Dolly answers; `experiments/train_claim_type.py`, 4 KB in
+`vt/claim_type_head.npz`). On 120 chatbot-reply sentences labeled by hand and never trained on, it finds 95%
+of the facts and takes 15% of the rest for facts (AUROC 0.97); the old rule (a number or a capitalised word)
+found 53% (AUROC 0.72). On held-out ClaimBuster debate sentences: AUROC 0.89. In replies to creative
+requests a sentence must score 0.9 to count as a fact, and only evidence that contradicts a claim counts
+against it, so a line of a poem is never "wrong" for not being in Wikipedia; a wrong date inside a poem is.
+
+The reply's verdict comes from its ledger: anything contradicted, miscalculated or unparseable makes it
+likely wrong; every fact supported likely right; facts unconfirmed uncertain (some supported) or unverified
+(none); no factual claims says so. Cost: the classifier on CPU, one forward pass per fact (no generation),
+and lookups only for facts the reply's own documents do not cover. A local run (0.5B, Wikipedia): a summary
+of a pasted article had all 3 claims supported by the user's text; a 16-line poem read "no factual claims";
+code "parses (not run)"; the 0.5B judge found the Eiffel Tower answer "unclear" against its Wikipedia pages
+(the judge is the served model: the 32B's judging is measured in the study above, the ledger live is not).
+
 ## Clients
 
 `vt.client.chat(url, messages)` streams the reply. If 45 s pass without a byte (the server sends a
