@@ -161,3 +161,26 @@ the untrained shift alone 0.70 [0.62, 0.78] and 0.68 [0.64, 0.73]. The trained-o
 inside the probe's interval. More of the same constructions does not help: 1,500 instead of 600 gave 0.77-0.79
 per response while the synthetic held-out score rose to 0.99, the probe learning the constructions' artefacts.
 More varied constructions, not more of them, is the lever.
+
+## End to end (`vt/grounding.py`, `experiments/grounding_demo.py`, `results/grounding_demo_qwen3_4b.json`)
+
+The serving check on 13 whole replies, Qwen3-4B reading each once with its evidence (the pasted article; or two
+Wikipedia lookups, by the question and by the question with the reply's own words; exact arithmetic; code
+parsed), probe, evidence shift and disagreement summed on their natural-sentence scales:
+
+| pair (same question) | right reply | wrong reply |
+|---|---|---|
+| summary of a pasted article | 1.13 | **2.80** |
+| poem: the sea / "Paris, capital of Italy" | 0.54 | **2.15** |
+| 17 x 23 = 391 / 401 | 0.00 | **0.39** |
+| Pride and Prejudice: Austen / Brontë | 0.38 | **0.58** |
+| Eiffel Tower: 1889 / 1925 | 0.82 | **0.84** (thin) |
+| Python function: parses / does not | 0.00 | **0.03** (thin) |
+
+All six pairs in the right order; across all 13 replies, wrong ones against the rest at AUROC 0.71 (reassurance
+0.50, the sea poem 0.54). Three things the earlier versions of this demo showed: the probe alone missed
+single-name and single-date contradictions (the disagreement signal is what catches them); a lookup by the
+question alone found Eiffel Tower passages without its date or designers (the reply's own words steer it to
+the pages that settle the claim); a code-parse failure needs to be in the evidence to count. Two margins are
+thin, and this is a 4B reading; the served model is the 32B the clean-neurons audit is about, and its probe
+has to be trained on it (a GPU run of `experiments/grounding_probe.py --export`).

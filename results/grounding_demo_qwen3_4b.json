@@ -2,17 +2,17 @@
  "model": "Qwen/Qwen3-4B",
  "n": 13,
  "wrong": 6,
- "total_auroc_wrong": 0.643,
+ "total_auroc_wrong": 0.714,
  "rows": [
   {
    "q": "Who designed the Eiffel Tower and when was it finished?",
    "wrong": false,
-   "total": 1.651,
-   "verdict": "contradicted",
+   "total": 0.816,
+   "verdict": "grounded",
    "sentences": [
     [
-     "contradicted",
-     1.651,
+     "grounded",
+     0.816,
      "The Eiffel Tower was designed by engineers of Gustave Eiffel's company"
     ]
    ]
@@ -20,12 +20,12 @@
   {
    "q": "Who designed the Eiffel Tower and when was it finished?",
    "wrong": true,
-   "total": 1.024,
-   "verdict": "not grounded",
+   "total": 0.844,
+   "verdict": "grounded",
    "sentences": [
     [
-     "not grounded",
-     1.024,
+     "grounded",
+     0.844,
      "The Eiffel Tower was designed by Gustave Eiffel's company and finished"
     ]
    ]
@@ -33,12 +33,12 @@
   {
    "q": "Who wrote Pride and Prejudice?",
    "wrong": false,
-   "total": 0.575,
+   "total": 0.377,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.575,
+     0.377,
      "Pride and Prejudice was written by Jane Austen and published in 1813."
     ]
    ]
@@ -126,22 +126,22 @@
    "sentences": [
     [
      "grounded",
-     -1.268,
+     -0.812,
      "Here you go:"
     ],
     [
      "grounded",
-     -0.134,
+     -0.703,
      "```python"
     ],
     [
      "grounded",
-     -0.983,
+     -0.967,
      "def reverse(s):"
     ],
     [
      "grounded",
-     -0.768,
+     -0.904,
      "return s[::-1]"
     ]
    ]
@@ -149,27 +149,27 @@
   {
    "q": "Write a Python function that reverses a string.",
    "wrong": true,
-   "total": 0.0,
+   "total": 0.032,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     -1.268,
+     0.029,
      "Here you go:"
     ],
     [
      "grounded",
-     -0.134,
+     0.003,
      "```python"
     ],
     [
      "grounded",
-     -0.565,
+     -0.556,
      "def reverse(s)"
     ],
     [
      "grounded",
-     -0.357,
+     -0.188,
      "return s[::-1]"
     ]
    ]
