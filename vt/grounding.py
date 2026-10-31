@@ -72,15 +72,21 @@ class Grounding:
         said = [m["content"] for m in messages if m.get("role") == "user"]
         question = said[-1] if said else ""
         parts = list(documents or [])
-        if self.retriever is not None and not parts:
-            try:
-                parts += list(self.retriever(question[:300]))
-            except Exception as e:                               # no lookup: grounded in the conversation only
-                print(f"grounding lookup failed: {e!r}", flush=True)
+        if self.retriever is not None and not parts:             # the question, and the question with the
+            for q in (question[:300], f"{question[:200]} {reply[:300]}"):   # reply's own words: they steer the
+                try:                                             # search to the pages that settle its claims
+                    parts += [p for p in self.retriever(q) if p not in parts]
+                except Exception as e:                           # no lookup: grounded in the conversation only
+                    print(f"grounding lookup failed: {e!r}", flush=True)
         parts += said[:-1]
         sums = exact_lines(reply)
         if sums:
             parts.append("Exact arithmetic: " + "; ".join(sums))
+        from vt.codecheck import check_code
+        code = check_code(reply)
+        if code:                                                 # parsed, never run
+            parts.append("Code check: " + "; ".join(f"the {c['language']} parses" if c["ok"] else
+                                                     f"the {c['language']} does not parse ({c['error']})" for c in code))
         ev = "\n\n".join(parts)[-self.max_context_chars:]
         return f"{question}\n\n{ev}".strip()
 

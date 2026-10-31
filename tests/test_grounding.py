@@ -46,9 +46,10 @@ def test_flags_follow_the_probe_and_evidence_reaches_the_context(tmp_path):
     g = Grounding(m, tok, probe(tmp_path, np.ones(128)), retriever=lambda q: seen.append(q) or ["Found (Wikipedia): x"],
                   flag_z=-1e9)
     assert g.check([{"role": "user", "content": "When?"}], "In 1889.")["verdict"] == "not grounded"
-    assert seen == ["When?"]
+    assert seen == ["When?", "When? In 1889."]                            # the question, then with the reply's words
     ev = g.evidence([{"role": "user", "content": "When?"}], "17 × 23 = 401.", documents=["Doc."])
     assert ev.startswith("When?") and "Doc." in ev and "Exact arithmetic: 17 × 23 = 391" in ev
+    assert "does not parse" in g.evidence([{"role": "user", "content": "Code?"}], "```python\ndef f(x)\n  pass\n```")
 
 
 def test_with_natural_scales_the_evidence_signals_join(tmp_path):

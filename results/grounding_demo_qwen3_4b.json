@@ -2,17 +2,17 @@
  "model": "Qwen/Qwen3-4B",
  "n": 13,
  "wrong": 6,
- "total_auroc_wrong": 0.571,
+ "total_auroc_wrong": 0.643,
  "rows": [
   {
    "q": "Who designed the Eiffel Tower and when was it finished?",
    "wrong": false,
-   "total": 1.127,
-   "verdict": "not grounded",
+   "total": 1.651,
+   "verdict": "contradicted",
    "sentences": [
     [
-     "not grounded",
-     1.127,
+     "contradicted",
+     1.651,
      "The Eiffel Tower was designed by engineers of Gustave Eiffel's company"
     ]
    ]
@@ -20,12 +20,12 @@
   {
    "q": "Who designed the Eiffel Tower and when was it finished?",
    "wrong": true,
-   "total": 1.07,
+   "total": 1.024,
    "verdict": "not grounded",
    "sentences": [
     [
      "not grounded",
-     1.07,
+     1.024,
      "The Eiffel Tower was designed by Gustave Eiffel's company and finished"
     ]
    ]
@@ -33,12 +33,12 @@
   {
    "q": "Who wrote Pride and Prejudice?",
    "wrong": false,
-   "total": 0.269,
+   "total": 0.575,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.269,
+     0.575,
      "Pride and Prejudice was written by Jane Austen and published in 1813."
     ]
    ]
@@ -46,12 +46,12 @@
   {
    "q": "Who wrote Pride and Prejudice?",
    "wrong": true,
-   "total": 0.077,
+   "total": 0.58,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.077,
+     0.58,
      "Pride and Prejudice was written by Charlotte Bront\u00eb."
     ]
    ]
@@ -59,17 +59,17 @@
   {
    "q": "Write a short poem about the sea.",
    "wrong": false,
-   "total": 2.117,
-   "verdict": "not grounded",
+   "total": 0.538,
+   "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.871,
+     -0.273,
      "Whispering waves dance on the shore,"
     ],
     [
-     "not grounded",
-     1.246,
+     "grounded",
+     0.538,
      "the moon hums softly, nothing more."
     ]
    ]
@@ -77,17 +77,17 @@
   {
    "q": "Write a short poem about Paris.",
    "wrong": true,
-   "total": 3.322,
+   "total": 2.152,
    "verdict": "not grounded",
    "sentences": [
     [
-     "not grounded",
-     1.531,
+     "grounded",
+     0.719,
      "Oh Paris, capital of Italy, your lights shine bright."
     ],
     [
      "not grounded",
-     1.791,
+     1.433,
      "I dream of you by night."
     ]
    ]
@@ -100,7 +100,7 @@
    "sentences": [
     [
      "grounded",
-     -0.36,
+     -1.017,
      "17 \u00d7 23 = 391."
     ]
    ]
@@ -108,12 +108,12 @@
   {
    "q": "What is 17 times 23?",
    "wrong": true,
-   "total": 0.621,
+   "total": 0.387,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.621,
+     0.387,
      "17 \u00d7 23 = 401."
     ]
    ]
@@ -121,27 +121,27 @@
   {
    "q": "Write a Python function that reverses a string.",
    "wrong": false,
-   "total": 1.356,
+   "total": 0.0,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.382,
+     -1.268,
      "Here you go:"
     ],
     [
      "grounded",
-     0.592,
+     -0.134,
      "```python"
     ],
     [
      "grounded",
-     0.22,
+     -0.983,
      "def reverse(s):"
     ],
     [
      "grounded",
-     0.162,
+     -0.768,
      "return s[::-1]"
     ]
    ]
@@ -149,27 +149,27 @@
   {
    "q": "Write a Python function that reverses a string.",
    "wrong": true,
-   "total": 1.918,
+   "total": 0.0,
    "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.382,
+     -1.268,
      "Here you go:"
     ],
     [
      "grounded",
-     0.592,
+     -0.134,
      "```python"
     ],
     [
      "grounded",
-     0.503,
+     -0.565,
      "def reverse(s)"
     ],
     [
      "grounded",
-     0.441,
+     -0.357,
      "return s[::-1]"
     ]
    ]
@@ -177,22 +177,22 @@
   {
    "q": "I'm nervous about my job interview tomorrow.",
    "wrong": false,
-   "total": 1.894,
-   "verdict": "not grounded",
+   "total": 0.496,
+   "verdict": "grounded",
    "sentences": [
     [
      "grounded",
-     0.033,
+     -1.306,
      "It's completely normal to feel nervous."
     ],
     [
      "grounded",
-     0.744,
+     0.004,
      "Take a deep breath and remember your strengths."
     ],
     [
-     "not grounded",
-     1.117,
+     "grounded",
+     0.492,
      "You've got this!"
     ]
    ]
@@ -200,17 +200,17 @@
   {
    "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
    "wrong": false,
-   "total": 0.0,
-   "verdict": "grounded",
+   "total": 1.126,
+   "verdict": "not grounded",
    "sentences": [
     [
      "grounded",
-     -0.803,
+     -1.416,
      "The council voted to close the Elm Street bridge for repairs after eng"
     ],
     [
-     "grounded",
-     -0.261,
+     "not grounded",
+     1.126,
      "It reopens in October and the repairs cost 4.2 million dollars."
     ]
    ]
@@ -218,17 +218,17 @@
   {
    "q": "Summarize this article.\n\nThe city council voted on Tuesday t",
    "wrong": true,
-   "total": 0.966,
-   "verdict": "grounded",
+   "total": 2.796,
+   "verdict": "contradicted",
    "sentences": [
     [
      "grounded",
-     -0.974,
+     -1.459,
      "The council voted to close the Elm Street bridge for repairs."
     ],
     [
-     "grounded",
-     0.966,
+     "contradicted",
+     2.796,
      "It reopens in June and the city pays 4.2 million dollars."
     ]
    ]
