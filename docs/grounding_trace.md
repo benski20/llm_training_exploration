@@ -55,3 +55,17 @@ and a search for the reply's statements that nothing else grounds.
 - the evidence path: `experiments/evidence_shift.py` on RAGTruth's human-labeled hallucinations;
 - the recall path, and whether clean neurons generalize: neurons picked by a real-vs-invented-entity contrast,
   scored on wrong vs right closed-book answers in domains they were not picked on.
+
+## Results so far
+
+**The evidence path** (`results/evidence_shift_qwen3_4b.json`, 200 RAGTruth test answers, half with
+hallucinations, Qwen3-4B, no training): AUROC for "hallucinated"
+
+| level | evidence shift | log-probability with the evidence | reference |
+|---|---|---|---|
+| token (27,763) | 0.62 | 0.58 | provenance (document share): 0.76 |
+| sentence (1,470) | 0.69 (mean shift), 0.68 on contradictions only | 0.60 | the 32B's trained head on a source it had not seen: 0.58 |
+| response (200) | 0.69 | 0.55 | a detector trained on RAGTruth itself: 0.86 |
+
+A real signal with no training, better than the trained head's transfer and than the model's plain confidence,
+but well short of provenance and of a detector trained on the same data. It is one ingredient, not the method.
