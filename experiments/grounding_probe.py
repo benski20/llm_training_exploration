@@ -166,6 +166,7 @@ def main():
     ap.add_argument("--test", type=int, default=200)
     ap.add_argument("--max-context-chars", type=int, default=4000)
     ap.add_argument("--out", default="grounding_probe.json")
+    ap.add_argument("--export", help="save the probe (C=0.01) for serving with vt/grounding.py (.npz)")
     ap.add_argument("--test-cache", help="save / reuse the RAGTruth side here (.npz; depends only on the model)")
     ap.add_argument("--phrasing", action="store_true", help="give every constructed reply the wording of an "
                     "answer (a lead-in, parentheses dropped), so copied text cannot be told by its form")
@@ -229,6 +230,13 @@ def main():
     z = lambda v: (v - v.mean()) / (v.std() + 1e-9)                # noqa: E731
     clf = LogisticRegression(C=0.01, max_iter=3000).fit(sc.transform(Xs), ys)
     probe = clf.decision_function(sc.transform(Xt))
+    if a.export:                                                # what vt/grounding.py loads to serve the probe
+        own = clf.decision_function(sc.transform(Xs))            # its scores on the constructions: the scale
+        np.savez(a.export, layers=np.array(reader.layers), mean=sc.mean_.astype(np.float32),
+                 scale=sc.scale_.astype(np.float32), coef=clf.coef_[0].astype(np.float32),
+                 intercept=np.float32(clf.intercept_[0]), score_mean=np.float32(own.mean()),
+                 score_std=np.float32(own.std()), model=np.array(a.model),
+                 grounded_mean=np.float32(own[ys == 0].mean()), ungrounded_mean=np.float32(own[ys == 1].mean()))
     res["evidence"] = {"mean_shift": report(-ev[:, 0]), "max_disagreement": report(ev[:, 1])}
     res["combined"] = {"probe+disagreement": report(z(probe) + z(ev[:, 1])),
                        "probe+shift": report(z(probe) - z(ev[:, 0])),
