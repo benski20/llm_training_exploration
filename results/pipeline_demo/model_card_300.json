@@ -1,0 +1,67 @@
+{
+ "probe": "results/pipeline_demo/probe.calibrated.npz",
+ "sha256": "1ea83ecd3588b82e573cfe1a3e997350602fcf4d77b5e07b2303e6eeb69c32dc",
+ "reader": "Qwen/Qwen3-4B",
+ "labeled": "results/pipeline_demo/test300.jsonl",
+ "n": 300,
+ "auroc": 0.619,
+ "at_threshold": {
+  "caught": 0.227,
+  "false_alarms": 0.187,
+  "precision": 0.548,
+  "hallucinated": 150,
+  "clean": 150
+ },
+ "threshold": 2.141,
+ "seconds_per_reply": 4.86,
+ "per_source": {
+  "DROP": {
+   "auroc": 0.469,
+   "caught": 0.32,
+   "false_alarms": 0.32,
+   "precision": 0.5,
+   "hallucinated": 25,
+   "clean": 25
+  },
+  "FinanceBench": {
+   "auroc": 0.385,
+   "caught": 0.12,
+   "false_alarms": 0.2,
+   "precision": 0.375,
+   "hallucinated": 25,
+   "clean": 25
+  },
+  "RAGTruth": {
+   "auroc": 0.662,
+   "caught": 0.48,
+   "false_alarms": 0.36,
+   "precision": 0.571,
+   "hallucinated": 25,
+   "clean": 25
+  },
+  "covidQA": {
+   "auroc": 0.728,
+   "caught": 0.08,
+   "false_alarms": 0.08,
+   "precision": 0.5,
+   "hallucinated": 25,
+   "clean": 25
+  },
+  "halueval": {
+   "auroc": 0.83,
+   "caught": 0.16,
+   "false_alarms": 0.0,
+   "precision": 1.0,
+   "hallucinated": 25,
+   "clean": 25
+  },
+  "pubmedQA": {
+   "auroc": 0.692,
+   "caught": 0.2,
+   "false_alarms": 0.16,
+   "precision": 0.556,
+   "hallucinated": 25,
+   "clean": 25
+  }
+ }
+}

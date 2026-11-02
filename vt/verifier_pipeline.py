@@ -179,7 +179,8 @@ def cmd_evaluate(a):
             res["per_source"][src] = dict(auroc=round(float(auroc(tot[m], y[m].astype(float))), 3)
                                           if y[m].min() != y[m].max() else None, **rates(tot[m], y[m], thr))
     out = os.path.splitext(a.card)[0]
-    json.dump(res, open(out + ".json", "w"), indent=1)
+    json.dump(dict(res, scores=[round(float(t), 4) for t in tot], labels=y.tolist()),     # per reply, for paired
+              open(out + ".json", "w"), indent=1)                                     # comparisons
     open(a.card, "w").write(model_card(res, a.probe))
     print(json.dumps(res, indent=1))
 
