@@ -1,0 +1,142 @@
+{
+ "reader": "Qwen/Qwen3-4B",
+ "train_answers": 800,
+ "test_answers": 600,
+ "train_sentences": 6714,
+ "test_sentences": 4505,
+ "test_hallucinated_answers": 227,
+ "published_response_f1": {
+  "Llama-2-13B fine-tuned (RAGTruth paper)": 78.7,
+  "LettuceDetect large (ModernBERT fine-tuned)": 79.22,
+  "GPT-4-turbo prompted (RAGTruth paper)": 63.4
+ },
+ "evidence": {
+  "C": 0.1,
+  "threshold": 0.6361,
+  "validation_f1": 73.5,
+  "response": {
+   "precision": 44.1,
+   "recall": 84.6,
+   "f1": 58.0,
+   "n": 600,
+   "auroc": 0.629,
+   "f1_ci95": [
+    53.4,
+    62.1
+   ]
+  },
+  "sentence_auroc": 0.699,
+  "by_task": {
+   "Data2txt": {
+    "precision": 65.7,
+    "recall": 91.5,
+    "f1": 76.5,
+    "n": 203
+   },
+   "QA": {
+    "precision": 24.0,
+    "recall": 87.5,
+    "f1": 37.6,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 35.2,
+    "recall": 66.7,
+    "f1": 46.1,
+    "n": 201
+   }
+  }
+ },
+ "neurons": {
+  "C": 0.001,
+  "threshold": 0.2906,
+  "validation_f1": 80.0,
+  "response": {
+   "precision": 64.1,
+   "recall": 78.0,
+   "f1": 70.4,
+   "n": 600,
+   "auroc": 0.856,
+   "f1_ci95": [
+    65.9,
+    74.8
+   ]
+  },
+  "sentence_auroc": 0.904,
+  "by_task": {
+   "Data2txt": {
+    "precision": 77.4,
+    "recall": 92.3,
+    "f1": 84.2,
+    "n": 203
+   },
+   "QA": {
+    "precision": 44.0,
+    "recall": 82.5,
+    "f1": 57.4,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 52.2,
+    "recall": 42.1,
+    "f1": 46.6,
+    "n": 201
+   }
+  }
+ },
+ "both": {
+  "C": 0.001,
+  "threshold": 0.2926,
+  "validation_f1": 80.0,
+  "response": {
+   "precision": 64.0,
+   "recall": 77.5,
+   "f1": 70.1,
+   "n": 600,
+   "auroc": 0.856,
+   "f1_ci95": [
+    65.6,
+    75.0
+   ]
+  },
+  "sentence_auroc": 0.904,
+  "by_task": {
+   "Data2txt": {
+    "precision": 77.4,
+    "recall": 92.3,
+    "f1": 84.2,
+    "n": 203
+   },
+   "QA": {
+    "precision": 44.6,
+    "recall": 82.5,
+    "f1": 57.9,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 50.0,
+    "recall": 40.4,
+    "f1": 44.7,
+    "n": 201
+   }
+  }
+ },
+ "learning_curve_neurons": {
+  "100": {
+   "response_auroc": 0.791,
+   "f1_best_threshold": 66.5
+  },
+  "200": {
+   "response_auroc": 0.815,
+   "f1_best_threshold": 69.4
+  },
+  "400": {
+   "response_auroc": 0.833,
+   "f1_best_threshold": 71.2
+  },
+  "800": {
+   "response_auroc": 0.856,
+   "f1_best_threshold": 72.8
+  }
+ }
+}
