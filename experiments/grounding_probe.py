@@ -68,11 +68,20 @@ def phrase(s, rng):
     return lead + (s[0].lower() + s[1:] if lead and s[:1].isupper() and not s[:2].isupper() else s)
 
 
-def synthetic(n, seed=0, phrasing=False):
+def contexts(source):
+    """Documents to build constructions from: Dolly's Wikipedia-style paragraphs, or a domain's own documents
+    (RAGTruth's training contexts: news, passages, reviews; its labels and answers are not used)."""
     from datasets import load_dataset
-    rng = random.Random(seed)
-    ctxs = [r["context"] for r in load_dataset("databricks/databricks-dolly-15k")["train"]
+    if source == "ragtruth":
+        rows = load_dataset("wandb/RAGTruth-processed", split="train")
+        return list(dict.fromkeys(r["context"] for r in rows if r["context"] and 60 <= len(r["context"].split()) <= 600))
+    return [r["context"] for r in load_dataset("databricks/databricks-dolly-15k")["train"]
             if r["context"] and 60 <= len(r["context"].split()) <= 400]
+
+
+def synthetic(n, seed=0, phrasing=False, source="dolly"):
+    rng = random.Random(seed)
+    ctxs = contexts(source)
     rng.shuffle(ctxs)
     names = sorted({w for c in ctxs[:2000] for w in re.findall(r"\b[A-Z][a-z]{3,}\b", c)})
     out = []
@@ -171,6 +180,9 @@ def main():
     ap.add_argument("--test", type=int, default=200)
     ap.add_argument("--max-context-chars", type=int, default=4000)
     ap.add_argument("--out", default="grounding_probe.json")
+    ap.add_argument("--source", choices=["dolly", "ragtruth"], default="dolly",
+                    help="documents for the constructions: general (Dolly) or the test domain's own (RAGTruth train "
+                         "contexts, no labels): does a domain's own text make a better probe for it?")
     ap.add_argument("--export", help="save the probe (C=0.01) for serving with vt/grounding.py (.npz)")
     ap.add_argument("--test-cache", help="save / reuse the RAGTruth side here (.npz; depends only on the model)")
     ap.add_argument("--phrasing", action="store_true", help="give every constructed reply the wording of an "
@@ -195,7 +207,7 @@ def main():
     reader = Reader(model)
     t0 = time.time()
 
-    syn = synthetic(a.train, phrasing=a.phrasing)
+    syn = synthetic(a.train, phrasing=a.phrasing, source=a.source)
     Xs, ys, ks = [], [], []
     for i, ex in enumerate(syn):
         pre = prefix(tok, "Answer from this text.\n\n" + ex["context"])
