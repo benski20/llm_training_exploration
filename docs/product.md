@@ -118,15 +118,29 @@ of a short article reads consistent (total 1.05 under the threshold 2.14), one w
 contradicted (2.35, p = 0.59); a bad key gets 401; tokens are metered per key. 1.4 s a check on CPU once warm
 (the first request loads the reader: 60 s).
 
-## Pricing and unit economics (to be confirmed by measurement on GPU)
+## Pricing and unit economics
 
-- Usage: per 1,000 tokens verified (reply plus evidence), metered per key by the API.
-- Self-hosted licence for regulated customers: annual, per deployment, the container and pipeline included.
-- Calibration service: per domain, on the customer's labeled replies; the model card is the deliverable.
+Pricing: per 1,000 tokens verified (reply plus evidence; the API meters it per key), an annual self-hosted
+licence for regulated customers (container plus pipeline), and calibration per domain (the model card is the
+deliverable).
 
-Cost per verification is two forward passes of the reader over evidence plus reply. On CPU it is 5.9 s for a
-HaluBench answer with a 4B reader; on a GPU the same work is a fraction of a second, which has to be measured
-(the hosted endpoint is written, not yet deployed). An LLM-judge call per claim is the comparison to beat.
+Cost per check, estimated from measured token counts (an estimate until the hosted endpoint runs on a GPU):
+
+| quantity | value | source |
+|---|---|---|
+| tokens read per check | 650 mean, 400 median, 1,900 at the 95th percentile, plus ~60 for the second pass | measured on HaluBench (fresh sample) with passage selection |
+| compute per check (4B reader) | 2 x 4e9 parameters x ~720 tokens ≈ 6e12 FLOPs | arithmetic |
+| one L4 GPU, prefill at ~30-40% of its ~120 bf16 TFLOP/s | ≈ 0.15 s a check, ≈ 20,000 checks an hour | assumption: typical prefill utilisation |
+| L4 rental | ≈ $0.80 an hour | cloud list prices (check current) |
+| **compute cost** | **≈ $0.00004 a check, ≈ $0.04 per 1,000 checks** | |
+| CPU only (4 cores, measured) | 1.4 s a check on a short document, 5.9 s on HaluBench's | measured |
+
+For comparison, an LLM judge reads the same evidence once per claim, with several claims per reply: at
+small-model API prices (~$0.15 per million input tokens) about $0.0005 a reply, at frontier-model prices
+(~$2.50 per million) about $0.01; prices from public list prices, to be checked. So the compute cost is roughly
+10 to 250 times lower than an LLM judge, before margin, and a 4-core CPU box can serve low volumes (about 2,500
+short checks an hour) with no GPU at all. Selling at $0.50-$1.00 per 1,000 checks would leave a large gross margin
+while staying well under LLM-judge prices; the per-token meter in the API supports either.
 
 ## What has to happen before selling
 
