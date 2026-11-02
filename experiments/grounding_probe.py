@@ -20,8 +20,6 @@ data), AUROC for "hallucinated" at sentence and response level, next to the trai
 import argparse
 import json
 import os
-import random
-import re
 import sys
 import time
 
@@ -33,39 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from evidence_shift import prefix, sentences, spans  # noqa: E402
 
 
-def sent_split(text):
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.split()) >= 8]
-
-
-def corrupt(s, rng, names):
-    """The sentence with one number or one capitalised name changed, or None if it has neither."""
-    nums = list(re.finditer(r"\b\d[\d,]*(?:\.\d+)?\b", s))
-    caps = [m for m in re.finditer(r"(?<!^)(?<![.!?] )\b[A-Z][a-z]{2,}\b", s)]
-    if nums and (not caps or rng.random() < 0.5):
-        m = rng.choice(nums)
-        v = m.group(0).replace(",", "")
-        try:
-            x = float(v)
-        except ValueError:
-            return None
-        new = str(int(x) + rng.choice([-3, -2, -1, 1, 2, 5, 10])) if x == int(x) else f"{x * rng.choice([0.5, 2, 1.5]):.1f}"
-        return s[:m.start()] + new + s[m.end():]
-    if caps:
-        m = rng.choice(caps)
-        other = [n for n in names if n != m.group(0)]
-        return s[:m.start()] + rng.choice(other) + s[m.end():] if other else None
-    return None
-
-
-LEADS = ("", "", "According to the text, ", "The passage says that ", "It notes that ", "In short, ", "Notably, ")
-
-
-def phrase(s, rng):
-    """The sentence worded like part of an answer: a lead-in, its parentheses dropped, its first letter lowered
-    after a lead-in. Applied alike to every kind, so the form says nothing about the label."""
-    s = re.sub(r"\s*\([^()]*\)", "", s).strip()
-    lead = rng.choice(LEADS)
-    return lead + (s[0].lower() + s[1:] if lead and s[:1].isupper() and not s[:2].isupper() else s)
+from vt.probe_train import LEADS, Reader, construct, corrupt, phrase, sent_split  # noqa: E402,F401
 
 
 def contexts(source):
@@ -80,59 +46,7 @@ def contexts(source):
 
 
 def synthetic(n, seed=0, phrasing=False, source="dolly"):
-    rng = random.Random(seed)
-    ctxs = contexts(source)
-    rng.shuffle(ctxs)
-    names = sorted({w for c in ctxs[:2000] for w in re.findall(r"\b[A-Z][a-z]{3,}\b", c)})
-    out = []
-    for i, c in enumerate(ctxs):
-        ss = sent_split(c)
-        if not ss:
-            continue
-        s = rng.choice(ss)
-        kind = ("grounded", "contradicted", "unsupported")[len(out) % 3]
-        if kind == "contradicted":
-            s2 = corrupt(s, rng, names)
-            if s2 is None or s2 == s:
-                continue
-            s = s2
-        elif kind == "unsupported":                          # on topic but not in the context: taken out of it
-            if len(ss) < 3:
-                continue
-            c = c.replace(s, " ").strip()
-        out.append({"context": c, "reply": phrase(s, rng) if phrasing else s, "kind": kind, "y": int(kind != "grounded")})
-        if len(out) >= n:
-            break
-    return out
-
-
-class Reader:
-    """MLP neuron activations (down_proj inputs) at every position, for every `every`-th layer."""
-
-    def __init__(self, model, every=4):
-        self.acts, self.layers = {}, list(range(every - 1, len(model.model.layers), every))
-        self.model = model
-        for i in self.layers:
-            model.model.layers[i].mlp.down_proj.register_forward_pre_hook(self._hook(i))
-
-    def _hook(self, i):
-        def f(mod, inp):                                        # kept on the CPU, in float16: GPU memory is the
-            import torch                                        # model's (a 32B on two T4s)
-            self.acts[i] = inp[0][0].detach().to("cpu", torch.float16)
-        return f
-
-    def run(self, ids):
-        import torch
-        x = torch.tensor([ids], device=next(self.model.parameters()).device)
-        with torch.no_grad():
-            try:                                                # no logits needed here: keep only the last one
-                self.model(input_ids=x, logits_to_keep=1)
-            except TypeError:
-                self.model(input_ids=x)
-
-    def mean(self, a, b):
-        """Mean activation of positions [a, b) in every read layer, concatenated."""
-        return np.concatenate([self.acts[i][a:b].float().mean(0).numpy() for i in self.layers]).astype(np.float32)
+    return construct(contexts(source), n=n, seed=seed, phrasing=phrasing)
 
 
 def ragtruth_features(model, tok, reader, n, max_chars, t0):

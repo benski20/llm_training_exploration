@@ -18,8 +18,10 @@ evidence shift) and where it makes the model prefer another word (disagreement: 
 three, on one scale, are summed per sentence (0.77 per RAGTruth sentence, 0.82 per response, for the 4B), and a
 sentence the disagreement dominates reads "contradicted".
 
-No generation, no question asked of the model: one pass with the evidence (two more, short, for the shift and
-disagreement: with the evidence and with the question alone).
+No generation, no question asked of the model: two forward passes, one with the evidence (neurons and
+probabilities at once) and one with the question alone. `raw()` gives each sentence's readings before any scale,
+`score()` the verdicts; a probe calibrated on labeled replies (vt/verifier_pipeline.py) also carries the reply
+threshold for a chosen false-alarm rate and the reply's probability of holding a hallucination.
 """
 import re
 
@@ -58,6 +60,10 @@ class Grounding:
         # without them the probe alone, on the scale of its training constructions
         self.natural = {k: (float(z[f"nat_{k}_mean"]), float(z[f"nat_{k}_std"]))
                         for k in ("probe", "mean_shift", "max_disagreement") if f"nat_{k}_mean" in z.files}
+        # a calibration on labeled replies (vt/verifier_pipeline.py calibrate): the reply-total threshold at the
+        # chosen false-alarm rate, and a logistic map from total to probability
+        self.calibration = (float(z["cal_threshold"]), float(z["cal_a"]), float(z["cal_b"])) \
+            if "cal_threshold" in z.files else None
 
     def _prefix(self, user):
         msgs = [{"role": "user", "content": user}]
@@ -90,59 +96,82 @@ class Grounding:
         ev = "\n\n".join(parts)[-self.max_context_chars:]
         return f"{question}\n\n{ev}".strip()
 
-    def _read(self, ids):
+    def _read(self, prefix_ids, reply_ids):
+        """One forward pass over evidence and reply: the probe's neurons at every position (on the CPU, float16)
+        and the log-probability distributions over the reply's tokens."""
         import torch
         acts, hooks = {}, []
         blocks = self.model.model.layers
         for i in self.layers:
             def hook(mod, inp, i=i):
-                acts[i] = inp[0][0].float()
+                acts[i] = inp[0][0].detach().to("cpu", torch.float16)
             hooks.append(blocks[i].mlp.down_proj.register_forward_pre_hook(hook))
         try:
-            with torch.no_grad():
-                self.model(input_ids=torch.tensor([ids], device=next(self.model.parameters()).device))
+            lw, dw = self._logprobs(prefix_ids, reply_ids)
         finally:
             for h in hooks:
                 h.remove()
-        return acts
+        return acts, lw, dw
 
-    def check(self, messages, reply, documents=()):
+    def raw(self, messages, reply, documents=(), signals=True):
+        """Each sentence's raw readings: the probe's score, the evidence shift (mean over its tokens) and the
+        disagreement (its largest). Two forward passes: with the evidence (neurons and probabilities at once)
+        and with the question alone; signals=False: the probe's score only, one pass."""
         pre = self._prefix(self.evidence(messages, reply, documents))
         enc = self.tok(reply, add_special_tokens=False, return_offsets_mapping=True)
         if not enc.input_ids:
-            return {"sentences": [], "total": 0.0, "verdict": None}
-        acts = self._read(pre + enc.input_ids)
-        both = len(self.natural) == 3                            # the evidence's effect: a pass without it
-        if both:
+            return []
+        acts, lw, dw = self._read(pre, enc.input_ids)
+        if signals:
             question = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
-            lw, dw = self._logprobs(pre, enc.input_ids)
             lo, do = self._logprobs(self._prefix(question.split("\n\n")[0][:500]), enc.input_ids)
             shift, dis = lw - lo, self._disagreement(dw, do, enc.input_ids)
-            del dw, do
+            del do
+        else:
+            shift = dis = np.zeros(len(enc.input_ids))
+        del dw
         rows = []
         for s, e in sentence_spans(reply):
             js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
             if not js:
                 continue
             a, b = len(pre) + js[0], len(pre) + js[-1] + 1
-            x = np.concatenate([acts[i][a:b].mean(0).cpu().numpy() for i in self.layers])
-            score = float(((x - self.mean) / self.scale) @ self.coef + self.intercept)
-            row = {"text": reply[s:e].strip(), "start": s, "end": e, "score": round(score, 4)}
+            x = np.concatenate([acts[i][a:b].float().mean(0).numpy() for i in self.layers])
+            rows.append({"text": reply[s:e].strip(), "start": s, "end": e,
+                         "score": float(((x - self.mean) / self.scale) @ self.coef + self.intercept),
+                         "mean_shift": float(shift[js].mean()), "max_disagreement": float(dis[js].max())})
+        return rows
+
+    def score(self, rows):
+        """Verdicts from raw readings: each sentence's signals on their natural scales, summed; the reply's total
+        ungroundedness, and with a calibration its probability of holding a hallucination."""
+        both = len(self.natural) == 3
+        out = []
+        for r in rows:
+            row = {"text": r["text"], "start": r["start"], "end": r["end"], "score": round(r["score"], 4)}
             if both:
-                zp, zsh, zd = (self._z("probe", score), self._z("mean_shift", float(shift[js].mean())),
-                               self._z("max_disagreement", float(dis[js].max())))
+                zp, zsh, zd = (self._z("probe", r["score"]), self._z("mean_shift", r["mean_shift"]),
+                               self._z("max_disagreement", r["max_disagreement"]))
                 zs = (zp - zsh + zd) / 3 ** 0.5                  # three unit-scale signals, summed
                 row.update(z_probe=round(zp, 3), z_shift=round(-zsh, 3), z_disagreement=round(zd, 3))
                 kind = "contradicted" if zd >= max(zp, -zsh) else "not grounded"
             else:
-                zs, kind = (score - self.score_mean) / max(self.score_std, 1e-9), "not grounded"
+                zs, kind = (r["score"] - self.score_mean) / max(self.score_std, 1e-9), "not grounded"
             row.update(z=round(zs, 3), verdict=kind if zs >= self.flag_z else "consistent")
-            rows.append(row)
-        total = round(float(sum(max(r["z"], 0.0) for r in rows)), 3)
-        flagged = [r["verdict"] for r in rows if r["verdict"] != "consistent"]
-        verdict = None if not rows else "contradicted" if "contradicted" in flagged else \
+            out.append(row)
+        total = round(float(sum(max(r["z"], 0.0) for r in out)), 3)
+        flagged = [r["verdict"] for r in out if r["verdict"] != "consistent"]
+        res = {"sentences": out, "total": total}
+        if self.calibration is not None:                          # the reply's verdict from its calibrated total
+            thr, a_, b_ = self.calibration
+            res["p_hallucinated"] = round(float(1 / (1 + np.exp(-(a_ * total + b_)))), 4)
+            flagged = flagged if total >= thr else []
+        res["verdict"] = None if not out else "contradicted" if "contradicted" in flagged else \
             "not grounded" if flagged else "consistent"
-        return {"sentences": rows, "total": total, "verdict": verdict}
+        return res
+
+    def check(self, messages, reply, documents=()):
+        return self.score(self.raw(messages, reply, documents, signals=len(self.natural) == 3))
 
     def _z(self, name, v):
         m, sd = self.natural[name]
@@ -152,9 +181,13 @@ class Grounding:
         """log p of each reply token, and every position's whole distribution (one forward pass)."""
         import torch
         dev = next(self.model.parameters()).device
+        x = torch.tensor([prefix_ids + reply_ids], device=dev)
         with torch.no_grad():
-            logits = self.model(input_ids=torch.tensor([prefix_ids + reply_ids], device=dev)).logits
-        lp = torch.log_softmax(logits[0, len(prefix_ids) - 1:-1].float(), -1)
+            try:                                                 # only the positions that predict the reply
+                logits = self.model(input_ids=x, logits_to_keep=len(reply_ids) + 1).logits[0, :-1]
+            except TypeError:
+                logits = self.model(input_ids=x).logits[0, len(prefix_ids) - 1:-1]
+        lp = torch.log_softmax(logits.float(), -1)
         return lp[torch.arange(len(reply_ids)), torch.tensor(reply_ids, device=dev)].cpu().numpy(), lp
 
     @staticmethod
