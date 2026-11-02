@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# The verification API (vt/verify_service.py): a reader model and its grounding probe behind POST /v1/verify.
+#   docker build -f Dockerfile.verifier -t verifier .                                  # CPU
+#   docker build -f Dockerfile.verifier --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu121 -t verifier .
+#   docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v hf:/home/vt/.cache/huggingface verifier \
+#       --reader Qwen/Qwen3-4B --probe /app/heads/grounding_probe_qwen3_4b.npz
+# The reader's weights download on first start into the mounted cache. Keys come from the environment only.
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir torch==2.5.1 --index-url "$TORCH_INDEX" && \
+    pip install --no-cache-dir transformers==4.51.3 accelerate==1.1.1 numpy==2.1.3 scipy==1.14.1 scikit-learn==1.5.2
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY vt ./vt
+COPY heads/grounding_probe_qwen3_4b.npz ./heads/
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir --no-deps . && useradd --create-home --uid 10001 vt
+USER vt
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+ENTRYPOINT ["vt-verify", "--host", "0.0.0.0", "--port", "8000"]
