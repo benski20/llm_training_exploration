@@ -41,6 +41,26 @@ def sentence_spans(text):
     return [(a, b) for a, b in out if re.search(r"[A-Za-z0-9]", text[a:b])]
 
 
+def select(documents, query, budget, chunk_words=150):
+    """Documents that fit the budget as they are; otherwise their passages most relevant to the question and reply
+    (BM25, overlapping chunks), in their original order, up to the budget: a long filing or paper is not simply
+    cut at its end."""
+    if sum(map(len, documents)) <= budget:
+        return documents
+    from vt.retrieval import Corpus, chunks
+    pieces = [c for d in documents for c in chunks(d, chunk_words, chunk_words // 3)]
+    if not pieces:
+        return documents
+    sc = Corpus(pieces).scores(query)
+    keep, used = set(), 0
+    for i in sorted(range(len(pieces)), key=lambda i: -sc[i]):
+        if used + len(pieces[i]) > budget:
+            continue
+        keep.add(i)
+        used += len(pieces[i]) + 2
+    return [pieces[i] for i in sorted(keep)]
+
+
 def exact_lines(text):
     """The reply's stated arithmetic, re-computed: evidence no model can doubt."""
     return [f"{m['expression']} = {m['computed']:g}" for m in check_arithmetic(text)]
@@ -77,7 +97,7 @@ class Grounding:
         """The question and everything the reply can be grounded in, as one user turn."""
         said = [m["content"] for m in messages if m.get("role") == "user"]
         question = said[-1] if said else ""
-        parts = list(documents or [])
+        parts = select(list(documents or []), f"{question} {reply}", self.max_context_chars)
         if self.retriever is not None and not parts:             # the question, and the question with the
             for q in (question[:300], f"{question[:200]} {reply[:300]}"):   # reply's own words: they steer the
                 try:                                             # search to the pages that settle its claims

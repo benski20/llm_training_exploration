@@ -98,6 +98,9 @@ def main():
     ap.add_argument("--probe", default="heads/grounding_probe_qwen3_4b.npz")
     ap.add_argument("--per-source", type=int, default=50)
     ap.add_argument("--out", default="halubench_compare.json")
+    ap.add_argument("--claim", choices=["answer", "statement"], default="answer",
+                    help="what the grounding check reads: the answer as given, or \"question answer\" (as MiniCheck)")
+    ap.add_argument("--sources", nargs="+", help="only these HaluBench sources")
     ap.add_argument("--add-hhem", metavar="RESULTS", help="score HHEM-2.1-open (Vectara; runs its own model code) on "
                     "the answers of an earlier run and merge it into that results file")
     a = ap.parse_args()
@@ -107,7 +110,7 @@ def main():
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from vt.grounding import Grounding
-    rows = sample(a.per_source)
+    rows = [r for r in sample(a.per_source) if not a.sources or r["source_ds"] in a.sources]
     tok = AutoTokenizer.from_pretrained(a.reader)
     reader = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
     g = Grounding(reader, tok, a.probe, max_context_chars=12000)
@@ -116,7 +119,8 @@ def main():
     for i, r in enumerate(rows):
         claim = f"{r['question']} {r['answer']}"
         t = time.time()
-        res = g.check([{"role": "user", "content": r["question"]}], str(r["answer"]), documents=[r["passage"]])
+        reply = claim if a.claim == "statement" else str(r["answer"])  # a one-word answer is no sentence to read
+        res = g.check([{"role": "user", "content": r["question"]}], reply, documents=[r["passage"]])
         t_g += time.time() - t
         zs = [s["z"] for s in res["sentences"]] or [0.0]
         t = time.time()
@@ -126,7 +130,7 @@ def main():
                     "grounding_max": max(zs), "grounding_verdict": res["verdict"], "minicheck": pm})
         if (i + 1) % 25 == 0:
             print(f"{i + 1}/{len(rows)} grounding {t_g / (i + 1):.1f}s minicheck {t_m / (i + 1):.2f}s", flush=True)
-    res = {"n": len(out), "reader": a.reader, "seconds_per_answer": {"grounding": round(t_g / len(out), 2),
+    res = {"n": len(out), "reader": a.reader, "claim": a.claim, "seconds_per_answer": {"grounding": round(t_g / len(out), 2),
                                                                     "minicheck": round(t_m / len(out), 2)}}
     res.update(summarize(out, ("grounding_total", "grounding_max", "minicheck")))
     print(json.dumps(res, indent=1))

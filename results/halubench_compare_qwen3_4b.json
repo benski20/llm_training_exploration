@@ -1,0 +1,2446 @@
+{
+ "n": 300,
+ "reader": "Qwen/Qwen3-4B",
+ "seconds_per_answer": {
+  "grounding": 13.53,
+  "minicheck": 2.39
+ },
+ "grounding_total": {
+  "auroc": 0.585,
+  "caught_at_10pct_false_alarms": 0.187,
+  "per_source": {
+   "DROP": 0.405,
+   "FinanceBench": 0.402,
+   "RAGTruth": 0.875,
+   "covidQA": 0.501,
+   "halueval": 0.666,
+   "pubmedQA": 0.589
+  }
+ },
+ "grounding_max": {
+  "auroc": 0.567,
+  "caught_at_10pct_false_alarms": 0.1,
+  "per_source": {
+   "DROP": 0.403,
+   "FinanceBench": 0.402,
+   "RAGTruth": 0.818,
+   "covidQA": 0.512,
+   "halueval": 0.83,
+   "pubmedQA": 0.565
+  }
+ },
+ "minicheck": {
+  "auroc": 0.632,
+  "caught_at_10pct_false_alarms": 0.16,
+  "per_source": {
+   "DROP": 0.65,
+   "FinanceBench": 0.507,
+   "RAGTruth": 0.658,
+   "covidQA": 0.827,
+   "halueval": 0.739,
+   "pubmedQA": 0.674
+  }
+ },
+ "rows": [
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.941,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.31583940982818604
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.118,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9780580997467041
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.961,
+   "grounding_max": 0.961,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7822057008743286
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.307,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.015232741832733154
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.722,
+   "grounding_max": 2.722,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8020615577697754
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 5.096,
+   "grounding_max": 5.096,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9654783010482788
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.053,
+   "grounding_max": 2.053,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8939111828804016
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -4.195,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9520647525787354
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.902,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9786164164543152
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.811,
+   "grounding_max": 0.811,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3337036967277527
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.298,
+   "grounding_max": 2.298,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.3456280827522278
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.943,
+   "grounding_max": 0.943,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7582610845565796
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.092,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5133731365203857
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 0.781,
+   "grounding_max": 0.498,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9490419626235962
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.033,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9377205967903137
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.842,
+   "grounding_max": 1.842,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9816373586654663
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.723,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8967660069465637
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 3.311,
+   "grounding_max": 3.311,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.3080853819847107
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.61,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5502766966819763
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.937,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9782442450523376
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.433,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8645840883255005
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -3.613,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.59921795129776
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -4.437,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9592159986495972
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.787,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.25449657440185547
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.323,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3643621802330017
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 3.53,
+   "grounding_max": 1.524,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.816902756690979
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.856,
+   "grounding_max": 2.856,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7303929924964905
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 2.643,
+   "grounding_max": 2.643,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.6899983286857605
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.621,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5832703113555908
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.796,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.019490957260131836
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.77,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5945329070091248
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 4.341,
+   "grounding_max": 4.341,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8801376223564148
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.028,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.517087459564209
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.196,
+   "grounding_max": 1.196,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9961255788803101
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.203,
+   "grounding_max": 2.203,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8977530002593994
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.423,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9690796732902527
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.42,
+   "grounding_max": 2.42,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9853097200393677
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.616,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.10674047470092773
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.32,
+   "grounding_max": 0.32,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.021671652793884277
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.422,
+   "grounding_max": 0.422,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9450128674507141
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.826,
+   "grounding_max": 0.826,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9829514622688293
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -3.272,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4218127727508545
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.09,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4716315269470215
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.461,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9875615835189819
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 3.007,
+   "grounding_max": 3.007,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.06040084362030029
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.627,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6491445899009705
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.226,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7487356662750244
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.211,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8679137229919434
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.336,
+   "grounding_max": 1.336,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9632903337478638
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.27,
+   "grounding_max": 2.27,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.3611243963241577
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.832,
+   "grounding_max": 1.832,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.03473907709121704
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.784,
+   "grounding_max": 1.784,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9103679656982422
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 2.386,
+   "grounding_max": 2.386,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.6206433176994324
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.965,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8776872158050537
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.607,
+   "grounding_max": 1.607,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9440381526947021
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 1.447,
+   "grounding_max": 1.447,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.03697258234024048
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.424,
+   "grounding_max": 2.424,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8717840909957886
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.203,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5049618482589722
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.815,
+   "grounding_max": 1.631,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9668382406234741
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.837,
+   "grounding_max": 0.837,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.2486070990562439
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.315,
+   "grounding_max": 0.315,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.2475406527519226
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.565,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.866950273513794
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.512,
+   "grounding_max": 1.512,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8577731251716614
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.008,
+   "grounding_max": 0.008,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.06843447685241699
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 0.707,
+   "grounding_max": 0.707,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9874205589294434
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.281,
+   "grounding_max": 1.281,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9657132625579834
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.93,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9872738122940063
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -3.096,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8982813358306885
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.499,
+   "grounding_max": 1.499,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.03876692056655884
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.567,
+   "grounding_max": 2.333,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9866658449172974
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.389,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6448351144790649
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.867,
+   "grounding_max": 0.867,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.47314417362213135
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.043,
+   "grounding_max": 0.043,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9868406653404236
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.092,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9850845336914062
+  },
+  {
+   "source": "halueval",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.392,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9883415699005127
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.342,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3089619278907776
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.963,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9687253832817078
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.065,
+   "grounding_max": 2.065,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.3562847375869751
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 2.762,
+   "grounding_max": 2.762,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9861200451850891
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.825,
+   "grounding_max": 1.512,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7874459624290466
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.095,
+   "grounding_max": 1.095,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.5551173090934753
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 3.263,
+   "grounding_max": 3.263,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.6462885141372681
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.692,
+   "grounding_max": 0.692,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.12218797206878662
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.553,
+   "grounding_max": 0.553,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3189247250556946
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.606,
+   "grounding_max": 1.298,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9133837223052979
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.046,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8466436862945557
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.366,
+   "grounding_max": 2.366,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9642533659934998
+  },
+  {
+   "source": "halueval",
+   "y": 1,
+   "grounding_total": 0.312,
+   "grounding_max": 0.312,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7695426940917969
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.113,
+   "grounding_max": 1.113,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9905703067779541
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.477,
+   "grounding_max": 0.477,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.988863468170166
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.656,
+   "grounding_max": 0.915,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7562323808670044
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.029,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8718090057373047
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.966,
+   "grounding_max": 0.966,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9771341681480408
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.707,
+   "grounding_max": 1.707,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9565757513046265
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.024,
+   "grounding_max": 2.024,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9769103527069092
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 2.392,
+   "grounding_max": 1.6,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.46299809217453003
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.292,
+   "grounding_max": 2.292,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9467144012451172
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 3.07,
+   "grounding_max": 3.07,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.25158756971359253
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.311,
+   "grounding_max": 0.311,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8013400435447693
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.707,
+   "grounding_max": 2.707,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9420545697212219
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 4.646,
+   "grounding_max": 1.48,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.5466305017471313
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 5.035,
+   "grounding_max": 5.035,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9893149733543396
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.089,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.31475740671157837
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.139,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4109850525856018
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 2.41,
+   "grounding_max": 1.923,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.33574575185775757
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.933,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9504881501197815
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.644,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.29614853858947754
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.214,
+   "grounding_max": 1.214,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9188315868377686
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.303,
+   "grounding_max": 2.303,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9854732751846313
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 3.534,
+   "grounding_max": 1.541,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.5235561728477478
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.164,
+   "grounding_max": 1.164,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9469491243362427
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.792,
+   "grounding_max": 2.21,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9086834192276001
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 7.044,
+   "grounding_max": 1.581,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.33281588554382324
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.083,
+   "grounding_max": 4.083,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.978812038898468
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.831,
+   "grounding_max": 3.831,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9122012853622437
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.987,
+   "grounding_max": 1.518,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8044630885124207
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.75,
+   "grounding_max": 0.536,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6196880340576172
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.834,
+   "grounding_max": 2.834,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.024318933486938477
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.731,
+   "grounding_max": 1.731,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9727197289466858
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 4.302,
+   "grounding_max": 3.217,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8518310785293579
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 2.961,
+   "grounding_max": 2.185,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.42947864532470703
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 3.561,
+   "grounding_max": 3.561,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8951015472412109
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.808,
+   "grounding_max": 2.241,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9267845749855042
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.558,
+   "grounding_max": 0.558,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.026036560535430908
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 2.226,
+   "grounding_max": 1.485,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.7493281364440918
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.147,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.2532709836959839
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.943,
+   "grounding_max": 2.453,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7576218843460083
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.644,
+   "grounding_max": 0.95,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7875237464904785
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.654,
+   "grounding_max": 4.654,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8482680320739746
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 0.744,
+   "grounding_max": 0.609,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5944502949714661
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 7.749,
+   "grounding_max": 2.97,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8211702108383179
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 5.002,
+   "grounding_max": 5.002,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9965168833732605
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.331,
+   "grounding_max": 2.331,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.34325993061065674
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.627,
+   "grounding_max": 1.627,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9895157217979431
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 1.246,
+   "grounding_max": 1.246,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9799219369888306
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 4.008,
+   "grounding_max": 4.008,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9417991042137146
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.407,
+   "grounding_max": 2.407,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8402958512306213
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.357,
+   "grounding_max": 2.054,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.7590593099594116
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.027,
+   "grounding_max": 2.027,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.436008095741272
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.181,
+   "grounding_max": 2.181,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9244772791862488
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.191,
+   "grounding_max": 4.191,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7740002870559692
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.446,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5527291893959045
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.037,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4478686451911926
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.586,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.025626540184020996
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.06,
+   "grounding_max": 0.06,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9323997497558594
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.146,
+   "grounding_max": 1.146,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9382729530334473
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.533,
+   "grounding_max": 1.533,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9676706790924072
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 2.723,
+   "grounding_max": 1.859,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8163860440254211
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.032,
+   "grounding_max": 1.032,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9537395238876343
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.416,
+   "grounding_max": 2.416,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9104885458946228
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.133,
+   "grounding_max": 0.133,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8821953535079956
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.467,
+   "grounding_max": 0.467,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.952434241771698
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.38,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.46194034814834595
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 4.674,
+   "grounding_max": 4.674,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.029323041439056396
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 5.768,
+   "grounding_max": 5.768,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9633431434631348
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.741,
+   "grounding_max": 1.858,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8961249589920044
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 5.12,
+   "grounding_max": 5.12,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.793402373790741
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.994,
+   "grounding_max": 1.994,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9148279428482056
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.432,
+   "grounding_max": 2.432,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9248439073562622
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.419,
+   "grounding_max": 1.419,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8659167289733887
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.594,
+   "grounding_max": 3.594,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9817244410514832
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.822,
+   "grounding_max": 0.822,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9853264689445496
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.725,
+   "grounding_max": 3.725,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9816605448722839
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.733,
+   "grounding_max": 0.733,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9654468894004822
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.298,
+   "grounding_max": 1.314,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9784431457519531
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.214,
+   "grounding_max": 2.214,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.991334855556488
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 0.49,
+   "grounding_max": 0.49,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9445640444755554
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.456,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.62433922290802
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.049,
+   "grounding_max": 1.446,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9638292193412781
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.199,
+   "grounding_max": 1.199,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8983812928199768
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.765,
+   "grounding_max": 1.765,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8916075229644775
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.13,
+   "grounding_max": 1.13,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9073680639266968
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 4.638,
+   "grounding_max": 1.381,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.7156256437301636
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.433,
+   "grounding_max": 2.433,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9758517742156982
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.672,
+   "grounding_max": 0.672,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9744272828102112
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.277,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.17994529008865356
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.701,
+   "grounding_max": 2.701,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9952951073646545
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.904,
+   "grounding_max": 2.904,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9651085138320923
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.193,
+   "grounding_max": 1.414,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.5122618675231934
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 3.176,
+   "grounding_max": 1.508,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7846819162368774
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.701,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8552106618881226
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.455,
+   "grounding_max": 0.455,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.669025182723999
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.352,
+   "grounding_max": 1.352,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8382812738418579
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.329,
+   "grounding_max": 0.732,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6381779909133911
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.068,
+   "grounding_max": 0.068,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.39577144384384155
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.646,
+   "grounding_max": 1.646,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9883768558502197
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 3.608,
+   "grounding_max": 3.608,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8783027529716492
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 3.579,
+   "grounding_max": 1.819,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.3249651789665222
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.267,
+   "grounding_max": 2.267,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.989098310470581
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.035,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4270590543746948
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.294,
+   "grounding_max": 1.294,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9912071824073792
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.01,
+   "grounding_max": 0.01,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9942082762718201
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.248,
+   "grounding_max": 0.796,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8650209307670593
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 2.402,
+   "grounding_max": 0.768,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.2575792670249939
+  },
+  {
+   "source": "RAGTruth",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.51,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.848227858543396
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.749,
+   "grounding_max": 1.749,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9074563384056091
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.34,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.10713756084442139
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.704,
+   "grounding_max": 1.704,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9684047698974609
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -2.449,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.039061009883880615
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 6.123,
+   "grounding_max": 6.123,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8797284960746765
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.38,
+   "grounding_max": 0.983,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9110454320907593
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.552,
+   "grounding_max": 0.552,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9910699725151062
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.089,
+   "grounding_max": 2.089,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9876989126205444
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.169,
+   "grounding_max": 2.169,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9932336211204529
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 6.275,
+   "grounding_max": 2.408,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8051478862762451
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.607,
+   "grounding_max": 1.607,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9788795709609985
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.904,
+   "grounding_max": 1.904,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8226108551025391
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.14,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6312095522880554
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.442,
+   "grounding_max": 1.442,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9828097820281982
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.781,
+   "grounding_max": 2.781,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.11537444591522217
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.2,
+   "grounding_max": 1.2,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.32708168029785156
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.108,
+   "grounding_max": 2.108,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9925174713134766
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.825,
+   "grounding_max": 1.825,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8770228624343872
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.092,
+   "grounding_max": 2.092,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9386273622512817
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.999,
+   "grounding_max": 1.999,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.7448995113372803
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.81,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.4965065121650696
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.024,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.013640940189361572
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 0.128,
+   "grounding_max": 0.128,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5488501787185669
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 2.791,
+   "grounding_max": 1.03,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.4045429825782776
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.335,
+   "grounding_max": 2.335,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.4333837628364563
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.281,
+   "grounding_max": 2.281,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.1051759123802185
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.189,
+   "grounding_max": 0.676,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9563699960708618
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 0.924,
+   "grounding_max": 0.924,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7343040704727173
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.158,
+   "grounding_max": 2.158,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9827567338943481
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.8,
+   "grounding_max": 1.8,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9824142456054688
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.854,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.061901748180389404
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.482,
+   "grounding_max": 2.482,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9520245790481567
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.086,
+   "grounding_max": 2.086,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9949201345443726
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.703,
+   "grounding_max": 1.703,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9780659675598145
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.888,
+   "grounding_max": 1.712,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8535326719284058
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.738,
+   "grounding_max": 3.738,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9298493266105652
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.947,
+   "grounding_max": 1.947,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8956233859062195
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.377,
+   "grounding_max": 0.377,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.36880141496658325
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.212,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8510741591453552
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.347,
+   "grounding_max": 2.347,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9179741144180298
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.873,
+   "grounding_max": 1.873,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9318246841430664
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 2.835,
+   "grounding_max": 1.684,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9030957221984863
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 3.097,
+   "grounding_max": 3.097,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9926831722259521
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 2.663,
+   "grounding_max": 1.954,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.37169498205184937
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.34,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6818302273750305
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.216,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.48114579916000366
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 1.087,
+   "grounding_max": 0.556,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.986290454864502
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.339,
+   "grounding_max": 2.339,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.976665198802948
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.893,
+   "grounding_max": 1.893,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9710495471954346
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 0.421,
+   "grounding_max": 0.421,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9806308746337891
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 3.78,
+   "grounding_max": 1.44,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8473066687583923
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.767,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8525223731994629
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 3.344,
+   "grounding_max": 1.332,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.6080963015556335
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.276,
+   "grounding_max": 2.276,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.015272021293640137
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 0.666,
+   "grounding_max": 0.666,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7057042717933655
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.304,
+   "grounding_max": 3.304,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9719328880310059
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 4.717,
+   "grounding_max": 4.717,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9944444894790649
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.278,
+   "grounding_max": 1.278,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9511587619781494
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 1.035,
+   "grounding_max": 0.753,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5752069354057312
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.194,
+   "grounding_max": 2.194,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9562892913818359
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.049,
+   "grounding_max": 2.049,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.985960066318512
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.49,
+   "grounding_max": 1.49,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9676493406295776
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.494,
+   "grounding_max": 3.494,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9951062798500061
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.043,
+   "grounding_max": 2.043,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.963731050491333
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.289,
+   "grounding_max": 1.289,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.41287773847579956
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.732,
+   "grounding_max": 2.288,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9779402613639832
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 0.74,
+   "grounding_max": 0.472,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9251212477684021
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.2,
+   "grounding_max": 4.2,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.828309178352356
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 3.926,
+   "grounding_max": 1.267,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.3960183262825012
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 4.851,
+   "grounding_max": 4.851,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7489644289016724
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.15,
+   "grounding_max": 2.15,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9934087991714478
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.349,
+   "grounding_max": 3.349,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9078681468963623
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 0.963,
+   "grounding_max": 0.963,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9684905409812927
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.343,
+   "grounding_max": 1.426,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.6419808864593506
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.419,
+   "grounding_max": 0.419,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9287844300270081
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 2.778,
+   "grounding_max": 1.04,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8617380261421204
+  },
+  {
+   "source": "pubmedQA",
+   "y": 0,
+   "grounding_total": 0.696,
+   "grounding_max": 0.453,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7835421562194824
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 3.303,
+   "grounding_max": 3.303,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.89671391248703
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 0.817,
+   "grounding_max": 0.817,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9882060885429382
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.296,
+   "grounding_max": 0.856,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8995067477226257
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 13.15,
+   "grounding_max": 2.434,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.3940654397010803
+  },
+  {
+   "source": "pubmedQA",
+   "y": 1,
+   "grounding_total": 1.57,
+   "grounding_max": 0.92,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9789555072784424
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.814,
+   "grounding_max": 2.814,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9754208922386169
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.899,
+   "grounding_max": 2.899,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.5846914052963257
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 0.57,
+   "grounding_max": 0.53,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.5401922464370728
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 5.584,
+   "grounding_max": 3.181,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.7725627422332764
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.113,
+   "grounding_max": 1.113,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8752644062042236
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.261,
+   "grounding_max": 2.261,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9936605095863342
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.168,
+   "grounding_max": 2.168,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.6418189406394958
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.096,
+   "grounding_max": 2.096,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9949056506156921
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 4.444,
+   "grounding_max": 1.808,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8269326686859131
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 0.59,
+   "grounding_max": 0.59,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6356693506240845
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.344,
+   "grounding_max": 1.344,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9709946513175964
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.309,
+   "grounding_max": 2.309,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9654659628868103
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 4.403,
+   "grounding_max": 4.403,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.6457110643386841
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.21,
+   "grounding_max": 2.21,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9629995822906494
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 6.741,
+   "grounding_max": 3.877,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9305893778800964
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.565,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.32147252559661865
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 4.071,
+   "grounding_max": 1.773,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.3413328528404236
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 1.938,
+   "grounding_max": 1.105,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8876751065254211
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 4.366,
+   "grounding_max": 1.519,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.3160366415977478
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 2.82,
+   "grounding_max": 1.252,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7854573726654053
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 2.893,
+   "grounding_max": 1.831,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.41901838779449463
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 7.046,
+   "grounding_max": 3.609,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9438625574111938
+  },
+  {
+   "source": "RAGTruth",
+   "y": 1,
+   "grounding_total": 3.592,
+   "grounding_max": 2.491,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.28762680292129517
+  }
+ ]
+}

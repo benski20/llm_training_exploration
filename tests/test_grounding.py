@@ -63,3 +63,12 @@ def test_with_natural_scales_the_evidence_signals_join(tmp_path):
                                                  documents=["The tower opened in 1889."])
     s = out["sentences"][0]
     assert {"z_probe", "z_shift", "z_disagreement"} <= set(s) and out["verdict"] == "consistent"
+
+
+def test_long_documents_keep_their_relevant_passages():
+    from vt.grounding import select
+    filler = " ".join(f"filler{i}" for i in range(3000))
+    doc = filler + " The bridge reopened in October after repairs to two beams. " + filler
+    out = select([doc], "When did the bridge reopen? It reopened in October.", budget=2000)
+    assert any("reopened in October" in p for p in out) and sum(map(len, out)) <= 2000
+    assert select(["short."], "q", budget=2000) == ["short."]
