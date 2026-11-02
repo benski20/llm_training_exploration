@@ -96,8 +96,13 @@ fresh HaluBench sample (`results/halubench_compare_qwen3_4b_seed1.json`, 300 oth
 | PubMedQA | 0.59 | **0.81** |
 | CPU seconds per answer | 5.9 (two passes) | 2.4 |
 
-Ahead of MiniCheck overall by a margin outside chance, and three times as many hallucinations caught at a 10%
-false-alarm rate; behind it on medical papers (CovidQA, PubMedQA), the next thing to fix.
+Ahead of MiniCheck overall by a margin outside chance on this sample, and three times as many hallucinations
+caught at a 10% false-alarm rate; behind it on medical papers (CovidQA, PubMedQA).
+
+A third sample (300 more answers, seed 4, `results/pipeline_demo/model_card_300.json` and
+`minicheck_test300.json`, scored through the calibrated pipeline): 0.62 against MiniCheck's 0.61. Across the three
+samples, then: 0.64 / 0.72 / 0.62 against 0.63 / 0.64 / 0.61. Level with or ahead of MiniCheck every time,
+clearly ahead once; the honest claim is "at least as good, at a fraction of an LLM judge's cost", not "better".
 
 Where it wins: answers written from documents, long or short. Where it still loses: medical papers (CovidQA,
 PubMedQA) and numeric answers over financial filings (FinanceBench, near chance for all three systems).
@@ -111,7 +116,10 @@ AUROC 0.66; at the calibrated threshold 33% of hallucinated replies caught and 1
 10%), precision 71%; 4.8 s a reply on CPU. Per source (20 replies each, so wide): PubMedQA 0.88, CovidQA 0.89,
 RAGTruth 0.85, HaluEval 0.81, DROP 0.36, FinanceBench 0.48. The false-alarm rate carried from calibration to new
 data within a few points; the 36 held-out calibration replies were too few to measure it (24% on 17 clean).
-With ~100 replies a customer gets a threshold that roughly holds; a firm error rate needs a few hundred.
+With ~100 replies a customer gets a threshold that roughly holds; a firm error rate needs a few hundred. On 300
+further replies the same threshold flagged 19% of clean ones (target 10%), caught 23% of hallucinated ones,
+precision 55%, AUROC 0.62: a threshold set on 84 replies mixed across six sources does not hold its rate on new
+data. A calibration set should come from one customer's own traffic and number a few hundred replies.
 
 Through the API itself (`vt-verify` with the calibrated probe, the SDK over HTTP with a key): a correct summary
 of a short article reads consistent (total 1.05 under the threshold 2.14), one with the wrong month and cost reads
