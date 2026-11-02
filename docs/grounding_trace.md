@@ -225,3 +225,19 @@ these swings are mostly noise. What holds either way: closed-book trivia errors 
 belief in the answer does not rescue them (0.46 on TriviaQA, `mixed_eval` rows re-read by the 4B). The check is
 strong where the evidence holds the deciding fact (RAGTruth 0.82, pasted text, arithmetic) and weak where a
 quick lookup does not find it.
+
+## A domain's own documents (`--source ragtruth`, `results/grounding_probe_qwen3_4b_domain.json`)
+
+Does a probe built from the test domain's own documents (RAGTruth's training contexts: news, passages,
+reviews; none of its labels or answers) beat the general one on that domain's real hallucinations? No:
+
+| constructions from | sentences | responses (95% CI) | held-out constructions |
+|---|---|---|---|
+| Dolly's general paragraphs | 0.75 | 0.82 [0.76, 0.88] | 0.93 |
+| the domain's own documents | 0.73 | 0.64 [0.56, 0.71] | 0.98 |
+
+Even per sentence, clearly worse per response (the intervals do not overlap). The 0.98 on held-out constructions
+is the warning: in these documents the constructions are easier to tell apart, and the probe learns how they
+were made rather than grounding. Adapting to a domain is not automatic: how varied and hard the constructions
+are matters more than whether they come from the domain, and any domain probe needs a held-out check on real,
+labeled replies before it is trusted.
