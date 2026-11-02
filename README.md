@@ -1,5 +1,17 @@
 # vt — training models that are proved correct
 
+> **The grounding verifier (product).** A verification API that sits behind any chatbot or RAG system and
+> flags, sentence by sentence, what the evidence contradicts or does not hold, read from a small open model's
+> internals in two forward passes, with a probe trained without human labels. On HaluBench it ties MiniCheck
+> and leads at a fixed false-alarm rate. See [docs/product.md](docs/product.md) (product, API, pipeline,
+> measurements, pricing) and [docs/grounding_trace.md](docs/grounding_trace.md) (how it was found).
+>
+> ```bash
+> pip install ".[verifier]"
+> vt-verify --reader Qwen/Qwen3-4B --probe heads/grounding_probe_qwen3_4b.npz      # POST /v1/verify
+> vt-verifier-pipeline calibrate --reader Qwen/Qwen3-4B --probe ... --labeled your_replies.jsonl --out ...
+> ```
+
 Most AI verification work takes a finished model and asks a solver to prove
 something about it, and the solver usually gives up. **vt puts the verifier
 inside training.** A model comes out of `vt prove` only with a machine-checked
