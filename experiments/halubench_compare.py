@@ -101,6 +101,7 @@ def main():
     ap.add_argument("--claim", choices=["answer", "statement"], default="answer",
                     help="what the grounding check reads: the answer as given, or \"question answer\" (as MiniCheck)")
     ap.add_argument("--sources", nargs="+", help="only these HaluBench sources")
+    ap.add_argument("--seed", type=int, default=0, help="which sample (1: a fresh one, to confirm a result)")
     ap.add_argument("--add-hhem", metavar="RESULTS", help="score HHEM-2.1-open (Vectara; runs its own model code) on "
                     "the answers of an earlier run and merge it into that results file")
     a = ap.parse_args()
@@ -110,7 +111,7 @@ def main():
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from vt.grounding import Grounding
-    rows = [r for r in sample(a.per_source) if not a.sources or r["source_ds"] in a.sources]
+    rows = [r for r in sample(a.per_source, a.seed) if not a.sources or r["source_ds"] in a.sources]
     tok = AutoTokenizer.from_pretrained(a.reader)
     reader = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
     g = Grounding(reader, tok, a.probe, max_context_chars=12000)
@@ -119,7 +120,7 @@ def main():
     for i, r in enumerate(rows):
         claim = f"{r['question']} {r['answer']}"
         t = time.time()
-        reply = claim if a.claim == "statement" else str(r["answer"])  # a one-word answer is no sentence to read
+        reply = claim if a.claim == "statement" else str(r["answer"])  # "answer": the check's own rule decides
         res = g.check([{"role": "user", "content": r["question"]}], reply, documents=[r["passage"]])
         t_g += time.time() - t
         zs = [s["z"] for s in res["sentences"]] or [0.0]

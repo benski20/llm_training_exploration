@@ -1,0 +1,1238 @@
+{
+ "n": 150,
+ "reader": "Qwen/Qwen3-4B",
+ "claim": "statement",
+ "seconds_per_answer": {
+  "grounding": 17.71,
+  "minicheck": 15.22
+ },
+ "grounding_total": {
+  "auroc": 0.573,
+  "caught_at_10pct_false_alarms": 0.133,
+  "per_source": {
+   "DROP": 0.525,
+   "FinanceBench": 0.445,
+   "covidQA": 0.806
+  }
+ },
+ "grounding_max": {
+  "auroc": 0.573,
+  "caught_at_10pct_false_alarms": 0.16,
+  "per_source": {
+   "DROP": 0.53,
+   "FinanceBench": 0.459,
+   "covidQA": 0.8
+  }
+ },
+ "minicheck": {
+  "auroc": 0.601,
+  "caught_at_10pct_false_alarms": 0.147,
+  "per_source": {
+   "DROP": 0.65,
+   "FinanceBench": 0.507,
+   "covidQA": 0.827
+  }
+ },
+ "rows": [
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.901,
+   "grounding_max": 0.901,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.7822057008743286
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.062,
+   "grounding_max": 0.062,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.015232741832733154
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 4.271,
+   "grounding_max": 4.271,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9654783010482788
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.817,
+   "grounding_max": 0.648,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3337036967277527
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.258,
+   "grounding_max": 1.258,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9816373586654663
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.786,
+   "grounding_max": 0.566,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3080853819847107
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.116,
+   "grounding_max": 1.116,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8801376223564148
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.538,
+   "grounding_max": 1.538,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9961255788803101
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.263,
+   "grounding_max": 3.263,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8977530002593994
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.823,
+   "grounding_max": 2.823,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9853097200393677
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.472,
+   "grounding_max": 0.472,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.06040084362030029
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.576,
+   "grounding_max": 0.576,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6491445899009705
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.776,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8679137229919434
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.507,
+   "grounding_max": 1.507,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.3611243963241577
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.882,
+   "grounding_max": 2.882,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.03473907709121704
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 3.388,
+   "grounding_max": 2.884,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9103679656982422
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.141,
+   "grounding_max": 3.141,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9440381526947021
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.96,
+   "grounding_max": 3.96,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.2486070990562439
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.054,
+   "grounding_max": 2.054,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8577731251716614
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.003,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.06843447685241699
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.002,
+   "grounding_max": 2.002,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9874205589294434
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.676,
+   "grounding_max": 1.676,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.03876692056655884
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.361,
+   "grounding_max": 0.361,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.47314417362213135
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.499,
+   "grounding_max": 0.343,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.3562847375869751
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.648,
+   "grounding_max": 1.302,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9133837223052979
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.2,
+   "grounding_max": 1.2,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9642533659934998
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.946,
+   "grounding_max": 2.946,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9905703067779541
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.456,
+   "grounding_max": 0.456,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.988863468170166
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -0.701,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8718090057373047
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.982,
+   "grounding_max": 1.982,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9771341681480408
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.42,
+   "grounding_max": 2.42,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9565757513046265
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.508,
+   "grounding_max": 3.508,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9769103527069092
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.355,
+   "grounding_max": 0.355,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9467144012451172
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.342,
+   "grounding_max": 0.342,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.25158756971359253
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.572,
+   "grounding_max": 0.346,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8013400435447693
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.471,
+   "grounding_max": 3.471,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9420545697212219
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.564,
+   "grounding_max": 4.029,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9893149733543396
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.693,
+   "grounding_max": 0.693,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9504881501197815
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.552,
+   "grounding_max": 2.289,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9188315868377686
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.861,
+   "grounding_max": 2.861,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9854732751846313
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.235,
+   "grounding_max": 2.235,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.978812038898468
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.457,
+   "grounding_max": 4.457,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9122012853622437
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.172,
+   "grounding_max": 0.172,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.024318933486938477
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.987,
+   "grounding_max": 2.987,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9727197289466858
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.146,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8518310785293579
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.089,
+   "grounding_max": 1.089,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8951015472412109
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.341,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.026036560535430908
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.886,
+   "grounding_max": 1.696,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8482680320739746
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 5.647,
+   "grounding_max": 4.221,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9965168833732605
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.194,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.34325993061065674
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.446,
+   "grounding_max": 1.446,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9895157217979431
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.953,
+   "grounding_max": 1.953,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9417991042137146
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.633,
+   "grounding_max": 2.633,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8402958512306213
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.756,
+   "grounding_max": 1.756,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9244772791862488
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.734,
+   "grounding_max": 3.734,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7740002870559692
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.228,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.025626540184020996
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.413,
+   "grounding_max": 0.413,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9323997497558594
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.391,
+   "grounding_max": 1.363,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9676706790924072
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.311,
+   "grounding_max": 2.311,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9537395238876343
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 4.6,
+   "grounding_max": 4.6,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9104885458946228
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.629,
+   "grounding_max": 0.629,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8821953535079956
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.476,
+   "grounding_max": 1.476,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.952434241771698
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.851,
+   "grounding_max": 1.536,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.029323041439056396
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.041,
+   "grounding_max": 3.041,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9633431434631348
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.955,
+   "grounding_max": 3.955,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.793402373790741
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.193,
+   "grounding_max": 2.193,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9148279428482056
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.608,
+   "grounding_max": 1.608,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8659167289733887
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.725,
+   "grounding_max": 4.389,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9817244410514832
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.848,
+   "grounding_max": 1.848,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9853264689445496
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.063,
+   "grounding_max": 3.063,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9816605448722839
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.196,
+   "grounding_max": 3.196,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9654468894004822
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.854,
+   "grounding_max": 2.854,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.991334855556488
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.773,
+   "grounding_max": 2.773,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8916075229644775
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.43,
+   "grounding_max": 2.43,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9073680639266968
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.148,
+   "grounding_max": 2.067,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9758517742156982
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.911,
+   "grounding_max": 1.911,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9744272828102112
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 3.636,
+   "grounding_max": 3.636,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9952951073646545
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.137,
+   "grounding_max": 1.773,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9651085138320923
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.0,
+   "grounding_max": -1.29,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8552106618881226
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.18,
+   "grounding_max": 2.18,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.669025182723999
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.297,
+   "grounding_max": 2.297,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8382812738418579
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.636,
+   "grounding_max": 0.636,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9883768558502197
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 3.88,
+   "grounding_max": 3.88,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8783027529716492
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.678,
+   "grounding_max": 2.069,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.989098310470581
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.743,
+   "grounding_max": 1.743,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9912071824073792
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 0.055,
+   "grounding_max": 0.055,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9942082762718201
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.507,
+   "grounding_max": 2.507,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9074563384056091
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -0.645,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.10713756084442139
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 0.68,
+   "grounding_max": 0.68,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9684047698974609
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.233,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.039061009883880615
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.94,
+   "grounding_max": 2.94,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8797284960746765
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.956,
+   "grounding_max": 1.956,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9910699725151062
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.771,
+   "grounding_max": 1.771,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9876989126205444
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.838,
+   "grounding_max": 3.838,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9932336211204529
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 1.843,
+   "grounding_max": 1.688,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9788795709609985
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.348,
+   "grounding_max": 1.348,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9828097820281982
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.341,
+   "grounding_max": 0.341,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.11537444591522217
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.377,
+   "grounding_max": 1.377,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.32708168029785156
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.179,
+   "grounding_max": 2.179,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9925174713134766
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.134,
+   "grounding_max": 2.134,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.8770228624343872
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.174,
+   "grounding_max": 2.063,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9386273622512817
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.685,
+   "grounding_max": 2.685,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.4965065121650696
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 2.362,
+   "grounding_max": 2.362,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.013640940189361572
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.63,
+   "grounding_max": 0.63,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.1051759123802185
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 4.148,
+   "grounding_max": 3.453,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9827567338943481
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 1.862,
+   "grounding_max": 1.862,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9824142456054688
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.538,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.061901748180389404
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 1.157,
+   "grounding_max": 1.157,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9520245790481567
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.768,
+   "grounding_max": 2.051,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9949201345443726
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.692,
+   "grounding_max": 2.692,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9780659675598145
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.719,
+   "grounding_max": 3.719,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9298493266105652
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.036,
+   "grounding_max": 2.036,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8956233859062195
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.708,
+   "grounding_max": 0.708,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.36880141496658325
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.787,
+   "grounding_max": 1.787,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.8510741591453552
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 3.05,
+   "grounding_max": 3.05,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9179741144180298
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 3.643,
+   "grounding_max": 2.833,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9926831722259521
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 0.222,
+   "grounding_max": 0.222,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6818302273750305
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 1.56,
+   "grounding_max": 1.56,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.48114579916000366
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 4.089,
+   "grounding_max": 4.089,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.976665198802948
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.246,
+   "grounding_max": 1.246,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9710495471954346
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.813,
+   "grounding_max": 1.813,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9806308746337891
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.0,
+   "grounding_max": -1.446,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8525223731994629
+  },
+  {
+   "source": "covidQA",
+   "y": 0,
+   "grounding_total": 0.514,
+   "grounding_max": 0.514,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.015272021293640137
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 3.016,
+   "grounding_max": 3.016,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9719328880310059
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 3.525,
+   "grounding_max": 3.519,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9944444894790649
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.631,
+   "grounding_max": 1.448,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9511587619781494
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.173,
+   "grounding_max": 2.173,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9562892913818359
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.722,
+   "grounding_max": 2.722,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.985960066318512
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 2.284,
+   "grounding_max": 2.284,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9676493406295776
+  },
+  {
+   "source": "DROP",
+   "y": 1,
+   "grounding_total": 2.636,
+   "grounding_max": 2.636,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9951062798500061
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 0.94,
+   "grounding_max": 0.94,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.963731050491333
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.361,
+   "grounding_max": 2.361,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.41287773847579956
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 4.774,
+   "grounding_max": 4.556,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.828309178352356
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 4.435,
+   "grounding_max": 4.435,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.7489644289016724
+  },
+  {
+   "source": "FinanceBench",
+   "y": 1,
+   "grounding_total": 3.309,
+   "grounding_max": 3.309,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9934087991714478
+  },
+  {
+   "source": "DROP",
+   "y": 0,
+   "grounding_total": 2.96,
+   "grounding_max": 2.96,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9078681468963623
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.435,
+   "grounding_max": 1.435,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9684905409812927
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 4.501,
+   "grounding_max": 4.501,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9287844300270081
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.499,
+   "grounding_max": 2.189,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.89671391248703
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 1.803,
+   "grounding_max": 1.803,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9754208922386169
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.296,
+   "grounding_max": 1.296,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.5846914052963257
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.913,
+   "grounding_max": 0.913,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.8752644062042236
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.847,
+   "grounding_max": 2.847,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9936605095863342
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.646,
+   "grounding_max": 0.487,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.6418189406394958
+  },
+  {
+   "source": "FinanceBench",
+   "y": 0,
+   "grounding_total": 2.712,
+   "grounding_max": 2.712,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9949056506156921
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 3.267,
+   "grounding_max": 3.267,
+   "grounding_verdict": "not grounded",
+   "minicheck": 0.9709946513175964
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 2.281,
+   "grounding_max": 1.381,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.9654659628868103
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.682,
+   "grounding_max": 1.682,
+   "grounding_verdict": "contradicted",
+   "minicheck": 0.6457110643386841
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 1.427,
+   "grounding_max": 0.925,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.9629995822906494
+  },
+  {
+   "source": "covidQA",
+   "y": 1,
+   "grounding_total": 0.718,
+   "grounding_max": 0.718,
+   "grounding_verdict": "consistent",
+   "minicheck": 0.32147252559661865
+  }
+ ]
+}

@@ -72,3 +72,14 @@ def test_long_documents_keep_their_relevant_passages():
     out = select([doc], "When did the bridge reopen? It reopened in October.", budget=2000)
     assert any("reopened in October" in p for p in out) and sum(map(len, out)) <= 2000
     assert select(["short."], "q", budget=2000) == ["short."]
+
+
+def test_a_short_reply_is_read_with_its_question(tmp_path):
+    m, tok = tiny()
+    g = Grounding(m, tok, probe(tmp_path, np.ones(128)), flag_z=1e9)
+    out = g.check([{"role": "user", "content": "Which team won?"}], "Rams", documents=["The Rams won."])
+    assert out["read_as"] == "question and reply" and out["sentences"][0]["text"] == "Which team won: Rams"
+    assert len(out["sentences"]) == 1
+    assert "read_as" not in g.check([{"role": "user", "content": "When?"}], "In 1889.", documents=["x"])  # a sentence
+    long = "The Rams won the game in the last minute after a long field goal by their kicker."
+    assert "read_as" not in g.check([{"role": "user", "content": "Who won?"}], long, documents=["x"])
