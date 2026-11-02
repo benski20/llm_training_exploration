@@ -138,6 +138,10 @@ def cmd_calibrate(a):
     art.update(cal_threshold=np.float32(thr), cal_a=np.float32(lr.coef_[0][0]), cal_b=np.float32(lr.intercept_[0]),
                cal_false_alarms=np.float32(a.false_alarms), cal_n=np.int32(len(fit)))
     save_probe(art, a.out)
+    trained = os.path.splitext(a.probe)[0] + ".train.json"     # the model card reads how it was trained
+    if os.path.exists(trained):
+        import shutil
+        shutil.copy(trained, os.path.splitext(a.out.replace(".calibrated", ""))[0] + ".train.json")
     report = {"probe": a.out, "from": a.probe, "reader": a.reader, "labeled": a.labeled, "target_false_alarms": a.false_alarms,
               "fit": dict(n=len(fit), threshold=round(thr, 4), auroc=round(float(auroc(tot, y.astype(float))), 3),
                           **rates(tot, y, thr)), "seconds_per_reply": round(secs, 2), "sha256": sha256(a.out)}
