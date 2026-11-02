@@ -53,8 +53,15 @@ def extract(a):
     os.makedirs(a.out, exist_ok=True)
     rows = rows_for(a.split, a.n, a.seed)
     tok = AutoTokenizer.from_pretrained(a.reader)
-    model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
-    reader = Reader(model)
+    if torch.cuda.is_available():                               # e.g. a Kaggle T4: float16 on one GPU
+        model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.float16, device_map="auto").eval()
+        if torch.cuda.get_device_capability(0)[0] < 8:
+            for mod in model.modules():
+                if getattr(mod, "compute_dtype", None) == torch.bfloat16:
+                    mod.compute_dtype = torch.float16
+    else:
+        model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
+    reader = Reader(model, every=a.every)
     t0 = time.time()
     for start in range(0, len(rows), a.shard):
         path = os.path.join(a.out, f"{a.split}_{start:05d}.npz")
@@ -110,6 +117,50 @@ def prf(flag, y):
             "f1": round(100 * 2 * pr * rc / max(1e-9, pr + rc), 1), "n": int(len(y))}
 
 
+def torch_logreg(X, y, l2, epochs=8, lr=1e-3, batch=512, seed=0):
+    """Class-balanced logistic regression on standardized features, minibatch Adam; X stays on the CPU (float16),
+    batches go to the GPU when there is one. Returns (mean, std, w, b) as numpy."""
+    import torch
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    g = torch.Generator().manual_seed(seed)
+    n, d = X.shape
+    mean = np.zeros(d, np.float64)
+    sq = np.zeros(d, np.float64)
+    for i in range(0, n, 4096):                                 # streamed mean and variance
+        c = X[i:i + 4096].astype(np.float64)
+        mean += c.sum(0)
+        sq += (c ** 2).sum(0)
+    mean /= n
+    std = np.sqrt(np.maximum(sq / n - mean ** 2, 1e-8))
+    m_t, s_t = torch.tensor(mean, dtype=torch.float32, device=dev), torch.tensor(std, dtype=torch.float32, device=dev)
+    w = torch.zeros(d, device=dev, requires_grad=True)
+    b = torch.zeros(1, device=dev, requires_grad=True)
+    opt = torch.optim.Adam([w, b], lr=lr)
+    yt = torch.tensor(y, dtype=torch.float32)
+    pos = float(y.mean())
+    weight = torch.tensor([0.5 / max(1 - pos, 1e-6), 0.5 / max(pos, 1e-6)])
+    for _ in range(epochs):
+        for idx in torch.randperm(n, generator=g).split(batch):
+            xb = (torch.from_numpy(X[idx.numpy()].astype(np.float32)).to(dev) - m_t) / s_t
+            yb = yt[idx].to(dev)
+            wb = weight[yt[idx].long()].to(dev)
+            loss = (torch.nn.functional.binary_cross_entropy_with_logits(xb @ w + b, yb, reduction="none") * wb).mean() \
+                + l2 * (w ** 2).sum()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+    return mean.astype(np.float32), std.astype(np.float32), w.detach().cpu().numpy(), float(b.detach().cpu())
+
+
+def torch_predict(model, X):
+    mean, std, w, b = model
+    out = []
+    for i in range(0, len(X), 4096):
+        z = ((X[i:i + 4096].astype(np.float32) - mean) / std) @ w + b
+        out.append(1 / (1 + np.exp(-z)))
+    return np.concatenate(out)
+
+
 def fit(a):
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -124,21 +175,29 @@ def fit(a):
            "train_sentences": int(len(tr["y"])), "test_sentences": int(len(te["y"])),
            "test_hallucinated_answers": int(te["resp_y"].sum()), "published_response_f1": PUBLISHED}
 
+    big = a.fitter == "torch"                                   # float16 until each batch reaches the GPU
+
     def feats(d, which):
-        z = [d["X"].astype(np.float32)] if which in ("neurons", "both") else []
+        dt = np.float16 if big else np.float32
+        z = [d["X"].astype(dt, copy=False)] if which in ("neurons", "both") else []
         if which in ("evidence", "both"):
-            z.append(np.c_[d["ev"], d["ev"] ** 2])
-        return np.concatenate(z, 1)
+            z.append(np.c_[d["ev"], d["ev"] ** 2].astype(dt))
+        return np.concatenate(z, 1) if len(z) > 1 else z[0]
+
+    def train(X, y, C):
+        if big:
+            m = torch_logreg(X, y, l2=1.0 / (C * len(y)))
+            return lambda Z: torch_predict(m, Z)
+        sc = StandardScaler().fit(X)
+        clf = LogisticRegression(C=C, max_iter=3000, class_weight="balanced").fit(sc.transform(X), y)
+        return lambda Z: clf.predict_proba(sc.transform(Z))[:, 1]
 
     rv = {i: y for i, y in zip(tr["resp_ids"], tr["resp_y"])}
     for which in ("evidence", "neurons", "both"):
         Xtr, Xte = feats(tr, which), feats(te, which)
         best = None
         for C in (0.001, 0.01, 0.1):
-            sc = StandardScaler().fit(Xtr[~is_val])
-            clf = LogisticRegression(C=C, max_iter=3000, class_weight="balanced").fit(sc.transform(Xtr[~is_val]),
-                                                                                     tr["y"][~is_val])
-            pv = clf.predict_proba(sc.transform(Xtr[is_val]))[:, 1]
+            pv = train(Xtr[~is_val], tr["y"][~is_val], C)(Xtr[is_val])
             vids = np.array(sorted(val_ids))
             rs, ry = response_scores(pv, tr["resp"][is_val], vids), np.array([rv[i] for i in vids])
             ts = np.unique(rs)
@@ -147,9 +206,7 @@ def fit(a):
             if best is None or f1s[k] > best[0]:
                 best = (f1s[k], C, float(ts[k]))
         _, C, thr = best
-        sc = StandardScaler().fit(Xtr)
-        clf = LogisticRegression(C=C, max_iter=3000, class_weight="balanced").fit(sc.transform(Xtr), tr["y"])
-        p = clf.predict_proba(sc.transform(Xte))[:, 1]
+        p = train(Xtr, tr["y"], C)(Xte)
         rs = response_scores(p, te["resp"], te["resp_ids"])
         flag = rs >= thr
         row = {"C": C, "threshold": round(thr, 4), "validation_f1": best[0],
@@ -177,6 +234,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", type=int, default=50)
     ap.add_argument("--max-context-chars", type=int, default=6000)
+    ap.add_argument("--every", type=int, default=4, help="read every n-th layer's neurons")
+    ap.add_argument("--fitter", choices=["sklearn", "torch"], default="sklearn",
+                    help="torch: streaming minibatch logistic regression (GPU when present) for large feature sets")
     ap.add_argument("--out", required=True)
     ap.add_argument("--report", default="results/ragtruth_sota.json")
     a = ap.parse_args()
