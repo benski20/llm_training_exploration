@@ -14,8 +14,8 @@ Labeled replies are JSON lines: {"question", "reply", "documents": [...], "hallu
              (vt/probe_train.py); no human labels. Keep the documents general and varied: probes from 1,500
              constructions, or from the target domain's own documents, transferred worse than from 600 general
              ones (docs/grounding_trace.md).
-  calibrate  on the customer's labeled replies: each signal's scale over their sentences (labels not used), the
-             reply-total threshold for the chosen false-alarm rate, a logistic map from total to probability; with
+  calibrate  on the customer's labeled replies: the reply-total threshold for the chosen false-alarm rate (the
+             probe's own signal scales kept: re-deriving them from mixed replies did worse; --rescale to), a logistic map from total to probability; with
              --holdout, measured on the part not used to set them. About 100 replies with both kinds is enough
              to set a threshold; the error rate it reports is only as precise as their number.
   evaluate   error rates on labeled replies at the calibrated threshold (and AUROC), per source when given,
@@ -121,12 +121,13 @@ def cmd_calibrate(a):
     model, tok = load_reader(a.reader)
     g = Grounding(model, tok, a.probe)
     raw_fit, secs = read_all(g, fit)
-    sent = [s for r in raw_fit for s in r]
-    natural = {k: (float(np.mean([s[k] for s in sent])), float(np.std([s[k] for s in sent])))
-               for k in ("score", "mean_shift", "max_disagreement")}            # labels not used
-    g.natural = {"probe": natural["score"], "mean_shift": natural["mean_shift"],
-                 "max_disagreement": natural["max_disagreement"]}
-    g.calibration = None
+    if a.rescale or len(g.natural) < 3:                          # the signals' scales from these replies (labels
+        sent = [s for r in raw_fit for s in r]                   # not used); by default a probe keeps its own:
+        natural = {k: (float(np.mean([s[k] for s in sent])), float(np.std([s[k] for s in sent])))
+                   for k in ("score", "mean_shift", "max_disagreement")}        # re-deriving them from 300 mixed
+        g.natural = {"probe": natural["score"], "mean_shift": natural["mean_shift"],    # HaluBench replies cost
+                     "max_disagreement": natural["max_disagreement"]}           # 0.03 AUROC and the false-alarm
+    g.calibration = None                                         # target (13% against 10%; kept: 8.7%)
     tot = np.array([g.score(r)["total"] for r in raw_fit])
     y = np.array([int(r["hallucinated"]) for r in fit])
     if y.min() == y.max():
@@ -255,6 +256,8 @@ def main(argv=None):
         p.add_argument("--false-alarms", type=float, default=0.05)
         p.add_argument("--holdout", type=float, default=0.5)
         p.add_argument("--seed", type=int, default=0)
+        p.add_argument("--rescale", action="store_true", help="re-derive the signals' scales from these replies "
+                       "(default: keep the probe's own, set only the threshold; a probe without scales gets them)")
     e = sub.add_parser("evaluate")
     e.add_argument("--reader", required=True)
     e.add_argument("--probe", required=True)

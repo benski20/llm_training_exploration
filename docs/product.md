@@ -121,6 +121,16 @@ further replies the same threshold flagged 19% of clean ones (target 10%), caugh
 precision 55%, AUROC 0.62: a threshold set on 84 replies mixed across six sources does not hold its rate on new
 data. A calibration set should come from one customer's own traffic and number a few hundred replies.
 
+Calibrating on 300 replies and testing on 300 others (`results/pipeline_demo/threshold_only_cal300.json`): with the
+probe's own signal scales kept and only the threshold set, **8.7% of clean test replies flagged against the 10%
+target**, 19% of hallucinated ones caught, precision 68%, AUROC 0.65; re-deriving the scales from the 300 mixed
+calibration replies instead gave 13% false alarms, 14% caught, AUROC 0.62. The pipeline now keeps the probe's
+scales by default. What this says about the product on HaluBench's mix: at a false-alarm rate a customer can
+live with, it catches about one hallucination in five overall, far more on some sources (HaluEval, CovidQA) than
+others (DROP, FinanceBench near chance). Sold as a guardrail for answers written from documents it has to be
+calibrated and measured on the customer's own replies, and its value rests on catching a share of errors cheaply
+on every reply, not on catching them all.
+
 Through the API itself (`vt-verify` with the calibrated probe, the SDK over HTTP with a key): a correct summary
 of a short article reads consistent (total 1.05 under the threshold 2.14), one with the wrong month and cost reads
 contradicted (2.35, p = 0.59); a bad key gets 401; tokens are metered per key. 1.4 s a check on CPU once warm
