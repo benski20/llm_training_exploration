@@ -107,6 +107,16 @@ clearly ahead once; the honest claim is "at least as good, at a fraction of an L
 Where it wins: answers written from documents, long or short. Where it still loses: medical papers (CovidQA,
 PubMedQA) and numeric answers over financial filings (FinanceBench, near chance for all three systems).
 
+## With a customer's labels: RAGTruth (`docs/ragtruth_sota.md`)
+
+When labeled answers are available, the same frozen reader with a linear probe trained on them is a supervised
+detector: on RAGTruth, trained on 800 answers, response-level F1 70.4 [65.9, 74.8] on 600 test answers (AUROC 0.86;
+sentence AUROC 0.90), above prompted GPT-4-turbo (63.4) and 9 points below fine-tuned detectors trained on
+~15,000 answers (78.7-79.2). It gains about 2 F1 per doubling of training answers (66.5 at 100, 72.8 at 800), not
+yet flattening; the full-scale run (`kaggle/ragtruth_sota`) tests whether the full training set reaches the
+state of the art. For the product: a customer with a few thousand labeled replies gets a detector trained on
+them in minutes (a linear layer on a frozen reader), no fine-tuning, the same API.
+
 ## The pipeline, end to end (`results/pipeline_demo/`)
 
 What a customer engagement produces, run on HaluBench as a stand-in for their data: `calibrate` on 120 labeled
