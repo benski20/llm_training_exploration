@@ -60,9 +60,26 @@ Two forward passes of a 4B model per reply, against an LLM-judge call per claim.
 | test | result |
 |---|---|
 | RAGTruth, human-labeled hallucinations in news, Q&A and reviews (never trained on) | 0.82 [0.76, 0.88] AUROC per response, 0.77 per sentence; a detector trained on RAGTruth itself: 0.86 |
-| HaluBench, 300 answers in 6 sources, head to head with MiniCheck (RoBERTa-Large) | overall 0.59 against 0.63; RAGTruth-style long answers 0.88 against 0.66; one-word answers (DROP, FinanceBench) 0.40 against 0.65 and 0.51; long papers (CovidQA) 0.50 against 0.83 |
+| HaluBench, 300 answers in 6 sources, head to head (`results/halubench_compare_qwen3_4b.json`) | see below |
 | End to end, 13 whole replies with Wikipedia evidence | the wrong reply above the right one in all 6 pairs (two by thin margins) |
 | Closed-book trivia through the full server | 1-2 of 13-14 wrong answers flagged: the lookup rarely finds the deciding fact |
+
+HaluBench head to head, the same 300 answers (50 per source, half hallucinated), AUROC for "hallucinated":
+
+| source | this verifier (4B reader) | MiniCheck (RoBERTa-Large) | Vectara HHEM-2.1-open |
+|---|---|---|---|
+| overall | 0.59 | **0.63** | 0.58 |
+| caught at 10% false alarms | **19%** | 16% | 11% |
+| RAGTruth (long-form RAG answers) | 0.88 | 0.66 | **0.89** |
+| HaluEval | 0.67 | **0.74** | 0.72 |
+| PubMedQA | 0.59 | **0.67** | 0.45 |
+| CovidQA (long papers) | 0.50 | **0.83** | 0.48 |
+| DROP (one-word answers) | 0.40 | **0.65** | 0.35 |
+| FinanceBench (one-word answers) | 0.40 | 0.51 | **0.53** |
+| CPU seconds per answer | 13.5 | 2.4 | 11.9 |
+
+On par with HHEM, behind MiniCheck overall, ahead of both on what is caught at a fixed 10% false-alarm rate, and
+as good as the best on long-form answers written from documents.
 
 Where it wins is where it is built for: answers written in sentences from documents. Where it loses is known:
 one-word extractive answers (there is no sentence to read) and documents longer than its evidence budget (fixed
