@@ -78,12 +78,29 @@ HaluBench head to head, the same 300 answers (50 per source, half hallucinated),
 | FinanceBench (one-word answers) | 0.40 | 0.51 | **0.53** |
 | CPU seconds per answer | 13.5 | 2.4 | 11.9 |
 
-On par with HHEM, behind MiniCheck overall, ahead of both on what is caught at a fixed 10% false-alarm rate, and
-as good as the best on long-form answers written from documents.
+That was the first version. Two fixes followed from where it lost: long documents are reduced to their passages
+most relevant to the reply instead of being cut at the end, and a fragment reply ("Rams", "$1.2 billion") is read
+as one statement with its question. Because they were chosen after seeing those sources, they were confirmed on a
+fresh HaluBench sample (`results/halubench_compare_qwen3_4b_seed1.json`, 300 other answers, seed 1):
 
-Where it wins is where it is built for: answers written in sentences from documents. Where it loses is known:
-one-word extractive answers (there is no sentence to read) and documents longer than its evidence budget (fixed
-since: long documents are reduced to their most relevant passages; re-measurement below).
+| fresh sample | this verifier (4B reader) | MiniCheck (RoBERTa-Large) |
+|---|---|---|
+| **overall** | **0.72** | 0.64 |
+| difference (95% CI) | **+0.09 [+0.005, +0.18]** | |
+| **caught at 10% false alarms** | **35%** | 11% |
+| RAGTruth | **0.92** | 0.65 |
+| HaluEval | **0.90** | 0.73 |
+| DROP | **0.67** | 0.45 |
+| FinanceBench | 0.56 | 0.52 |
+| CovidQA | 0.75 | **0.89** |
+| PubMedQA | 0.59 | **0.81** |
+| CPU seconds per answer | 5.9 (two passes) | 2.4 |
+
+Ahead of MiniCheck overall by a margin outside chance, and three times as many hallucinations caught at a 10%
+false-alarm rate; behind it on medical papers (CovidQA, PubMedQA), the next thing to fix.
+
+Where it wins: answers written from documents, long or short. Where it still loses: medical papers (CovidQA,
+PubMedQA) and numeric answers over financial filings (FinanceBench, near chance for all three systems).
 
 ## Pricing and unit economics (to be confirmed by measurement on GPU)
 
@@ -91,13 +108,13 @@ since: long documents are reduced to their most relevant passages; re-measuremen
 - Self-hosted licence for regulated customers: annual, per deployment, the container and pipeline included.
 - Calibration service: per domain, on the customer's labeled replies; the model card is the deliverable.
 
-Cost per verification is two forward passes of the reader over evidence plus reply. On CPU it is 13.5 s for a
+Cost per verification is two forward passes of the reader over evidence plus reply. On CPU it is 5.9 s for a
 HaluBench answer with a 4B reader; on a GPU the same work is a fraction of a second, which has to be measured
 (the hosted endpoint is written, not yet deployed). An LLM-judge call per claim is the comparison to beat.
 
 ## What has to happen before selling
 
-1. Close the gaps the benchmark found (short answers, long documents) and re-measure on HaluBench; add LLM-AggreFact.
+1. Close the remaining gaps (medical papers, numbers in filings); add LLM-AggreFact to the benchmark.
 2. A larger reader: the Kaggle kernel that trains and scores the probe on Qwen3-32B is ready (`kaggle/grounding`).
 3. GPU latency and cost per 1,000 tokens on the hosted endpoint.
 4. A design partner's labeled replies for a real calibration and model card.

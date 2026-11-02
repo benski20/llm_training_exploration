@@ -76,13 +76,13 @@ def summarize(out, names):
     return res
 
 
-def add_hhem(path, per_source):
+def add_hhem(path, per_source, seed=0):
     """Vectara's HHEM-2.1-open on the answers of an earlier run (same sample), merged into its results."""
     from transformers import AutoModelForSequenceClassification
     m = AutoModelForSequenceClassification.from_pretrained("vectara/hallucination_evaluation_model",
                                                            trust_remote_code=True)    # its own model code
     res = json.load(open(path))
-    rows, t = sample(per_source), time.time()
+    rows, t = sample(per_source, seed), time.time()
     assert [r["source_ds"] for r in rows] == [o["source"] for o in res["rows"]], "not the same sample"
     for r, o in zip(rows, res["rows"]):
         o["hhem"] = float(1 - m.predict([(r["passage"], f"{r['question']} {r['answer']}")])[0])
@@ -106,7 +106,7 @@ def main():
                     "the answers of an earlier run and merge it into that results file")
     a = ap.parse_args()
     if a.add_hhem:
-        return add_hhem(a.add_hhem, a.per_source)
+        return add_hhem(a.add_hhem, a.per_source, a.seed)
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 

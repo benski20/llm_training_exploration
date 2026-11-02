@@ -2,8 +2,9 @@
 
 > **The grounding verifier (product).** A verification API that sits behind any chatbot or RAG system and
 > flags, sentence by sentence, what the evidence contradicts or does not hold, read from a small open model's
-> internals in two forward passes, with a probe trained without human labels. On HaluBench it ties MiniCheck
-> and leads at a fixed false-alarm rate. See [docs/product.md](docs/product.md) (product, API, pipeline,
+> internals in two forward passes, with a probe trained without human labels. On a held-out HaluBench sample it
+> beats MiniCheck (AUROC 0.72 against 0.64, +0.09 [+0.005, +0.18]) and catches three times as many hallucinations
+> at a 10% false-alarm rate (35% against 11%). See [docs/product.md](docs/product.md) (product, API, pipeline,
 > measurements, pricing) and [docs/grounding_trace.md](docs/grounding_trace.md) (how it was found).
 >
 > ```bash

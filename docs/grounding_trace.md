@@ -241,3 +241,13 @@ is the warning: in these documents the constructions are easier to tell apart, a
 were made rather than grounding. Adapting to a domain is not automatic: how varied and hard the constructions
 are matters more than whether they come from the domain, and any domain probe needs a held-out check on real,
 labeled replies before it is trusted.
+
+## Head to head on HaluBench (`experiments/halubench_compare.py`)
+
+First version, 300 answers (seed 0): 0.59 overall against MiniCheck's 0.63 and HHEM's 0.58; strong on RAGTruth
+(0.88), weak on one-word answers (DROP, FinanceBench 0.40) and long papers (CovidQA 0.50, 41 of 50 passages over the
+evidence budget). Two fixes: long documents reduced to their most relevant passages (BM25 over chunks, against the
+question and reply), fragment replies read as one statement with their question. Confirmed on 300 other answers
+(seed 1): **0.72 against MiniCheck's 0.64, difference +0.09 [+0.005, +0.18], 35% of hallucinations caught at a 10%
+false-alarm rate against 11%**; RAGTruth 0.92, HaluEval 0.90, DROP 0.67; behind on CovidQA (0.75 / 0.89) and
+PubMedQA (0.59 / 0.81). 5.9 s an answer on CPU.
