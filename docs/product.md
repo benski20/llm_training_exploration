@@ -102,6 +102,17 @@ false-alarm rate; behind it on medical papers (CovidQA, PubMedQA), the next thin
 Where it wins: answers written from documents, long or short. Where it still loses: medical papers (CovidQA,
 PubMedQA) and numeric answers over financial filings (FinanceBench, near chance for all three systems).
 
+## The pipeline, end to end (`results/pipeline_demo/`)
+
+What a customer engagement produces, run on HaluBench as a stand-in for their data: `calibrate` on 120 labeled
+replies (84 to set the scales and a threshold for a 10% false-alarm target, 36 held out), then `evaluate` on 120
+other replies, which writes the model card (`results/pipeline_demo/model_card.md`). On the 120 test replies:
+AUROC 0.66; at the calibrated threshold 33% of hallucinated replies caught and 13% of clean ones flagged (target
+10%), precision 71%; 4.8 s a reply on CPU. Per source (20 replies each, so wide): PubMedQA 0.88, CovidQA 0.89,
+RAGTruth 0.85, HaluEval 0.81, DROP 0.36, FinanceBench 0.48. The false-alarm rate carried from calibration to new
+data within a few points; the 36 held-out calibration replies were too few to measure it (24% on 17 clean).
+With ~100 replies a customer gets a threshold that roughly holds; a firm error rate needs a few hundred.
+
 ## Pricing and unit economics (to be confirmed by measurement on GPU)
 
 - Usage: per 1,000 tokens verified (reply plus evidence), metered per key by the API.

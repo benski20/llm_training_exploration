@@ -203,7 +203,8 @@ def model_card(res, probe):
              + (f" ({train['warning']})" if train.get("warning") else ""), "",
              "## Calibration", "",
              f"- On {int(z['cal_n']) if 'cal_n' in z.files else '?'} labeled replies, threshold "
-             f"{res['threshold']} for {float(z['cal_false_alarms']) if 'cal_false_alarms' in z.files else '?'} false alarms",
+             f"{res['threshold']} for a target of "
+             f"{format(float(z['cal_false_alarms']), '.0%') if 'cal_false_alarms' in z.files else '?'} false alarms",
              "", "## Measured", "",
              f"On {res['n']} labeled replies (`{res['labeled']}`): AUROC {res['auroc']}; at the threshold "
              f"{t['caught']:.0%} of {t['hallucinated']} hallucinated replies caught, {t['false_alarms']:.0%} of "
