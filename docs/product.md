@@ -131,13 +131,14 @@ Cost per check, estimated from measured token counts (an estimate until the host
 | tokens read per check | 650 mean, 400 median, 1,900 at the 95th percentile, plus ~60 for the second pass | measured on HaluBench (fresh sample) with passage selection |
 | compute per check (4B reader) | 2 x 4e9 parameters x ~720 tokens ≈ 6e12 FLOPs | arithmetic |
 | one L4 GPU, prefill at ~30-40% of its ~120 bf16 TFLOP/s | ≈ 0.15 s a check, ≈ 20,000 checks an hour | assumption: typical prefill utilisation |
-| L4 rental | ≈ $0.80 an hour | cloud list prices (check current) |
+| L4 rental | ≈ $0.80 an hour on Modal; $0.39-0.43 at the cheapest providers | third-party price trackers, Aug-Oct 2026 ([amcompute](https://www.amcompute.com/gpu-cloud-prices/l4), [computeprices](https://computeprices.com/providers/modal/gpus/l4)) |
 | **compute cost** | **≈ $0.00004 a check, ≈ $0.04 per 1,000 checks** | |
 | CPU only (4 cores, measured) | 1.4 s a check on a short document, 5.9 s on HaluBench's | measured |
 
 For comparison, an LLM judge reads the same evidence once per claim, with several claims per reply: at
-small-model API prices (~$0.15 per million input tokens) about $0.0005 a reply, at frontier-model prices
-(~$2.50 per million) about $0.01; prices from public list prices, to be checked. So the compute cost is roughly
+GPT-4o-mini's $0.15 per million input tokens about $0.0005 a reply, at GPT-4o's $2.50 about $0.01 (third-party
+price trackers, 2026, e.g. [pricepertoken](https://pricepertoken.com/pricing-page/model/openai-gpt-4o-mini); GPT-4o
+is listed as legacy, newer flagships may cost differently; batch APIs halve these). So the compute cost is roughly
 10 to 250 times lower than an LLM judge, before margin, and a 4-core CPU box can serve low volumes (about 2,500
 short checks an hour) with no GPU at all. Selling at $0.50-$1.00 per 1,000 checks would leave a large gross margin
 while staying well under LLM-judge prices; the per-token meter in the API supports either.
