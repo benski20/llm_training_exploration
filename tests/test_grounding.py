@@ -83,3 +83,17 @@ def test_a_short_reply_is_read_with_its_question(tmp_path):
     assert "read_as" not in g.check([{"role": "user", "content": "When?"}], "In 1889.", documents=["x"])  # a sentence
     long = "The Rams won the game in the last minute after a long field goal by their kicker."
     assert "read_as" not in g.check([{"role": "user", "content": "Who won?"}], long, documents=["x"])
+
+
+def test_a_calibrated_probe_flags_sentences_and_reply_alike(tmp_path):
+    m, tok = tiny()
+    p = tmp_path / "probe.npz"
+    np.savez(p, layers=np.array([1, 3]), mean=np.zeros(128, np.float32), scale=np.ones(128, np.float32),
+             coef=np.ones(128, np.float32), intercept=np.float32(0), score_mean=np.float32(0), score_std=np.float32(1),
+             model=np.array("tiny"), cal_threshold=np.float32(5.0), cal_a=np.float32(1), cal_b=np.float32(-5))
+    g = Grounding(m, tok, p, flag_z=-1e9)                       # every sentence over the default cut
+    rows = [{"text": "A one.", "start": 0, "end": 6, "score": 3.0, "mean_shift": 0, "max_disagreement": 0},
+            {"text": "B two.", "start": 7, "end": 13, "score": 3.0, "mean_shift": 0, "max_disagreement": 0}]
+    out = g.score(rows)                                         # each 3 < 5, together 6 >= 5
+    assert [s["verdict"] for s in out["sentences"]] == ["consistent", "consistent"] and out["verdict"] == "not grounded"
+    assert g.score(rows[:1])["verdict"] == "consistent" and 0 < g.score(rows[:1])["p_hallucinated"] < 0.5

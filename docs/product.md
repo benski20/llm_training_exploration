@@ -113,6 +113,11 @@ RAGTruth 0.85, HaluEval 0.81, DROP 0.36, FinanceBench 0.48. The false-alarm rate
 data within a few points; the 36 held-out calibration replies were too few to measure it (24% on 17 clean).
 With ~100 replies a customer gets a threshold that roughly holds; a firm error rate needs a few hundred.
 
+Through the API itself (`vt-verify` with the calibrated probe, the SDK over HTTP with a key): a correct summary
+of a short article reads consistent (total 1.05 under the threshold 2.14), one with the wrong month and cost reads
+contradicted (2.35, p = 0.59); a bad key gets 401; tokens are metered per key. 1.4 s a check on CPU once warm
+(the first request loads the reader: 60 s).
+
 ## Pricing and unit economics (to be confirmed by measurement on GPU)
 
 - Usage: per 1,000 tokens verified (reply plus evidence), metered per key by the API.

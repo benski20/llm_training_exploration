@@ -166,6 +166,7 @@ class Grounding:
         """Verdicts from raw readings: each sentence's signals on their natural scales, summed; the reply's total
         ungroundedness, and with a calibration its probability of holding a hallucination."""
         both = len(self.natural) == 3
+        cut = max(self.flag_z, self.calibration[0]) if self.calibration is not None else self.flag_z
         out = []
         for r in rows:
             row = {"text": r["text"], "start": r["start"], "end": r["end"], "score": round(r["score"], 4)}
@@ -177,15 +178,19 @@ class Grounding:
                 kind = "contradicted" if zd >= max(zp, -zsh) else "not grounded"
             else:
                 zs, kind = (r["score"] - self.score_mean) / max(self.score_std, 1e-9), "not grounded"
-            row.update(z=round(zs, 3), verdict=kind if zs >= self.flag_z else "consistent")
+            row.update(z=round(zs, 3), verdict=kind if zs >= cut else "consistent")
             out.append(row)
         total = round(float(sum(max(r["z"], 0.0) for r in out)), 3)
         flagged = [r["verdict"] for r in out if r["verdict"] != "consistent"]
         res = {"sentences": out, "total": total}
-        if self.calibration is not None:                          # the reply's verdict from its calibrated total
-            thr, a_, b_ = self.calibration
+        if self.calibration is not None:                          # the reply's verdict from its calibrated total:
+            thr, a_, b_ = self.calibration                        # sentences each under the cut can add up to it
             res["p_hallucinated"] = round(float(1 / (1 + np.exp(-(a_ * total + b_)))), 4)
-            flagged = flagged if total >= thr else []
+            if total >= thr and not flagged and out:
+                flagged = [max(out, key=lambda r: r["z"]).get("z_disagreement", 0) >= 1 and "contradicted"
+                           or "not grounded"]
+            elif total < thr:
+                flagged = []
         res["verdict"] = None if not out else "contradicted" if "contradicted" in flagged else \
             "not grounded" if flagged else "consistent"
         return res
