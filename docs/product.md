@@ -175,5 +175,7 @@ while staying well under LLM-judge prices; the per-token meter in the API suppor
 
 1. Close the remaining gaps (medical papers, numbers in filings); add LLM-AggreFact to the benchmark.
 2. A larger reader: the Kaggle kernel that trains and scores the probe on Qwen3-32B is ready (`kaggle/grounding`).
-3. GPU latency and cost per 1,000 tokens on the hosted endpoint.
+3. GPU latency and cost per 1,000 tokens on the hosted endpoint. The Kaggle RAGTruth kernel
+   (`kaggle/ragtruth_sota`) now records seconds and tokens per answer on its T4 (`timing` in its results), so
+   the run that settles accuracy also gives a measured GPU cost per check, unbatched (an upper bound).
 4. A design partner's labeled replies for a real calibration and model card.

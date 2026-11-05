@@ -67,8 +67,9 @@ def extract(a):
         path = os.path.join(a.out, f"{a.split}_{start:05d}.npz")
         if os.path.exists(path):                               # done before a restart
             continue
-        X, ev, y, resp, kind, task = [], [], [], [], [], []
+        X, ev, y, resp, kind, task, t_sec, t_tok = [], [], [], [], [], [], [], []
         for i, r in enumerate(rows[start:start + a.shard], start):
+            t_r = time.time()
             out = r["output"]
             pre = prefix(tok, f"{r['query']}\n\n{r['context'][:a.max_context_chars]}")
             enc = tok(out, add_special_tokens=False, return_offsets_mapping=True)
@@ -79,6 +80,10 @@ def extract(a):
             lo, do = token_logprobs(model, tok, prefix(tok, r["query"]), enc.input_ids)
             shift, dis = lw - lo, disagreement(dw, do, enc.input_ids)
             del dw, do
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t_sec.append(time.time() - t_r)                  # both passes, as a served check reads them
+            t_tok.append(len(pre) + len(enc.input_ids))
             sp = spans(r)
             for s, e in sentences(out):
                 js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
@@ -96,7 +101,9 @@ def extract(a):
                  kind=np.array(kind), task=np.array(task),
                  resp_y=np.array([int(bool(spans(r))) for r in rows[start:start + a.shard]]),
                  resp_task=np.array([r["task_type"] for r in rows[start:start + a.shard]]),
-                 resp_ids=np.arange(start, start + len(rows[start:start + a.shard])))
+                 resp_ids=np.arange(start, start + len(rows[start:start + a.shard])),
+                 t_sec=np.array(t_sec, np.float32), t_tok=np.array(t_tok),
+                 device=np.array(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"))
         print(f"{a.split} {min(start + a.shard, len(rows))}/{len(rows)} {time.time() - t0:.0f}s", flush=True)
 
 
@@ -104,6 +111,22 @@ def load(out, split):
     parts = [np.load(p) for p in sorted(glob.glob(os.path.join(out, f"{split}_*.npz")))]
     cat = lambda k: np.concatenate([p[k] for p in parts])      # noqa: E731
     return {k: cat(k) for k in ("X", "ev", "y", "resp", "kind", "task", "resp_y", "resp_task", "resp_ids")}
+
+
+def timing(out, split="test"):
+    """Measured seconds per answer (both reader passes, as served) and tokens read, from the extraction shards."""
+    parts = [np.load(p) for p in sorted(glob.glob(os.path.join(out, f"{split}_*.npz")))]
+    parts = [p for p in parts if "t_sec" in p.files]
+    if not parts:
+        return None
+    sec, tok = np.concatenate([p["t_sec"] for p in parts]), np.concatenate([p["t_tok"] for p in parts])
+    return {"device": str(parts[0]["device"]), "answers": int(len(sec)),
+            "seconds_per_answer": {"mean": round(float(sec.mean()), 3), "median": round(float(np.median(sec)), 3),
+                                   "p95": round(float(np.percentile(sec, 95)), 3)},
+            "tokens_per_answer": {"mean": round(float(tok.mean())), "median": int(np.median(tok)),
+                                  "p95": int(np.percentile(tok, 95))},
+            "answers_per_hour": round(3600 / float(sec.mean())),
+            "note": "one answer at a time, unbatched, hooks on every 6th layer kept on the CPU: an upper bound"}
 
 
 def response_scores(p, resp, ids):
@@ -221,6 +244,7 @@ def fit(a):
         row["response"]["f1_ci95"] = [round(float(np.percentile(boot, 2.5)), 1), round(float(np.percentile(boot, 97.5)), 1)]
         res[which] = row
         print(which, json.dumps(row["response"]), flush=True)
+    res["timing"] = timing(a.out)
     json.dump(res, open(a.report, "w"), indent=1)
     print(json.dumps({k: v for k, v in res.items() if k not in ("published_response_f1",)}, indent=1))
 
