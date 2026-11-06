@@ -74,6 +74,21 @@ def recall_at_fpr(score, y, fpr):
     return t, float((score[y == 1] > t).mean()) if (y == 1).any() else float("nan")
 
 
+def guaranteed_threshold(score, y, fpr, confidence):
+    """The lowest threshold whose false-alarm rate is at most `fpr` with the given confidence (one-sided
+    Clopper-Pearson bound over the clean replies): on new replies from the same domain the promise holds that
+    often. The plain quantile is right on average but, from a few hundred replies, overshoots about half the time
+    (docs/claim_contrast.md, single-domain test)."""
+    from scipy.stats import beta
+    neg = np.sort(score[y == 0])
+    n = len(neg)
+    for k in range(n):
+        above = n - k - 1                                        # clean replies scoring above neg[k]
+        if beta.ppf(confidence, above + 1, n - above) <= fpr:
+            return float(neg[k])
+    return float(neg[-1]) if n else float("inf")
+
+
 def rates(score, y, threshold):
     flag = score > threshold
     tp, fp = int((flag & (y == 1)).sum()), int((flag & (y == 0)).sum())
@@ -144,6 +159,8 @@ def cmd_calibrate(a):
         tot = cross_val_predict(LogisticRegression(C=a.C, max_iter=2000), F, y, method="decision_function",
                                 cv=StratifiedKFold(5, shuffle=True, random_state=a.seed))
     thr, _ = recall_at_fpr(tot, y, a.false_alarms)
+    if a.confidence:                                             # a stated guarantee, not an average
+        thr = guaranteed_threshold(tot, y, a.false_alarms, a.confidence)
     lr = LogisticRegression().fit(tot[:, None], y)
     art = load_probe(a.probe)
     for k in ("cal_weights", "cal_weights_b", "cal_features"):
@@ -153,7 +170,8 @@ def cmd_calibrate(a):
                    cal_features=np.array(Grounding.FEATURES))
     art.update({f"nat_{k}_{s}": np.float32(v) for k, (m, sd) in g.natural.items() for s, v in (("mean", m), ("std", sd))})
     art.update(cal_threshold=np.float32(thr), cal_a=np.float32(lr.coef_[0][0]), cal_b=np.float32(lr.intercept_[0]),
-               cal_false_alarms=np.float32(a.false_alarms), cal_n=np.int32(len(fit)))
+               cal_false_alarms=np.float32(a.false_alarms), cal_n=np.int32(len(fit)),
+               cal_confidence=np.float32(a.confidence or 0))
     save_probe(art, a.out)
     trained = os.path.splitext(a.probe)[0] + ".train.json"     # the model card reads how it was trained
     if os.path.exists(trained):
@@ -161,7 +179,9 @@ def cmd_calibrate(a):
         shutil.copy(trained, os.path.splitext(a.out.replace(".calibrated", ""))[0] + ".train.json")
     report = {"probe": a.out, "from": a.probe, "reader": a.reader, "labeled": a.labeled, "target_false_alarms": a.false_alarms,
               "fit": dict(n=len(fit), threshold=round(thr, 4), auroc=round(float(auroc(tot, y.astype(float))), 3),
-                          **rates(tot, y, thr)), "seconds_per_reply": round(secs, 2), "sha256": sha256(a.out)}
+                          **rates(tot, y, thr)), "seconds_per_reply": round(secs, 2), "sha256": sha256(a.out),
+              "confidence": a.confidence or None,
+              "scores": [round(float(t), 4) for t in tot], "labels": y.tolist()}      # to re-set the threshold offline
     if held:                                                     # measured on replies not used to set anything
         g2 = Grounding(model, tok, a.out)
         raw_h, _ = read_all(g2, held)
@@ -222,7 +242,10 @@ def model_card(res, probe):
              "## Calibration", "",
              f"- On {int(z['cal_n']) if 'cal_n' in z.files else '?'} labeled replies, threshold "
              f"{res['threshold']} for a target of "
-             f"{format(float(z['cal_false_alarms']), '.0%') if 'cal_false_alarms' in z.files else '?'} false alarms",
+             f"{format(float(z['cal_false_alarms']), '.0%') if 'cal_false_alarms' in z.files else '?'} false alarms"
+             + ((f", held with {float(z['cal_confidence']):.0%} confidence (one-sided Clopper-Pearson bound)"
+                 if float(z["cal_confidence"]) > 0 else " (on average: the plain quantile)")
+                if "cal_confidence" in z.files else ""),
              "", "## Measured", "",
              f"On {res['n']} labeled replies (`{res['labeled']}`): AUROC {res['auroc']}; at the threshold "
              f"{t['caught']:.0%} of {t['hallucinated']} hallucinated replies caught, {t['false_alarms']:.0%} of "
@@ -316,6 +339,8 @@ def main(argv=None):
         p.add_argument("--false-alarms", type=float, default=0.05)
         p.add_argument("--holdout", type=float, default=0.5)
         p.add_argument("--seed", type=int, default=0)
+        p.add_argument("--confidence", type=float, default=0.0, help="set the threshold so the false-alarm rate is "
+                       "at most --false-alarms with this confidence (e.g. 0.95; default: the plain quantile)")
         p.add_argument("--fit-weights", action="store_true", help="fit the domain's weighting of every signal "
                        "(probe, evidence shift, disagreement, copying heads, source flow) instead of a threshold alone")
         p.add_argument("--C", type=float, default=0.3, help="regularisation of --fit-weights")

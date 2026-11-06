@@ -1,0 +1,25 @@
+{
+ "constructions": 600,
+ "kinds": {
+  "contradicted": 200,
+  "unsupported": 200,
+  "grounded": 200
+ },
+ "reader": "Qwen/Qwen3-4B",
+ "documents": "general (Dolly reference paragraphs), worded like answers",
+ "held_out_construction_auroc": 0.933,
+ "layers": [
+  3,
+  7,
+  11,
+  15,
+  19,
+  23,
+  27,
+  31,
+  35
+ ],
+ "source": "experiments/grounding_probe.py --phrasing --train 600 (results/grounding_probe_qwen3_4b_phrasing.json)",
+ "probe": "heads/grounding_probe_qwen3_4b.npz",
+ "sha256": "c52c4cad386029cfd2b6915a64fa72608bdf3f629c5ff96bb64187e6a2c3fea2"
+}

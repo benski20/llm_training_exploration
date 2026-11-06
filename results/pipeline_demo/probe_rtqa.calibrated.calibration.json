@@ -1,0 +1,19 @@
+{
+ "probe": "results/pipeline_demo/probe_rtqa.calibrated.npz",
+ "from": "heads/grounding_probe_qwen3_4b.npz",
+ "reader": "Qwen/Qwen3-4B",
+ "labeled": "results/pipeline_demo/ragtruth_qa_cal300.jsonl",
+ "target_false_alarms": 0.1,
+ "fit": {
+  "n": 300,
+  "threshold": 3.156,
+  "auroc": 0.809,
+  "caught": 0.547,
+  "false_alarms": 0.1,
+  "precision": 0.845,
+  "hallucinated": 150,
+  "clean": 150
+ },
+ "seconds_per_reply": 3.87,
+ "sha256": "36a853b5bf80798535c048f55fcc3e2a0f3ccb1208abed3793197ac543adaf82"
+}
