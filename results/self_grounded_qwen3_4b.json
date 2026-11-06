@@ -1,0 +1,303 @@
+{
+ "n": 320,
+ "domains": {
+  "drop": {
+   "answers": 80,
+   "accuracy": 0.425,
+   "auroc_wrong": {
+    "neg_logp_mean": 0.658,
+    "neg_logp_min": 0.662,
+    "entropy_mean": 0.655,
+    "entropy_max": 0.657,
+    "neg_margin_min": 0.659,
+    "neg_shift_mean": 0.469,
+    "neg_shift_min": 0.455,
+    "copy_conflict": 0.395,
+    "uncopied": 0.566,
+    "neg_evidence_share": 0.517,
+    "reply_minus_sink": 0.513,
+    "combo": 0.577
+   }
+  },
+  "finance": {
+   "answers": 80,
+   "accuracy": 0.35,
+   "auroc_wrong": {
+    "neg_logp_mean": 0.871,
+    "neg_logp_min": 0.831,
+    "entropy_mean": 0.889,
+    "entropy_max": 0.837,
+    "neg_margin_min": 0.821,
+    "neg_shift_mean": 0.738,
+    "neg_shift_min": 0.664,
+    "copy_conflict": 0.67,
+    "uncopied": 0.786,
+    "neg_evidence_share": 0.822,
+    "reply_minus_sink": 0.587,
+    "combo": 0.828
+   }
+  },
+  "halueval": {
+   "answers": 80,
+   "accuracy": 0.725,
+   "auroc_wrong": {
+    "neg_logp_mean": 0.643,
+    "neg_logp_min": 0.637,
+    "entropy_mean": 0.656,
+    "entropy_max": 0.639,
+    "neg_margin_min": 0.626,
+    "neg_shift_mean": 0.428,
+    "neg_shift_min": 0.484,
+    "copy_conflict": 0.546,
+    "uncopied": 0.571,
+    "neg_evidence_share": 0.521,
+    "reply_minus_sink": 0.46,
+    "combo": 0.596
+   }
+  },
+  "pubmed": {
+   "answers": 80,
+   "accuracy": 0.662,
+   "auroc_wrong": {
+    "neg_logp_mean": 0.59,
+    "neg_logp_min": 0.595,
+    "entropy_mean": 0.644,
+    "entropy_max": 0.582,
+    "neg_margin_min": 0.548,
+    "neg_shift_mean": 0.333,
+    "neg_shift_min": 0.542,
+    "copy_conflict": 0.59,
+    "uncopied": 0.716,
+    "neg_evidence_share": 0.609,
+    "reply_minus_sink": 0.743,
+    "combo": 0.523
+   }
+  }
+ },
+ "transfer": {
+  "threshold_from_drop": {
+   "neg_logp_min": {
+    "drop": {
+     "false_alarms": 0.118,
+     "caught": 0.152
+    },
+    "finance": {
+     "false_alarms": 0.107,
+     "caught": 0.423
+    },
+    "halueval": {
+     "false_alarms": 0.052,
+     "caught": 0.091
+    },
+    "pubmed": {
+     "false_alarms": 0.226,
+     "caught": 0.333
+    }
+   },
+   "entropy_max": {
+    "drop": {
+     "false_alarms": 0.118,
+     "caught": 0.174
+    },
+    "finance": {
+     "false_alarms": 0.071,
+     "caught": 0.519
+    },
+    "halueval": {
+     "false_alarms": 0.0,
+     "caught": 0.091
+    },
+    "pubmed": {
+     "false_alarms": 0.264,
+     "caught": 0.333
+    }
+   },
+   "combo": {
+    "drop": {
+     "false_alarms": 0.118,
+     "caught": 0.087
+    },
+    "finance": {
+     "false_alarms": 0.143,
+     "caught": 0.615
+    },
+    "halueval": {
+     "false_alarms": 0.017,
+     "caught": 0.045
+    },
+    "pubmed": {
+     "false_alarms": 0.66,
+     "caught": 0.778
+    }
+   }
+  },
+  "threshold_from_finance": {
+   "neg_logp_min": {
+    "drop": {
+     "false_alarms": 0.176,
+     "caught": 0.217
+    },
+    "finance": {
+     "false_alarms": 0.107,
+     "caught": 0.615
+    },
+    "halueval": {
+     "false_alarms": 0.086,
+     "caught": 0.136
+    },
+    "pubmed": {
+     "false_alarms": 0.453,
+     "caught": 0.667
+    }
+   },
+   "entropy_max": {
+    "drop": {
+     "false_alarms": 0.235,
+     "caught": 0.217
+    },
+    "finance": {
+     "false_alarms": 0.107,
+     "caught": 0.577
+    },
+    "halueval": {
+     "false_alarms": 0.017,
+     "caught": 0.091
+    },
+    "pubmed": {
+     "false_alarms": 0.434,
+     "caught": 0.593
+    }
+   },
+   "combo": {
+    "drop": {
+     "false_alarms": 0.118,
+     "caught": 0.087
+    },
+    "finance": {
+     "false_alarms": 0.107,
+     "caught": 0.615
+    },
+    "halueval": {
+     "false_alarms": 0.017,
+     "caught": 0.045
+    },
+    "pubmed": {
+     "false_alarms": 0.642,
+     "caught": 0.63
+    }
+   }
+  },
+  "threshold_from_halueval": {
+   "neg_logp_min": {
+    "drop": {
+     "false_alarms": 0.206,
+     "caught": 0.283
+    },
+    "finance": {
+     "false_alarms": 0.179,
+     "caught": 0.635
+    },
+    "halueval": {
+     "false_alarms": 0.103,
+     "caught": 0.182
+    },
+    "pubmed": {
+     "false_alarms": 0.642,
+     "caught": 0.741
+    }
+   },
+   "entropy_max": {
+    "drop": {
+     "false_alarms": 0.235,
+     "caught": 0.304
+    },
+    "finance": {
+     "false_alarms": 0.25,
+     "caught": 0.673
+    },
+    "halueval": {
+     "false_alarms": 0.103,
+     "caught": 0.136
+    },
+    "pubmed": {
+     "false_alarms": 0.736,
+     "caught": 0.852
+    }
+   },
+   "combo": {
+    "drop": {
+     "false_alarms": 0.235,
+     "caught": 0.283
+    },
+    "finance": {
+     "false_alarms": 0.214,
+     "caught": 0.75
+    },
+    "halueval": {
+     "false_alarms": 0.103,
+     "caught": 0.182
+    },
+    "pubmed": {
+     "false_alarms": 0.925,
+     "caught": 1.0
+    }
+   }
+  },
+  "threshold_from_pubmed": {
+   "neg_logp_min": {
+    "drop": {
+     "false_alarms": 0.088,
+     "caught": 0.13
+    },
+    "finance": {
+     "false_alarms": 0.036,
+     "caught": 0.288
+    },
+    "halueval": {
+     "false_alarms": 0.0,
+     "caught": 0.0
+    },
+    "pubmed": {
+     "false_alarms": 0.113,
+     "caught": 0.111
+    }
+   },
+   "entropy_max": {
+    "drop": {
+     "false_alarms": 0.059,
+     "caught": 0.13
+    },
+    "finance": {
+     "false_alarms": 0.036,
+     "caught": 0.346
+    },
+    "halueval": {
+     "false_alarms": 0.0,
+     "caught": 0.045
+    },
+    "pubmed": {
+     "false_alarms": 0.113,
+     "caught": 0.148
+    }
+   },
+   "combo": {
+    "drop": {
+     "false_alarms": 0.029,
+     "caught": 0.065
+    },
+    "finance": {
+     "false_alarms": 0.036,
+     "caught": 0.346
+    },
+    "halueval": {
+     "false_alarms": 0.0,
+     "caught": 0.045
+    },
+    "pubmed": {
+     "false_alarms": 0.113,
+     "caught": 0.037
+    }
+   }
+  }
+ }
+}
