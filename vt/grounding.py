@@ -79,12 +79,16 @@ class Grounding:
         # the scale of each signal over natural answer sentences (no labels): probe, evidence shift, disagreement;
         # without them the probe alone, on the scale of its training constructions
         self.natural = {k: (float(z[f"nat_{k}_mean"]), float(z[f"nat_{k}_std"]))
-                        for k in ("probe", "mean_shift", "max_disagreement", "copy_conflict", "uncopied")
+                        for k in ("probe", "mean_shift", "max_disagreement", "copy_conflict", "uncopied",
+                                  "self_reliance")
                         if f"nat_{k}_mean" in z.files}
         self.signals = all(k in self.natural for k in ("probe", "mean_shift", "max_disagreement"))
         # the reader's copying heads (vt/copyheads.py; `vt.verifier_pipeline copyheads`): where they point in the
         # evidence before each reply token, read in the same forward pass
         self.copy_heads = [(int(l), int(h)) for l, h in z["copy_heads"]] if "copy_heads" in z.files else []
+        # source flow (vt/sourceflow.py) at these layers: how much each token draws on the reply's own earlier text
+        # rather than parking on the sink; the same sign flags errors in answers, reasoning steps and long-form text
+        self.flow_layers = [int(l) for l in z["flow_layers"]] if "flow_layers" in z.files else []
         # a calibration on labeled replies (vt/verifier_pipeline.py calibrate): the reply-total threshold at the
         # chosen false-alarm rate, and a logistic map from total to probability
         self.calibration = (float(z["cal_threshold"]), float(z["cal_a"]), float(z["cal_b"])) \
@@ -121,7 +125,7 @@ class Grounding:
         ev = "\n\n".join(parts)[-self.max_context_chars:]
         return f"{question}\n\n{ev}".strip()
 
-    def _read(self, prefix_ids, reply_ids):
+    def _read(self, prefix_ids, reply_ids, region=None):
         """One forward pass over evidence and reply: the probe's neurons at every position (on the CPU, float16)
         and the log-probability distributions over the reply's tokens."""
         import torch
@@ -137,6 +141,12 @@ class Grounding:
             P = len(prefix_ids)
             heads = HeadAttention(self.model, self.copy_heads).at(range(P - 1, P + len(reply_ids) - 1))
             heads.__enter__()
+        flow = None
+        if self.flow_layers and region is not None:
+            from vt.sourceflow import SourceFlow
+            P = len(prefix_ids)
+            flow = SourceFlow(self.model, self.flow_layers).at(range(P - 1, P + len(reply_ids) - 1), region)
+            flow.__enter__()
         try:
             lw, dw = self._logprobs(prefix_ids, reply_ids)
         finally:
@@ -144,21 +154,29 @@ class Grounding:
                 h.remove()
             if heads is not None:
                 heads.__exit__()
+            if flow is not None:
+                flow.__exit__()
         copy = None
         if heads is not None:
             from vt.copyheads import token_copy
             copy = token_copy(heads.collect(), prefix_ids, reply_ids)
-        return acts, lw, dw, copy
+        return acts, lw, dw, copy, (flow.collect() if flow is not None else None)
 
     def raw(self, messages, reply, documents=(), signals=True):
         """Each sentence's raw readings: the probe's score, the evidence shift (mean over its tokens) and the
         disagreement (its largest). Two forward passes: with the evidence (neurons and probabilities at once)
         and with the question alone; signals=False: the probe's score only, one pass."""
-        pre = self._prefix(self.evidence(messages, reply, documents))
+        user = self.evidence(messages, reply, documents)
         enc = self.tok(reply, add_special_tokens=False, return_offsets_mapping=True)
         if not enc.input_ids:
             return []
-        acts, lw, dw, copy = self._read(pre, enc.input_ids)
+        region = None
+        if self.flow_layers:                                     # the same prefix, with each token's region
+            from vt.sourceflow import regions_for
+            pre, region = regions_for(self.tok, user, "", len(enc.input_ids))
+        else:
+            pre = self._prefix(user)
+        acts, lw, dw, copy, flow = self._read(pre, enc.input_ids, region)
         if copy is not None:                                     # word tokens, the reply's first one aside
             wordy = np.array([j > 0 and bool(re.search(r"[A-Za-z0-9]", self.tok.decode([t])))
                               for j, t in enumerate(enc.input_ids)])
@@ -185,6 +203,8 @@ class Grounding:
                 w = [j for j in js if wordy[j]]
                 row["copy_conflict"] = float(conflict[w].max()) if w else 0.0     # heads point at another token
                 row["uncopied"] = float((match[w] < 0.05).mean()) if w else 0.0  # words not copied from it
+            if flow is not None:                                 # draws on its own text rather than nothing
+                row["self_reliance"] = float(flow[:, js, 3].mean() - flow[:, js, 0].mean())
             rows.append(row)
         return rows
 
@@ -201,7 +221,7 @@ class Grounding:
                                self._z("max_disagreement", r["max_disagreement"]))
                 terms = [zp, -zsh, zd]
                 zc = None
-                for k in ("copy_conflict", "uncopied"):          # with the copying heads' scales: two more
+                for k in ("copy_conflict", "uncopied", "self_reliance"):   # with their natural scales: more
                     if k in self.natural and k in r:
                         terms.append(self._z(k, r[k]))
                         row["z_" + k] = round(terms[-1], 3)

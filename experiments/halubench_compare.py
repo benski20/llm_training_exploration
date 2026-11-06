@@ -102,6 +102,7 @@ def main():
                     help="what the grounding check reads: the answer as given, or \"question answer\" (as MiniCheck)")
     ap.add_argument("--sources", nargs="+", help="only these HaluBench sources")
     ap.add_argument("--seed", type=int, default=0, help="which sample (1: a fresh one, to confirm a result)")
+    ap.add_argument("--no-minicheck", action="store_true", help="the grounding check only")
     ap.add_argument("--add-hhem", metavar="RESULTS", help="score HHEM-2.1-open (Vectara; runs its own model code) on "
                     "the answers of an earlier run and merge it into that results file")
     a = ap.parse_args()
@@ -115,7 +116,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(a.reader)
     reader = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
     g = Grounding(reader, tok, a.probe, max_context_chars=12000)
-    mc = MiniCheck()
+    mc = None if a.no_minicheck else MiniCheck()
     out, t_g, t_m = [], 0.0, 0.0
     for i, r in enumerate(rows):
         claim = f"{r['question']} {r['answer']}"
@@ -125,7 +126,7 @@ def main():
         t_g += time.time() - t
         zs = [s["z"] for s in res["sentences"]] or [0.0]
         t = time.time()
-        pm = mc.p_unsupported(r["passage"], claim)
+        pm = mc.p_unsupported(r["passage"], claim) if mc else 0.0
         t_m += time.time() - t
         out.append({"source": r["source_ds"], "y": int(r["label"] == "FAIL"), "grounding_total": res["total"],
                     "grounding_max": max(zs), "grounding_verdict": res["verdict"], "minicheck": pm})
@@ -133,7 +134,7 @@ def main():
             print(f"{i + 1}/{len(rows)} grounding {t_g / (i + 1):.1f}s minicheck {t_m / (i + 1):.2f}s", flush=True)
     res = {"n": len(out), "reader": a.reader, "claim": a.claim, "seconds_per_answer": {"grounding": round(t_g / len(out), 2),
                                                                     "minicheck": round(t_m / len(out), 2)}}
-    res.update(summarize(out, ("grounding_total", "grounding_max", "minicheck")))
+    res.update(summarize(out, ("grounding_total", "grounding_max") + (() if a.no_minicheck else ("minicheck",))))
     print(json.dumps(res, indent=1))
     json.dump(dict(res, rows=out), open(a.out, "w"), indent=1)
 

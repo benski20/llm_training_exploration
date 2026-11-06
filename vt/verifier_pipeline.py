@@ -222,6 +222,50 @@ def model_card(res, probe):
     return "\n".join(lines)
 
 
+def cmd_augment(a):
+    """Add the reader's copying heads and source-flow layers to a probe, with the natural scale of each new
+    signal over unlabeled answers (RAGTruth training answers with their contexts, or --unlabeled: JSON lines with
+    question, reply and documents; labels are never read)."""
+    import shutil
+    import tempfile
+
+    from vt.copyheads import find_copy_heads
+    from vt.grounding import Grounding
+    model, tok = load_reader(a.reader)
+    heads = find_copy_heads(model, top=a.heads)
+    layers = list(range(2, model.config.num_hidden_layers, 4))
+    base = dict(np.load(a.probe))
+    for k in [k for k in base if k.startswith(("nat_copy", "nat_uncopied", "nat_self_reliance"))]:
+        del base[k]
+    tmp = os.path.join(tempfile.mkdtemp(), "probe.npz")
+    np.savez(tmp, **base, copy_heads=np.array([(l, h) for l, h, _ in heads]), flow_layers=np.array(layers))
+    if a.unlabeled:
+        rows = [{"question": r.get("question", ""), "reply": str(r["reply"]), "documents": r.get("documents") or []}
+                for r in read_jsonl(a.unlabeled)]
+    else:
+        from datasets import load_dataset
+        ds = load_dataset("wandb/RAGTruth-processed", split="train").shuffle(seed=a.seed)
+        rows = [{"question": r["query"], "reply": r["output"], "documents": [r["context"]]}
+                for r in ds.select(range(a.n))]
+    g = Grounding(model, tok, tmp)
+    raw, sec = read_all(g, rows[:a.n])
+    vals = {k: np.array([r[k] for rr in raw for r in rr if k in r]) for k in ("copy_conflict", "uncopied", "self_reliance")}
+    nat = {}
+    for k, v in vals.items():
+        nat[f"nat_{k}_mean"], nat[f"nat_{k}_std"] = np.float32(v.mean()), np.float32(v.std())
+    np.savez(a.out, **dict(np.load(tmp)), **nat)
+    shutil.rmtree(os.path.dirname(tmp), ignore_errors=True)
+    side = os.path.splitext(a.probe)[0] + ".train.json"
+    if os.path.exists(side):
+        shutil.copy(side, os.path.splitext(a.out)[0] + ".train.json")
+    report = {"probe": a.out, "from": a.probe, "reader": a.reader, "copy_heads": heads, "flow_layers": layers,
+              "unlabeled_replies": len(raw), "sentences": int(len(vals["self_reliance"])),
+              "natural_scales": {k: round(float(v), 4) for k, v in nat.items()}, "seconds_per_reply": round(sec, 2),
+              "sha256": sha256(a.out)}
+    json.dump(report, open(os.path.splitext(a.out)[0] + ".augment.json", "w"), indent=1)
+    print(json.dumps(report, indent=1))
+
+
 def cmd_halubench(a):
     from datasets import load_dataset
     rows = list(load_dataset("PatronusAI/HaluBench", split="test"))
@@ -263,12 +307,21 @@ def main(argv=None):
     e.add_argument("--probe", required=True)
     e.add_argument("--labeled", required=True)
     e.add_argument("--card", required=True, help="the model card (.md; its numbers also as .json)")
+    g = sub.add_parser("augment", help="add copying heads and source flow to a probe (no labels)")
+    g.add_argument("--reader", required=True)
+    g.add_argument("--probe", required=True)
+    g.add_argument("--out", required=True)
+    g.add_argument("--unlabeled", help="JSON lines: question, reply, documents (default: RAGTruth training answers)")
+    g.add_argument("--n", type=int, default=150)
+    g.add_argument("--heads", type=int, default=16)
+    g.add_argument("--seed", type=int, default=0)
     h = sub.add_parser("halubench")
     h.add_argument("--n", type=int, default=300)
     h.add_argument("--out", required=True)
     h.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
-    {"train": cmd_train, "calibrate": cmd_calibrate, "evaluate": cmd_evaluate, "halubench": cmd_halubench}[a.cmd](a)
+    {"train": cmd_train, "calibrate": cmd_calibrate, "evaluate": cmd_evaluate, "augment": cmd_augment,
+     "halubench": cmd_halubench}[a.cmd](a)
 
 
 if __name__ == "__main__":
