@@ -1,0 +1,118 @@
+{
+ "n": 163,
+ "testable": 0.871,
+ "by_source": {
+  "DROP": {
+   "testable_answers": 22,
+   "hallucinated": 12,
+   "support": {
+    "auroc_rank": 0.4,
+    "auroc_margin": 0.433,
+    "rule_false_alarms": 1.0,
+    "rule_caught": 0.917
+   },
+   "likelihood": {
+    "auroc_rank": 0.308,
+    "auroc_margin": 0.333,
+    "rule_false_alarms": 0.9,
+    "rule_caught": 0.667
+   }
+  },
+  "FinanceBench": {
+   "testable_answers": 24,
+   "hallucinated": 14,
+   "support": {
+    "auroc_rank": 0.55,
+    "auroc_margin": 0.486,
+    "rule_false_alarms": 1.0,
+    "rule_caught": 1.0
+   },
+   "likelihood": {
+    "auroc_rank": 0.504,
+    "auroc_margin": 0.571,
+    "rule_false_alarms": 0.8,
+    "rule_caught": 1.0
+   }
+  },
+  "RAGTruth": {
+   "testable_answers": 10,
+   "hallucinated": 2,
+   "support": {
+    "auroc_rank": 1.0,
+    "auroc_margin": 0.938,
+    "rule_false_alarms": 0.625,
+    "rule_caught": 1.0
+   },
+   "likelihood": {
+    "auroc_rank": 1.0,
+    "auroc_margin": 1.0,
+    "rule_false_alarms": 0.5,
+    "rule_caught": 1.0
+   }
+  },
+  "covidQA": {
+   "testable_answers": 11,
+   "hallucinated": 7,
+   "support": {
+    "auroc_rank": 0.679,
+    "auroc_margin": 0.679,
+    "rule_false_alarms": 0.5,
+    "rule_caught": 0.857
+   },
+   "likelihood": {
+    "auroc_rank": 0.607,
+    "auroc_margin": 0.536,
+    "rule_false_alarms": 0.5,
+    "rule_caught": 0.571
+   }
+  },
+  "halueval": {
+   "testable_answers": 49,
+   "hallucinated": 24,
+   "support": {
+    "auroc_rank": 0.855,
+    "auroc_margin": 0.85,
+    "rule_false_alarms": 0.56,
+    "rule_caught": 0.917
+   },
+   "likelihood": {
+    "auroc_rank": 0.69,
+    "auroc_margin": 0.683,
+    "rule_false_alarms": 0.56,
+    "rule_caught": 0.833
+   }
+  },
+  "pubmedQA": {
+   "testable_answers": 26,
+   "hallucinated": 15,
+   "support": {
+    "auroc_rank": 0.379,
+    "auroc_margin": 0.412,
+    "rule_false_alarms": 1.0,
+    "rule_caught": 1.0
+   },
+   "likelihood": {
+    "auroc_rank": 0.367,
+    "auroc_margin": 0.467,
+    "rule_false_alarms": 1.0,
+    "rule_caught": 1.0
+   }
+  },
+  "all": {
+   "testable_answers": 142,
+   "hallucinated": 74,
+   "support": {
+    "auroc_rank": 0.654,
+    "auroc_margin": 0.671,
+    "rule_false_alarms": 0.765,
+    "rule_caught": 0.946
+   },
+   "likelihood": {
+    "auroc_rank": 0.591,
+    "auroc_margin": 0.61,
+    "rule_false_alarms": 0.706,
+    "rule_caught": 0.851
+   }
+  }
+ }
+}
