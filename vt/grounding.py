@@ -93,6 +93,10 @@ class Grounding:
         # chosen false-alarm rate, and a logistic map from total to probability
         self.calibration = (float(z["cal_threshold"]), float(z["cal_a"]), float(z["cal_b"])) \
             if "cal_threshold" in z.files else None
+        # a per-domain weighting of the signals (calibrate --fit-weights): the reply's risk is a weighted sum of
+        # each signal's strongest sentence, and the calibration's threshold applies to it instead of the total
+        self.weights = (np.asarray(z["cal_weights"], float), float(z["cal_weights_b"])) \
+            if "cal_weights" in z.files else None
 
     def _prefix(self, user):
         msgs = [{"role": "user", "content": user}]
@@ -212,7 +216,8 @@ class Grounding:
         """Verdicts from raw readings: each sentence's signals on their natural scales, summed; the reply's total
         ungroundedness, and with a calibration its probability of holding a hallucination."""
         both = self.signals
-        cut = max(self.flag_z, self.calibration[0]) if self.calibration is not None else self.flag_z
+        cut = max(self.flag_z, self.calibration[0]) if self.calibration is not None and getattr(self, "weights", None) \
+            is None else self.flag_z
         out = []
         for r in rows:
             row = {"text": r["text"], "start": r["start"], "end": r["end"], "score": round(r["score"], 4)}
@@ -236,17 +241,29 @@ class Grounding:
         total = round(float(sum(max(r["z"], 0.0) for r in out)), 3)
         flagged = [r["verdict"] for r in out if r["verdict"] != "consistent"]
         res = {"sentences": out, "total": total}
+        value = total
+        if self.weights is not None:                              # the domain's own weighting of the signals
+            w, b = self.weights
+            value = res["risk"] = round(float(self.reply_features(res) @ w + b), 4)
         if self.calibration is not None:                          # the reply's verdict from its calibrated total:
             thr, a_, b_ = self.calibration                        # sentences each under the cut can add up to it
-            res["p_hallucinated"] = round(float(1 / (1 + np.exp(-(a_ * total + b_)))), 4)
-            if total >= thr and not flagged and out:
+            res["p_hallucinated"] = round(float(1 / (1 + np.exp(-(a_ * value + b_)))), 4)
+            if value >= thr and not flagged and out:
                 flagged = [max(out, key=lambda r: r["z"]).get("z_disagreement", 0) >= 1 and "contradicted"
                            or "not grounded"]
-            elif total < thr:
+            elif value < thr:
                 flagged = []
         res["verdict"] = None if not out else "contradicted" if "contradicted" in flagged else \
             "not grounded" if flagged else "consistent"
         return res
+
+    FEATURES = ("total", "z_probe", "z_shift", "z_disagreement", "z_copy_conflict", "z_uncopied", "z_self_reliance")
+
+    @classmethod
+    def reply_features(cls, res):
+        """The reply's total and each signal's strongest sentence (0 where a signal is absent)."""
+        out = res["sentences"]
+        return np.array([res["total"]] + [max((r.get(k, 0.0) for r in out), default=0.0) for k in cls.FEATURES[1:]])
 
     SHORT = 12                                                    # words: below this a reply is no sentence
 

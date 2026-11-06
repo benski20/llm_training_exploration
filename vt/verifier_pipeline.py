@@ -127,14 +127,26 @@ def cmd_calibrate(a):
                    for k in ("score", "mean_shift", "max_disagreement")}        # re-deriving them from 300 mixed
         g.natural = {"probe": natural["score"], "mean_shift": natural["mean_shift"],    # HaluBench replies cost
                      "max_disagreement": natural["max_disagreement"]}           # 0.03 AUROC and the false-alarm
-    g.calibration = None                                         # target (13% against 10%; kept: 8.7%)
-    tot = np.array([g.score(r)["total"] for r in raw_fit])
+    g.calibration = g.weights = None                             # target (13% against 10%; kept: 8.7%)
+    scored = [g.score(r) for r in raw_fit]
+    tot = np.array([s["total"] for s in scored])
     y = np.array([int(r["hallucinated"]) for r in fit])
     if y.min() == y.max():
         raise SystemExit("the labeled replies need both clean and hallucinated ones")
+    weights = None
+    if a.fit_weights:                                            # the domain's own weighting of every signal
+        F = np.array([Grounding.reply_features(s) for s in scored])
+        wl = LogisticRegression(C=a.C, max_iter=2000).fit(F, y)
+        weights = (wl.coef_[0], float(wl.intercept_[0]))
+        tot = F @ weights[0] + weights[1]                         # the risk the threshold applies to
     thr, _ = recall_at_fpr(tot, y, a.false_alarms)
     lr = LogisticRegression().fit(tot[:, None], y)
     art = load_probe(a.probe)
+    for k in ("cal_weights", "cal_weights_b", "cal_features"):
+        art.pop(k, None)
+    if weights is not None:
+        art.update(cal_weights=weights[0].astype(np.float32), cal_weights_b=np.float32(weights[1]),
+                   cal_features=np.array(Grounding.FEATURES))
     art.update({f"nat_{k}_{s}": np.float32(v) for k, (m, sd) in g.natural.items() for s, v in (("mean", m), ("std", sd))})
     art.update(cal_threshold=np.float32(thr), cal_a=np.float32(lr.coef_[0][0]), cal_b=np.float32(lr.intercept_[0]),
                cal_false_alarms=np.float32(a.false_alarms), cal_n=np.int32(len(fit)))
@@ -149,7 +161,7 @@ def cmd_calibrate(a):
     if held:                                                     # measured on replies not used to set anything
         g2 = Grounding(model, tok, a.out)
         raw_h, _ = read_all(g2, held)
-        th = np.array([g2.score(r)["total"] for r in raw_h])
+        th = np.array([(lambda s: s.get("risk", s["total"]))(g2.score(r)) for r in raw_h])
         yh = np.array([int(r["hallucinated"]) for r in held])
         report["held_out"] = dict(n=len(held), auroc=round(float(auroc(th, yh.astype(float))), 3) if yh.min() != yh.max()
                                   else None, **rates(th, yh, thr))
@@ -166,7 +178,7 @@ def cmd_evaluate(a):
     if g.calibration is None:
         raise SystemExit("evaluate needs a calibrated probe (vt.verifier_pipeline calibrate)")
     raw, secs = read_all(g, rows)
-    tot = np.array([g.score(r)["total"] for r in raw])
+    tot = np.array([(lambda s: s.get("risk", s["total"]))(g.score(r)) for r in raw])
     y = np.array([int(r["hallucinated"]) for r in rows])
     thr = g.calibration[0]
     res = {"probe": a.probe, "sha256": sha256(a.probe), "reader": a.reader, "labeled": a.labeled, "n": len(rows),
@@ -300,6 +312,9 @@ def main(argv=None):
         p.add_argument("--false-alarms", type=float, default=0.05)
         p.add_argument("--holdout", type=float, default=0.5)
         p.add_argument("--seed", type=int, default=0)
+        p.add_argument("--fit-weights", action="store_true", help="fit the domain's weighting of every signal "
+                       "(probe, evidence shift, disagreement, copying heads, source flow) instead of a threshold alone")
+        p.add_argument("--C", type=float, default=0.3, help="regularisation of --fit-weights")
         p.add_argument("--rescale", action="store_true", help="re-derive the signals' scales from these replies "
                        "(default: keep the probe's own, set only the threshold; a probe without scales gets them)")
     e = sub.add_parser("evaluate")
