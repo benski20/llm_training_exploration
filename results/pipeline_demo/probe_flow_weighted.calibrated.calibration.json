@@ -1,0 +1,19 @@
+{
+ "probe": "results/pipeline_demo/probe_flow_weighted.calibrated.npz",
+ "from": "heads/grounding_probe_qwen3_4b_flow.npz",
+ "reader": "Qwen/Qwen3-4B",
+ "labeled": "results/pipeline_demo/calibration300.jsonl",
+ "target_false_alarms": 0.1,
+ "fit": {
+  "n": 300,
+  "threshold": 0.6524,
+  "auroc": 0.735,
+  "caught": 0.32,
+  "false_alarms": 0.1,
+  "precision": 0.762,
+  "hallucinated": 150,
+  "clean": 150
+ },
+ "seconds_per_reply": 4.43,
+ "sha256": "c51301d0bb2b117da8fc992423db32a6325afafbda2d6c3de187e52f2d539285"
+}

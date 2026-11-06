@@ -56,3 +56,29 @@ same sign everywhere, and every interval lies above chance.
 - Add `reply − sink` to the served check as a fourth label-free signal, next to the probe, the evidence shift and
   the disagreement, so closed-book answers and reasoning get a reading without evidence.
 - Let `calibrate` fit the per-layer source-flow readout per domain (it already fits a threshold per domain).
+
+## In the pipeline (`augment`, then `calibrate --fit-weights`; results/pipeline_demo/)
+
+Setup:
+- `augment` added the 16 copying heads and the source-flow layers to the shipped probe, with natural scales from
+  150 unlabelled RAGTruth answers.
+- `calibrate --fit-weights` then fitted the domain's weighting of all signals on 300 labelled HaluBench replies
+  (calibration300). Every row below is scored on 300 *other* replies (test300).
+
+| calibration | test AUROC | caught | false alarms (target 10%) | precision |
+|---|---|---|---|---|
+| threshold only, original signals (earlier demo) | 0.620 | 14.0% | 13.3% | 0.51 |
+| weighted, original signals | 0.592 | 19.3% | 18.7% | 0.51 |
+| **weighted, with copying heads and source flow** | **0.638** | **24.7%** | 18.7% | **0.57** |
+
+- **The new signals help through the weighting.** Against the same weighting without them: +4.6 AUROC points,
+  more caught, higher precision. Against the threshold-only demo: +1.8 points.
+- **Copying-head conflict gets the largest weight** (0.76, against 0.27 for the probe). Per source, it lifts
+  FinanceBench (0.38 to 0.55) and CovidQA (0.74 to 0.89).
+- **Two problems remain:**
+  - The weighted versions miss the false-alarm target on new replies (18.7% against 10%).
+  - The fit set reads 0.735 and the test set 0.638, so 300 mixed replies over-fit seven weights.
+- **Equal weights without labels don't help here.** On the seed-1 sample, equal weights left the
+  worst-sentence AUROC level (0.718 against 0.723) and lowered the reply total (0.653 against 0.724).
+- So the shipped default stays the original probe. The new signals are for customers who calibrate on their own
+  labelled replies, preferably more than 300 from one domain.
