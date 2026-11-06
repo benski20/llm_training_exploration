@@ -146,6 +146,33 @@ of a short article reads consistent (total 1.05 under the threshold 2.14), one w
 contradicted (2.35, p = 0.59); a bad key gets 401; tokens are metered per key. 1.4 s a check on CPU once warm
 (the first request loads the reader: 60 s).
 
+## The promise that holds: a false-alarm rate on one domain (`results/pipeline_demo/`)
+
+Every training-free attempt to hold a false-alarm rate across domains failed:
+- copying heads and source flow (docs/source_flow.md);
+- the generator reading its own answers (docs/self_grounded.md);
+- claims against their own alternatives (docs/claim_contrast.md);
+- one threshold pooled over HaluBench's six sources (4% to 32% per source).
+
+What holds is calibrating on one domain, with a threshold set on a confidence bound.
+
+The test: calibrate the shipped check on 300 labelled RAGTruth question-answering training replies, then score 300
+replies from RAGTruth's test split.
+
+| threshold | caught | false alarms (target 10%) | precision |
+|---|---|---|---|
+| plain 90th percentile of clean scores (`calibrate`) | 53% | 16.0% | 77% |
+| **at most 10% with 95% confidence** (`calibrate --confidence 0.95`, one-sided Clopper-Pearson) | **42%** | **10.7%** | **80%** |
+
+- Test AUROC is 0.765, against 0.62 when calibrating on one HaluBench mix and testing on another.
+- **The plain quantile is right on average but not reliable from a few hundred labels.** Over 500 random
+  half-splits of the test replies it averaged 11% false alarms, but exceeded 10% in 54% of splits. The bounded
+  threshold exceeded it in 8%.
+- **The cost of the guarantee is recall.** More labelled replies narrow the gap.
+- **So the sales promise is:** "at most X% false alarms on your domain, with 95% confidence, from N of your
+  labelled replies". The model card states which kind of threshold it used and the false-alarm rate measured on
+  held-out replies.
+
 ## Pricing and unit economics
 
 Pricing: per 1,000 tokens verified (reply plus evidence; the API meters it per key), an annual self-hosted
@@ -178,4 +205,5 @@ while staying well under LLM-judge prices; the per-token meter in the API suppor
 3. GPU latency and cost per 1,000 tokens on the hosted endpoint. The Kaggle RAGTruth kernel
    (`kaggle/ragtruth_sota`) now records seconds and tokens per answer on its T4 (`timing` in its results), so
    the run that settles accuracy also gives a measured GPU cost per check, unbatched (an upper bound).
-4. A design partner's labeled replies for a real calibration and model card.
+4. A design partner's labeled replies for a real calibration and model card: one domain, 300 or more labelled
+   replies, `calibrate --confidence 0.95` (the test above shows the promise holds within a domain).
