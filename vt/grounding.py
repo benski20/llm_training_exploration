@@ -79,7 +79,12 @@ class Grounding:
         # the scale of each signal over natural answer sentences (no labels): probe, evidence shift, disagreement;
         # without them the probe alone, on the scale of its training constructions
         self.natural = {k: (float(z[f"nat_{k}_mean"]), float(z[f"nat_{k}_std"]))
-                        for k in ("probe", "mean_shift", "max_disagreement") if f"nat_{k}_mean" in z.files}
+                        for k in ("probe", "mean_shift", "max_disagreement", "copy_conflict", "uncopied")
+                        if f"nat_{k}_mean" in z.files}
+        self.signals = all(k in self.natural for k in ("probe", "mean_shift", "max_disagreement"))
+        # the reader's copying heads (vt/copyheads.py; `vt.verifier_pipeline copyheads`): where they point in the
+        # evidence before each reply token, read in the same forward pass
+        self.copy_heads = [(int(l), int(h)) for l, h in z["copy_heads"]] if "copy_heads" in z.files else []
         # a calibration on labeled replies (vt/verifier_pipeline.py calibrate): the reply-total threshold at the
         # chosen false-alarm rate, and a logistic map from total to probability
         self.calibration = (float(z["cal_threshold"]), float(z["cal_a"]), float(z["cal_b"])) \
@@ -126,12 +131,24 @@ class Grounding:
             def hook(mod, inp, i=i):
                 acts[i] = inp[0][0].detach().to("cpu", torch.float16)
             hooks.append(blocks[i].mlp.down_proj.register_forward_pre_hook(hook))
+        heads = None
+        if self.copy_heads:                                      # the positions that predict each reply token
+            from vt.copyheads import HeadAttention
+            P = len(prefix_ids)
+            heads = HeadAttention(self.model, self.copy_heads).at(range(P - 1, P + len(reply_ids) - 1))
+            heads.__enter__()
         try:
             lw, dw = self._logprobs(prefix_ids, reply_ids)
         finally:
             for h in hooks:
                 h.remove()
-        return acts, lw, dw
+            if heads is not None:
+                heads.__exit__()
+        copy = None
+        if heads is not None:
+            from vt.copyheads import token_copy
+            copy = token_copy(heads.collect(), prefix_ids, reply_ids)
+        return acts, lw, dw, copy
 
     def raw(self, messages, reply, documents=(), signals=True):
         """Each sentence's raw readings: the probe's score, the evidence shift (mean over its tokens) and the
@@ -141,7 +158,10 @@ class Grounding:
         enc = self.tok(reply, add_special_tokens=False, return_offsets_mapping=True)
         if not enc.input_ids:
             return []
-        acts, lw, dw = self._read(pre, enc.input_ids)
+        acts, lw, dw, copy = self._read(pre, enc.input_ids)
+        if copy is not None:                                     # word tokens, the reply's first one aside
+            wordy = np.array([j > 0 and bool(re.search(r"[A-Za-z0-9]", self.tok.decode([t])))
+                              for j, t in enumerate(enc.input_ids)])
         if signals:
             question = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
             lo, do = self._logprobs(self._prefix(question.split("\n\n")[0][:500]), enc.input_ids)
@@ -157,15 +177,21 @@ class Grounding:
                 continue
             a, b = len(pre) + js[0], len(pre) + js[-1] + 1
             x = np.concatenate([acts[i][a:b].float().mean(0).numpy() for i in self.layers])
-            rows.append({"text": reply[s:e].strip(), "start": s, "end": e,
-                         "score": float(((x - self.mean) / self.scale) @ self.coef + self.intercept),
-                         "mean_shift": float(shift[js].mean()), "max_disagreement": float(dis[js].max())})
+            row = {"text": reply[s:e].strip(), "start": s, "end": e,
+                   "score": float(((x - self.mean) / self.scale) @ self.coef + self.intercept),
+                   "mean_shift": float(shift[js].mean()), "max_disagreement": float(dis[js].max())}
+            if copy is not None:
+                match, conflict = copy
+                w = [j for j in js if wordy[j]]
+                row["copy_conflict"] = float(conflict[w].max()) if w else 0.0     # heads point at another token
+                row["uncopied"] = float((match[w] < 0.05).mean()) if w else 0.0  # words not copied from it
+            rows.append(row)
         return rows
 
     def score(self, rows):
         """Verdicts from raw readings: each sentence's signals on their natural scales, summed; the reply's total
         ungroundedness, and with a calibration its probability of holding a hallucination."""
-        both = len(self.natural) == 3
+        both = self.signals
         cut = max(self.flag_z, self.calibration[0]) if self.calibration is not None else self.flag_z
         out = []
         for r in rows:
@@ -173,9 +199,16 @@ class Grounding:
             if both:
                 zp, zsh, zd = (self._z("probe", r["score"]), self._z("mean_shift", r["mean_shift"]),
                                self._z("max_disagreement", r["max_disagreement"]))
-                zs = (zp - zsh + zd) / 3 ** 0.5                  # three unit-scale signals, summed
+                terms = [zp, -zsh, zd]
+                zc = None
+                for k in ("copy_conflict", "uncopied"):          # with the copying heads' scales: two more
+                    if k in self.natural and k in r:
+                        terms.append(self._z(k, r[k]))
+                        row["z_" + k] = round(terms[-1], 3)
+                        zc = terms[-1] if k == "copy_conflict" else zc
+                zs = sum(terms) / len(terms) ** 0.5             # unit-scale signals, summed
                 row.update(z_probe=round(zp, 3), z_shift=round(-zsh, 3), z_disagreement=round(zd, 3))
-                kind = "contradicted" if zd >= max(zp, -zsh) else "not grounded"
+                kind = "contradicted" if max(zd, zc if zc is not None else zd) >= max(zp, -zsh) else "not grounded"
             else:
                 zs, kind = (r["score"] - self.score_mean) / max(self.score_std, 1e-9), "not grounded"
             row.update(z=round(zs, 3), verdict=kind if zs >= cut else "consistent")
@@ -206,7 +239,7 @@ class Grounding:
         fragment = len(reply.split()) < self.SHORT and not re.search(r"[.!?]\s*$", reply.strip())
         if question and fragment:                                 # one statement: "Which team won: Rams"
             text = f"{question.split(chr(10) * 2)[0].strip()[:500].rstrip(' ?.!')}: {reply.strip()}"
-        res = self.score(self.raw(messages, text, documents, signals=len(self.natural) == 3))
+        res = self.score(self.raw(messages, text, documents, signals=self.signals))
         if text is not reply:
             res["read_as"] = "question and reply"
         return res
