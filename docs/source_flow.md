@@ -82,3 +82,12 @@ Setup:
   worst-sentence AUROC level (0.718 against 0.723) and lowered the reply total (0.653 against 0.724).
 - So the shipped default stays the original probe. The new signals are for customers who calibrate on their own
   labelled replies, preferably more than 300 from one domain.
+
+**Why the false-alarm target slips.** Setting the threshold from out-of-fold risks (each calibration reply scored
+by weights fitted without it; now the default for `--fit-weights`) moved test false alarms only from 18.7% to 17.3%
+(AUROC 0.638, caught 24%, precision 0.58). So in-fold optimism is not the main cause.
+- **The pooled threshold is.** On the test replies, false alarms per source run from 4% (CovidQA) and 8% (HaluEval)
+  to 24% (PubMedQA) and 32% (RAGTruth), so one threshold over six unlike domains cannot hold one rate in each.
+- **Each per-source rate is also noisy:** it rests on 25 clean replies.
+- **What follows for the product:** calibrate per domain, on the customer's own replies (the intended use), and
+  report the false-alarm rate measured on held-out replies from that domain, as the model card does.

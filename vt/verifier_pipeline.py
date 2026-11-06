@@ -138,7 +138,11 @@ def cmd_calibrate(a):
         F = np.array([Grounding.reply_features(s) for s in scored])
         wl = LogisticRegression(C=a.C, max_iter=2000).fit(F, y)
         weights = (wl.coef_[0], float(wl.intercept_[0]))
-        tot = F @ weights[0] + weights[1]                         # the risk the threshold applies to
+        # the threshold from out-of-fold risks: each reply scored by weights fitted without it, so the false-alarm
+        # rate it sets holds on new replies (set on in-fold risks it read 10% and came out 18.7%)
+        from sklearn.model_selection import StratifiedKFold, cross_val_predict
+        tot = cross_val_predict(LogisticRegression(C=a.C, max_iter=2000), F, y, method="decision_function",
+                                cv=StratifiedKFold(5, shuffle=True, random_state=a.seed))
     thr, _ = recall_at_fpr(tot, y, a.false_alarms)
     lr = LogisticRegression().fit(tot[:, None], y)
     art = load_probe(a.probe)
