@@ -88,7 +88,7 @@ class Scorer:
         p = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
         return self.tok(p, add_special_tokens=False).input_ids
 
-    def logps(self, user, replies, batch=16):
+    def logps(self, user, replies, batch=4):
         import torch
         pre = self.prefix(user)
         with torch.no_grad():
