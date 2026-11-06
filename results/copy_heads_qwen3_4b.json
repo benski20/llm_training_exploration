@@ -1,0 +1,210 @@
+{
+ "n": 300,
+ "reader": "Qwen/Qwen3-4B",
+ "seed": 1,
+ "copying_heads": [
+  [
+   13,
+   13,
+   0.98
+  ],
+  [
+   22,
+   23,
+   0.974
+  ],
+  [
+   24,
+   22,
+   0.913
+  ],
+  [
+   2,
+   31,
+   0.909
+  ],
+  [
+   29,
+   11,
+   0.894
+  ],
+  [
+   20,
+   21,
+   0.892
+  ],
+  [
+   13,
+   15,
+   0.825
+  ],
+  [
+   29,
+   9,
+   0.754
+  ],
+  [
+   22,
+   22,
+   0.75
+  ],
+  [
+   13,
+   14,
+   0.729
+  ],
+  [
+   24,
+   23,
+   0.729
+  ],
+  [
+   7,
+   23,
+   0.692
+  ],
+  [
+   20,
+   26,
+   0.671
+  ],
+  [
+   4,
+   4,
+   0.59
+  ],
+  [
+   23,
+   4,
+   0.538
+  ],
+  [
+   33,
+   29,
+   0.536
+  ]
+ ],
+ "features": {
+  "conflict_max": {
+   "auroc": 0.672,
+   "per_source": {
+    "DROP": 0.603,
+    "FinanceBench": 0.677,
+    "RAGTruth": 0.552,
+    "covidQA": 0.816,
+    "halueval": 0.958,
+    "pubmedQA": 0.493
+   }
+  },
+  "conflict_mean": {
+   "auroc": 0.614,
+   "per_source": {
+    "DROP": 0.578,
+    "FinanceBench": 0.749,
+    "RAGTruth": 0.144,
+    "covidQA": 0.746,
+    "halueval": 0.862,
+    "pubmedQA": 0.592
+   }
+  },
+  "conflict_on_present": {
+   "auroc": 0.648,
+   "per_source": {
+    "DROP": 0.506,
+    "FinanceBench": 0.696,
+    "RAGTruth": 0.57,
+    "covidQA": 0.706,
+    "halueval": 0.956,
+    "pubmedQA": 0.533
+   }
+  },
+  "uncopied": {
+   "auroc": 0.649,
+   "per_source": {
+    "DROP": 0.649,
+    "FinanceBench": 0.534,
+    "RAGTruth": 0.786,
+    "covidQA": 0.828,
+    "halueval": 0.918,
+    "pubmedQA": 0.5
+   }
+  },
+  "match_mean": {
+   "auroc": 0.572,
+   "per_source": {
+    "DROP": 0.555,
+    "FinanceBench": 0.528,
+    "RAGTruth": 0.734,
+    "covidQA": 0.673,
+    "halueval": 0.713,
+    "pubmedQA": 0.501
+   }
+  },
+  "lexical_new": {
+   "auroc": 0.609,
+   "per_source": {
+    "DROP": 0.514,
+    "FinanceBench": 0.48,
+    "RAGTruth": 0.776,
+    "covidQA": 0.8,
+    "halueval": 0.903,
+    "pubmedQA": 0.444
+   }
+  },
+  "grounding_total": {
+   "auroc": 0.724,
+   "per_source": {
+    "DROP": 0.671,
+    "FinanceBench": 0.563,
+    "RAGTruth": 0.921,
+    "covidQA": 0.749,
+    "halueval": 0.897,
+    "pubmedQA": 0.591
+   }
+  },
+  "minicheck": {
+   "auroc": 0.635,
+   "per_source": {
+    "DROP": 0.454,
+    "FinanceBench": 0.523,
+    "RAGTruth": 0.653,
+    "covidQA": 0.885,
+    "halueval": 0.73,
+    "pubmedQA": 0.814
+   }
+  },
+  "cv5_grounding_only": {
+   "auroc": 0.717,
+   "per_source": {
+    "DROP": 0.678,
+    "FinanceBench": 0.529,
+    "RAGTruth": 0.918,
+    "covidQA": 0.719,
+    "halueval": 0.891,
+    "pubmedQA": 0.587
+   }
+  },
+  "cv5_grounding+copy": {
+   "auroc": 0.753,
+   "per_source": {
+    "DROP": 0.656,
+    "FinanceBench": 0.654,
+    "RAGTruth": 0.955,
+    "covidQA": 0.95,
+    "halueval": 0.997,
+    "pubmedQA": 0.552
+   }
+  },
+  "cv5_copy_only": {
+   "auroc": 0.702,
+   "per_source": {
+    "DROP": 0.61,
+    "FinanceBench": 0.704,
+    "RAGTruth": 0.818,
+    "covidQA": 0.909,
+    "halueval": 1.0,
+    "pubmedQA": 0.434
+   }
+  }
+ }
+}
