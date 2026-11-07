@@ -308,7 +308,8 @@ class OmniVerifier:
 
     @staticmethod
     def save(art, path):
-        a = dict(art)
+        a = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and v.dtype == np.float64 else v)
+             for k, v in art.items()}
         a["meta"] = json.dumps(a["meta"])
         np.savez(path, **a)
 
