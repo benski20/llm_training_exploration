@@ -1,3 +1,16 @@
+> **The omni verifier (any format, any domain).** One pass of a small frozen reader (Qwen3-1.7B, ~1 s on 4 CPU
+> cores, ≈$0.015 per 1,000 checks on a GPU) scores any LLM reply for being wrong: RAG answers, chat, long-form text,
+> step-by-step reasoning. It points at the suspect sentence or step. A new domain is onboarded in minutes: unlabelled
+> replies re-centre it, 25-100 labels adapt it, and a threshold holds a stated false-alarm rate with 95% confidence.
+> Held out on 21 domains it scores AUROC 0.73 with no labels from the domain (reasoning 0.85) and 0.78 with 100
+> labels. See [docs/omni_verifier.md](docs/omni_verifier.md) and the research behind it in
+> [docs/research/](docs/research/README.md).
+>
+> ```bash
+> vt-omni onboard --head heads/omni_qwen3_1p7b.npz --name acme --unlabelled traffic.jsonl --labelled labelled.jsonl --out profiles/acme.json
+> vt-omni serve --head heads/omni_qwen3_1p7b.npz --profiles profiles/      # POST /v1/verify {"profile": "acme", ...}
+> ```
+
 # vt — training models that are proved correct
 
 > **The grounding verifier (product).** A verification API that sits behind any chatbot or RAG system and
