@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--feats", required=True)
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--evidence")
+    ap.add_argument("--nli", help="experiments/omni_nli.py output: MiniCheck + HHEM on document-grounded replies")
+    ap.add_argument("--no-evidence-expert", action="store_true")
     ap.add_argument("--report", required=True)
     ap.add_argument("--pca", type=int, default=256)
     ap.add_argument("--l2", type=float, default=0.05)
@@ -75,6 +77,7 @@ def main():
     mid = [nl // 2 - 1, nl // 2, nl // 2 + 1]
     pos = {int(i): k for k, i in enumerate(ids)}
     experts = {}
+    rep_nli = None
 
     # reply head
     H = np.concatenate([F["r_mean"][:, mid].reshape(n, -1), F["j_state"][:, mid].reshape(n, -1)], 1).astype(np.float32)
@@ -123,6 +126,30 @@ def main():
         experts["evidence"] = evs
         print(f"evidence: {has.sum()} replies", flush=True)
 
+    # NLI grounding experts (MiniCheck, HHEM): a LODO head on their four scores, document-grounded replies only
+    if a.nli and os.path.exists(a.nli):
+        Z_ = np.load(a.nli)
+        nl = np.full((n, Z_["nli"].shape[1]), np.nan)
+        for i, row in zip(Z_["ids"], Z_["nli"]):
+            if int(i) in pos:
+                nl[pos[int(i)]] = row
+        has = ~np.isnan(nl).any(1)
+        s_nl = np.full(n, np.nan)
+        if has.sum() > 50 and len(np.unique(dom[has])) > 1:
+            _, s_ = lodo(nl[has], y[has], dom[has], a.l2, True)
+            s_nl[has] = s_
+        experts["nli"] = s_nl
+        rep_nli = {}
+        for d in np.unique(dom[has]):
+            m = has & (dom == d)
+            rep_nli[d] = {"n": int(m.sum()), "nli_head": auroc(s_nl[m], y[m]),
+                          **{nm: auroc(nl[m, j], y[m]) for j, nm in enumerate(("minicheck_reply", "minicheck_worst",
+                                                                                   "hhem_reply", "hhem_worst"))}}
+        print("NLI experts on their replies:", json.dumps({d: {k: round(v, 2) for k, v in r_.items()}
+                                                           for d, r_ in rep_nli.items()}), flush=True)
+    if a.no_evidence_expert:
+        experts.pop("evidence", None)
+
     # exact arithmetic
     from vt.mathcheck import check_arithmetic
     exact = np.zeros(n)
@@ -140,7 +167,7 @@ def main():
             Z[idx, j] = zscore(experts[nm][idx])
     final0 = Z.sum(1) + a.exact_weight * exact_flag
 
-    rep = {"reader": F["meta"]["reader"], "n": int(n), "experts": names, "per_domain": {}, "exact": {}}
+    rep = {"reader": F["meta"]["reader"], "n": int(n), "experts": names, "per_domain": {}, "exact": {}, "nli": rep_nli}
     for d in np.unique(dom):
         idx = dom == d
         row = {nm: auroc(Z[idx, j], y[idx]) for j, nm in enumerate(names)}
