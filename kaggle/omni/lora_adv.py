@@ -51,6 +51,11 @@ def args():
     ap.add_argument("--lam", type=float, default=0.3)
     ap.add_argument("--tok-batch", type=int, default=4096)
     ap.add_argument("--boot", type=int, default=1000)
+    ap.add_argument("--smoke-first", action="store_true",
+                    help="run a tiny smoke configuration in a subprocess first; abort if it fails")
+    ap.add_argument("--tmp", default="/tmp/la")
+    ap.add_argument("--work", default=WORK)
+    ap.add_argument("--deadline-h", type=float, default=10.8, help="workers stop starting folds after this")
     return ap.parse_args()
 
 
@@ -61,7 +66,8 @@ def log(*a):
 # ------------------------------------------------------------------------------------------------ data and folds
 
 def build_corpus(a):
-    path = os.path.join(TMP, "corpus.jsonl")
+    path = "/tmp/la_corpus/corpus.jsonl"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         import omni_corpus
         subprocess.run([sys.executable, omni_corpus.__file__, "build", "--out", path], check=True)
@@ -256,7 +262,11 @@ def worker(variant, a):
         timing["layers_0_14_lora_unmerged_s_per_reply"] = time_pass(lambda i: run([i]), sample)
 
     report = {"timing": timing, "folds": {}}
+    t_start = float(os.environ.get("LA_T0", time.time()))
     for fname, trmask in folds.items():
+        if time.time() - t_start > a.deadline_h * 3600:
+            log(variant, "deadline reached; skipping", fname)
+            continue
         t0 = time.time()
         seed = 1000 + list(folds).index(fname)
         torch.manual_seed(seed)
@@ -482,7 +492,9 @@ def analyse(a, rows, folds, reports, wall):
 # ------------------------------------------------------------------------------------------------ main
 
 def main():
+    global TMP, WORK
     a = args()
+    TMP, WORK = a.tmp, a.work
     os.makedirs(TMP, exist_ok=True)
     os.makedirs(WORK, exist_ok=True)
     variant = os.environ.get("LA_WORKER")
@@ -494,7 +506,20 @@ def main():
     tv = tuple(int(x) for x in version("transformers").split(".")[:2])
     if tv < (4, 51):
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "transformers>=4.51,<4.58"], check=False)
+    os.environ.setdefault("LA_T0", str(t0))
     rows = build_corpus(a)
+    bundled = "/kaggle/working/src/kaggle/omni/lora_adv.py"           # bundle this file too (kgrun --bundle)
+    script = bundled if os.path.exists(bundled) else os.path.abspath(sys.argv[0])
+    if a.smoke_first:
+        # one GPU session for both: a tiny end-to-end run first (2 folds, 24 replies/domain), abort on any failure
+        sm = ["--limit-per-domain", "24", "--folds", "lofo_chat,lodo_truthfulqa", "--epochs", "0.5", "--boot", "20",
+              "--tmp", "/tmp/la_smoke", "--work", os.path.join(WORK, "smoke")]
+        r = subprocess.run([sys.executable, script] + sm, env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)))
+        sj = os.path.join(WORK, "smoke", "lora_adv.json")
+        ok = r.returncode == 0 and os.path.exists(sj) and json.load(open(sj))["worker_exit_codes"] == [0, 0]
+        log("smoke", "OK" if ok else "FAILED", f"{time.time() - t0:.0f}s")
+        if not ok:
+            sys.exit(1)
     folds = make_folds(rows, a.folds)
     with open(os.path.join(TMP, "rows.jsonl"), "w") as f:
         for r in rows:
@@ -504,13 +529,12 @@ def main():
     import torch
     ngpu = torch.cuda.device_count()
     log("gpus", ngpu)
-    bundled = "/kaggle/working/src/kaggle/omni/lora_adv.py"           # bundle this file too (kgrun --bundle)
-    script = bundled if os.path.exists(bundled) else os.path.abspath(sys.argv[0])
     procs = []
     for k, v in enumerate(("lora", "adv")):
         env = dict(os.environ, LA_WORKER=v, CUDA_VISIBLE_DEVICES=str(k % max(ngpu, 1)),
                    PYTHONPATH=os.pathsep.join(sys.path))
-        p = subprocess.Popen([sys.executable, script] + sys.argv[1:], env=env)
+        wargs = [x for x in sys.argv[1:] if x != "--smoke-first"]
+        p = subprocess.Popen([sys.executable, script] + wargs + ["--tmp", TMP, "--work", WORK], env=env)
         if ngpu < 2:
             p.wait()
         procs.append(p)

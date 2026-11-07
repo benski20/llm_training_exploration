@@ -38,7 +38,7 @@ READERS = {  # tag: (model, quant, gpus per worker)
     "q17": ("Qwen/Qwen3-1.7B", None, 1),
     "q4b": ("Qwen/Qwen3-4B", None, 1),
     "q8b": ("Qwen/Qwen3-8B", None, 2),
-    "q14b4": ("Qwen/Qwen3-14B", "nf4", 1),
+    "q14b4": ("Qwen/Qwen3-14B", "nf4", 2),   # one T4 runs out of memory on the longest replies (reply logits)
 }
 HEAD_NAME = {"q17": "omni_qwen3_1p7b_gpu", "q4b": "omni_qwen3_4b", "q8b": "omni_qwen3_8b", "q14b4": "omni_qwen3_14b_nf4"}
 # CPU (bf16) features of the repo's runs, for a few corpus ids: [judge log-odds, mean token log-prob, |r_mean| layer 4]
