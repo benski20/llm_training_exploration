@@ -213,4 +213,16 @@ and 30-600× below an LLM judge per claim.
   (`experiments/omni_evidence.py`, 800 replies across the 10 RAG domains). Six shift signals scored 0.43-0.79
   leave-one-domain-out, mean ≈ 0.57, and their sign flips between domains. This signal reached 0.82 with the 4B reader
   in docs/grounding_trace.md, but with 1.7B it is not worth a second pass per check, so it is left out.
+- **Written checkers fit invariants, not per-question computation.** A hand-written "every number in the reply is
+  in the passage, or a sum, difference, ratio or scale change of two of its numbers" checker was tried on the two
+  number-heavy domains:
+  - FinanceBench: AUROC 0.48, firing on 28% of wrong and 31% of correct answers. Its answers are multi-step metrics
+    (margins, retention ratios, EBITDA − capex) whose wrong versions are plausible near-misses built from real filing
+    numbers.
+  - DROP: 0.54.
+
+  Checking those needs the question's formula executed on the right rows (a program per question, an escalation
+  tier). Checkers written once per domain fit fixed invariants: citation formats, IDs, units, dates, the arithmetic
+  already checked here. That is the setting of "weight-space programming" results such as a hand-written
+  fake-citation network.
 - **Sizes.** 125-400 replies per domain. Per-domain AUROCs carry ±0.05-0.07 confidence intervals; the 21-domain means are much tighter.
