@@ -65,6 +65,6 @@ def test_train_profile_adapt_calibrate(tmp_path):
     assert prof["threshold"] is not None and prof["card"]["min_clean_needed"] == 29
     OmniVerifier.save(art, tmp_path / "h.npz")
     v2 = OmniVerifier.load(tmp_path / "h.npz")
-    assert np.allclose(v2.score(prof, fd), v.score(prof, fd))
+    assert np.allclose(v2.score(prof, fd), v.score(prof, fd), atol=1e-2)       # bases stored in float16
     OmniVerifier.save_profile(prof, tmp_path / "p.json")
     assert OmniVerifier.load_profile(tmp_path / "p.json")["name"] == "d"

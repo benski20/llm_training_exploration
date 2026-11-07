@@ -302,16 +302,16 @@ class OmniVerifier:
     @classmethod
     def load(cls, path, reader=None):
         z = np.load(path, allow_pickle=False)
-        art = {k: z[k] for k in z.files}
+        art = {k: (z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k]) for k in z.files}
         art["meta"] = json.loads(str(art["meta"]))
         return cls(art, reader)
 
     @staticmethod
     def save(art, path):
-        a = {k: (v.astype(np.float32) if isinstance(v, np.ndarray) and v.dtype == np.float64 else v)
-             for k, v in art.items()}
+        a = {k: (v.astype(np.float16 if k in ("pca_V", "upca_V") else np.float32)
+                 if isinstance(v, np.ndarray) and v.dtype.kind == "f" else v) for k, v in art.items()}
         a["meta"] = json.dumps(a["meta"])
-        np.savez(path, **a)
+        np.savez_compressed(path, **a)
 
     def attach_reader(self, **kw):
         self.reader = Reader(self.meta["reader"], layers=self.meta["layers"],
