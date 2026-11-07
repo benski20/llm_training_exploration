@@ -169,6 +169,10 @@ replies from RAGTruth's test split.
   half-splits of the test replies it averaged 11% false alarms, but exceeded 10% in 54% of splits. The bounded
   threshold exceeded it in 8%.
 - **The cost of the guarantee is recall.** More labelled replies narrow the gap.
+- **Label budget** (docs/written_readout.md): the bounded threshold held from 100 labelled replies on (over 12%
+  false alarms in 3% of draws). More labels buy recall: 22% / 32% / 42% caught at 100 / 200 / 300 labels.
+- **Labels are needed only for the threshold.** A readout written without labels ranked as well (0.755 against
+  0.765), but every label-free threshold missed (11-46% false alarms).
 - **So the sales promise is:** "at most X% false alarms on your domain, with 95% confidence, from N of your
   labelled replies". The model card states which kind of threshold it used and the false-alarm rate measured on
   held-out replies.

@@ -1,0 +1,62 @@
+{
+ "50": {
+  "labelled_replies": 50,
+  "guaranteed": {
+   "false_alarms_mean": 0.045,
+   "false_alarms_95th": 0.16,
+   "over_12pct": 0.07,
+   "caught": 0.221
+  },
+  "plain_quantile": {
+   "false_alarms_mean": 0.159,
+   "false_alarms_95th": 0.247,
+   "over_12pct": 0.69,
+   "caught": 0.507
+  }
+ },
+ "100": {
+  "labelled_replies": 100,
+  "guaranteed": {
+   "false_alarms_mean": 0.044,
+   "false_alarms_95th": 0.113,
+   "over_12pct": 0.03,
+   "caught": 0.224
+  },
+  "plain_quantile": {
+   "false_alarms_mean": 0.159,
+   "false_alarms_95th": 0.22,
+   "over_12pct": 0.78,
+   "caught": 0.523
+  }
+ },
+ "200": {
+  "labelled_replies": 200,
+  "guaranteed": {
+   "false_alarms_mean": 0.072,
+   "false_alarms_95th": 0.113,
+   "over_12pct": 0.02,
+   "caught": 0.317
+  },
+  "plain_quantile": {
+   "false_alarms_mean": 0.158,
+   "false_alarms_95th": 0.2,
+   "over_12pct": 0.92,
+   "caught": 0.527
+  }
+ },
+ "300": {
+  "labelled_replies": 300,
+  "guaranteed": {
+   "false_alarms_mean": 0.107,
+   "false_alarms_95th": 0.107,
+   "over_12pct": 0.0,
+   "caught": 0.42
+  },
+  "plain_quantile": {
+   "false_alarms_mean": 0.16,
+   "false_alarms_95th": 0.16,
+   "over_12pct": 1.0,
+   "caught": 0.527
+  }
+ }
+}

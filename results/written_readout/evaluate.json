@@ -1,0 +1,119 @@
+{
+ "test_replies": 300,
+ "written": {
+  "written_before_test_labels": true,
+  "from": "results/written_readout/explore.json (300 unlabeled RAGTruth QA training replies) and reasoning; no labels from the domain",
+  "aggregate": "max",
+  "signals_oriented": "higher = less grounded: probe score, -evidence shift, disagreement, copy conflict, uncopied share, self-reliance",
+  "readouts": {
+   "written": {
+    "probe": 1.0,
+    "shift": 1.0,
+    "disagreement": 0.5,
+    "copy_conflict": -0.5,
+    "uncopied": 1.0,
+    "self_reliance": 0.25
+   },
+   "unsupported_axis": {
+    "probe": 1.0,
+    "shift": 1.0,
+    "disagreement": 0.0,
+    "copy_conflict": 0.0,
+    "uncopied": 1.0,
+    "self_reliance": 0.0
+   },
+   "first_component": {
+    "probe": 0.345,
+    "shift": 0.468,
+    "disagreement": -0.147,
+    "copy_conflict": -0.518,
+    "uncopied": 0.589,
+    "self_reliance": 0.155
+   },
+   "shipped_signals_domain_scaled": {
+    "probe": 1.0,
+    "shift": 1.0,
+    "disagreement": 1.0,
+    "copy_conflict": 0.0,
+    "uncopied": 0.0,
+    "self_reliance": 0.0
+   }
+  },
+  "reasoning": {
+   "unsupported_axis": "probe, low evidence shift and uncopied words correlate (0.25-0.59) on unlabeled replies: one axis, content not drawn from the evidence, RAGTruth's main hallucination type",
+   "copy_conflict": "anti-correlated with uncopied (-0.58) and with low shift (-0.42): here it measures engagement with the evidence rather than contradiction, so a negative weight",
+   "disagreement": "a second axis (contradiction): with copy conflict 0.35, against self-reliance -0.45; half weight",
+   "self_reliance": "weakly tied to the rest; a small positive weight, its sign in docs/source_flow.md",
+   "aggregate": "a reply is hallucinated if any sentence is: its worst sentence"
+  }
+ },
+ "readouts": {
+  "shipped check (no labels for ranking)": {
+   "auroc": 0.765
+  },
+  "written": {
+   "auroc": 0.755,
+   "label_free_threshold": 3.627,
+   "mixture": {
+    "clean_share": 0.523,
+    "clean_mean": 0.964,
+    "clean_std": 2.078
+   },
+   "at_threshold": {
+    "caught": 0.58,
+    "false_alarms": 0.253,
+    "precision": 0.696,
+    "hallucinated": 150,
+    "clean": 150
+   }
+  },
+  "unsupported_axis": {
+   "auroc": 0.753,
+   "label_free_threshold": 3.042,
+   "mixture": {
+    "clean_share": 0.394,
+    "clean_mean": 0.568,
+    "clean_std": 1.93
+   },
+   "at_threshold": {
+    "caught": 0.593,
+    "false_alarms": 0.26,
+    "precision": 0.695,
+    "hallucinated": 150,
+    "clean": 150
+   }
+  },
+  "first_component": {
+   "auroc": 0.758,
+   "label_free_threshold": 1.025,
+   "mixture": {
+    "clean_share": 0.439,
+    "clean_mean": -0.294,
+    "clean_std": 1.029
+   },
+   "at_threshold": {
+    "caught": 0.833,
+    "false_alarms": 0.46,
+    "precision": 0.644,
+    "hallucinated": 150,
+    "clean": 150
+   }
+  },
+  "shipped_signals_domain_scaled": {
+   "auroc": 0.693,
+   "label_free_threshold": 4.436,
+   "mixture": {
+    "clean_share": 0.743,
+    "clean_mean": 2.522,
+    "clean_std": 1.494
+   },
+   "at_threshold": {
+    "caught": 0.273,
+    "false_alarms": 0.107,
+    "precision": 0.719,
+    "hallucinated": 150,
+    "clean": 150
+   }
+  }
+ }
+}
