@@ -236,4 +236,22 @@ and 30-600× below an LLM judge per claim.
   tier). Checkers written once per domain fit fixed invariants: citation formats, IDs, units, dates, the arithmetic
   already checked here. That is the setting of "weight-space programming" results such as a hand-written
   fake-citation network.
+- **A written checker works where the domain has a structural invariant** (`vt/checkers/business_record.py`).
+  RAGTruth data-to-text replies describe a structured business record. The checker was written by hand from its
+  schema, with no training and no labels:
+  - every stated number is in the record (12/24-hour clock allowed);
+  - no claimed amenity contradicts the record;
+  - "seven days a week" only if the record has hours for seven days.
+
+  | held-out data-to-text, zero labels | AUROC | caught at 10% false alarms |
+  |---|---|---|
+  | reader alone | 0.679 | 39% |
+  | reader + 2 × violations | **0.710** | 41% |
+
+  - **When it fires it is almost always right:** 15% of wrong replies, 1% of correct ones, 96% precision.
+  - **Most wrong replies break no structural rule.** Invented praise in reviews, for example, is left to the reader.
+  - **Caveat:** two false-fire rules ("COVID-19" read as a number, the days rule) were fixed after looking at which
+    correct replies it flagged, a small leak. It should be confirmed on fresh data-to-text replies.
+  - This is the place for "weight-space programming": a program, or a tiny written network, for each domain's
+    invariants, written once at onboarding.
 - **Sizes.** 125-400 replies per domain. Per-domain AUROCs carry ±0.05-0.07 confidence intervals; the 21-domain means are much tighter.
