@@ -37,7 +37,6 @@ Each pass produces:
 | reply head | mean residual state over the reply at three middle layers, the judgement state at the same layers (PCA 256), output signals (token log-prob, entropy, margin), judge log-odds | logistic, 20 domains, each standardised by its own statistics |
 | unit head → worst unit | the same per sentence / reasoning step / segment | logistic on 16,119 labelled units (RAGTruth spans, FELM segments, ProcessBench first wrong step) |
 | exact arithmetic | every "a op b = c" in the reply, recomputed (`vt/mathcheck.py`) | none |
-| evidence shift (document-grounded replies) | how much the documents raise or lower each written word (a second, short pass) | logistic on six signals |
 
 **Score.** The sum of the reply head's and the worst unit's z-scores, each standardised by the domain profile's own
 statistics. The API also returns each unit's score, which says *which* sentence or step is suspect.
@@ -157,4 +156,8 @@ and 30-600× below an LLM judge per claim.
 - **The exact arithmetic check is narrow.** It fires on 3% of wrong replies (≈6% in math domains), at about 66% precision on ProcessBench / FELM math.
   - Remaining false fires are counterfactual prose ("we cannot make 5 + 3 = 9") and notation it cannot parse.
   - It adds +0.001 AUROC overall. It is a pointer to a specific wrong step, not a verdict.
+- **Evidence shift does not help at this reader size.** Each grounded reply read with and without its documents
+  (`experiments/omni_evidence.py`, 800 replies across the 10 RAG domains). Six shift signals scored 0.43-0.79
+  leave-one-domain-out, mean ≈ 0.57, and their sign flips between domains. This signal reached 0.82 with the 4B reader
+  in docs/grounding_trace.md, but with 1.7B it is not worth a second pass per check, so it is left out.
 - **Sizes.** 125-400 replies per domain. Per-domain AUROCs carry ±0.05-0.07 confidence intervals; the 21-domain means are much tighter.
