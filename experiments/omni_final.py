@@ -55,9 +55,14 @@ def main():
     ap.add_argument("--l2", type=float, default=0.05)
     ap.add_argument("--reps", type=int, default=20)
     ap.add_argument("--exact-weight", type=float, default=2.0)
+    ap.add_argument("--same-ids-as", help="another features dir: keep only the replies it has (fair comparisons)")
     a = ap.parse_args()
     t0 = time.time()
     F = load_features(a.feats)
+    if a.same_ids_as:
+        from vt.omni import subset
+        keep = set(load_features(a.same_ids_as)["ids"].tolist())
+        F = subset(F, np.array([int(i) in keep for i in F["ids"]]))
     rows = {}
     for line in open(a.corpus):
         r = json.loads(line)
