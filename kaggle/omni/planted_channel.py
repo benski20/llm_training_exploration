@@ -35,6 +35,7 @@ OUT = "/kaggle/working" if os.path.isdir("/kaggle/working") else "/tmp/planted"
 LODO = ["halubench_finance", "ragtruth_summary", "truthfulqa", "felm_wk", "pb_math", "halueval_dialogue"]
 FORMATS = ["rag", "chat", "longform", "reasoning"]
 LOCK = threading.Lock()
+LOAD_LOCK = threading.Lock()      # from_pretrained flips the process-wide default dtype: never load in two threads
 
 
 def log(**kw):
@@ -78,7 +79,8 @@ def tokenise(rows, tok, max_tokens):
 def load_backbone(name, layer, device):
     import torch
     from transformers import AutoModelForCausalLM
-    m = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.float16, attn_implementation="sdpa")
+    with LOAD_LOCK:
+        m = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.float16, attn_implementation="sdpa")
     bb = m.model
     bb.layers = bb.layers[:layer]
     bb.config.num_hidden_layers = layer
@@ -104,12 +106,20 @@ def extract(bb, toks, idx, device):
 
 def train_fold(a, fold, toks, y, u_np, device):
     import torch
+    import peft.import_utils
     from peft import LoraConfig, get_peft_model
+    peft.import_utils.is_torchao_available = lambda: False      # Kaggle's torchao 0.10 trips peft's version check
+    try:
+        import peft.tuners.lora.torchao as _tao
+        _tao.is_torchao_available = lambda: False
+    except ImportError:
+        pass
     t0 = time.time()
     bb = load_backbone(a.model, a.layer, device)
     cfg = LoraConfig(r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05,
                      target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
-    pm = get_peft_model(bb, cfg)
+    with LOAD_LOCK:
+        pm = get_peft_model(bb, cfg)
     params = [p for p in pm.parameters() if p.requires_grad]
     for p in params:
         p.data = p.data.float()
@@ -224,7 +234,8 @@ def evaluate(folds, scores, y, dom, n_boot, seed=0):
         yv0 = y[va] == 0
         tdoms = sorted(set(dom[te]))
         # bootstrap indices shared across methods (paired)
-        bidx_val = [rng.choice(np.where(yv0)[0], yv0.sum()) for _ in range(n_boot)]
+        n0v = int(yv0.sum())
+        bidx_val = [rng.integers(0, n0v, n0v) for _ in range(n_boot)]
         bidx_dom = {}
         for d in tdoms:
             m = np.where(dom[te] == d)[0]
@@ -394,6 +405,8 @@ def main():
 
     # phase 3: baselines, metrics, bootstrap
     done = [f for f in folds if f["name"] in results]
+    if not done:
+        raise SystemExit(f"no fold finished: {errors}")
     scores = {f["name"]: fold_scores(f, results[f["name"]], Hf, y, dom, u, a.l2) for f in done}
     np.savez(os.path.join(OUT, "scores.npz"), **{f"{fn}__{m}__{part}": v[j] for fn, S in scores.items()
                                                  for m, v in S.items() for j, part in enumerate(("val", "test"))},
