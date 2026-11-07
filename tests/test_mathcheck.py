@@ -52,3 +52,19 @@ def test_operations_in_words():
     assert check_arithmetic("17 times 23 is 391.")[0]["ok"]
     assert not check_arithmetic("100 divided by 4 equals 20")[0]["ok"]
     assert check_arithmetic("I visited 3 times in 2019.") == []
+
+
+def test_no_catastrophic_backtracking():
+    import time
+    t = "5 × (1 + 4 + 9 + 6 + 5 + 6 + 9 + 4 + 1) + (1 + 4 + 9 + 6 + 5 + 6 + 9 + 4 + 1 + 4 + 9 + 6) " * 3
+    t0 = time.time()
+    check_arithmetic(t)
+    assert time.time() - t0 < 1.0
+
+
+def test_chains_and_lossy_latex_are_not_misread():
+    assert all(e["ok"] for e in check_arithmetic("6 × 3 + 2 = (6 x 3) + 2 = 18 + 2 = 20"))
+    assert all(e["ok"] for e in check_arithmetic("43^2-27^2=(43+27)(43-27)=70· 16= 1120"))
+    assert check_arithmetic(r"\sqrt{97969} = 313") == []
+    assert check_arithmetic("194 ÷ 11 = 17 with a remainder of 7") == []
+    assert [e["ok"] for e in check_arithmetic("First, 17*24 = 418.")] == [False]

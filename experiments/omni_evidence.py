@@ -59,7 +59,7 @@ def main():
     def logps(item):
         x, r0, roff = encode(tok, item, a.max_tokens)
         with torch.no_grad():
-            lo = model(input_ids=torch.tensor([x])).logits[0, r0 - 1:-1].float().log_softmax(-1)
+            lo = model(input_ids=torch.tensor([x]), logits_to_keep=len(x) - r0 + 1).logits[0, :-1].float().log_softmax(-1)
         return lo, x[r0:], roff
 
     for r in rows:

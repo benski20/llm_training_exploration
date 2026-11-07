@@ -14,7 +14,13 @@ OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast
        ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos}
 NUM = r"\d+(?:,\d{3})*(?:\.\d+)?"
 # an arithmetic expression with at least one operator, then "=" or "is"/"equals", then a number
-EQUATION = re.compile(rf"((?:\(?\s*-?{NUM}\s*\)?\s*[-+*/×÷x^·]\s*)+\(?\s*-?{NUM}\s*\)?)\s*(?:=|equals|is)\s*\$?\s*(-?{NUM})(%?)")
+# possessive repetition (Python 3.11+): without it, a long "a + b + c ..." with no "=" backtracks exponentially
+# The expression must start at a boundary (not mid-expression: no operator, bracket, ^ or digit before it) and the
+# stated value must end it (no operator, bracket, digit or decimal after it): in a chain "a = b + c = d" the value
+# of a is not "b".
+EQUATION = re.compile(rf"(?<![\w)^·×*/+\-.(])((?:\(?\s*-?{NUM}(?:\s*\))?\s*[-+*/×÷x^·]\s*)++\(?\s*-?{NUM}(?:\s*\))?)"
+                      rf"\s*(?:=|equals|is)\s*\$?\s*(-?{NUM})(%?)(?![\d^(a-zA-Z]|\.\d|,\d|\s*[-+*/×÷^·(§])"
+                      rf"(?!\s*(?:with\s+(?:a\s+)?)?(?:remainder|R\b|r\b))")
 PERCENT = re.compile(rf"({NUM})\s*%\s*(?:\w+\s+)?(?:of|on)\s*\$?\s*({NUM})\s*(?:\w+\s+)?"
                      rf"(?:=|equals|is|would be|comes to|will be)\s*\$?\s*(-?{NUM})")    # "20% tip on $45 would be $9"
 
@@ -53,7 +59,11 @@ def close(a, b):
 
 def plain(text):
     """LaTeX and markdown math as plain arithmetic: \\( 17 \\times 23 = 391 \\) -> 17 × 23 = 391."""
-    t = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"(\1)/(\2)", text)
+    # constructs whose meaning is lost when stripped (roots, binomials, ±, factorials, moduli) break an equation
+    # rather than being misread: "\\sqrt[3]{13}" must not become "[3]13", nor "\\binom{15}{2}" "152"
+    t = re.sub(r"\\(?:sqrt|binom|dbinom|tbinom|choose|pm|mp|pmod|bmod|mod|lfloor|rfloor|lceil|rceil|log|ln|sin|cos|tan)"
+               r"|!|\bmod\b", " § ", text)
+    t = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r"(\1)/(\2)", t)
     for a, b in (("\\times", "×"), ("\\cdot", "·"), ("\\div", "÷"), ("\\left", ""), ("\\right", ""),
                  ("\\(", " "), ("\\)", " "), ("\\[", " "), ("\\]", " "), ("$", " "), ("{", ""), ("}", "")):
         t = t.replace(a, b)

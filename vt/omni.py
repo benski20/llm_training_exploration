@@ -145,11 +145,13 @@ class Reader:
             return None
         dev = self.model.get_input_embeddings().weight.device
         with torch.no_grad():
-            o = self.model(input_ids=torch.tensor([ids], device=dev), output_hidden_states=True)
-        last = o.logits[0, -1].float().log_softmax(-1)
+            o = self.model(input_ids=torch.tensor([ids], device=dev), output_hidden_states=True,
+                           logits_to_keep=n + ns + 1)       # only the reply's (and the judge's) logits
+        lg = o.logits[0]                                     # positions r0-1 .. end
+        last = lg[-1].float().log_softmax(-1)
         j_logit = float(torch.logsumexp(last[self.yes], 0) - torch.logsumexp(last[self.no], 0))
         j_state = torch.stack([o.hidden_states[L][0, -1] for L in self.layers]).float().cpu().numpy()
-        logp = o.logits[0, r0 - 1:r0 + n - 1].float().log_softmax(-1)
+        logp = lg[:n].float().log_softmax(-1)
         tgt = torch.tensor(ids[r0:r0 + n], device=logp.device)
         lp = logp.gather(-1, tgt[:, None])[:, 0]
         ent = -(logp.exp() * logp).sum(-1)
