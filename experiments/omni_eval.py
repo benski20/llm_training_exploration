@@ -409,6 +409,7 @@ def main():
     ulab = F["u_lab"]
     Us = standardise(U, udom)
     rep_units = {}
+    worst_all = np.full(len(y), np.nan)
     for d in np.unique(dom):
         te_u, tr_u = udom == d, (udom != d) & (ulab >= 0)
         m = LogReg(a.l2).fit(Us[tr_u], ulab[tr_u].astype(float), balanced_weights(ulab[tr_u].astype(float)))
@@ -424,6 +425,7 @@ def main():
         ok = ~np.isnan(wv)
         z = lambda v: (v - np.nanmean(v)) / (np.nanstd(v) + 1e-9)        # per-domain, unlabelled
         comb = z(reply_lodo[idx]) + np.where(ok, z(np.where(ok, wv, np.nanmean(wv))), 0)
+        worst_all[idx] = np.where(ok, wv, np.nan)
         rep_units[d] = {"unit_auroc": loc, "worst_unit_reply_auroc": auroc(wv[ok], y[idx][ok]),
                         "reply_auroc": auroc(reply_lodo[idx], y[idx]), "combined_auroc": auroc(comb, y[idx])}
     report["units"] = rep_units
@@ -435,6 +437,59 @@ def main():
         if v["unit_auroc"] == v["unit_auroc"]:
             print(f"   {d:22s} unit {v['unit_auroc']:.3f}  worst-unit reply {v['worst_unit_reply_auroc']:.3f}"
                   f"  combined {v['combined_auroc']:.3f}")
+
+    # 5. experts: several heads, each LODO with per-domain standardisation; combined by per-domain z-scores
+    #    (zero labels) or by a 5-weight logistic fitted on k labels (pulled toward equal weights)
+    experts = {}
+    for name in ("mean_mid3", "judge_mid", "scalar"):
+        kind, layers = {"mean_mid3": feats["mean_mid3"], "judge_mid": ("judge", [nlay // 2, nlay // 2 + 1]),
+                        "scalar": feats["scalar"]}[name]
+        _, experts[name] = lodo(build(kind, layers), y, dom, a.l2, True)
+    experts["worst_unit"] = worst_all
+    experts["judge_tf"] = -F["j_logit"]
+    names = list(experts)
+
+    def zcols(idx):
+        cols = []
+        for n_ in names:
+            v = experts[n_][idx].astype(float)
+            m = np.isnan(v)
+            v = np.where(m, np.nanmean(v), v)
+            cols.append((v - v.mean()) / (v.std() + 1e-9))
+        return np.stack(cols, 1)
+
+    ens, single = {}, {n_: {} for n_ in names}
+    Zall = np.zeros((len(y), len(names)))
+    for d in np.unique(dom):
+        idx = np.where(dom == d)[0]
+        Zall[idx] = zcols(idx)
+        ens[d] = auroc(Zall[idx].sum(1), y[idx])
+        for j, n_ in enumerate(names):
+            single[n_][d] = auroc(Zall[idx, j], y[idx])
+    report["experts"] = {"single": {n_: mean(v) for n_, v in single.items()}, "zero_label_sum": ens,
+                         "zero_label_sum_mean": mean(ens)}
+    print("experts zero-label: " + ", ".join(f"{n_} {mean(v):.3f}" for n_, v in single.items()) +
+          f"  | sum of z {mean(ens):.3f}", flush=True)
+    rng = np.random.default_rng(1)
+    for k in [10, 25, 50, 100]:
+        res_s, res_w = [], []
+        for d in np.unique(dom):
+            idx = np.where(dom == d)[0]
+            yd, Zd = y[idx], Zall[idx]
+            pos, neg = np.where(yd == 1)[0], np.where(yd == 0)[0]
+            if k // 2 >= len(pos) - 5 or k - k // 2 >= len(neg) - 5:
+                continue
+            for _ in range(a.reps):
+                cal = np.concatenate([rng.choice(pos, k // 2, replace=False), rng.choice(neg, k - k // 2, replace=False)])
+                rest = np.setdiff1d(np.arange(len(yd)), cal)
+                m = LogReg(1.0 / k, w0=np.ones(len(names)) * 0.5).fit(Zd[cal], yd[cal].astype(float),
+                                                                      balanced_weights(yd[cal].astype(float)))
+                res_w.append(auroc(m.score(Zd[rest]), yd[rest]))
+                res_s.append(auroc(Zd[rest].sum(1), yd[rest]))
+        if res_w:
+            report["experts"][f"adapt_{k}"] = {"sum": float(np.nanmean(res_s)), "weighted": float(np.nanmean(res_w))}
+            print(f"experts adapt k={k:3d}: equal-weight sum {np.nanmean(res_s):.3f} -> fitted weights {np.nanmean(res_w):.3f}",
+                  flush=True)
 
     os.makedirs(os.path.dirname(os.path.abspath(a.report)), exist_ok=True)
     json.dump(report, open(a.report, "w"), indent=1)
