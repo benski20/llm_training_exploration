@@ -61,7 +61,13 @@ def validate(item):
         return None, f"reply: at most {MAX_REPLY} characters"
     if len(docs) > MAX_DOCS or sum(map(len, docs)) > MAX_DOCS_CHARS:
         return None, f"documents: at most {MAX_DOCS}, {MAX_DOCS_CHARS} characters in all"
-    return {"question": question, "reply": reply, "documents": docs, "lookup": bool(item.get("lookup"))}, None
+    prof = item.get("profile")
+    if prof is not None and (not isinstance(prof, str) or len(prof) > 128):
+        return None, "profile: a profile name"
+    out = {"question": question, "reply": reply, "documents": docs, "lookup": bool(item.get("lookup"))}
+    if prof is not None:
+        out["profile"] = prof
+    return out, None
 
 
 class Usage:

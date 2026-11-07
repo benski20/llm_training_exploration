@@ -217,17 +217,88 @@ def min_clean_for_guarantee(fpr, conf):
     return int(np.ceil(np.log(1 - conf) / np.log(1 - fpr)))
 
 
+def _hidden(f, parts, layer_idx):
+    """the hidden-state block of a reply's feature vector: the chosen parts at the chosen layers, flattened.
+    f: one reply's features (arrays (n_layers, d)) or a batch ((N, n_layers, d))."""
+    key = {"mean": "r_mean", "last": "r_last", "judge": "j_state"}
+    blocks = [np.asarray(f[key[p]])[..., layer_idx, :] for p in parts if p in key]
+    H = np.concatenate([b.reshape(*b.shape[:-2], -1) for b in blocks], -1)
+    return H.astype(np.float32)
+
+
+def _scalars(f):
+    return np.concatenate([np.asarray(f["r_sc"], np.float32), np.atleast_1d(np.asarray(f["j_logit"], np.float32))[..., None]
+                           if np.ndim(f["j_logit"]) else np.array([f["j_logit"]], np.float32)], -1)
+
+
+def _project(H, mu, sd, pmu, V):
+    return (((H - mu) / sd) - pmu) @ V.T
+
+
+def _pca(H, k):
+    mu, sd = H.mean(0), H.std(0) + 1e-4
+    Z = (H - mu) / sd
+    pmu = Z.mean(0)
+    _, _, Vt = np.linalg.svd(Z - pmu, full_matrices=False)
+    return mu, sd, pmu, Vt[:k]
+
+
+def _dstd(X, groups):
+    X = X.copy()
+    for g in np.unique(groups):
+        m = groups == g
+        X[m] = (X[m] - X[m].mean(0)) / (X[m].std(0) + 1e-4)
+    return X
+
+
+def train_artifact(F, rows, parts=("mean",), layer_idx=None, pca=256, l2=0.05, unit_l2=0.05, reader=None):
+    """The universal heads from stored corpus features (experiments/omni_corpus.py extract + load_features).
+    rows: {id: corpus row}. Each training domain is standardised by its own statistics (as a new domain will be,
+    from its unlabelled replies). Returns the artifact dict for OmniVerifier."""
+    ids = F["ids"]
+    dom = np.array([rows[i]["domain"] for i in ids])
+    y = np.array([rows[i]["label"] for i in ids], float)
+    layer_idx = list(layer_idx) if layer_idx is not None else [len(F["meta"]["layers"]) // 2 - 1,
+                                                                 len(F["meta"]["layers"]) // 2,
+                                                                 len(F["meta"]["layers"]) // 2 + 1]
+    H = _hidden(F, parts, layer_idx)
+    hmu, hsd, pmu, V = _pca(H, pca)
+    X = np.concatenate([_project(H, hmu, hsd, pmu, V), np.concatenate([F["r_sc"], F["j_logit"][:, None]], 1)], 1)
+    Xd = _dstd(X, dom)
+    head = LogReg(l2).fit(Xd, y, balanced_weights(y))
+    # units: the mean state of the unit at the same layers, its own projection, labelled units only
+    U = F["u_mean"][:, layer_idx].reshape(len(F["u_row"]), -1).astype(np.float32)
+    umu, usd, upmu, UV = _pca(U[np.random.default_rng(0).permutation(len(U))[:20000]], pca)
+    pos = {i: k for k, i in enumerate(ids)}
+    udom = dom[[pos[i] for i in F["u_row"]]]
+    UX = np.concatenate([_project(U, umu, usd, upmu, UV), F["u_sc"]], 1)
+    UXd = _dstd(UX, udom)
+    lab = F["u_lab"] >= 0
+    uy = F["u_lab"][lab].astype(float)
+    uhead = LogReg(unit_l2).fit(UXd[lab], uy, balanced_weights(uy))
+    meta = {"reader": reader or F["meta"]["reader"], "layers": F["meta"]["layers"], "layer_idx": layer_idx,
+            "parts": list(parts), "pca": pca, "domains": sorted(set(dom.tolist())), "n_replies": int(len(y)),
+            "n_units": int(lab.sum()), "max_tokens": F["meta"].get("max_tokens", 2048)}
+    return {"meta": meta, "h_mu": hmu, "h_sd": hsd, "pca_mu": pmu, "pca_V": V, "x_mu": X.mean(0),
+            "x_sd": X.std(0) + 1e-4, "w": head.w, "b": np.array(head.b), "uh_mu": umu, "uh_sd": usd,
+            "upca_mu": upmu, "upca_V": UV, "ux_mu": UX.mean(0), "ux_sd": UX.std(0) + 1e-4, "uw": uhead.w,
+            "ub": np.array(uhead.b)}
+
+
 class OmniVerifier:
-    """Universal head + domain profiles. The head works on a feature vector built from the reader's features:
-    the chosen layers' mean states, projected by a stored PCA basis, plus the scalar output signals."""
+    """Universal heads + domain profiles.
+
+    reply score   logistic head on [projected hidden block, output signals, judge log-odds]
+    unit score    logistic head on [projected unit mean state, unit output signals]; reply's worst unit
+    final score   z(reply score) + z(worst unit), each z by the profile's statistics (the domain's unlabelled
+                  replies; the training mix for the universal profile)
+    """
 
     def __init__(self, art, reader=None):
-        self.art = art
-        self.reader = reader
-        self.layer_idx = [int(i) for i in art["layer_idx"]]
-        self.use_scalars = bool(art["use_scalars"])
+        self.art, self.reader = art, reader
+        self.meta = art["meta"]
+        self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
-    # -- persistence
     @classmethod
     def load(cls, path, reader=None):
         z = np.load(path, allow_pickle=False)
@@ -242,87 +313,128 @@ class OmniVerifier:
         np.savez(path, **a)
 
     def attach_reader(self, **kw):
-        self.reader = Reader(self.art["meta"]["reader"], layers=self.art["meta"]["layers"], **kw)
+        self.reader = Reader(self.meta["reader"], layers=self.meta["layers"],
+                             max_tokens=self.meta.get("max_tokens", 2048), **kw)
         return self
 
-    # -- features -> head input
-    def vector(self, r_mean, r_sc):
-        H = np.asarray(r_mean)[..., self.layer_idx, :].reshape(*np.shape(r_mean)[:-2], -1).astype(np.float32)
-        Z = ((H - self.art["h_mu"]) / self.art["h_sd"] - self.art["pca_mu"]) @ self.art["pca_V"].T
-        if self.use_scalars:
-            Z = np.concatenate([Z, np.asarray(r_sc, np.float32)], -1)
-        return Z
+    # -- feature vectors
+    def reply_vector(self, f):
+        a = self.art
+        Z = _project(_hidden(f, self.parts, self.layer_idx), a["h_mu"], a["h_sd"], a["pca_mu"], a["pca_V"])
+        return np.concatenate([Z, _scalars(f)], -1)
+
+    def unit_matrix(self, f):
+        a = self.art
+        if not f["units"]:
+            return np.zeros((0, len(a["ux_mu"])), np.float32)
+        U = np.stack([np.asarray(u["mean"])[self.layer_idx].reshape(-1) for u in f["units"]]).astype(np.float32)
+        return np.concatenate([_project(U, a["uh_mu"], a["uh_sd"], a["upca_mu"], a["upca_V"]),
+                               np.stack([u["sc"] for u in f["units"]])], 1)
 
     def featurize(self, items):
-        out = []
-        for it in items:
-            f = self.reader.features(it)
-            out.append(f)
-        return out
+        return [self.reader.features(it) for it in items]
 
-    def matrix(self, feats):
-        return np.stack([self.vector(f["r_mean"], f["r_sc"]) for f in feats])
-
-    # -- domain profiles
+    # -- profiles
     def universal_profile(self):
-        return {"name": "universal", "mu": self.art["x_mu"].tolist(), "sd": self.art["x_sd"].tolist(),
-                "w": self.art["w"].tolist(), "b": float(self.art["b"]), "threshold": None, "card": {}}
+        a = self.art
+        return {"name": "universal", "mu": a["x_mu"].tolist(), "sd": a["x_sd"].tolist(), "umu": a["ux_mu"].tolist(),
+                "usd": a["ux_sd"].tolist(), "w": a["w"].tolist(), "b": float(a["b"]), "z": None, "threshold": None,
+                "card": {"reader": self.meta["reader"], "trained_on": self.meta["domains"]}}
 
-    def profile(self, X_unlabelled, name="domain"):
-        """Zero labels: standardise by the domain's own unlabelled replies (covariate-shift correction)."""
-        X = np.asarray(X_unlabelled)
+    def _raw(self, prof, feats):
+        """(reply head score, worst-unit score) per reply."""
+        r, u = [], []
+        for f in feats:
+            x = (self.reply_vector(f) - np.array(prof["mu"])) / np.array(prof["sd"])
+            r.append(float(x @ np.array(prof["w"]) + prof["b"]))
+            U = self.unit_matrix(f)
+            us = ((U - np.array(prof["umu"])) / np.array(prof["usd"])) @ self.art["uw"] + float(self.art["ub"])
+            u.append(float(us.max()) if len(us) else np.nan)
+        return np.array(r), np.array(u)
+
+    def _combine(self, prof, r, u):
+        z = prof.get("z") or {"r": [0.0, 1.0], "u": [0.0, 1.0]}
+        zr = (r - z["r"][0]) / z["r"][1]
+        zu = np.where(np.isnan(u), 0.0, (np.nan_to_num(u) - z["u"][0]) / z["u"][1])
+        return zr + zu
+
+    def profile(self, feats, name="domain"):
+        """Zero labels: the domain's unlabelled replies set every standardisation (covariate-shift correction)."""
         p = self.universal_profile()
+        X = np.stack([self.reply_vector(f) for f in feats])
+        U = np.concatenate([self.unit_matrix(f) for f in feats])
         p.update(name=name, mu=X.mean(0).tolist(), sd=(X.std(0) + 1e-4).tolist())
-        p["card"]["unlabelled_replies"] = int(len(X))
+        if len(U) > 1:
+            p.update(umu=U.mean(0).tolist(), usd=(U.std(0) + 1e-4).tolist())
+        r, u = self._raw(p, feats)
+        p["z"] = {"r": [float(r.mean()), float(r.std() + 1e-6)], "u": [float(np.nanmean(u)), float(np.nanstd(u) + 1e-6)]}
+        p["card"] = dict(p["card"], unlabelled_replies=len(feats))
         return p
 
-    def score(self, prof, X):
-        Xs = (np.asarray(X) - np.array(prof["mu"])) / np.array(prof["sd"])
-        return Xs @ np.array(prof["w"]) + prof["b"]
+    def score(self, prof, feats):
+        r, u = self._raw(prof, feats)
+        return self._combine(prof, r, u)
 
-    def adapt(self, prof, X, y, grid=(0.01, 0.1, 1.0, 10.0), seed=0):
-        """k labels: refit pulled toward the profile's current weights; the strength by repeated half splits
-        (the unchanged head is kept if no refit helps)."""
+    def adapt(self, prof, feats, y, grid=(0.01, 0.1, 1.0, 10.0), seed=0):
+        """k labelled replies: the reply head refitted with a pull toward its current weights; the strength by
+        repeated half splits on the final score (kept unchanged unless a refit helps)."""
         from vt.correctness import auroc
         y = np.asarray(y, float)
-        Xs = (np.asarray(X) - np.array(prof["mu"])) / np.array(prof["sd"])
+        X = (np.stack([self.reply_vector(f) for f in feats]) - np.array(prof["mu"])) / np.array(prof["sd"])
+        _, u = self._raw(prof, feats)
         w0, b0 = np.array(prof["w"]), prof["b"]
         rng = np.random.default_rng(seed)
-        best, best_s = None, None
-        base = []
-        cands = {lp: [] for lp in grid}
+        res = {None: []}
+        res.update({lp: [] for lp in grid})
         for _ in range(5):
             perm = rng.permutation(len(y))
             a, b = perm[:len(y) // 2], perm[len(y) // 2:]
             if len(set(y[a])) < 2 or len(set(y[b])) < 2:
                 continue
-            base.append(auroc(Xs[b] @ w0 + b0, y[b]))
+            res[None].append(auroc(self._combine(prof, X[b] @ w0 + b0, u[b]), y[b]))
             for lp in grid:
-                m = LogReg(lp, w0, b0).fit(Xs[a], y[a], balanced_weights(y[a]))
-                cands[lp].append(auroc(m.score(Xs[b]), y[b]))
-        if base:
-            best_s = np.mean(base)
-            for lp, v in cands.items():
-                if v and np.mean(v) > best_s + 0.005:
-                    best, best_s = lp, np.mean(v)
-        p = dict(prof)
-        p["card"] = dict(prof["card"], adapted_on=int(len(y)), prior_strength=best)
+                m = LogReg(lp, w0, b0).fit(X[a], y[a], balanced_weights(y[a]))
+                res[lp].append(auroc(self._combine(prof, m.score(X[b]), u[b]), y[b]))
+        best = None
+        if res[None]:
+            base = np.mean(res[None])
+            for lp in grid:
+                if res[lp] and np.mean(res[lp]) > base + 0.005:
+                    best, base = lp, np.mean(res[lp])
+        p = dict(prof, card=dict(prof["card"], adapted_on=int(len(y)), prior_strength=best))
         if best is not None:
-            m = LogReg(best, w0, b0).fit(Xs, y, balanced_weights(y))
-            p["w"], p["b"] = m.w.tolist(), m.b
+            m = LogReg(best, w0, b0).fit(X, y, balanced_weights(y))
+            p.update(w=m.w.tolist(), b=m.b, prior_w=w0.tolist(), prior_b=float(b0))
+            r = X @ m.w + m.b
+            p["z"] = dict(p["z"] or {}, r=[float(r.mean()), float(r.std() + 1e-6)], u=(p["z"] or {}).get("u", [0.0, 1.0]))
         return p
 
-    def calibrate(self, prof, X, y, fpr=0.10, confidence=0.95):
-        """threshold from the domain's labelled *clean* replies: false alarms <= fpr with stated confidence."""
+    def _oof(self, prof, feats, y, folds=5, seed=0):
+        X = (np.stack([self.reply_vector(f) for f in feats]) - np.array(prof["mu"])) / np.array(prof["sd"])
+        _, u = self._raw(prof, feats)
+        w0, b0, lp = np.array(prof["prior_w"]), prof["prior_b"], prof["card"]["prior_strength"]
+        f = np.arange(len(y)) % folds
+        np.random.default_rng(seed).shuffle(f)
+        r = np.zeros(len(y))
+        for k in range(folds):
+            tr, te = f != k, f == k
+            if len(set(y[tr].tolist())) < 2:
+                r[te] = X[te] @ w0 + b0
+            else:
+                r[te] = LogReg(lp, w0, b0).fit(X[tr], y[tr], balanced_weights(y[tr])).score(X[te])
+        return self._combine(prof, r, u)
+
+    def calibrate(self, prof, feats, y, fpr=0.10, confidence=0.95):
+        """threshold from the domain's labelled *clean* replies: false alarms <= fpr with stated confidence
+        (cross-fitted when the profile was adapted on the same labels)."""
         y = np.asarray(y)
-        clean = self.score(prof, np.asarray(X)[y == 0])
+        s = self._oof(prof, feats, y.astype(float)) if prof.get("prior_w") is not None else self.score(prof, feats)
         need = min_clean_for_guarantee(fpr, confidence)
-        p = dict(prof)
-        p["threshold"] = cp_threshold(clean, fpr, confidence)
-        p["card"] = dict(prof["card"], fpr_target=fpr, confidence=confidence, clean_replies=int(len(clean)),
-                         guarantee_possible=bool(len(clean) >= need), min_clean_needed=need)
+        p = dict(prof, threshold=cp_threshold(s[y == 0], fpr, confidence))
+        p["card"] = dict(prof["card"], fpr_target=fpr, confidence=confidence, clean_replies=int((y == 0).sum()),
+                         guarantee_possible=bool((y == 0).sum() >= need), min_clean_needed=need)
         if (y == 1).any():
-            p["card"]["recall_on_calibration"] = float((self.score(prof, np.asarray(X)[y == 1]) >= p["threshold"]).mean())
+            p["card"]["recall_on_calibration"] = float((s[y == 1] >= p["threshold"]).mean())
         return p
 
     # -- one check
@@ -332,25 +444,18 @@ class OmniVerifier:
         f = self.reader.features(it)
         if f is None:
             return {"error": "empty reply"}
-        z = float(self.score(prof, self.vector(f["r_mean"], f["r_sc"])[None])[0])
-        out = {"score": z, "p_wrong": 1 / (1 + np.exp(-z)), "profile": prof["name"]}
+        r, u = self._raw(prof, [f])
+        z = float(self._combine(prof, r, u)[0])
+        out = {"score": z, "reply_score": float(r[0]), "worst_unit_score": None if np.isnan(u[0]) else float(u[0]),
+               "judge_logodds_yes": float(f["j_logit"]), "profile": prof["name"]}
         if prof.get("threshold") is not None:
             out["flagged"] = bool(z >= prof["threshold"])
             out["guarantee"] = {k: prof["card"].get(k) for k in ("fpr_target", "confidence", "clean_replies")}
-        if "uw" in self.art:                                      # unit head: which sentence / step
-            us = []
-            for u in f["units"]:
-                v = self.unit_vector(u)
-                a, b = it["units"][u["index"]]
-                us.append({"text": reply[a:b], "start": a, "end": b,
-                           "score": float(((v - self.art["ux_mu"]) / self.art["ux_sd"]) @ self.art["uw"] + self.art["ub"])})
-            out["units"] = us
+        U = self.unit_matrix(f)
+        us = ((U - np.array(prof["umu"])) / np.array(prof["usd"])) @ self.art["uw"] + float(self.art["ub"])
+        out["units"] = [{"text": reply[a:b], "start": a, "end": b, "score": float(sc)}
+                        for (a, b), sc in ((it["units"][fu["index"]], sc) for fu, sc in zip(f["units"], us))]
         return out
-
-    def unit_vector(self, u):
-        H = np.asarray(u["mean"])[self.layer_idx].reshape(-1).astype(np.float32)
-        Z = ((H - self.art["h_mu"]) / self.art["h_sd"] - self.art["pca_mu"]) @ self.art["pca_V"].T
-        return np.concatenate([Z, u["sc"]]) if self.use_scalars else Z
 
     @staticmethod
     def save_profile(prof, path):
@@ -359,3 +464,24 @@ class OmniVerifier:
     @staticmethod
     def load_profile(path):
         return json.load(open(path))
+
+
+def feature_dicts(F):
+    """per-reply feature dicts (as Reader.features returns) from stored corpus features (load_features)."""
+    by_row = {}
+    for k, r in enumerate(F["u_row"]):
+        by_row.setdefault(int(r), []).append({"index": int(F["u_idx"][k]), "mean": F["u_mean"][k].astype(np.float32),
+                                              "sc": F["u_sc"][k]})
+    return [{"r_mean": F["r_mean"][i].astype(np.float32), "r_last": F["r_last"][i].astype(np.float32),
+             "r_sc": F["r_sc"][i], "j_state": F["j_state"][i].astype(np.float32), "j_logit": float(F["j_logit"][i]),
+             "units": by_row.get(int(F["ids"][i]), [])} for i in range(len(F["ids"]))]
+
+
+def subset(F, mask):
+    """stored features restricted to the replies in mask (and their units)."""
+    keep = set(np.asarray(F["ids"])[mask].tolist())
+    um = np.array([int(r) in keep for r in F["u_row"]])
+    out = {k: (v[mask] if k in ("ids", "r_mean", "r_last", "r_sc", "j_state", "j_logit") else v[um])
+           for k, v in F.items() if k != "meta"}
+    out["meta"] = F["meta"]
+    return out

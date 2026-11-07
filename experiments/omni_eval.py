@@ -224,8 +224,19 @@ def adapt(X, y, dom, l2, ks, reps, per_domain_std, l2_prior_grid=(0.01, 0.1, 1.0
                         best, best_s = lp, v
                 m = LogReg(best, w0=uni.w, b0=uni.b).fit(Xc, yc, balanced_weights(yc))
                 rows["prior"].append(auroc(m.score(Xg[rest]), yg[rest]))
-                # guarantee: threshold from the clean calibration replies' scores
-                clean = m.score(Xc[yc == 0])
+                # guarantee: threshold from the clean calibration replies' *out-of-fold* scores (cross-fitting:
+                # each is scored by a refit that never saw it), so the head's fit does not bias the threshold
+                oof = np.zeros(len(cal))
+                folds = np.arange(len(cal)) % 5
+                rng.shuffle(folds)
+                for f_ in range(5):
+                    tr_, te_ = folds != f_, folds == f_
+                    if len(set(yc[tr_])) < 2:
+                        oof[te_] = Xc[te_] @ uni.w + uni.b
+                        continue
+                    mf = LogReg(best, w0=uni.w, b0=uni.b).fit(Xc[tr_], yc[tr_], balanced_weights(yc[tr_]))
+                    oof[te_] = mf.score(Xc[te_])
+                clean = oof[yc == 0]
                 t = cp_threshold(clean, 0.10, 0.95)
                 sr = m.score(Xg[rest])
                 rows["g_fpr"].append(float((sr[yg[rest] == 0] >= t).mean()))
@@ -309,6 +320,7 @@ def main():
     kind, layers = feats[best]
     X = build(kind, layers)
     # 2. leave-one-format-out
+    _, reply_lodo = lodo(X, y, dom, a.l2, True)
     lf, _ = lodo(X, y, dom, a.l2, False, hold_key=fmt)
     lfd, _ = lodo(X, y, dom, a.l2, True, hold_key=fmt)
     report["lofo"] = {"plain": lf, "dstd": lfd, "mean": {"plain": mean(lf), "dstd": mean(lfd)}}
@@ -367,14 +379,19 @@ def main():
         idx = np.where(dom == d)[0]
         wv = np.array([worst.get(F["ids"][i], np.nan) for i in idx])
         ok = ~np.isnan(wv)
-        rep_units[d] = {"unit_auroc": loc, "worst_unit_reply_auroc": auroc(wv[ok], y[idx][ok])}
+        z = lambda v: (v - np.nanmean(v)) / (np.nanstd(v) + 1e-9)        # per-domain, unlabelled
+        comb = z(reply_lodo[idx]) + np.where(ok, z(np.where(ok, wv, np.nanmean(wv))), 0)
+        rep_units[d] = {"unit_auroc": loc, "worst_unit_reply_auroc": auroc(wv[ok], y[idx][ok]),
+                        "reply_auroc": auroc(reply_lodo[idx], y[idx]), "combined_auroc": auroc(comb, y[idx])}
     report["units"] = rep_units
-    print("units: localisation AUROC (labelled units, LODO) mean %.3f; worst-unit reply AUROC mean %.3f" % (
-        mean({d: v["unit_auroc"] for d, v in rep_units.items()}),
-        mean({d: v["worst_unit_reply_auroc"] for d, v in rep_units.items()})), flush=True)
+    print("units: localisation AUROC (labelled units, LODO) mean %.3f; worst-unit reply AUROC mean %.3f; "
+          "reply %.3f; reply+worst-unit %.3f" % tuple(mean({d: v[k] for d, v in rep_units.items()}) for k in
+                                                       ("unit_auroc", "worst_unit_reply_auroc", "reply_auroc",
+                                                        "combined_auroc")), flush=True)
     for d, v in rep_units.items():
         if v["unit_auroc"] == v["unit_auroc"]:
-            print(f"   {d:22s} unit {v['unit_auroc']:.3f}  worst-unit reply {v['worst_unit_reply_auroc']:.3f}")
+            print(f"   {d:22s} unit {v['unit_auroc']:.3f}  worst-unit reply {v['worst_unit_reply_auroc']:.3f}"
+                  f"  combined {v['combined_auroc']:.3f}")
 
     os.makedirs(os.path.dirname(os.path.abspath(a.report)), exist_ok=True)
     json.dump(report, open(a.report, "w"), indent=1)
