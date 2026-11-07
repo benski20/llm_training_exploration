@@ -93,6 +93,17 @@ another model's text.
 - **Linear is enough.** A one-hidden-layer MLP on the same features transfers worse (0.688 against 0.713). The
   strength of the L2 penalty barely matters (0.706-0.713 over a 100× range). This matches the literature: the signal
   is close to one linear direction (docs/research/internal_state_probes.md).
+- **No invariance trick beats per-domain standardisation on frozen features.** Same features (PCA 128), leave-one-domain-out:
+
+  | method | AUROC |
+  |---|---|
+  | per-domain standardisation (the shipped choice) | **0.693** |
+  | group DRO (weight the worst training domain up) | 0.692 |
+  | CORAL (whiten each domain's covariance) | 0.641 |
+  | project out the 5 / 10 / 19 directions that separate domains | 0.683 / 0.685 / 0.676 |
+
+  A more invariant probe needs a different representation, not a different fit. That is the case for editing the
+  reader (docs/omni_experiments/).
 - **Diversity is the main lever.** Training on 1 / 2 / 4 / 8 / 12 / 20 other domains gives 0.56 / 0.56 / 0.61 / 0.67 / 0.69 / **0.71** on the held-out domain, still rising at 20.
   - Every new domain a customer brings, once labelled, raises zero-label accuracy for the next one.
 
