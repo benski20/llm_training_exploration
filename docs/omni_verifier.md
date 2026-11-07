@@ -142,9 +142,27 @@ The same corpus, heads and protocol, with only the reader changed (`results/omni
 | Qwen3-0.6B | 0.677 | 0.81 | 0.71 | 0.64 | 0.52 | 0.716 | 0.83 |
 | **Qwen3-1.7B** | **0.727** | **0.85** | **0.75** | **0.69** | **0.61** | **0.742** | 0.98 |
 
-- **1.7B is the default.** 0.6B saves 15% of the time and loses 0.05 AUROC.
+- **0.6B is not worth it.** It saves 15% of the time and loses 0.05 AUROC.
 - **The reader's own judge collapses at 0.6B** (0.53 against 0.64).
 - **Closed-book chat falls to chance** (0.52).
+
+**Qwen3-4B, the accuracy tier.** 4B features were read for 1,800 of the replies (a random 35%, about 85 per domain;
+the run is slower on this CPU, 5-8 s a reply). Both readers are compared on exactly those replies, under the same
+protocol (`results/omni/final_q4b_subset1800.json`, `final_q17_subset1800.json`):
+
+| same 1,800 replies, held-out domains | zero labels, all | reasoning | long-form | RAG | closed-book chat | 50 labels |
+|---|---|---|---|---|---|---|
+| Qwen3-1.7B | 0.700 | 0.84 | 0.73 | 0.65 | 0.60 | 0.69 |
+| **Qwen3-4B** | **0.779** | **0.88** | **0.76** | **0.77** | **0.69** | **0.80** |
+
+- **The bigger reader gains most where the small one lacked knowledge:** RAG +0.12, closed-book chat +0.10.
+- **Its own judge becomes useful on chat:** 0.73 against 0.52.
+- **The 4B head ships too:** `heads/omni_qwen3_4b.npz`, trained on these 1,800 replies.
+  - For 1.7B, going from 1,800 to all 5,107 replies added 0.03 zero-label. A 4B head on the full corpus should reach about 0.80; this is an estimate, not a measurement.
+- **Cost:** about 2.4× the 1.7B compute, ≈ $0.035 per 1,000 checks on a GPU by the same estimate.
+- **Two tiers:**
+  - 1.7B for cheap screening of every reply;
+  - 4B where accuracy matters more than the last cent.
 
 ## Speed and cost
 
