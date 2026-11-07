@@ -133,6 +133,19 @@ floor is real.
 - **Its price is recall.** At a held 10%, the verifier catches about a quarter to a half of wrong replies on reasoning, less on RAG and chat.
 - **It is a cheap filter on every reply, not a replacement for review.** Recall rises with labels and with the adapted head (0.78 AUROC at 100 labels).
 
+### Reader size
+
+The same corpus, heads and protocol, with only the reader changed (`results/omni/final_q06.json`, `final_q17.json`):
+
+| reader | zero labels, all | reasoning | long-form | RAG | closed-book chat | 50 labels | CPU s / reply |
+|---|---|---|---|---|---|---|---|
+| Qwen3-0.6B | 0.677 | 0.81 | 0.71 | 0.64 | 0.52 | 0.716 | 0.83 |
+| **Qwen3-1.7B** | **0.727** | **0.85** | **0.75** | **0.69** | **0.61** | **0.742** | 0.98 |
+
+- **1.7B is the default.** 0.6B saves 15% of the time and loses 0.05 AUROC.
+- **The reader's own judge collapses at 0.6B** (0.53 against 0.64).
+- **Closed-book chat falls to chance** (0.52).
+
 ## Speed and cost
 
 One pass of Qwen3-1.7B over documents + question + reply + the judge suffix (`vt/omni.py`, logits computed only for
