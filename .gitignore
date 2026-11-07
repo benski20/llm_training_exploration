@@ -19,3 +19,4 @@ space/vt/
 space/heads/
 # Kaggle kernels' copies of their own inputs (committed elsewhere)
 results/kaggle/*/bundle/
+results/kaggle/omni-*smoke*/
