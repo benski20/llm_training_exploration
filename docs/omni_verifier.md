@@ -90,6 +90,9 @@ another model's text.
 
 - **Middle layers transfer best.** Layer 15-20 of 28 beat the last layer (0.66) and early layers (0.58).
 - **Per-domain standardisation from unlabelled replies helps** (+0.01 to +0.03). It costs nothing but a few hundred of the domain's unlabelled replies.
+- **Linear is enough.** A one-hidden-layer MLP on the same features transfers worse (0.688 against 0.713). The
+  strength of the L2 penalty barely matters (0.706-0.713 over a 100× range). This matches the literature: the signal
+  is close to one linear direction (docs/research/internal_state_probes.md).
 - **Diversity is the main lever.** Training on 1 / 2 / 4 / 8 / 12 / 20 other domains gives 0.56 / 0.56 / 0.61 / 0.67 / 0.69 / **0.71** on the held-out domain, still rising at 20.
   - Every new domain a customer brings, once labelled, raises zero-label accuracy for the next one.
 
