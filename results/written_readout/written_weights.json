@@ -1,0 +1,19 @@
+{
+ "written_before_test_labels": true,
+ "from": "results/written_readout/explore.json (300 unlabeled RAGTruth QA training replies) and reasoning; no labels from the domain",
+ "aggregate": "max",
+ "signals_oriented": "higher = less grounded: probe score, -evidence shift, disagreement, copy conflict, uncopied share, self-reliance",
+ "readouts": {
+  "written": {"probe": 1.0, "shift": 1.0, "disagreement": 0.5, "copy_conflict": -0.5, "uncopied": 1.0, "self_reliance": 0.25},
+  "unsupported_axis": {"probe": 1.0, "shift": 1.0, "disagreement": 0.0, "copy_conflict": 0.0, "uncopied": 1.0, "self_reliance": 0.0},
+  "first_component": {"probe": 0.345, "shift": 0.468, "disagreement": -0.147, "copy_conflict": -0.518, "uncopied": 0.589, "self_reliance": 0.155},
+  "shipped_signals_domain_scaled": {"probe": 1.0, "shift": 1.0, "disagreement": 1.0, "copy_conflict": 0.0, "uncopied": 0.0, "self_reliance": 0.0}
+ },
+ "reasoning": {
+  "unsupported_axis": "probe, low evidence shift and uncopied words correlate (0.25-0.59) on unlabeled replies: one axis, content not drawn from the evidence, RAGTruth's main hallucination type",
+  "copy_conflict": "anti-correlated with uncopied (-0.58) and with low shift (-0.42): here it measures engagement with the evidence rather than contradiction, so a negative weight",
+  "disagreement": "a second axis (contradiction): with copy conflict 0.35, against self-reliance -0.45; half weight",
+  "self_reliance": "weakly tied to the rest; a small positive weight, its sign in docs/source_flow.md",
+  "aggregate": "a reply is hallucinated if any sentence is: its worst sentence"
+ }
+}

@@ -1,0 +1,80 @@
+{
+ "replies": 300,
+ "sentences": 2716,
+ "sentences_per_reply": 9.05,
+ "mean": {
+  "probe": 4.8008,
+  "shift": -0.6275,
+  "disagreement": 6.438,
+  "copy_conflict": 0.4883,
+  "uncopied": 0.5737,
+  "self_reliance": 0.4639
+ },
+ "std": {
+  "probe": 2.6237,
+  "shift": 1.6019,
+  "disagreement": 7.1738,
+  "copy_conflict": 0.1954,
+  "uncopied": 0.3478,
+  "self_reliance": 0.1432
+ },
+ "correlation": {
+  "probe": {
+   "probe": 1.0,
+   "shift": 0.25,
+   "disagreement": 0.13,
+   "copy_conflict": -0.17,
+   "uncopied": 0.41,
+   "self_reliance": 0.13
+  },
+  "shift": {
+   "probe": 0.25,
+   "shift": 1.0,
+   "disagreement": 0.2,
+   "copy_conflict": -0.42,
+   "uncopied": 0.59,
+   "self_reliance": -0.13
+  },
+  "disagreement": {
+   "probe": 0.13,
+   "shift": 0.2,
+   "disagreement": 1.0,
+   "copy_conflict": 0.35,
+   "uncopied": -0.13,
+   "self_reliance": -0.45
+  },
+  "copy_conflict": {
+   "probe": -0.17,
+   "shift": -0.42,
+   "disagreement": 0.35,
+   "copy_conflict": 1.0,
+   "uncopied": -0.58,
+   "self_reliance": -0.12
+  },
+  "uncopied": {
+   "probe": 0.41,
+   "shift": 0.59,
+   "disagreement": -0.13,
+   "copy_conflict": -0.58,
+   "uncopied": 1.0,
+   "self_reliance": 0.14
+  },
+  "self_reliance": {
+   "probe": 0.13,
+   "shift": -0.13,
+   "disagreement": -0.45,
+   "copy_conflict": -0.12,
+   "uncopied": 0.14,
+   "self_reliance": 1.0
+  }
+ },
+ "first_component": {
+  "probe": 0.345,
+  "shift": 0.468,
+  "disagreement": -0.147,
+  "copy_conflict": -0.518,
+  "uncopied": 0.589,
+  "self_reliance": 0.155
+ },
+ "explained": 0.381
+}
