@@ -164,6 +164,25 @@ protocol (`results/omni/final_q4b_subset1800.json`, `final_q17_subset1800.json`)
   - 1.7B for cheap screening of every reply;
   - 4B where accuracy matters more than the last cent.
 
+### A real onboarding, through the CLI (`results/omni/demo_covid/`)
+
+The pipeline a customer would run, on a domain the head never saw:
+- **Head:** trained on the other 20 domains, leaving out CovidQA (biomedical papers, long passages).
+- **Data:** fresh HaluBench CovidQA replies, none of them in the corpus.
+  - `onboard` read 200 unlabelled replies, then 100 labelled ones (51 clean).
+  - `evaluate` scored 300 further replies (50% wrong).
+
+| profile | AUROC | false alarms (target ≤ 10%, 95%) | wrong caught | precision |
+|---|---|---|---|---|
+| universal head | 0.720 | n/a | n/a | n/a |
+| profiled on 200 unlabelled replies | 0.720 | n/a | n/a | n/a |
+| **+ 100 labels (adapted, calibrated)** | **0.752** | **3.3%** | 6.7% | 67% |
+
+- **The guarantee held:** 3.3% false alarms against the 10% target.
+- **On this domain it held at very low recall.** At 0.75 AUROC a 10% false-alarm threshold set from 51 clean replies sits high.
+- **This is the trade-off the product has to state.** On hard domains, use the 4B tier, or accept more false alarms for more recall.
+- **Speed:** 7.3 s a reply on 2 CPU threads with CovidQA's long passages (up to 2,048 tokens), against about 1 s on the corpus's median reply.
+
 ## Speed and cost
 
 One pass of Qwen3-1.7B over documents + question + reply + the judge suffix (`vt/omni.py`, logits computed only for

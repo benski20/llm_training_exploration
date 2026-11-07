@@ -1,0 +1,33 @@
+{
+ "profile": "universal",
+ "reader": "Qwen/Qwen3-1.7B",
+ "n": 300,
+ "wrong": 149,
+ "auroc": 0.7201208942619672,
+ "seconds_per_reply": 7.252,
+ "calibration": {
+  "reader": "Qwen/Qwen3-1.7B",
+  "trained_on": [
+   "felm_math",
+   "felm_reasoning",
+   "felm_science",
+   "felm_wk",
+   "felm_writing",
+   "halubench_drop",
+   "halubench_finance",
+   "halubench_pubmed",
+   "halueval_dialogue",
+   "halueval_general",
+   "halueval_qa",
+   "halueval_summary",
+   "pb_gsm8k",
+   "pb_math",
+   "pb_olympiad",
+   "pb_omnimath",
+   "ragtruth_data2text",
+   "ragtruth_qa",
+   "ragtruth_summary",
+   "truthfulqa"
+  ]
+ }
+}
