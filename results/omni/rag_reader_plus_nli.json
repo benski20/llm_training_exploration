@@ -1,0 +1,71 @@
+{
+ "reader": "Qwen/Qwen3-1.7B",
+ "nli": "mean of HHEM-2.1-open reply score and MiniCheck-RoBERTa-L worst sentence",
+ "per_domain": {
+  "halubench_covid": {
+   "n": 92,
+   "reader": 0.7825059101654847,
+   "nli": 0.7721040189125296,
+   "reader_plus_nli": 0.8553191489361702
+  },
+  "halubench_drop": {
+   "n": 96,
+   "reader": 0.5210594876248371,
+   "nli": 0.47286148501953973,
+   "reader_plus_nli": 0.5379939209726444
+  },
+  "halubench_finance": {
+   "n": 93,
+   "reader": 0.5868347338935574,
+   "nli": 0.6372549019607843,
+   "reader_plus_nli": 0.6671335200746965
+  },
+  "halubench_pubmed": {
+   "n": 86,
+   "reader": 0.7620335316387237,
+   "nli": 0.5727420227149811,
+   "reader_plus_nli": 0.7160627366143861
+  },
+  "halueval_dialogue": {
+   "n": 136,
+   "reader": 0.7719184027777778,
+   "nli": 0.7335069444444444,
+   "reader_plus_nli": 0.8142361111111112
+  },
+  "halueval_qa": {
+   "n": 138,
+   "reader": 0.7542568845911288,
+   "nli": 0.6981290729451335,
+   "reader_plus_nli": 0.7685516081564011
+  },
+  "halueval_summary": {
+   "n": 127,
+   "reader": 0.7107769423558897,
+   "nli": 0.7431077694235589,
+   "reader_plus_nli": 0.7671679197994987
+  },
+  "ragtruth_data2text": {
+   "n": 149,
+   "reader": 0.615370705244123,
+   "nli": 0.6151898734177215,
+   "reader_plus_nli": 0.6634719710669078
+  },
+  "ragtruth_qa": {
+   "n": 138,
+   "reader": 0.5632427843803056,
+   "nli": 0.7775891341256367,
+   "reader_plus_nli": 0.7209252971137521
+  },
+  "ragtruth_summary": {
+   "n": 145,
+   "reader": 0.5614535768645358,
+   "nli": 0.7992770167427702,
+   "reader_plus_nli": 0.7189878234398782
+  }
+ },
+ "mean": {
+  "reader": 0.6629452959536363,
+  "nli": 0.68217622397071,
+  "reader_plus_nli": 0.7229850057285446
+ }
+}

@@ -157,42 +157,37 @@ The same corpus, heads and protocol, with only the reader changed (`results/omni
 - **The reader's own judge collapses at 0.6B** (0.53 against 0.64).
 - **Closed-book chat falls to chance** (0.52).
 
-**Qwen3-4B, the accuracy tier.** 4B features were read for 1,800 of the replies (a random 35%, about 85 per domain;
-the run is slower on this CPU, 5-8 s a reply). Both readers are compared on exactly those replies, under the same
-protocol (`results/omni/final_q4b_subset1800.json`, `final_q17_subset1800.json`):
+**Bigger readers, full corpus** (Kaggle T4, `kaggle/omni/scale_readers.py`, `results/omni/final_q4b_full.json`,
+`final_q8b.json`, docs/omni_experiments/scale_readers.md). Same 5,107 replies and protocol:
 
-| same 1,800 replies, held-out domains | zero labels, all | reasoning | long-form | RAG | closed-book chat | 50 labels |
-|---|---|---|---|---|---|---|
-| Qwen3-1.7B | 0.700 | 0.84 | 0.73 | 0.65 | 0.60 | 0.69 |
-| **Qwen3-4B** | **0.779** | **0.88** | **0.76** | **0.77** | **0.69** | **0.80** |
+| reader | zero labels, all | reasoning | long-form | RAG | closed-book chat | 50 labels | 100 labels |
+|---|---|---|---|---|---|---|---|
+| Qwen3-1.7B | 0.727 | 0.85 | 0.75 | 0.69 | 0.61 | 0.742 | 0.742 |
+| Qwen3-4B | 0.778 | 0.89 | 0.79 | 0.75 | 0.68 | 0.798 | 0.793 |
+| **Qwen3-8B** | **0.805** | **0.91** | **0.84** | **0.77** | **0.71** | **0.816** | **0.815** |
 
-- **The bigger reader gains most where the small one lacked knowledge:** RAG +0.12, closed-book chat +0.10.
-- **Its own judge becomes useful on chat:** 0.73 against 0.52.
-- **The 4B head ships too:** `heads/omni_qwen3_4b.npz`, trained on these 1,800 replies.
-  - For 1.7B, going from 1,800 to all 5,107 replies added 0.03 zero-label. A 4B head on the full corpus should reach about 0.80; this is an estimate, not a measurement.
-- **Cost:** about 2.4× the 1.7B compute, ≈ $0.035 per 1,000 checks on a GPU by the same estimate.
-- **Two tiers:**
+- **Accuracy is still rising with reader size**, most where the small reader lacked knowledge: RAG +0.08 and closed-book chat +0.10 from 1.7B to 8B.
+- **Heads ship for all three:** `heads/omni_qwen3_{1p7b,4b,8b}.npz`.
+- **Tiers:**
   - 1.7B for cheap screening of every reply;
-  - 4B where accuracy matters more than the last cent.
+  - 8B where accuracy matters most, at about 5× the compute.
 
-### A real onboarding, through the CLI (`results/omni/demo_covid/`)
+### RAG: adding an NLI cross-encoder
 
-The pipeline a customer would run, on a domain the head never saw:
-- **Head:** trained on the other 20 domains, leaving out CovidQA (biomedical papers, long passages).
-- **Data:** fresh HaluBench CovidQA replies, none of them in the corpus.
-  - `onboard` read 200 unlabelled replies, then 100 labelled ones (51 clean).
-  - `evaluate` scored 300 further replies (50% wrong).
+For replies that come with documents, two small grounding cross-encoders score the reply against the documents:
+Vectara HHEM-2.1-open (reply level) and MiniCheck-RoBERTa-Large (worst sentence). Their mean is one more
+label-free expert (`experiments/omni_nli.py`, `results/omni/rag_reader_plus_nli.json`). On 1,200 grounded replies
+(86-149 per RAG domain), held out, zero labels, with the 1.7B reader:
 
-| profile | AUROC | false alarms (target ≤ 10%, 95%) | wrong caught | precision |
-|---|---|---|---|---|
-| universal head | 0.720 | n/a | n/a | n/a |
-| profiled on 200 unlabelled replies | 0.720 | n/a | n/a | n/a |
-| **+ 100 labels (adapted, calibrated)** | **0.752** | **3.3%** | 6.7% | 67% |
+| | reader | NLI | **reader + NLI (z-sum)** |
+|---|---|---|---|
+| mean over 10 RAG domains | 0.663 | 0.682 | **0.723** |
+| RAGTruth QA / summary | 0.56 / 0.56 | 0.78 / 0.80 | 0.72 / 0.72 |
+| CovidQA / FinanceBench | 0.78 / 0.59 | 0.77 / 0.64 | 0.86 / 0.67 |
 
-- **The guarantee held:** 3.3% false alarms against the 10% target.
-- **On this domain it held at very low recall.** At 0.75 AUROC a 10% false-alarm threshold set from 51 clean replies sits high.
-- **This is the trade-off the product has to state.** On hard domains, use the 4B tier, or accept more false alarms for more recall.
-- **Speed:** 7.3 s a reply on 2 CPU threads with CovidQA's long passages (up to 2,048 tokens), against about 1 s on the corpus's median reply.
+- **The two are complementary:** +0.06 on average.
+- **Where NLI alone wins** (RAGTruth), the per-domain adaptation step should learn the weighting from labels. Equal weights are the zero-label default.
+- **Cost on CPU:** about 6-9 s a reply here (MiniCheck checks every document chunk). On a GPU, both are small encoders (0.1-0.4B) that add little next to the reader.
 
 ## Speed and cost
 
@@ -254,4 +249,11 @@ and 30-600× below an LLM judge per claim.
     correct replies it flagged, a small leak. It should be confirmed on fresh data-to-text replies.
   - This is the place for "weight-space programming": a program, or a tiny written network, for each domain's
     invariants, written once at onboarding.
+- **A written probe direction with the model trained to fit it does not transfer better** (agent B,
+  docs/omni_experiments/planted_channel.md). A fixed random direction in Qwen3-1.7B, with a LoRA trained so that the
+  direction carries "wrong", against a fitted probe on the frozen model:
+  - AUROC 0.656 vs 0.653 (6 held-out domains), 0.631 vs 0.615 (format held out); both differences within chance.
+  - Its fixed threshold did not hold a false-alarm rate on new domains: 19-47% against a 10% target.
+  - Per-domain standardisation from unlabelled replies was still the best label-free option. A stated false-alarm
+    rate still needs the domain's own clean labels.
 - **Sizes.** 125-400 replies per domain. Per-domain AUROCs carry ±0.05-0.07 confidence intervals; the 21-domain means are much tighter.
