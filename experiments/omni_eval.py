@@ -246,6 +246,39 @@ def adapt(X, y, dom, l2, ks, reps, per_domain_std, l2_prior_grid=(0.01, 0.1, 1.0
     return res
 
 
+def guarantee_curve(X, y, dom, l2, ks, reps, prevalence=0.2, fpr=0.10, conf=0.95, seed=0):
+    """Realistic onboarding: the domain's traffic has `prevalence` wrong replies; k replies are drawn uniformly and
+    labelled; only their clean ones set the threshold. Universal head on the domain's own standardisation, threshold
+    by Clopper-Pearson; false alarms and recall measured on the rest of the domain's traffic."""
+    Xs = standardise(X, dom)
+    rng = np.random.default_rng(seed)
+    out = {}
+    for g in np.unique(dom):
+        te = dom == g
+        uni = LogReg(l2).fit(Xs[~te], y[~te], balanced_weights(y[~te]))
+        sg, yg = uni.score(Xs[te]), y[te]
+        neg, pos = np.where(yg == 0)[0], np.where(yg == 1)[0]
+        n_pos = min(len(pos), int(round(len(neg) * prevalence / (1 - prevalence))))
+        out[g] = {}
+        for k in ks:
+            fa, rec, nclean = [], [], []
+            for _ in range(reps):
+                pool = np.concatenate([neg, rng.choice(pos, n_pos, replace=False)])
+                if k >= len(pool) - 30:
+                    break
+                cal = rng.choice(pool, k, replace=False)
+                rest = np.setdiff1d(pool, cal)
+                clean = sg[cal][yg[cal] == 0]
+                t = cp_threshold(clean, fpr, conf)
+                fa.append(float((sg[rest][yg[rest] == 0] >= t).mean()))
+                rec.append(float((sg[rest][yg[rest] == 1] >= t).mean()))
+                nclean.append(len(clean))
+            if fa:
+                out[g][k] = {"fpr_mean": float(np.mean(fa)), "fpr_over_12pct": float(np.mean(np.array(fa) > 0.12)),
+                             "recall": float(np.mean(rec)), "clean_labels": float(np.mean(nclean))}
+    return out
+
+
 def mean(d):
     v = [x for x in d.values() if x == x]
     return float(np.mean(v)) if v else float("nan")
@@ -353,6 +386,16 @@ def main():
             return float(np.mean(v)) if v else float("nan")
         print(f"k={k:3d}: universal {avg('universal'):.3f} fresh {avg('fresh'):.3f} prior {avg('prior'):.3f}"
               f"  guarantee fpr {avg('g_fpr'):.3f} recall {avg('g_recall'):.3f}", flush=True)
+    # 3b. realistic guarantee: uniform labelling at 20% prevalence, calibration only (no adaptation)
+    gc = guarantee_curve(X, y, dom, a.l2, [50, 100, 150], max(a.reps, 20))
+    report["guarantee_curve"] = gc
+    for k in (50, 100, 150):
+        v = [gc[g][k] for g in gc if k in gc[g]]
+        if v:
+            print(f"guarantee @ {k} uniform labels (~{np.mean([x['clean_labels'] for x in v]):.0f} clean): false alarms "
+                  f"{np.mean([x['fpr_mean'] for x in v]):.3f} (draws over 12%: {np.mean([x['fpr_over_12pct'] for x in v]):.3f})"
+                  f", recall {np.mean([x['recall'] for x in v]):.3f}  [{len(v)} domains]", flush=True)
+
     # 4. units (sentence / segment / step): localisation and worst-unit reply score, zero labels from the domain
     unit_layers = feats["mean_mid3"][1]
     Xr = build("mean+scalar", unit_layers)
