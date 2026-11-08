@@ -47,7 +47,10 @@ that have a candidate. The position is recorded as a fraction of the reply.
 | reasoning, intermediate | ProcessBench: the last "= N" of one non-final step changed. Nothing downstream is changed. | 80 |
 | reasoning, final | ProcessBench: a number inside `\boxed{}` changed | 33 (60: few boxed answers are plain numbers) |
 
-The rule-built pairs come to 377 over 12 domains. Their positions:
+The rule-built pairs come to 377 over 12 domains. They are saved, with the original, the twin, the units, the edited
+unit and span, and the position, in `results/omni/nuance_pairs_dataset.jsonl` (md5 131e9374…). It was built locally
+with no model, and the build is reproducible: two runs produce identical output. The kernel rebuilds the same set and
+adds the LLM edits. Their positions:
 
 | type | early | middle | late |
 |---|---|---|---|
