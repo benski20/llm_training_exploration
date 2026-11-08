@@ -19,11 +19,15 @@ Labels are revealed only for the replies a scheme chooses.
       diversity         k-center greedy (farthest first) in the standardised expert-score space
 
 (b) GUARANTEE (threshold for <= 10% false alarms with 95% confidence). Per domain and draw: a pool with all clean
-    replies and wrong ones at 20% prevalence (as judge_calibration_sim.py); the pool is the traffic the promise is
-    about (finite-population frame): every scheme is scored by its realised false-alarm rate on ALL clean replies of
-    the pool and recall on all wrong ones. Schemes, B labels:
+    replies and wrong ones at 20% prevalence (as judge_calibration_sim.py; the same 14 domains). The pool is the
+    traffic the promise is about; every scheme is scored by its realised false-alarm rate on ALL clean replies of the
+    pool and recall on all wrong ones. Two frames:
+      bootstrap   labels drawn WITH replacement (traffic = the pool's empirical distribution: a large population,
+                  as a customer with thousands of unlabelled replies) -- the primary frame
+      finite      labels drawn without replacement from the pool
+    Schemes, B labels:
       uniform           B uniform labels, Clopper-Pearson (CP) threshold on the clean ones (shipped protocol)
-      uniform-rest      the same at B = 100, scored on the unlabelled rest (exactly the shipped baseline's frame)
+      uniform-rest      the same at B = 100, scored on the unlabelled rest (the shipped baseline's frame; finite only)
       lowest-first      the B replies with the lowest score (the stack's "most likely clean"), CP on the clean ones
       judge-clean-first the B replies the external judges most believe correct, CP on the clean ones
       strat(q, f)       two strata from the UNLABELLED scores: H = top q of the pool, L = the rest; f*B labels drawn
@@ -34,6 +38,7 @@ Labels are revealed only for the replies a scheme chooses.
                         d1 = 0.03, d2 = d3 = 0.01 (Bonferroni, total 0.05); thresholds scanned from the top
                         (fixed-sequence), so the bound holds simultaneously. P(H), P(L) are the stratum shares of the
                         unlabelled traffic (known: scoring unlabelled replies is free). Infeasible -> flag nothing.
+      strat-cond(q, f)  the conditional form FAR = P(H | clean) * P(s >= t | clean, H), same strata
       ipw-kish(q, f)    the same stratified sample, inverse-probability-weighted FAR estimate, CP on the Kish effective
                         sample size (approximate, no finite-sample proof: tested for validity)
     Reported per scheme and B: mean realised false alarms, share of draws over 10% / 12%, recall, feasible share.
