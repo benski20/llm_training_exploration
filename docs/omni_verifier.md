@@ -157,20 +157,30 @@ The same corpus, heads and protocol, with only the reader changed (`results/omni
 - **The reader's own judge collapses at 0.6B** (0.53 against 0.64).
 - **Closed-book chat falls to chance** (0.52).
 
-**Bigger readers, full corpus** (Kaggle T4, `kaggle/omni/scale_readers.py`, `results/omni/final_q4b_full.json`,
-`final_q8b.json`, docs/omni_experiments/scale_readers.md). Same 5,107 replies and protocol:
+**Bigger readers, full corpus** (Kaggle 2× T4, `kaggle/omni/scale_readers.py`, `results/omni/final_q*.json`,
+docs/omni_experiments/scale_readers.md). Same 5,107 replies and protocol. fp16 on T4 was checked: no overflow,
+cosine ≥ 0.99999 to fp32, and the 1.7B GPU rerun reproduces the CPU result exactly.
 
-| reader | zero labels, all | reasoning | long-form | RAG | closed-book chat | 50 labels | 100 labels |
-|---|---|---|---|---|---|---|---|
-| Qwen3-1.7B | 0.727 | 0.85 | 0.75 | 0.69 | 0.61 | 0.742 | 0.742 |
-| Qwen3-4B | 0.778 | 0.89 | 0.79 | 0.75 | 0.68 | 0.798 | 0.793 |
-| **Qwen3-8B** | **0.805** | **0.91** | **0.84** | **0.77** | **0.71** | **0.816** | **0.815** |
+| reader | zero labels: all | reasoning | long-form | RAG | chat | 50 labels | guarantee @ 100 uniform labels: false alarms / caught | T4-seconds / reply |
+|---|---|---|---|---|---|---|---|---|
+| Qwen3-1.7B | 0.728 | 0.85 | 0.75 | 0.69 | 0.61 | 0.744 | 5.2% / 28% | 0.29 |
+| Qwen3-4B | 0.778 | 0.89 | 0.79 | 0.75 | 0.68 | 0.798 | 4.9% / 40% | 0.72 |
+| **Qwen3-8B** | **0.805** | **0.91** | **0.84** | **0.77** | **0.71** | **0.816** | **4.9% / 47%** | 1.93 |
+| Qwen3-14B (nf4) | 0.820 | 0.91 | 0.86 | 0.79 | 0.71 | 0.842 | 4.7% / 49% | 3.18 |
 
-- **Accuracy is still rising with reader size**, most where the small reader lacked knowledge: RAG +0.08 and closed-book chat +0.10 from 1.7B to 8B.
-- **Heads ship for all three:** `heads/omni_qwen3_{1p7b,4b,8b}.npz`.
-- **Tiers:**
-  - 1.7B for cheap screening of every reply;
-  - 8B where accuracy matters most, at about 5× the compute.
+- **The guarantee holds at every size**, and what it buys grows with the reader. At a held ≤ 10% false-alarm rate it catches 28% of wrong replies with 1.7B and 47% with 8B.
+- **The reader's own judge gains the most from scale** (0.64 → 0.78 at 8B). On chat, the 8B judge alone (0.75) beats the combined score (0.71): weight it up there.
+- **DROP and FinanceBench stay at 0.5-0.65 at every size.** Numbers in tables need computation (see Limits).
+- **Tiers** (T4 at ~$0.35/hour, measured unbatched seconds; batching would lower these):
+
+  | tier | reader | cost per 1,000 checks | use |
+  |---|---|---|---|
+  | budget | 1.7B | ≈ $0.03 | screening, math |
+  | default | 4B | ≈ $0.07 | most traffic |
+  | premium | 8B | ≈ $0.19 on 2× T4; ≈ $0.09 on one 24 GB GPU (estimate) | RAG, long-form, high stakes |
+
+  14B adds +0.015 over 8B at 1.6× the cost: not a tier.
+- **Heads:** `heads/omni_qwen3_{1p7b,4b,8b}.npz`. The 4B and 8B heads are trained on the full corpus.
 
 ### RAG: adding an NLI cross-encoder
 

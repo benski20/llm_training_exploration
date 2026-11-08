@@ -1,4 +1,4 @@
-# Reader scaling on GPU: Qwen3 1.7B, 4B and 8B on the full corpus
+# Reader scaling on GPU: Qwen3 1.7B, 4B, 8B and 14B (4-bit) on the full corpus
 
 **Question.** How does omni-verifier accuracy grow with the frozen reader, on the full corpus? Before this run, 4B had been
 measured on a 1,800-reply subset only, because CPU extraction took 5-8 s a reply.
@@ -26,7 +26,7 @@ measured on a 1,800-reply subset only, because CPU extraction took 5-8 s a reply
 
 ## Results (held-out domains, AUROC for "wrong")
 
-Results files: `results/omni/final_q4b_full.json` and `final_q8b.json`. The 1.7B numbers are the repo's CPU run
+Results files: `results/omni/final_q4b_full.json`, `final_q8b.json` and `final_q14b_nf4.json`. The 1.7B numbers are the repo's CPU run
 (`final_q17_noev`); the GPU rerun is within ±0.01 of it, and its outputs are in `results/kaggle/omni-scale-readers/`.
 
 | format | reader | zero labels | reader's own judge | 25 labels | 50 labels | 100 labels | guarantee, 100 uniform labels: false alarms / caught |
@@ -34,18 +34,23 @@ Results files: `results/omni/final_q4b_full.json` and `final_q8b.json`. The 1.7B
 | **all 21** | 1.7B | 0.728 | 0.639 | 0.736 | 0.744 | 0.742 | 5.2% / 28% |
 | | 4B | 0.778 | 0.719 | 0.793 | 0.798 | 0.793 | 4.9% / 40% |
 | | **8B** | **0.805** | **0.779** | **0.814** | **0.816** | **0.815** | **4.9% / 47%** |
+| | 14B (nf4) | 0.820 | 0.804 | 0.838 | 0.842 | 0.840 | 4.7% / 49% |
 | reasoning (4) | 1.7B | 0.849 | 0.741 | 0.847 | 0.850 | 0.852 | 5.3% / 45% |
 | | 4B | 0.885 | 0.825 | 0.885 | 0.886 | 0.886 | 4.2% / 56% |
 | | 8B | 0.906 | 0.884 | 0.905 | 0.904 | 0.904 | 5.7% / 59% |
+| | 14B (nf4) | 0.906 | 0.886 | 0.904 | 0.905 | 0.904 | 5.4% / 60% |
 | long-form (5) | 1.7B | 0.751 | 0.637 | 0.765 | 0.770 | 0.727 | 5.5% / 37% |
 | | 4B | 0.794 | 0.678 | 0.810 | 0.815 | 0.737 | 4.9% / 41% |
 | | 8B | 0.839 | 0.801 | 0.837 | 0.836 | 0.796 | 4.7% / 55% |
+| | 14B (nf4) | 0.855 | 0.838 | 0.849 | 0.852 | 0.799 | 4.6% / 60% |
 | RAG (10) | 1.7B | 0.691 | 0.618 | 0.706 | 0.718 | 0.727 | 5.0% / 19% |
 | | 4B | 0.746 | 0.695 | 0.767 | 0.772 | 0.783 | 5.2% / 38% |
 | | 8B | 0.767 | 0.732 | 0.783 | 0.788 | 0.798 | 4.6% / 44% |
+| | 14B (nf4) | 0.790 | 0.764 | 0.829 | 0.833 | 0.842 | 4.4% / 47% |
 | closed-book chat (2) | 1.7B | 0.613 | 0.538 | 0.591 | 0.594 | 0.615 | 5.2% / 11% |
 | | 4B | 0.679 | 0.729 | 0.695 | 0.707 | 0.711 | 5.2% / 12% |
 | | 8B | 0.707 | 0.750 | 0.731 | 0.730 | 0.740 | 4.7% / 20% |
+| | 14B (nf4) | 0.714 | 0.754 | 0.720 | 0.738 | 0.743 | 4.2% / 22% |
 
 **How to read the table.**
 - The label columns are k balanced labels, with the expert weights refitted (omni_final's adaptation).
@@ -76,15 +81,19 @@ Results files: `results/omni/final_q4b_full.json` and `final_q8b.json`. The 1.7B
 | 1.7B | 0.29 | 0.29 | 14 min on 2 workers | 0.03 |
 | 4B | 0.72 | 0.72 | 33 min on 2 workers | 0.07 |
 | 8B (2 T4s, layers split) | 0.97 | 1.93 | 85 min | 0.19 (≈ 0.09 on one 24 GB GPU) |
+| 14B nf4 4-bit (2 T4s) | 1.59 | 3.18 | 140 min | 0.31 |
 
 - Timing is the wall time inside `Reader.features` per reply.
 - 1.7B and 4B ran two workers at once, sharing the CPU.
 - 8B in fp16 does not fit one T4. On a single L4 or A10 (24 GB) it would cost about one GPU-second a reply.
 
-**Qwen3-14B (nf4 4-bit, optional): no result.**
-- **One T4 ran out of memory** after about 2,500 replies, on the longest replies' logits, at about 1.8 s a reply.
-- **The retry across both T4s could not start** (`scale_readers.py` now gives 14B both GPUs). The shared account was at its
-  GPU-session limit.
+**Qwen3-14B in nf4 4-bit (bitsandbytes, fp16 compute), across both T4s** (`results/omni/final_q14b_nf4.json`;
+head in `results/kaggle/omni-scale-q14b/heads/omni_qwen3_14b_nf4.npz`).
+- **Two T4s are required.** On one T4 it ran out of memory on the longest replies' logits.
+- **Zero labels: 0.820** (+0.015 over 8B).
+- **With labels it gains more:** 0.842 at 50 labels, and RAG 0.833 at 50 labels, 0.842 at 100.
+- **Reasoning is saturated** at 0.906.
+- **The cost is 1.6× that of 8B.** The returns are now diminishing.
 
 ## Recommendation
 
@@ -93,10 +102,13 @@ Results files: `results/omni/final_q4b_full.json` and `final_q8b.json`. The 1.7B
 | screening (every reply) | 1.7B | 0.73 | 28% | ≈ $0.03 / 1k |
 | **default** | **4B** | 0.78 | 40% | ≈ $0.07 / 1k |
 | accuracy (RAG, long-form, knowledge, high stakes) | 8B | 0.81 | 47% | ≈ $0.09 / 1k on one 24 GB GPU, ≈ $0.19 on T4s |
+| (not worth a tier) | 14B nf4 | 0.82 | 49% | ≈ $0.31 / 1k on T4s |
 
 - **Make 4B the default.** It costs 2.5× the 1.7B compute and adds +0.05 zero-label and about 1.5× the recall at a held
   false-alarm rate.
 - **Make 8B the premium tier.** Over 4B it adds about another +0.03, and recall on long-form rises from 41% to 55%.
+- **Do not make 14B a tier.** 4-bit 14B adds +0.015 zero-label over 8B, or +0.025 at 50 labels, for about 1.6× the cost.
+  Keep it in mind for RAG customers who label 50 or more replies.
 - **Use 1.7B only where cost dominates,** or for math and reasoning, where it is already at 0.85.
 
 Heads: `heads/omni_qwen3_4b.npz` (now trained on the full 5,107 replies) and `heads/omni_qwen3_8b.npz`.
