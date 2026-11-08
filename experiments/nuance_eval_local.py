@@ -61,6 +61,9 @@ def main():
             fd = [f for f in fd if f is not None]
             print(f"profile {d}: {len(fd)} replies read", flush=True)
         profiles[d] = v.profile(fd, d)                      # labels unused
+        del fd
+        import gc
+        gc.collect()
     out, t0 = [], time.time()
     for k, p in enumerate(pairs):
         rec = {"pid": p["pid"], "type": p["type"], "format": p["format"], "domain": p["domain"], "third": p["third"],
