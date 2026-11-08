@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from omni_eval import auroc, cp_threshold  # noqa: E402
 
 ALPHA, CONF = 0.10, 0.95
+MIN_CLEAN = 29            # (1 - 0.1)^29 < 0.05: fewer clean replies cannot carry the guarantee
 
 
 def z(v):
@@ -170,11 +171,12 @@ def main():
                 continue
             res = {}
 
-            def add(name, t, rest_c, rest_w):
+            def add(name, t, rest_c, rest_w, n_clean=None):
+                """n_clean: size of the set a CP threshold was set on (feasible = a guarantee is possible: >= 29)."""
                 r = res.setdefault(name, {"fa": [], "rc": [], "feasible": []})
                 r["fa"].append(float((rest_c >= t).mean()))
                 r["rc"].append(float((rest_w >= t).mean()))
-                r["feasible"].append(bool(np.isfinite(t)))
+                r["feasible"].append(bool(np.isfinite(t)) and (n_clean is None or n_clean >= MIN_CLEAN))
 
             for _ in range(a.draws):
                 pool = np.concatenate([neg, rng.choice(wr, npos, replace=False)])
@@ -182,21 +184,21 @@ def main():
                 rest = np.setdiff1d(pool, cal)
                 rc_, rw_ = s_dom[rest][yd[rest] == 0], s_dom[rest][yd[rest] == 1]
                 s, yc = s_dom[cal], yd[cal]
-                add("human", cp_or_inf(s[yc == 0]), rc_, rw_)
+                add("human", cp_or_inf(s[yc == 0]), rc_, rw_, int((yc == 0).sum()))
                 for k in keys:
                     lg = jl[k][idx][cal]
                     qc = 1 / (1 + np.exp(-lg))
                     A = qc >= 0.5
-                    add(f"{k}:naive", cp_or_inf(s[A]), rc_, rw_)
+                    add(f"{k}:naive", cp_or_inf(s[A]), rc_, rw_, int(A.sum()))
                     for p in (0.9, 0.99):
-                        add(f"{k}:conf>={p}", cp_or_inf(s[qc >= p]), rc_, rw_)
+                        add(f"{k}:conf>={p}", cp_or_inf(s[qc >= p]), rc_, rw_, int((qc >= p).sum()))
                     top = np.argsort(-lg)[: int(round(0.3 * N))]
-                    add(f"{k}:conf-top30", cp_or_inf(s[top]), rc_, rw_)
+                    add(f"{k}:conf-top30", cp_or_inf(s[top]), rc_, rw_, len(top))
                     perm = rng.permutation(N)
-                    for m in (0, 10, 20):
+                    for m in (0, 10, 20, 40):
                         lab = perm[:m]
                         add(f"{k}:ppi-{m}", ppi_threshold(s, qc, lab, yc[lab]), rc_, rw_)
-                    for m in (10, 20):
+                    for m in (10, 20, 40):
                         iA, iB = rng.permutation(np.where(A)[0]), rng.permutation(np.where(~A)[0])
                         la, lb = iA[: m // 2], iB[: m - min(m // 2, len(iA))]
                         add(f"{k}:bound-{m}", bound_threshold(s, A, (int(yc[la].sum()), len(la)),

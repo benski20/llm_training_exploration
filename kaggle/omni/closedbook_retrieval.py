@@ -30,6 +30,7 @@ import numpy as np
 
 SRC = "/kaggle/working/src"
 WORK = "/kaggle/working"
+LI = [2, 3, 4]                                              # the head's layer_idx (meta)
 DOMAINS = ("truthfulqa", "halueval_general", "felm_wk", "felm_science")
 CORPUS_MD5 = "b598848a44e70308b64ae5f0072b6eb0"
 T0 = time.time()
@@ -206,19 +207,19 @@ def kernel(a):
     th.start()
     # ---- models
     import torch
-    from vt.omni import OmniVerifier, make_item
-    v = OmniVerifier.load(os.path.join(SRC, "heads", "omni_qwen3_8b.npz"))
-    v.attach_reader()
-    log("reader on", sorted({str(p.device) for p in v.reader.model.parameters()}))
+    from vt.omni import Reader, make_item
+    rd = Reader("Qwen/Qwen3-8B")                             # layers 9 14 20 25 31 36, as heads/omni_qwen3_8b.npz
+    assert rd.layers == [9, 14, 20, 25, 31, 36], rd.layers
+    log("reader on", sorted({str(p.device) for p in rd.model.parameters()}))
     nli = GPUNLI("cuda:1" if torch.cuda.device_count() > 1 else "cuda:0")
     log("NLI ready; HHEM on", nli.hhem_dev)
-    out = {k: [] for k in ("ids", "X_cb", "j_cb", "X_doc", "j_doc", "nli", "t_ret", "t_cb", "t_doc", "t_nli", "req",
+    out = {k: [] for k in ("ids", "H_cb", "SC_cb", "H_doc", "SC_doc", "nli", "t_ret", "t_cb", "t_doc", "t_nli", "req",
                            "ndocs")}
-    U = {"cb": [], "cb_row": [], "doc": [], "doc_row": []}
+    U = {"cb": [], "cb_sc": [], "cb_row": [], "doc": [], "doc_sc": [], "doc_row": []}
 
     def save():
         np.savez(os.path.join(WORK, "cb_scores.npz"), **{k: np.array(x) for k, x in out.items()},
-                 **{f"U_{k}": (np.concatenate(x) if k in ("cb", "doc") and x else np.array(x)) for k, x in U.items()},
+                 **{f"U_{k}": (np.concatenate(x) if k in ("cb", "doc", "cb_sc", "doc_sc") and x else np.array(x)) for k, x in U.items()},
                  nli_keys=np.array(["hhem", "mc4", "mc_all", "mc_mean"]))
         json.dump({str(k): x for k, x in ev.items()}, open(os.path.join(WORK, "evidence.json"), "w"))
         json.dump({"errors": dict(wiki.errors), "requests": wiki.n_requests, "corpus_md5": md5, "n": len(out["ids"]),
@@ -230,7 +231,7 @@ def kernel(a):
 
     for k, r in enumerate(rows):
         t = time.time()
-        f = v.reader.features(r)                              # closed book, exactly as the corpus was read
+        f = rd.features(r)                              # closed book, exactly as the corpus was read
         sync()
         t_cb = time.time() - t
         ready[r["id"]].wait()
@@ -238,7 +239,7 @@ def kernel(a):
         q = r["messages"][-1]["content"]
         it = make_item(r["response"], q, e["docs"], units=[tuple(u) for u in r["units"]])
         t = time.time()
-        g = v.reader.features(it)
+        g = rd.features(it)
         sync()
         t_doc = time.time() - t
         t = time.time()
@@ -248,10 +249,9 @@ def kernel(a):
         if f is None or g is None:
             continue
         out["ids"].append(r["id"])
-        out["X_cb"].append(v.reply_vector(f))
-        out["j_cb"].append(f["j_logit"])
-        out["X_doc"].append(v.reply_vector(g))
-        out["j_doc"].append(g["j_logit"])
+        for tag, ff in (("cb", f), ("doc", g)):              # the head's inputs, raw: (mean, judge) x layers LI
+            out[f"H_{tag}"].append(np.stack([ff["r_mean"][LI], ff["j_state"][LI]]).astype(np.float16))
+            out[f"SC_{tag}"].append(np.concatenate([ff["r_sc"], [ff["j_logit"]]]).astype(np.float32))
         out["nli"].append([n["hhem"], n["mc4"], n["mc_all"], n["mc_mean"]])
         out["t_ret"].append(e["t"])
         out["t_cb"].append(t_cb)
@@ -260,9 +260,10 @@ def kernel(a):
         out["req"].append(e["requests"])
         out["ndocs"].append(len(e["docs"]))
         for tag, ff in (("cb", f), ("doc", g)):
-            M = v.unit_matrix(ff)
-            U[tag].append(M.astype(np.float32))
-            U[f"{tag}_row"] += [r["id"]] * len(M)
+            if ff["units"]:
+                U[tag].append(np.stack([u["mean"][LI] for u in ff["units"]]).astype(np.float16))
+                U[f"{tag}_sc"].append(np.stack([u["sc"] for u in ff["units"]]).astype(np.float32))
+            U[f"{tag}_row"] += [r["id"]] * len(ff["units"])
         if k % 25 == 0 or k == len(rows) - 1:
             save()
             log(f"{k + 1}/{len(rows)}", r["domain"], f"ret {e['t']:.1f}s ({e['requests']} req, {len(e['docs'])} docs)",
@@ -316,6 +317,14 @@ def analyse(a):
     E = np.load(a.expert, allow_pickle=True)
     epos = {int(i): k for k, i in enumerate(E["ids"])}
     ids = S["ids"].astype(int)
+    from vt.omni import _project
+    X, UX = {}, {}                                           # head inputs (OmniVerifier.reply_vector / unit_matrix)
+    for tag in ("cb", "doc"):
+        H = S[f"H_{tag}"].astype(np.float32).reshape(len(ids), -1)
+        X[tag] = np.concatenate([_project(H, art["h_mu"], art["h_sd"], art["pca_mu"], art["pca_V"]), S[f"SC_{tag}"]], 1)
+        Uh = S[f"U_{tag}"].astype(np.float32).reshape(len(S[f"U_{tag}_row"]), -1)
+        UX[tag] = np.concatenate([_project(Uh, art["uh_mu"], art["uh_sd"], art["upca_mu"], art["upca_V"]),
+                                  S[f"U_{tag}_sc"]], 1)
     dom = np.array([rows[i]["domain"] for i in ids])
     y = np.array([rows[i]["label"] for i in ids])
     nk = list(S["nli_keys"])
@@ -335,8 +344,8 @@ def analyse(a):
         k = [epos[i] for i in di]
         ex["cb_lodo_reply"], ex["cb_lodo_unit"], ex["cb_lodo_judge"] = E["reply"][k], E["worst_unit"][k], E["judge"][k]
         for tag in ("cb", "doc"):
-            r_, u_ = head_scores(art, S[f"X_{tag}"][m], S[f"U_{tag}_row"], S[f"U_{tag}"], di)
-            ex[f"{tag}_reply"], ex[f"{tag}_unit"], ex[f"{tag}_judge"] = r_, u_, -S[f"j_{tag}"][m]
+            r_, u_ = head_scores(art, X[tag][m], S[f"U_{tag}_row"], UX[tag], di)
+            ex[f"{tag}_reply"], ex[f"{tag}_unit"], ex[f"{tag}_judge"] = r_, u_, -S[f"SC_{tag}"][m, -1]
         for j, kk in enumerate(nk):
             ex[f"nli_{kk}"] = NL[m, j]
         ex["nli"] = (NL[m, nk.index("hhem")] + NL[m, nk.index("mc4")]) / 2           # NLIScorer as shipped
