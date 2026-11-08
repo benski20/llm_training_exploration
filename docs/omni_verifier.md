@@ -121,6 +121,8 @@ final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
 | group DRO, CORAL, projecting out domain directions | −0.05 to 0.00 | no |
 | MLP head, evidence shift (1.7B), number-grounding checker for finance | −0.02 / ≈0.57 / 0.48 | no |
 | **hand-written decision circuit** (`vt/omni_circuit.py`): named evidence neurons (judges, internal, weakest step gated on reasoning, grounding gated on documents, hard rule violations), weights set by hand | 0.843 = 0.843 for the learned sum; ±0.01 per format | **ship for interpretability**: every verdict lists the evidence that drove it (`evidence` in the API response). Escalating the 10-20% of replies where judges and internals disagree does not help (errors 55% vs 45% there) |
+| similarity-weighted training at onboarding (MMD or kernel-mean-matching weights from the new domain's *unlabelled* replies) | +0.008 to +0.011 zero-label (0.712 → 0.720-0.723), 14-18 of 21 domains improve, mostly long-form | small, free: adopt as the default head fit |
+| label-free anomaly scores (Mahalanobis, kNN, isolation forest); label-free direction re-estimation (GMM, optimal-transport pseudo-labels) | anomaly ≈ 0.50 alone, −0.05 to −0.09 added; re-estimation ±0.0 | no: wrong replies are not outliers |
 | retrieve Wikipedia, then ground, for closed-book chat (agent G; 1,009 replies, 8B) | +0.001 (0.734 → 0.735) at about 10× the cost; NLI on retrieved passages 0.54 | no: the evidence rarely holds the deciding fact (4 of 40 wrong replies), and many chat errors are task failures with nothing to look up |
 
 ## How it works (`vt/omni.py`)
