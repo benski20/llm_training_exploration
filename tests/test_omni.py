@@ -83,3 +83,18 @@ def test_flags_and_extras_enter_the_score():
         f["judges"] = [float(y[dom == "d"][k]) * 2 - 1]
     prof2 = v.profile(fd, "d")
     assert auc(v.score(prof2, fd), y[dom == "d"]) > auc(v.score(prof, fd), y[dom == "d"])
+
+
+def test_stratified_guarantee_holds():
+    from vt.omni import stratified_plan, stratified_threshold
+    rng = np.random.default_rng(3)
+    fails, feas = 0, 0
+    for _ in range(150):
+        y = (rng.random(400) < 0.2).astype(int)
+        s = rng.normal(0, 1, 400) + 1.2 * y
+        H, lab = stratified_plan(s, 50, seed=int(rng.integers(1e9)))
+        t = stratified_threshold(s, H, lab, y[lab])
+        if np.isfinite(t):
+            feas += 1
+            fails += (s[y == 0] >= t).mean() > 0.10
+    assert feas > 100 and fails <= 0.06 * feas

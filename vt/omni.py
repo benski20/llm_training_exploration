@@ -640,3 +640,53 @@ class JudgeScorer:
         with self.torch.no_grad():
             lp = self.model(input_ids=ids.to(dev), logits_to_keep=1).logits[0, -1].float().log_softmax(-1)
         return float(self.torch.logsumexp(lp[self.no], 0) - self.torch.logsumexp(lp[self.yes], 0))
+
+
+# ------------------------------------------------------------------ cheaper onboarding: stratified labelling
+# (experiments/novel_active_labels.py, docs/omni_experiments/novel_active_labels.md: valid on 14 held-out domains,
+# feasible from 30 labels, 50 stratified labels ~ 70 uniform)
+
+def stratified_plan(pool_scores, budget, q=0.15, f=0.5, seed=0):
+    """which unlabelled replies to send for labelling: f * budget uniformly among the top q of the pool's scores
+    (stratum H), the rest uniformly among the others. Returns (H mask over the pool, indices to label)."""
+    s = np.asarray(pool_scores, float)
+    H = s >= np.quantile(s, 1 - q)
+    rng = np.random.default_rng(seed)
+    iH, iL = np.where(H)[0], np.where(~H)[0]
+    kH = min(len(iH), int(round(f * budget)))
+    kL = min(len(iL), budget - kH)
+    return H, np.concatenate([rng.choice(iH, kH, replace=False), rng.choice(iL, kL, replace=False)])
+
+
+def stratified_threshold(pool_scores, H, labelled, labels, fpr=0.10, confidence=0.95, split=(0.6, 0.2, 0.2)):
+    """threshold whose false-alarm rate on the pool's population is <= fpr with the stated confidence, from a
+    stratified labelled sample (stratified_plan). Conservative and exact (finite sample):
+        FAR(t) <= P(H) * CPup(clean labelled in H scoring >= t) / [P(L) * CPlo(clean share in L) + P(H) * CPlo(clean
+        share in H)],
+    the failure probability 1 - confidence split over the three bounds (Bonferroni); thresholds are scanned from the
+    top (fixed sequence), and t lies in H. Returns inf (flag nothing) when infeasible."""
+    s, H = np.asarray(pool_scores, float), np.asarray(H, bool)
+    lab, y = np.asarray(labelled), np.asarray(labels)
+    inH = H[lab]
+    a = 1 - confidence
+    d1, d2, d3 = (a * x for x in split)
+    pH = H.mean()
+    pL = 1 - pH
+
+    def lo(k, n, d):
+        return 0.0 if n == 0 or k == 0 else float(beta_dist.ppf(d, k, n - k + 1))
+
+    mH, mL = int(inH.sum()), int((~inH).sum())
+    den = pL * lo(int((y[~inH] == 0).sum()), mL, d2) + pH * lo(int((y[inH] == 0).sum()), mH, d3)
+    if den <= 0 or mH == 0:
+        return float("inf")
+    sc = np.sort(s[lab][inH & (y == 0)])[::-1]
+    best = None
+    for k in range(len(sc) + 1):                     # k clean labelled replies in H at or above the threshold
+        up = 1.0 if k == mH else float(beta_dist.ppf(1 - d1, k + 1, mH - k))
+        if pH * up / den > fpr:
+            break
+        best = k
+    if best is None:
+        return float("inf")
+    return float(sc[best] + 1e-9) if best < len(sc) else float(s[H].min())
