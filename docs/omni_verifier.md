@@ -75,8 +75,31 @@ Within each domain, the domain's correct replies are scored against the wrong re
 
 - **A single subtle error in a long answer is caught about as well as the average case.**
 - **Late errors and olympiad problems cost a few points.**
-- **The weak slice is subtle factual errors in long-form world-knowledge answers.** A minimal-pair stress test (one
-  controlled edit per correct reply, by error type) is in docs/omni_experiments/nuance_pairs.md.
+- **The weak slice is subtle factual errors in long-form world-knowledge answers.**
+
+**Minimal pairs: one subtle edit** (`results/omni/nuance_pairs_dataset.jsonl`, 377 pairs from correct replies in 12
+domains; `experiments/nuance_eval_local.py`, `results/omni/nuance_pairs_q17_cpu.json`). Each correct reply has a twin
+that differs in one sentence: a number, a qualifier (always/usually, all/some), a negation, a reasoning step, or the
+final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
+
+| edit | twin scored above its original | AUROC over all replies | edited sentence ranked worst / in top 3 (chance top-1) |
+|---|---|---|---|
+| **all** | **90%** | 0.64 | 37% / **79%** (22%) |
+| negation | 92% | 0.68 | 53% / 94% |
+| number | 87% | 0.59 | 46% / 80% |
+| qualifier | 86% | 0.58 | 37% / 74% |
+| reasoning, intermediate step | 91% | 0.68 | 14% / 73% |
+| reasoning, final answer | 100% | 0.77 | 30% / 64% |
+
+- **Relative judgement is strong.** One changed word raises the score of the same reply nine times in ten, and the
+  edited sentence is among the top 3 suspects four times in five. That serves best-of-N selection, regression tests
+  of a model or prompt change, and pointing a reviewer at the sentence.
+- **Absolute detection of a single subtle edit is moderate at this tier** (0.64). A one-word error in a long reply often
+  scores below a *different* correct reply.
+- **Caveat:** the shipped head was trained on the corpus, so originals are training replies and twins are not, which
+  may flatter the pairwise figure.
+- **The accuracy tier on these pairs is not measured yet.** The 8B reader, the judges and NLI are ready in
+  `kaggle/omni/nuance_pairs.py`, which needs a GPU (the Kaggle weekly quota ran out).
 
 ## What moved accuracy, and what did not (all held out, measured)
 
