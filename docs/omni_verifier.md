@@ -65,6 +65,7 @@ Every number is on domains whose labels were never used for training
 |---|---|---|
 | bigger reader: 1.7B → 4B → 8B (→ 14B) | 0.73 → 0.78 → 0.81 (→ 0.82) | **largest lever**; 8B is the premium tier |
 | external judges read in one pass (Qwen3-14B, phi-4; no generation) | 0.80 → 0.84 zero-label, 0.86 with 50 labels; chat 0.73 → 0.79 | **ship in the accuracy tier** |
+| **judge as an offline teacher**: at onboarding the judges label the domain's *unlabelled* replies; the 1.7B probe self-trains on them (pulled toward its universal weights) | 1.7B student 0.71 → **0.77** with zero human labels (RAG 0.68 → 0.76, chat 0.59 → 0.66); served at ≈ $0.03 per 1,000 | **ship as the cheap tier's onboarding**: the expensive judge runs once per domain, not per check |
 | 50-100 labels from the new domain (prior-pulled refit or expert weights) | +0.01 to +0.06; RAG 0.77 → 0.87 with NLI | **the onboarding step** |
 | more training domains (1 → 20) | 0.56 → 0.71 (1.7B), still rising | every customer domain helps the next |
 | NLI cross-encoders on grounded replies | +0.06 with 1.7B, +0.015 with 8B zero-label; dominant after adaptation on RAGTruth | ship for RAG |
