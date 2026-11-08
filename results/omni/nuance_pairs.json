@@ -1,0 +1,216 @@
+{
+ "status": "NOT EVALUATED: Kaggle push refused, 'Maximum weekly GPU quota of 30.00 hours reached' (2026-11-08 15:01 UTC); no local model loading allowed. Pair construction (rule-based part) and the exact-arithmetic expert (pure Python) only.",
+ "kernel": "kaggle/omni/nuance_pairs.py (smoke: --args '--smoke 3'); head fetched md5-checked from the public repo at b284b37 (bundling the 17.9 MB head makes the Kaggle push fail with HTTP 400)",
+ "rule_pairs": 377,
+ "by_type_format": {
+  "negation|longform": 45,
+  "negation|rag": 45,
+  "number|longform": 45,
+  "number|rag": 39,
+  "qualifier|longform": 45,
+  "qualifier|rag": 45,
+  "reasoning_final|reasoning": 33,
+  "reasoning_intermediate|reasoning": 80
+ },
+ "by_domain": {
+  "felm_math": 27,
+  "felm_reasoning": 27,
+  "felm_science": 27,
+  "felm_wk": 27,
+  "felm_writing": 27,
+  "halueval_dialogue": 28,
+  "pb_gsm8k": 20,
+  "pb_math": 30,
+  "pb_olympiad": 35,
+  "pb_omnimath": 28,
+  "ragtruth_qa": 59,
+  "ragtruth_summary": 42
+ },
+ "by_type_third": {
+  "negation|early": 39,
+  "negation|late": 26,
+  "negation|middle": 25,
+  "number|early": 27,
+  "number|late": 22,
+  "number|middle": 35,
+  "qualifier|early": 33,
+  "qualifier|late": 28,
+  "qualifier|middle": 29,
+  "reasoning_final|late": 33,
+  "reasoning_intermediate|early": 12,
+  "reasoning_intermediate|late": 40,
+  "reasoning_intermediate|middle": 28
+ },
+ "length_tercile_bounds_chars": [
+  550.0,
+  1197.6666666666667
+ ],
+ "median_orig_len_chars": 763.0,
+ "llm_edit_slots (entity / addition, generated in-kernel by Qwen3-8B)": {
+  "addition|longform": 72,
+  "addition|rag": 72,
+  "entity|longform": 72,
+  "entity|rag": 72
+ },
+ "llm_targets": {
+  "entity": {
+   "longform": 45,
+   "rag": 45
+  },
+  "addition": {
+   "longform": 45,
+   "rag": 45
+  }
+ },
+ "exact_arithmetic_expert (vt.mathcheck, explicit equations; part of the stack's flags)": {
+  "number": {
+   "n": 84,
+   "twin_flagged": 6,
+   "orig_flagged": 0,
+   "pair_acc": 0.536
+  },
+  "qualifier": {
+   "n": 90,
+   "twin_flagged": 0,
+   "orig_flagged": 0,
+   "pair_acc": 0.5
+  },
+  "negation": {
+   "n": 90,
+   "twin_flagged": 0,
+   "orig_flagged": 0,
+   "pair_acc": 0.5
+  },
+  "reasoning_intermediate": {
+   "n": 80,
+   "twin_flagged": 27,
+   "orig_flagged": 2,
+   "pair_acc": 0.656
+  },
+  "reasoning_final": {
+   "n": 33,
+   "twin_flagged": 2,
+   "orig_flagged": 1,
+   "pair_acc": 0.515
+  }
+ },
+ "examples": {
+  "number": [
+   {
+    "domain": "ragtruth_summary",
+    "pos": 0.017,
+    "before": "93",
+    "after": "70",
+    "context_after_edit": "Here is a 70-word summary of the article:\n\nTonee Turner, a 22-year-old artist from Pittsburgh, Penns"
+   },
+   {
+    "domain": "halueval_dialogue",
+    "pos": 0.1829,
+    "before": "1935",
+    "after": "1937",
+    "context_after_edit": "Tortilla Flat was released in 1937. It's about a group of paisanos, a small band of errant friends enjoying life and win"
+   },
+   {
+    "domain": "felm_math",
+    "pos": 0.6875,
+    "before": "20",
+    "after": "16",
+    "context_after_edit": "iple of 6 greater than 115, we need to divide 115 by 6 and find the next whole number.\n115 \u00f7 6 = 19 remainder 1 So the next whole number is 16. Therefore, the smallest multiple of 6 greater than 115 is:\n6 \u00d7 20 = 120"
+   }
+  ],
+  "qualifier": [
+   {
+    "domain": "felm_wk",
+    "pos": 0.3624,
+    "before": "later",
+    "after": "earlier",
+    "context_after_edit": "ent. Research has shown that children who attend high-quality kindergarten programs are more likely to succeed academically and socially in earlier years. Kindergarten provides children with a structured environment where they can"
+   },
+   {
+    "domain": "ragtruth_summary",
+    "pos": 0.8099,
+    "before": "many",
+    "after": "few",
+    "context_after_edit": "ng control of the city. In response, the Coalition has said that it conducted seven airstrikes in the region in the past few days. However, few analysts predict that Ramadi may soon fall to ISIS due to its strategic location and t"
+   },
+   {
+    "domain": "ragtruth_qa",
+    "pos": 0.3781,
+    "before": "higher",
+    "after": "lower",
+    "context_after_edit": "soil warms to 50 degrees F. At this temperature, the seeds will germinate within 10 days, although they may take up to 30 days or longer at lower soil temperatures. Keep the soil moist during the germination process, watering your"
+   }
+  ],
+  "negation": [
+   {
+    "domain": "ragtruth_qa",
+    "pos": 0.7624,
+    "before": "was ",
+    "after": "was not ",
+    "context_after_edit": "nt aims for what they wanted to do with Germany, and the USSR disagreed with Britain and the USA's plans. The Americans claimed that Stalin was not trying to force the USA out of Berlin, and that the blockade was Russian empire-bu"
+   },
+   {
+    "domain": "felm_wk",
+    "pos": 0.0529,
+    "before": "can ",
+    "after": "cannot ",
+    "context_after_edit": "Yes, learning foreign languages cannot improve your critical thinking skills. When you learn a new language, you are expos"
+   },
+   {
+    "domain": "ragtruth_summary",
+    "pos": 0.3077,
+    "before": "was ",
+    "after": "was not ",
+    "context_after_edit": "The White House has confirmed that Ahmed Farouq, an American and the deputy emir of al Qaeda in the Indian Subcontinent\u00a0(AQIS), was not killed in a US\u00a0counterterrorism airstrike in January. Two al Qaeda hostages, Warre"
+   }
+  ],
+  "entity": [],
+  "addition": [],
+  "reasoning_intermediate": [
+   {
+    "domain": "pb_math",
+    "pos": 0.2497,
+    "before": "5",
+    "after": "4",
+    "context_after_edit": "ector divides the opposite side into segments proportional to the adjacent sides. Therefore, \\( BD : DC = AB : AC = 5 : 4 \\). Since \\( BC = 4 \\), we can express \\( BD \\) and \\( DC \\) as: \\[ BD = \\frac{5}{9} \\times 5 = \\frac{25}{9}"
+   },
+   {
+    "domain": "pb_olympiad",
+    "pos": 0.8692,
+    "before": "2",
+    "after": "1",
+    "context_after_edit": "4 \\), so \\( y = 5 \\).\nFifth, if \\( x = 16 \\), then \\( (y-1) = 2 \\), so \\( y = 3 \\).\nSixth, if \\( x = 32 \\), then \\( (y-1) = 1 \\), so \\( y = 1 \\).\n\nAll the calculated values of \\( y \\) are positive integers. Now, we'll add them up "
+   },
+   {
+    "domain": "pb_omnimath",
+    "pos": 0.6349,
+    "before": "1729",
+    "after": "1727",
+    "context_after_edit": " 1000. \\]\n\nNow, we will check the sums of these cubes to find the smallest \\( N \\) that can be written in two different ways. First, \\( N = 1727 \\) (from the Hardy-Ramanujan number, but it is the sum of two cubes, not three).\n\nLet"
+   }
+  ],
+  "reasoning_final": [
+   {
+    "domain": "pb_olympiad",
+    "pos": 0.9823,
+    "before": "27",
+    "after": "22",
+    "context_after_edit": "\\frac{5}{4} \\]\n\nThis is consistent, so another solution is \\((18, 20, 22)\\).\n\nTherefore, the possible values of \\(a, b, c\\) are:\n\\[ \\boxed{(22, 20, 13) \\text{ and } (18, 20, 22)} \\]"
+   },
+   {
+    "domain": "pb_omnimath",
+    "pos": 0.9961,
+    "before": "2",
+    "after": "1",
+    "context_after_edit": "r in absolute value than \\(a^4 + b^2\\) and will not divide it. Thus, the only solution is \\((2, 4)\\).\n\nTherefore, the answer is:\n\\[\n\\boxed{(1, 4)}\n\\]"
+   },
+   {
+    "domain": "pb_math",
+    "pos": 0.9934,
+    "before": "2",
+    "after": "1",
+    "context_after_edit": "\\), we can find the product of \\(x\\) and \\(y\\): \\[ x \\cdot y = 1 \\cdot (-2) = -2 \\]\n\nTherefore, the product of \\(x\\) and \\(y\\) is \\(\\boxed{-1}\\)."
+   }
+  ]
+ }
+}
