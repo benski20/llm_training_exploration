@@ -34,6 +34,16 @@ LI = [2, 3, 4]                                              # the head's layer_i
 DOMAINS = ("truthfulqa", "halueval_general", "felm_wk", "felm_science")
 CORPUS_MD5 = "b598848a44e70308b64ae5f0072b6eb0"
 T0 = time.time()
+# manual spot-check of the full run (10 random wrong replies per domain, seed 0): does the retrieved evidence state the
+# fact that decides the reply is wrong? (read by hand from evidence.json; partial = the topic page, not the fact)
+SPOT_CHECK = {"truthfulqa": {"yes": 2, "partial": 1, "no": 7, "note": "pyramids / Bermuda Triangle found; most "
+                             "misconception questions retrieve off-topic pages (Chrissy Teigen 'Cravings', Grizzy & the Lemmings)"},
+              "halueval_general": {"yes": 0, "partial": 1, "no": 9, "note": "9/10 wrong replies are to tasks with no "
+                                   "retrievable fact (missing input, creative writing, arithmetic, refusals)"},
+              "felm_wk": {"yes": 2, "partial": 3, "no": 5, "note": "Saturn density, Friday-13th years found; Victoria "
+                          "Falls passage supports the wrong claim; Leicester query retrieved Cambridge"},
+              "felm_science": {"yes": 0, "partial": 2, "no": 8, "note": "technical claims (EPR line counts, Newton's "
+                               "law reasoning) are not stated in any retrieved passage"}}
 
 
 def log(*a):
@@ -392,18 +402,24 @@ def analyse(a):
     if len(feats_by_dom) >= 2:
         from vt.omni import LogReg, balanced_weights
         names = ["cb_lodo_reply", "cb_lodo_unit", "cb_lodo_judge", "doc_reply", "doc_unit", "doc_judge", "nli"]
+        sets = {"d_learned_lodo4 (all experts; doc head in-sample)": list(range(7)),
+                "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": [0, 1, 2, 5, 6],
+                "d_learned_lodo4 (closed-book LODO only: reweighting control)": [0, 1, 2]}
         for d in feats_by_dom:
             Xtr = np.concatenate([feats_by_dom[o][0] for o in feats_by_dom if o != d])
             ytr = np.concatenate([feats_by_dom[o][1] for o in feats_by_dom if o != d]).astype(float)
-            mdl = LogReg(0.1).fit(Xtr, ytr, balanced_weights(ytr))
-            rep["per_domain"][d]["combined"]["d_learned_lodo4 (all experts)"] = round(
-                auroc(mdl.score(feats_by_dom[d][0]), feats_by_dom[d][1]), 4)
-            rep["lodo_weights"][d] = dict(zip(names, [round(float(x), 3) for x in mdl.w]))
+            for nm, cols in sets.items():
+                mdl = LogReg(0.1).fit(Xtr[:, cols], ytr, balanced_weights(ytr))
+                rep["per_domain"][d]["combined"][nm] = round(auroc(mdl.score(feats_by_dom[d][0][:, cols]),
+                                                                   feats_by_dom[d][1]), 4)
+                rep["lodo_weights"].setdefault(nm, {})[d] = dict(zip([names[c] for c in cols],
+                                                                     [round(float(x), 3) for x in mdl.w]))
     keys = list(next(iter(rep["per_domain"].values()))["combined"])
     rep["mean"] = {k2: round(float(np.mean([p["combined"][k2] for p in rep["per_domain"].values()])), 4) for k2 in keys}
     ek = list(next(iter(rep["per_domain"].values()))["experts"])
     rep["mean_experts"] = {k2: round(float(np.mean([p["experts"][k2] for p in rep["per_domain"].values()])), 4) for k2 in ek}
     rep["seconds_per_reply"] = {k2: round(float(S[k2].mean()), 3) for k2 in ("t_ret", "t_cb", "t_doc", "t_nli")}
+    rep["spot_check_deciding_fact"] = SPOT_CHECK
     info = os.path.join(a.analyse, "run_info.json")
     if os.path.exists(info):
         rep["run_info"] = json.load(open(info))

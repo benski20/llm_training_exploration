@@ -150,6 +150,12 @@ def prompt_messages(it, max_chars=24000):
 
 # ---------------------------------------------------------------- generation workers
 
+def chat_ids(tok, it):
+    text = tok.apply_chat_template(prompt_messages(it), tokenize=False, add_generation_prompt=True,
+                                   enable_thinking=False)
+    return list(tok(text, add_special_tokens=False)["input_ids"])
+
+
 def gen_vllm(cfg):
     from vllm import LLM, SamplingParams
     items = [json.loads(l) for l in open(cfg["items"])]
@@ -158,10 +164,10 @@ def gen_vllm(cfg):
     tok = llm.get_tokenizer()
     prompts = []
     for it in items:
-        ids = tok.apply_chat_template(prompt_messages(it), add_generation_prompt=True, enable_thinking=False)
+        ids = chat_ids(tok, it)
         if len(ids) > 7400:          # the longest filings: keep the head of the passage
             it = dict(it, passage=it["passage"][:int(len(it["passage"]) * 7000 / len(ids))])
-            ids = tok.apply_chat_template(prompt_messages(it), add_generation_prompt=True, enable_thinking=False)
+            ids = chat_ids(tok, it)
         prompts.append({"prompt_token_ids": ids})
     sp = SamplingParams(n=cfg["k"], temperature=0.7, top_p=0.8, top_k=20, max_tokens=cfg["max_new"], seed=0)
     t = time.time()
@@ -185,10 +191,10 @@ def gen_hf(cfg):
                                                  attn_implementation="sdpa").eval()
     enc = []
     for it in items:
-        ids = tok.apply_chat_template(prompt_messages(it), add_generation_prompt=True, enable_thinking=False)
+        ids = chat_ids(tok, it)
         if len(ids) > 6000:
             it = dict(it, passage=it["passage"][:int(len(it["passage"]) * 5600 / len(ids))])
-            ids = tok.apply_chat_template(prompt_messages(it), add_generation_prompt=True, enable_thinking=False)
+            ids = chat_ids(tok, it)
         enc.append(ids)
     order = sorted(range(len(items)), key=lambda i: -len(enc[i]))
     res, t, i = {}, time.time(), 0
@@ -369,16 +375,20 @@ def stated_value(s, kind):
         t = s.replace("\\dfrac", "\\frac").replace("\\tfrac", "\\frac")
         t = re.sub(r"\\(?:text|mathrm|mbox)\{[^{}]*\}|\\[,!; ]|\\%|%|\^\\circ|\\\$", "", t)
         t = plain(t).replace("§", "")
+        if re.search(r",\s|,-|;", t):          # several answers: not compared
+            return []
         try:
             return [(evaluate(t.strip().strip(".").replace(" ", "")), 6)]
         except (ValueError, SyntaxError, ZeroDivisionError, OverflowError):
-            pass
+            return numbers(t) if re.fullmatch(r"\s*-?\$?\s*\d+(?:,\d{3})*(?:\.\d+)?\s*\w*\s*", t) else []
     return numbers(s)
 
 
 def compare(stated, kind, ans):
     """(agree, relerr or None) of one recomputed answer against the stated one; None if not comparable"""
     sv = stated_value(stated, kind)
+    if kind == "problem" and not sv:
+        return None
     vals = []
     if isinstance(ans, list):
         flat = [a for a in ans if a is not None]
@@ -403,7 +413,7 @@ def compare(stated, kind, ans):
     agree, rel = False, math.inf
     scales = (1,) if kind == "problem" else SCALES
     for x, dec in sv:
-        tol = max(0.5 * 10 ** -dec * 1.0001, 0.002 * abs(x), 1e-9) if kind == "passage" else max(1e-6, 1e-4 * abs(x))
+        tol = max(0.5 * 10 ** -dec * 1.0001, 5e-4 * abs(x), 1e-9) if kind == "passage" else max(1e-6, 1e-4 * abs(x))
         for v in vals:
             for s in scales:
                 y = v * s
@@ -500,6 +510,7 @@ def main():
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--max-new", type=int, default=640)
     ap.add_argument("--backend", default="auto", choices=["auto", "vllm", "hf"])
+    ap.add_argument("--vllm", default="vllm==0.11.0 transformers==4.57.1")
     ap.add_argument("--no-pb", action="store_true")
     ap.add_argument("--worker", default="")
     a = ap.parse_args()
@@ -526,7 +537,7 @@ def main():
     backends = ["vllm", "hf"] if a.backend == "auto" else [a.backend]
     for b in backends:
         if b == "vllm":
-            rc = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "vllm==0.10.1.1"]).returncode
+            rc = subprocess.run([sys.executable, "-m", "pip", "install", "-q"] + a.vllm.split()).returncode
             log("pip vllm rc", rc)
             if rc:
                 continue

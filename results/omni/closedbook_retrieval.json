@@ -1,0 +1,375 @@
+{
+ "n": 1009,
+ "per_domain": {
+  "truthfulqa": {
+   "n": 400,
+   "wrong": 200,
+   "experts": {
+    "cb_lodo_reply": 0.7419,
+    "cb_lodo_unit": 0.6581,
+    "cb_lodo_judge": 0.7822,
+    "cb_reply": 0.87,
+    "cb_unit": 0.6581,
+    "cb_judge": 0.7822,
+    "doc_reply": 0.8277,
+    "doc_unit": 0.6418,
+    "doc_judge": 0.7396,
+    "nli_hhem": 0.4757,
+    "nli_mc4": 0.5338,
+    "nli_mc_all": 0.5338,
+    "nli_mc_mean": 0.5315,
+    "nli": 0.497,
+    "nli_all": 0.497
+   },
+   "combined": {
+    "a_closed_book_lodo (r+u+2j)": 0.7843,
+    "a'_closed_book_shipped_head (in-sample)": 0.8238,
+    "b_reader_with_docs (r+u+2j)": 0.7808,
+    "b_judge_with_docs": 0.7396,
+    "c_nli (shipped)": 0.497,
+    "c_nli_all_sentences": 0.497,
+    "d_lodo_cb + nli": 0.7601,
+    "d_lodo_cb + docs_judge": 0.7944,
+    "d_lodo_cb + docs_judge + nli": 0.7734,
+    "d_docs_reader + nli": 0.75,
+    "d_docs_judge + nli": 0.6842,
+    "d_learned_lodo4 (all experts; doc head in-sample)": 0.8383,
+    "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": 0.7974,
+    "d_learned_lodo4 (closed-book LODO only: reweighting control)": 0.787
+   },
+   "retrieval": {
+    "empty_evidence": 0.005,
+    "mean_passages": 3.65,
+    "mean_requests": 3.8775,
+    "s_retrieval_mean": 2.3743776327371595,
+    "s_retrieval_median": 2.360044479370117,
+    "answer_word_recall_mean": 0.4617312754247428,
+    "answer_words_all_found": 0.2
+   },
+   "seconds": {
+    "t_ret": 2.3743776327371595,
+    "t_cb": 0.1128969407081604,
+    "t_doc": 0.73319708943367,
+    "t_nli": 0.2418556708097458
+   }
+  },
+  "halueval_general": {
+   "n": 300,
+   "wrong": 150,
+   "experts": {
+    "cb_lodo_reply": 0.6115,
+    "cb_lodo_unit": 0.5207,
+    "cb_lodo_judge": 0.7188,
+    "cb_reply": 0.7335,
+    "cb_unit": 0.5206,
+    "cb_judge": 0.7188,
+    "doc_reply": 0.6481,
+    "doc_unit": 0.5155,
+    "doc_judge": 0.6266,
+    "nli_hhem": 0.4257,
+    "nli_mc4": 0.5281,
+    "nli_mc_all": 0.5206,
+    "nli_mc_mean": 0.5179,
+    "nli": 0.4557,
+    "nli_all": 0.4422
+   },
+   "combined": {
+    "a_closed_book_lodo (r+u+2j)": 0.6707,
+    "a'_closed_book_shipped_head (in-sample)": 0.7026,
+    "b_reader_with_docs (r+u+2j)": 0.6253,
+    "b_judge_with_docs": 0.6266,
+    "c_nli (shipped)": 0.4557,
+    "c_nli_all_sentences": 0.4422,
+    "d_lodo_cb + nli": 0.6492,
+    "d_lodo_cb + docs_judge": 0.6648,
+    "d_lodo_cb + docs_judge + nli": 0.6504,
+    "d_docs_reader + nli": 0.6074,
+    "d_docs_judge + nli": 0.6044,
+    "d_learned_lodo4 (all experts; doc head in-sample)": 0.6688,
+    "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": 0.6572,
+    "d_learned_lodo4 (closed-book LODO only: reweighting control)": 0.6596
+   },
+   "retrieval": {
+    "empty_evidence": 0.0033333333333333335,
+    "mean_passages": 5.73,
+    "mean_requests": 11.28,
+    "s_retrieval_mean": 6.798269287745158,
+    "s_retrieval_median": 6.789562344551086
+   },
+   "seconds": {
+    "t_ret": 6.798269287745158,
+    "t_cb": 0.23869605620702108,
+    "t_doc": 1.3313144032160442,
+    "t_nli": 1.6542385705312093
+   }
+  },
+  "felm_wk": {
+   "n": 184,
+   "wrong": 85,
+   "experts": {
+    "cb_lodo_reply": 0.6649,
+    "cb_lodo_unit": 0.6696,
+    "cb_lodo_judge": 0.6379,
+    "cb_reply": 0.734,
+    "cb_unit": 0.7494,
+    "cb_judge": 0.6379,
+    "doc_reply": 0.7166,
+    "doc_unit": 0.7194,
+    "doc_judge": 0.639,
+    "nli_hhem": 0.5452,
+    "nli_mc4": 0.5765,
+    "nli_mc_all": 0.5842,
+    "nli_mc_mean": 0.5698,
+    "nli": 0.5649,
+    "nli_all": 0.567
+   },
+   "combined": {
+    "a_closed_book_lodo (r+u+2j)": 0.6733,
+    "a'_closed_book_shipped_head (in-sample)": 0.714,
+    "b_reader_with_docs (r+u+2j)": 0.6949,
+    "b_judge_with_docs": 0.639,
+    "c_nli (shipped)": 0.5649,
+    "c_nli_all_sentences": 0.567,
+    "d_lodo_cb + nli": 0.6669,
+    "d_lodo_cb + docs_judge": 0.6761,
+    "d_lodo_cb + docs_judge + nli": 0.672,
+    "d_docs_reader + nli": 0.6801,
+    "d_docs_judge + nli": 0.6286,
+    "d_learned_lodo4 (all experts; doc head in-sample)": 0.7041,
+    "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": 0.672,
+    "d_learned_lodo4 (closed-book LODO only: reweighting control)": 0.6654
+   },
+   "retrieval": {
+    "empty_evidence": 0.0,
+    "mean_passages": 4.913043478260869,
+    "mean_requests": 8.978260869565217,
+    "s_retrieval_mean": 5.964571165001911,
+    "s_retrieval_median": 5.153411865234375
+   },
+   "seconds": {
+    "t_ret": 5.964571165001911,
+    "t_cb": 0.1743483374948087,
+    "t_doc": 1.146310030118279,
+    "t_nli": 0.7674837086511694
+   }
+  },
+  "felm_science": {
+   "n": 125,
+   "wrong": 39,
+   "experts": {
+    "cb_lodo_reply": 0.7731,
+    "cb_lodo_unit": 0.8232,
+    "cb_lodo_judge": 0.7451,
+    "cb_reply": 0.8402,
+    "cb_unit": 0.8739,
+    "cb_judge": 0.7451,
+    "doc_reply": 0.7683,
+    "doc_unit": 0.836,
+    "doc_judge": 0.7657,
+    "nli_hhem": 0.6011,
+    "nli_mc4": 0.6506,
+    "nli_mc_all": 0.6044,
+    "nli_mc_mean": 0.6711,
+    "nli": 0.6288,
+    "nli_all": 0.6231
+   },
+   "combined": {
+    "a_closed_book_lodo (r+u+2j)": 0.808,
+    "a'_closed_book_shipped_head (in-sample)": 0.8426,
+    "b_reader_with_docs (r+u+2j)": 0.8116,
+    "b_judge_with_docs": 0.7657,
+    "c_nli (shipped)": 0.6288,
+    "c_nli_all_sentences": 0.6231,
+    "d_lodo_cb + nli": 0.8113,
+    "d_lodo_cb + docs_judge": 0.8044,
+    "d_lodo_cb + docs_judge + nli": 0.8011,
+    "d_docs_reader + nli": 0.8023,
+    "d_docs_judge + nli": 0.7627,
+    "d_learned_lodo4 (all experts; doc head in-sample)": 0.8169,
+    "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": 0.7964,
+    "d_learned_lodo4 (closed-book LODO only: reweighting control)": 0.7952
+   },
+   "retrieval": {
+    "empty_evidence": 0.016,
+    "mean_passages": 5.6,
+    "mean_requests": 12.024,
+    "s_retrieval_mean": 7.710296958923339,
+    "s_retrieval_median": 7.531328439712524
+   },
+   "seconds": {
+    "t_ret": 7.710296958923339,
+    "t_cb": 0.2708328437805176,
+    "t_doc": 1.3513956737518311,
+    "t_nli": 1.4593089656829834
+   }
+  }
+ },
+ "lodo_weights": {
+  "d_learned_lodo4 (all experts; doc head in-sample)": {
+   "truthfulqa": {
+    "cb_lodo_reply": 0.037,
+    "cb_lodo_unit": 0.047,
+    "cb_lodo_judge": 0.352,
+    "doc_reply": 0.293,
+    "doc_unit": 0.105,
+    "doc_judge": 0.023,
+    "nli": -0.041
+   },
+   "halueval_general": {
+    "cb_lodo_reply": 0.073,
+    "cb_lodo_unit": 0.177,
+    "cb_lodo_judge": 0.32,
+    "doc_reply": 0.523,
+    "doc_unit": 0.115,
+    "doc_judge": 0.101,
+    "nli": -0.11
+   },
+   "felm_wk": {
+    "cb_lodo_reply": 0.019,
+    "cb_lodo_unit": 0.102,
+    "cb_lodo_judge": 0.431,
+    "doc_reply": 0.463,
+    "doc_unit": -0.003,
+    "doc_judge": 0.084,
+    "nli": -0.107
+   },
+   "felm_science": {
+    "cb_lodo_reply": 0.036,
+    "cb_lodo_unit": 0.079,
+    "cb_lodo_judge": 0.391,
+    "doc_reply": 0.468,
+    "doc_unit": 0.002,
+    "doc_judge": 0.047,
+    "nli": -0.104
+   }
+  },
+  "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": {
+   "truthfulqa": {
+    "cb_lodo_reply": 0.151,
+    "cb_lodo_unit": 0.114,
+    "cb_lodo_judge": 0.335,
+    "doc_judge": 0.143,
+    "nli": -0.019
+   },
+   "halueval_general": {
+    "cb_lodo_reply": 0.216,
+    "cb_lodo_unit": 0.274,
+    "cb_lodo_judge": 0.3,
+    "doc_judge": 0.313,
+    "nli": -0.093
+   },
+   "felm_wk": {
+    "cb_lodo_reply": 0.16,
+    "cb_lodo_unit": 0.132,
+    "cb_lodo_judge": 0.436,
+    "doc_judge": 0.23,
+    "nli": -0.097
+   },
+   "felm_science": {
+    "cb_lodo_reply": 0.174,
+    "cb_lodo_unit": 0.104,
+    "cb_lodo_judge": 0.392,
+    "doc_judge": 0.21,
+    "nli": -0.093
+   }
+  },
+  "d_learned_lodo4 (closed-book LODO only: reweighting control)": {
+   "truthfulqa": {
+    "cb_lodo_reply": 0.171,
+    "cb_lodo_unit": 0.127,
+    "cb_lodo_judge": 0.39
+   },
+   "halueval_general": {
+    "cb_lodo_reply": 0.257,
+    "cb_lodo_unit": 0.269,
+    "cb_lodo_judge": 0.411
+   },
+   "felm_wk": {
+    "cb_lodo_reply": 0.182,
+    "cb_lodo_unit": 0.134,
+    "cb_lodo_judge": 0.53
+   },
+   "felm_science": {
+    "cb_lodo_reply": 0.195,
+    "cb_lodo_unit": 0.101,
+    "cb_lodo_judge": 0.475
+   }
+  }
+ },
+ "mean": {
+  "a_closed_book_lodo (r+u+2j)": 0.7341,
+  "a'_closed_book_shipped_head (in-sample)": 0.7708,
+  "b_reader_with_docs (r+u+2j)": 0.7281,
+  "b_judge_with_docs": 0.6927,
+  "c_nli (shipped)": 0.5366,
+  "c_nli_all_sentences": 0.5323,
+  "d_lodo_cb + nli": 0.7219,
+  "d_lodo_cb + docs_judge": 0.7349,
+  "d_lodo_cb + docs_judge + nli": 0.7242,
+  "d_docs_reader + nli": 0.71,
+  "d_docs_judge + nli": 0.67,
+  "d_learned_lodo4 (all experts; doc head in-sample)": 0.757,
+  "d_learned_lodo4 (closed-book LODO + docs judge + NLI)": 0.7308,
+  "d_learned_lodo4 (closed-book LODO only: reweighting control)": 0.7268
+ },
+ "mean_experts": {
+  "cb_lodo_reply": 0.6978,
+  "cb_lodo_unit": 0.6679,
+  "cb_lodo_judge": 0.721,
+  "cb_reply": 0.7944,
+  "cb_unit": 0.7005,
+  "cb_judge": 0.721,
+  "doc_reply": 0.7402,
+  "doc_unit": 0.6782,
+  "doc_judge": 0.6927,
+  "nli_hhem": 0.5119,
+  "nli_mc4": 0.5723,
+  "nli_mc_all": 0.5608,
+  "nli_mc_mean": 0.5726,
+  "nli": 0.5366,
+  "nli_all": 0.5323
+ },
+ "seconds_per_reply": {
+  "t_ret": 5.005,
+  "t_cb": 0.181,
+  "t_doc": 1.063,
+  "t_nli": 0.908
+ },
+ "spot_check_deciding_fact": {
+  "truthfulqa": {
+   "yes": 2,
+   "partial": 1,
+   "no": 7,
+   "note": "pyramids / Bermuda Triangle found; most misconception questions retrieve off-topic pages (Chrissy Teigen 'Cravings', Grizzy & the Lemmings)"
+  },
+  "halueval_general": {
+   "yes": 0,
+   "partial": 1,
+   "no": 9,
+   "note": "9/10 wrong replies are to tasks with no retrievable fact (missing input, creative writing, arithmetic, refusals)"
+  },
+  "felm_wk": {
+   "yes": 2,
+   "partial": 3,
+   "no": 5,
+   "note": "Saturn density, Friday-13th years found; Victoria Falls passage supports the wrong claim; Leicester query retrieved Cambridge"
+  },
+  "felm_science": {
+   "yes": 0,
+   "partial": 2,
+   "no": 8,
+   "note": "technical claims (EPR line counts, Newton's law reasoning) are not stated in any retrieved passage"
+  }
+ },
+ "run_info": {
+  "errors": {
+   "HTTP 500": 8,
+   "text: TimeoutError": 2
+  },
+  "requests": 8090,
+  "corpus_md5": "b598848a44e70308b64ae5f0072b6eb0",
+  "n": 1009,
+  "gpu": "Tesla T4",
+  "elapsed_min": 85.34531387090684
+ }
+}

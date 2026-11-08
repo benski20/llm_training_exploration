@@ -2,8 +2,8 @@
 of the false-alarm guarantee (experiments/judge_calibration_sim.py runs the calibration simulation locally).
 
 Judges (each distinct from the reader Qwen3-8B, both larger; one of another family), one per T4, in parallel:
-    qwen14   Qwen/Qwen3-14B, 4-bit nf4, thinking disabled
-    phi4     microsoft/phi-4 (14.7B), 4-bit nf4
+    qwen14   Qwen/Qwen3-14B, 4-bit nf4 (quantized on load, fp16 compute), thinking disabled
+    phi4     microsoft/phi-4 (14.7B), 4-bit nf4 (same)
 Each judge sees the task (with its documents for grounded replies) and the reply, is asked a format-specific
 verification question, and we read P(Yes) / (P(Yes) + P(No)) at the first answer token (one forward pass, no
 generation: a budgeted thinking pass over 5,107 replies does not fit a Kaggle session on T4s).
@@ -69,7 +69,13 @@ def cut(tok, text, n):
 def prompt(tok, r, max_tokens):
     user = r["messages"][-1]["content"]
     doc = r.get("doc") or ""
-    if doc and doc.strip()[:100] in user:
+    if "hallucinated span" in user and r["response"][:60] in user:
+        # RAGTruth input_str is the annotation prompt (task + context, the reply, an instruction to label spans):
+        # keep only the task and its context; the context is already inside it
+        user = user[:user.index(r["response"][:60])].rstrip()
+        user = user[:user.rfind("\n")] if "\n" in user else user        # drop the "Below is the answer:" header
+        doc = ""
+    if doc and " ".join(doc.split())[:100] in " ".join(user.split()):
         doc = ""
     q = Q_REASON if r["format"] == "reasoning" else (Q_GROUNDED if (r.get("doc") or "") else Q_CLOSED)
     reply, t1 = cut(tok, r["response"], 1800)
@@ -101,6 +107,37 @@ def answer_ids(tok, words):
     return sorted(out)
 
 
+def chunked_last_hidden(model, ids, chunk=512):
+    """one long prompt, prefilled in chunks with a KV cache: attention memory O(chunk x L), not O(L^2)."""
+    from transformers import DynamicCache
+    try:
+        cache = DynamicCache(config=model.config)
+    except TypeError:
+        cache = DynamicCache()
+    for s in range(0, ids.shape[1], chunk):
+        out = model.model(input_ids=ids[:, s:s + chunk], past_key_values=cache, use_cache=True)
+    return out.last_hidden_state[:, -1]
+
+
+def last_logprobs(model, inp, att):
+    """log-softmax of the next-token logits at the last position; halves the batch on CUDA OOM."""
+    import torch
+    try:
+        with torch.no_grad():
+            if len(inp) == 1 and inp.shape[1] > 768:
+                h = chunked_last_hidden(model, inp.cuda())
+            else:
+                mask = None if bool(att.all()) else att.cuda()
+                h = model.model(input_ids=inp.cuda(), attention_mask=mask).last_hidden_state[:, -1]
+            return torch.log_softmax(model.lm_head(h).float(), -1).cpu()
+    except torch.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        if len(inp) == 1:
+            raise
+        k = len(inp) // 2
+        return torch.cat([last_logprobs(model, inp[:k], att[:k]), last_logprobs(model, inp[k:], att[k:])])
+
+
 def worker(a):
     import numpy as np
     import torch
@@ -120,7 +157,7 @@ def worker(a):
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     model = None
-    for src in ((preq, None), (name, "nf4")):
+    for src in ((name, "nf4"), (preq, None)):
         try:
             kw = dict(dtype=torch.float16, device_map={"": 0}, attn_implementation="sdpa")
             if src[1]:
@@ -155,7 +192,9 @@ def worker(a):
         j = 0
         while j < len(block):
             L = block[j][0]
-            bs = max(1, min(a.max_batch, a.batch_tokens // max(L, 1)))
+            # long prompts one at a time with no padding mask (sdpa then uses its memory-efficient causal kernel;
+            # a padded batch needs an explicit mask and the O(L^2) path, which runs out of memory on a T4)
+            bs = 1 if L > 768 else max(1, min(a.max_batch, a.batch_tokens // max(L, 1)))
             chunk = block[j:j + bs]
             j += bs
             Lm = max(c[0] for c in chunk)
@@ -164,12 +203,7 @@ def worker(a):
             for k, c in enumerate(chunk):
                 inp[k, Lm - c[0]:] = torch.tensor(c[2])
                 att[k, Lm - c[0]:] = 1
-            with torch.no_grad():
-                try:
-                    out = model(input_ids=inp.cuda(), attention_mask=att.cuda(), logits_to_keep=1)
-                except TypeError:
-                    out = model(input_ids=inp.cuda(), attention_mask=att.cuda())
-            lp = torch.log_softmax(out.logits[:, -1].float(), -1).cpu()
+            lp = last_logprobs(model, inp, att)
             for k, c in enumerate(chunk):
                 ly = torch.logsumexp(lp[k, yes], 0).item()
                 ln = torch.logsumexp(lp[k, no], 0).item()
@@ -179,7 +213,6 @@ def worker(a):
                 res["yesno_mass"].append(float(np.exp(ly) + np.exp(ln)))
                 res["n_tokens"].append(c[0])
                 res["truncated"].append(c[3])
-            del out
         np.savez(outp, model=name, **{k: np.array(v) for k, v in res.items()})
         n = len(res["ids"])
         log(tag, f"{n}/{len(order)}", f"{(time.time() - t_start) / n:.2f} s/reply",
@@ -192,8 +225,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--judges", nargs="+", default=["qwen14", "phi4"])
     ap.add_argument("--per-domain", type=int, default=0, help="smoke test: this many replies per domain")
-    ap.add_argument("--max-tokens", type=int, default=4096)
-    ap.add_argument("--batch-tokens", type=int, default=8192)
+    ap.add_argument("--max-tokens", type=int, default=3584)
+    ap.add_argument("--batch-tokens", type=int, default=6144)
     ap.add_argument("--max-batch", type=int, default=16)
     ap.add_argument("--hours", type=float, default=10.5)
     ap.add_argument("--worker")

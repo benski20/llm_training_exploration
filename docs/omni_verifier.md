@@ -62,6 +62,7 @@ Every number is on a domain whose labels were never used for training. AUROC for
 | probe hand-written from SAE latents (agent D) | −0.13; a fitted SAE probe ties raw | no |
 | group DRO, CORAL, projecting out domain directions | −0.05 to 0.00 | no |
 | MLP head, evidence shift (1.7B), number-grounding checker for finance | −0.02 / ≈0.57 / 0.48 | no |
+| retrieve Wikipedia, then ground, for closed-book chat (agent G; 1,009 replies, 8B) | +0.001 (0.734 → 0.735) at about 10× the cost; NLI on retrieved passages 0.54 | no: the evidence rarely holds the deciding fact (4 of 40 wrong replies), and many chat errors are task failures with nothing to look up |
 
 ## How it works (`vt/omni.py`)
 
@@ -259,7 +260,11 @@ and 30-600× below an LLM judge per claim.
 
 ## Limits
 
-- **Closed-book facts need retrieval.** A 1.7B reader judging a frontier model's long-tail facts is near chance (0.53-0.64). The route is the document-grounded path: retrieve evidence, then check the reply against it.
+- **Closed-book chat stays at about 0.73, and retrieval does not fix it** (docs/omni_experiments/closedbook_retrieval.md).
+  Wikipedia retrieval worked from Kaggle, but the evidence held the deciding fact for 4 of 40 checked wrong replies.
+  Passages pull the judge toward "topic matches", and NLI on them is at chance. The remaining routes are the
+  generator's own signals (where the customer runs open models) or a much larger reader.
+- **Closed-book facts need retrieval (original expectation, since tested above).** A 1.7B reader judging a frontier model's long-tail facts is near chance (0.53-0.64). The route is the document-grounded path: retrieve evidence, then check the reply against it.
   - Wikipedia lookups are wired in (`vt/retrieval.py`) but rate-limited from this cloud address (HTTP 429), so not measured here.
   - The 4B reader run tests how far a bigger reader closes the gap.
 - **Not state of the art on plain RAG grounding.** Fine-tuned detectors reach ~79 RAGTruth F1 and decision models ~79 on LLM-AggreFact.
