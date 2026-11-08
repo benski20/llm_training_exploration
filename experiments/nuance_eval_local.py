@@ -34,21 +34,32 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", default="results/omni/nuance_pairs_dataset.jsonl")
     ap.add_argument("--head", default="heads/omni_qwen3_1p7b.npz")
-    ap.add_argument("--feats", required=True)
+    ap.add_argument("--feats", help="stored corpus features of this reader for the domain profiles; without it, "
+                    "--profile-n corpus replies per domain are read live (labels unused)")
+    ap.add_argument("--profile-n", type=int, default=100)
     ap.add_argument("--corpus", default="/home/user/omni/corpus.jsonl")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, default=4)
     a = ap.parse_args()
     pairs = [json.loads(l) for l in open(a.pairs)]
     v = OmniVerifier.load(a.head).attach_reader(threads=a.threads)
-    F = load_features(a.feats)
     rows = {json.loads(l)["id"]: json.loads(l) for l in open(a.corpus)}
-    dom = np.array([rows[int(i)]["domain"] for i in F["ids"]])
     profiles = {}
+    if a.feats:
+        F = load_features(a.feats)
+        dom = np.array([rows[int(i)]["domain"] for i in F["ids"]])
+    used = {p["orig_id"] for p in pairs}
     for d in sorted({p["domain"] for p in pairs}):
-        fd = feature_dicts(subset(F, dom == d))
-        for f in fd:                                        # stored features carry no flags / NLI / judges
-            f.setdefault("flags", 0)
+        if a.feats:
+            fd = feature_dicts(subset(F, dom == d))
+            for f in fd:                                    # stored features carry no flags / NLI / judges
+                f.setdefault("flags", 0)
+        else:                                               # read live: replies of the domain not used in pairs
+            pool = [r for r in rows.values() if r["domain"] == d and r["id"] not in used]
+            np.random.default_rng(0).shuffle(pool)
+            fd = [v.features(item(r["messages"], r["response"], r["units"], r["doc"])) for r in pool[:a.profile_n]]
+            fd = [f for f in fd if f is not None]
+            print(f"profile {d}: {len(fd)} replies read", flush=True)
         profiles[d] = v.profile(fd, d)                      # labels unused
     out, t0 = [], time.time()
     for k, p in enumerate(pairs):
