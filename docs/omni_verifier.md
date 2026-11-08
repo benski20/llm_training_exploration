@@ -24,6 +24,25 @@ curl -H "Authorization: Bearer $KEY" -d '{"profile": "acme", "question": "...", 
 #     "nli_unsupported", "violations": [{"claim", "why"}], ...}
 ```
 
+## Benchmark: the official RAGTruth test set (`kaggle/omni/ragtruth_h2h.py`, `results/omni/ragtruth_h2h.json`)
+
+All 2,700 test answers. Heads were trained on RAGTruth training answers only. The threshold and the reported
+configuration were chosen on held-out training answers, before the test set was read.
+
+| detector | reply-level F1 [95% CI] | AUROC | how |
+|---|---|---|---|
+| RAG-HAT (reported) | 83.9 | | fine-tuned |
+| **omni verifier, Qwen3-8B** (45% of training answers: time limit) | **79.3** [77.3, 81.1] | **0.926** | frozen reader, linear readout, + NLI |
+| LettuceDetect-large (reported) | 79.2 | | fine-tuned ModernBERT |
+| **omni verifier, Qwen3-4B** (all 15,090 training answers) | **79.1** [77.1, 80.9] | 0.921 | frozen reader, linear readout, + NLI |
+| Llama-2-13B fine-tuned (reported) | 78.7 | | fine-tuned on RAGTruth |
+| NLI alone (HHEM + MiniCheck) | 68.4 | 0.822 | |
+| GPT-4-turbo prompted (reported) | 63.4 | | LLM judge |
+
+- **A statistical tie with the fine-tuned leaders, and about 5 points below RAG-HAT.** No model is fine-tuned and no
+  LLM judge is called. The 4B reader costs about 1.3 T4-seconds an answer, and NLI adds at most 0.6 F1 here.
+- **By task (8B):** data-to-text 87.1, QA 66.7, summaries 65.8 (summary recall about 62%).
+
 ## Headline: the full stack on 21 held-out domains
 
 The stack:
@@ -334,7 +353,8 @@ and 30-600× below an LLM judge per claim.
 - **Closed-book facts need retrieval (original expectation, since tested above).** A 1.7B reader judging a frontier model's long-tail facts is near chance (0.53-0.64). The route is the document-grounded path: retrieve evidence, then check the reply against it.
   - Wikipedia lookups are wired in (`vt/retrieval.py`) but rate-limited from this cloud address (HTTP 429), so not measured here.
   - The 4B reader run tests how far a bigger reader closes the gap.
-- **Not state of the art on plain RAG grounding.** Fine-tuned detectors reach ~79 RAGTruth F1 and decision models ~79 on LLM-AggreFact.
+- **RAG grounding: level with fine-tuned detectors on RAGTruth** (79.3 / 79.1 F1, see the benchmark section), not
+  above them. The earlier note follows: Fine-tuned detectors reach ~79 RAGTruth F1 and decision models ~79 on LLM-AggreFact.
   - Here: 0.69 zero-label AUROC on RAG domains, 0.73-0.78 adapted; RAGTruth with 800 in-domain labels was 0.86 (docs/ragtruth_sota.md).
   - The case for this verifier is any format at one cheap pass, step localisation, and the per-domain guarantee, not peak RAG accuracy.
 - **The exact arithmetic check is narrow.** It fires on 3% of wrong replies (≈6% in math domains), at about 66% precision on ProcessBench / FELM math.

@@ -1,0 +1,2459 @@
+{
+ "benchmark": "RAGTruth (wandb/RAGTruth-processed), full official test split: 2,700 answers (900 QA / 900 Summary / 900 Data2txt), 943 hallucinated",
+ "protocol": {
+  "label": "response hallucinated if any human-labelled span",
+  "threshold": "F1-maximising threshold on 5-fold out-of-fold scores of TRAINING answers; test never used to choose threshold, C, features or headline",
+  "headline_rule": "expert/stack with the highest training out-of-fold F1",
+  "ci": "95% bootstrap over test answers (2,000 resamples F1, 1,000 AUROC)",
+  "hardware": "Kaggle 2x Tesla T4, fp16; Qwen3-8B split over both GPUs, Qwen3-4B one worker per GPU",
+  "max_tokens": 3072,
+  "kernel": "kaggle/omni/ragtruth_h2h.py (slug ragtruth-h2h); raw outputs results/kaggle/ragtruth-h2h/"
+ },
+ "published_response_f1": {
+  "RAG-HAT (reported)": 83.9,
+  "LettuceDetect-large (fine-tuned ModernBERT)": 79.22,
+  "Llama-2-13B fine-tuned (RAGTruth paper)": 78.7,
+  "GPT-4-turbo prompted (RAGTruth paper)": 63.4
+ },
+ "readers": {
+  "Qwen/Qwen3-8B": {
+   "train_answers": 6800,
+   "train_available": 15090,
+   "test_answers": 2700,
+   "test_missing": [],
+   "test_hallucinated": 943,
+   "train_hallucinated_frac": 0.4462,
+   "train_sentences": 50435,
+   "test_sentences": 18792,
+   "meta": {
+    "model": "Qwen/Qwen3-8B",
+    "layers": [
+     9,
+     14,
+     20,
+     25,
+     31,
+     36
+    ],
+    "mid_layers": [
+     20,
+     25,
+     31
+    ],
+    "neuron_layers": [
+     13,
+     19,
+     24
+    ],
+    "max_tokens": 3072,
+    "d": 4096,
+    "inter": 12288
+   },
+   "headline": {
+    "chosen_by": "highest training out-of-fold F1 (test never used to choose)",
+    "expert": "stack: all (omni + neurons + NLI)",
+    "test": {
+     "precision": 76.8,
+     "recall": 81.9,
+     "f1": 79.3,
+     "n": 2700,
+     "positives": 943,
+     "auroc": 0.9255,
+     "f1_ci95": [
+      77.3,
+      81.1
+     ],
+     "auroc_ci95": [
+      0.9154,
+      0.9352
+     ]
+    },
+    "by_task": {
+     "QA": {
+      "precision": 62.2,
+      "recall": 71.9,
+      "f1": 66.7,
+      "n": 900,
+      "positives": 160,
+      "auroc": 0.9149,
+      "per_task_threshold": {
+       "precision": 55.7,
+       "recall": 82.5,
+       "f1": 66.5,
+       "n": 900,
+       "positives": 160
+      }
+     },
+     "Summary": {
+      "precision": 69.8,
+      "recall": 62.3,
+      "f1": 65.8,
+      "n": 900,
+      "positives": 204,
+      "auroc": 0.8905,
+      "per_task_threshold": {
+       "precision": 62.0,
+       "recall": 71.1,
+       "f1": 66.2,
+       "n": 900,
+       "positives": 204
+      }
+     },
+     "Data2txt": {
+      "precision": 83.1,
+      "recall": 91.5,
+      "f1": 87.1,
+      "n": 900,
+      "positives": 579,
+      "auroc": 0.9026,
+      "per_task_threshold": {
+       "precision": 87.8,
+       "recall": 87.4,
+       "f1": 87.6,
+       "n": 900,
+       "positives": 579
+      }
+     }
+    }
+   },
+   "feature_choice_on_train_oof": {
+    "stack: omni (reply + unit + judge)": {
+     "f1": 80.6,
+     "auroc": 0.903
+    },
+    "MLP-neuron sentence probe": {
+     "f1": 79.0,
+     "auroc": 0.8828
+    },
+    "stack: omni + NLI": {
+     "f1": 80.6,
+     "auroc": 0.9056
+    },
+    "stack: neurons + NLI": {
+     "f1": 79.9,
+     "auroc": 0.8962
+    }
+   },
+   "timing": {
+    "gpu": "Tesla T4",
+    "reader_wall_s_per_answer": {
+     "mean": 2.561,
+     "median": 2.255,
+     "p95": 4.938
+    },
+    "reader_gpus": 2,
+    "reader_t4_s_per_answer": 5.122,
+    "nli_t4_s_per_answer": 1.499,
+    "tokens_per_answer": {
+     "mean": 1082,
+     "p95": 1869
+    },
+    "note": "batch 1; reader = one forward with hidden states, judge suffix and neuron hooks; the NLI ran concurrently on GPU 1 (contention included)",
+    "total_t4_s_per_answer": 6.621
+   },
+   "experts": {
+    "judge (reader's own, no training)": {
+     "train_oof": {
+      "f1": 70.0,
+      "auroc": 0.7712
+     },
+     "threshold": -1.28125,
+     "response": {
+      "precision": 56.7,
+      "recall": 81.7,
+      "f1": 66.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8069,
+      "f1_ci95": [
+       64.6,
+       69.1
+      ],
+      "auroc_ci95": [
+       0.7906,
+       0.8236
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 29.6,
+       "recall": 84.4,
+       "f1": 43.8,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.7757,
+       "per_task_threshold": {
+        "precision": 35.9,
+        "recall": 70.0,
+        "f1": 47.5,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 56.2,
+       "recall": 77.5,
+       "f1": 65.2,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8648,
+       "per_task_threshold": {
+        "precision": 60.1,
+        "recall": 74.5,
+        "f1": 66.5,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 76.7,
+       "recall": 82.4,
+       "f1": 79.4,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.7794,
+       "per_task_threshold": {
+        "precision": 74.1,
+        "recall": 85.5,
+        "f1": 79.4,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 61.6,
+      "recall": 80.5,
+      "f1": 69.8,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       67.5,
+       71.9
+      ]
+     }
+    },
+    "HHEM-2.1-open": {
+     "train_oof": {
+      "f1": 74.7,
+      "auroc": 0.8163
+     },
+     "threshold": 0.17789912223815918,
+     "response": {
+      "precision": 56.9,
+      "recall": 86.5,
+      "f1": 68.7,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8226,
+      "f1_ci95": [
+       66.4,
+       70.7
+      ],
+      "auroc_ci95": [
+       0.8067,
+       0.8383
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 40.0,
+       "recall": 80.0,
+       "f1": 53.3,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8378,
+       "per_task_threshold": {
+        "precision": 49.3,
+        "recall": 66.2,
+        "f1": 56.5,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 47.0,
+       "recall": 60.8,
+       "f1": 53.0,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7753,
+       "per_task_threshold": {
+        "precision": 47.6,
+        "recall": 63.7,
+        "f1": 54.5,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 66.4,
+       "recall": 97.4,
+       "f1": 79.0,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6149,
+       "per_task_threshold": {
+        "precision": 66.7,
+        "recall": 97.1,
+        "f1": 79.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 60.0,
+      "recall": 84.6,
+      "f1": 70.2,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       67.9,
+       72.2
+      ]
+     }
+    },
+    "MiniCheck-RoBERTa-L": {
+     "train_oof": {
+      "f1": 67.6,
+      "auroc": 0.7192
+     },
+     "threshold": 0.5638335943222046,
+     "response": {
+      "precision": 47.5,
+      "recall": 86.0,
+      "f1": 61.2,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.7401,
+      "f1_ci95": [
+       58.9,
+       63.3
+      ],
+      "auroc_ci95": [
+       0.7206,
+       0.758
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 26.7,
+       "recall": 76.9,
+       "f1": 39.7,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.7243,
+       "per_task_threshold": {
+        "precision": 30.4,
+        "recall": 66.9,
+        "f1": 41.8,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 33.2,
+       "recall": 77.0,
+       "f1": 46.4,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7163,
+       "per_task_threshold": {
+        "precision": 33.2,
+        "recall": 77.5,
+        "f1": 46.5,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 68.4,
+       "recall": 91.7,
+       "f1": 78.4,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6159,
+       "per_task_threshold": {
+        "precision": 64.4,
+        "recall": 98.8,
+        "f1": 78.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 48.8,
+      "recall": 88.8,
+      "f1": 63.0,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       60.7,
+       65.2
+      ]
+     }
+    },
+    "NLI mean (product)": {
+     "train_oof": {
+      "f1": 72.5,
+      "auroc": 0.8065
+     },
+     "threshold": 0.5142484903335571,
+     "response": {
+      "precision": 59.3,
+      "recall": 80.8,
+      "f1": 68.4,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8218,
+      "f1_ci95": [
+       66.1,
+       70.6
+      ],
+      "auroc_ci95": [
+       0.8051,
+       0.8373
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 43.0,
+       "recall": 65.6,
+       "f1": 52.0,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8273,
+       "per_task_threshold": {
+        "precision": 45.9,
+        "recall": 63.7,
+        "f1": 53.4,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 45.4,
+       "recall": 62.3,
+       "f1": 52.5,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7695,
+       "per_task_threshold": {
+        "precision": 45.6,
+        "recall": 62.7,
+        "f1": 52.8,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 69.7,
+       "recall": 91.5,
+       "f1": 79.2,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6582,
+       "per_task_threshold": {
+        "precision": 66.3,
+        "recall": 97.8,
+        "f1": 79.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 58.7,
+      "recall": 84.4,
+      "f1": 69.2,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       66.9,
+       71.3
+      ]
+     }
+    },
+    "omni reply head": {
+     "train_oof": {
+      "f1": 78.9,
+      "auroc": 0.8886
+     },
+     "threshold": -0.0006592065743889208,
+     "response": {
+      "precision": 73.7,
+      "recall": 79.6,
+      "f1": 76.6,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9071,
+      "f1_ci95": [
+       74.4,
+       78.5
+      ],
+      "auroc_ci95": [
+       0.896,
+       0.9179
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 54.8,
+       "recall": 68.1,
+       "f1": 60.7,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8929,
+       "per_task_threshold": {
+        "precision": 57.1,
+        "recall": 68.1,
+        "f1": 62.1,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 68.1,
+       "recall": 62.7,
+       "f1": 65.3,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8766,
+       "per_task_threshold": {
+        "precision": 59.3,
+        "recall": 72.1,
+        "f1": 65.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 81.3,
+       "recall": 88.8,
+       "f1": 84.9,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8682,
+       "per_task_threshold": {
+        "precision": 83.6,
+        "recall": 86.9,
+        "f1": 85.2,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 72.9,
+      "recall": 80.5,
+      "f1": 76.5,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       74.4,
+       78.5
+      ]
+     },
+     "info": {
+      "C": 0.1,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8826504738634193,
+        "f1": 0.7924528301886793
+       },
+       "0.01": {
+        "auroc": 0.8871245699884305,
+        "f1": 0.7877729257641921
+       },
+       "0.1": {
+        "auroc": 0.8881322295180577,
+        "f1": 0.7910189982728842
+       },
+       "1.0": {
+        "auroc": 0.887783170988187,
+        "f1": 0.7890222984562607
+       }
+      },
+      "seconds": 6
+     }
+    },
+    "omni worst unit": {
+     "train_oof": {
+      "f1": 79.1,
+      "auroc": 0.891
+     },
+     "threshold": 0.7339776164030767,
+     "response": {
+      "precision": 68.5,
+      "recall": 85.7,
+      "f1": 76.1,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9052,
+      "f1_ci95": [
+       74.1,
+       78.1
+      ],
+      "auroc_ci95": [
+       0.893,
+       0.9166
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 49.3,
+       "recall": 85.0,
+       "f1": 62.4,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9052,
+       "per_task_threshold": {
+        "precision": 54.2,
+        "recall": 81.2,
+        "f1": 65.0,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 62.7,
+       "recall": 66.7,
+       "f1": 64.6,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.864,
+       "per_task_threshold": {
+        "precision": 58.8,
+        "recall": 68.6,
+        "f1": 63.3,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 78.0,
+       "recall": 92.6,
+       "f1": 84.7,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8766,
+       "per_task_threshold": {
+        "precision": 81.6,
+        "recall": 88.8,
+        "f1": 85.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 70.8,
+      "recall": 83.1,
+      "f1": 76.5,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       74.4,
+       78.4
+      ]
+     },
+     "info": {
+      "C": 1.0,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8892562418909752,
+        "f1": 0.7861369399830939
+       },
+       "0.01": {
+        "auroc": 0.8915284153401346,
+        "f1": 0.7912087912087912
+       },
+       "0.1": {
+        "auroc": 0.892393377986481,
+        "f1": 0.7912457912457912
+       },
+       "1.0": {
+        "auroc": 0.8924526520764591,
+        "f1": 0.7926112510495382
+       }
+      },
+      "seconds": 14
+     }
+    },
+    "MLP-neuron sentence probe": {
+     "train_oof": {
+      "f1": 79.0,
+      "auroc": 0.8828
+     },
+     "threshold": 2.440532684326172,
+     "response": {
+      "precision": 76.0,
+      "recall": 78.0,
+      "f1": 77.0,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8874,
+      "f1_ci95": [
+       74.7,
+       79.0
+      ],
+      "auroc_ci95": [
+       0.8741,
+       0.9003
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 57.1,
+       "recall": 72.5,
+       "f1": 63.9,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8452,
+       "per_task_threshold": {
+        "precision": 56.2,
+        "recall": 73.1,
+        "f1": 63.6,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 65.7,
+       "recall": 53.4,
+       "f1": 58.9,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8001,
+       "per_task_threshold": {
+        "precision": 64.0,
+        "recall": 53.9,
+        "f1": 58.5,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 85.2,
+       "recall": 88.3,
+       "f1": 86.7,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8907,
+       "per_task_threshold": {
+        "precision": 84.2,
+        "recall": 89.3,
+        "f1": 86.7,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 74.8,
+      "recall": 78.9,
+      "f1": 76.8,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       74.6,
+       78.9
+      ]
+     },
+     "info": {
+      "C": 0.001,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8655026991664306,
+        "f1": 0.7723785166240409
+       },
+       "0.01": {
+        "auroc": 0.8603590253583339,
+        "f1": 0.7710241465445462
+       },
+       "0.1": {
+        "auroc": 0.8594150305920164,
+        "f1": 0.7712854757929883
+       }
+      },
+      "seconds": 22,
+      "on_gpu": true,
+      "dim": 36864,
+      "sentence_auroc_test": 0.9045
+     }
+    },
+    "stack: omni (reply + unit + judge)": {
+     "train_oof": {
+      "f1": 80.6,
+      "auroc": 0.903
+     },
+     "threshold": -0.13053446970916002,
+     "response": {
+      "precision": 74.6,
+      "recall": 83.8,
+      "f1": 78.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9201,
+      "f1_ci95": [
+       76.9,
+       80.7
+      ],
+      "auroc_ci95": [
+       0.9099,
+       0.9302
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 59.4,
+       "recall": 76.9,
+       "f1": 67.0,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9108,
+       "per_task_threshold": {
+        "precision": 59.4,
+        "recall": 76.9,
+        "f1": 67.0,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 67.7,
+       "recall": 66.7,
+       "f1": 67.2,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8877,
+       "per_task_threshold": {
+        "precision": 66.8,
+        "recall": 69.1,
+        "f1": 68.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 81.6,
+       "recall": 91.7,
+       "f1": 86.3,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8892,
+       "per_task_threshold": {
+        "precision": 87.9,
+        "recall": 86.5,
+        "f1": 87.2,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 77.4,
+      "recall": 81.1,
+      "f1": 79.2,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       77.2,
+       81.1
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)"
+      ]
+     }
+    },
+    "stack: omni + NLI": {
+     "train_oof": {
+      "f1": 80.6,
+      "auroc": 0.9056
+     },
+     "threshold": -0.07368549430300494,
+     "response": {
+      "precision": 75.1,
+      "recall": 83.0,
+      "f1": 78.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9214,
+      "f1_ci95": [
+       76.8,
+       80.7
+      ],
+      "auroc_ci95": [
+       0.9108,
+       0.9315
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 60.8,
+       "recall": 73.8,
+       "f1": 66.7,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9162,
+       "per_task_threshold": {
+        "precision": 57.0,
+        "recall": 81.9,
+        "f1": 67.2,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 69.5,
+       "recall": 64.7,
+       "f1": 67.0,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8913,
+       "per_task_threshold": {
+        "precision": 64.0,
+        "recall": 70.6,
+        "f1": 67.1,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 80.9,
+       "recall": 92.1,
+       "f1": 86.1,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8864,
+       "per_task_threshold": {
+        "precision": 86.2,
+        "recall": 87.4,
+        "f1": 86.8,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 75.0,
+      "recall": 82.8,
+      "f1": 78.7,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       76.7,
+       80.6
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    },
+    "stack: neurons + NLI": {
+     "train_oof": {
+      "f1": 79.9,
+      "auroc": 0.8962
+     },
+     "threshold": -0.29426393558509656,
+     "response": {
+      "precision": 75.1,
+      "recall": 81.0,
+      "f1": 78.0,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9075,
+      "f1_ci95": [
+       75.9,
+       79.9
+      ],
+      "auroc_ci95": [
+       0.895,
+       0.9194
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 61.9,
+       "recall": 70.0,
+       "f1": 65.7,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8804,
+       "per_task_threshold": {
+        "precision": 53.8,
+        "recall": 79.4,
+        "f1": 64.1,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 68.8,
+       "recall": 57.4,
+       "f1": 62.6,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8466,
+       "per_task_threshold": {
+        "precision": 67.2,
+        "recall": 57.4,
+        "f1": 61.9,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 80.3,
+       "recall": 92.4,
+       "f1": 85.9,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8883,
+       "per_task_threshold": {
+        "precision": 82.1,
+        "recall": 91.0,
+        "f1": 86.3,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 73.3,
+      "recall": 81.8,
+      "f1": 77.3,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       75.2,
+       79.3
+      ]
+     },
+     "info": {
+      "parts": [
+       "MLP-neuron sentence probe",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    },
+    "stack: omni + neurons": {
+     "train_oof": {
+      "f1": 81.3,
+      "auroc": 0.9087
+     },
+     "threshold": -0.008497816471110364,
+     "response": {
+      "precision": 79.0,
+      "recall": 79.9,
+      "f1": 79.4,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9236,
+      "f1_ci95": [
+       77.4,
+       81.4
+      ],
+      "auroc_ci95": [
+       0.9135,
+       0.9332
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 63.3,
+       "recall": 70.0,
+       "f1": 66.5,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9097,
+       "per_task_threshold": {
+        "precision": 53.4,
+        "recall": 84.4,
+        "f1": 65.4,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 70.8,
+       "recall": 59.3,
+       "f1": 64.5,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8843,
+       "per_task_threshold": {
+        "precision": 65.0,
+        "recall": 69.1,
+        "f1": 67.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 86.0,
+       "recall": 89.8,
+       "f1": 87.8,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.9046,
+       "per_task_threshold": {
+        "precision": 89.7,
+        "recall": 85.8,
+        "f1": 87.7,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 75.5,
+      "recall": 82.0,
+      "f1": 78.6,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       76.6,
+       80.5
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "MLP-neuron sentence probe"
+      ]
+     }
+    },
+    "stack: all (omni + neurons + NLI)": {
+     "train_oof": {
+      "f1": 81.5,
+      "auroc": 0.9112
+     },
+     "threshold": -0.1344716346277726,
+     "response": {
+      "precision": 76.8,
+      "recall": 81.9,
+      "f1": 79.3,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9255,
+      "f1_ci95": [
+       77.3,
+       81.1
+      ],
+      "auroc_ci95": [
+       0.9154,
+       0.9352
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 62.2,
+       "recall": 71.9,
+       "f1": 66.7,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9149,
+       "per_task_threshold": {
+        "precision": 55.7,
+        "recall": 82.5,
+        "f1": 66.5,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 69.8,
+       "recall": 62.3,
+       "f1": 65.8,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8905,
+       "per_task_threshold": {
+        "precision": 62.0,
+        "recall": 71.1,
+        "f1": 66.2,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 83.1,
+       "recall": 91.5,
+       "f1": 87.1,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.9026,
+       "per_task_threshold": {
+        "precision": 87.8,
+        "recall": 87.4,
+        "f1": 87.6,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 74.8,
+      "recall": 83.0,
+      "f1": 78.7,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       76.7,
+       80.6
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "MLP-neuron sentence probe",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    }
+   }
+  },
+  "Qwen/Qwen3-4B": {
+   "train_answers": 15090,
+   "train_available": 15090,
+   "test_answers": 2700,
+   "test_missing": [],
+   "test_hallucinated": 943,
+   "train_hallucinated_frac": 0.4454,
+   "train_sentences": 111592,
+   "test_sentences": 18792,
+   "meta": {
+    "model": "Qwen/Qwen3-4B",
+    "layers": [
+     9,
+     14,
+     20,
+     25,
+     31,
+     36
+    ],
+    "mid_layers": [
+     20,
+     25,
+     31
+    ],
+    "neuron_layers": [
+     13,
+     19,
+     24
+    ],
+    "max_tokens": 3072,
+    "d": 2560,
+    "inter": 9728
+   },
+   "headline": {
+    "chosen_by": "highest training out-of-fold F1 (test never used to choose)",
+    "expert": "stack: all (omni + neurons + NLI)",
+    "test": {
+     "precision": 75.2,
+     "recall": 83.5,
+     "f1": 79.1,
+     "n": 2700,
+     "positives": 943,
+     "auroc": 0.9208,
+     "f1_ci95": [
+      77.1,
+      80.9
+     ],
+     "auroc_ci95": [
+      0.9107,
+      0.9305
+     ]
+    },
+    "by_task": {
+     "QA": {
+      "precision": 61.4,
+      "recall": 72.5,
+      "f1": 66.5,
+      "n": 900,
+      "positives": 160,
+      "auroc": 0.9103,
+      "per_task_threshold": {
+       "precision": 53.9,
+       "recall": 78.1,
+       "f1": 63.8,
+       "n": 900,
+       "positives": 160
+      }
+     },
+     "Summary": {
+      "precision": 65.4,
+      "recall": 67.6,
+      "f1": 66.5,
+      "n": 900,
+      "positives": 204,
+      "auroc": 0.8775,
+      "per_task_threshold": {
+       "precision": 53.0,
+       "recall": 77.9,
+       "f1": 63.1,
+       "n": 900,
+       "positives": 204
+      }
+     },
+     "Data2txt": {
+      "precision": 82.5,
+      "recall": 92.1,
+      "f1": 87.0,
+      "n": 900,
+      "positives": 579,
+      "auroc": 0.8987,
+      "per_task_threshold": {
+       "precision": 85.3,
+       "recall": 89.3,
+       "f1": 87.3,
+       "n": 900,
+       "positives": 579
+      }
+     }
+    }
+   },
+   "feature_choice_on_train_oof": {
+    "stack: omni (reply + unit + judge)": {
+     "f1": 79.2,
+     "auroc": 0.8929
+    },
+    "MLP-neuron sentence probe": {
+     "f1": 77.8,
+     "auroc": 0.877
+    },
+    "stack: omni + NLI": {
+     "f1": 79.6,
+     "auroc": 0.8957
+    },
+    "stack: neurons + NLI": {
+     "f1": 79.6,
+     "auroc": 0.8937
+    }
+   },
+   "timing": {
+    "gpu": "Tesla T4",
+    "reader_wall_s_per_answer": {
+     "mean": 1.277,
+     "median": 1.02,
+     "p95": 2.655
+    },
+    "reader_gpus": 1,
+    "reader_t4_s_per_answer": 1.277,
+    "nli_t4_s_per_answer": 1.499,
+    "tokens_per_answer": {
+     "mean": 1082,
+     "p95": 1869
+    },
+    "note": "batch 1; reader = one forward with hidden states, judge suffix and neuron hooks; the NLI ran concurrently on GPU 1 (contention included)",
+    "total_t4_s_per_answer": 2.776
+   },
+   "experts": {
+    "judge (reader's own, no training)": {
+     "train_oof": {
+      "f1": 68.0,
+      "auroc": 0.7613
+     },
+     "threshold": -2.15625,
+     "response": {
+      "precision": 52.0,
+      "recall": 78.6,
+      "f1": 62.6,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.7855,
+      "f1_ci95": [
+       60.3,
+       64.8
+      ],
+      "auroc_ci95": [
+       0.7676,
+       0.8021
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 38.4,
+       "recall": 60.0,
+       "f1": 46.8,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.7735,
+       "per_task_threshold": {
+        "precision": 37.5,
+        "recall": 60.6,
+        "f1": 46.3,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 33.9,
+       "recall": 87.3,
+       "f1": 48.8,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8122,
+       "per_task_threshold": {
+        "precision": 40.6,
+        "recall": 74.5,
+        "f1": 52.6,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 72.0,
+       "recall": 80.7,
+       "f1": 76.1,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.7196,
+       "per_task_threshold": {
+        "precision": 65.3,
+        "recall": 98.6,
+        "f1": 78.6,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 54.4,
+      "recall": 87.0,
+      "f1": 66.9,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       64.7,
+       69.0
+      ]
+     }
+    },
+    "HHEM-2.1-open": {
+     "train_oof": {
+      "f1": 73.1,
+      "auroc": 0.8042
+     },
+     "threshold": 0.19875168800354004,
+     "response": {
+      "precision": 58.6,
+      "recall": 84.8,
+      "f1": 69.3,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8226,
+      "f1_ci95": [
+       67.1,
+       71.4
+      ],
+      "auroc_ci95": [
+       0.8067,
+       0.8383
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 41.9,
+       "recall": 76.2,
+       "f1": 54.1,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8378,
+       "per_task_threshold": {
+        "precision": 47.3,
+        "recall": 70.6,
+        "f1": 56.6,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 49.4,
+       "recall": 57.4,
+       "f1": 53.1,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7753,
+       "per_task_threshold": {
+        "precision": 42.2,
+        "recall": 67.6,
+        "f1": 52.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 67.0,
+       "recall": 96.9,
+       "f1": 79.2,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6149,
+       "per_task_threshold": {
+        "precision": 66.2,
+        "recall": 97.9,
+        "f1": 79.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 57.5,
+      "recall": 86.7,
+      "f1": 69.1,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       66.9,
+       71.1
+      ]
+     }
+    },
+    "MiniCheck-RoBERTa-L": {
+     "train_oof": {
+      "f1": 67.2,
+      "auroc": 0.7173
+     },
+     "threshold": 0.4728351831436157,
+     "response": {
+      "precision": 46.0,
+      "recall": 89.7,
+      "f1": 60.8,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.7401,
+      "f1_ci95": [
+       58.6,
+       62.9
+      ],
+      "auroc_ci95": [
+       0.7206,
+       0.758
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 25.0,
+       "recall": 82.5,
+       "f1": 38.4,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.7243,
+       "per_task_threshold": {
+        "precision": 25.0,
+        "recall": 82.5,
+        "f1": 38.4,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 32.6,
+       "recall": 79.4,
+       "f1": 46.2,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7163,
+       "per_task_threshold": {
+        "precision": 32.6,
+        "recall": 79.4,
+        "f1": 46.2,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 67.7,
+       "recall": 95.3,
+       "f1": 79.2,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6159,
+       "per_task_threshold": {
+        "precision": 64.3,
+        "recall": 99.1,
+        "f1": 78.0,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 45.3,
+      "recall": 92.0,
+      "f1": 60.7,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       58.5,
+       62.9
+      ]
+     }
+    },
+    "NLI mean (product)": {
+     "train_oof": {
+      "f1": 71.4,
+      "auroc": 0.7978
+     },
+     "threshold": 0.4981340169906616,
+     "response": {
+      "precision": 57.5,
+      "recall": 82.9,
+      "f1": 67.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8218,
+      "f1_ci95": [
+       65.6,
+       70.1
+      ],
+      "auroc_ci95": [
+       0.8051,
+       0.8373
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 42.4,
+       "recall": 69.4,
+       "f1": 52.6,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8273,
+       "per_task_threshold": {
+        "precision": 42.4,
+        "recall": 69.4,
+        "f1": 52.6,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 41.2,
+       "recall": 64.7,
+       "f1": 50.4,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.7695,
+       "per_task_threshold": {
+        "precision": 39.0,
+        "recall": 67.2,
+        "f1": 49.4,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 69.3,
+       "recall": 93.1,
+       "f1": 79.4,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.6582,
+       "per_task_threshold": {
+        "precision": 66.1,
+        "recall": 97.8,
+        "f1": 78.9,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 55.4,
+      "recall": 86.3,
+      "f1": 67.5,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       65.3,
+       69.7
+      ]
+     }
+    },
+    "omni reply head": {
+     "train_oof": {
+      "f1": 78.2,
+      "auroc": 0.8832
+     },
+     "threshold": -0.09359286165302018,
+     "response": {
+      "precision": 71.4,
+      "recall": 80.9,
+      "f1": 75.8,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8987,
+      "f1_ci95": [
+       73.7,
+       77.8
+      ],
+      "auroc_ci95": [
+       0.8867,
+       0.9098
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 56.0,
+       "recall": 67.5,
+       "f1": 61.2,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8743,
+       "per_task_threshold": {
+        "precision": 52.2,
+        "recall": 73.8,
+        "f1": 61.1,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 65.3,
+       "recall": 63.7,
+       "f1": 64.5,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8679,
+       "per_task_threshold": {
+        "precision": 55.4,
+        "recall": 73.0,
+        "f1": 63.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 77.5,
+       "recall": 90.7,
+       "f1": 83.6,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8533,
+       "per_task_threshold": {
+        "precision": 81.6,
+        "recall": 88.1,
+        "f1": 84.7,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 69.4,
+      "recall": 82.4,
+      "f1": 75.3,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       73.2,
+       77.3
+      ]
+     },
+     "info": {
+      "C": 0.001,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8860421170751284,
+        "f1": 0.786036036036036
+       },
+       "0.01": {
+        "auroc": 0.8857133068475731,
+        "f1": 0.788929889298893
+       },
+       "0.1": {
+        "auroc": 0.8852194240971178,
+        "f1": 0.78928046989721
+       },
+       "1.0": {
+        "auroc": 0.8853733731346471,
+        "f1": 0.7906110283159463
+       }
+      },
+      "seconds": 6
+     }
+    },
+    "omni worst unit": {
+     "train_oof": {
+      "f1": 77.4,
+      "auroc": 0.8752
+     },
+     "threshold": 0.7192566760462624,
+     "response": {
+      "precision": 67.6,
+      "recall": 84.6,
+      "f1": 75.2,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8952,
+      "f1_ci95": [
+       73.0,
+       77.1
+      ],
+      "auroc_ci95": [
+       0.8827,
+       0.9065
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 48.9,
+       "recall": 85.6,
+       "f1": 62.3,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9023,
+       "per_task_threshold": {
+        "precision": 51.1,
+        "recall": 83.8,
+        "f1": 63.5,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 68.6,
+       "recall": 58.8,
+       "f1": 63.3,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8491,
+       "per_task_threshold": {
+        "precision": 51.7,
+        "recall": 73.0,
+        "f1": 60.6,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 74.6,
+       "recall": 93.4,
+       "f1": 83.0,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8504,
+       "per_task_threshold": {
+        "precision": 78.5,
+        "recall": 90.7,
+        "f1": 84.1,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 66.3,
+      "recall": 85.7,
+      "f1": 74.7,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       72.6,
+       76.7
+      ]
+     },
+     "info": {
+      "C": 0.001,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8728581172744613,
+        "f1": 0.7746327481189538
+       },
+       "0.01": {
+        "auroc": 0.8728176277877123,
+        "f1": 0.7746947835738068
+       },
+       "0.1": {
+        "auroc": 0.8726031669897668,
+        "f1": 0.7760973810402065
+       },
+       "1.0": {
+        "auroc": 0.8725880390496629,
+        "f1": 0.775811209439528
+       }
+      },
+      "seconds": 19
+     }
+    },
+    "MLP-neuron sentence probe": {
+     "train_oof": {
+      "f1": 77.8,
+      "auroc": 0.877
+     },
+     "threshold": 2.452493190765381,
+     "response": {
+      "precision": 70.8,
+      "recall": 78.2,
+      "f1": 74.3,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.8831,
+      "f1_ci95": [
+       72.1,
+       76.3
+      ],
+      "auroc_ci95": [
+       0.8689,
+       0.8961
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 55.1,
+       "recall": 70.6,
+       "f1": 61.9,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8777,
+       "per_task_threshold": {
+        "precision": 55.4,
+        "recall": 64.4,
+        "f1": 59.5,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 49.8,
+       "recall": 66.7,
+       "f1": 57.0,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8145,
+       "per_task_threshold": {
+        "precision": 46.1,
+        "recall": 72.1,
+        "f1": 56.2,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 86.7,
+       "recall": 84.3,
+       "f1": 85.5,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8845,
+       "per_task_threshold": {
+        "precision": 84.7,
+        "recall": 88.6,
+        "f1": 86.6,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 68.7,
+      "recall": 80.9,
+      "f1": 74.3,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       72.1,
+       76.3
+      ]
+     },
+     "info": {
+      "C": 0.1,
+      "fold0_selection": {
+       "0.001": {
+        "auroc": 0.8635726766264872,
+        "f1": 0.770460601446517
+       },
+       "0.01": {
+        "auroc": 0.8663108337853176,
+        "f1": 0.7696414950419527
+       },
+       "0.1": {
+        "auroc": 0.8666156172844725,
+        "f1": 0.7727098505174397
+       }
+      },
+      "seconds": 37,
+      "on_gpu": true,
+      "dim": 29184,
+      "sentence_auroc_test": 0.9033
+     }
+    },
+    "stack: omni (reply + unit + judge)": {
+     "train_oof": {
+      "f1": 79.2,
+      "auroc": 0.8929
+     },
+     "threshold": -0.1326219275263189,
+     "response": {
+      "precision": 71.7,
+      "recall": 82.9,
+      "f1": 76.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9104,
+      "f1_ci95": [
+       74.8,
+       78.9
+      ],
+      "auroc_ci95": [
+       0.8996,
+       0.9205
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 55.8,
+       "recall": 72.5,
+       "f1": 63.0,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8992,
+       "per_task_threshold": {
+        "precision": 54.2,
+        "recall": 76.2,
+        "f1": 63.4,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 66.0,
+       "recall": 60.8,
+       "f1": 63.3,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8732,
+       "per_task_threshold": {
+        "precision": 57.8,
+        "recall": 72.5,
+        "f1": 64.3,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 78.1,
+       "recall": 93.6,
+       "f1": 85.2,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8758,
+       "per_task_threshold": {
+        "precision": 82.2,
+        "recall": 89.3,
+        "f1": 85.6,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 70.9,
+      "recall": 83.5,
+      "f1": 76.7,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       74.6,
+       78.6
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)"
+      ]
+     }
+    },
+    "stack: omni + NLI": {
+     "train_oof": {
+      "f1": 79.6,
+      "auroc": 0.8957
+     },
+     "threshold": -0.07582397688443585,
+     "response": {
+      "precision": 72.9,
+      "recall": 82.8,
+      "f1": 77.5,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.912,
+      "f1_ci95": [
+       75.5,
+       79.5
+      ],
+      "auroc_ci95": [
+       0.9013,
+       0.9223
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 58.0,
+       "recall": 70.0,
+       "f1": 63.5,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9052,
+       "per_task_threshold": {
+        "precision": 54.3,
+        "recall": 78.1,
+        "f1": 64.1,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 70.1,
+       "recall": 60.8,
+       "f1": 65.1,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8755,
+       "per_task_threshold": {
+        "precision": 60.9,
+        "recall": 67.2,
+        "f1": 63.9,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 77.6,
+       "recall": 94.1,
+       "f1": 85.1,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8728,
+       "per_task_threshold": {
+        "precision": 81.1,
+        "recall": 90.5,
+        "f1": 85.6,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 71.4,
+      "recall": 83.4,
+      "f1": 76.9,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       74.8,
+       78.9
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    },
+    "stack: neurons + NLI": {
+     "train_oof": {
+      "f1": 79.6,
+      "auroc": 0.8937
+     },
+     "threshold": -0.16858536317005038,
+     "response": {
+      "precision": 72.8,
+      "recall": 82.0,
+      "f1": 77.1,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9072,
+      "f1_ci95": [
+       75.0,
+       79.1
+      ],
+      "auroc_ci95": [
+       0.8957,
+       0.9185
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 60.0,
+       "recall": 69.4,
+       "f1": 64.3,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.8989,
+       "per_task_threshold": {
+        "precision": 59.0,
+        "recall": 69.4,
+        "f1": 63.8,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 61.1,
+       "recall": 67.6,
+       "f1": 64.2,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8466,
+       "per_task_threshold": {
+        "precision": 48.6,
+        "recall": 75.0,
+        "f1": 59.0,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 80.5,
+       "recall": 90.5,
+       "f1": 85.2,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8815,
+       "per_task_threshold": {
+        "precision": 84.1,
+        "recall": 88.4,
+        "f1": 86.2,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 69.8,
+      "recall": 82.3,
+      "f1": 75.5,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       73.4,
+       77.4
+      ]
+     },
+     "info": {
+      "parts": [
+       "MLP-neuron sentence probe",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    },
+    "stack: omni + neurons": {
+     "train_oof": {
+      "f1": 80.6,
+      "auroc": 0.9034
+     },
+     "threshold": -0.19280340452085362,
+     "response": {
+      "precision": 74.8,
+      "recall": 83.5,
+      "f1": 78.9,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9196,
+      "f1_ci95": [
+       76.9,
+       80.8
+      ],
+      "auroc_ci95": [
+       0.9088,
+       0.9289
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 58.8,
+       "recall": 71.2,
+       "f1": 64.4,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9059,
+       "per_task_threshold": {
+        "precision": 57.4,
+        "recall": 75.0,
+        "f1": 65.0,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 63.4,
+       "recall": 67.2,
+       "f1": 65.2,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8745,
+       "per_task_threshold": {
+        "precision": 60.2,
+        "recall": 73.5,
+        "f1": 66.2,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 83.5,
+       "recall": 92.6,
+       "f1": 87.8,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.9007,
+       "per_task_threshold": {
+        "precision": 86.0,
+        "recall": 90.3,
+        "f1": 88.1,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 74.4,
+      "recall": 84.1,
+      "f1": 78.9,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       77.0,
+       80.8
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "MLP-neuron sentence probe"
+      ]
+     }
+    },
+    "stack: all (omni + neurons + NLI)": {
+     "train_oof": {
+      "f1": 80.8,
+      "auroc": 0.9061
+     },
+     "threshold": -0.1749682026275749,
+     "response": {
+      "precision": 75.2,
+      "recall": 83.5,
+      "f1": 79.1,
+      "n": 2700,
+      "positives": 943,
+      "auroc": 0.9208,
+      "f1_ci95": [
+       77.1,
+       80.9
+      ],
+      "auroc_ci95": [
+       0.9107,
+       0.9305
+      ]
+     },
+     "by_task": {
+      "QA": {
+       "precision": 61.4,
+       "recall": 72.5,
+       "f1": 66.5,
+       "n": 900,
+       "positives": 160,
+       "auroc": 0.9103,
+       "per_task_threshold": {
+        "precision": 53.9,
+        "recall": 78.1,
+        "f1": 63.8,
+        "n": 900,
+        "positives": 160
+       }
+      },
+      "Summary": {
+       "precision": 65.4,
+       "recall": 67.6,
+       "f1": 66.5,
+       "n": 900,
+       "positives": 204,
+       "auroc": 0.8775,
+       "per_task_threshold": {
+        "precision": 53.0,
+        "recall": 77.9,
+        "f1": 63.1,
+        "n": 900,
+        "positives": 204
+       }
+      },
+      "Data2txt": {
+       "precision": 82.5,
+       "recall": 92.1,
+       "f1": 87.0,
+       "n": 900,
+       "positives": 579,
+       "auroc": 0.8987,
+       "per_task_threshold": {
+        "precision": 85.3,
+        "recall": 89.3,
+        "f1": 87.3,
+        "n": 900,
+        "positives": 579
+       }
+      }
+     },
+     "per_task_threshold": {
+      "precision": 70.4,
+      "recall": 84.9,
+      "f1": 77.0,
+      "n": 2700,
+      "positives": 943,
+      "f1_ci95": [
+       75.0,
+       78.9
+      ]
+     },
+     "info": {
+      "parts": [
+       "omni reply head",
+       "omni worst unit",
+       "judge (reader's own, no training)",
+       "MLP-neuron sentence probe",
+       "HHEM-2.1-open",
+       "MiniCheck-RoBERTa-L"
+      ]
+     }
+    }
+   }
+  }
+ },
+ "notes": [
+  "Qwen3-8B read 6,800 of 15,090 training answers (a random 45%: the 8B extraction was time-cut at 7 h); Qwen3-4B read all 15,090.",
+  "NLI (HHEM-2.1-open at the pinned revision + MiniCheck-RoBERTa-L) scored 16,600 of 17,790 answers (all 2,700 test; 1,190 training answers missing, imputed with the training mean in the 4B stacks).",
+  "Timing is batch 1. The 8B reader ran while the NLI worker shared GPU 1 for the whole 8B run, so its 2.56 s/answer includes contention; the earlier corpus measurement (median ~350 tokens, no contention) was 0.97 s. RAGTruth inputs average 1,082 tokens.",
+  "The universal omni head shipped in the repo was trained on a corpus containing RAGTruth test answers; it is NOT used here: every head is refitted on RAGTruth training answers only.",
+  "Several feature sets and stacks were evaluated on test; the headline was fixed by the training-OOF rule, and the CI shows the spread between them is within noise."
+ ]
+}

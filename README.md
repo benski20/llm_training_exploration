@@ -5,7 +5,9 @@
 > Held out on 21 domains, the accuracy tier (Qwen3-8B reader + two one-pass judges + NLI + written checkers, ≈ $0.5 per
 > 1,000 checks) scores AUROC 0.84 with no labels from the domain and 0.86 with 50 (reasoning 0.92, long-form 0.87,
 > RAG 0.84, chat 0.80); its false-alarm guarantee held at about 5% against a 10% target from 100 labels. The 1.7B
-> tier costs ≈ $0.03 per 1,000 checks (0.73). See [docs/omni_verifier.md](docs/omni_verifier.md) and the research behind it in
+> tier costs ≈ $0.03 per 1,000 checks (0.73). On the official RAGTruth test set (2,700 answers) a frozen 4B or 8B
+> reader with a linear readout reaches response F1 79.1-79.3 (AUROC 0.92-0.93), level with fine-tuned detectors
+> (LettuceDetect 79.2, Llama-2-13B 78.7) and above prompted GPT-4-turbo (63.4). See [docs/omni_verifier.md](docs/omni_verifier.md) and the research behind it in
 > [docs/research/](docs/research/README.md).
 >
 > ```bash
