@@ -463,6 +463,20 @@ class OmniVerifier:
             p["z"] = dict(p["z"] or {"u": [0.0, 1.0]}, r=[float(r.mean()), float(r.std() + 1e-6)])
         return p
 
+    def evidence(self, prof, r, u, extras):
+        """how much each named signal pushed this reply toward "wrong" (its weight times its standardised value):
+        the verdict's reasons, as in vt/omni_circuit.py (same accuracy as the sum, readable)."""
+        z = prof.get("z") or {}
+        w = dict(self.WEIGHTS, **(prof.get("weights") or {}))
+        val = lambda v, k: 0.0 if k not in z or np.isnan(v) else float((v - z[k][0]) / z[k][1])
+        j, n, fl, e = extras
+        out = {"reader_probe": w["r"] * val(r[0], "r"), "weakest_sentence": w["u"] * val(u[0], "u"),
+               "reader_judgement": w["j"] * val(j[0], "j"), "grounding_nli": w["n"] * val(n[0], "n"),
+               "rule_violations": prof.get("flag_weight", self.FLAG_WEIGHT) * float(fl[0])}
+        for k in range(e.shape[1]):
+            out[f"judge_{k + 1}"] = w.get(f"e{k}", self.JUDGE_WEIGHT) * val(e[0, k], f"e{k}")
+        return {k: round(v, 3) for k, v in sorted(out.items(), key=lambda t: -t[1]) if v != 0.0}
+
     def _oof(self, prof, feats, y, folds=5, seed=0):
         X = (np.stack([self.reply_vector(f) for f in feats]) - np.array(prof["mu"])) / np.array(prof["sd"])
         _, u = self._raw(prof, feats)
@@ -499,10 +513,12 @@ class OmniVerifier:
         if f is None:
             return {"error": "empty reply"}
         r, u = self._raw(prof, [f])
-        z = float(self._combine(prof, r, u, self._extras([f]))[0])
+        ex = self._extras([f])
+        z = float(self._combine(prof, r, u, ex)[0])
         out = {"score": z, "reply_score": float(r[0]), "worst_unit_score": None if np.isnan(u[0]) else float(u[0]),
                "judge_logodds_yes": float(f["j_logit"]), "nli_unsupported": None if np.isnan(f["nli"]) else f["nli"],
-               "violations": f["violations"], "judges_logodds_wrong": f.get("judges", []), "profile": prof["name"]}
+               "violations": f["violations"], "judges_logodds_wrong": f.get("judges", []), "profile": prof["name"],
+               "evidence": self.evidence(prof, r, u, ex)}
         if prof.get("threshold") is not None:
             out["flagged"] = bool(z >= prof["threshold"])
             out["guarantee"] = {k: prof["card"].get(k) for k in ("fpr_target", "confidence", "clean_replies")}
