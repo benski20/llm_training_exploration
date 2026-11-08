@@ -23,6 +23,28 @@ curl -H "Authorization: Bearer $KEY" -d '{"profile": "acme", "question": "...", 
 # -> {"score", "flagged", "guarantee": {"fpr_target", "confidence", "clean_replies"}, "units": [{"text", "score"}], ...}
 ```
 
+## Headline: the full stack on 21 held-out domains (`experiments/omni_stack.py`, `results/omni/stack_q8b_*.json`)
+
+The stack:
+- the **Qwen3-8B reader**: reply head, worst unit, and its own judge (weight 2);
+- **NLI cross-encoders** (HHEM + MiniCheck) on replies that come with documents;
+- **written domain checkers** and exact arithmetic.
+
+Every number is on a domain whose labels were never used for training. AUROC for "wrong":
+
+| format | zero labels from the domain | 50 labels | 100 labels | guarantee from 100 uniform labels: false alarms (target ≤ 10%) / wrong caught |
+|---|---|---|---|---|
+| reasoning (4 domains) | **0.90** | 0.91 | 0.91 | 4.5% / **58%** |
+| long-form (5) | **0.84** | 0.84 | 0.80 | 5.1% / 57% |
+| RAG (10; NLI where scored) | 0.77 | 0.81 | **0.87** | 5.7% / 42% |
+| closed-book chat (2) | 0.73 | 0.74 | 0.75 | 5.8% / 27% |
+| **all 21** | **0.81** | **0.82** | 0.82-0.85 | **5.3% / 46%** |
+
+- **Reasoning and long-form are strong with no labels.** RAG needs 50-100 labels to reach 0.81-0.87: the learned weighting lets NLI dominate where it is stronger. Closed-book chat stays the weak format.
+- **Cost:** about $0.19 per 1,000 checks on 2× T4 (measured unbatched), or about $0.09 on one 24 GB GPU (estimate).
+  The 1.7B tier costs ≈ $0.03 per 1,000 at 0.73 / 0.85 (all / reasoning).
+- **The false-alarm guarantee held on every format.** At that held rate it catches about half of wrong replies on reasoning and long-form.
+
 ## How it works (`vt/omni.py`)
 
 The reader reads `[documents +] question + reply`, then a fixed judge question appended *after* the reply: "Is the

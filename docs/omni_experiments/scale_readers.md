@@ -112,3 +112,5 @@ head in `results/kaggle/omni-scale-q14b/heads/omni_qwen3_14b_nf4.npz`).
 - **Use 1.7B only where cost dominates,** or for math and reasoning, where it is already at 0.85.
 
 Heads: `heads/omni_qwen3_4b.npz` (now trained on the full 5,107 replies) and `heads/omni_qwen3_8b.npz`.
+
+**Expert scores per reply.** Files: `results/omni/expert_scores_q8b.npz` and `expert_scores_q17.npz` (GPU fp16 reruns, kernel `omni-expert-scores`). For every corpus id they hold the LODO expert scores exactly as `omni_final.py` computes them: `reply`, `worst_unit` (NaN when a reply has no units) and `judge` (−j_logit), plus `label`, `domain` and `format`. Per-domain AUROCs reproduce the reports: 8B 0.789 / 0.759 / 0.779; 1.7B 0.715 / 0.705 / 0.641.

@@ -2,8 +2,9 @@
 > cores, ≈$0.015 per 1,000 checks on a GPU) scores any LLM reply for being wrong: RAG answers, chat, long-form text,
 > step-by-step reasoning. It points at the suspect sentence or step. A new domain is onboarded in minutes: unlabelled
 > replies re-centre it, 25-100 labels adapt it, and a threshold holds a stated false-alarm rate with 95% confidence.
-> Held out on 21 domains it scores AUROC 0.73 with no labels from the domain (reasoning 0.85) and 0.78 with 100
-> labels; the Qwen3-4B tier scores 0.78 with no labels and 0.80 with 50 (on a 1,800-reply subset). See [docs/omni_verifier.md](docs/omni_verifier.md) and the research behind it in
+> Held out on 21 domains, the Qwen3-8B tier (with NLI on RAG and written checkers) scores AUROC 0.81 with no labels
+> from the domain (reasoning 0.90, long-form 0.84) and RAG 0.87 with 100 labels; its false-alarm guarantee held at
+> about 5% against a 10% target while catching about half of wrong replies. The 1.7B tier costs ≈ $0.03 per 1,000 checks. See [docs/omni_verifier.md](docs/omni_verifier.md) and the research behind it in
 > [docs/research/](docs/research/README.md).
 >
 > ```bash
