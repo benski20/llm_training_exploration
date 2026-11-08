@@ -256,4 +256,11 @@ and 30-600× below an LLM judge per claim.
   - Its fixed threshold did not hold a false-alarm rate on new domains: 19-47% against a 10% target.
   - Per-domain standardisation from unlabelled replies was still the best label-free option. A stated false-alarm
     rate still needs the domain's own clean labels.
+- **A probe hand-written from sparse-autoencoder features transfers worse, not better** (agent D,
+  docs/omni_experiments/sae_probe.md). Setup: Qwen-Scope SAE on Qwen3-1.7B; 30 latents chosen without labels
+  (uncertainty, invented entities, uncopied text), equal weights.
+  - Held out: 0.55 against 0.69 for a probe on raw states.
+  - Refitted on 25-50 labels it still trails the raw probe by 0.10.
+  - A sparse probe fitted on all SAE latents ties the raw probe (−0.01). This matches the literature (docs/research/mech_interp.md).
+  - Why: the "unknown entity" latents barely fire on replies, and the uncertainty and copy latents flip sign between domains.
 - **Sizes.** 125-400 replies per domain. Per-domain AUROCs carry ±0.05-0.07 confidence intervals; the 21-domain means are much tighter.
