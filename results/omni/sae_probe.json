@@ -1,0 +1,1739 @@
+{
+ "setup": {
+  "reader_instruct": "Qwen/Qwen3-1.7B",
+  "base": "Qwen/Qwen3-1.7B-Base",
+  "sae": "Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50",
+  "sae_cfg": {
+   "model_type": "topk_sae",
+   "hf_repo_id": "Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50",
+   "base_model": "Qwen/Qwen3-1.7B-Base",
+   "d_model": 2048,
+   "d_sae": 32768,
+   "k": 50,
+   "num_layers": 28,
+   "layers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27
+   ],
+   "hook_point": "resid_post",
+   "dtype": "float32"
+  },
+  "layer": 14,
+  "hidden_states_index": 15,
+  "max_tokens": 1024,
+  "n_rows": 5107,
+  "per_domain_cap": 0,
+  "dtype": "float16",
+  "attn": "sdpa",
+  "rows_nonfinite_hidden": 0,
+  "rows_empty": 0,
+  "sae_probe_columns": 16971,
+  "formats": {
+   "chat": [
+    "halueval_general",
+    "truthfulqa"
+   ],
+   "longform": [
+    "felm_math",
+    "felm_reasoning",
+    "felm_science",
+    "felm_wk",
+    "felm_writing"
+   ],
+   "rag": [
+    "halubench_covid",
+    "halubench_drop",
+    "halubench_finance",
+    "halubench_pubmed",
+    "halueval_dialogue",
+    "halueval_qa",
+    "halueval_summary",
+    "ragtruth_data2text",
+    "ragtruth_qa",
+    "ragtruth_summary"
+   ],
+   "reasoning": [
+    "pb_gsm8k",
+    "pb_math",
+    "pb_olympiad",
+    "pb_omnimath"
+   ]
+  },
+  "domain_sizes": {
+   "felm_math": 194,
+   "felm_reasoning": 208,
+   "felm_science": 125,
+   "felm_wk": 184,
+   "felm_writing": 136,
+   "halubench_covid": 200,
+   "halubench_drop": 200,
+   "halubench_finance": 200,
+   "halubench_pubmed": 200,
+   "halueval_dialogue": 300,
+   "halueval_general": 300,
+   "halueval_qa": 300,
+   "halueval_summary": 300,
+   "pb_gsm8k": 240,
+   "pb_math": 240,
+   "pb_olympiad": 240,
+   "pb_omnimath": 240,
+   "ragtruth_data2text": 300,
+   "ragtruth_qa": 300,
+   "ragtruth_summary": 300,
+   "truthfulqa": 400
+  },
+  "minutes": 86.7
+ },
+ "sae_fit": {
+  "instruct": {
+   "fvu": 0.34015717775424864,
+   "mean_cos": 0.910317599773407,
+   "tokens": 35860,
+   "nonfinite_tokens": 0
+  },
+  "base": {
+   "fvu": 0.2888171033994912,
+   "mean_cos": 0.9231433868408203,
+   "tokens": 35860,
+   "nonfinite_tokens": 0
+  },
+  "rule": "instruct if FVU<=0.5 and <=1.5x Base FVU",
+  "reader_used": "Qwen/Qwen3-1.7B"
+ },
+ "selection": {
+  "ENT": [
+   {
+    "latent": 884,
+    "rho_entropy": 0.2382,
+    "d_unknown": 0.0,
+    "rho_novel": 0.0159,
+    "token_fire_rate": 0.0437
+   },
+   {
+    "latent": 19765,
+    "rho_entropy": 0.2088,
+    "d_unknown": 0.0,
+    "rho_novel": -0.0061,
+    "token_fire_rate": 0.0551
+   },
+   {
+    "latent": 984,
+    "rho_entropy": 0.1763,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2084,
+    "token_fire_rate": 0.0736
+   },
+   {
+    "latent": 17871,
+    "rho_entropy": 0.1645,
+    "d_unknown": 0.0,
+    "rho_novel": 0.0065,
+    "token_fire_rate": 0.0485
+   },
+   {
+    "latent": 27046,
+    "rho_entropy": 0.1621,
+    "d_unknown": 0.0,
+    "rho_novel": 0.0109,
+    "token_fire_rate": 0.081
+   },
+   {
+    "latent": 20660,
+    "rho_entropy": 0.1609,
+    "d_unknown": 0.0,
+    "rho_novel": -0.0073,
+    "token_fire_rate": 0.011
+   },
+   {
+    "latent": 19024,
+    "rho_entropy": 0.1446,
+    "d_unknown": 0.0,
+    "rho_novel": 0.0319,
+    "token_fire_rate": 0.015
+   },
+   {
+    "latent": 17180,
+    "rho_entropy": 0.1409,
+    "d_unknown": 0.0,
+    "rho_novel": -0.0013,
+    "token_fire_rate": 0.0129
+   },
+   {
+    "latent": 27944,
+    "rho_entropy": 0.1359,
+    "d_unknown": -0.148,
+    "rho_novel": 0.0758,
+    "token_fire_rate": 0.0233
+   },
+   {
+    "latent": 22534,
+    "rho_entropy": 0.1312,
+    "d_unknown": 0.0,
+    "rho_novel": 0.0519,
+    "token_fire_rate": 0.0452
+   }
+  ],
+  "UNK": [
+   {
+    "latent": 8762,
+    "rho_entropy": -0.002,
+    "d_unknown": 2.469,
+    "rho_novel": 0.0099,
+    "token_fire_rate": 0.0022
+   },
+   {
+    "latent": 14368,
+    "rho_entropy": 0.0052,
+    "d_unknown": 2.364,
+    "rho_novel": 0.0136,
+    "token_fire_rate": 0.0004
+   },
+   {
+    "latent": 4564,
+    "rho_entropy": 0.0102,
+    "d_unknown": 2.345,
+    "rho_novel": 0.0244,
+    "token_fire_rate": 0.0002
+   },
+   {
+    "latent": 20048,
+    "rho_entropy": -0.0003,
+    "d_unknown": 2.044,
+    "rho_novel": 0.0161,
+    "token_fire_rate": 0.0016
+   },
+   {
+    "latent": 14924,
+    "rho_entropy": 0.003,
+    "d_unknown": 1.718,
+    "rho_novel": 0.0075,
+    "token_fire_rate": 0.0006
+   },
+   {
+    "latent": 22454,
+    "rho_entropy": 0.0055,
+    "d_unknown": 1.679,
+    "rho_novel": 0.0164,
+    "token_fire_rate": 0.0003
+   },
+   {
+    "latent": 12055,
+    "rho_entropy": -0.0206,
+    "d_unknown": 1.624,
+    "rho_novel": 0.0511,
+    "token_fire_rate": 0.0091
+   },
+   {
+    "latent": 9471,
+    "rho_entropy": 0.0043,
+    "d_unknown": 1.623,
+    "rho_novel": 0.0084,
+    "token_fire_rate": 0.0004
+   },
+   {
+    "latent": 21131,
+    "rho_entropy": 0.0151,
+    "d_unknown": 1.491,
+    "rho_novel": 0.028,
+    "token_fire_rate": 0.0005
+   },
+   {
+    "latent": 20983,
+    "rho_entropy": -0.0003,
+    "d_unknown": 1.461,
+    "rho_novel": 0.0131,
+    "token_fire_rate": 0.0003
+   }
+  ],
+  "NOV": [
+   {
+    "latent": 29462,
+    "rho_entropy": 0.0268,
+    "d_unknown": 0.0,
+    "rho_novel": 0.3464,
+    "token_fire_rate": 0.0591
+   },
+   {
+    "latent": 16308,
+    "rho_entropy": 0.0506,
+    "d_unknown": -0.095,
+    "rho_novel": 0.3453,
+    "token_fire_rate": 0.4077
+   },
+   {
+    "latent": 8854,
+    "rho_entropy": 0.0768,
+    "d_unknown": 0.0,
+    "rho_novel": 0.3186,
+    "token_fire_rate": 0.0357
+   },
+   {
+    "latent": 32306,
+    "rho_entropy": 0.1106,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2911,
+    "token_fire_rate": 0.0758
+   },
+   {
+    "latent": 31477,
+    "rho_entropy": 0.0244,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2609,
+    "token_fire_rate": 0.022
+   },
+   {
+    "latent": 11099,
+    "rho_entropy": 0.0016,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2506,
+    "token_fire_rate": 0.0284
+   },
+   {
+    "latent": 6072,
+    "rho_entropy": 0.0387,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2386,
+    "token_fire_rate": 0.0359
+   },
+   {
+    "latent": 22548,
+    "rho_entropy": 0.0743,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2345,
+    "token_fire_rate": 0.0501
+   },
+   {
+    "latent": 18884,
+    "rho_entropy": 0.0106,
+    "d_unknown": 0.0,
+    "rho_novel": 0.2295,
+    "token_fire_rate": 0.019
+   },
+   {
+    "latent": 17113,
+    "rho_entropy": 0.0639,
+    "d_unknown": 0.035,
+    "rho_novel": 0.2149,
+    "token_fire_rate": 0.0732
+   }
+  ]
+ },
+ "zero_label": {
+  "global": {
+   "a_raw": {
+    "all": 0.6856,
+    "chat": 0.5976,
+    "longform": 0.6972,
+    "rag": 0.646,
+    "reasoning": 0.8142,
+    "diff_vs_a_ci95": {
+     "all": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "chat": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "longform": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rag": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "reasoning": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7293,
+     "felm_reasoning": 0.7079,
+     "felm_science": 0.74,
+     "felm_wk": 0.527,
+     "felm_writing": 0.7815,
+     "halubench_covid": 0.708,
+     "halubench_drop": 0.4035,
+     "halubench_finance": 0.509,
+     "halubench_pubmed": 0.5998,
+     "halueval_dialogue": 0.8016,
+     "halueval_general": 0.6112,
+     "halueval_qa": 0.7292,
+     "halueval_summary": 0.7711,
+     "pb_gsm8k": 0.757,
+     "pb_math": 0.8601,
+     "pb_olympiad": 0.7952,
+     "pb_omnimath": 0.8444,
+     "ragtruth_data2text": 0.6288,
+     "ragtruth_qa": 0.6936,
+     "ragtruth_summary": 0.6159,
+     "truthfulqa": 0.584
+    }
+   },
+   "b_sae_l1": {
+    "all": 0.6757,
+    "chat": 0.5688,
+    "longform": 0.7031,
+    "rag": 0.631,
+    "reasoning": 0.8066,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.01,
+      -0.0266,
+      0.0048
+     ],
+     "chat": [
+      -0.0288,
+      -0.07,
+      0.019
+     ],
+     "longform": [
+      0.0059,
+      -0.032,
+      0.0476
+     ],
+     "rag": [
+      -0.0151,
+      -0.0395,
+      0.0077
+     ],
+     "reasoning": [
+      -0.0076,
+      -0.0274,
+      0.0132
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.6831,
+     "felm_reasoning": 0.7924,
+     "felm_science": 0.7534,
+     "felm_wk": 0.5096,
+     "felm_writing": 0.777,
+     "halubench_covid": 0.7659,
+     "halubench_drop": 0.6007,
+     "halubench_finance": 0.5612,
+     "halubench_pubmed": 0.5127,
+     "halueval_dialogue": 0.6965,
+     "halueval_general": 0.523,
+     "halueval_qa": 0.806,
+     "halueval_summary": 0.6544,
+     "pb_gsm8k": 0.79,
+     "pb_math": 0.8565,
+     "pb_olympiad": 0.7791,
+     "pb_omnimath": 0.8009,
+     "ragtruth_data2text": 0.5463,
+     "ragtruth_qa": 0.5854,
+     "ragtruth_summary": 0.5808,
+     "truthfulqa": 0.6145
+    }
+   },
+   "b_sae_l2": {
+    "all": 0.6172,
+    "chat": 0.5459,
+    "longform": 0.6295,
+    "rag": 0.5665,
+    "reasoning": 0.764,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.0684,
+      -0.0833,
+      -0.0533
+     ],
+     "chat": [
+      -0.0517,
+      -0.0944,
+      -0.005
+     ],
+     "longform": [
+      -0.0677,
+      -0.1049,
+      -0.0316
+     ],
+     "rag": [
+      -0.0795,
+      -0.1018,
+      -0.0561
+     ],
+     "reasoning": [
+      -0.0502,
+      -0.0737,
+      -0.0261
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.6819,
+     "felm_reasoning": 0.6765,
+     "felm_science": 0.6655,
+     "felm_wk": 0.5302,
+     "felm_writing": 0.5934,
+     "halubench_covid": 0.7108,
+     "halubench_drop": 0.5125,
+     "halubench_finance": 0.5126,
+     "halubench_pubmed": 0.5239,
+     "halueval_dialogue": 0.6894,
+     "halueval_general": 0.5376,
+     "halueval_qa": 0.6892,
+     "halueval_summary": 0.5492,
+     "pb_gsm8k": 0.7256,
+     "pb_math": 0.8224,
+     "pb_olympiad": 0.7048,
+     "pb_omnimath": 0.8033,
+     "ragtruth_data2text": 0.4823,
+     "ragtruth_qa": 0.4763,
+     "ragtruth_summary": 0.5193,
+     "truthfulqa": 0.5543
+    }
+   },
+   "c_written": {
+    "all": 0.5519,
+    "chat": 0.5626,
+    "longform": 0.5184,
+    "rag": 0.5408,
+    "reasoning": 0.6164,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1337,
+      -0.1548,
+      -0.1129
+     ],
+     "chat": [
+      -0.035,
+      -0.0909,
+      0.0239
+     ],
+     "longform": [
+      -0.1788,
+      -0.2279,
+      -0.1266
+     ],
+     "rag": [
+      -0.1053,
+      -0.1376,
+      -0.0754
+     ],
+     "reasoning": [
+      -0.1978,
+      -0.2378,
+      -0.1569
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4625,
+     "felm_reasoning": 0.5019,
+     "felm_science": 0.5653,
+     "felm_wk": 0.4379,
+     "felm_writing": 0.6242,
+     "halubench_covid": 0.5865,
+     "halubench_drop": 0.4959,
+     "halubench_finance": 0.5214,
+     "halubench_pubmed": 0.5387,
+     "halueval_dialogue": 0.4588,
+     "halueval_general": 0.6252,
+     "halueval_qa": 0.7067,
+     "halueval_summary": 0.6713,
+     "pb_gsm8k": 0.6137,
+     "pb_math": 0.5622,
+     "pb_olympiad": 0.6403,
+     "pb_omnimath": 0.6494,
+     "ragtruth_data2text": 0.4851,
+     "ragtruth_qa": 0.4447,
+     "ragtruth_summary": 0.4986,
+     "truthfulqa": 0.5
+    }
+   },
+   "c_fit": {
+    "all": 0.5651,
+    "chat": 0.504,
+    "longform": 0.6269,
+    "rag": 0.4906,
+    "reasoning": 0.7044,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1206,
+      -0.1406,
+      -0.1002
+     ],
+     "chat": [
+      -0.0936,
+      -0.1465,
+      -0.0366
+     ],
+     "longform": [
+      -0.0703,
+      -0.1184,
+      -0.021
+     ],
+     "rag": [
+      -0.1554,
+      -0.1878,
+      -0.1233
+     ],
+     "reasoning": [
+      -0.1098,
+      -0.144,
+      -0.0742
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7466,
+     "felm_reasoning": 0.7307,
+     "felm_science": 0.5477,
+     "felm_wk": 0.4657,
+     "felm_writing": 0.6438,
+     "halubench_covid": 0.5339,
+     "halubench_drop": 0.3756,
+     "halubench_finance": 0.5128,
+     "halubench_pubmed": 0.5074,
+     "halueval_dialogue": 0.5275,
+     "halueval_general": 0.5891,
+     "halueval_qa": 0.543,
+     "halueval_summary": 0.7297,
+     "pb_gsm8k": 0.6312,
+     "pb_math": 0.752,
+     "pb_olympiad": 0.6894,
+     "pb_omnimath": 0.7449,
+     "ragtruth_data2text": 0.3904,
+     "ragtruth_qa": 0.3635,
+     "ragtruth_summary": 0.4225,
+     "truthfulqa": 0.419
+    }
+   },
+   "c_ENT": {
+    "all": 0.5604,
+    "chat": 0.5196,
+    "longform": 0.4965,
+    "rag": 0.5751,
+    "reasoning": 0.6237,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1253,
+      -0.1448,
+      -0.1059
+     ],
+     "chat": [
+      -0.078,
+      -0.1335,
+      -0.0161
+     ],
+     "longform": [
+      -0.2007,
+      -0.2549,
+      -0.1487
+     ],
+     "rag": [
+      -0.071,
+      -0.1006,
+      -0.0434
+     ],
+     "reasoning": [
+      -0.1905,
+      -0.2294,
+      -0.1512
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4678,
+     "felm_reasoning": 0.5198,
+     "felm_science": 0.4917,
+     "felm_wk": 0.469,
+     "felm_writing": 0.5343,
+     "halubench_covid": 0.5711,
+     "halubench_drop": 0.3377,
+     "halubench_finance": 0.5084,
+     "halubench_pubmed": 0.5257,
+     "halueval_dialogue": 0.5516,
+     "halueval_general": 0.6204,
+     "halueval_qa": 0.9066,
+     "halueval_summary": 0.818,
+     "pb_gsm8k": 0.6225,
+     "pb_math": 0.5725,
+     "pb_olympiad": 0.6481,
+     "pb_omnimath": 0.6518,
+     "ragtruth_data2text": 0.5167,
+     "ragtruth_qa": 0.5377,
+     "ragtruth_summary": 0.4773,
+     "truthfulqa": 0.4188
+    }
+   },
+   "c_UNK": {
+    "all": 0.5284,
+    "chat": 0.538,
+    "longform": 0.5761,
+    "rag": 0.5103,
+    "reasoning": 0.509,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1573,
+      -0.1791,
+      -0.1369
+     ],
+     "chat": [
+      -0.0596,
+      -0.1085,
+      -0.0034
+     ],
+     "longform": [
+      -0.121,
+      -0.1727,
+      -0.0725
+     ],
+     "rag": [
+      -0.1358,
+      -0.164,
+      -0.1012
+     ],
+     "reasoning": [
+      -0.3052,
+      -0.346,
+      -0.264
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.5111,
+     "felm_reasoning": 0.5468,
+     "felm_science": 0.5289,
+     "felm_wk": 0.5149,
+     "felm_writing": 0.779,
+     "halubench_covid": 0.4689,
+     "halubench_drop": 0.5705,
+     "halubench_finance": 0.5149,
+     "halubench_pubmed": 0.4844,
+     "halueval_dialogue": 0.5643,
+     "halueval_general": 0.5294,
+     "halueval_qa": 0.5399,
+     "halueval_summary": 0.4326,
+     "pb_gsm8k": 0.4979,
+     "pb_math": 0.4896,
+     "pb_olympiad": 0.5047,
+     "pb_omnimath": 0.5439,
+     "ragtruth_data2text": 0.5077,
+     "ragtruth_qa": 0.4634,
+     "ragtruth_summary": 0.5561,
+     "truthfulqa": 0.5467
+    }
+   },
+   "c_NOV": {
+    "all": 0.5037,
+    "chat": 0.5331,
+    "longform": 0.4617,
+    "rag": 0.5385,
+    "reasoning": 0.4542,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.182,
+      -0.2044,
+      -0.1596
+     ],
+     "chat": [
+      -0.0645,
+      -0.1193,
+      0.0024
+     ],
+     "longform": [
+      -0.2354,
+      -0.2895,
+      -0.1756
+     ],
+     "rag": [
+      -0.1075,
+      -0.1374,
+      -0.0781
+     ],
+     "reasoning": [
+      -0.36,
+      -0.4121,
+      -0.3123
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.409,
+     "felm_reasoning": 0.4201,
+     "felm_science": 0.5346,
+     "felm_wk": 0.4318,
+     "felm_writing": 0.513,
+     "halubench_covid": 0.6024,
+     "halubench_drop": 0.4855,
+     "halubench_finance": 0.5304,
+     "halubench_pubmed": 0.5392,
+     "halueval_dialogue": 0.4593,
+     "halueval_general": 0.5427,
+     "halueval_qa": 0.7842,
+     "halueval_summary": 0.6593,
+     "pb_gsm8k": 0.4501,
+     "pb_math": 0.4166,
+     "pb_olympiad": 0.4722,
+     "pb_omnimath": 0.4779,
+     "ragtruth_data2text": 0.482,
+     "ragtruth_qa": 0.3575,
+     "ragtruth_summary": 0.4856,
+     "truthfulqa": 0.5236
+    }
+   }
+  },
+  "dstd": {
+   "a_raw": {
+    "all": 0.6726,
+    "chat": 0.5591,
+    "longform": 0.6704,
+    "rag": 0.6418,
+    "reasoning": 0.8089,
+    "diff_vs_a_ci95": {
+     "all": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "chat": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "longform": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "rag": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "reasoning": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7019,
+     "felm_reasoning": 0.7005,
+     "felm_science": 0.7275,
+     "felm_wk": 0.5333,
+     "felm_writing": 0.6887,
+     "halubench_covid": 0.686,
+     "halubench_drop": 0.3825,
+     "halubench_finance": 0.5251,
+     "halubench_pubmed": 0.6044,
+     "halueval_dialogue": 0.81,
+     "halueval_general": 0.5541,
+     "halueval_qa": 0.7368,
+     "halueval_summary": 0.7536,
+     "pb_gsm8k": 0.7361,
+     "pb_math": 0.8672,
+     "pb_olympiad": 0.7878,
+     "pb_omnimath": 0.8444,
+     "ragtruth_data2text": 0.6461,
+     "ragtruth_qa": 0.6867,
+     "ragtruth_summary": 0.5872,
+     "truthfulqa": 0.564
+    }
+   },
+   "b_sae_l1": {
+    "all": 0.663,
+    "chat": 0.5465,
+    "longform": 0.6718,
+    "rag": 0.6371,
+    "reasoning": 0.7748,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.0096,
+      -0.0272,
+      0.0075
+     ],
+     "chat": [
+      -0.0126,
+      -0.0658,
+      0.0405
+     ],
+     "longform": [
+      0.0014,
+      -0.0455,
+      0.0472
+     ],
+     "rag": [
+      -0.0047,
+      -0.0266,
+      0.0198
+     ],
+     "reasoning": [
+      -0.034,
+      -0.0641,
+      -0.0062
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7469,
+     "felm_reasoning": 0.7408,
+     "felm_science": 0.6789,
+     "felm_wk": 0.492,
+     "felm_writing": 0.7005,
+     "halubench_covid": 0.7604,
+     "halubench_drop": 0.4944,
+     "halubench_finance": 0.5889,
+     "halubench_pubmed": 0.5907,
+     "halueval_dialogue": 0.7239,
+     "halueval_general": 0.5484,
+     "halueval_qa": 0.7787,
+     "halueval_summary": 0.7161,
+     "pb_gsm8k": 0.7291,
+     "pb_math": 0.7919,
+     "pb_olympiad": 0.7797,
+     "pb_omnimath": 0.7986,
+     "ragtruth_data2text": 0.5285,
+     "ragtruth_qa": 0.5688,
+     "ragtruth_summary": 0.6207,
+     "truthfulqa": 0.5446
+    }
+   },
+   "b_sae_l2": {
+    "all": 0.6311,
+    "chat": 0.5391,
+    "longform": 0.6384,
+    "rag": 0.5917,
+    "reasoning": 0.7667,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.0414,
+      -0.0573,
+      -0.0263
+     ],
+     "chat": [
+      -0.02,
+      -0.0685,
+      0.0301
+     ],
+     "longform": [
+      -0.032,
+      -0.0732,
+      0.0093
+     ],
+     "rag": [
+      -0.0502,
+      -0.0729,
+      -0.0281
+     ],
+     "reasoning": [
+      -0.0422,
+      -0.0657,
+      -0.0163
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.6749,
+     "felm_reasoning": 0.7268,
+     "felm_science": 0.6628,
+     "felm_wk": 0.5097,
+     "felm_writing": 0.6177,
+     "halubench_covid": 0.6482,
+     "halubench_drop": 0.4517,
+     "halubench_finance": 0.5119,
+     "halubench_pubmed": 0.5547,
+     "halueval_dialogue": 0.7618,
+     "halueval_general": 0.5405,
+     "halueval_qa": 0.7262,
+     "halueval_summary": 0.6426,
+     "pb_gsm8k": 0.7189,
+     "pb_math": 0.8172,
+     "pb_olympiad": 0.7404,
+     "pb_omnimath": 0.7904,
+     "ragtruth_data2text": 0.5566,
+     "ragtruth_qa": 0.5422,
+     "ragtruth_summary": 0.5209,
+     "truthfulqa": 0.5377
+    }
+   },
+   "c_written": {
+    "all": 0.5534,
+    "chat": 0.566,
+    "longform": 0.5522,
+    "rag": 0.5432,
+    "reasoning": 0.5741,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1192,
+      -0.1417,
+      -0.0977
+     ],
+     "chat": [
+      0.007,
+      -0.0496,
+      0.0657
+     ],
+     "longform": [
+      -0.1182,
+      -0.1691,
+      -0.0632
+     ],
+     "rag": [
+      -0.0987,
+      -0.1295,
+      -0.0699
+     ],
+     "reasoning": [
+      -0.2348,
+      -0.2823,
+      -0.192
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4879,
+     "felm_reasoning": 0.5363,
+     "felm_science": 0.6464,
+     "felm_wk": 0.4743,
+     "felm_writing": 0.6163,
+     "halubench_covid": 0.5779,
+     "halubench_drop": 0.3947,
+     "halubench_finance": 0.5172,
+     "halubench_pubmed": 0.5729,
+     "halueval_dialogue": 0.499,
+     "halueval_general": 0.6258,
+     "halueval_qa": 0.7877,
+     "halueval_summary": 0.6438,
+     "pb_gsm8k": 0.5561,
+     "pb_math": 0.5274,
+     "pb_olympiad": 0.6055,
+     "pb_omnimath": 0.6075,
+     "ragtruth_data2text": 0.4988,
+     "ragtruth_qa": 0.4305,
+     "ragtruth_summary": 0.5093,
+     "truthfulqa": 0.5063
+    }
+   },
+   "c_fit": {
+    "all": 0.5968,
+    "chat": 0.5291,
+    "longform": 0.6405,
+    "rag": 0.5562,
+    "reasoning": 0.6776,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.0758,
+      -0.0956,
+      -0.0566
+     ],
+     "chat": [
+      -0.03,
+      -0.0892,
+      0.0272
+     ],
+     "longform": [
+      -0.0299,
+      -0.0786,
+      0.0189
+     ],
+     "rag": [
+      -0.0857,
+      -0.1145,
+      -0.0582
+     ],
+     "reasoning": [
+      -0.1313,
+      -0.1661,
+      -0.0935
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7508,
+     "felm_reasoning": 0.6782,
+     "felm_science": 0.5888,
+     "felm_wk": 0.5075,
+     "felm_writing": 0.6773,
+     "halubench_covid": 0.6088,
+     "halubench_drop": 0.352,
+     "halubench_finance": 0.495,
+     "halubench_pubmed": 0.5257,
+     "halueval_dialogue": 0.6041,
+     "halueval_general": 0.643,
+     "halueval_qa": 0.7631,
+     "halueval_summary": 0.7874,
+     "pb_gsm8k": 0.6271,
+     "pb_math": 0.6667,
+     "pb_olympiad": 0.6881,
+     "pb_omnimath": 0.7285,
+     "ragtruth_data2text": 0.4188,
+     "ragtruth_qa": 0.5488,
+     "ragtruth_summary": 0.4582,
+     "truthfulqa": 0.4152
+    }
+   },
+   "c_ENT": {
+    "all": 0.5608,
+    "chat": 0.5272,
+    "longform": 0.5266,
+    "rag": 0.5766,
+    "reasoning": 0.5806,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1118,
+      -0.1334,
+      -0.091
+     ],
+     "chat": [
+      -0.0318,
+      -0.0874,
+      0.029
+     ],
+     "longform": [
+      -0.1438,
+      -0.1998,
+      -0.0878
+     ],
+     "rag": [
+      -0.0652,
+      -0.0948,
+      -0.0389
+     ],
+     "reasoning": [
+      -0.2282,
+      -0.2722,
+      -0.1855
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.5012,
+     "felm_reasoning": 0.5511,
+     "felm_science": 0.5182,
+     "felm_wk": 0.5188,
+     "felm_writing": 0.5436,
+     "halubench_covid": 0.5667,
+     "halubench_drop": 0.3154,
+     "halubench_finance": 0.4956,
+     "halubench_pubmed": 0.5577,
+     "halueval_dialogue": 0.5765,
+     "halueval_general": 0.6345,
+     "halueval_qa": 0.8949,
+     "halueval_summary": 0.78,
+     "pb_gsm8k": 0.5797,
+     "pb_math": 0.5199,
+     "pb_olympiad": 0.6216,
+     "pb_omnimath": 0.6013,
+     "ragtruth_data2text": 0.5304,
+     "ragtruth_qa": 0.559,
+     "ragtruth_summary": 0.49,
+     "truthfulqa": 0.4199
+    }
+   },
+   "c_UNK": {
+    "all": 0.5286,
+    "chat": 0.5375,
+    "longform": 0.5798,
+    "rag": 0.5088,
+    "reasoning": 0.5099,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1439,
+      -0.165,
+      -0.1231
+     ],
+     "chat": [
+      -0.0215,
+      -0.0711,
+      0.0322
+     ],
+     "longform": [
+      -0.0906,
+      -0.1405,
+      -0.0424
+     ],
+     "rag": [
+      -0.1331,
+      -0.1614,
+      -0.1015
+     ],
+     "reasoning": [
+      -0.299,
+      -0.3397,
+      -0.2586
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.5109,
+     "felm_reasoning": 0.5475,
+     "felm_science": 0.5304,
+     "felm_wk": 0.526,
+     "felm_writing": 0.7842,
+     "halubench_covid": 0.4685,
+     "halubench_drop": 0.5688,
+     "halubench_finance": 0.5149,
+     "halubench_pubmed": 0.4858,
+     "halueval_dialogue": 0.568,
+     "halueval_general": 0.5286,
+     "halueval_qa": 0.5413,
+     "halueval_summary": 0.4446,
+     "pb_gsm8k": 0.4992,
+     "pb_math": 0.4899,
+     "pb_olympiad": 0.5051,
+     "pb_omnimath": 0.5454,
+     "ragtruth_data2text": 0.4776,
+     "ragtruth_qa": 0.4624,
+     "ragtruth_summary": 0.5557,
+     "truthfulqa": 0.5464
+    }
+   },
+   "c_NOV": {
+    "all": 0.5208,
+    "chat": 0.5477,
+    "longform": 0.4675,
+    "rag": 0.5368,
+    "reasoning": 0.5339,
+    "diff_vs_a_ci95": {
+     "all": [
+      -0.1518,
+      -0.1737,
+      -0.128
+     ],
+     "chat": [
+      -0.0113,
+      -0.0687,
+      0.0496
+     ],
+     "longform": [
+      -0.2029,
+      -0.2576,
+      -0.1407
+     ],
+     "rag": [
+      -0.105,
+      -0.136,
+      -0.0757
+     ],
+     "reasoning": [
+      -0.275,
+      -0.3277,
+      -0.227
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4437,
+     "felm_reasoning": 0.4654,
+     "felm_science": 0.5638,
+     "felm_wk": 0.4172,
+     "felm_writing": 0.4473,
+     "halubench_covid": 0.5752,
+     "halubench_drop": 0.3763,
+     "halubench_finance": 0.548,
+     "halubench_pubmed": 0.5586,
+     "halueval_dialogue": 0.521,
+     "halueval_general": 0.5552,
+     "halueval_qa": 0.8044,
+     "halueval_summary": 0.6335,
+     "pb_gsm8k": 0.5134,
+     "pb_math": 0.5083,
+     "pb_olympiad": 0.5596,
+     "pb_omnimath": 0.5543,
+     "ragtruth_data2text": 0.5034,
+     "ragtruth_qa": 0.3816,
+     "ragtruth_summary": 0.4661,
+     "truthfulqa": 0.5403
+    }
+   }
+  }
+ },
+ "l1_fits": {
+  "global": [
+   {
+    "domain": "felm_math",
+    "lambda": 0.01,
+    "nonzero": 382
+   },
+   {
+    "domain": "felm_reasoning",
+    "lambda": 0.01,
+    "nonzero": 387
+   },
+   {
+    "domain": "felm_science",
+    "lambda": 0.01,
+    "nonzero": 360
+   },
+   {
+    "domain": "felm_wk",
+    "lambda": 0.01,
+    "nonzero": 342
+   },
+   {
+    "domain": "felm_writing",
+    "lambda": 0.01,
+    "nonzero": 372
+   },
+   {
+    "domain": "halubench_covid",
+    "lambda": 0.01,
+    "nonzero": 384
+   },
+   {
+    "domain": "halubench_drop",
+    "lambda": 0.01,
+    "nonzero": 368
+   },
+   {
+    "domain": "halubench_finance",
+    "lambda": 0.01,
+    "nonzero": 383
+   },
+   {
+    "domain": "halubench_pubmed",
+    "lambda": 0.01,
+    "nonzero": 376
+   },
+   {
+    "domain": "halueval_dialogue",
+    "lambda": 0.01,
+    "nonzero": 376
+   },
+   {
+    "domain": "halueval_general",
+    "lambda": 0.01,
+    "nonzero": 353
+   },
+   {
+    "domain": "halueval_qa",
+    "lambda": 0.01,
+    "nonzero": 370
+   },
+   {
+    "domain": "halueval_summary",
+    "lambda": 0.01,
+    "nonzero": 385
+   },
+   {
+    "domain": "pb_gsm8k",
+    "lambda": 0.01,
+    "nonzero": 380
+   },
+   {
+    "domain": "pb_math",
+    "lambda": 0.01,
+    "nonzero": 367
+   },
+   {
+    "domain": "pb_olympiad",
+    "lambda": 0.01,
+    "nonzero": 359
+   },
+   {
+    "domain": "pb_omnimath",
+    "lambda": 0.01,
+    "nonzero": 374
+   },
+   {
+    "domain": "ragtruth_data2text",
+    "lambda": 0.01,
+    "nonzero": 377
+   },
+   {
+    "domain": "ragtruth_qa",
+    "lambda": 0.01,
+    "nonzero": 383
+   },
+   {
+    "domain": "ragtruth_summary",
+    "lambda": 0.01,
+    "nonzero": 395
+   },
+   {
+    "domain": "truthfulqa",
+    "lambda": 0.01,
+    "nonzero": 390
+   }
+  ],
+  "dstd": [
+   {
+    "domain": "felm_math",
+    "lambda": 0.03,
+    "nonzero": 40
+   },
+   {
+    "domain": "felm_reasoning",
+    "lambda": 0.03,
+    "nonzero": 33
+   },
+   {
+    "domain": "felm_science",
+    "lambda": 0.03,
+    "nonzero": 38
+   },
+   {
+    "domain": "felm_wk",
+    "lambda": 0.03,
+    "nonzero": 34
+   },
+   {
+    "domain": "felm_writing",
+    "lambda": 0.03,
+    "nonzero": 37
+   },
+   {
+    "domain": "halubench_covid",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "halubench_drop",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "halubench_finance",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "halubench_pubmed",
+    "lambda": 0.03,
+    "nonzero": 33
+   },
+   {
+    "domain": "halueval_dialogue",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "halueval_general",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "halueval_qa",
+    "lambda": 0.03,
+    "nonzero": 27
+   },
+   {
+    "domain": "halueval_summary",
+    "lambda": 0.03,
+    "nonzero": 27
+   },
+   {
+    "domain": "pb_gsm8k",
+    "lambda": 0.03,
+    "nonzero": 33
+   },
+   {
+    "domain": "pb_math",
+    "lambda": 0.03,
+    "nonzero": 31
+   },
+   {
+    "domain": "pb_olympiad",
+    "lambda": 0.03,
+    "nonzero": 34
+   },
+   {
+    "domain": "pb_omnimath",
+    "lambda": 0.01,
+    "nonzero": 515
+   },
+   {
+    "domain": "ragtruth_data2text",
+    "lambda": 0.03,
+    "nonzero": 36
+   },
+   {
+    "domain": "ragtruth_qa",
+    "lambda": 0.01,
+    "nonzero": 515
+   },
+   {
+    "domain": "ragtruth_summary",
+    "lambda": 0.03,
+    "nonzero": 39
+   },
+   {
+    "domain": "truthfulqa",
+    "lambda": 0.03,
+    "nonzero": 40
+   }
+  ]
+ },
+ "few_label": {
+  "k25": {
+   "d_written_refit": {
+    "all": 0.6314,
+    "chat": 0.5863,
+    "longform": 0.6389,
+    "rag": 0.6354,
+    "reasoning": 0.6346,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      -0.0411,
+      -0.095,
+      0.0259
+     ],
+     "vs_a_refit": [
+      -0.1035,
+      -0.1311,
+      -0.0779
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.6431,
+     "felm_reasoning": 0.6028,
+     "felm_science": 0.6414,
+     "felm_wk": 0.5146,
+     "felm_writing": 0.7926,
+     "halubench_covid": 0.5805,
+     "halubench_drop": 0.7091,
+     "halubench_finance": 0.5021,
+     "halubench_pubmed": 0.5489,
+     "halueval_dialogue": 0.5635,
+     "halueval_general": 0.6186,
+     "halueval_qa": 0.9394,
+     "halueval_summary": 0.8644,
+     "pb_gsm8k": 0.5899,
+     "pb_math": 0.6463,
+     "pb_olympiad": 0.6406,
+     "pb_omnimath": 0.6615,
+     "ragtruth_data2text": 0.551,
+     "ragtruth_qa": 0.6016,
+     "ragtruth_summary": 0.4938,
+     "truthfulqa": 0.5541
+    }
+   },
+   "a_raw_refit": {
+    "all": 0.7349,
+    "chat": 0.6381,
+    "longform": 0.71,
+    "rag": 0.7426,
+    "reasoning": 0.7955,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      0.0624,
+      0.0213,
+      0.1155
+     ],
+     "vs_a_refit": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7135,
+     "felm_reasoning": 0.693,
+     "felm_science": 0.7388,
+     "felm_wk": 0.5129,
+     "felm_writing": 0.8916,
+     "halubench_covid": 0.6834,
+     "halubench_drop": 0.8189,
+     "halubench_finance": 0.5323,
+     "halubench_pubmed": 0.6976,
+     "halueval_dialogue": 0.829,
+     "halueval_general": 0.6148,
+     "halueval_qa": 0.9837,
+     "halueval_summary": 0.8993,
+     "pb_gsm8k": 0.7257,
+     "pb_math": 0.846,
+     "pb_olympiad": 0.7751,
+     "pb_omnimath": 0.8351,
+     "ragtruth_data2text": 0.6714,
+     "ragtruth_qa": 0.7391,
+     "ragtruth_summary": 0.5711,
+     "truthfulqa": 0.6614
+    }
+   },
+   "c_written_same_test": {
+    "all": 0.5549,
+    "chat": 0.567,
+    "longform": 0.556,
+    "rag": 0.5435,
+    "reasoning": 0.5758,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      -0.1177,
+      -0.1668,
+      -0.0728
+     ],
+     "vs_a_refit": [
+      -0.1801,
+      -0.2264,
+      -0.1342
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4883,
+     "felm_reasoning": 0.5363,
+     "felm_science": 0.6557,
+     "felm_wk": 0.4744,
+     "felm_writing": 0.6253,
+     "halubench_covid": 0.5725,
+     "halubench_drop": 0.3994,
+     "halubench_finance": 0.5173,
+     "halubench_pubmed": 0.5731,
+     "halueval_dialogue": 0.498,
+     "halueval_general": 0.6256,
+     "halueval_qa": 0.7906,
+     "halueval_summary": 0.6442,
+     "pb_gsm8k": 0.5549,
+     "pb_math": 0.5276,
+     "pb_olympiad": 0.6065,
+     "pb_omnimath": 0.6141,
+     "ragtruth_data2text": 0.4981,
+     "ragtruth_qa": 0.4314,
+     "ragtruth_summary": 0.5109,
+     "truthfulqa": 0.5084
+    }
+   }
+  },
+  "k50": {
+   "d_written_refit": {
+    "all": 0.6591,
+    "chat": 0.6041,
+    "longform": 0.6694,
+    "rag": 0.6615,
+    "reasoning": 0.6677,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      -0.0135,
+      -0.0637,
+      0.0454
+     ],
+     "vs_a_refit": [
+      -0.1012,
+      -0.1245,
+      -0.0766
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.6861,
+     "felm_reasoning": 0.6318,
+     "felm_science": 0.6688,
+     "felm_wk": 0.5153,
+     "felm_writing": 0.8451,
+     "halubench_covid": 0.5977,
+     "halubench_drop": 0.71,
+     "halubench_finance": 0.4955,
+     "halubench_pubmed": 0.5664,
+     "halueval_dialogue": 0.6234,
+     "halueval_general": 0.6306,
+     "halueval_qa": 0.9565,
+     "halueval_summary": 0.9175,
+     "pb_gsm8k": 0.6162,
+     "pb_math": 0.7173,
+     "pb_olympiad": 0.6557,
+     "pb_omnimath": 0.6817,
+     "ragtruth_data2text": 0.5759,
+     "ragtruth_qa": 0.6598,
+     "ragtruth_summary": 0.5121,
+     "truthfulqa": 0.5775
+    }
+   },
+   "a_raw_refit": {
+    "all": 0.7603,
+    "chat": 0.6736,
+    "longform": 0.7333,
+    "rag": 0.7738,
+    "reasoning": 0.8038,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      0.0877,
+      0.0415,
+      0.1469
+     ],
+     "vs_a_refit": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.7408,
+     "felm_reasoning": 0.7311,
+     "felm_science": 0.7583,
+     "felm_wk": 0.5124,
+     "felm_writing": 0.9236,
+     "halubench_covid": 0.6862,
+     "halubench_drop": 0.8785,
+     "halubench_finance": 0.5424,
+     "halubench_pubmed": 0.7551,
+     "halueval_dialogue": 0.8437,
+     "halueval_general": 0.627,
+     "halueval_qa": 0.9905,
+     "halueval_summary": 0.9618,
+     "pb_gsm8k": 0.7322,
+     "pb_math": 0.8684,
+     "pb_olympiad": 0.7781,
+     "pb_omnimath": 0.8365,
+     "ragtruth_data2text": 0.6982,
+     "ragtruth_qa": 0.7949,
+     "ragtruth_summary": 0.5863,
+     "truthfulqa": 0.7202
+    }
+   },
+   "c_written_same_test": {
+    "all": 0.5527,
+    "chat": 0.5666,
+    "longform": 0.5498,
+    "rag": 0.5422,
+    "reasoning": 0.5757,
+    "diff_ci95_domain_bootstrap": {
+     "vs_a_zero_label": [
+      -0.1199,
+      -0.1672,
+      -0.0722
+     ],
+     "vs_a_refit": [
+      -0.2076,
+      -0.2597,
+      -0.1578
+     ]
+    },
+    "per_domain": {
+     "felm_math": 0.4787,
+     "felm_reasoning": 0.5417,
+     "felm_science": 0.651,
+     "felm_wk": 0.4694,
+     "felm_writing": 0.608,
+     "halubench_covid": 0.5772,
+     "halubench_drop": 0.3985,
+     "halubench_finance": 0.5098,
+     "halubench_pubmed": 0.5647,
+     "halueval_dialogue": 0.5058,
+     "halueval_general": 0.6246,
+     "halueval_qa": 0.7863,
+     "halueval_summary": 0.6424,
+     "pb_gsm8k": 0.5613,
+     "pb_math": 0.5283,
+     "pb_olympiad": 0.6086,
+     "pb_omnimath": 0.6048,
+     "ragtruth_data2text": 0.5004,
+     "ragtruth_qa": 0.4302,
+     "ragtruth_summary": 0.5061,
+     "truthfulqa": 0.5085
+    }
+   }
+  }
+ }
+}
