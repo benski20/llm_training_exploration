@@ -46,6 +46,23 @@ Every number is on a domain whose labels were never used for training. AUROC for
   The 1.7B tier costs ≈ $0.03 per 1,000 at 0.73 / 0.85 (all / reasoning).
 - **The false-alarm guarantee held on every format.** At that held rate it catches about half of wrong replies on reasoning and long-form.
 
+## What moved accuracy, and what did not (all held out, measured)
+
+| lever | effect on held-out AUROC | verdict |
+|---|---|---|
+| bigger reader: 1.7B → 4B → 8B (→ 14B) | 0.73 → 0.78 → 0.81 (→ 0.82) | **largest lever**; 8B is the premium tier |
+| 50-100 labels from the new domain (prior-pulled refit or expert weights) | +0.01 to +0.06; RAG 0.77 → 0.87 with NLI | **the onboarding step** |
+| more training domains (1 → 20) | 0.56 → 0.71 (1.7B), still rising | every customer domain helps the next |
+| NLI cross-encoders on grounded replies | +0.06 with 1.7B, +0.015 with 8B zero-label; dominant after adaptation on RAGTruth | ship for RAG |
+| worst unit (sentence / step), the reader's own judge (×2) | +0.02 each; judge +0.02 on chat | shipped |
+| per-domain standardisation from unlabelled replies | +0.01-0.03 | shipped |
+| written domain checker (data-to-text) | +0.03 on its domain, 96% precise | per domain at onboarding |
+| LoRA editing of the reader (agent A) | +0.023 [0.017, 0.030] on one feature; the domain-adversarial version adds nothing | low priority: needs the whole stack retrained on the edited reader |
+| written probe direction + model trained to fit it (agent B) | ±0.0; fixed threshold does not transfer | no |
+| probe hand-written from SAE latents (agent D) | −0.13; a fitted SAE probe ties raw | no |
+| group DRO, CORAL, projecting out domain directions | −0.05 to 0.00 | no |
+| MLP head, evidence shift (1.7B), number-grounding checker for finance | −0.02 / ≈0.57 / 0.48 | no |
+
 ## How it works (`vt/omni.py`)
 
 The reader reads `[documents +] question + reply`, then a fixed judge question appended *after* the reply: "Is the
