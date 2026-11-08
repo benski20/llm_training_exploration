@@ -84,6 +84,7 @@ Within each domain, the domain's correct replies are scored against the wrong re
 |---|---|---|
 | bigger reader: 1.7B → 4B → 8B (→ 14B) | 0.73 → 0.78 → 0.81 (→ 0.82) | **largest lever**; 8B is the premium tier |
 | external judges read in one pass (Qwen3-14B, phi-4; no generation) | 0.80 → 0.84 zero-label, 0.86 with 50 labels; chat 0.73 → 0.79 | **ship in the accuracy tier** |
+| **numeric recompute tier** (Qwen3-8B writes 5 short programs from the passage without seeing the stated answer; sandboxed; disagreement flags it) | DROP 0.56 → **0.82** (fresh 0.79), FinanceBench 0.63 → **0.88** (fresh 0.88); with the reader on GSM8K / MATH 0.96 / 0.97 | **escalation tier for numeric questions over documents**: about $4 per 1,000 (20× the reader). Match tolerance chosen on corpus rows; fresh rows agree |
 | **judge as an offline teacher**: at onboarding the judges label the domain's *unlabelled* replies; the 1.7B probe self-trains on them (pulled toward its universal weights) | 1.7B student 0.71 → **0.77** with zero human labels (RAG 0.68 → 0.76, chat 0.59 → 0.66); served at ≈ $0.03 per 1,000 | **ship as the cheap tier's onboarding**: the expensive judge runs once per domain, not per check |
 | 50-100 labels from the new domain (prior-pulled refit or expert weights) | +0.01 to +0.06; RAG 0.77 → 0.87 with NLI | **the onboarding step** |
 | more training domains (1 → 20) | 0.56 → 0.71 (1.7B), still rising | every customer domain helps the next |
@@ -248,7 +249,8 @@ cosine ≥ 0.99999 to fp32, and the 1.7B GPU rerun reproduces the CPU result exa
 
 - **The guarantee holds at every size**, and what it buys grows with the reader. At a held ≤ 10% false-alarm rate it catches 28% of wrong replies with 1.7B and 47% with 8B.
 - **The reader's own judge gains the most from scale** (0.64 → 0.78 at 8B). On chat, the 8B judge alone (0.75) beats the combined score (0.71): weight it up there.
-- **DROP and FinanceBench stay at 0.5-0.65 at every size.** Numbers in tables need computation (see Limits).
+- **DROP and FinanceBench stay at 0.5-0.65 at every reader size.** Numbers in tables need computation, which the
+  numeric recompute tier supplies (0.82 / 0.88).
 - **Tiers** (T4 at ~$0.35/hour, measured unbatched seconds; batching would lower these):
 
   | tier | reader | cost per 1,000 checks | use |

@@ -413,7 +413,7 @@ def compare(stated, kind, ans):
     agree, rel = False, math.inf
     scales = (1,) if kind == "problem" else SCALES
     for x, dec in sv:
-        tol = max(0.5 * 10 ** -dec * 1.0001, 5e-4 * abs(x), 1e-9) if kind == "passage" else max(1e-6, 1e-4 * abs(x))
+        tol = max(0.5 * 10 ** -dec * 1.0001, 1e-9) if kind == "passage" else max(1e-6, 1e-4 * abs(x))
         for v in vals:
             for s in scales:
                 y = v * s
