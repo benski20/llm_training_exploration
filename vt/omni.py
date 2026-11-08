@@ -58,7 +58,8 @@ def make_item(reply, question="", documents=None, messages=None, units=None):
     if doc:
         last = max(i for i, m in enumerate(msgs) if m["role"] == "user")
         msgs[last]["content"] = f"{doc}\n\n{msgs[last]['content']}"
-    return {"messages": msgs, "response": reply, "units": units or sentence_spans(reply)}
+    return {"messages": msgs, "response": reply, "units": units or sentence_spans(reply), "doc": doc,
+            "question": question or (msgs[-1]["content"] if msgs and msgs[-1]["role"] == "user" else "")}
 
 
 # ------------------------------------------------------------------ features
@@ -296,17 +297,24 @@ class OmniVerifier:
                   replies; the training mix for the universal profile)
     """
 
-    def __init__(self, art, reader=None):
-        self.art, self.reader = art, reader
+    # default expert weights (results/omni/stack_q8b_*.json): reply head, worst unit, the reader's own judge, NLI;
+    # written-checker / exact-arithmetic violations add a fixed bump each (capped at 2)
+    WEIGHTS = {"r": 1.0, "u": 1.0, "j": 2.0, "n": 1.0}
+    FLAG_WEIGHT = 2.0
+
+    def __init__(self, art, reader=None, nli=None, checkers=()):
+        """nli: optional callable (documents_text, question, reply) -> P(unsupported) (see NLIScorer);
+        checkers: callables (reply, documents_text) -> list of violations (vt/checkers), applied to every check."""
+        self.art, self.reader, self.nli, self.checkers = art, reader, nli, list(checkers)
         self.meta = art["meta"]
         self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
     @classmethod
-    def load(cls, path, reader=None):
+    def load(cls, path, reader=None, nli=None, checkers=()):
         z = np.load(path, allow_pickle=False)
         art = {k: (z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k]) for k in z.files}
         art["meta"] = json.loads(str(art["meta"]))
-        return cls(art, reader)
+        return cls(art, reader, nli=nli, checkers=checkers)
 
     @staticmethod
     def save(art, path):
@@ -334,8 +342,28 @@ class OmniVerifier:
         return np.concatenate([_project(U, a["uh_mu"], a["uh_sd"], a["upca_mu"], a["upca_V"]),
                                np.stack([u["sc"] for u in f["units"]])], 1)
 
+    def features(self, it):
+        """the reader's features plus the optional experts: NLI (with documents), checker and arithmetic flags."""
+        f = self.reader.features(it)
+        if f is None:
+            return None
+        doc = it.get("doc", "")
+        f["nli"] = float(self.nli(doc, it.get("question", ""), it["response"])) if self.nli and doc else float("nan")
+        from vt.mathcheck import check_arithmetic
+        flags = [e["expression"] for e in check_arithmetic(it["response"], explicit=True) if not e["ok"]]
+        viol = [v for c in self.checkers for v in c(it["response"], doc)]
+        f["flags"] = min(len(flags), 1) + min(len(viol), 2)
+        f["violations"] = [{"why": "arithmetic", "claim": x} for x in flags] + viol
+        return f
+
     def featurize(self, items):
-        return [self.reader.features(it) for it in items]
+        return [self.features(it) for it in items]
+
+    def _extras(self, feats):
+        j = np.array([-float(f["j_logit"]) for f in feats])
+        n = np.array([float(f.get("nli", np.nan)) for f in feats])
+        fl = np.array([float(f.get("flags", 0)) for f in feats])
+        return j, n, fl
 
     # -- profiles
     def universal_profile(self):
@@ -355,11 +383,17 @@ class OmniVerifier:
             u.append(float(us.max()) if len(us) else np.nan)
         return np.array(r), np.array(u)
 
-    def _combine(self, prof, r, u):
+    def _combine(self, prof, r, u, extras=None):
+        """z-sum of the experts by the profile's statistics and weights (an expert absent for a reply counts 0)."""
         z = prof.get("z") or {"r": [0.0, 1.0], "u": [0.0, 1.0]}
-        zr = (r - z["r"][0]) / z["r"][1]
-        zu = np.where(np.isnan(u), 0.0, (np.nan_to_num(u) - z["u"][0]) / z["u"][1])
-        return zr + zu
+        w = dict(self.WEIGHTS, **(prof.get("weights") or {}))
+        zz = lambda v, k: (np.where(np.isnan(v), 0.0, (np.nan_to_num(v) - z[k][0]) / z[k][1]) if k in z
+                           else np.zeros(np.shape(v)))
+        out = w["r"] * (r - z["r"][0]) / z["r"][1] + w["u"] * zz(u, "u")
+        if extras is not None:
+            j, n, fl = extras
+            out = out + w["j"] * zz(j, "j") + w["n"] * zz(n, "n") + prof.get("flag_weight", self.FLAG_WEIGHT) * fl
+        return out
 
     def profile(self, feats, name="domain"):
         """Zero labels: the domain's unlabelled replies set every standardisation (covariate-shift correction)."""
@@ -370,13 +404,17 @@ class OmniVerifier:
         if len(U) > 1:
             p.update(umu=U.mean(0).tolist(), usd=(U.std(0) + 1e-4).tolist())
         r, u = self._raw(p, feats)
-        p["z"] = {"r": [float(r.mean()), float(r.std() + 1e-6)], "u": [float(np.nanmean(u)), float(np.nanstd(u) + 1e-6)]}
+        j, n, _ = self._extras(feats)
+        st = lambda v: [float(np.nanmean(v)), float(np.nanstd(v) + 1e-6)]
+        p["z"] = {"r": st(r), "u": st(u), "j": st(j)}
+        if (~np.isnan(n)).sum() > 1:
+            p["z"]["n"] = st(n)
         p["card"] = dict(p["card"], unlabelled_replies=len(feats))
         return p
 
     def score(self, prof, feats):
         r, u = self._raw(prof, feats)
-        return self._combine(prof, r, u)
+        return self._combine(prof, r, u, self._extras(feats))
 
     def adapt(self, prof, feats, y, grid=(0.01, 0.1, 1.0, 10.0), seed=0):
         """k labelled replies: the reply head refitted with a pull toward its current weights; the strength by
@@ -385,6 +423,8 @@ class OmniVerifier:
         y = np.asarray(y, float)
         X = (np.stack([self.reply_vector(f) for f in feats]) - np.array(prof["mu"])) / np.array(prof["sd"])
         _, u = self._raw(prof, feats)
+        ex = self._extras(feats)
+        sub = lambda idx: tuple(v[idx] for v in ex)
         w0, b0 = np.array(prof["w"]), prof["b"]
         rng = np.random.default_rng(seed)
         res = {None: []}
@@ -394,10 +434,10 @@ class OmniVerifier:
             a, b = perm[:len(y) // 2], perm[len(y) // 2:]
             if len(set(y[a])) < 2 or len(set(y[b])) < 2:
                 continue
-            res[None].append(auroc(self._combine(prof, X[b] @ w0 + b0, u[b]), y[b]))
+            res[None].append(auroc(self._combine(prof, X[b] @ w0 + b0, u[b], sub(b)), y[b]))
             for lp in grid:
                 m = LogReg(lp, w0, b0).fit(X[a], y[a], balanced_weights(y[a]))
-                res[lp].append(auroc(self._combine(prof, m.score(X[b]), u[b]), y[b]))
+                res[lp].append(auroc(self._combine(prof, m.score(X[b]), u[b], sub(b)), y[b]))
         best = None
         if res[None]:
             base = np.mean(res[None])
@@ -409,7 +449,7 @@ class OmniVerifier:
             m = LogReg(best, w0, b0).fit(X, y, balanced_weights(y))
             p.update(w=m.w.tolist(), b=m.b, prior_w=w0.tolist(), prior_b=float(b0))
             r = X @ m.w + m.b
-            p["z"] = dict(p["z"] or {}, r=[float(r.mean()), float(r.std() + 1e-6)], u=(p["z"] or {}).get("u", [0.0, 1.0]))
+            p["z"] = dict(p["z"] or {"u": [0.0, 1.0]}, r=[float(r.mean()), float(r.std() + 1e-6)])
         return p
 
     def _oof(self, prof, feats, y, folds=5, seed=0):
@@ -425,7 +465,7 @@ class OmniVerifier:
                 r[te] = X[te] @ w0 + b0
             else:
                 r[te] = LogReg(lp, w0, b0).fit(X[tr], y[tr], balanced_weights(y[tr])).score(X[te])
-        return self._combine(prof, r, u)
+        return self._combine(prof, r, u, self._extras(feats))
 
     def calibrate(self, prof, feats, y, fpr=0.10, confidence=0.95):
         """threshold from the domain's labelled *clean* replies: false alarms <= fpr with stated confidence
@@ -444,13 +484,14 @@ class OmniVerifier:
     def verify(self, reply, question="", documents=None, messages=None, prof=None, units=None):
         prof = prof or self.universal_profile()
         it = make_item(reply, question, documents, messages, units)
-        f = self.reader.features(it)
+        f = self.features(it)
         if f is None:
             return {"error": "empty reply"}
         r, u = self._raw(prof, [f])
-        z = float(self._combine(prof, r, u)[0])
+        z = float(self._combine(prof, r, u, self._extras([f]))[0])
         out = {"score": z, "reply_score": float(r[0]), "worst_unit_score": None if np.isnan(u[0]) else float(u[0]),
-               "judge_logodds_yes": float(f["j_logit"]), "profile": prof["name"]}
+               "judge_logodds_yes": float(f["j_logit"]), "nli_unsupported": None if np.isnan(f["nli"]) else f["nli"],
+               "violations": f["violations"], "profile": prof["name"]}
         if prof.get("threshold") is not None:
             out["flagged"] = bool(z >= prof["threshold"])
             out["guarantee"] = {k: prof["card"].get(k) for k in ("fpr_target", "confidence", "clean_replies")}
@@ -488,3 +529,39 @@ def subset(F, mask):
            for k, v in F.items() if k != "meta"}
     out["meta"] = F["meta"]
     return out
+
+
+class NLIScorer:
+    """P(unsupported) of a reply given documents: the mean of Vectara HHEM-2.1-open (reply level; runs its own model
+    code from the Hub, pinned here to a reviewed revision) and MiniCheck-RoBERTa-Large (worst of up to 4 sentences)."""
+
+    HHEM_REVISION = "de9a5e6ba9ba49531a022dba17e35ffeb2a6fad8"   # modeling_hhem_v2.py reviewed: model code only
+
+    def __init__(self, chunk_words=300, max_sentences=4):
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        self.torch = torch
+        self.hhem = AutoModelForSequenceClassification.from_pretrained(
+            "vectara/hallucination_evaluation_model", trust_remote_code=True, revision=self.HHEM_REVISION).eval()
+        name = "lytang/MiniCheck-RoBERTa-Large"
+        self.mtok = AutoTokenizer.from_pretrained(name)
+        self.mc = AutoModelForSequenceClassification.from_pretrained(name).eval()
+        self.chunk_words, self.max_sentences = chunk_words, max_sentences
+
+    def _mc(self, doc, claim):
+        w = doc.split()
+        chunks = [" ".join(w[i:i + self.chunk_words]) for i in range(0, max(1, len(w)), self.chunk_words)] or [""]
+        x = self.mtok(chunks, [claim] * len(chunks), return_tensors="pt", padding=True, truncation="only_first",
+                      max_length=512)
+        with self.torch.no_grad():
+            p = self.torch.softmax(self.mc(**x).logits, -1)[:, 1]
+        return float(1 - p.max())
+
+    def __call__(self, doc, question, reply):
+        doc = doc[:12000]
+        claim = f"{question[-300:]} {reply}" if len(reply.split()) < 8 else reply
+        sents = [reply[a:b].strip() for a, b in sentence_spans(reply)][:self.max_sentences] or [reply]
+        m = max(self._mc(doc, s_) for s_ in sents) if len(sents) > 1 else self._mc(doc, claim)
+        with self.torch.no_grad():
+            h = 1 - float(self.hhem.predict([(doc, claim)])[0])
+        return (h + m) / 2

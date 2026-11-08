@@ -32,10 +32,22 @@ def _items(path):
     return rows, [make_item(r["reply"], r.get("question", ""), r.get("documents"), r.get("messages")) for r in rows]
 
 
+CHECKERS = {"business_record": "vt.checkers.business_record"}
+
+
+def _verifier(a):
+    """the head with its reader, plus the optional NLI scorer and written checkers named on the command line."""
+    import importlib
+
+    from vt.omni import NLIScorer, OmniVerifier
+    checkers = [importlib.import_module(CHECKERS[c]).check for c in (a.checkers or [])]
+    return OmniVerifier.load(a.head, nli=NLIScorer() if a.nli else None, checkers=checkers).attach_reader(threads=a.threads)
+
+
 def _feats(v, items, label="reading"):
     out, t = [], time.time()
     for i, it in enumerate(items):
-        out.append(v.reader.features(it))
+        out.append(v.features(it))
         if (i + 1) % 25 == 0:
             print(f"  {label} {i + 1}/{len(items)} ({(time.time() - t) / (i + 1):.2f} s each)", file=sys.stderr, flush=True)
     keep = [k for k, f in enumerate(out) if f is not None]
@@ -60,7 +72,7 @@ def cmd_train(a):
 
 def cmd_onboard(a):
     from vt.omni import OmniVerifier
-    v = OmniVerifier.load(a.head).attach_reader(threads=a.threads)
+    v = _verifier(a)
     _, items = _items(a.unlabelled)
     fu, _ = _feats(v, items, "unlabelled")
     prof = v.profile(fu, a.name)
@@ -79,7 +91,7 @@ def cmd_onboard(a):
 def cmd_evaluate(a):
     from vt.correctness import auroc
     from vt.omni import OmniVerifier
-    v = OmniVerifier.load(a.head).attach_reader(threads=a.threads)
+    v = _verifier(a)
     prof = OmniVerifier.load_profile(a.profile) if a.profile else v.universal_profile()
     rows, items = _items(a.labelled)
     t = time.time()
@@ -121,7 +133,7 @@ def cmd_serve(a):
     from vt.omni import OmniVerifier
     from vt.verifier_pipeline import sha256
     from vt.verify_service import keys_from_env, make_server
-    v = OmniVerifier.load(a.head).attach_reader(threads=a.threads)
+    v = _verifier(a)
     profiles = {}
     for p in sorted(glob.glob(os.path.join(a.profiles, "*.json"))) if a.profiles else []:
         prof = OmniVerifier.load_profile(p)
@@ -148,6 +160,8 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.add_argument("--head", required=True)
         p.add_argument("--threads", type=int, default=None)
+        p.add_argument("--nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+        p.add_argument("--checkers", nargs="*", choices=sorted(CHECKERS), help="written domain checkers to apply")
         if name == "onboard":
             p.add_argument("--name", required=True)
             p.add_argument("--unlabelled", required=True)

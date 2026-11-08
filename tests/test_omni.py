@@ -16,7 +16,7 @@ def synthetic(n=400, d=16, L=3, domains=("a", "b", "c", "d"), seed=0):
     nu = 3
     F = {"ids": np.arange(n), "r_mean": H.astype(np.float16), "r_last": H.astype(np.float16),
          "j_state": H.astype(np.float16), "r_sc": rng.normal(0, 1, (n, 10)).astype(np.float32),
-         "j_logit": rng.normal(0, 1, n).astype(np.float32),
+         "j_logit": (rng.normal(0, 1, n) - 1.5 * y).astype(np.float32),      # the judge says "No" more to wrong
          "u_mean": np.repeat(H, nu, 0).astype(np.float16), "u_sc": rng.normal(0, 1, (n * nu, 10)).astype(np.float32),
          "u_row": np.repeat(np.arange(n), nu), "u_idx": np.tile(np.arange(nu), n),
          "u_lab": np.repeat(y, nu), "meta": {"reader": "none", "layers": [1, 2, 3], "max_tokens": 64}}
@@ -68,3 +68,14 @@ def test_train_profile_adapt_calibrate(tmp_path):
     assert np.allclose(v2.score(prof, fd), v.score(prof, fd), atol=1e-2)       # bases stored in float16
     OmniVerifier.save_profile(prof, tmp_path / "p.json")
     assert OmniVerifier.load_profile(tmp_path / "p.json")["name"] == "d"
+
+
+def test_flags_and_extras_enter_the_score():
+    F, rows, dom, y = synthetic()
+    art = train_artifact(subset(F, dom != "d"), rows, layer_idx=[0, 1, 2], pca=8)
+    v = OmniVerifier(art)
+    fd = feature_dicts(subset(F, dom == "d"))
+    prof = v.profile(fd, "d")
+    base = v.score(prof, fd)
+    fd[0]["flags"] = 2
+    assert v.score(prof, fd)[0] == base[0] + 2 * v.FLAG_WEIGHT

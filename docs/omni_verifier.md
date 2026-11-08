@@ -14,13 +14,14 @@ The design comes from six literature surveys: [docs/research/README.md](research
 
 ```bash
 vt-omni train   --feats <corpus features> --corpus corpus.jsonl --parts mean judge --out heads/omni_qwen3_1p7b.npz
-vt-omni onboard --head heads/omni_qwen3_1p7b.npz --name acme --unlabelled traffic.jsonl --labelled labelled.jsonl \
-                --fpr 0.10 --confidence 0.95 --out profiles/acme.json
+vt-omni onboard --head heads/omni_qwen3_8b.npz --nli --checkers business_record --name acme \
+                --unlabelled traffic.jsonl --labelled labelled.jsonl --fpr 0.10 --confidence 0.95 --out profiles/acme.json
 vt-omni evaluate --head heads/omni_qwen3_1p7b.npz --profile profiles/acme.json --labelled test.jsonl --card card.json
 VERIFY_API_KEYS="acme:$KEY" vt-omni serve --head heads/omni_qwen3_1p7b.npz --profiles profiles/ --host 0.0.0.0
 curl -H "Authorization: Bearer $KEY" -d '{"profile": "acme", "question": "...", "reply": "...", "documents": ["..."]}' \
      localhost:8000/v1/verify
-# -> {"score", "flagged", "guarantee": {"fpr_target", "confidence", "clean_replies"}, "units": [{"text", "score"}], ...}
+# -> {"score", "flagged", "guarantee": {"fpr_target", "confidence", "clean_replies"}, "units": [{"text", "score"}],
+#     "nli_unsupported", "violations": [{"claim", "why"}], ...}
 ```
 
 ## Headline: the full stack on 21 held-out domains (`experiments/omni_stack.py`, `results/omni/stack_q8b_*.json`)
@@ -58,6 +59,9 @@ Each pass produces:
 |---|---|---|
 | reply head | mean residual state over the reply at three middle layers, the judgement state at the same layers (PCA 256), output signals (token log-prob, entropy, margin), judge log-odds | logistic, 20 domains, each standardised by its own statistics |
 | unit head → worst unit | the same per sentence / reasoning step / segment | logistic on 16,119 labelled units (RAGTruth spans, FELM segments, ProcessBench first wrong step) |
+| reader's own judge | log-odds of "No" to "is the reply above correct?", read in the same pass | none (weight 2) |
+| NLI cross-encoders (`--nli`, replies with documents) | HHEM-2.1-open + MiniCheck-RoBERTa-L, P(unsupported) (`NLIScorer`) | none |
+| written domain checkers (`--checkers`) | programs for a domain's invariants (`vt/checkers/`), violations named in the response | none |
 | exact arithmetic | every "a op b = c" in the reply, recomputed (`vt/mathcheck.py`) | none |
 
 **Score.** The sum of the reply head's and the worst unit's z-scores, each standardised by the domain profile's own
