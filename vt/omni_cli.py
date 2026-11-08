@@ -39,9 +39,11 @@ def _verifier(a):
     """the head with its reader, plus the optional NLI scorer and written checkers named on the command line."""
     import importlib
 
-    from vt.omni import NLIScorer, OmniVerifier
+    from vt.omni import JudgeScorer, NLIScorer, OmniVerifier
     checkers = [importlib.import_module(CHECKERS[c]).check for c in (a.checkers or [])]
-    return OmniVerifier.load(a.head, nli=NLIScorer() if a.nli else None, checkers=checkers).attach_reader(threads=a.threads)
+    judges = [JudgeScorer(m) for m in (a.judges or [])]
+    return OmniVerifier.load(a.head, nli=NLIScorer() if a.nli else None, checkers=checkers,
+                             judges=judges).attach_reader(threads=a.threads)
 
 
 def _feats(v, items, label="reading"):
@@ -162,6 +164,8 @@ def main(argv=None):
         p.add_argument("--threads", type=int, default=None)
         p.add_argument("--nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
         p.add_argument("--checkers", nargs="*", choices=sorted(CHECKERS), help="written domain checkers to apply")
+        p.add_argument("--judges", nargs="*", help="external judge models read in one pass, e.g. Qwen/Qwen3-14B "
+                       "microsoft/phi-4 (4-bit on a GPU)")
         if name == "onboard":
             p.add_argument("--name", required=True)
             p.add_argument("--unlabelled", required=True)

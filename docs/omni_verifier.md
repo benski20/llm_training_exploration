@@ -24,33 +24,47 @@ curl -H "Authorization: Bearer $KEY" -d '{"profile": "acme", "question": "...", 
 #     "nli_unsupported", "violations": [{"claim", "why"}], ...}
 ```
 
-## Headline: the full stack on 21 held-out domains (`experiments/omni_stack.py`, `results/omni/stack_q8b_*.json`)
+## Headline: the full stack on 21 held-out domains
 
 The stack:
-- the **Qwen3-8B reader**: reply head, worst unit, and its own judge (weight 2);
-- **NLI cross-encoders** (HHEM + MiniCheck) on replies that come with documents;
+- the **Qwen3-8B reader**: reply head, worst unit, and its own judge;
+- **two external judges** read in one pass each, P("No") with no generation: Qwen3-14B (4-bit) and phi-4 (4-bit);
+- **NLI cross-encoders** on replies with documents;
 - **written domain checkers** and exact arithmetic.
 
-Every number is on a domain whose labels were never used for training. AUROC for "wrong":
+Every number is on domains whose labels were never used for training
+(`results/omni/stack_plus_judges.json`, `stack_q8b_*.json`, `judge_calibration.json`). AUROC for "wrong":
 
-| format | zero labels from the domain | 50 labels | 100 labels | guarantee from 100 uniform labels: false alarms (target ≤ 10%) / wrong caught |
+| format | 8B stack, zero labels | **+ judges, zero labels** | **+ judges, 50 labels** | guarantee from 100 uniform human labels: false alarms (≤ 10%) / caught |
 |---|---|---|---|---|
-| reasoning (4 domains) | **0.90** | 0.91 | 0.91 | 4.5% / **58%** |
-| long-form (5) | **0.84** | 0.84 | 0.80 | 5.1% / 57% |
-| RAG (10; NLI where scored) | 0.77 | 0.81 | **0.87** | 5.7% / 42% |
-| closed-book chat (2) | 0.73 | 0.74 | 0.75 | 5.8% / 27% |
-| **all 21** | **0.81** | **0.82** | 0.82-0.85 | **5.3% / 46%** |
+| reasoning (4 domains) | 0.90 | **0.92** | **0.92** | 4.5% / 58% (8B stack) |
+| long-form (5) | 0.83 | **0.87** | **0.87** | 5.1% / 57% |
+| RAG (10) | 0.76 | **0.81** | **0.84** (0.87 with NLI, 100 labels, 8B stack) | 5.7% / 42% |
+| closed-book chat (2) | 0.73 | **0.79** | **0.80** | 5.8% / 27% |
+| **all 21** | 0.80 | **0.84** | **0.86** | **4.9% / 45%** |
 
-- **Reasoning and long-form are strong with no labels.** RAG needs 50-100 labels to reach 0.81-0.87: the learned weighting lets NLI dominate where it is stronger. Closed-book chat stays the weak format.
-- **Cost:** about $0.19 per 1,000 checks on 2× T4 (measured unbatched), or about $0.09 on one 24 GB GPU (estimate).
-  The 1.7B tier costs ≈ $0.03 per 1,000 at 0.73 / 0.85 (all / reasoning).
-- **The false-alarm guarantee held on every format.** At that held rate it catches about half of wrong replies on reasoning and long-form.
+- **Cost per check** (T4, measured unbatched): 8B reader 1.9 T4-s + Qwen3-14B judge 1.6 s + phi-4 1.8 s ≈ 5.3 T4-s,
+  ≈ **$0.5 per 1,000 checks** at $0.35 per T4-hour. One forward pass per model, no generation.
+  - The 8B stack alone is ≈ $0.19 per 1,000 (0.80); the 1.7B tier ≈ $0.03 per 1,000 (0.73).
+- **The external judges are the largest lever since reader size.** A strong instruct model's P("No") to "is this
+  reply correct?", read in one pass, is a cheap, general signal: 0.84 alone. Probes on the reader's internals add to it
+  on reasoning and long-form, and with labels.
+- **The guarantee still needs human labels.** The false-alarm promise came from 100 uniformly sampled human labels
+  (about 80 clean). Judge labels cannot replace them (docs/omni_experiments/judge_calibration.md):
+
+  | 100 replies at 20% prevalence | mean false alarms | draws over 12% | caught |
+  |---|---|---|---|
+  | human labels (Clopper-Pearson) | **4.9%** | **4.5%** | 45% |
+  | judge labels as truth | 16.6% | 54% | 64% |
+  | judge labels + 20 / 40 human labels (prediction-powered) | 6.2% / 5.9% | 16% / 11% | 45% / 47% |
+  | strict finite-sample bound with 40 human labels | never feasible | n/a | 0% |
 
 ## What moved accuracy, and what did not (all held out, measured)
 
 | lever | effect on held-out AUROC | verdict |
 |---|---|---|
 | bigger reader: 1.7B → 4B → 8B (→ 14B) | 0.73 → 0.78 → 0.81 (→ 0.82) | **largest lever**; 8B is the premium tier |
+| external judges read in one pass (Qwen3-14B, phi-4; no generation) | 0.80 → 0.84 zero-label, 0.86 with 50 labels; chat 0.73 → 0.79 | **ship in the accuracy tier** |
 | 50-100 labels from the new domain (prior-pulled refit or expert weights) | +0.01 to +0.06; RAG 0.77 → 0.87 with NLI | **the onboarding step** |
 | more training domains (1 → 20) | 0.56 → 0.71 (1.7B), still rising | every customer domain helps the next |
 | NLI cross-encoders on grounded replies | +0.06 with 1.7B, +0.015 with 8B zero-label; dominant after adaptation on RAGTruth | ship for RAG |
@@ -260,7 +274,7 @@ and 30-600× below an LLM judge per claim.
 
 ## Limits
 
-- **Closed-book chat stays at about 0.73, and retrieval does not fix it** (docs/omni_experiments/closedbook_retrieval.md).
+- **Closed-book chat: retrieval does not fix it, external judges do partly** (0.73 → 0.79-0.80) (docs/omni_experiments/closedbook_retrieval.md).
   Wikipedia retrieval worked from Kaggle, but the evidence held the deciding fact for 4 of 40 checked wrong replies.
   Passages pull the judge toward "topic matches", and NLI on them is at chance. The remaining routes are the
   generator's own signals (where the customer runs open models) or a much larger reader.

@@ -302,19 +302,23 @@ class OmniVerifier:
     WEIGHTS = {"r": 1.0, "u": 1.0, "j": 2.0, "n": 1.0}
     FLAG_WEIGHT = 2.0
 
-    def __init__(self, art, reader=None, nli=None, checkers=()):
+    JUDGE_WEIGHT = 3.0          # each external judge (results/omni/stack_plus_judges.json)
+
+    def __init__(self, art, reader=None, nli=None, checkers=(), judges=()):
         """nli: optional callable (documents_text, question, reply) -> P(unsupported) (see NLIScorer);
-        checkers: callables (reply, documents_text) -> list of violations (vt/checkers), applied to every check."""
+        checkers: callables (reply, documents_text) -> list of violations (vt/checkers), applied to every check;
+        judges: callables (item) -> log-odds that the reply is wrong, one pass each (see JudgeScorer)."""
         self.art, self.reader, self.nli, self.checkers = art, reader, nli, list(checkers)
+        self.judges = list(judges)
         self.meta = art["meta"]
         self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
     @classmethod
-    def load(cls, path, reader=None, nli=None, checkers=()):
+    def load(cls, path, reader=None, nli=None, checkers=(), judges=()):
         z = np.load(path, allow_pickle=False)
         art = {k: (z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k]) for k in z.files}
         art["meta"] = json.loads(str(art["meta"]))
-        return cls(art, reader, nli=nli, checkers=checkers)
+        return cls(art, reader, nli=nli, checkers=checkers, judges=judges)
 
     @staticmethod
     def save(art, path):
@@ -354,6 +358,7 @@ class OmniVerifier:
         viol = [v for c in self.checkers for v in c(it["response"], doc)]
         f["flags"] = min(len(flags), 1) + min(len(viol), 2)
         f["violations"] = [{"why": "arithmetic", "claim": x} for x in flags] + viol
+        f["judges"] = [float(jd(it)) for jd in self.judges]
         return f
 
     def featurize(self, items):
@@ -363,7 +368,9 @@ class OmniVerifier:
         j = np.array([-float(f["j_logit"]) for f in feats])
         n = np.array([float(f.get("nli", np.nan)) for f in feats])
         fl = np.array([float(f.get("flags", 0)) for f in feats])
-        return j, n, fl
+        k = max((len(f.get("judges") or []) for f in feats), default=0)
+        e = np.array([(list(f.get("judges") or []) + [np.nan] * k)[:k] for f in feats], float).reshape(len(feats), k)
+        return j, n, fl, e
 
     # -- profiles
     def universal_profile(self):
@@ -391,8 +398,10 @@ class OmniVerifier:
                            else np.zeros(np.shape(v)))
         out = w["r"] * (r - z["r"][0]) / z["r"][1] + w["u"] * zz(u, "u")
         if extras is not None:
-            j, n, fl = extras
+            j, n, fl, e = extras
             out = out + w["j"] * zz(j, "j") + w["n"] * zz(n, "n") + prof.get("flag_weight", self.FLAG_WEIGHT) * fl
+            for k in range(e.shape[1]):
+                out = out + w.get(f"e{k}", self.JUDGE_WEIGHT) * zz(e[:, k], f"e{k}")
         return out
 
     def profile(self, feats, name="domain"):
@@ -404,9 +413,11 @@ class OmniVerifier:
         if len(U) > 1:
             p.update(umu=U.mean(0).tolist(), usd=(U.std(0) + 1e-4).tolist())
         r, u = self._raw(p, feats)
-        j, n, _ = self._extras(feats)
+        j, n, _, e = self._extras(feats)
         st = lambda v: [float(np.nanmean(v)), float(np.nanstd(v) + 1e-6)]
         p["z"] = {"r": st(r), "u": st(u), "j": st(j)}
+        for k in range(e.shape[1]):
+            p["z"][f"e{k}"] = st(e[:, k])
         if (~np.isnan(n)).sum() > 1:
             p["z"]["n"] = st(n)
         p["card"] = dict(p["card"], unlabelled_replies=len(feats))
@@ -491,7 +502,7 @@ class OmniVerifier:
         z = float(self._combine(prof, r, u, self._extras([f]))[0])
         out = {"score": z, "reply_score": float(r[0]), "worst_unit_score": None if np.isnan(u[0]) else float(u[0]),
                "judge_logodds_yes": float(f["j_logit"]), "nli_unsupported": None if np.isnan(f["nli"]) else f["nli"],
-               "violations": f["violations"], "profile": prof["name"]}
+               "violations": f["violations"], "judges_logodds_wrong": f.get("judges", []), "profile": prof["name"]}
         if prof.get("threshold") is not None:
             out["flagged"] = bool(z >= prof["threshold"])
             out["guarantee"] = {k: prof["card"].get(k) for k in ("fpr_target", "confidence", "clean_replies")}
@@ -565,3 +576,51 @@ class NLIScorer:
         with self.torch.no_grad():
             h = 1 - float(self.hhem.predict([(doc, claim)])[0])
         return (h + m) / 2
+
+
+class JudgeScorer:
+    """An external judge read in ONE forward pass (no generation): the log-odds that the reply is wrong, from the
+    model's next-token probabilities of "No" vs "Yes" to a verification question. Measured on 21 held-out domains
+    (results/omni/judge_calibration.json): Qwen3-14B (4-bit) AUROC 0.84 alone, 0.84 with phi-4; added to the 8B stack
+    with weight 3 each, 0.86 after 50 labels (results/omni/stack_plus_judges.json). Prompts as kaggle/omni/judge_calibration.py."""
+
+    SYSTEM = "You are a meticulous, impartial fact-checker. You verify answers written by an AI assistant."
+    Q_GROUNDED = ("Is the reply fully correct and faithful: is every statement in it supported by the documents / "
+                  "context in the task, with nothing contradicted, fabricated or unsupported?")
+    Q_REASON = ("Check the solution step by step. Is every step correct (no calculation, logic or reading error), "
+                "so that the solution is fully correct?")
+    Q_CLOSED = "Is the reply fully correct: is every factual statement in it accurate, with nothing false or misleading?"
+
+    def __init__(self, name="Qwen/Qwen3-14B", load_in_4bit=True, max_tokens=4096):
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        self.torch, self.max_tokens = torch, max_tokens
+        self.tok = AutoTokenizer.from_pretrained(name)
+        kw = {"device_map": "auto"} if torch.cuda.is_available() else {"dtype": torch.bfloat16}
+        if load_in_4bit and torch.cuda.is_available():
+            from transformers import BitsAndBytesConfig
+            kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                                           bnb_4bit_compute_dtype=torch.float16)
+        self.model = AutoModelForCausalLM.from_pretrained(name, **kw).eval()
+        first = lambda ws: sorted({self.tok(w, add_special_tokens=False)["input_ids"][0] for w in ws})
+        self.yes, self.no = first(["Yes", " Yes", "yes"]), first(["No", " No", "no"])
+
+    def __call__(self, it, reasoning=None):
+        doc = it.get("doc", "")
+        reasoning = reasoning if reasoning is not None else len(sentence_spans(it["response"])) >= 4 and \
+            bool(re.search(r"[=+*/^]|step", it["response"], re.I))
+        q = self.Q_REASON if reasoning else (self.Q_GROUNDED if doc else self.Q_CLOSED)
+        body = "The task given to the assistant:\n<task>\n" + (it.get("question") or "") + "\n</task>\n\n"
+        if doc:
+            body += "Source documents for the task:\n<documents>\n" + doc[:24000] + "\n</documents>\n\n"
+        body += "The assistant's reply:\n<reply>\n" + it["response"] + "\n</reply>\n\n" + q + " Answer with only Yes or No."
+        msgs = [{"role": "system", "content": self.SYSTEM}, {"role": "user", "content": body}]
+        try:
+            text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        except TypeError:
+            text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+        ids = self.tok(text, return_tensors="pt", add_special_tokens=False)["input_ids"][:, -self.max_tokens:]
+        dev = self.model.get_input_embeddings().weight.device
+        with self.torch.no_grad():
+            lp = self.model(input_ids=ids.to(dev), logits_to_keep=1).logits[0, -1].float().log_softmax(-1)
+        return float(self.torch.logsumexp(lp[self.no], 0) - self.torch.logsumexp(lp[self.yes], 0))

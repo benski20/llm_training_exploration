@@ -79,3 +79,7 @@ def test_flags_and_extras_enter_the_score():
     base = v.score(prof, fd)
     fd[0]["flags"] = 2
     assert v.score(prof, fd)[0] == base[0] + 2 * v.FLAG_WEIGHT
+    for k, f in enumerate(fd):                                  # an external judge that knows the label
+        f["judges"] = [float(y[dom == "d"][k]) * 2 - 1]
+    prof2 = v.profile(fd, "d")
+    assert auc(v.score(prof2, fd), y[dom == "d"]) > auc(v.score(prof, fd), y[dom == "d"])
