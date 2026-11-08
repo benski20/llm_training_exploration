@@ -21,3 +21,4 @@ space/heads/
 results/kaggle/*/bundle/
 results/kaggle/omni-*smoke*/
 results/kaggle/omni-*/
+results/kaggle/ragtruth-h2h/
