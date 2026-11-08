@@ -418,6 +418,9 @@ class OmniVerifier:
         p["z"] = {"r": st(r), "u": st(u), "j": st(j)}
         for k in range(e.shape[1]):
             p["z"][f"e{k}"] = st(e[:, k])
+        us = np.concatenate([self._unit_scores(p, f) for f in feats])
+        if len(us) > 1:
+            p["z"]["unit"] = st(us)                       # every unit's score: for the suspect-step rule
         if (~np.isnan(n)).sum() > 1:
             p["z"]["n"] = st(n)
         p["card"] = dict(p["card"], unlabelled_replies=len(feats))
@@ -462,6 +465,26 @@ class OmniVerifier:
             r = X @ m.w + m.b
             p["z"] = dict(p["z"] or {"u": [0.0, 1.0]}, r=[float(r.mean()), float(r.std() + 1e-6)])
         return p
+
+    def _unit_scores(self, prof, f):
+        U = self.unit_matrix(f)
+        return ((U - np.array(prof["umu"])) / np.array(prof["usd"])) @ self.art["uw"] + float(self.art["ub"])
+
+    SUSPECT_TAU = 0.75   # z above the domain's average unit; chosen on held-out ProcessBench domains
+
+    def suspect_unit(self, prof, unit_scores):
+        """the suspect sentence / step: the FIRST unit whose score is SUSPECT_TAU standard deviations above the
+        domain's average unit (finds the first wrong reasoning step 47% exactly / 73% within one step on held-out
+        ProcessBench, against 34% / 58% for the highest-scoring unit: docs/omni_experiments/novel_consensus_dynamics.md),
+        the highest-scoring unit when none crosses or the profile has no unit statistics."""
+        if len(unit_scores) == 0:
+            return None
+        zu = (prof.get("z") or {}).get("unit")
+        if zu:
+            hit = np.where((np.asarray(unit_scores) - zu[0]) / zu[1] > self.SUSPECT_TAU)[0]
+            if len(hit):
+                return int(hit[0])
+        return int(np.argmax(unit_scores))
 
     def evidence(self, prof, r, u, extras):
         """how much each named signal pushed this reply toward "wrong" (its weight times its standardised value):
@@ -526,6 +549,8 @@ class OmniVerifier:
         us = ((U - np.array(prof["umu"])) / np.array(prof["usd"])) @ self.art["uw"] + float(self.art["ub"])
         out["units"] = [{"text": reply[a:b], "start": a, "end": b, "score": float(sc)}
                         for (a, b), sc in ((it["units"][fu["index"]], sc) for fu, sc in zip(f["units"], us))]
+        k = self.suspect_unit(prof, us)
+        out["suspect_unit"] = None if k is None else out["units"][k]
         return out
 
     @staticmethod
