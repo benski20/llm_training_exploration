@@ -59,6 +59,25 @@ Every number is on domains whose labels were never used for training
   | judge labels + 20 / 40 human labels (prediction-powered) | 6.2% / 5.9% | 16% / 11% | 45% / 47% |
   | strict finite-sample bound with 40 human labels | never feasible | n/a | 0% |
 
+### Nuanced cases (same held-out scores, stratified; full stack with judges, zero labels)
+
+Within each domain, the domain's correct replies are scored against the wrong replies in each slice.
+
+| slice | AUROC |
+|---|---|
+| all wrong replies | 0.842 |
+| long replies (top third by length in their domain) / short (bottom third) | **0.852** / 0.813 |
+| exactly one wrong segment hidden among 5 or more (FELM, RAGTruth, ProcessBench) | **0.859** (9 domains) |
+| two or more wrong segments | 0.900 |
+| reasoning: first wrong step early (first third) / late (last third) | 0.886 / **0.853** |
+| ProcessBench GSM8K / MATH / OlympiadBench / Omni-MATH | 0.93 / 0.95 / 0.88 / 0.93 |
+| FELM writing and recommendations / world knowledge / RAGTruth summaries | 0.91 / **0.73** / 0.81 |
+
+- **A single subtle error in a long answer is caught about as well as the average case.**
+- **Late errors and olympiad problems cost a few points.**
+- **The weak slice is subtle factual errors in long-form world-knowledge answers.** A minimal-pair stress test (one
+  controlled edit per correct reply, by error type) is in docs/omni_experiments/nuance_pairs.md.
+
 ## What moved accuracy, and what did not (all held out, measured)
 
 | lever | effect on held-out AUROC | verdict |
