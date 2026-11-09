@@ -107,3 +107,4 @@ Expectations to test, not results:
 - **The final-answer-only change and the late-position edits should be the hard cells for the reader probes.** The
   arithmetic checker misses them.
 - **NLI's MiniCheck half cannot see an edit after the 4th sentence.** The diagnostic `mc_all` measures that directly.
+4B nuance run stopped at 50/377 pairs (42 s/pair on CPU, memory-bound); resume on GPU with kaggle/omni/nuance_pairs.py
