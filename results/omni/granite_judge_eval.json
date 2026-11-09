@@ -1,0 +1,34 @@
+{
+ "per_domain": {
+  "truthfulqa": {
+   "granite_alone": 0.7302875,
+   "stack": 0.87255,
+   "stack+granite(w3)": 0.8599,
+   "stack+granite(w5)": 0.84795
+  },
+  "halueval_general": {
+   "granite_alone": 0.6349555555555556,
+   "stack": 0.6976888888888889,
+   "stack+granite(w3)": 0.7109777777777778,
+   "stack+granite(w5)": 0.7072888888888889
+  },
+  "felm_wk": {
+   "granite_alone": 0.5729649435531788,
+   "stack": 0.7292929292929293,
+   "stack+granite(w3)": 0.7190730837789662,
+   "stack+granite(w5)": 0.7076648841354723
+  },
+  "felm_science": {
+   "granite_alone": 0.5842277877161598,
+   "stack": 0.8407871198568873,
+   "stack+granite(w3)": 0.8127608825283243,
+   "stack+granite(w5)": 0.7874180083482409
+  }
+ },
+ "mean": {
+  "granite_alone": 0.6306089467062236,
+  "stack": 0.7850797345096764,
+  "stack+granite(w3)": 0.7756779360212671,
+  "stack+granite(w5)": 0.7625804453431505
+ }
+}
