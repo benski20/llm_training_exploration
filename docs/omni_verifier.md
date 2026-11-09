@@ -113,12 +113,25 @@ final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
 - **Relative judgement is strong.** One changed word raises the score of the same reply nine times in ten, and the
   edited sentence is among the top 3 suspects four times in five. That serves best-of-N selection, regression tests
   of a model or prompt change, and pointing a reviewer at the sentence.
-- **Absolute detection of a single subtle edit is moderate at this tier** (0.64). A one-word error in a long reply often
+- **Absolute detection of a single subtle edit is moderate at the 1.7B tier (0.64), and rises with the reader.**
+  With Qwen3-4B (`results/omni/nuance_pairs_q4b_cpu.json`, zero-label profiles from 30 replies per domain):
+
+  | edit | 1.7B | 4B |
+  |---|---|---|
+  | all | 0.641 | **0.742** |
+  | negation | 0.681 | 0.781 |
+  | number | 0.586 | 0.700 |
+  | qualifier | 0.580 | 0.667 |
+  | final answer | 0.772 | **0.962** |
+  | intermediate step | 0.683 | 0.729 |
+
+  The 4B tier ranks the twin above its original 92% of the time. The 8B reader and the judges on these pairs are
+  scripted and wait for GPU time. A one-word error in a long reply often
   scores below a *different* correct reply.
 - **Caveat:** the shipped head was trained on the corpus, so originals are training replies and twins are not, which
   may flatter the pairwise figure.
-- **The accuracy tier on these pairs is not measured yet.** The 8B reader, the judges and NLI are ready in
-  `kaggle/omni/nuance_pairs.py`, which needs a GPU (the Kaggle weekly quota ran out).
+- **The 8B tier and the judges on these pairs are not measured yet:** they are scripted in
+  `kaggle/omni/nuance_pairs.py` and wait for GPU time.
 
 ## What moved accuracy, and what did not (all held out, measured)
 
