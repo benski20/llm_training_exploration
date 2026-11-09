@@ -149,10 +149,23 @@ final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
 | unsupervised expert weighting from agreement alone (spectral meta-learner, Dawid-Skene, latent-class; the reader's experts grouped as one) | primary +0.001; grouped Dawid-Skene +0.005 [+0.000, +0.010], 17/21 domains (secondary, unreplicated); estimated error prevalence off by 0.15 | no for weighting; the judges' errors are correlated (≈ 0.65), so agreement overstates accuracy |
 | causal "verdict fragility": steer the reader along its LODO "wrong" direction and measure how easily its Yes/No flips; counterfactual patch without documents (`experiments/novel_verdict_fragility.py`, 840 replies) | steering works (≈ 3.4 logits per sd, monotone in 100%), but fragility = the verdict re-expressed (Spearman 0.91); adding all causal signals −0.021 | no |
 | logit-lens "commitment" (the depth at which each written token becomes the lens's top prediction, flips across layers; `experiments/novel_logit_lens.py`, 1,050 replies) | alone 0.57 (reasoning 0.79); added to the reply head −0.016 [−0.032, −0.001] | no: largely log-prob in another form (ρ 0.53); Qwen3's lens is uninformative before ~75% depth |
+| six 2024-26 mechanistic signals in one pass (`experiments/novel_mech_bundle.py`, 1,008 replies): verdict logit lens, question-only prior and reply-induced shift, six judge framings (incl. reversed), judge attention (detection and localisation), spectral attention / lookback ratio, a peer reader from another family (granite-3.3-2b) | every one lowers the 1.7B reply head when added (−0.004 to −0.08); reversed questions are answered as quality questions by a small reader; judge attention localises below chance | no. Chat-only leads (granite's judge on chat 0.64 vs 0.48; question→judge shift +0.07 on chat, n.s.) rest on 2 domains |
 | self-contrast: each reply scored against 4 automatic single-claim corruptions of itself, gap as a signal (`experiments/self_contrast.py`, 1.7B, 100 replies × 4 domains) | RAGTruth QA 0.773 → 0.787 combined (contrast alone 0.760); RAGTruth summaries, MATH, FELM world knowledge: 0.52-0.59 alone, combination worse | no, at 5× the compute: corruptions are noticed about equally in correct and wrong replies, except where documents pin down the answer |
 | similarity-weighted training at onboarding (MMD or kernel-mean-matching weights from the new domain's *unlabelled* replies) | +0.008 to +0.011 zero-label (0.712 → 0.720-0.723), 14-18 of 21 domains improve, mostly long-form | small, free: adopt as the default head fit |
 | label-free anomaly scores (Mahalanobis, kNN, isolation forest); label-free direction re-estimation (GMM, optimal-transport pseudo-labels) | anomaly ≈ 0.50 alone, −0.05 to −0.09 added; re-estimation ±0.0 | no: wrong replies are not outliers |
 | retrieve Wikipedia, then ground, for closed-book chat (agent G; 1,009 replies, 8B) | +0.001 (0.734 → 0.735) at about 10× the cost; NLI on retrieved passages 0.54 | no: the evidence rarely holds the deciding fact (4 of 40 wrong replies), and many chat errors are task failures with nothing to look up |
+
+**What the mechanistic search found, in sum.** About 25 mechanistic and statistical ideas were tested, all held out
+over the same 21 domains:
+- **What works:** linear probes on the reader's hidden states, at the reply, at each step, and at the moment of a
+  verdict (the judge state).
+- **What adds to the probes:** a stronger model's own one-pass verdict; documents (NLI), domain rules (written
+  checkers) and computation (numeric recompute) where they apply.
+- **What does not add**, once the probes are in place: lens trajectories, causal fragility, attention structure,
+  SAE features, consensus between readers, anomaly scores, and re-weighting.
+- **Combining is saturated:** the best possible weights add +0.02.
+
+The remaining lever is a stronger reader or judge, which is GPU-bound.
 
 ## How it works (`vt/omni.py`)
 
