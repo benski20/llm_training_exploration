@@ -133,6 +133,29 @@ final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
 - **The 8B tier and the judges on these pairs are not measured yet:** they are scripted in
   `kaggle/omni/nuance_pairs.py` and wait for GPU time.
 
+## Toward a general verifier: distillation without human labels (`experiments/general_student.py`)
+
+A cheap student (Qwen3-1.7B features, linear head) was trained on the teacher's scores, pooled over every other
+domain. The teacher is the two one-pass judges, and **no human label was used**. Scored with human labels on the
+held-out domain:
+
+| student, 21 held-out domains | all | reasoning | long-form | RAG | chat |
+|---|---|---|---|---|---|
+| trained on human labels | 0.710 | 0.84 | 0.71 | 0.68 | 0.59 |
+| **trained on judge scores only** | **0.725** | **0.85** | **0.76** | 0.68 | **0.64** |
+| the teacher (Qwen3-14B + phi-4, one pass) | 0.844 | 0.92 | 0.87 | 0.82 | 0.79 |
+
+- **Training data for a general verifier can scale without human labelling.** The judges' scores are as good as
+  human labels for training: better here.
+- **The student still trails its teacher by 0.12.** Closing the gap is a GPU training job:
+  - a bigger student (the 8B probe reaches 0.80 with human labels);
+  - far more, and more diverse, judge-labelled replies (public chat logs, reasoning sets, RAG data, written by many
+    models);
+  - fine-tuning the student rather than probing it.
+- **Planned run:** about 100k judge-labelled replies, 4B and 8B students. Decision rule: ship the student as the
+  general default tier if it reaches about 0.80 on held-out domains; otherwise the general tier is the full stack
+  at about $0.50 per 1,000 checks.
+
 ## What moved accuracy, and what did not (all held out, measured)
 
 | lever | effect on held-out AUROC | verdict |
