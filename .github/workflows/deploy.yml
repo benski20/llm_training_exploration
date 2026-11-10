@@ -69,6 +69,16 @@ jobs:
           A="${{ github.event.inputs.action }}"
           if [ -z "$A" ]; then A=$(python3 -c "import json; print(json.load(open('deploy/request.json')).get('action', 'deploy'))"); fi
           echo "action=$A" >> "$GITHUB_OUTPUT"
+          if [ -z "${{ github.event.inputs.action }}" ]; then   # a push: optional deploy settings from request.json
+            python3 - >> "$GITHUB_ENV" <<'PY'
+          import json, re
+          env = json.load(open("deploy/request.json")).get("env") or {}
+          for k, v in env.items():
+              if re.fullmatch(r"VERICHAT_(OMNI|OMNI_JUDGES|OMNI_NLI|OMNI_CHECKERS|OMNI_READER|GPU|SCALEDOWN|GROUNDING)", k) \
+                      and re.fullmatch(r"[\w./,:-]*", str(v)):
+                  print(f"{k}={v}")
+          PY
+          fi
       - name: stop
         if: steps.req.outputs.action == 'stop'
         run: modal app stop verichat

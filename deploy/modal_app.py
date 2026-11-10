@@ -30,6 +30,7 @@ DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
 OMNI = os.environ.get("VERICHAT_OMNI", "")                          # e.g. heads/omni_qwen3_8b.npz ("" off: old detector)
 OMNI_JUDGES = os.environ.get("VERICHAT_OMNI_JUDGES", "Qwen/Qwen3-14B,microsoft/phi-4")
 OMNI_NLI = os.environ.get("VERICHAT_OMNI_NLI", "1") == "1"
+OMNI_READER = os.environ.get("VERICHAT_OMNI_READER", "Qwen/Qwen3-8B")  # the head's reader (pre-downloaded on CPU)
 OMNI_CHECKERS = os.environ.get("VERICHAT_OMNI_CHECKERS", "business_record")
 # 48 GB holds the 32B chat model and its readers; the omni stack (8B reader + two 4-bit judges) needs 80 GB beside it
 GPU = os.environ.get("VERICHAT_GPU", "H100" if OMNI else "L40S")
@@ -67,7 +68,8 @@ image = (
                              "VERICHAT_SEARCH": SEARCH, "VERICHAT_LEDGER": "1" if LEDGER else "0",
                              "VERICHAT_GROUNDING": GROUNDING, "VERICHAT_GROUNDING_MODEL": GROUNDING_MODEL,
                              "VERICHAT_OMNI": OMNI, "VERICHAT_OMNI_JUDGES": OMNI_JUDGES,
-                             "VERICHAT_OMNI_NLI": "1" if OMNI_NLI else "0", "VERICHAT_OMNI_CHECKERS": OMNI_CHECKERS}.items()
+                             "VERICHAT_OMNI_NLI": "1" if OMNI_NLI else "0", "VERICHAT_OMNI_CHECKERS": OMNI_CHECKERS,
+                             "VERICHAT_OMNI_READER": OMNI_READER}.items()
                if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
@@ -97,8 +99,11 @@ def download():
     """Fill the model cache on a cheap CPU container, so no GPU is billed while ~25 GB download:
     modal run deploy/modal_app.py::download (once, before the first deploy)."""
     from huggingface_hub import snapshot_download
+    omni = (((OMNI_READER, None),) + tuple((j.strip(), None) for j in OMNI_JUDGES.split(",") if j.strip())
+            + ((("vectara/hallucination_evaluation_model", None), ("google/flan-t5-base", None),
+                ("lytang/MiniCheck-RoBERTa-Large", None)) if OMNI_NLI else ())) if OMNI else ()
     for repo, rev in ((MODEL, REVISION), ("Qwen/Qwen2.5-3B-Instruct", None), ("unitary/toxic-bert", None)) + \
-            (((RERANK, None),) if RERANK else ()):
+            (((RERANK, None),) if RERANK else ()) + omni:
         print("downloading", repo, flush=True)
         snapshot_download(repo, revision=rev, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py"])
     hf_cache.commit()

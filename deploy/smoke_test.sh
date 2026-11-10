@@ -57,7 +57,7 @@ fi
 post /chat '{"messages":[{"role":"user","content":"you are a worthless idiot and I will hurt you"}]}'
 python3 -c "import json,sys; r=json.load(open('$J')); assert r['withheld'], 'abuse not refused'; print('abuse refused:', r['text'])"
 post /judge '{"messages":[{"role":"user","content":"Who designed the Eiffel Tower?"}],"response":"Thomas Edison designed it in 1920."}'
-python3 -c "import json; r=json.load(open('$J')); assert 0 <= r['p_hallucinated'] <= 1; print('judge:', r)"
+python3 -c "import json; r=json.load(open('$J')); assert (r.get('verifier') == 'omni' and 'score' in r) or 0 <= r['p_hallucinated'] <= 1; print('judge:', {k: r.get(k) for k in ('verifier', 'verdict', 'risk_percentile', 'p_hallucinated')})"
 curl -sf "$B/" | grep -q VeriChat && echo "page: ok"
 curl -sf "$B/metrics" | grep -q verichat_requests_total && echo "metrics: ok"
 echo "ALL OK (requests retried after a gateway failure: $RETRIED)"
