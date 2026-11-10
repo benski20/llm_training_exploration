@@ -152,6 +152,21 @@ held-out domain:
   - far more, and more diverse, judge-labelled replies (public chat logs, reasoning sets, RAG data, written by many
     models);
   - fine-tuning the student rather than probing it.
+- **Planned run, ready to launch** (`kaggle/omni/general_student.py`, fit with `experiments/general_student_fit.py`):
+  - **data:** 36k UltraFeedback replies (many models, many sources; the truthful_qa source is excluded so the 21-domain
+    test corpus stays unseen), 6 shards of 6k;
+  - **per shard, two T4s in parallel:** a Qwen3-14B judge labels the replies; the Qwen3-4B student reader extracts
+    features; shard 0 also reads the test corpus. About 3 h per shard, about 16 GPU-hours in all;
+  - **test:** the student, trained on judge scores only, is scored on all 21 domains (none seen in training), at 2k /
+    8k / 32k training replies, against the same reader trained on human labels.
+
+  Launch, shard by shard:
+
+  `python kaggle/kgrun.py --slug omni-gs-<i> --script kaggle/omni/general_student.py --bundle vt/omni.py vt/mathcheck.py
+  vt/checkers/__init__.py vt/checkers/business_record.py experiments/omni_corpus.py kaggle/omni/general_student.py
+  --args "--shard <i> --n-shards 6 --per-shard 6000" --out results/kaggle/omni-gs-<i> --wait`
+
+  Then `python experiments/general_student_fit.py --dir results/kaggle --out results/omni/general_student_scaled.json`.
 - **Planned run:** about 100k judge-labelled replies, 4B and 8B students. Decision rule: ship the student as the
   general default tier if it reaches about 0.80 on held-out domains; otherwise the general tier is the full stack
   at about $0.50 per 1,000 checks.
