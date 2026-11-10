@@ -167,9 +167,8 @@ held-out domain:
   --args "--shard <i> --n-shards 6 --per-shard 6000" --out results/kaggle/omni-gs-<i> --wait`
 
   Then `python experiments/general_student_fit.py --dir results/kaggle --out results/omni/general_student_scaled.json`.
-- **Planned run:** about 100k judge-labelled replies, 4B and 8B students. Decision rule: ship the student as the
-  general default tier if it reaches about 0.80 on held-out domains; otherwise the general tier is the full stack
-  at about $0.50 per 1,000 checks.
+- **Decision rule:** ship the student as the general default tier if it reaches about 0.80 on held-out domains;
+  otherwise the general tier is the full stack at about $0.50 per 1,000 checks.
 
 ## What moved accuracy, and what did not (all held out, measured)
 
