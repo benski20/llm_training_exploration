@@ -113,7 +113,28 @@ function add(cls,inner){const d=document.createElement('div');d.className='card 
 fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
  if(h.verify_claims)document.getElementById('vsub').hidden=false;
  if(h.thinking_available){document.getElementById('thinkl').hidden=false;document.getElementById('think').checked=!!h.thinking}});
-function renderJudge(r,a){let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
+const EVN={judge_1:'judge 1 (one-pass verdict)',judge_2:'judge 2 (one-pass verdict)',reader_judgement:"reader's own verdict",
+ reader_probe:'probe on the reply',weakest_sentence:'weakest sentence / step',grounding_nli:'not supported by the documents (NLI)',
+ rule_violations:'rule violations'};
+function renderOmni(r,a){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.start);const sus=r.suspect_unit;
+ const top=us.map(u=>u.score).sort((x,y)=>y-x),cut=top.length>2?top[Math.floor(top.length*0.3)]:Infinity;
+ let html='',pos=0;for(const u of us){if(u.start<pos)continue;html+=esc(a.slice(pos,u.start));
+  const isS=sus&&u.start===sus.start&&u.end===sus.end,cls=isS?'c b':(u.score>=cut&&us.length>2?'c m':'');
+  const t=esc(a.slice(u.start,u.end));html+=cls?'<span class="'+cls+'" title="'+esc((isS?'suspect: ':'')+'unit score '+u.score.toFixed(2))+'">'+t+'</span>':t;pos=u.end}
+ html+=esc(a.slice(pos));
+ const col={'likely wrong':'var(--bad)','uncertain':'var(--mid)','likely right':'var(--good)','no problem found':'var(--good)'}[r.verdict]||'var(--muted)';
+ const pct=r.risk_percentile==null?'':' — riskier than '+Math.round(100*r.risk_percentile)+'% of typical replies';
+ const g=r.guarantee?' (calibrated: at most '+Math.round(100*r.guarantee.fpr_target)+'% false alarms, '+Math.round(100*r.guarantee.confidence)+'% confidence)':
+  ' (general profile, no labels: a ranking, not a guarantee)';
+ const ev=Object.entries(r.evidence||{}).map(([k,v])=>'<div>'+(v>0?'▲':'▼')+' '+esc(EVN[k]||k)+' <span class="meta">'+(v>0?'+':'')+v.toFixed(2)+'</span></div>').join('');
+ const vi=(r.violations||[]).map(x=>'<div>✗ <b>'+esc(x.why)+'</b>: '+esc(String(x.claim).slice(0,160))+'</div>').join('');
+ return '<div class="card"><div class="text">'+html+'</div>'+
+  '<div class="meta"><b style="color:'+col+'">'+esc(r.verdict||'scored')+'</b>'+pct+g+'</div>'+
+  (sus?'<div class="meta">Suspect '+(us.length>3?'step / sentence':'sentence')+' (red): “'+esc(sus.text.slice(0,140))+'”</div>':'')+
+  (ev?'<div class="claims"><div class="meta">What drove the verdict (▲ toward wrong):</div>'+ev+'</div>':'')+
+  (vi?'<div class="claims"><div class="meta">Rule violations:</div>'+vi+'</div>':'')+
+  '<div class="meta">score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
+function renderJudge(r,a){if(r.verifier==='omni')return renderOmni(r,a);let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
  return '<div class="card"><div class="text">'+html+'</div><div class="meta">'+(r.flagged?'Likely contains a hallucination':
  'No hallucination detected')+' (P = '+r.p_hallucinated.toFixed(2)+'). Red: the spans the reader doubts most.</div></div>'}
@@ -322,7 +343,8 @@ class RateLimiter:
 
 def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120.0, detector=None,
                 api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16,
-                log_requests=False):
+                log_requests=False, omni=None):
+    """omni: (OmniVerifier, profile) to answer /judge with the omni verifier (vt/omni.py) instead of `detector`."""
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
     def chat(items, ready=None):                                 # items may carry a "_stream" callback
@@ -334,7 +356,22 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                                on_reasoning=lambda i, d: sinks[i] and sinks[i]({"reasoning": d}), on_ready=ready)
     chat.early = True                                            # replies go out as soon as each is final
     handlers = {"chat": chat}
-    if detector is not None:
+    if omni is not None:
+        ov, oprof = omni
+
+        def omni_judge(items):
+            out = []
+            for it in items:
+                t0 = time.perf_counter()
+                try:
+                    r = ov.verify(it["response"], messages=it["messages"], documents=it.get("documents"), prof=oprof)
+                except Exception as e:                       # one bad item must not fail the batch
+                    traceback.print_exc()
+                    r = {"error": f"verification failed: {type(e).__name__}"}
+                out.append(dict(r, verifier="omni", ms=round(1000 * (time.perf_counter() - t0))))
+            return out
+        handlers["judge"] = omni_judge
+    elif detector is not None:
         handlers["judge"] = lambda items: detector.judge_batch(items)
     metrics = Metrics()
     batcher = Batcher(handlers, max_batch=max_batch, metrics=metrics)
@@ -376,7 +413,12 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             if self.path == "/health":
                 return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
                                             "risk_threshold": bot.gen.risk_threshold if bot.gen.risk_probe is not None else None,
-                                            "detector": detector is not None, "thinking": bot.gen.thinking,
+                                            "detector": detector is not None or omni is not None,
+                                            "omni": None if omni is None else {
+                                                "reader": omni[0].meta["reader"], "judges": len(omni[0].judges),
+                                                "nli": omni[0].nli is not None, "profile": omni[1]["name"],
+                                                "calibrated": omni[1].get("threshold") is not None},
+                                            "thinking": bot.gen.thinking,
                                             "thinking_available": bot.gen.think_open is not None,
                                             "retrieval": type(bot.retriever).__name__ if bot.retriever is not None else None,
                                             "retrieval_errors": dict(getattr(bot.retriever, "errors", None) or {}),
@@ -388,7 +430,7 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             if log_requests:                                     # arrival, so lost requests can be told apart
                 self._rid = next(arrivals)
                 print(f"recv {self.path} #{self._rid}", flush=True)
-            if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None):
+            if self.path not in ("/chat", "/judge") or (self.path == "/judge" and detector is None and omni is None):
                 return self.send_json(404, {"error": "not found"})
             if api_key and not hmac.compare_digest(self.headers.get("Authorization", ""), f"Bearer {api_key}"):
                 return self.send_json(401, {"error": "missing or wrong API key"})
@@ -418,7 +460,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 except Exception:                                # the model failed: a clean error, not a dropped line
                     traceback.print_exc()
                     return self.send_json(500, {"error": "internal error while judging"})
-                rs = [r if "error" in r else {k: r[k] for k in ("p_hallucinated", "flagged", "spans")} for r in rs]
+                rs = [r if "error" in r or r.get("verifier") == "omni" else
+                      {k: r[k] for k in ("p_hallucinated", "flagged", "spans")} for r in rs]
                 return self.send_json(200, {"items": rs} if batch is not None else rs[0])
             try:
                 msgs, docs, mode = validate(req)
@@ -518,6 +561,18 @@ def build(argv=None, host=None, port=None):
                                                         "(default: the doubt threshold)")
     ap.add_argument("--detector", help="a kaggle/detector head (*_detector.pt) to enable /judge")
     ap.add_argument("--detector-model", help="its reader model (default: the head's own)")
+    ap.add_argument("--omni-head", help="an omni verifier head (heads/omni_qwen3_*.npz): /judge then uses the omni "
+                    "verifier (vt/omni.py) — reader probes, optional one-pass judges, NLI, written checkers")
+    ap.add_argument("--omni-judges", default="", help="comma-separated judge models read in one pass, e.g. "
+                    "Qwen/Qwen3-14B,microsoft/phi-4 (4-bit on a GPU)")
+    ap.add_argument("--omni-nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+    ap.add_argument("--omni-checkers", default="", help="comma-separated written checkers (vt/checkers), e.g. "
+                    "business_record")
+    ap.add_argument("--omni-profile", help="a domain profile (vt-omni onboard) to use; without it a general, "
+                    "zero-label profile is built at startup from --omni-sample and cached next to the head")
+    ap.add_argument("--omni-cache-dir", help="where to cache the general profile (default: beside the head)")
+    ap.add_argument("--omni-sample", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
+                    "omni_profile_sample.jsonl"), help="unlabelled replies for the general profile")
     ap.add_argument("--moderation", action="store_true", help="screen messages and replies (vt/moderation.py)")
     ap.add_argument("--rate-per-minute", type=int, default=20, help="POSTs per client per minute (0: unlimited)")
     ap.add_argument("--trust-proxy", action="store_true", help="client address from X-Forwarded-For")
@@ -585,9 +640,48 @@ def build(argv=None, host=None, port=None):
         name = a.detector_model or torch.load(a.detector, map_location="cpu", weights_only=True)["model"]
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
+    omni = load_omni(a) if a.omni_head else None
     return make_server(bot, host or a.host, a.port if port is None else port, deadline=a.deadline, detector=det,
                        log_requests=a.log_requests, api_key=os.environ.get("VERICHAT_API_KEY") or None,
-                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy)
+                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy, omni=omni)
+
+
+def load_omni(a):
+    """the omni verifier for /judge and its profile: a given domain profile, or a general zero-label one built from
+    the unlabelled sample (cached beside the head, keyed by the head and the judges)."""
+    import hashlib
+    import importlib
+    import json as _json
+
+    from .omni import JudgeScorer, NLIScorer, OmniVerifier
+    judges = [JudgeScorer(m.strip()) for m in a.omni_judges.split(",") if m.strip()]
+    checkers = [importlib.import_module(f"vt.checkers.{c.strip()}").check for c in a.omni_checkers.split(",") if c.strip()]
+    v = OmniVerifier.load(a.omni_head, nli=NLIScorer() if a.omni_nli else None, checkers=checkers, judges=judges)
+    v.attach_reader()
+    if a.omni_profile:
+        return v, OmniVerifier.load_profile(a.omni_profile)
+    key = hashlib.sha256(f"{a.omni_head}|{a.omni_judges}|{a.omni_nli}|{a.omni_checkers}".encode()).hexdigest()[:12]
+    stem = os.path.splitext(os.path.basename(a.omni_head))[0] + f".general_{key}.json"
+    cache = os.path.join(a.omni_cache_dir, stem) if a.omni_cache_dir else \
+        os.path.join(os.path.dirname(os.path.abspath(a.omni_head)), stem)
+    if a.omni_cache_dir:
+        os.makedirs(a.omni_cache_dir, exist_ok=True)
+    try:
+        return v, OmniVerifier.load_profile(cache)
+    except (OSError, ValueError):
+        pass
+    items = []
+    for line in open(a.omni_sample):
+        x = _json.loads(line)
+        items.append({"messages": x["messages"], "response": x["reply"], "units": [tuple(u) for u in x["units"]],
+                      "doc": "\n\n".join(x.get("documents") or []), "question": x["messages"][-1]["content"]})
+    print(f"building the general omni profile from {len(items)} unlabelled replies ...", flush=True)
+    prof = v.general_profile(items)
+    try:
+        OmniVerifier.save_profile(prof, cache)
+    except OSError:                                          # a read-only image: rebuild next time
+        pass
+    return v, prof
 
 
 if __name__ == "__main__":

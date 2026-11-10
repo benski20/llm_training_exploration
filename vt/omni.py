@@ -128,7 +128,7 @@ class Reader:
         self.tok = AutoTokenizer.from_pretrained(name)
         cuda = torch.cuda.is_available()
         self.model = AutoModelForCausalLM.from_pretrained(
-            name, dtype=torch.bfloat16 if (not cuda or torch.cuda.get_device_capability(0)[0] >= 8) else torch.float16,
+            name, torch_dtype=torch.bfloat16 if (not cuda or torch.cuda.get_device_capability(0)[0] >= 8) else torch.float16,
             device_map="auto" if cuda else None).eval()
         nL = self.model.config.num_hidden_layers
         self.layers = list(layers) if layers is not None else sorted({int(round(f * nL)) for f in layer_fracs})
@@ -426,6 +426,35 @@ class OmniVerifier:
         p["card"] = dict(p["card"], unlabelled_replies=len(feats))
         return p
 
+    def general_profile(self, items, name="general"):
+        """a zero-label profile from a sample of unlabelled replies (e.g. data/omni_profile_sample.jsonl): every
+        standardisation from them, and their final scores kept as a reference distribution, so a new reply's risk
+        can be stated as a percentile of typical replies (no labels, so no guaranteed false-alarm rate)."""
+        feats = [f for f in self.featurize(items) if f is not None]
+        p = self.profile(feats, name)
+        p["ref_scores"] = sorted(float(x) for x in self.score(p, feats))
+        p["card"] = dict(p["card"], reference_replies=len(feats), calibrated_with_labels=False)
+        return p
+
+    @staticmethod
+    def percentile(prof, score):
+        """the share of the profile's reference replies scoring below this one (None without a reference)."""
+        ref = prof.get("ref_scores")
+        if not ref:
+            return None
+        return float(np.searchsorted(np.asarray(ref), score) / len(ref))
+
+    @staticmethod
+    def verdict(prof, score):
+        """a plain-language reading: against the profile's calibrated threshold when it has one (with its
+        guarantee), else against the reference percentile (uncalibrated: a ranking, not a promise)."""
+        if prof.get("threshold") is not None:
+            return "likely wrong" if score >= prof["threshold"] else "no problem found"
+        q = OmniVerifier.percentile(prof, score)
+        if q is None:
+            return None
+        return "likely wrong" if q >= 0.8 else ("uncertain" if q >= 0.5 else "likely right")
+
     def score(self, prof, feats):
         r, u = self._raw(prof, feats)
         return self._combine(prof, r, u, self._extras(feats))
@@ -542,6 +571,8 @@ class OmniVerifier:
                "judge_logodds_yes": float(f["j_logit"]), "nli_unsupported": None if np.isnan(f["nli"]) else f["nli"],
                "violations": f["violations"], "judges_logodds_wrong": f.get("judges", []), "profile": prof["name"],
                "evidence": self.evidence(prof, r, u, ex)}
+        out["risk_percentile"] = self.percentile(prof, z)
+        out["verdict"] = self.verdict(prof, z)
         if prof.get("threshold") is not None:
             out["flagged"] = bool(z >= prof["threshold"])
             out["guarantee"] = {k: prof["card"].get(k) for k in ("fpr_target", "confidence", "clean_replies")}
@@ -637,7 +668,7 @@ class JudgeScorer:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch, self.max_tokens = torch, max_tokens
         self.tok = AutoTokenizer.from_pretrained(name)
-        kw = {"device_map": "auto"} if torch.cuda.is_available() else {"dtype": torch.bfloat16}
+        kw = {"device_map": "auto", "torch_dtype": torch.float16} if torch.cuda.is_available() else {"torch_dtype": torch.bfloat16}
         if load_in_4bit and torch.cuda.is_available():
             from transformers import BitsAndBytesConfig
             kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",

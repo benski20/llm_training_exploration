@@ -26,7 +26,13 @@ import modal
 MODEL = os.environ.get("VERICHAT_MODEL", "unsloth/Qwen3-32B-bnb-4bit")
 HEAD = os.environ.get("VERICHAT_HEAD", "results/kaggle/risk-32b2/risk/Qwen3-32B-bnb-4bit_risk_head.pt")
 DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
-GPU = os.environ.get("VERICHAT_GPU", "L40S")
+# the omni verifier behind /judge (vt/omni.py, docs/omni_verifier.md): its head, one-pass judges, NLI, written checkers
+OMNI = os.environ.get("VERICHAT_OMNI", "")                          # e.g. heads/omni_qwen3_8b.npz ("" off: old detector)
+OMNI_JUDGES = os.environ.get("VERICHAT_OMNI_JUDGES", "Qwen/Qwen3-14B,microsoft/phi-4")
+OMNI_NLI = os.environ.get("VERICHAT_OMNI_NLI", "1") == "1"
+OMNI_CHECKERS = os.environ.get("VERICHAT_OMNI_CHECKERS", "business_record")
+# 48 GB holds the 32B chat model and its readers; the omni stack (8B reader + two 4-bit judges) needs 80 GB beside it
+GPU = os.environ.get("VERICHAT_GPU", "H100" if OMNI else "L40S")
 SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "120"))       # idle seconds before the GPU stops (billing)
 RISK_THRESHOLD = os.environ.get("VERICHAT_RISK_THRESHOLD")         # default: the head's own
 RATE = os.environ.get("VERICHAT_RATE", "10")                        # POSTs per client per minute; 0 for load tests
@@ -34,7 +40,7 @@ WIKIPEDIA = os.environ.get("VERICHAT_WIKIPEDIA", "1") == "1"        # look doubt
 REVISION = os.environ.get("VERICHAT_REVISION")                      # pin the model to a Hugging Face commit
 VERIFY = os.environ.get("VERICHAT_VERIFY", "1") == "1"            # check each reply's claims against sources
 LEDGER = os.environ.get("VERICHAT_LEDGER", "0") == "1"            # the LLM-judge ledger (superseded; 1: on)
-GROUNDING = os.environ.get("VERICHAT_GROUNDING", "heads/grounding_probe_qwen3_4b.npz")   # "" off
+GROUNDING = os.environ.get("VERICHAT_GROUNDING", "" if OMNI else "heads/grounding_probe_qwen3_4b.npz")   # "" off
 GROUNDING_MODEL = os.environ.get("VERICHAT_GROUNDING_MODEL", "Qwen/Qwen3-4B")          # the probe's reader
 # web_server by default: through it a streamed reply arrives as written (deploy/stream_probe.py: a ping every 10 s);
 # through asgi_app not even its status line came back within 90 s, so long replies looked dead to clients and were
@@ -59,7 +65,9 @@ image = (
                              "VERICHAT_REVISION": REVISION, "VERICHAT_RERANK": RERANK,
                              "VERICHAT_VERIFY": "1" if VERIFY else "0", "VERICHAT_ASGI": "1" if ASGI else "0",
                              "VERICHAT_SEARCH": SEARCH, "VERICHAT_LEDGER": "1" if LEDGER else "0",
-                             "VERICHAT_GROUNDING": GROUNDING, "VERICHAT_GROUNDING_MODEL": GROUNDING_MODEL}.items()
+                             "VERICHAT_GROUNDING": GROUNDING, "VERICHAT_GROUNDING_MODEL": GROUNDING_MODEL,
+                             "VERICHAT_OMNI": OMNI, "VERICHAT_OMNI_JUDGES": OMNI_JUDGES,
+                             "VERICHAT_OMNI_NLI": "1" if OMNI_NLI else "0", "VERICHAT_OMNI_CHECKERS": OMNI_CHECKERS}.items()
                if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
@@ -75,6 +83,9 @@ image = (
     .add_local_file(os.path.join(ROOT, "results", "study_questions.json"), "/app/eval/study_questions.json")
     .add_local_file(os.path.join(ROOT, "results", "study_questions_2.json"), "/app/eval/study_questions_2.json")
 )
+if OMNI:                                                            # the omni head and its unlabelled profile sample
+    image = (image.add_local_file(os.path.join(ROOT, OMNI), "/app/heads/omni.npz")
+             .add_local_file(os.path.join(ROOT, "data", "omni_profile_sample.jsonl"), "/app/data/omni_profile_sample.jsonl"))
 if GROUNDING:                                                       # the grounding probe the reader serves
     image = image.add_local_file(os.path.join(ROOT, GROUNDING), "/app/heads/grounding_probe.npz")
 app = modal.App("verichat", image=image)
@@ -216,7 +227,11 @@ def server_args():
                + (["--grounding-model", GROUNDING_MODEL] if GROUNDING_MODEL else []) if GROUNDING else [])
             + (["--ledger"] if LEDGER and not GROUNDING else
                ["--verify-claims"] if (WIKIPEDIA or SEARCH) and VERIFY else [])
-            + (["--revision", REVISION] if REVISION else []))
+            + (["--revision", REVISION] if REVISION else [])
+            + (["--omni-head", "/app/heads/omni.npz", "--omni-judges", OMNI_JUDGES,
+                "--omni-checkers", OMNI_CHECKERS, "--omni-sample", "/app/data/omni_profile_sample.jsonl",
+                "--omni-cache-dir", "/root/.cache/huggingface/omni"] + (["--omni-nli"] if OMNI_NLI else [])
+               if OMNI else []))
 
 
 # the search key reaches the container as a Modal secret: from this deploy's environment (a one-off workflow
