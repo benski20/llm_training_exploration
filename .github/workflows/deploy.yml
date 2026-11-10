@@ -69,7 +69,7 @@ jobs:
           A="${{ github.event.inputs.action }}"
           if [ -z "$A" ]; then A=$(python3 -c "import json; print(json.load(open('deploy/request.json')).get('action', 'deploy'))"); fi
           echo "action=$A" >> "$GITHUB_OUTPUT"
-          if [ -z "${{ github.event.inputs.action }}" ]; then   # a push: optional deploy settings from request.json
+          if true; then                                         # optional deploy settings from request.json (push or manual)
             python3 - >> "$GITHUB_ENV" <<'PY'
           import json, re
           env = json.load(open("deploy/request.json")).get("env") or {}
