@@ -133,6 +133,20 @@ final answer. Tier: Qwen3-1.7B, zero-label domain profiles.
 - **The 8B tier and the judges on these pairs are not measured yet:** they are scripted in
   `kaggle/omni/nuance_pairs.py` and wait for GPU time.
 
+## The teacher as the product
+
+The two one-pass judges alone score 0.842 on the 21 held-out domains with zero labels: as much as the full stack. They
+can be the general verifier directly. The 8B reader adds per-step localisation and the evidence breakdown, little
+score.
+- **Cost:**
+  - the measured $0.50 per 1,000 checks was unbatched, on T4s, with 4-bit models;
+  - **estimate, not measured:** a judge only reads (no generation), so it batches well. 14B × 800 tokens ≈ 2.2e13
+    FLOPs ≈ 0.06 s on an H100 at about 40% utilisation, so ≈ $0.04 per 1,000 per judge at $2.50/hour. That is
+    ≈ $0.10 per 1,000 for both judges, at a few hundred ms latency.
+- **Distilling a 4B student** (below) is then a cost and latency optimisation, a further 5-10×, not a requirement.
+- **Licences:** Qwen3 Apache-2.0, phi-4 MIT.
+- **Next measurement, first in the GPU queue:** batched throughput and latency of the judges on a modern GPU.
+
 ## Toward a general verifier: distillation without human labels (`experiments/general_student.py`)
 
 A cheap student (Qwen3-1.7B features, linear head) was trained on the teacher's scores, pooled over every other
