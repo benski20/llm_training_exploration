@@ -40,42 +40,158 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VeriChat</title>
 <style>
-:root{--bg:#fbfbfa;--fg:#1d1d1b;--muted:#6b6b66;--card:#ffffff;--line:#e4e3df;--good:#1f7a4d;--goodbg:#e3f3ea;
---mid:#8a5a00;--midbg:#fbefd6;--bad:#a8231c;--badbg:#f8e0de;--accent:#2f5bd3}
-@media (prefers-color-scheme: dark){:root{--bg:#161615;--fg:#ecebe7;--muted:#9a9a93;--card:#1f1f1d;--line:#33332f;
---good:#6fd3a0;--goodbg:#173527;--mid:#f0c060;--midbg:#3a2e12;--bad:#ff8a80;--badbg:#3d1c1a;--accent:#8aa8ff}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
-main{max-width:860px;margin:0 auto;padding:20px 16px 120px}h1{font-size:20px;margin:0 0 4px}
-.sub{color:var(--muted);margin:0 0 16px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
-.user{border-left:3px solid var(--accent)}.bot .text{white-space:pre-wrap}
+:root{--bg:#faf9f5;--side:#f3f1ea;--fg:#1f1e1b;--muted:#75736c;--card:#ffffff;--line:#e6e3d8;--soft:#efece3;
+--accent:#c96442;--accent2:#b5573a;--good:#2f7d4f;--goodbg:#e4f1e7;--mid:#94650c;--midbg:#f8edd3;--bad:#b3362a;--badbg:#f8e1dd;
+--shadow:0 1px 2px rgba(40,30,10,.05),0 4px 18px rgba(40,30,10,.06);--serif:ui-serif,"Iowan Old Style","Palatino Linotype",Palatino,Georgia,Cambria,serif;
+--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#262624;--side:#1f1e1c;--fg:#f2f0e8;--muted:#a3a097;--card:#30302d;
+--line:#3d3c38;--soft:#35342f;--accent:#d97757;--accent2:#e08a6c;--good:#7fd1a2;--goodbg:#1e3a29;--mid:#eec46d;--midbg:#3d3117;
+--bad:#ff9384;--badbg:#45231f;--shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.25)}}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--sans);display:flex;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer}textarea,select{font:inherit;color:inherit}
+/* sidebar */
+aside{width:264px;flex:none;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 12px;gap:4px;transition:transform .2s}
+.brand{display:flex;align-items:center;gap:9px;font:600 19px/1 var(--serif);padding:6px 8px 16px;letter-spacing:-.01em}
+.mark{width:26px;height:26px;flex:none}
+.nav{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-radius:9px;padding:8px 10px;color:var(--fg)}
+.nav:hover{background:var(--soft)}.nav.on{background:var(--soft);font-weight:600}.nav svg{width:18px;height:18px;flex:none;opacity:.8}
+.newchat{color:var(--accent);font-weight:600}
+.side-h{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:18px 10px 6px}
+.setting{padding:4px 10px;font-size:13.5px;color:var(--muted)}.setting label{display:flex;gap:8px;align-items:center;cursor:pointer}
+.setting select{width:100%;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.side-foot{margin-top:auto;font-size:12px;color:var(--muted);padding:10px;line-height:1.5}
+.status{display:inline-flex;align-items:center;gap:6px}.dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}.dot.ok{background:var(--good)}
+/* main column */
+.app{flex:1;display:flex;flex-direction:column;min-width:0;height:100%}
+header{display:flex;align-items:center;gap:10px;padding:12px 18px;min-height:52px}
+header .title{font-weight:500;color:var(--muted);font-size:14px}
+.menu{display:none;background:none;border:0;padding:6px;border-radius:8px}.menu:hover{background:var(--soft)}
+.scroll{flex:1;overflow-y:auto}
+.col{max-width:760px;margin:0 auto;padding:8px 20px 24px}
+.view[hidden]{display:none}
+/* empty state */
+.empty{text-align:center;padding:12vh 0 18px}
+.empty h1{font:400 34px/1.2 var(--serif);margin:14px 0 8px;letter-spacing:-.015em}
+.empty p{color:var(--muted);max-width:560px;margin:0 auto}
+.empty .mark{width:40px;height:40px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:22px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:13.5px;color:var(--fg)}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+/* messages */
+.msg{margin:22px 0}.msg.user{display:flex;justify-content:flex-end}
+.bubble{background:var(--soft);border-radius:18px;padding:10px 16px;max-width:85%;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.bot{display:flex;gap:14px}.msg.bot .mark{width:24px;height:24px;margin-top:4px}
+.body{flex:1;min-width:0}
+.text{white-space:pre-wrap;font:16.5px/1.7 var(--serif);overflow-wrap:anywhere}
+.thinking{color:var(--muted);font-size:13.5px;display:flex;align-items:center;gap:8px}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:p 1.1s ease-in-out infinite}
+@keyframes p{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+.meta{color:var(--muted);font-size:13px;margin-top:8px}
+.claims{font-size:13.5px;margin-top:12px;border:1px solid var(--line);border-radius:12px;padding:6px 12px;background:var(--card)}
+.claims>div{padding:5px 0;border-top:1px solid var(--line)}.claims>div:first-child{border-top:0}
+details.meta summary{cursor:pointer}
 .c{border-radius:4px;padding:0 2px;cursor:help}.c.g{background:var(--goodbg);color:var(--good)}
-.c.m{background:var(--midbg);color:var(--mid)}.ds{text-decoration:underline wavy var(--bad);text-underline-offset:3px;cursor:help}div.c{display:block;margin:2px 0}.c.b{background:var(--badbg);color:var(--bad)}
-.meta{color:var(--muted);font-size:13px;margin-top:6px}.claims{font-size:13px;margin-top:8px}
-.claims div{padding:2px 0;border-top:1px dashed var(--line)}textarea{width:100%;background:var(--card);color:var(--fg);
-border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}details{margin:8px 0}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}button{background:var(--accent);color:#fff;border:0;
-border-radius:8px;padding:8px 16px;font:inherit;cursor:pointer}button:disabled{opacity:.5}select{font:inherit;padding:6px;border-radius:6px}
-</style></head><body><main>
-<h1>VeriChat</h1>
-<p class="sub">Every reply is checked by the model's own internals as it is written. A sentence the model doubts is
-underlined in red (hover for its risk). Names, numbers and dates are coloured: green likely right, amber uncertain, red
-doubtful. With documents, each claim shows whether it came from them (with the sentence) or from memory. The scores rank
-how likely the model is to be wrong; they do not prove anything. <span id="vsub" hidden>After each reply, its factual
-claims are looked up and checked against what the sources say: ✓ supported, ✗ not supported, ? unclear, – nothing
-found.</span></p>
-<div id="log"></div>
-<details><summary>Documents (optional)</summary><textarea id="docs" rows="5" placeholder="Paste source text. Separate documents with a blank line containing ---"></textarea></details>
-<textarea id="msg" rows="3" placeholder="Ask anything"></textarea>
-<div class="row"><select id="mode"><option value="hedge">mark doubtful claims</option><option value="stop">withhold doubtful answers</option>
-<option value="flag">only score</option></select><label id="thinkl" hidden><input type="checkbox" id="think"> think first (slower)</label><button id="send">Send</button><span id="busy" class="meta"></span></div>
-<details id="jp" hidden><summary>Check an answer from any AI</summary>
-<textarea id="jq" rows="2" placeholder="The question or prompt it answered"></textarea>
-<textarea id="ja" rows="5" placeholder="Its answer (documents above, if any, are used as the source)"></textarea>
-<div class="row"><button id="jsend">Check</button><span id="jbusy" class="meta"></span></div><div id="jout"></div></details>
-</main><script>
-const log=document.getElementById('log'),msgs=[];
-function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text">'+esc(t)+'</div></details>'}
+.c.m{background:var(--midbg);color:var(--mid)}.c.b{background:var(--badbg);color:var(--bad)}div.c{display:block;margin:2px 0}
+.ds{text-decoration:underline wavy var(--bad);text-underline-offset:3px;cursor:help}
+/* verdict card */
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin:16px 0;box-shadow:var(--shadow)}
+.vhead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.pill{border-radius:999px;padding:4px 12px;font-weight:600;font-size:13.5px}
+.pill.bad{background:var(--badbg);color:var(--bad)}.pill.mid{background:var(--midbg);color:var(--mid)}.pill.good{background:var(--goodbg);color:var(--good)}.pill.na{background:var(--soft);color:var(--muted)}
+.meter{flex:1;min-width:140px;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--good),var(--mid) 55%,var(--bad));position:relative;opacity:.85}
+.meter i{position:absolute;top:-4px;width:3px;height:14px;border-radius:2px;background:var(--fg)}
+.ev{display:flex;align-items:center;gap:10px}.ev .lab{flex:1}.ev .bar{width:90px;height:6px;border-radius:3px;background:var(--soft);position:relative;overflow:hidden}
+.ev .bar b{position:absolute;top:0;bottom:0;border-radius:3px}.ev .num{width:46px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+/* composer */
+.dock{padding:0 20px 18px}.dock .inner{max-width:760px;margin:0 auto}
+.composer{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:var(--shadow);padding:12px 12px 10px 16px;transition:border-color .15s}
+.composer:focus-within{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.composer textarea{width:100%;border:0;outline:0;resize:none;background:transparent;padding:4px 0;max-height:240px;line-height:1.5}
+.tools{display:flex;align-items:center;gap:6px;margin-top:6px}
+.ibtn{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid var(--line);border-radius:10px;padding:5px 10px;font-size:13px;color:var(--muted)}
+.ibtn:hover{background:var(--soft);color:var(--fg)}.ibtn svg{width:16px;height:16px}.ibtn.on{color:var(--accent);border-color:var(--accent)}
+.spacer{flex:1}
+.send{width:34px;height:34px;border-radius:10px;border:0;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center}
+.send:hover{background:var(--accent2)}.send:disabled{opacity:.4;cursor:default}.send svg{width:18px;height:18px}
+.docs{margin-bottom:10px}.docs[hidden]{display:none}
+.docs textarea{width:100%;background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:10px 14px;outline:0;font-size:13.5px}
+.hint{text-align:center;font-size:12px;color:var(--muted);margin-top:8px}
+/* verify view */
+.vtitle{font:400 28px/1.25 var(--serif);margin:28px 0 6px;letter-spacing:-.01em}
+.vsub{color:var(--muted);margin:0 0 18px}
+.field{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+.box{width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 14px;outline:0;resize:vertical}
+.box:focus{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.primary{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:9px 18px;font-weight:600}
+.primary:hover{background:var(--accent2)}.primary:disabled{opacity:.5}
+.ghost{background:none;border:1px solid var(--line);border-radius:10px;padding:8px 14px;color:var(--fg)}.ghost:hover{background:var(--soft)}
+.scrim{display:none}
+@media (max-width:820px){aside{position:fixed;inset:0 auto 0 0;z-index:20;transform:translateX(-100%);box-shadow:var(--shadow)}
+ body.open aside{transform:none}body.open .scrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:10}
+ .menu{display:inline-flex}.col,.dock{padding-left:16px;padding-right:16px}.empty{padding-top:6vh}.empty h1{font-size:28px}}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="logo" viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="var(--accent)"/><path d="M9.5 16.5l4.2 4.2 8.8-9.4" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+<aside>
+ <div class="brand"><svg class="mark"><use href="#logo"/></svg>VeriChat</div>
+ <button class="nav newchat" id="newchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 6.5v7M6.5 10h7"/></svg>New chat</button>
+ <button class="nav on" id="navchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 5.5a2 2 0 012-2h9a2 2 0 012 2v6a2 2 0 01-2 2H9l-3.5 3v-3h0a2 2 0 01-2-2z"/></svg>Chat</button>
+ <button class="nav" id="jp" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5l6 2.5v4.5c0 4-2.6 6.6-6 8-3.4-1.4-6-4-6-8V5z"/><path d="M7.2 10l2 2 3.6-3.8"/></svg>Verify an answer</button>
+ <div class="side-h">Settings</div>
+ <div class="setting">When a claim looks doubtful
+  <select id="mode"><option value="hedge">Mark it in the reply</option><option value="stop">Withhold the answer</option><option value="flag">Only score it</option></select></div>
+ <div class="setting" id="thinkl" hidden><label><input type="checkbox" id="think"> Think before answering (slower)</label></div>
+ <div class="side-foot"><div class="status"><span class="dot" id="dot"></span><span id="stat">Connecting…</span></div>
+  <div style="margin-top:8px">Scores rank how likely a reply is to be wrong. They are evidence, not proof.</div></div>
+</aside>
+<div class="scrim" id="scrim"></div>
+<div class="app">
+ <header><button class="menu" id="menu" aria-label="Menu"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"/></svg></button>
+  <span class="title" id="htitle">Chat</span></header>
+ <div class="scroll" id="scroll">
+  <section class="view col" id="vchat">
+   <div class="empty" id="empty"><svg class="mark"><use href="#logo"/></svg>
+    <h1 id="greet">How can I help you today?</h1>
+    <p>Every reply is checked by the model's own internals as it is written. Doubtful sentences are underlined in red; names,
+     numbers and dates are coloured green (likely right), amber (uncertain) or red (doubtful). Hover any of them for the score.
+     <span id="vsub" hidden>Factual claims are then looked up and checked against sources: ✓ supported, ✗ not supported, ? unclear, – nothing found.</span></p>
+    <div class="chips" id="chips"></div></div>
+   <div id="log"></div>
+  </section>
+  <section class="view col" id="vverify" hidden>
+   <h2 class="vtitle">Verify an answer from any AI</h2>
+   <p class="vsub">Paste a question and the answer some model gave. A panel of readers and judges scores how likely it is to be
+    wrong, points to the sentence or step it suspects, and shows what drove the verdict.</p>
+   <label class="field" for="jq">Question or prompt</label>
+   <textarea class="box" id="jq" rows="2" placeholder="What did you ask?"></textarea>
+   <label class="field" for="ja">The answer to check</label>
+   <textarea class="box" id="ja" rows="7" placeholder="Paste the model's answer"></textarea>
+   <label class="field" for="jdocs">Source documents <span style="opacity:.7">(optional, to check grounding; separate with a line containing ---)</span></label>
+   <textarea class="box" id="jdocs" rows="3" placeholder="Paste the text the answer should be based on"></textarea>
+   <div class="row"><button class="primary" id="jsend">Check answer</button><button class="ghost" id="jex">Try an example</button>
+    <span id="jbusy" class="meta" style="margin:0"></span></div>
+   <div id="jout"></div>
+  </section>
+ </div>
+ <div class="dock" id="dock"><div class="inner">
+  <div class="docs" id="docsbox" hidden><textarea id="docs" rows="5" placeholder="Paste source text the answer should rely on. Separate documents with a line containing ---"></textarea></div>
+  <div class="composer" id="composer">
+   <textarea id="msg" rows="1" placeholder="Ask anything"></textarea>
+   <div class="tools"><button class="ibtn" id="docbtn" title="Add source documents"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 9.5l-5 5a3.2 3.2 0 01-4.5-4.5l5.5-5.5a2.1 2.1 0 013 3l-5.5 5.5a1 1 0 01-1.4-1.4l5-5"/></svg><span id="doclab">Documents</span></button>
+    <span id="busy" class="meta" style="margin:0 0 0 4px"></span><span class="spacer"></span>
+    <button class="send" id="send" aria-label="Send"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M5 9l5-5 5 5"/></svg></button></div>
+  </div>
+  <div class="hint" id="hint">Enter to send · Shift+Enter for a new line</div>
+ </div></div>
+</div>
+<script>
+const $=id=>document.getElementById(id),log=$('log'),msgs=[];
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+const LOGO='<svg class="mark"><use href="#logo"/></svg>';
+function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text" style="font-size:14px">'+esc(t)+'</div></details>'}
 function marks(r){const t=r.text,cl=new Array(t.length).fill(-1),ds=new Array(t.length).fill(-1);let pos=0;
  r.claims.forEach((c,i)=>{if(!c.text)return;const k=(c.start!==undefined&&c.start>=pos)?c.start:t.indexOf(c.text,pos);if(k<0)return;
   for(let j=k;j<Math.min(t.length,k+c.text.length);j++)cl[j]=i;pos=k+c.text.length});
@@ -96,63 +212,89 @@ function render(r){let html=marks(r);
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'. ':'')+
-  'mode '+r.mode+'</div>'+assess(r.assessment)+(r.grounding?grounding(r.grounding):r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
-function assess(a){if(!a)return '';const c={'likely right':'#1a7f37','uncertain':'#9a6700','likely wrong':'#cf222e','unverified':'#57606a','no factual claims':'#57606a','nothing flagged':'#1a7f37','not grounded':'#9a6700'}[a.verdict]||'';
- return '<div class="meta"><b style="color:'+c+'">Overall: '+esc(a.verdict)+'</b> (based on '+esc(a.basis)+')</div>'}
+  '</div>'+assess(r.assessment)+(r.grounding?grounding(r.grounding):r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
+function pillCls(v){return {'likely right':'good','nothing flagged':'good','no problem found':'good','uncertain':'mid','not grounded':'mid','likely wrong':'bad'}[v]||'na'}
+function assess(a){if(!a)return '';return '<div class="meta"><span class="pill '+pillCls(a.verdict)+'">'+esc(a.verdict)+'</span> <span style="margin-left:6px">based on '+esc(a.basis)+'</span></div>'}
 function grounding(g){if(!g||!g.sentences||!g.sentences.length)return '';const sym={'consistent':'✓','not grounded':'–','contradicted':'✗'};
- return '<div class="claims"><div class="meta">Each sentence, read against the evidence:</div>'+g.sentences.map(x=>'<div>'+sym[x.verdict]+' <b>'+esc(x.verdict)+'</b>: '+esc(x.text.slice(0,160))+'</div>').join('')+'</div>'}
+ return '<div class="claims"><div class="meta" style="margin:0">Each sentence, read against the evidence</div>'+g.sentences.map(x=>'<div>'+sym[x.verdict]+' <b>'+esc(x.verdict)+'</b>: '+esc(x.text.slice(0,160))+'</div>').join('')+'</div>'}
 function ledger(l){if(!l||!l.length)return '';const sym={'supported':'✓','contradicted':'✗','unverified':'?'};
  const shown=l.filter(u=>u.verdict!=='not a factual claim'),rest=l.length-shown.length;
- return '<div class="claims"><div class="meta">Every statement, checked:</div>'+shown.map(u=>'<div>'+sym[u.verdict]+' <b>'+esc(u.verdict)+'</b>: '+esc(u.claim.slice(0,160))+
+ return '<div class="claims"><div class="meta" style="margin:0">Every statement, checked</div>'+shown.map(u=>'<div>'+sym[u.verdict]+' <b>'+esc(u.verdict)+'</b>: '+esc(u.claim.slice(0,160))+
   (u.evidence?' <span class="meta">('+esc(u.evidence.join(' '))+')</span>':'')+(u.sources&&u.sources.length?' <span class="meta">('+esc(u.sources.join('; '))+')</span>':'')+'</div>').join('')+
   (rest?'<div class="meta">'+rest+' sentence(s): not a statement of fact (opinion, advice, wording, fiction)</div>':'')+'</div>'}
 function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
- return '<div class="claims"><div class="meta">Checked against sources:</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
+ return '<div class="claims"><div class="meta" style="margin:0">Checked against sources</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
-function add(cls,inner){const d=document.createElement('div');d.className='card '+cls;d.innerHTML=inner;log.appendChild(d);d.scrollIntoView()}
-fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)document.getElementById('jp').hidden=false;
- if(h.verify_claims)document.getElementById('vsub').hidden=false;
- if(h.thinking_available){document.getElementById('thinkl').hidden=false;document.getElementById('think').checked=!!h.thinking}});
-const EVN={judge_1:'judge 1 (one-pass verdict)',judge_2:'judge 2 (one-pass verdict)',reader_judgement:"reader's own verdict",
- reader_probe:'probe on the reply',weakest_sentence:'weakest sentence / step',grounding_nli:'not supported by the documents (NLI)',
- rule_violations:'rule violations'};
+const scroll=$('scroll');function bottom(){scroll.scrollTop=scroll.scrollHeight}
+function addUser(t){$('empty').hidden=true;const d=document.createElement('div');d.className='msg user';d.innerHTML='<div class="bubble">'+esc(t)+'</div>';log.appendChild(d);bottom()}
+function addBot(){const d=document.createElement('div');d.className='msg bot';d.innerHTML=LOGO+'<div class="body"><div class="text"></div><div class="thinking"><span class="pulse"></span><span>Thinking…</span></div></div>';log.appendChild(d);bottom();return d.querySelector('.body')}
+// views, sidebar, settings
+function show(v){$('vchat').hidden=v!=='chat';$('vverify').hidden=v!=='verify';$('navchat').classList.toggle('on',v==='chat');$('jp').classList.toggle('on',v==='verify');
+ $('dock').hidden=v!=='chat';$('htitle').textContent=v==='chat'?'Chat':'Verify an answer';document.body.classList.remove('open');
+}
+$('navchat').onclick=()=>show('chat');$('jp').onclick=()=>show('verify');
+$('newchat').onclick=()=>{msgs.length=0;log.innerHTML='';$('empty').hidden=false;show('chat');$('msg').focus()};
+$('menu').onclick=()=>document.body.classList.toggle('open');$('scrim').onclick=()=>document.body.classList.remove('open');
+function docList(id){return $(id||'docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean)}
+function docLabel(){const n=docList().length;$('doclab').textContent=n?n+' document'+(n>1?'s':''):'Documents';$('docbtn').classList.toggle('on',!$('docsbox').hidden||n>0)}
+$('docbtn').onclick=()=>{$('docsbox').hidden=!$('docsbox').hidden;docLabel();if(!$('docsbox').hidden)$('docs').focus()};$('docs').oninput=docLabel;
+const h=new Date().getHours();$('greet').textContent=h<5?'Burning the midnight oil?':h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+const CHIPS=['Who designed the Eiffel Tower, and when was it finished?','What is 17 × 24? Show your working.','Explain why the sky is blue in two sentences.','Which is larger, 9.11 or 9.9?'];
+$('chips').innerHTML=CHIPS.map(c=>'<button class="chip">'+esc(c)+'</button>').join('');
+[...$('chips').children].forEach((b,i)=>b.onclick=()=>{$('msg').value=CHIPS[i];grow();sendChat()});
+const ta=$('msg');function grow(){ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,240)+'px'}ta.oninput=grow;
+ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendChat()}};
+fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)$('jp').hidden=false;
+ if(h.verify_claims)$('vsub').hidden=false;
+ if(h.thinking_available){$('thinkl').hidden=false;$('think').checked=!!h.thinking}
+ $('dot').classList.add('ok');$('stat').textContent=h.omni?'Online · verifier: '+h.omni.reader.split('/').pop()+' + '+h.omni.judges+' judges':'Online'})
+ .catch(()=>{$('stat').textContent='Server starting up…'});
+// the verifier panel
+const EVN={judge_1:'Judge 1 (one-pass verdict)',judge_2:'Judge 2 (one-pass verdict)',reader_judgement:"Reader's own verdict",
+ reader_probe:'Probe on the reply',weakest_sentence:'Weakest sentence or step',grounding_nli:'Not supported by the documents',
+ rule_violations:'Rule violations'};
 function renderOmni(r,a){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.start);const sus=r.suspect_unit;
  const top=us.map(u=>u.score).sort((x,y)=>y-x),cut=top.length>2?top[Math.floor(top.length*0.3)]:Infinity;
  let html='',pos=0;for(const u of us){if(u.start<pos)continue;html+=esc(a.slice(pos,u.start));
   const isS=sus&&u.start===sus.start&&u.end===sus.end,cls=isS?'c b':(u.score>=cut&&us.length>2?'c m':'');
   const t=esc(a.slice(u.start,u.end));html+=cls?'<span class="'+cls+'" title="'+esc((isS?'suspect: ':'')+'unit score '+u.score.toFixed(2))+'">'+t+'</span>':t;pos=u.end}
  html+=esc(a.slice(pos));
- const col={'likely wrong':'var(--bad)','uncertain':'var(--mid)','likely right':'var(--good)','no problem found':'var(--good)'}[r.verdict]||'var(--muted)';
- const pct=r.risk_percentile==null?'':' — riskier than '+Math.round(100*r.risk_percentile)+'% of typical replies';
- const g=r.guarantee?' (calibrated: at most '+Math.round(100*r.guarantee.fpr_target)+'% false alarms, '+Math.round(100*r.guarantee.confidence)+'% confidence)':
-  ' (general profile, no labels: a ranking, not a guarantee)';
- const ev=Object.entries(r.evidence||{}).map(([k,v])=>'<div>'+(v>0?'▲':'▼')+' '+esc(EVN[k]||k)+' <span class="meta">'+(v>0?'+':'')+v.toFixed(2)+'</span></div>').join('');
+ const p=r.risk_percentile;
+ const pct=p==null?'':'<span class="meta" style="margin:0">riskier than '+Math.round(100*p)+'% of typical replies</span>';
+ const g=r.guarantee?'Calibrated: at most '+Math.round(100*r.guarantee.fpr_target)+'% false alarms at '+Math.round(100*r.guarantee.confidence)+'% confidence.':
+  'General profile, no labels: a ranking against typical replies, not a guarantee.';
+ const ents=Object.entries(r.evidence||{}),mx=Math.max(1,...ents.map(([,v])=>Math.abs(v)));
+ const ev=ents.map(([k,v])=>'<div class="ev"><span class="lab">'+esc(EVN[k]||k)+'</span><span class="bar"><b style="left:'+(v>0?50:50-50*Math.abs(v)/mx)+'%;width:'+(50*Math.abs(v)/mx)+'%;background:'+(v>0?'var(--bad)':'var(--good)')+'"></b></span><span class="num">'+(v>0?'+':'')+v.toFixed(2)+'</span></div>').join('');
  const vi=(r.violations||[]).map(x=>'<div>✗ <b>'+esc(x.why)+'</b>: '+esc(String(x.claim).slice(0,160))+'</div>').join('');
- return '<div class="card"><div class="text">'+html+'</div>'+
-  '<div class="meta"><b style="color:'+col+'">'+esc(r.verdict||'scored')+'</b>'+pct+g+'</div>'+
-  (sus?'<div class="meta">Suspect '+(us.length>3?'step / sentence':'sentence')+' (red): “'+esc(sus.text.slice(0,140))+'”</div>':'')+
-  (ev?'<div class="claims"><div class="meta">What drove the verdict (▲ toward wrong):</div>'+ev+'</div>':'')+
-  (vi?'<div class="claims"><div class="meta">Rule violations:</div>'+vi+'</div>':'')+
-  '<div class="meta">score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
+ return '<div class="card"><div class="vhead"><span class="pill '+pillCls(r.verdict)+'">'+esc(r.verdict||'scored')+'</span>'+
+  (p==null?'':'<span class="meter" title="risk percentile"><i style="left:calc('+(100*p).toFixed(1)+'% - 1px)"></i></span>')+pct+'</div>'+
+  '<div class="text">'+html+'</div>'+
+  (sus?'<div class="meta">Suspect '+(us.length>3?'step':'sentence')+' in red, riskiest of the rest in amber: “'+esc(sus.text.slice(0,140))+'”</div>':'')+
+  (ev?'<div class="claims"><div class="meta" style="margin:0 0 4px">What drove the verdict (red pushes toward wrong)</div>'+ev+'</div>':'')+
+  (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+
+  '<div class="meta">'+g+' Score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
 function renderJudge(r,a){if(r.verifier==='omni')return renderOmni(r,a);let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
- return '<div class="card"><div class="text">'+html+'</div><div class="meta">'+(r.flagged?'Likely contains a hallucination':
- 'No hallucination detected')+' (P = '+r.p_hallucinated.toFixed(2)+'). Red: the spans the reader doubts most.</div></div>'}
-document.getElementById('jsend').onclick=async()=>{const q=document.getElementById('jq').value.trim(),a=document.getElementById('ja').value.trim();
- if(!q||!a)return;const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
- const b=document.getElementById('jsend');b.disabled=true;document.getElementById('jbusy').textContent='reading…';
+ return '<div class="card"><div class="vhead"><span class="pill '+(r.flagged?'bad':'good')+'">'+(r.flagged?'Likely contains a hallucination':
+ 'No hallucination detected')+'</span><span class="meta" style="margin:0">P = '+r.p_hallucinated.toFixed(2)+'</span></div><div class="text">'+html+'</div><div class="meta">Red: the spans the reader doubts most.</div></div>'}
+$('jex').onclick=()=>{$('jq').value='When was the Eiffel Tower completed, and who designed it?';
+ $('ja').value='The Eiffel Tower was completed in 1899. It was designed by Gustave Eiffel\'s company, with the main structure engineered by Maurice Koechlin and Émile Nouguier, for the Exposition Universelle in Paris.'};
+$('jsend').onclick=async()=>{const q=$('jq').value.trim(),a=$('ja').value.trim();
+ if(!q||!a)return;const docs=docList('jdocs');
+ const b=$('jsend');b.disabled=true;$('jbusy').innerHTML='<span class="thinking"><span class="pulse"></span>Reading the answer…</span>';
  try{const res=await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify({messages:[{role:'user',content:q}],response:a,documents:docs})});const r=await res.json();
-  document.getElementById('jout').innerHTML=r.error?esc('Error: '+r.error):renderJudge(r,a)}
- catch(e){document.getElementById('jout').textContent='Error: '+e}b.disabled=false;document.getElementById('jbusy').textContent=''};
-document.getElementById('send').onclick=async()=>{const m=document.getElementById('msg').value.trim();if(!m)return;
- const docs=document.getElementById('docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean);
- msgs.push({role:'user',content:m});add('user',esc(m));document.getElementById('msg').value='';
- const b=document.getElementById('send');b.disabled=true;document.getElementById('busy').textContent='thinking…';
- const card=document.createElement('div');card.className='card bot';card.innerHTML='<div class="text"></div><div class="meta"></div>';log.appendChild(card);
- const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
+  $('jout').innerHTML=r.error?'<div class="card">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a)}
+ catch(e){$('jout').innerHTML='<div class="card">'+esc('Error: '+e)+'</div>'}b.disabled=false;$('jbusy').textContent='';$('jout').scrollIntoView({behavior:'smooth',block:'nearest'})};
+// chat
+$('send').onclick=()=>sendChat();
+async function sendChat(){const m=ta.value.trim();if(!m||$('send').disabled)return;
+ const docs=docList();
+ msgs.push({role:'user',content:m});addUser(m);ta.value='';grow();
+ const b=$('send');b.disabled=true;
+ const card=addBot();const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
  let ok=false;
- const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:document.getElementById('mode').value,stream:true,thinking:document.getElementById('think').checked});
+ const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:$('mode').value,stream:true,thinking:$('think').checked});
  // The server sends a heartbeat every 10 s, so 45 s of silence means the request is stuck: abort it.
  // A request that drops or sticks before any text arrived is retried once; after that, say what happened.
  async function attempt(){const ac=new AbortController();let wd=null,r=null,err=null,buf='';
@@ -163,17 +305,17 @@ document.getElementById('send').onclick=async()=>{const m=document.getElementByI
    while(true){arm();const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
     let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
      if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
-     if(m.reasoning){reasoned+=m.reasoning;rlive.textContent='Thinking: '+reasoned.slice(-300);card.scrollIntoView()}
-     if(m.delta){rlive.textContent='';shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');card.scrollIntoView()}
+     if(m.reasoning){reasoned+=m.reasoning;rlive.lastChild.textContent='Thinking: '+reasoned.slice(-240);bottom()}
+     if(m.delta){rlive.hidden=true;shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');bottom()}
      if(m.done){if(m.error)return {final:'Error: '+m.error};r=m.reply}}}}
   catch(e){err=e}finally{clearTimeout(wd)}
   return r?{reply:r}:{dropped:true,err}}
  let out=await attempt();
- if(out.dropped&&!shown){document.getElementById('busy').textContent='reconnecting…';await new Promise(z=>setTimeout(z,1500));out=await attempt()}
+ if(out.dropped&&!shown){rlive.lastChild.textContent='Reconnecting…';await new Promise(z=>setTimeout(z,1500));out=await attempt()}
  if(out.reply){msgs.push({role:'assistant',content:out.reply.text});card.innerHTML=render(out.reply);ok=true}
- else if(out.final)card.innerHTML=esc(out.final);
- else card.insertAdjacentHTML('beforeend','<div class="meta">'+esc('The reply did not arrive ('+(out.err?out.err.name:'the connection closed')+'). Please send it again.')+'</div>');
- if(!ok)msgs.pop();b.disabled=false;document.getElementById('busy').textContent=''};
+ else if(out.final)card.innerHTML='<div class="meta">'+esc(out.final)+'</div>';
+ else{rlive.hidden=false;rlive.innerHTML=esc('The reply did not arrive ('+(out.err?out.err.name:'the connection closed')+'). Please send it again.')}
+ if(!ok)msgs.pop();b.disabled=false;bottom();ta.focus()}
 </script></body></html>"""
 
 

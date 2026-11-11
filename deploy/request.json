@@ -1,1 +1,1 @@
-{"action": "deploy", "env": {"VERICHAT_OMNI": "heads/omni_qwen3_8b.npz"}, "note": "changing this file runs .github/workflows/deploy.yml (needs the MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repository secrets); env: allowlisted VERICHAT_* deploy settings", "requested": "2026-11-10T15:01Z"}
+{"action": "deploy", "env": {"VERICHAT_OMNI": "heads/omni_qwen3_8b.npz"}, "note": "changing this file runs .github/workflows/deploy.yml (needs the MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repository secrets); env: allowlisted VERICHAT_* deploy settings", "requested": "2026-11-11T12:00Z"}
