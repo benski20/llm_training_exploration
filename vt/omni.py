@@ -81,12 +81,16 @@ def _template(tok, msgs, gen=True):
         return tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=gen)
 
 
-def judge_suffix(tok):
+PREFIX_QUESTION = ("Is everything in the reply above correct so far? It may be unfinished: judge only what it says. "
+                   "Answer Yes or No.")
+
+
+def judge_suffix(tok, question=JUDGE_QUESTION):
     """the text after the reply that closes its turn and asks the judge question (PRISM-style framing; the
     reader is causal, so the reply's own states do not change)."""
     mark = "\u2063REPLY\u2063"
     t = _template(tok, [{"role": "user", "content": "Q"}, {"role": "assistant", "content": mark},
-                        {"role": "user", "content": JUDGE_QUESTION}])
+                        {"role": "user", "content": question}])
     return t[t.index(mark) + len(mark):]
 
 
@@ -171,35 +175,39 @@ class Reader:
                 "j_state": j_state, "j_logit": j_logit, "units": units}
 
 
-    def causal_units(self, item, max_units=24):
-        """Remove-a-unit test on the reader's own verdict (experiments/novel_causal_units.py): j = log P(No) - log P(Yes)
-        after the judge question, for the full reply and for the reply with each sentence / step removed. A unit
-        whose removal lowers j is a cause of the reader's "wrong"; one whose removal flips j below 0 is decisive.
-        The task prefix is read once and cached; each variant re-reads only the reply and the judge question."""
+    def step_verdicts(self, item, max_units=32):
+        """Running verdict (experiments/novel_running_verdict.py): the reader's j = log P(No) - log P(Yes) to "is
+        everything so far correct?" read after each sentence / step. The reply is read once with a KV cache; at each
+        unit boundary only the short question is added. Nothing is removed from the reply, so the verdict is never
+        read on a gappy text. The first unit where j turns positive is where the reader starts to call it wrong."""
         import copy
 
         import torch
-        ids, r0, _ = encode(self.tok, item, self.max_tokens, self.suffix)
+        if not hasattr(self, "prefix_suffix"):
+            self.prefix_suffix = self.tok(judge_suffix(self.tok, PREFIX_QUESTION), add_special_tokens=False)["input_ids"]
+        ids, r0, roff = encode(self.tok, item, self.max_tokens, self.suffix)
+        n = len(ids) - r0 - len(self.suffix)
+        reply_ids = ids[r0:r0 + n]
+        ends = np.array([e for _, e in roff[:n]])
         dev = self.model.get_input_embeddings().weight.device
         yes, no = torch.tensor(self.yes, device=dev), torch.tensor(self.no, device=dev)
         with torch.no_grad():
             cache = self.model(input_ids=torch.tensor([ids[:r0]], device=dev), use_cache=True).past_key_values
-
-        def j(reply):
-            rid = self.tok(reply, add_special_tokens=False)["input_ids"] + list(self.suffix)
+        out, done = [], 0
+        for a, b in list(item["units"])[:max_units]:
+            upto = int((ends <= b).sum()) if (ends <= b).any() else 0
+            if upto <= done:
+                continue
             with torch.no_grad():
-                o = self.model(input_ids=torch.tensor([rid], device=dev), past_key_values=copy.deepcopy(cache),
-                               use_cache=True, logits_to_keep=1)
+                self.model(input_ids=torch.tensor([reply_ids[done:upto]], device=dev), past_key_values=cache,
+                           use_cache=True, logits_to_keep=1)
+                o = self.model(input_ids=torch.tensor([self.prefix_suffix], device=dev),
+                               past_key_values=copy.deepcopy(cache), use_cache=True, logits_to_keep=1)
             lp = o.logits[0, -1].float().log_softmax(-1)
-            return float(torch.logsumexp(lp[no], 0) - torch.logsumexp(lp[yes], 0))
-        resp = item["response"]
-        j0 = j(resp)
-        units = list(item["units"])[:max_units]
-        out = []
-        for a, b in units:
-            jk = j((resp[:a] + resp[b:]).strip())
-            out.append({"start": a, "end": b, "text": resp[a:b], "delta": j0 - jk, "flips": bool(j0 > 0 >= jk)})
-        return {"verdict_wrong": j0, "units": out}
+            out.append({"start": a, "end": b, "text": item["response"][a:b],
+                        "j": float(torch.logsumexp(lp[no], 0) - torch.logsumexp(lp[yes], 0))})
+            done = upto
+        return out
 
 
 # ------------------------------------------------------------------ heads
@@ -343,7 +351,7 @@ class OmniVerifier:
         judges: callables (item) -> log-odds that the reply is wrong, one pass each (see JudgeScorer)."""
         self.art, self.reader, self.nli, self.checkers = art, reader, nli, list(checkers)
         self.judges, self.arithmetic = list(judges), arithmetic
-        self.causal = False                              # remove-a-unit test in verify() (Reader.causal_units)
+        self.causal = False                              # running verdict per sentence / step in verify() (Reader.step_verdicts)
         self.meta = art["meta"]
         self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
@@ -619,17 +627,16 @@ class OmniVerifier:
         out["suspect_unit"] = None if k is None else out["units"][k]
         if self.causal and self.reader is not None:
             try:
-                out["causal"] = c = self.reader.causal_units(it)
-                if self.judges and len(c["units"]) <= 16:   # the same test on the external judges' verdicts
-                    base = float(sum(f["judges"]))
-                    c["judges_wrong"] = base
-                    for u in c["units"]:
-                        cut = (reply[:u["start"]] + reply[u["end"]:]).strip()
-                        jk = float(sum(jd({"response": cut, "doc": it["doc"], "question": it["question"]})
-                                       for jd in self.judges))
-                        u["judge_delta"], u["judge_flips"] = base - jk, bool(base > 0 >= jk)
+                steps = self.reader.step_verdicts(it)
+                if self.judges and len(steps) <= 16:      # the same running verdict from the external judges
+                    for u in steps:
+                        u["judges"] = float(sum(jd({"response": reply[:u["end"]], "doc": it["doc"],
+                                                    "question": it["question"]}, prefix=True) for jd in self.judges))
+                key = "judges" if steps and "judges" in steps[0] else "j"
+                first = next((k for k, u in enumerate(steps) if u[key] > 0), None)
+                out["steps"] = {"by": key, "units": steps, "first_wrong": first}
             except Exception as e:                           # an explanation must never fail the verdict
-                out["causal"] = {"error": type(e).__name__}
+                out["steps"] = {"error": type(e).__name__}
         return out
 
     @staticmethod
@@ -725,11 +732,14 @@ class JudgeScorer:
         first = lambda ws: sorted({self.tok(w, add_special_tokens=False)["input_ids"][0] for w in ws})
         self.yes, self.no = first(["Yes", " Yes", "yes"]), first(["No", " No", "no"])
 
-    def __call__(self, it, reasoning=None):
+    Q_PREFIX = ("Check the reply so far. It may be unfinished: judge only what it says. Is every statement, "
+                "calculation and step in it correct so far?")
+
+    def __call__(self, it, reasoning=None, prefix=False):
         doc = it.get("doc", "")
         reasoning = reasoning if reasoning is not None else len(sentence_spans(it["response"])) >= 4 and \
             bool(re.search(r"[=+*/^]|step", it["response"], re.I))
-        q = self.Q_REASON if reasoning else (self.Q_GROUNDED if doc else self.Q_CLOSED)
+        q = self.Q_PREFIX if prefix else self.Q_REASON if reasoning else (self.Q_GROUNDED if doc else self.Q_CLOSED)
         body = "The task given to the assistant:\n<task>\n" + (it.get("question") or "") + "\n</task>\n\n"
         if doc:
             body += "Source documents for the task:\n<documents>\n" + doc[:24000] + "\n</documents>\n\n"
