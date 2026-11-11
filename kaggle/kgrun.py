@@ -55,8 +55,8 @@ def push(a):
     try:
         open(os.path.join(stage, "run.py"), "w").write(script)
         meta = {"id": f"{USER}/{a.slug}", "title": a.slug, "code_file": "run.py", "language": "python",
-                "kernel_type": "script", "is_private": True, "enable_gpu": True, "enable_internet": True,
-                "machine_shape": a.machine, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
+                "kernel_type": "script", "is_private": True, "enable_gpu": not a.cpu, "enable_internet": True,
+                **({} if a.cpu else {"machine_shape": a.machine}), "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
                 "model_sources": []}
         json.dump(meta, open(os.path.join(stage, "kernel-metadata.json"), "w"))
         r = api().kernels_push(stage)
@@ -86,6 +86,7 @@ def main():
     ap.add_argument("--args", default="")
     ap.add_argument("--out")
     ap.add_argument("--machine", default="NvidiaTeslaT4", help="NvidiaTeslaT4 (2x T4) or NvidiaTeslaP100")
+    ap.add_argument("--cpu", action="store_true", help="a CPU-only session (no GPU quota used)")
     ap.add_argument("--wait", action="store_true", help="poll until done, then fetch outputs")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--fetch", action="store_true")
