@@ -322,8 +322,18 @@ function renderOmni(r,a,compact){const us=(r.units||[]).slice().sort((x,y)=>x.st
   (compact?'':'<div class="text">'+md(html)+'</div>')+
   (sus?'<div class="meta">'+(compact?'Most suspect ':'Suspect ')+(us.length>3?'step':'sentence')+(compact?'':' in red, riskiest of the rest in amber')+': “'+esc(sus.text.slice(0,140))+'”</div>':'')+
   (ev?'<div class="claims"><div class="meta" style="margin:0 0 4px">What drove the verdict (red pushes toward wrong)</div>'+ev+'</div>':'')+
-  (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+
+  (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+causal(r.causal)+
   '<div class="meta">'+g+' Score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
+function causal(c){if(!c||!c.units||!c.units.length)return '';const J=c.units[0].judge_delta!==undefined;
+ const d=u=>J?u.judge_delta:u.delta,fl=u=>J?u.judge_flips:u.flips;
+ const us=c.units.slice().sort((x,y)=>d(y)-d(x)).slice(0,3),mx=Math.max(0.5,...c.units.map(u=>Math.abs(d(u))));
+ const rows=us.map(u=>'<div class="ev"><span class="lab">'+(fl(u)?'<span class="pill bad" style="padding:1px 8px;font-size:11.5px;margin-right:6px">decisive</span>':'')+
+  '“'+esc(u.text.slice(0,110))+(u.text.length>110?'…':'')+'”</span><span class="bar"><b style="left:'+(d(u)>0?50:50-50*Math.min(1,Math.abs(d(u))/mx))+'%;width:'+
+  (50*Math.min(1,Math.abs(d(u))/mx))+'%;background:'+(d(u)>0?'var(--bad)':'var(--good)')+'"></b></span><span class="num">'+(d(u)>0?'+':'')+d(u).toFixed(2)+'</span></div>').join('');
+ const v=J?c.judges_wrong:c.verdict_wrong;
+ return '<div class="claims"><div class="meta" style="margin:0 0 4px">Remove-a-sentence test: how far the '+(J?'judges\'':'reader\'s')+
+  ' verdict of “wrong” drops when each sentence is deleted (now '+(v>0?'leaning wrong':'leaning right')+', '+v.toFixed(2)+
+  '). <b>Decisive</b>: deleting that sentence flips the verdict to right.</div>'+rows+'</div>'}
 function renderJudge(r,a,compact){if(r.verifier==='omni')return renderOmni(r,a,compact);let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
  return '<div class="card"><div class="vhead"><span class="pill '+(r.flagged?'bad':'good')+'">'+(r.flagged?'Likely contains a hallucination':
@@ -776,6 +786,8 @@ def build(argv=None, host=None, port=None):
     ap.add_argument("--omni-judges", default="", help="comma-separated judge models read in one pass, e.g. "
                     "Qwen/Qwen3-14B,microsoft/phi-4 (4-bit on a GPU)")
     ap.add_argument("--omni-nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+    ap.add_argument("--omni-causal", action="store_true", help="add the remove-a-sentence test on the reader's "
+                    "verdict to every /judge answer (one extra reply-length pass per sentence, task prefix cached)")
     ap.add_argument("--omni-arithmetic", action="store_true", help="also flag arithmetic that does not compute "
                     "(vt/mathcheck, rule-based; off by default: the served verifier uses learned experts only)")
     ap.add_argument("--omni-checkers", default="", help="comma-separated written checkers (vt/checkers), e.g. "
@@ -871,6 +883,7 @@ def load_omni(a):
     v = OmniVerifier.load(a.omni_head, nli=NLIScorer() if a.omni_nli else None, checkers=checkers, judges=judges,
                           arithmetic=a.omni_arithmetic)
     v.attach_reader()
+    v.causal = a.omni_causal
     if a.omni_profile:
         return v, OmniVerifier.load_profile(a.omni_profile)
     key = hashlib.sha256(f"{a.omni_head}|{a.omni_judges}|{a.omni_nli}|{a.omni_checkers}|{a.omni_arithmetic}".encode()

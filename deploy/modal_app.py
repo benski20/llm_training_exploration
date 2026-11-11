@@ -235,7 +235,7 @@ def server_args():
             + (["--revision", REVISION] if REVISION else [])
             + (["--omni-head", "/app/heads/omni.npz", "--omni-judges", OMNI_JUDGES,
                 "--omni-checkers", OMNI_CHECKERS, "--omni-sample", "/app/data/omni_profile_sample.jsonl",
-                "--omni-cache-dir", "/root/.cache/huggingface/omni"] + (["--omni-nli"] if OMNI_NLI else [])
+                "--omni-cache-dir", "/root/.cache/huggingface/omni", "--omni-causal"] + (["--omni-nli"] if OMNI_NLI else [])
                if OMNI else []))
 
 

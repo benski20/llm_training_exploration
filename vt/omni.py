@@ -171,6 +171,37 @@ class Reader:
                 "j_state": j_state, "j_logit": j_logit, "units": units}
 
 
+    def causal_units(self, item, max_units=24):
+        """Remove-a-unit test on the reader's own verdict (experiments/novel_causal_units.py): j = log P(No) - log P(Yes)
+        after the judge question, for the full reply and for the reply with each sentence / step removed. A unit
+        whose removal lowers j is a cause of the reader's "wrong"; one whose removal flips j below 0 is decisive.
+        The task prefix is read once and cached; each variant re-reads only the reply and the judge question."""
+        import copy
+
+        import torch
+        ids, r0, _ = encode(self.tok, item, self.max_tokens, self.suffix)
+        dev = self.model.get_input_embeddings().weight.device
+        yes, no = torch.tensor(self.yes, device=dev), torch.tensor(self.no, device=dev)
+        with torch.no_grad():
+            cache = self.model(input_ids=torch.tensor([ids[:r0]], device=dev), use_cache=True).past_key_values
+
+        def j(reply):
+            rid = self.tok(reply, add_special_tokens=False)["input_ids"] + list(self.suffix)
+            with torch.no_grad():
+                o = self.model(input_ids=torch.tensor([rid], device=dev), past_key_values=copy.deepcopy(cache),
+                               use_cache=True, logits_to_keep=1)
+            lp = o.logits[0, -1].float().log_softmax(-1)
+            return float(torch.logsumexp(lp[no], 0) - torch.logsumexp(lp[yes], 0))
+        resp = item["response"]
+        j0 = j(resp)
+        units = list(item["units"])[:max_units]
+        out = []
+        for a, b in units:
+            jk = j((resp[:a] + resp[b:]).strip())
+            out.append({"start": a, "end": b, "text": resp[a:b], "delta": j0 - jk, "flips": bool(j0 > 0 >= jk)})
+        return {"verdict_wrong": j0, "units": out}
+
+
 # ------------------------------------------------------------------ heads
 
 class LogReg:
@@ -312,6 +343,7 @@ class OmniVerifier:
         judges: callables (item) -> log-odds that the reply is wrong, one pass each (see JudgeScorer)."""
         self.art, self.reader, self.nli, self.checkers = art, reader, nli, list(checkers)
         self.judges, self.arithmetic = list(judges), arithmetic
+        self.causal = False                              # remove-a-unit test in verify() (Reader.causal_units)
         self.meta = art["meta"]
         self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
@@ -585,6 +617,19 @@ class OmniVerifier:
                         for (a, b), sc in ((it["units"][fu["index"]], sc) for fu, sc in zip(f["units"], us))]
         k = self.suspect_unit(prof, us)
         out["suspect_unit"] = None if k is None else out["units"][k]
+        if self.causal and self.reader is not None:
+            try:
+                out["causal"] = c = self.reader.causal_units(it)
+                if self.judges and len(c["units"]) <= 16:   # the same test on the external judges' verdicts
+                    base = float(sum(f["judges"]))
+                    c["judges_wrong"] = base
+                    for u in c["units"]:
+                        cut = (reply[:u["start"]] + reply[u["end"]:]).strip()
+                        jk = float(sum(jd({"response": cut, "doc": it["doc"], "question": it["question"]})
+                                       for jd in self.judges))
+                        u["judge_delta"], u["judge_flips"] = base - jk, bool(base > 0 >= jk)
+            except Exception as e:                           # an explanation must never fail the verdict
+                out["causal"] = {"error": type(e).__name__}
         return out
 
     @staticmethod
