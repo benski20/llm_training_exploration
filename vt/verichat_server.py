@@ -128,6 +128,12 @@ details.meta summary{cursor:pointer}
 .primary:hover{background:var(--accent2)}.primary:disabled{opacity:.5}
 .ghost{background:none;border:1px solid var(--line);border-radius:10px;padding:8px 14px;color:var(--fg)}.ghost:hover{background:var(--soft)}
 .scrim{display:none}
+.acts{display:flex;gap:4px;margin-top:8px}.act{background:none;border:0;border-radius:8px;padding:4px 9px;font-size:12.5px;color:var(--muted)}
+.act:hover{background:var(--soft);color:var(--fg)}.act:disabled{opacity:.5}
+.wake{display:flex;align-items:center;gap:10px;background:var(--midbg);color:var(--mid);border-radius:12px;padding:10px 14px;font-size:13.5px;margin:4px 0 0}
+#hist{display:flex;flex-direction:column;gap:1px;overflow-y:auto;min-height:0;flex:0 1 auto}
+.hitem{font-size:13.5px;padding:6px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.exs{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px}.exs .meta{margin:0;align-self:center}
 @media (max-width:820px){aside{position:fixed;inset:0 auto 0 0;z-index:20;transform:translateX(-100%);box-shadow:var(--shadow)}
  body.open aside{transform:none}body.open .scrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:10}
  .menu{display:inline-flex}.col,.dock{padding-left:16px;padding-right:16px}.empty{padding-top:6vh}.empty h1{font-size:28px}}
@@ -140,6 +146,7 @@ details.meta summary{cursor:pointer}
  <button class="nav newchat" id="newchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 6.5v7M6.5 10h7"/></svg>New chat</button>
  <button class="nav on" id="navchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 5.5a2 2 0 012-2h9a2 2 0 012 2v6a2 2 0 01-2 2H9l-3.5 3v-3h0a2 2 0 01-2-2z"/></svg>Chat</button>
  <button class="nav" id="jp" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5l6 2.5v4.5c0 4-2.6 6.6-6 8-3.4-1.4-6-4-6-8V5z"/><path d="M7.2 10l2 2 3.6-3.8"/></svg>Verify an answer</button>
+ <div class="side-h" id="histh" hidden>Recent</div><div id="hist"></div>
  <div class="side-h">Settings</div>
  <div class="setting">When a claim looks doubtful
   <select id="mode"><option value="hedge">Mark it in the reply</option><option value="stop">Withhold the answer</option><option value="flag">Only score it</option></select></div>
@@ -152,6 +159,8 @@ details.meta summary{cursor:pointer}
  <header><button class="menu" id="menu" aria-label="Menu"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 6h14M3 10h14M3 14h14"/></svg></button>
   <span class="title" id="htitle">Chat</span></header>
  <div class="scroll" id="scroll">
+  <div class="col" style="padding-bottom:0"><div class="wake" id="wake" hidden><span class="pulse"></span><span>Waking up the GPU server. The first
+   visit after a pause takes 1–3 minutes; you can start typing meanwhile.</span></div></div>
   <section class="view col" id="vchat">
    <div class="empty" id="empty"><svg class="mark"><use href="#logo"/></svg>
     <h1 id="greet">How can I help you today?</h1>
@@ -165,13 +174,14 @@ details.meta summary{cursor:pointer}
    <h2 class="vtitle">Verify an answer from any AI</h2>
    <p class="vsub">Paste a question and the answer some model gave. A panel of readers and judges scores how likely it is to be
     wrong, points to the sentence or step it suspects, and shows what drove the verdict.</p>
+   <div class="exs" id="exs"><span class="meta">Try:</span></div>
    <label class="field" for="jq">Question or prompt</label>
    <textarea class="box" id="jq" rows="2" placeholder="What did you ask?"></textarea>
    <label class="field" for="ja">The answer to check</label>
    <textarea class="box" id="ja" rows="7" placeholder="Paste the model's answer"></textarea>
    <label class="field" for="jdocs">Source documents <span style="opacity:.7">(optional, to check grounding; separate with a line containing ---)</span></label>
    <textarea class="box" id="jdocs" rows="3" placeholder="Paste the text the answer should be based on"></textarea>
-   <div class="row"><button class="primary" id="jsend">Check answer</button><button class="ghost" id="jex">Try an example</button>
+   <div class="row"><button class="primary" id="jsend">Check answer</button><button class="ghost" id="jclear">Clear</button>
     <span id="jbusy" class="meta" style="margin:0"></span></div>
    <div id="jout"></div>
   </section>
@@ -189,6 +199,8 @@ details.meta summary{cursor:pointer}
 </div>
 <script>
 const $=id=>document.getElementById(id),log=$('log'),msgs=[];
+let conv=[],chatId=null,hasJudge=false;   // conv: {role:'user',text} / {role:'bot',reply,docs,check}
+function clean(t){return String(t).split('[unsure:] ').join('').split('[unsure:]').join('')}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 const LOGO='<svg class="mark"><use href="#logo"/></svg>';
 function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text" style="font-size:14px">'+esc(t)+'</div></details>'}
@@ -233,7 +245,33 @@ function show(v){$('vchat').hidden=v!=='chat';$('vverify').hidden=v!=='verify';$
  $('dock').hidden=v!=='chat';$('htitle').textContent=v==='chat'?'Chat':'Verify an answer';document.body.classList.remove('open');
 }
 $('navchat').onclick=()=>show('chat');$('jp').onclick=()=>show('verify');
-$('newchat').onclick=()=>{msgs.length=0;log.innerHTML='';$('empty').hidden=false;show('chat');$('msg').focus()};
+$('newchat').onclick=()=>{msgs.length=0;conv=[];chatId=null;log.innerHTML='';$('empty').hidden=false;renderHist();show('chat');$('msg').focus()};
+// recent chats, kept in this browser only
+function store(){try{return JSON.parse(localStorage.getItem('verichat.chats')||'[]')}catch(_){return []}}
+function saveChat(){if(!conv.length)return;const all=store().filter(c=>c.id!==chatId);chatId=chatId||String(Date.now());
+ all.unshift({id:chatId,title:conv[0].text.slice(0,60),conv});try{localStorage.setItem('verichat.chats',JSON.stringify(all.slice(0,20)))}catch(_){}renderHist()}
+function renderHist(){const all=store();$('histh').hidden=!all.length;
+ $('hist').innerHTML=all.map(c=>'<button class="nav hitem'+(c.id===chatId?' on':'')+'" data-id="'+esc(c.id)+'" title="'+esc(c.title)+'">'+esc(c.title)+'</button>').join('')}
+$('hist').onclick=e=>{const b=e.target.closest('[data-id]');if(!b)return;const c=store().find(x=>x.id===b.dataset.id);if(!c)return;
+ chatId=c.id;conv=c.conv;msgs.length=0;log.innerHTML='';$('empty').hidden=!!conv.length;
+ conv.forEach((t,i)=>{if(t.role==='user'){msgs.push({role:'user',content:t.text});addUser(t.text)}
+  else{msgs.push({role:'assistant',content:t.reply.text});const d=document.createElement('div');d.className='msg bot';
+   d.innerHTML=LOGO+'<div class="body">'+render(t.reply)+acts(i)+'</div>';log.appendChild(d);
+   if(t.check)d.querySelector('.vres').innerHTML=renderJudge(t.check,clean(t.reply.text))}});
+ renderHist();show('chat');bottom()};
+function acts(i){return '<div class="acts"><button class="act" data-act="copy" data-i="'+i+'">Copy</button>'+
+ (hasJudge?'<button class="act" data-act="verify" data-i="'+i+'">Verify this reply</button>':'')+'</div><div class="vres"></div>'}
+log.onclick=async e=>{const b=e.target.closest('[data-act]');if(!b)return;const i=+b.dataset.i,t=conv[i],a=clean(t.reply.text);
+ if(b.dataset.act==='copy'){try{await navigator.clipboard.writeText(a);b.textContent='Copied'}catch(_){b.textContent='Copy failed'}
+  setTimeout(()=>{b.textContent='Copy'},1500);return}
+ const out=b.parentNode.nextElementSibling;b.disabled=true;
+ out.innerHTML='<div class="thinking" style="margin-top:8px"><span class="pulse"></span>Checking with the reader and two judges…</div>';
+ const ms=conv.slice(0,i).map(x=>x.role==='user'?{role:'user',content:x.text}:{role:'assistant',content:clean(x.reply.text)}).slice(-24);
+ try{const r=await (await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({messages:ms,response:a,documents:t.docs||[]})})).json();
+  out.innerHTML=r.error?'<div class="meta">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a);if(!r.error){t.check=r;saveChat()}}
+ catch(err){out.innerHTML='<div class="meta">'+esc('Error: '+err)+'</div>'}b.disabled=false};
+renderHist();
 $('menu').onclick=()=>document.body.classList.toggle('open');$('scrim').onclick=()=>document.body.classList.remove('open');
 function docList(id){return $(id||'docs').value.split(/\n\s*---\s*\n/).map(s=>s.trim()).filter(Boolean)}
 function docLabel(){const n=docList().length;$('doclab').textContent=n?n+' document'+(n>1?'s':''):'Documents';$('docbtn').classList.toggle('on',!$('docsbox').hidden||n>0)}
@@ -244,11 +282,14 @@ $('chips').innerHTML=CHIPS.map(c=>'<button class="chip">'+esc(c)+'</button>').jo
 [...$('chips').children].forEach((b,i)=>b.onclick=()=>{$('msg').value=CHIPS[i];grow();sendChat()});
 const ta=$('msg');function grow(){ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,240)+'px'}ta.oninput=grow;
 ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendChat()}};
-fetch('/health').then(r=>r.json()).then(h=>{if(h.detector)$('jp').hidden=false;
+let healthy=false;setTimeout(()=>{if(!healthy)$('wake').hidden=false},3000);
+function health(){fetch('/health').then(r=>{if(!r.ok)throw new Error(r.status);return r.json()}).then(h=>{healthy=true;$('wake').hidden=true;
+ if(h.detector){$('jp').hidden=false;hasJudge=true}
  if(h.verify_claims)$('vsub').hidden=false;
  if(h.thinking_available){$('thinkl').hidden=false;$('think').checked=!!h.thinking}
  $('dot').classList.add('ok');$('stat').textContent=h.omni?'Online · verifier: '+h.omni.reader.split('/').pop()+' + '+h.omni.judges+' judges':'Online'})
- .catch(()=>{$('stat').textContent='Server starting up…'});
+ .catch(()=>{$('stat').textContent='Server starting up…';$('wake').hidden=false;setTimeout(health,10000)})}
+health();
 // the verifier panel
 const EVN={judge_1:'Judge 1 (one-pass verdict)',judge_2:'Judge 2 (one-pass verdict)',reader_judgement:"Reader's own verdict",
  reader_probe:'Probe on the reply',weakest_sentence:'Weakest sentence or step',grounding_nli:'Not supported by the documents',
@@ -277,8 +318,18 @@ function renderJudge(r,a){if(r.verifier==='omni')return renderOmni(r,a);let html
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
  return '<div class="card"><div class="vhead"><span class="pill '+(r.flagged?'bad':'good')+'">'+(r.flagged?'Likely contains a hallucination':
  'No hallucination detected')+'</span><span class="meta" style="margin:0">P = '+r.p_hallucinated.toFixed(2)+'</span></div><div class="text">'+html+'</div><div class="meta">Red: the spans the reader doubts most.</div></div>'}
-$('jex').onclick=()=>{$('jq').value='When was the Eiffel Tower completed, and who designed it?';
- $('ja').value='The Eiffel Tower was completed in 1899. It was designed by Gustave Eiffel\'s company, with the main structure engineered by Maurice Koechlin and Émile Nouguier, for the Exposition Universelle in Paris.'};
+const EX=[{l:'A wrong date',q:'When was the Eiffel Tower completed, and who designed it?',
+  a:"The Eiffel Tower was completed in 1899. It was designed by Gustave Eiffel's company, with the main structure engineered by Maurice Koechlin and Émile Nouguier, for the Exposition Universelle in Paris."},
+ {l:'A correct answer',q:'At what temperature does water boil at sea level?',
+  a:'At sea level (standard atmospheric pressure, 1 atm), pure water boils at 100 °C, which is 212 °F. At higher altitudes the air pressure is lower, so water boils at a lower temperature.'},
+ {l:'An arithmetic slip',q:'Pens cost $3 each. Ana buys 7 pens and pays with a $50 note. How much change does she get?',
+  a:'Step 1: The pens cost 7 × 3 = 24 dollars.\nStep 2: Her change is 50 − 24 = 26 dollars.\nAnswer: Ana gets $26 in change.'},
+ {l:'Not in the document',q:'Is the Riverside Clinic open on Saturdays?',
+  a:'Yes. The Riverside Clinic is open on Saturdays from 9am to 1pm, and parking is free for patients.',
+  d:'The Riverside Clinic is open Monday to Friday, 8am to 6pm. It is closed on weekends and public holidays. Parking is free for patients with an appointment.'}];
+EX.forEach(x=>{const b=document.createElement('button');b.className='chip';b.textContent=x.l;
+ b.onclick=()=>{$('jq').value=x.q;$('ja').value=x.a;$('jdocs').value=x.d||'';$('jsend').click()};$('exs').appendChild(b)});
+$('jclear').onclick=()=>{['jq','ja','jdocs'].forEach(k=>$(k).value='');$('jout').innerHTML='';$('jq').focus()};
 $('jsend').onclick=async()=>{const q=$('jq').value.trim(),a=$('ja').value.trim();
  if(!q||!a)return;const docs=docList('jdocs');
  const b=$('jsend');b.disabled=true;$('jbusy').innerHTML='<span class="thinking"><span class="pulse"></span>Reading the answer…</span>';
@@ -312,7 +363,8 @@ async function sendChat(){const m=ta.value.trim();if(!m||$('send').disabled)retu
   return r?{reply:r}:{dropped:true,err}}
  let out=await attempt();
  if(out.dropped&&!shown){rlive.lastChild.textContent='Reconnecting…';await new Promise(z=>setTimeout(z,1500));out=await attempt()}
- if(out.reply){msgs.push({role:'assistant',content:out.reply.text});card.innerHTML=render(out.reply);ok=true}
+ if(out.reply){msgs.push({role:'assistant',content:out.reply.text});conv.push({role:'user',text:m},{role:'bot',reply:out.reply,docs});
+  card.innerHTML=render(out.reply)+acts(conv.length-1);ok=true;saveChat()}
  else if(out.final)card.innerHTML='<div class="meta">'+esc(out.final)+'</div>';
  else{rlive.hidden=false;rlive.innerHTML=esc('The reply did not arrive ('+(out.err?out.err.name:'the connection closed')+'). Please send it again.')}
  if(!ok)msgs.pop();b.disabled=false;bottom();ta.focus()}
