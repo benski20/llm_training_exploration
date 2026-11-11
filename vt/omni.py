@@ -304,21 +304,23 @@ class OmniVerifier:
 
     JUDGE_WEIGHT = 3.0          # each external judge (results/omni/stack_plus_judges.json)
 
-    def __init__(self, art, reader=None, nli=None, checkers=(), judges=()):
-        """nli: optional callable (documents_text, question, reply) -> P(unsupported) (see NLIScorer);
+    def __init__(self, art, reader=None, nli=None, checkers=(), judges=(), arithmetic=True):
+        """arithmetic: flag "a op b = c" expressions in the reply that do not compute (vt/mathcheck; narrow: fires on
+        ~3% of wrong replies at ~66% precision). The served demo turns it off and uses only learned experts.
+        nli: optional callable (documents_text, question, reply) -> P(unsupported) (see NLIScorer);
         checkers: callables (reply, documents_text) -> list of violations (vt/checkers), applied to every check;
         judges: callables (item) -> log-odds that the reply is wrong, one pass each (see JudgeScorer)."""
         self.art, self.reader, self.nli, self.checkers = art, reader, nli, list(checkers)
-        self.judges = list(judges)
+        self.judges, self.arithmetic = list(judges), arithmetic
         self.meta = art["meta"]
         self.layer_idx, self.parts = self.meta["layer_idx"], self.meta["parts"]
 
     @classmethod
-    def load(cls, path, reader=None, nli=None, checkers=(), judges=()):
+    def load(cls, path, reader=None, nli=None, checkers=(), judges=(), arithmetic=True):
         z = np.load(path, allow_pickle=False)
         art = {k: (z[k].astype(np.float32) if z[k].dtype == np.float16 else z[k]) for k in z.files}
         art["meta"] = json.loads(str(art["meta"]))
-        return cls(art, reader, nli=nli, checkers=checkers, judges=judges)
+        return cls(art, reader, nli=nli, checkers=checkers, judges=judges, arithmetic=arithmetic)
 
     @staticmethod
     def save(art, path):
@@ -354,7 +356,8 @@ class OmniVerifier:
         doc = it.get("doc", "")
         f["nli"] = float(self.nli(doc, it.get("question", ""), it["response"])) if self.nli and doc else float("nan")
         from vt.mathcheck import check_arithmetic
-        flags = [e["expression"] for e in check_arithmetic(it["response"], explicit=True) if not e["ok"]]
+        flags = [e["expression"] for e in check_arithmetic(it["response"], explicit=True) if not e["ok"]] \
+            if self.arithmetic else []
         viol = [v for c in self.checkers for v in c(it["response"], doc)]
         f["flags"] = min(len(flags), 1) + min(len(viol), 2)
         f["violations"] = [{"why": "arithmetic", "claim": x} for x in flags] + viol

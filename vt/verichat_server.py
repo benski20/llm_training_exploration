@@ -34,7 +34,8 @@ import traceback
 
 from .serve import HardenedHandler, bounded_server
 
-MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS, MAX_BATCH = 48, 4000, 4, 12000, 16   # the bot fits long chats
+MAX_NEW_TOKENS = 1536                                                               # step-by-step answers need room
+MAX_MESSAGES, MAX_CHARS, MAX_DOCS, MAX_DOC_CHARS, MAX_BATCH = 48, 8000, 4, 12000, 16   # the bot fits long chats
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -128,6 +129,7 @@ details.meta summary{cursor:pointer}
 .primary:hover{background:var(--accent2)}.primary:disabled{opacity:.5}
 .ghost{background:none;border:1px solid var(--line);border-radius:10px;padding:8px 14px;color:var(--fg)}.ghost:hover{background:var(--soft)}
 .scrim{display:none}
+.mdhr{border:0;border-top:1px solid var(--line);margin:4px 0}
 .acts{display:flex;gap:4px;margin-top:8px}.act{background:none;border:0;border-radius:8px;padding:4px 9px;font-size:12.5px;color:var(--muted)}
 .act:hover{background:var(--soft);color:var(--fg)}.act:disabled{opacity:.5}
 .wake{display:flex;align-items:center;gap:10px;background:var(--midbg);color:var(--mid);border-radius:12px;padding:10px 14px;font-size:13.5px;margin:4px 0 0}
@@ -201,6 +203,14 @@ details.meta summary{cursor:pointer}
 const $=id=>document.getElementById(id),log=$('log'),msgs=[];
 let conv=[],chatId=null,hasJudge=false;   // conv: {role:'user',text} / {role:'bot',reply,docs,check}
 function clean(t){return String(t).split('[unsure:] ').join('').split('[unsure:]').join('')}
+// light markdown on already-escaped text (spans from the checkers stay intact)
+function md(h){return h.split('\n').map(l=>{
+ if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(l))return '<hr class="mdhr">';
+ l=l.replace(/^(\s*)#{1,4}\s+(.*)$/,'$1<b>$2</b>').replace(/^(\s*)[-*]\s+/,(m,sp)=>sp+'• ');
+ l=l.replace(/\*\*([^*<>\n]+?)\*\*/g,'<b>$1</b>').replace(/\*\*/g,'');
+ l=l.replace(/\$\$?([^$\n]*?[=\\+×^{}][^$\n]*?)\$\$?/g,'$1').replace(/\\boxed\{([^{}]*)\}/g,'<b>$1</b>').replace(/\\text\{([^{}]*)\}/g,'$1')
+  .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g,'$1/$2').replace(/\\times/g,'×').replace(/\\cdot/g,'·').replace(/\\div/g,'÷').replace(/\\[()\[\]]/g,'');
+ return l}).join('\n').replace(/\n{3,}/g,'\n\n').replace(/\n*<hr class="mdhr">\n*/g,'<hr class="mdhr">')}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 const LOGO='<svg class="mark"><use href="#logo"/></svg>';
 function reasonBox(t){return '<details class="meta"><summary>Reasoning (not checked)</summary><div class="text" style="font-size:14px">'+esc(t)+'</div></details>'}
@@ -215,16 +225,16 @@ function marks(r){const t=r.text,cl=new Array(t.length).fill(-1),ds=new Array(t.
   if(x){cls.push('ds');tip.push('doubtful sentence: '+(100*x.risk).toFixed(0)+'% risk')}
   html+=cls.length?'<span class="'+cls.join(' ')+'" title="'+esc(tip.join(' | '))+'">'+seg+'</span>':seg;a=j}
  return html.split('[unsure:] ').join('').split('[unsure:]').join('')}
-function render(r){let html=marks(r);
+function render(r){let html=md(marks(r));
  const bad=(r.sentences||[]).filter(x=>x.doubted).length;
  const list=r.claims.filter(c=>c.text).map(c=>'<div><b>'+esc(c.text)+'</b> — '+c.verdict+' ('+c.score.toFixed(2)+')'+
   (c.source?' · from '+esc(c.source)+(c.citation?': “'+esc(c.citation.sentence)+'”':''):'')+'</div>').join('');
- return '<div class="text">'+html+'</div>'+(list?'<div class="claims">'+list+'</div>':'')+
+ return '<div class="text">'+html+'</div>'+(list&&!hasJudge?'<div class="claims">'+list+'</div>':'')+
   '<div class="meta">'+(r.withheld?'Answer withheld: the model doubted it. ':'')+
   (bad?bad+' doubtful sentence'+(bad>1?'s':'')+' underlined (hover for the risk). ':'')+
   (r.retrieval&&r.retrieval.retrieved?'The model doubted its first answer ('+esc(r.retrieval.closed_book_text)+'), so it looked it up: '+
    esc((r.retrieval.passages||[]).map(p=>p.replace(/\): [\s\S]*$/,')').replace(' (Wikipedia)','').slice(0,70)).join('; '))+'. ':'')+
-  '</div>'+assess(r.assessment)+(r.grounding?grounding(r.grounding):r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
+  '</div>'+(hasJudge?'':assess(r.assessment))+(r.grounding?grounding(r.grounding):r.ledger?ledger(r.ledger):verif(r.verification))+(r.reasoning?reasonBox(r.reasoning):'')}
 function pillCls(v){return {'likely right':'good','nothing flagged':'good','no problem found':'good','uncertain':'mid','not grounded':'mid','likely wrong':'bad'}[v]||'na'}
 function assess(a){if(!a)return '';return '<div class="meta"><span class="pill '+pillCls(a.verdict)+'">'+esc(a.verdict)+'</span> <span style="margin-left:6px">based on '+esc(a.basis)+'</span></div>'}
 function grounding(g){if(!g||!g.sentences||!g.sentences.length)return '';const sym={'consistent':'✓','not grounded':'–','contradicted':'✗'};
@@ -234,7 +244,7 @@ function ledger(l){if(!l||!l.length)return '';const sym={'supported':'✓','cont
  return '<div class="claims"><div class="meta" style="margin:0">Every statement, checked</div>'+shown.map(u=>'<div>'+sym[u.verdict]+' <b>'+esc(u.verdict)+'</b>: '+esc(u.claim.slice(0,160))+
   (u.evidence?' <span class="meta">('+esc(u.evidence.join(' '))+')</span>':'')+(u.sources&&u.sources.length?' <span class="meta">('+esc(u.sources.join('; '))+')</span>':'')+'</div>').join('')+
   (rest?'<div class="meta">'+rest+' sentence(s): not a statement of fact (opinion, advice, wording, fiction)</div>':'')+'</div>'}
-function verif(v){if(!v||!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
+function verif(v){v=(v||[]).filter(c=>c.verdict!=='no evidence'&&c.verdict!=='not in the sources');if(!v.length)return '';const sym={'supported':'✓','unsupported':'✗','unclear':'?','no evidence':'–','not in the sources':'–'};
  return '<div class="claims"><div class="meta" style="margin:0">Checked against sources</div>'+v.map(c=>'<div>'+sym[c.verdict]+' <b>'+esc(c.verdict)+'</b>: '+esc(c.claim)+
   (c.sources&&c.sources.length?' <span class="meta">('+esc(c.sources.join('; '))+')</span>':'')+'</div>').join('')+'</div>'}
 const scroll=$('scroll');function bottom(){scroll.scrollTop=scroll.scrollHeight}
@@ -257,7 +267,7 @@ $('hist').onclick=e=>{const b=e.target.closest('[data-id]');if(!b)return;const c
  conv.forEach((t,i)=>{if(t.role==='user'){msgs.push({role:'user',content:t.text});addUser(t.text)}
   else{msgs.push({role:'assistant',content:t.reply.text});const d=document.createElement('div');d.className='msg bot';
    d.innerHTML=LOGO+'<div class="body">'+render(t.reply)+acts(i)+'</div>';log.appendChild(d);
-   if(t.check)d.querySelector('.vres').innerHTML=renderJudge(t.check,clean(t.reply.text))}});
+   if(t.check)d.querySelector('.vres').innerHTML=renderJudge(t.check,clean(t.reply.text),true)}});
  renderHist();show('chat');bottom()};
 function acts(i){return '<div class="acts"><button class="act" data-act="copy" data-i="'+i+'">Copy</button>'+
  (hasJudge?'<button class="act" data-act="verify" data-i="'+i+'">Verify this reply</button>':'')+'</div><div class="vres"></div>'}
@@ -265,11 +275,11 @@ log.onclick=async e=>{const b=e.target.closest('[data-act]');if(!b)return;const 
  if(b.dataset.act==='copy'){try{await navigator.clipboard.writeText(a);b.textContent='Copied'}catch(_){b.textContent='Copy failed'}
   setTimeout(()=>{b.textContent='Copy'},1500);return}
  const out=b.parentNode.nextElementSibling;b.disabled=true;
- out.innerHTML='<div class="thinking" style="margin-top:8px"><span class="pulse"></span>Checking with the reader and two judges…</div>';
+ out.innerHTML='<div class="thinking" style="margin-top:8px"><span class="pulse"></span>Verifying this answer with the reader and two judges…</div>';
  const ms=conv.slice(0,i).map(x=>x.role==='user'?{role:'user',content:x.text}:{role:'assistant',content:clean(x.reply.text)}).slice(-24);
  try{const r=await (await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({messages:ms,response:a,documents:t.docs||[]})})).json();
-  out.innerHTML=r.error?'<div class="meta">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a);if(!r.error){t.check=r;saveChat()}}
+  out.innerHTML=r.error?'<div class="meta">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a,true);if(!r.error){t.check=r;saveChat()}}
  catch(err){out.innerHTML='<div class="meta">'+esc('Error: '+err)+'</div>'}b.disabled=false};
 renderHist();
 $('menu').onclick=()=>document.body.classList.toggle('open');$('scrim').onclick=()=>document.body.classList.remove('open');
@@ -294,7 +304,7 @@ health();
 const EVN={judge_1:'Judge 1 (one-pass verdict)',judge_2:'Judge 2 (one-pass verdict)',reader_judgement:"Reader's own verdict",
  reader_probe:'Probe on the reply',weakest_sentence:'Weakest sentence or step',grounding_nli:'Not supported by the documents',
  rule_violations:'Rule violations'};
-function renderOmni(r,a){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.start);const sus=r.suspect_unit;
+function renderOmni(r,a,compact){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.start);const sus=r.suspect_unit;
  const top=us.map(u=>u.score).sort((x,y)=>y-x),cut=top.length>2?top[Math.floor(top.length*0.3)]:Infinity;
  let html='',pos=0;for(const u of us){if(u.start<pos)continue;html+=esc(a.slice(pos,u.start));
   const isS=sus&&u.start===sus.start&&u.end===sus.end,cls=isS?'c b':(u.score>=cut&&us.length>2?'c m':'');
@@ -309,12 +319,12 @@ function renderOmni(r,a){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.st
  const vi=(r.violations||[]).map(x=>'<div>✗ <b>'+esc(x.why)+'</b>: '+esc(String(x.claim).slice(0,160))+'</div>').join('');
  return '<div class="card"><div class="vhead"><span class="pill '+pillCls(r.verdict)+'">'+esc(r.verdict||'scored')+'</span>'+
   (p==null?'':'<span class="meter" title="risk percentile"><i style="left:calc('+(100*p).toFixed(1)+'% - 1px)"></i></span>')+pct+'</div>'+
-  '<div class="text">'+html+'</div>'+
-  (sus?'<div class="meta">Suspect '+(us.length>3?'step':'sentence')+' in red, riskiest of the rest in amber: “'+esc(sus.text.slice(0,140))+'”</div>':'')+
+  (compact?'':'<div class="text">'+md(html)+'</div>')+
+  (sus?'<div class="meta">'+(compact?'Most suspect ':'Suspect ')+(us.length>3?'step':'sentence')+(compact?'':' in red, riskiest of the rest in amber')+': “'+esc(sus.text.slice(0,140))+'”</div>':'')+
   (ev?'<div class="claims"><div class="meta" style="margin:0 0 4px">What drove the verdict (red pushes toward wrong)</div>'+ev+'</div>':'')+
   (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+
   '<div class="meta">'+g+' Score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
-function renderJudge(r,a){if(r.verifier==='omni')return renderOmni(r,a);let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
+function renderJudge(r,a,compact){if(r.verifier==='omni')return renderOmni(r,a,compact);let html='',pos=0;for(const s of r.spans){html+=esc(a.slice(pos,s.start))+'<span class="c b" title="'+
  esc('P(hallucinated) '+s.score.toFixed(2))+'">'+esc(a.slice(s.start,s.end))+'</span>';pos=s.end}html+=esc(a.slice(pos));
  return '<div class="card"><div class="vhead"><span class="pill '+(r.flagged?'bad':'good')+'">'+(r.flagged?'Likely contains a hallucination':
  'No hallucination detected')+'</span><span class="meta" style="margin:0">P = '+r.p_hallucinated.toFixed(2)+'</span></div><div class="text">'+html+'</div><div class="meta">Red: the spans the reader doubts most.</div></div>'}
@@ -345,7 +355,7 @@ async function sendChat(){const m=ta.value.trim();if(!m||$('send').disabled)retu
  const b=$('send');b.disabled=true;
  const card=addBot();const live=card.firstChild,rlive=card.lastChild;let shown='',reasoned='';
  let ok=false;
- const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:$('mode').value,stream:true,thinking:$('think').checked});
+ const body=JSON.stringify({messages:msgs.slice(-24),documents:docs,mode:$('mode').value,stream:true,thinking:$('think').checked,max_new_tokens:1024});
  // The server sends a heartbeat every 10 s, so 45 s of silence means the request is stuck: abort it.
  // A request that drops or sticks before any text arrived is retried once; after that, say what happened.
  async function attempt(){const ac=new AbortController();let wd=null,r=null,err=null,buf='';
@@ -357,14 +367,15 @@ async function sendChat(){const m=ta.value.trim();if(!m||$('send').disabled)retu
     let k;while((k=buf.indexOf('\n\n'))>=0){const ev=buf.slice(0,k);buf=buf.slice(k+2);
      if(!ev.startsWith('data: '))continue;const m=JSON.parse(ev.slice(6));
      if(m.reasoning){reasoned+=m.reasoning;rlive.lastChild.textContent='Thinking: '+reasoned.slice(-240);bottom()}
-     if(m.delta){rlive.hidden=true;shown+=m.delta;live.textContent=shown.split('[unsure:] ').join('').split('[unsure:]').join('');bottom()}
+     if(m.delta){rlive.hidden=true;shown+=m.delta;live.innerHTML=md(esc(clean(shown)));bottom()}
      if(m.done){if(m.error)return {final:'Error: '+m.error};r=m.reply}}}}
   catch(e){err=e}finally{clearTimeout(wd)}
   return r?{reply:r}:{dropped:true,err}}
  let out=await attempt();
  if(out.dropped&&!shown){rlive.lastChild.textContent='Reconnecting…';await new Promise(z=>setTimeout(z,1500));out=await attempt()}
  if(out.reply){msgs.push({role:'assistant',content:out.reply.text});conv.push({role:'user',text:m},{role:'bot',reply:out.reply,docs});
-  card.innerHTML=render(out.reply)+acts(conv.length-1);ok=true;saveChat()}
+  card.innerHTML=render(out.reply)+acts(conv.length-1);ok=true;saveChat();
+  if(hasJudge)card.querySelector('[data-act="verify"]').click()}         // every reply gets the verifier's verdict
  else if(out.final)card.innerHTML='<div class="meta">'+esc(out.final)+'</div>';
  else{rlive.hidden=false;rlive.innerHTML=esc('The reply did not arrive ('+(out.err?out.err.name:'the connection closed')+'). Please send it again.')}
  if(!ok)msgs.pop();b.disabled=false;bottom();ta.focus()}
@@ -394,6 +405,9 @@ def validate(req):
         raise ValueError("temperature: a number from 0 to 2")
     if req.get("seed") is not None and (isinstance(req["seed"], bool) or not isinstance(req["seed"], int)):
         raise ValueError("seed: an integer")
+    n = req.get("max_new_tokens")
+    if n is not None and (isinstance(n, bool) or not isinstance(n, int) or not 16 <= n <= MAX_NEW_TOKENS):
+        raise ValueError(f"max_new_tokens: an integer from 16 to {MAX_NEW_TOKENS}")
     return msgs, docs, mode
 
 
@@ -662,6 +676,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)[:200]})
             item = {"messages": msgs, "documents": docs, "mode": mode, "thinking": req.get("thinking")}
+            if req.get("max_new_tokens") is not None:
+                item["max_new_tokens"] = req["max_new_tokens"]
             over = {k: req[k] for k in ("temperature", "seed") if req.get(k) is not None}
             if over:                                             # the server's sampling with these overrides
                 item["sampling"] = dict(bot.gen.sampling or {}, **over)
@@ -760,6 +776,8 @@ def build(argv=None, host=None, port=None):
     ap.add_argument("--omni-judges", default="", help="comma-separated judge models read in one pass, e.g. "
                     "Qwen/Qwen3-14B,microsoft/phi-4 (4-bit on a GPU)")
     ap.add_argument("--omni-nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+    ap.add_argument("--omni-arithmetic", action="store_true", help="also flag arithmetic that does not compute "
+                    "(vt/mathcheck, rule-based; off by default: the served verifier uses learned experts only)")
     ap.add_argument("--omni-checkers", default="", help="comma-separated written checkers (vt/checkers), e.g. "
                     "business_record")
     ap.add_argument("--omni-profile", help="a domain profile (vt-omni onboard) to use; without it a general, "
@@ -850,11 +868,13 @@ def load_omni(a):
     from .omni import JudgeScorer, NLIScorer, OmniVerifier
     judges = [JudgeScorer(m.strip()) for m in a.omni_judges.split(",") if m.strip()]
     checkers = [importlib.import_module(f"vt.checkers.{c.strip()}").check for c in a.omni_checkers.split(",") if c.strip()]
-    v = OmniVerifier.load(a.omni_head, nli=NLIScorer() if a.omni_nli else None, checkers=checkers, judges=judges)
+    v = OmniVerifier.load(a.omni_head, nli=NLIScorer() if a.omni_nli else None, checkers=checkers, judges=judges,
+                          arithmetic=a.omni_arithmetic)
     v.attach_reader()
     if a.omni_profile:
         return v, OmniVerifier.load_profile(a.omni_profile)
-    key = hashlib.sha256(f"{a.omni_head}|{a.omni_judges}|{a.omni_nli}|{a.omni_checkers}".encode()).hexdigest()[:12]
+    key = hashlib.sha256(f"{a.omni_head}|{a.omni_judges}|{a.omni_nli}|{a.omni_checkers}|{a.omni_arithmetic}".encode()
+                         ).hexdigest()[:12]
     stem = os.path.splitext(os.path.basename(a.omni_head))[0] + f".general_{key}.json"
     cache = os.path.join(a.omni_cache_dir, stem) if a.omni_cache_dir else \
         os.path.join(os.path.dirname(os.path.abspath(a.omni_head)), stem)

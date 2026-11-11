@@ -31,7 +31,7 @@ OMNI = os.environ.get("VERICHAT_OMNI", "")                          # e.g. heads
 OMNI_JUDGES = os.environ.get("VERICHAT_OMNI_JUDGES", "Qwen/Qwen3-14B,microsoft/phi-4")
 OMNI_NLI = os.environ.get("VERICHAT_OMNI_NLI", "1") == "1"
 OMNI_READER = os.environ.get("VERICHAT_OMNI_READER", "Qwen/Qwen3-8B")  # the head's reader (pre-downloaded on CPU)
-OMNI_CHECKERS = os.environ.get("VERICHAT_OMNI_CHECKERS", "business_record")
+OMNI_CHECKERS = os.environ.get("VERICHAT_OMNI_CHECKERS", "")         # written rule checkers: none by default
 # 48 GB holds the 32B chat model and its readers; the omni stack (8B reader + two 4-bit judges) needs 80 GB beside it
 GPU = os.environ.get("VERICHAT_GPU", "H100" if OMNI else "L40S")
 SCALEDOWN = int(os.environ.get("VERICHAT_SCALEDOWN", "120"))       # idle seconds before the GPU stops (billing)
