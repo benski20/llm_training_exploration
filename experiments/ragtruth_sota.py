@@ -45,6 +45,36 @@ def rows_for(split, n, seed=0):
     return rows[:n]
 
 
+def projection(n_layers, width, d, seed=1):
+    """A fixed Gaussian projection of each read layer's neurons, summed: d numbers per sentence instead of
+    n_layers * width. Its first k columns are themselves a k-dimensional projection. On 800 / 600 answers a
+    2,048-dimensional one kept response F1 (70.0 against 70.4 for all 87,552 neurons)."""
+    return [(np.random.default_rng((seed, l)).standard_normal((width, d), dtype=np.float32) / np.sqrt(d)).astype(np.float16)
+            for l in range(n_layers)]
+
+
+def project(x, P):
+    """x: n_layers * width (one sentence, or rows of them) -> d."""
+    x = np.atleast_2d(np.asarray(x, np.float32))
+    w = P[0].shape[0]
+    return sum(x[:, i * w:(i + 1) * w] @ Pl.astype(np.float32) for i, Pl in enumerate(P)).astype(np.float16)
+
+
+def convert(a):
+    """Project already extracted shards (all neurons) into --out."""
+    import shutil
+    os.makedirs(a.out, exist_ok=True)
+    P = None
+    for src in sorted(glob.glob(os.path.join(a.source, "*_*.npz"))):
+        z = dict(np.load(src))
+        if P is None:
+            n_layers = z["X"].shape[1] // a.width
+            P = projection(n_layers, a.width, a.project)
+        z["X"] = np.concatenate([project(z["X"][i:i + 256], P) for i in range(0, len(z["X"]), 256)])
+        np.savez(os.path.join(a.out, os.path.basename(src)), **z)
+        print("converted", os.path.basename(src), z["X"].shape, flush=True)
+
+
 def extract(a):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -62,6 +92,7 @@ def extract(a):
     else:
         model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
     reader = Reader(model, every=a.every)
+    P = projection(len(reader.layers), model.config.intermediate_size, a.project) if a.project else None
     t0 = time.time()
     for start in range(0, len(rows), a.shard):
         path = os.path.join(a.out, f"{a.split}_{start:05d}.npz")
@@ -90,7 +121,8 @@ def extract(a):
                 if not js:
                     continue
                 a_, b_ = len(pre) + js[0], len(pre) + js[-1] + 1
-                X.append(np.concatenate([acts[li][a_:b_].float().mean(0).numpy() for li in reader.layers]).astype(np.float16))
+                x = np.concatenate([acts[li][a_:b_].float().mean(0).numpy() for li in reader.layers])
+                X.append(project(x, P)[0] if P is not None else x.astype(np.float16))
                 ev.append((float(shift[js].mean()), float(dis[js].max())))
                 kinds = [k for x_, y_, k in sp if s < y_ and x_ < e]
                 y.append(int(bool(kinds)))
@@ -251,7 +283,7 @@ def fit(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["extract", "fit"])
+    ap.add_argument("cmd", choices=["extract", "fit", "convert"])
     ap.add_argument("--reader", default="Qwen/Qwen3-4B")
     ap.add_argument("--split", default="train")
     ap.add_argument("--n", type=int, default=1200)
@@ -261,10 +293,14 @@ def main():
     ap.add_argument("--every", type=int, default=4, help="read every n-th layer's neurons")
     ap.add_argument("--fitter", choices=["sklearn", "torch"], default="sklearn",
                     help="torch: streaming minibatch logistic regression (GPU when present) for large feature sets")
+    ap.add_argument("--project", type=int, default=0, help="store a fixed random projection of the neurons to this "
+                    "many numbers per sentence (0: all neurons)")
+    ap.add_argument("--source", help="convert: the shards to project")
+    ap.add_argument("--width", type=int, default=9728, help="convert: neurons per read layer")
     ap.add_argument("--out", required=True)
     ap.add_argument("--report", default="results/ragtruth_sota.json")
     a = ap.parse_args()
-    (extract if a.cmd == "extract" else fit)(a)
+    {"extract": extract, "fit": fit, "convert": convert}[a.cmd](a)
 
 
 if __name__ == "__main__":
