@@ -37,14 +37,15 @@ def log(*a):
     print(f"[{(time.time() - T0) / 60:6.1f} min]", *a, flush=True)
 
 
-def load_records(paths, shard, n_shards):
+def load_records(paths, shard, n_shards, cap=0):
+    """this shard's records; with cap, at most cap per file (a fixed pseudo-random subset: the lowest id hashes)."""
+    h = lambda r: int(hashlib.sha1(r["id"].encode()).hexdigest(), 16)
     recs = []
     for p in paths:
-        for line in open(p):
-            r = json.loads(line)
-            # deterministic sharding by id hash, independent of file order
-            if int(hashlib.sha1(r["id"].encode()).hexdigest(), 16) % n_shards == shard:
-                recs.append(r)
+        rs = [json.loads(line) for line in open(p)]
+        if cap and len(rs) > cap:
+            rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[:cap]
+        recs += [r for r in rs if h(r) % n_shards == shard]      # deterministic sharding, independent of file order
     recs.sort(key=lambda r: r["id"])
     return recs
 
@@ -69,6 +70,9 @@ def main():
     ap.add_argument("--hours", type=float, default=11.5)
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--cap", type=int, default=0, help="at most this many answers per source file")
+    ap.add_argument("--gpu-workers", type=int, default=0, help="one model per GPU: split this shard over N "
+                    "subprocesses (e.g. 2 on a Kaggle 2x T4 session with a 4-bit 14B)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 
@@ -91,6 +95,26 @@ def main():
         subprocess.run(cmd, check=True, cwd=repo)
         a.data = sorted(glob.glob(os.path.join(dd, "*.jsonl")))
         root = repo
+    if a.gpu_workers > 1:                                    # one model per GPU, each a sub-shard of this shard
+        script = os.path.join(root, "kaggle", "probe", "extract.py")    # the repo copy (no kernel prelude)
+        os.makedirs(a.out, exist_ok=True)
+        procs = []
+        for g in range(a.gpu_workers):
+            cmd = [sys.executable, script, "--data", *a.data, "--reader", a.reader, "--shard",
+                   str(a.shard * a.gpu_workers + g), "--n-shards", str(a.n_shards * a.gpu_workers),
+                   "--max-tokens", str(a.max_tokens), "--res-fracs", a.res_fracs, "--neu-fracs", a.neu_fracs,
+                   "--proj", str(a.proj), "--seed", str(a.seed), "--hours", str(a.hours), "--cap", str(a.cap),
+                   "--out", a.out] + (["--load-4bit"] if a.load_4bit else []) + \
+                  (["--limit", str(a.limit)] if a.limit else [])
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
+            procs.append(subprocess.Popen(cmd, env=env, stdout=open(os.path.join(a.out, f"worker{g}.log"), "w"),
+                                          stderr=subprocess.STDOUT))
+            log("worker", g, "started")
+        rc = [p.wait() for p in procs]
+        log("workers done", rc)
+        for g in range(a.gpu_workers):
+            print(f"--- worker{g}.log (tail)\n" + "".join(open(os.path.join(a.out, f"worker{g}.log")).readlines()[-6:]))
+        return
     sys.path.insert(0, root)
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -98,7 +122,7 @@ def main():
     from vt.omni import encode, judge_suffix, make_item, scalar_feats, sentence_spans, token_units
     if a.threads:
         torch.set_num_threads(a.threads)
-    recs = load_records(a.data, a.shard, a.n_shards)
+    recs = load_records(a.data, a.shard, a.n_shards, a.cap)
     if a.limit:
         recs = recs[:a.limit]
     log("shard", a.shard, "of", a.n_shards, ":", len(recs), "answers from", len(a.data), "files")
