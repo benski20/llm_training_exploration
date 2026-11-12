@@ -148,6 +148,7 @@ details.meta summary{cursor:pointer}
  <button class="nav newchat" id="newchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 6.5v7M6.5 10h7"/></svg>New chat</button>
  <button class="nav on" id="navchat"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3.5 5.5a2 2 0 012-2h9a2 2 0 012 2v6a2 2 0 01-2 2H9l-3.5 3v-3h0a2 2 0 01-2-2z"/></svg>Chat</button>
  <button class="nav" id="jp" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5l6 2.5v4.5c0 4-2.6 6.6-6 8-3.4-1.4-6-4-6-8V5z"/><path d="M7.2 10l2 2 3.6-3.8"/></svg>Verify an answer</button>
+ <button class="nav" id="navsuite" hidden><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12v12H4z"/><path d="M7 8h6M7 11h6M7 14h3"/></svg>Held-out tests</button>
  <div class="side-h" id="histh" hidden>Recent</div><div id="hist"></div>
  <div class="side-h">Settings</div>
  <div class="setting">When a claim looks doubtful
@@ -177,6 +178,8 @@ details.meta summary{cursor:pointer}
    <p class="vsub">Paste a question and the answer some model gave. A panel of readers and judges scores how likely it is to be
     wrong, points to the sentence or step it suspects, and shows what drove the verdict.</p>
    <div class="exs" id="exs"><span class="meta">Try:</span></div>
+   <label class="field" for="jprof">Check as</label>
+   <select class="box" id="jprof" style="padding:8px 12px"><option value="">General: no labels (reader + LLM judges)</option></select>
    <label class="field" for="jq">Question or prompt</label>
    <textarea class="box" id="jq" rows="2" placeholder="What did you ask?"></textarea>
    <label class="field" for="ja">The answer to check</label>
@@ -186,6 +189,17 @@ details.meta summary{cursor:pointer}
    <div class="row"><button class="primary" id="jsend">Check answer</button><button class="ghost" id="jclear">Clear</button>
     <span id="jbusy" class="meta" style="margin:0"></span></div>
    <div id="jout"></div>
+  </section>
+  <section class="view col" id="vsuite" hidden>
+   <h2 class="vtitle">Held-out tests: internals vs LLM judges</h2>
+   <p class="vsub">Answers from six document-grounded datasets, human-labelled as faithful or hallucinated. For each
+    dataset, a probe was trained at server start on the frozen 8B reader's hidden states from <b>50 labelled answers</b>.
+    No judge model and no pretrained head weights are used in its verdict. None of the answers below were used. Each check also runs two
+    14B LLM judges, shown as a second opinion, so you can compare the two.</p>
+   <div class="exs" id="sdoms"></div>
+   <div class="row" style="margin:6px 0 12px"><button class="primary" id="srun">Run this set</button><span id="sbusy" class="meta" style="margin:0"></span></div>
+   <div id="sboard"></div>
+   <div id="slist"></div>
   </section>
  </div>
  <div class="dock" id="dock"><div class="inner">
@@ -251,10 +265,11 @@ const scroll=$('scroll');function bottom(){scroll.scrollTop=scroll.scrollHeight}
 function addUser(t){$('empty').hidden=true;const d=document.createElement('div');d.className='msg user';d.innerHTML='<div class="bubble">'+esc(t)+'</div>';log.appendChild(d);bottom()}
 function addBot(){const d=document.createElement('div');d.className='msg bot';d.innerHTML=LOGO+'<div class="body"><div class="text"></div><div class="thinking"><span class="pulse"></span><span>Thinking…</span></div></div>';log.appendChild(d);bottom();return d.querySelector('.body')}
 // views, sidebar, settings
-function show(v){$('vchat').hidden=v!=='chat';$('vverify').hidden=v!=='verify';$('navchat').classList.toggle('on',v==='chat');$('jp').classList.toggle('on',v==='verify');
- $('dock').hidden=v!=='chat';$('htitle').textContent=v==='chat'?'Chat':'Verify an answer';document.body.classList.remove('open');
+function show(v){$('vchat').hidden=v!=='chat';$('vverify').hidden=v!=='verify';$('vsuite').hidden=v!=='suite';$('navchat').classList.toggle('on',v==='chat');$('jp').classList.toggle('on',v==='verify');
+ $('navsuite').classList.toggle('on',v==='suite');
+ $('dock').hidden=v!=='chat';$('htitle').textContent={chat:'Chat',verify:'Verify an answer',suite:'Held-out tests'}[v];document.body.classList.remove('open');
 }
-$('navchat').onclick=()=>show('chat');$('jp').onclick=()=>show('verify');
+$('navchat').onclick=()=>show('chat');$('jp').onclick=()=>show('verify');$('navsuite').onclick=()=>show('suite');
 $('newchat').onclick=()=>{msgs.length=0;conv=[];chatId=null;log.innerHTML='';$('empty').hidden=false;renderHist();show('chat');$('msg').focus()};
 // recent chats, kept in this browser only
 function store(){try{return JSON.parse(localStorage.getItem('verichat.chats')||'[]')}catch(_){return []}}
@@ -301,8 +316,8 @@ function health(){fetch('/health').then(r=>{if(!r.ok)throw new Error(r.status);r
  .catch(()=>{$('stat').textContent='Server starting up…';$('wake').hidden=false;setTimeout(health,10000)})}
 health();
 // the verifier panel
-const EVN={judge_1:'Judge 1 (one-pass verdict)',judge_2:'Judge 2 (one-pass verdict)',reader_judgement:"Reader's own verdict",
- reader_probe:'Probe on the reply',weakest_sentence:'Weakest sentence or step',grounding_nli:'Not supported by the documents',
+const EVN={reader_probe_internals:'Probe on the reader\'s hidden states',judge_1:'Judge 1 (one-pass verdict)',judge_2:'Judge 2 (one-pass verdict)',reader_judgement:"Reader's own verdict",
+ reader_probe:'Probe on the reader\'s hidden states',weakest_sentence:'Weakest sentence or step',grounding_nli:'Not supported by the documents',
  rule_violations:'Rule violations'};
 function renderOmni(r,a,compact){const us=(r.units||[]).slice().sort((x,y)=>x.start-y.start);const sus=r.suspect_unit;
  const top=us.map(u=>u.score).sort((x,y)=>y-x),cut=top.length>2?top[Math.floor(top.length*0.3)]:Infinity;
@@ -312,8 +327,13 @@ function renderOmni(r,a,compact){const us=(r.units||[]).slice().sort((x,y)=>x.st
  html+=esc(a.slice(pos));
  const p=r.risk_percentile;
  const pct=p==null?'':'<span class="meta" style="margin:0">riskier than '+Math.round(100*p)+'% of typical replies</span>';
- const g=r.guarantee?'Calibrated: at most '+Math.round(100*r.guarantee.fpr_target)+'% false alarms at '+Math.round(100*r.guarantee.confidence)+'% confidence.':
+ const IN=!!SUITE.domains[r.profile];
+ const g=IN?'Internals-only verdict: a probe on the frozen 8B reader\'s hidden states, trained on 50 labelled answers from '+esc(DN[r.profile]||r.profile)+'; its threshold was set on those labels.':
+  r.guarantee&&r.guarantee.fpr_target?'Calibrated: at most '+Math.round(100*r.guarantee.fpr_target)+'% false alarms at '+Math.round(100*r.guarantee.confidence)+'% confidence.':
   'General profile, no labels: a ranking against typical replies, not a guarantee.';
+ const js=(r.judges_logodds_wrong||[]).reduce((x,y)=>x+y,0);
+ const second=IN&&(r.judges_logodds_wrong||[]).length?'<div class="claims"><div class="ev"><span class="lab"><b>Second opinion</b>, two 14B LLM judges (not used in the verdict): '+
+  (js>0?'they lean <b style="color:var(--bad)">wrong</b>':'they lean <b style="color:var(--good)">right</b>')+'</span><span class="num" style="width:auto">'+(js>0?'+':'')+js.toFixed(1)+'</span></div></div>':'';
  const ents=Object.entries(r.evidence||{}),mx=Math.max(1,...ents.map(([,v])=>Math.abs(v)));
  const ev=ents.map(([k,v])=>'<div class="ev"><span class="lab">'+esc(EVN[k]||k)+'</span><span class="bar"><b style="left:'+(v>0?50:50-50*Math.abs(v)/mx)+'%;width:'+(50*Math.abs(v)/mx)+'%;background:'+(v>0?'var(--bad)':'var(--good)')+'"></b></span><span class="num">'+(v>0?'+':'')+v.toFixed(2)+'</span></div>').join('');
  const vi=(r.violations||[]).map(x=>'<div>✗ <b>'+esc(x.why)+'</b>: '+esc(String(x.claim).slice(0,160))+'</div>').join('');
@@ -322,7 +342,7 @@ function renderOmni(r,a,compact){const us=(r.units||[]).slice().sort((x,y)=>x.st
   (compact?'':'<div class="text">'+md(html)+'</div>')+
   (sus?'<div class="meta">'+(compact?'Most suspect ':'Suspect ')+(us.length>3?'step':'sentence')+(compact?'':' in red, riskiest of the rest in amber')+': “'+esc(sus.text.slice(0,140))+'”</div>':'')+
   (ev?'<div class="claims"><div class="meta" style="margin:0 0 4px">What drove the verdict (red pushes toward wrong)</div>'+ev+'</div>':'')+
-  (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+steps(r.steps)+
+  (vi?'<div class="claims"><div class="meta" style="margin:0">Rule violations</div>'+vi+'</div>':'')+steps(r.steps)+second+
   '<div class="meta">'+g+' Score '+r.score.toFixed(2)+' · '+r.ms+' ms</div></div>'}
 function steps(c){if(!c||!c.units||!c.units.length)return '';const key=c.by,J=key==='judges';
  const mx=Math.max(1,...c.units.map(u=>Math.abs(u[key])));
@@ -352,9 +372,46 @@ $('jsend').onclick=async()=>{const q=$('jq').value.trim(),a=$('ja').value.trim()
  if(!q||!a)return;const docs=docList('jdocs');
  const b=$('jsend');b.disabled=true;$('jbusy').innerHTML='<span class="thinking"><span class="pulse"></span>Reading the answer…</span>';
  try{const res=await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({messages:[{role:'user',content:q}],response:a,documents:docs})});const r=await res.json();
+  body:JSON.stringify({messages:[{role:'user',content:q}],response:a,documents:docs,profile:$('jprof').value||undefined})});const r=await res.json();
   $('jout').innerHTML=r.error?'<div class="card">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a)}
  catch(e){$('jout').innerHTML='<div class="card">'+esc('Error: '+e)+'</div>'}b.disabled=false;$('jbusy').textContent='';$('jout').scrollIntoView({behavior:'smooth',block:'nearest'})};
+// held-out suite: internals-only domain probes vs the LLM judges
+const DN={ragtruth_qa:'RAGTruth: questions over web passages',ragtruth_summary:'RAGTruth: news summaries',
+ ragtruth_data2text:'RAGTruth: business records to text',halueval_qa:'HaluEval: knowledge-grounded QA',
+ halueval_dialogue:'HaluEval: knowledge-grounded dialogue',halueval_summary:'HaluEval: document summaries'};
+let SUITE={domains:{},tests:[]},SDOM='all';const SRES={};
+function au(s,y){let a=0,n=0;for(let i=0;i<s.length;i++)if(y[i])for(let j=0;j<s.length;j++)if(!y[j]){n++;a+=s[i]>s[j]?1:s[i]===s[j]?.5:0}return n?a/n:NaN}
+fetch('/suite').then(r=>r.ok?r.json():null).then(x=>{if(!x||!x.tests||!x.tests.length)return;SUITE=x;$('navsuite').hidden=false;
+ Object.keys(x.domains).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent='Internals only, '+(DN[d]||d)+' (probe from 50 labels)';$('jprof').appendChild(o)});
+ const ds=['all',...Object.keys(x.domains)];$('sdoms').innerHTML=ds.map(d=>'<button class="chip" data-d="'+d+'">'+esc(d==='all'?'All six ('+x.tests.length+')':DN[d]||d)+'</button>').join('');
+ $('sdoms').onclick=e=>{const b=e.target.closest('[data-d]');if(b){SDOM=b.dataset.d;srender()}};srender()}).catch(()=>{});
+function sitems(){return SUITE.tests.filter(t=>SDOM==='all'||t.domain===SDOM)}
+function srender(){[...$('sdoms').children].forEach(b=>b.classList.toggle('on',b.dataset.d===SDOM));
+ [...$('sdoms').children].forEach(b=>{b.style.borderColor=b.dataset.d===SDOM?'var(--accent)':'';b.style.color=b.dataset.d===SDOM?'var(--accent)':''});
+ const its=sitems(),done=its.filter(t=>SRES[t.id]&&!SRES[t.id].error);
+ if(done.length){const y=done.map(t=>t.label),si=done.map(t=>SRES[t.id].score),sj=done.map(t=>(SRES[t.id].judges_logodds_wrong||[]).reduce((a,b)=>a+b,0));
+  const ai=done.filter(t=>(SRES[t.id].verdict==='likely wrong')===!!t.label).length/done.length,aj=done.filter(t=>(sj[done.indexOf(t)]>0)===!!t.label).length/done.length;
+  $('sboard').innerHTML='<div class="card"><div class="meta" style="margin:0 0 8px">'+done.length+' of '+its.length+' held-out answers checked ('+y.filter(Boolean).length+' hallucinated)</div>'+
+   '<div class="ev"><span class="lab"><b>Internals only</b> (8B reader probe, 50 labels per dataset)</span><span class="num" style="width:auto">AUROC <b>'+au(si,y).toFixed(3)+'</b> · accuracy <b>'+(100*ai).toFixed(0)+'%</b></span></div>'+
+   '<div class="ev"><span class="lab">Two 14B LLM judges (no labels)</span><span class="num" style="width:auto">AUROC '+au(sj,y).toFixed(3)+' · accuracy '+(100*aj).toFixed(0)+'%</span></div>'+
+   '<div class="meta">AUROC: chance at random is 0.5, perfect ranking is 1. Accuracy uses each method\'s own cut-off: the probe\'s, set on its 50 training labels, and the judges\' natural Yes/No.</div></div>'}
+ else $('sboard').innerHTML='';
+ $('slist').innerHTML=its.map(t=>{const r=SRES[t.id];const q=t.messages[t.messages.length-1].content;
+  const vi=r&&!r.error?((r.verdict==='likely wrong')===!!t.label?'<span class="pill good">internals ✓</span>':'<span class="pill bad">internals ✗</span>'):'';
+  const vj=r&&!r.error?(((r.judges_logodds_wrong||[]).reduce((a,b)=>a+b,0)>0)===!!t.label?'<span class="pill good">judges ✓</span>':'<span class="pill bad">judges ✗</span>'):'';
+  return '<details class="card" style="padding:10px 14px;margin:8px 0"><summary style="cursor:pointer;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+
+   '<span class="pill '+(t.label?'bad':'good')+'">truth: '+(t.label?'hallucinated':'faithful')+'</span>'+vi+vj+
+   '<span class="meta" style="margin:0">'+esc(DN[t.domain]||t.domain)+'</span><span style="flex:1;min-width:200px">'+esc(t.response.slice(0,110))+'…</span></summary>'+
+   '<div class="meta">The task and its documents</div><div class="box" style="max-height:220px;overflow:auto;white-space:pre-wrap;font-size:13px">'+esc(q)+'</div>'+
+   (r&&!r.error?renderJudge(r,t.response):'<div class="row"><button class="ghost" data-run="'+t.id+'">Check this answer</button></div>')+'</details>'}).join('')}
+async function srun(list){for(let i=0;i<list.length;i+=16){const ch=list.slice(i,i+16);
+  $('sbusy').innerHTML='<span class="thinking"><span class="pulse"></span>Checking '+(i+1)+'–'+Math.min(i+8,list.length)+' of '+list.length+'…</span>';
+  try{let res;for(let tries=0;tries<12;tries++){res=await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:ch.map(t=>({messages:t.messages.filter(m=>m.role!=='system'),response:t.response,profile:t.domain}))})});
+    if(res.status!==429)break;$('sbusy').textContent='Waiting for the rate limit…';await new Promise(z=>setTimeout(z,8000))}
+   const x=await res.json();if(x.error){$('sbusy').textContent='Error: '+x.error;return}(x.items||[]).forEach((r,k)=>{SRES[ch[k].id]=r});srender()}
+  catch(e){$('sbusy').textContent='Error: '+e;return}}$('sbusy').textContent='Done.'}
+$('srun').onclick=async()=>{$('srun').disabled=true;await srun(sitems().filter(t=>!SRES[t.id]));$('srun').disabled=false};
+$('slist').onclick=async e=>{const b=e.target.closest('[data-run]');if(!b)return;b.disabled=true;await srun(SUITE.tests.filter(t=>String(t.id)===b.dataset.run))};
 // chat
 $('send').onclick=()=>sendChat();
 async function sendChat(){const m=ta.value.trim();if(!m||$('send').disabled)return;
@@ -559,8 +616,11 @@ class RateLimiter:
 
 def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120.0, detector=None,
                 api_key=None, rate_per_minute=20, trust_proxy=False, max_batch=8, max_concurrency=16,
-                log_requests=False, omni=None):
-    """omni: (OmniVerifier, profile) to answer /judge with the omni verifier (vt/omni.py) instead of `detector`."""
+                log_requests=False, omni=None, suite=None):
+    """omni: (OmniVerifier, profile) to answer /judge with the omni verifier (vt/omni.py) instead of `detector`.
+    suite: (profiles by domain, held-out test items) from load_suite: /judge takes {"profile": domain} and GET /suite
+    lists the held-out items."""
+    suite_profiles, suite_tests = suite if suite else ({}, [])
     """api_key: if set, POSTs need "Authorization: Bearer <key>". trust_proxy: take the client from
     X-Forwarded-For (only behind a proxy you control). Concurrent requests are batched (max_batch)."""
     def chat(items, ready=None):                                 # items may carry a "_stream" callback
@@ -580,7 +640,8 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
             for it in items:
                 t0 = time.perf_counter()
                 try:
-                    r = ov.verify(it["response"], messages=it["messages"], documents=it.get("documents"), prof=oprof)
+                    r = ov.verify(it["response"], messages=it["messages"], documents=it.get("documents"),
+                                  prof=suite_profiles.get(it.get("profile")) or oprof)
                 except Exception as e:                       # one bad item must not fail the batch
                     traceback.print_exc()
                     r = {"error": f"verification failed: {type(e).__name__}"}
@@ -626,6 +687,9 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path == "/suite":
+                return self.send_json(200, {"domains": {d: p["card"] for d, p in suite_profiles.items()},
+                                            "tests": suite_tests})
             if self.path == "/health":
                 return self.send_json(200, {"status": "ok", "layer": bot.gen.layer, "threshold": bot.threshold,
                                             "risk_threshold": bot.gen.risk_threshold if bot.gen.risk_probe is not None else None,
@@ -669,8 +733,10 @@ def make_server(bot, host="127.0.0.1", port=8080, max_body=1 << 18, deadline=120
                 except ValueError as e:
                     return self.send_json(400, {"error": str(e)[:200]})
                 try:
-                    rs = batcher.submit_many("judge", [{"messages": m, "response": r, "documents": d}
-                                                       for m, r, d in parsed], deadline)
+                    profs = [x.get("profile") if isinstance(x, dict) and isinstance(x.get("profile"), str) else None
+                             for x in (batch or [req])]
+                    rs = batcher.submit_many("judge", [{"messages": m, "response": r, "documents": d, "profile": pf}
+                                                       for (m, r, d), pf in zip(parsed, profs)], deadline)
                 except TimeoutError as e:
                     return self.send_json(503, {"error": str(e)})
                 except Exception:                                # the model failed: a clean error, not a dropped line
@@ -784,6 +850,9 @@ def build(argv=None, host=None, port=None):
     ap.add_argument("--omni-judges", default="", help="comma-separated judge models read in one pass, e.g. "
                     "Qwen/Qwen3-14B,microsoft/phi-4 (4-bit on a GPU)")
     ap.add_argument("--omni-nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+    ap.add_argument("--rag-suite", help="data/rag_suite.jsonl: per document-grounded domain, an internals-only probe "
+                    "trained at startup on its 50 labelled replies (frozen reader, no judges), and held-out test "
+                    "replies listed at GET /suite")
     ap.add_argument("--omni-causal", action="store_true", help="add the running verdict to every /judge answer: "
                     "\"is everything so far correct?\" after each sentence / step, from the reader (cached) and the judges")
     ap.add_argument("--omni-arithmetic", action="store_true", help="also flag arithmetic that does not compute "
@@ -863,9 +932,10 @@ def build(argv=None, host=None, port=None):
         det = Detector(bot.model, bot.tok, torch.load(a.detector, map_location="cpu", weights_only=True)) \
             if name == a.model else Detector.load(name, a.detector)
     omni = load_omni(a) if a.omni_head else None
+    suite = load_suite(omni[0], a) if omni and a.rag_suite else None
     return make_server(bot, host or a.host, a.port if port is None else port, deadline=a.deadline, detector=det,
                        log_requests=a.log_requests, api_key=os.environ.get("VERICHAT_API_KEY") or None,
-                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy, omni=omni)
+                       rate_per_minute=a.rate_per_minute, trust_proxy=a.trust_proxy, omni=omni, suite=suite)
 
 
 def load_omni(a):
@@ -907,6 +977,67 @@ def load_omni(a):
     except OSError:                                          # a read-only image: rebuild next time
         pass
     return v, prof
+
+
+def load_suite(v, a):
+    """Per domain of the suite, an internals-only profile: the frozen reader's reply vector, standardised by the
+    domain's unlabelled and training replies (labels unused), then a FRESH logistic probe fitted on the 50 labelled
+    training replies only (the shipped head's weights are not used: they saw the corpus). Its decision threshold is the
+    one that best separates the training labels in 5-fold cross-fitting. Judges, NLI and rule checks carry weight 0:
+    the verdict comes from the reader's hidden states alone (the judges still run, as a second opinion)."""
+    import hashlib
+    import json as _json
+
+    import numpy as np
+
+    from .omni import LogReg, balanced_weights, make_item
+    raw = open(a.rag_suite, "rb").read()
+    key = hashlib.sha256(raw + a.omni_head.encode()).hexdigest()[:12]
+    cache = os.path.join(a.omni_cache_dir or os.path.dirname(os.path.abspath(a.rag_suite)), f"rag_suite_{key}.json")
+    rows = [_json.loads(l) for l in raw.decode().splitlines() if l.strip()]
+    tests = [{k: r[k] for k in ("id", "domain", "label", "messages", "response")} for r in rows if r["split"] == "test"]
+    try:
+        return _json.load(open(cache)), tests
+    except (OSError, ValueError):
+        pass
+    judges, nli, v.judges, v.nli = v.judges, v.nli, [], None             # reader only while building
+    profiles = {}
+    try:
+        for d in sorted({r["domain"] for r in rows}):
+            rs = [r for r in rows if r["domain"] == d and r["split"] != "test"]
+            # exactly the item /judge builds for a suite request (system turn dropped, as the page sends it)
+            feats = [v.features(make_item(r["response"], messages=[m for m in r["messages"] if m["role"] != "system"]))
+                     for r in rs]
+            keep = [k for k, f in enumerate(feats) if f is not None]
+            feats, rs = [feats[k] for k in keep], [rs[k] for k in keep]
+            p = v.profile(feats, d)
+            X = (np.stack([v.reply_vector(f) for f in feats]) - np.array(p["mu"])) / np.array(p["sd"])
+            tr = np.array([r["split"] == "train" for r in rs])
+            y = np.array([r["label"] for r in rs], float)
+            oof, fold = np.zeros(int(tr.sum())), np.arange(int(tr.sum())) % 5
+            for k in range(5):
+                m = LogReg(0.05).fit(X[tr][fold != k], y[tr][fold != k], balanced_weights(y[tr][fold != k]))
+                oof[fold == k] = m.score(X[tr][fold == k])
+            m = LogReg(0.05).fit(X[tr], y[tr], balanced_weights(y[tr]))
+            r_all = X @ m.w + m.b
+            zr = [float(r_all.mean()), float(r_all.std() + 1e-6)]
+            zo = (oof - zr[0]) / zr[1]
+            cand = np.sort(zo)
+            best = max(cand, key=lambda t: (zo[y[tr] == 1] >= t).mean() - (zo[y[tr] == 0] >= t).mean())
+            p.update(w=m.w.tolist(), b=float(m.b), weights={"r": 1.0, "u": 0.0, "j": 0.0, "n": 0.0, "e0": 0.0, "e1": 0.0},
+                     flag_weight=0.0, threshold=float(best), ref_scores=sorted(((r_all - zr[0]) / zr[1]).tolist()))
+            p["z"] = dict(p["z"], r=zr)
+            p["card"] = dict(p["card"], internals_only=True, domain=d, labelled=int(tr.sum()),
+                             unlabelled=int((~tr).sum()), fpr_target=None)
+            profiles[d] = p
+            print(f"suite profile {d}: {int(tr.sum())} labelled, {int((~tr).sum())} unlabelled", flush=True)
+    finally:
+        v.judges, v.nli = judges, nli
+    try:
+        _json.dump(profiles, open(cache, "w"))
+    except OSError:
+        pass
+    return profiles, tests
 
 
 if __name__ == "__main__":

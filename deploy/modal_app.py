@@ -87,7 +87,8 @@ image = (
 )
 if OMNI:                                                            # the omni head and its unlabelled profile sample
     image = (image.add_local_file(os.path.join(ROOT, OMNI), "/app/heads/omni.npz")
-             .add_local_file(os.path.join(ROOT, "data", "omni_profile_sample.jsonl"), "/app/data/omni_profile_sample.jsonl"))
+             .add_local_file(os.path.join(ROOT, "data", "omni_profile_sample.jsonl"), "/app/data/omni_profile_sample.jsonl")
+             .add_local_file(os.path.join(ROOT, "data", "rag_suite.jsonl"), "/app/data/rag_suite.jsonl"))
 if GROUNDING:                                                       # the grounding probe the reader serves
     image = image.add_local_file(os.path.join(ROOT, GROUNDING), "/app/heads/grounding_probe.npz")
 app = modal.App("verichat", image=image)
@@ -235,7 +236,8 @@ def server_args():
             + (["--revision", REVISION] if REVISION else [])
             + (["--omni-head", "/app/heads/omni.npz", "--omni-judges", OMNI_JUDGES,
                 "--omni-checkers", OMNI_CHECKERS, "--omni-sample", "/app/data/omni_profile_sample.jsonl",
-                "--omni-cache-dir", "/root/.cache/huggingface/omni", "--omni-causal"] + (["--omni-nli"] if OMNI_NLI else [])
+                "--omni-cache-dir", "/root/.cache/huggingface/omni", "--rag-suite", "/app/data/rag_suite.jsonl"]
+               + (["--omni-nli"] if OMNI_NLI else [])
                if OMNI else []))
 
 
