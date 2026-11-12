@@ -33,13 +33,18 @@ def main():
     ap.add_argument("--entry", default="kaggle/probe/extract.py")
     ap.add_argument("--entry-args", default="")
     ap.add_argument("--cpu", action="store_true")
+    ap.add_argument("--expect-user", default="")
     a = ap.parse_args()
+    for k in [k for k in os.environ if k.startswith("KAGGLE_API") or k in ("KAGGLE_USERNAME", "KAGGLE_KEY")]:
+        os.environ.pop(k)                                   # the session's own token would win over ours
     os.environ["KAGGLE_API_TOKEN"] = a.token
     from kaggle.api.kaggle_api_extended import KaggleApi
     api = KaggleApi()
     api.authenticate()
     user = api.config_values.get("username")
     print("second account:", user, flush=True)
+    if a.expect_user and user != a.expect_user:
+        raise SystemExit(f"authenticated as {user}, expected {a.expect_user}")
     for slug in a.slug:
         ref = f"{user}/{slug}"
         if a.action == "push":
