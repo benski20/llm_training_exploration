@@ -15,6 +15,7 @@ import argparse
 import base64
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -50,7 +51,7 @@ def push(a):
     for p in a.bundle or []:
         files[p] = base64.b64encode(open(os.path.join(ROOT, p), "rb").read()).decode()
     body = open(os.path.join(ROOT, a.script)).read()
-    script = PRELUDE.format(files=files, args=a.args.split() if a.args else []) + body
+    script = PRELUDE.format(files=files, args=shlex.split(a.args) if a.args else []) + body
     stage = tempfile.mkdtemp()
     try:
         open(os.path.join(stage, "run.py"), "w").write(script)
