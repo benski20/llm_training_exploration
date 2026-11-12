@@ -118,7 +118,7 @@ def main():
                    "--caps", a.caps,
                    "--out", a.out] + (["--load-4bit"] if a.load_4bit else []) + \
                   (["--limit", str(a.limit)] if a.limit else [])
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g), PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
             procs.append(subprocess.Popen(cmd, env=env, stdout=open(os.path.join(a.out, f"worker{g}.log"), "w"),
                                           stderr=subprocess.STDOUT))
             log("worker", g, "started")
@@ -155,12 +155,19 @@ def main():
     part = len(glob.glob(os.path.join(a.out, f"shard{a.shard:03d}_*.npz")))
     buf = {k: [] for k in keys}
     t_start = time.time()
+    n_oom = 0
     for k, r in enumerate(todo):
         if time.time() - T0 > a.hours * 3600:
             log("time budget reached")
             break
-        f = pr.features(r.get("question") or "", r.get("documents") or [], r["response"], r.get("spans") or [],
-                        bool(r.get("has_spans")), int(r["label"]))
+        try:
+            f = pr.features(r.get("question") or "", r.get("documents") or [], r["response"], r.get("spans") or [],
+                            bool(r.get("has_spans")), int(r["label"]))
+        except pr.torch.OutOfMemoryError:
+            pr.torch.cuda.empty_cache()
+            n_oom += 1
+            log("out of memory, skipped", r["id"], "total skipped", n_oom)
+            continue
         if f is None:
             continue
         row = len(buf["ids"])
@@ -187,7 +194,7 @@ def main():
             rate = (k + 1) / (time.time() - t_start)
             log(f"{k + 1}/{len(todo)}  {rate * 3600:.0f} answers/h  ETA {(len(todo) - k - 1) / rate / 3600:.1f} h")
     flush(buf, part)
-    log("done")
+    log("done; skipped for memory:", n_oom)
 
 
 if __name__ == "__main__":

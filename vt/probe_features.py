@@ -50,13 +50,23 @@ class ProbeReader:
                      "neu_layers": self.neu_layers, "res_fracs": list(res_fracs), "neu_fracs": list(neu_fracs),
                      "proj": proj, "seed": seed, "max_tokens": max_tokens,
                      "layout": "vt.omni.make_item(response, question, documents)"}
-        self._cap = {}
+        self._cap, self._res, self._win = {}, {}, (0, 0)
         for L in self.neu_layers:
             self.model.model.layers[L].mlp.down_proj.register_forward_pre_hook(self._hook(L))
+        for L in self.res_layers:              # hidden_states[L] is the output of decoder layer L - 1
+            self.model.model.layers[L - 1].register_forward_hook(self._res_hook(L))
 
     def _hook(self, L):
         def f(mod, inp):
-            self._cap[L] = inp[0]
+            r0, n = self._win
+            self._cap[L] = inp[0][:, r0:r0 + n].clone()        # only the answer tokens are kept
+        return f
+
+    def _res_hook(self, L):
+        def f(mod, inp, out):
+            h = out[0] if isinstance(out, tuple) else out
+            r0, n = self._win
+            self._res[L] = (h[:, r0:r0 + n].clone(), h[:, -1:].clone())
         return f
 
     def features(self, question, documents, response, spans=None, has_spans=False, label=0):
@@ -69,9 +79,9 @@ class ProbeReader:
         n = len(ids) - r0 - ns
         if n <= 0:
             return None
-        with torch.no_grad():
-            o = self.model(input_ids=torch.tensor([ids], device=self.dev), output_hidden_states=True,
-                           logits_to_keep=n + ns + 1)
+        self._win = (r0, n)
+        with torch.no_grad():                # layer outputs come from hooks (all hidden states would not fit a T4)
+            o = self.model(input_ids=torch.tensor([ids], device=self.dev), logits_to_keep=n + ns + 1)
         lg = o.logits[0]
         last = lg[-1].float().log_softmax(-1)
         j_logit = float(torch.logsumexp(last[self.yes], 0) - torch.logsumexp(last[self.no], 0))
@@ -83,10 +93,11 @@ class ProbeReader:
         margin = torch.where(lp >= top2[:, 0] - 1e-6, top2[:, 0] - top2[:, 1], lp - top2[:, 0])
         lp, ent, margin = lp.cpu().numpy(), ent.cpu().numpy(), margin.cpu().numpy()
         proj = lambda x, P: x.float().cpu() @ P
-        R = {L: proj(o.hidden_states[L][0, r0:r0 + n], self.Pr) for L in self.res_layers}
-        J = np.stack([proj(o.hidden_states[L][0, -1:], self.Pr)[0].numpy() for L in self.res_layers])
-        N = {L: proj(self._cap[L][0, r0:r0 + n], self.Pn) for L in self.neu_layers}
+        R = {L: proj(self._res[L][0][0], self.Pr) for L in self.res_layers}
+        J = np.stack([proj(self._res[L][1][0], self.Pr)[0].numpy() for L in self.res_layers])
+        N = {L: proj(self._cap[L][0], self.Pn) for L in self.neu_layers}
         self._cap.clear()
+        self._res.clear()
         spans = spans or []
         f = {"a_mean": np.stack([R[L].mean(0).numpy() for L in self.res_layers]).astype(np.float16),
              "a_last": np.stack([R[L][-1].numpy() for L in self.res_layers]).astype(np.float16),
