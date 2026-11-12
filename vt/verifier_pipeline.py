@@ -89,6 +89,32 @@ def guaranteed_threshold(score, y, fpr, confidence):
     return float(neg[-1]) if n else float("inf")
 
 
+def cleared_threshold(score, y, max_error, confidence):
+    """The highest threshold below which replies can be cleared as supported: among replies scoring at or under it,
+    the hallucinated share is at most `max_error` with the given confidence (one-sided Clopper-Pearson). This
+    bound holds for the calibration set's own base rate of hallucination; a deployment with more hallucinations
+    needs a calibration set that reflects it. None when no threshold qualifies."""
+    from scipy.stats import beta
+    order = np.argsort(score, kind="stable")
+    s, yy = np.asarray(score)[order], np.asarray(y)[order]
+    best, bad = None, 0
+    for k in range(len(s)):
+        bad += int(yy[k])
+        if k + 1 < len(s) and s[k + 1] == s[k]:
+            continue                                             # a threshold cannot split equal scores
+        upper = beta.ppf(confidence, bad + 1, k + 1 - bad) if bad < k + 1 else 1.0
+        if upper <= max_error:
+            best = float(s[k])
+    return best
+
+
+def three_way(score, cleared_at, flagged_at):
+    """'supported' at or under the cleared threshold, 'unsupported' over the flag threshold, 'needs review' between."""
+    score = np.asarray(score)
+    lo = -np.inf if cleared_at is None else cleared_at
+    return np.where(score > flagged_at, "unsupported", np.where(score <= lo, "supported", "needs review"))
+
+
 def rates(score, y, threshold):
     flag = score > threshold
     tp, fp = int((flag & (y == 1)).sum()), int((flag & (y == 0)).sum())
