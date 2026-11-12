@@ -24,3 +24,4 @@ results/kaggle/omni-*/
 results/kaggle/ragtruth-h2h/
 heads/*.general_*.json
 *.partial
+data/probe_eval/*.jsonl
