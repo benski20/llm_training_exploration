@@ -858,6 +858,7 @@ def build(argv=None, host=None, port=None):
     ap.add_argument("--omni-judges", default="", help="comma-separated judge models read in one pass, e.g. "
                     "Qwen/Qwen3-14B,microsoft/phi-4 (4-bit on a GPU)")
     ap.add_argument("--omni-nli", action="store_true", help="add the NLI cross-encoders for replies with documents")
+    ap.add_argument("--omni-reader-4bit", action="store_true", help="load the omni reader in 4-bit (nf4)")
     ap.add_argument("--rag-suite", help="data/rag_suite.jsonl: per document-grounded domain, an internals-only probe "
                     "trained at startup on its 50 labelled replies (frozen reader, no judges), and held-out test "
                     "replies listed at GET /suite")
@@ -958,7 +959,7 @@ def load_omni(a):
     checkers = [importlib.import_module(f"vt.checkers.{c.strip()}").check for c in a.omni_checkers.split(",") if c.strip()]
     v = OmniVerifier.load(a.omni_head, nli=NLIScorer() if a.omni_nli else None, checkers=checkers, judges=judges,
                           arithmetic=a.omni_arithmetic)
-    v.attach_reader()
+    v.attach_reader(load_in_4bit=a.omni_reader_4bit)
     v.causal = a.omni_causal
     if a.omni_profile:
         return v, OmniVerifier.load_profile(a.omni_profile)

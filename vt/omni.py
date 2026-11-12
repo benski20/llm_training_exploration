@@ -123,7 +123,7 @@ class Reader:
     """The frozen reader: one forward pass per item, features as in experiments/omni_corpus.py."""
 
     def __init__(self, name, layers=None, layer_fracs=(0.25, 0.4, 0.55, 0.7, 0.85, 1.0), max_tokens=2048,
-                 threads=None):
+                 threads=None, load_in_4bit=False):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         if threads:
@@ -131,9 +131,14 @@ class Reader:
         self.name, self.max_tokens = name, max_tokens
         self.tok = AutoTokenizer.from_pretrained(name)
         cuda = torch.cuda.is_available()
+        kw = {}
+        if load_in_4bit and cuda:                            # e.g. a 14B reader beside the chat model and judges
+            from transformers import BitsAndBytesConfig
+            kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                                                           bnb_4bit_compute_dtype=torch.bfloat16)
         self.model = AutoModelForCausalLM.from_pretrained(
             name, torch_dtype=torch.bfloat16 if (not cuda or torch.cuda.get_device_capability(0)[0] >= 8) else torch.float16,
-            device_map="auto" if cuda else None).eval()
+            device_map="auto" if cuda else None, **kw).eval()
         nL = self.model.config.num_hidden_layers
         self.layers = list(layers) if layers is not None else sorted({int(round(f * nL)) for f in layer_fracs})
         self.suffix = self.tok(judge_suffix(self.tok), add_special_tokens=False)["input_ids"]

@@ -13,6 +13,7 @@ import sys
 ap = argparse.ArgumentParser()
 ap.add_argument("--branch", required=True)
 ap.add_argument("--omni", default="")
+ap.add_argument("--set", default="", help="extra VERICHAT_* settings, comma-separated K=V")
 ap.add_argument("--id", required=True)
 ap.add_argument("--secret", required=True)
 a = ap.parse_args()
@@ -20,7 +21,8 @@ repo = "/kaggle/working/repo" if os.path.isdir("/kaggle/working") else "repo"
 subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", a.branch,
                 "https://github.com/benski20/llm_training_exploration", repo], check=True)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "modal==1.6.3"], check=True)
-env = dict(os.environ, MODAL_TOKEN_ID=a.id, MODAL_TOKEN_SECRET=a.secret, VERICHAT_OMNI=a.omni)
+env = dict(os.environ, MODAL_TOKEN_ID=a.id, MODAL_TOKEN_SECRET=a.secret, VERICHAT_OMNI=a.omni,
+           **dict(kv.split("=", 1) for kv in a.set.split(",") if kv.startswith("VERICHAT_")))
 r = subprocess.run(["modal", "deploy", "deploy/modal_app.py"], cwd=repo, env=env, capture_output=True, text=True)
 out = (r.stdout + r.stderr).replace(a.secret, "***").replace(a.id, "***")
 print(out[-6000:])

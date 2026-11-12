@@ -30,6 +30,7 @@ DETECTOR = "results/kaggle/detector-3b/detector/Qwen2.5-3B-Instruct_detector.pt"
 OMNI = os.environ.get("VERICHAT_OMNI", "")                          # e.g. heads/omni_qwen3_8b.npz ("" off: old detector)
 OMNI_JUDGES = os.environ.get("VERICHAT_OMNI_JUDGES", "Qwen/Qwen3-14B,microsoft/phi-4")
 OMNI_NLI = os.environ.get("VERICHAT_OMNI_NLI", "1") == "1"
+OMNI_READER_4BIT = os.environ.get("VERICHAT_OMNI_READER_4BIT", "")      # "1": load the reader in 4-bit (a 14B one)
 OMNI_READER = os.environ.get("VERICHAT_OMNI_READER", "Qwen/Qwen3-8B")  # the head's reader (pre-downloaded on CPU)
 OMNI_CHECKERS = os.environ.get("VERICHAT_OMNI_CHECKERS", "")         # written rule checkers: none by default
 # 48 GB holds the 32B chat model and its readers; the omni stack (8B reader + two 4-bit judges) needs 80 GB beside it
@@ -69,7 +70,7 @@ image = (
                              "VERICHAT_GROUNDING": GROUNDING, "VERICHAT_GROUNDING_MODEL": GROUNDING_MODEL,
                              "VERICHAT_OMNI": OMNI, "VERICHAT_OMNI_JUDGES": OMNI_JUDGES,
                              "VERICHAT_OMNI_NLI": "1" if OMNI_NLI else "0", "VERICHAT_OMNI_CHECKERS": OMNI_CHECKERS,
-                             "VERICHAT_OMNI_READER": OMNI_READER}.items()
+                             "VERICHAT_OMNI_READER": OMNI_READER, "VERICHAT_OMNI_READER_4BIT": OMNI_READER_4BIT}.items()
                if v is not None})
     .add_local_dir(os.path.join(ROOT, "vt"), "/app/vt")
     .add_local_file(os.path.join(ROOT, HEAD), "/app/heads/risk_head.pt")
@@ -236,7 +237,7 @@ def server_args():
             + (["--revision", REVISION] if REVISION else [])
             + (["--omni-head", "/app/heads/omni.npz", "--omni-judges", OMNI_JUDGES,
                 "--omni-checkers", OMNI_CHECKERS, "--omni-sample", "/app/data/omni_profile_sample.jsonl",
-                "--omni-cache-dir", "/root/.cache/huggingface/omni", "--rag-suite", "/app/data/rag_suite.jsonl"]
+                "--omni-cache-dir", "/root/.cache/huggingface/omni", "--rag-suite", "/app/data/rag_suite.jsonl"] + (["--omni-reader-4bit"] if OMNI_READER_4BIT else [])
                + (["--omni-nli"] if OMNI_NLI else [])
                if OMNI else []))
 
