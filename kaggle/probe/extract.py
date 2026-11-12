@@ -167,6 +167,8 @@ def main():
             pr.torch.cuda.empty_cache()
             n_oom += 1
             log("out of memory, skipped", r["id"], "total skipped", n_oom)
+            if n_oom > 20 and n_oom > 0.05 * (k + 1):
+                raise SystemExit("too many out-of-memory answers: use one model across both GPUs (--gpu-workers 0)")
             continue
         if f is None:
             continue
