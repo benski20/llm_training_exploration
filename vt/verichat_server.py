@@ -196,7 +196,7 @@ details.meta summary{cursor:pointer}
    <h2 class="vtitle">Held-out tests: internals vs LLM judges</h2>
    <p class="vsub">Answers from document-grounded datasets, human-labelled as faithful or hallucinated. For each
     dataset, a probe was trained at server start on the frozen 8B reader's hidden states: from <b>50 labelled answers</b>,
-    or for the RAG probe, from 1,500 RAGTruth training answers (tested on RAGTruth's official test set).
+    or for the RAG probe, from 3,500 RAGTruth training answers (tested on RAGTruth's official test set).
     No judge model and no pretrained head weights are used in its verdict. None of the answers below were used. Each check also runs two
     14B LLM judges, shown as a second opinion, so you can compare the two.</p>
    <div class="exs" id="sdoms"></div>
