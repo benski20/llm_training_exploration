@@ -1,0 +1,200 @@
+{
+ "n_train": 29007,
+ "n_val": 3151,
+ "train_sources": {
+  "anah": 487,
+  "attributionbench": 3011,
+  "cleanlab_finqa": 861,
+  "faithdial": 2931,
+  "fava": 4001,
+  "halueval_qa": 2000,
+  "halueval_summary": 2058,
+  "minicheck": 1696,
+  "ragbench": 5974,
+  "ragtruth": 7126,
+  "wandb_finqa": 2013
+ },
+ "reader": "Qwen/Qwen3-14B",
+ "models": {
+  "ans_lr": {
+   "val_auroc": 0.9222646305006972,
+   "business_test_auroc": 0.6541666666666667,
+   "halubench_DROP_auroc": 0.5028098195800059,
+   "halubench_FinanceBench_auroc": 0.5796348910878155,
+   "halubench_RAGTruth_auroc": 0.7887333333333333,
+   "halubench_covidQA_auroc": 0.8620689655172414,
+   "halubench_halueval_auroc": 0.9929934210526316,
+   "halubench_pubmedQA_auroc": 0.784409814106962,
+   "ragtruth_test_auroc": 0.8690515924485667,
+   "ragtruth_test": {
+    "precision": 66.97163769441903,
+    "recall": 77.62460233297985,
+    "f1": 71.90569744597249,
+    "auroc": 0.8690515924485667
+   },
+   "ragtruth_test_data2txt": {
+    "precision": 81.36942675159236,
+    "recall": 88.25561312607945,
+    "f1": 84.67274233637117,
+    "auroc": 0.8641712265749844
+   },
+   "ragtruth_test_qa": {
+    "precision": 38.84615384615385,
+    "recall": 63.125,
+    "f1": 48.09523809523809,
+    "auroc": 0.8012584459459459
+   },
+   "ragtruth_test_summary": {
+    "precision": 58.536585365853654,
+    "recall": 58.82352941176471,
+    "f1": 58.67970660146699,
+    "auroc": 0.8325656411990084
+   },
+   "halubench_mean_auroc": 0.751775040779665
+  },
+  "unit_lr": {
+   "val_auroc": 0.7493008320077785,
+   "business_test_auroc": 0.6905555555555556,
+   "halubench_DROP_auroc": 0.5461237635150678,
+   "halubench_FinanceBench_auroc": 0.553704973710852,
+   "halubench_RAGTruth_auroc": 0.8886,
+   "halubench_covidQA_auroc": 0.9103448275862069,
+   "halubench_halueval_auroc": 0.9671052631578948,
+   "halubench_pubmedQA_auroc": 0.8250514554542782,
+   "ragtruth_test_auroc": 0.8806265620746826,
+   "ragtruth_test": {
+    "precision": 62.23776223776224,
+    "recall": 84.94167550371155,
+    "f1": 71.83856502242152,
+    "auroc": 0.8806265620746826
+   },
+   "ragtruth_test_data2txt": {
+    "precision": 77.56874095513749,
+    "recall": 92.573402417962,
+    "f1": 84.40944881889763,
+    "auroc": 0.8757552768496548
+   },
+   "ragtruth_test_qa": {
+    "precision": 40.54054054054054,
+    "recall": 84.375,
+    "f1": 54.76673427991886,
+    "auroc": 0.8870101351351352
+   },
+   "ragtruth_test_summary": {
+    "precision": 49.42965779467681,
+    "recall": 63.725490196078425,
+    "f1": 55.6745182012848,
+    "auroc": 0.7927160806851478
+   },
+   "halubench_mean_auroc": 0.78182171390405
+  },
+  "ans_mlp": {
+   "val_auroc": 0.9457587220087593,
+   "business_test_auroc": 0.6976388888888889,
+   "halubench_DROP_auroc": 0.5397154030694403,
+   "halubench_FinanceBench_auroc": 0.6344012279154828,
+   "halubench_RAGTruth_auroc": 0.8355333333333332,
+   "halubench_covidQA_auroc": 0.9181034482758621,
+   "halubench_halueval_auroc": 0.998157894736842,
+   "halubench_pubmedQA_auroc": 0.9091443693031461,
+   "ragtruth_test_auroc": 0.8931479052733167,
+   "ragtruth_test": {
+    "precision": 67.5257731958763,
+    "recall": 83.35100742311771,
+    "f1": 74.60844803037494,
+    "auroc": 0.8931479052733167
+   },
+   "ragtruth_test_data2txt": {
+    "precision": 81.25,
+    "recall": 92.05526770293609,
+    "f1": 86.31578947368422,
+    "auroc": 0.875798320232004
+   },
+   "ragtruth_test_qa": {
+    "precision": 40.41811846689895,
+    "recall": 72.5,
+    "f1": 51.90156599552573,
+    "auroc": 0.8563682432432433
+   },
+   "ragtruth_test_summary": {
+    "precision": 61.990950226244344,
+    "recall": 67.15686274509804,
+    "f1": 64.47058823529412,
+    "auroc": 0.8610054654045526
+   },
+   "halubench_mean_auroc": 0.8058426127723511
+  },
+  "set_attn": {
+   "val_auroc": 0.9471297650676138,
+   "business_test_auroc": 0.7197222222222222,
+   "halubench_DROP_auroc": 0.5291333924874299,
+   "halubench_FinanceBench_auroc": 0.6192482283400281,
+   "halubench_RAGTruth_auroc": 0.8639333333333333,
+   "halubench_covidQA_auroc": 0.9724137931034483,
+   "halubench_halueval_auroc": 0.9981249999999999,
+   "halubench_pubmedQA_auroc": 0.9039171485510797,
+   "ragtruth_test_auroc": 0.9124483734505999,
+   "ragtruth_test": {
+    "precision": 75.53083923154702,
+    "recall": 79.2152704135737,
+    "f1": 77.32919254658385,
+    "auroc": 0.9124483734505999
+   },
+   "ragtruth_test_data2txt": {
+    "precision": 84.56591639871382,
+    "recall": 90.84628670120898,
+    "f1": 87.59367194004996,
+    "auroc": 0.9005267433914956
+   },
+   "ragtruth_test_qa": {
+    "precision": 55.080213903743314,
+    "recall": 64.375,
+    "f1": 59.365994236311245,
+    "auroc": 0.885802364864865
+   },
+   "ragtruth_test_summary": {
+    "precision": 65.55555555555556,
+    "recall": 57.84313725490197,
+    "f1": 61.458333333333336,
+    "auroc": 0.868513353617309
+   },
+   "halubench_mean_auroc": 0.8144618159692198
+  },
+  "stack": {
+   "val_auroc": 0.9514488705419778,
+   "business_test_auroc": 0.7073611111111112,
+   "halubench_DROP_auroc": 0.5352131190640508,
+   "halubench_FinanceBench_auroc": 0.6275105319878516,
+   "halubench_RAGTruth_auroc": 0.8515333333333334,
+   "halubench_covidQA_auroc": 0.9448275862068966,
+   "halubench_halueval_auroc": 0.9983552631578947,
+   "halubench_pubmedQA_auroc": 0.9056813355549023,
+   "ragtruth_test_auroc": 0.9108211903182604,
+   "ragtruth_test": {
+    "precision": 75.55110220440882,
+    "recall": 79.95758218451749,
+    "f1": 77.69191138588357,
+    "auroc": 0.9108211903182604
+   },
+   "ragtruth_test_data2txt": {
+    "precision": 84.85342019543974,
+    "recall": 89.98272884283247,
+    "f1": 87.34283319362952,
+    "auroc": 0.8973576743660516
+   },
+   "ragtruth_test_qa": {
+    "precision": 53.80952380952381,
+    "recall": 70.625,
+    "f1": 61.081081081081074,
+    "auroc": 0.8783952702702703
+   },
+   "ragtruth_test_summary": {
+    "precision": 68.96551724137932,
+    "recall": 58.82352941176471,
+    "f1": 63.49206349206349,
+    "auroc": 0.8776270565697543
+   },
+   "halubench_mean_auroc": 0.8105201948841548
+  }
+ }
+}
