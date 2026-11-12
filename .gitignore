@@ -25,3 +25,5 @@ results/kaggle/ragtruth-h2h/
 heads/*.general_*.json
 *.partial
 data/probe_eval/*.jsonl
+# probe training data: rebuilt by experiments/probe_data.py (~850 MB)
+data/probe_train/*.jsonl
