@@ -153,6 +153,8 @@ details.meta summary{cursor:pointer}
  <div class="side-h">Settings</div>
  <div class="setting">When a claim looks doubtful
   <select id="mode"><option value="hedge">Mark it in the reply</option><option value="stop">Withhold the answer</option><option value="flag">Only score it</option></select></div>
+ <div class="setting" id="cprofl" hidden>Verify chat replies with
+  <select id="cprof"><option value="">General: reader + LLM judges</option></select></div>
  <div class="setting" id="thinkl" hidden><label><input type="checkbox" id="think"> Think before answering (slower)</label></div>
  <div class="side-foot"><div class="status"><span class="dot" id="dot"></span><span id="stat">Connecting…</span></div>
   <div style="margin-top:8px">Scores rank how likely a reply is to be wrong. They are evidence, not proof.</div></div>
@@ -192,8 +194,9 @@ details.meta summary{cursor:pointer}
   </section>
   <section class="view col" id="vsuite" hidden>
    <h2 class="vtitle">Held-out tests: internals vs LLM judges</h2>
-   <p class="vsub">Answers from six document-grounded datasets, human-labelled as faithful or hallucinated. For each
-    dataset, a probe was trained at server start on the frozen 8B reader's hidden states from <b>50 labelled answers</b>.
+   <p class="vsub">Answers from document-grounded datasets, human-labelled as faithful or hallucinated. For each
+    dataset, a probe was trained at server start on the frozen 8B reader's hidden states: from <b>50 labelled answers</b>,
+    or for the RAG probe, from 1,500 RAGTruth training answers (tested on RAGTruth's official test set).
     No judge model and no pretrained head weights are used in its verdict. None of the answers below were used. Each check also runs two
     14B LLM judges, shown as a second opinion, so you can compare the two.</p>
    <div class="exs" id="sdoms"></div>
@@ -293,7 +296,7 @@ log.onclick=async e=>{const b=e.target.closest('[data-act]');if(!b)return;const 
  out.innerHTML='<div class="thinking" style="margin-top:8px"><span class="pulse"></span>Verifying this answer with the reader and two judges…</div>';
  const ms=conv.slice(0,i).map(x=>x.role==='user'?{role:'user',content:x.text}:{role:'assistant',content:clean(x.reply.text)}).slice(-24);
  try{const r=await (await fetch('/judge',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({messages:ms,response:a,documents:t.docs||[]})})).json();
+   body:JSON.stringify({messages:ms,response:a,documents:t.docs||[],profile:$('cprof').value||undefined})})).json();
   out.innerHTML=r.error?'<div class="meta">'+esc('Error: '+r.error)+'</div>':renderJudge(r,a,true);if(!r.error){t.check=r;saveChat()}}
  catch(err){out.innerHTML='<div class="meta">'+esc('Error: '+err)+'</div>'}b.disabled=false};
 renderHist();
@@ -378,11 +381,14 @@ $('jsend').onclick=async()=>{const q=$('jq').value.trim(),a=$('ja').value.trim()
 // held-out suite: internals-only domain probes vs the LLM judges
 const DN={ragtruth_qa:'RAGTruth: questions over web passages',ragtruth_summary:'RAGTruth: news summaries',
  ragtruth_data2text:'RAGTruth: business records to text',halueval_qa:'HaluEval: knowledge-grounded QA',
- halueval_dialogue:'HaluEval: knowledge-grounded dialogue',halueval_summary:'HaluEval: document summaries'};
+ halueval_dialogue:'HaluEval: knowledge-grounded dialogue',halueval_summary:'HaluEval: document summaries',
+ ragtruth_full:'RAG probe: RAGTruth, all tasks (official test set)'};
 let SUITE={domains:{},tests:[]},SDOM='all';const SRES={};
 function au(s,y){let a=0,n=0;for(let i=0;i<s.length;i++)if(y[i])for(let j=0;j<s.length;j++)if(!y[j]){n++;a+=s[i]>s[j]?1:s[i]===s[j]?.5:0}return n?a/n:NaN}
 fetch('/suite').then(r=>r.ok?r.json():null).then(x=>{if(!x||!x.tests||!x.tests.length)return;SUITE=x;$('navsuite').hidden=false;
- Object.keys(x.domains).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent='Internals only, '+(DN[d]||d)+' (probe from 50 labels)';$('jprof').appendChild(o)});
+ Object.keys(x.domains).forEach(d=>{const t='Internals only, '+(DN[d]||d)+' (probe from '+((x.domains[d]||{}).labelled||50)+' labels)';
+  for(const s of ['jprof','cprof']){const o=document.createElement('option');o.value=d;o.textContent=t;$(s).appendChild(o)}});
+ if(x.domains.ragtruth_full){$('cprofl').hidden=false}
  const ds=['all',...Object.keys(x.domains),'disagree'];$('sdoms').innerHTML=ds.map(d=>'<button class="chip" data-d="'+d+'">'+esc(d==='all'?'All six ('+x.tests.length+')':d==='disagree'?'Where internals and judges disagree (run first)':DN[d]||d)+'</button>').join('');
  $('sdoms').onclick=e=>{const b=e.target.closest('[data-d]');if(b){SDOM=b.dataset.d;srender()}};srender()}).catch(()=>{});
 function jsum(r){return (r.judges_logodds_wrong||[]).reduce((a,b)=>a+b,0)}
