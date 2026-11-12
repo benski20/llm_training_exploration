@@ -30,6 +30,9 @@ import time
 
 import numpy as np
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from vt.probe_features import answer_vector, make_mlp, make_set_attn, unit_vector  # noqa: E402
+
 T0 = time.time()
 
 
@@ -49,16 +52,12 @@ def load(dirs):
                 meta = json.load(open(mp))
             n0 = len(A["ids"])
             n = len(z["ids"])
-            X = np.concatenate([z["a_mean"].reshape(n, -1), z["a_judge"].reshape(n, -1), z["a_neu"].reshape(n, -1),
-                                z["a_sc"].astype(np.float16), z["j_logit"][:, None].astype(np.float16)], 1)
-            A["X"].append(X.astype(np.float16))
+            A["X"].append(answer_vector(z["a_mean"], z["a_judge"], z["a_neu"], z["a_sc"], z["j_logit"]))
             for k in ("ids", "label", "source", "task"):
                 A[k] += z[k].tolist()
             m = len(z["u_row"])
             if m:
-                UX = np.concatenate([z["u_res"].reshape(m, -1), z["u_neu"].reshape(m, -1),
-                                     z["u_sc"].astype(np.float16)], 1)
-                U["X"].append(UX.astype(np.float16))
+                U["X"].append(unit_vector(z["u_res"], z["u_neu"], z["u_sc"]))
                 U["row"] += (z["u_row"] + n0).tolist()
                 U["lab"] += z["u_lab"].tolist()
     if not A["X"]:
@@ -187,7 +186,7 @@ def main():
         return best
 
     if "ans_mlp" in models:
-        mlp = nn.Sequential(nn.Dropout(0.2), nn.Linear(Xt.shape[1], 512), nn.GELU(), nn.Dropout(0.3), nn.Linear(512, 1))
+        mlp = make_mlp(Xt.shape[1])
 
         def bf(idx, train):
             o = mlp(Xt[idx])[:, 0]
@@ -207,33 +206,7 @@ def main():
             rows_of[r].append(k)
         ulab = torch.tensor(U["lab"], dtype=torch.float32)
 
-        class SetAttn(nn.Module):
-            def __init__(self, du, da, h=256):
-                super().__init__()
-                self.enc = nn.Sequential(nn.Dropout(0.2), nn.Linear(du, h), nn.GELU())
-                self.att = nn.Linear(h, 1)
-                self.uhead = nn.Linear(h, 1)
-                self.ans = nn.Sequential(nn.Dropout(0.2), nn.Linear(da, h), nn.GELU())
-                self.out = nn.Sequential(nn.Dropout(0.3), nn.Linear(2 * h + 1, 1))
-
-            def forward(self, idx, Xa, UX, rows):
-                hs, us, pooled, worst = [], [], [], []
-                for i in idx:
-                    rr = rows[i]
-                    if not rr:
-                        pooled.append(torch.zeros(self.att.in_features))
-                        worst.append(torch.zeros(1))
-                        us.append(None)
-                        continue
-                    h = self.enc(UX[rr])
-                    w = torch.softmax(self.att(h)[:, 0], 0)
-                    pooled.append((w[:, None] * h).sum(0))
-                    u = self.uhead(h)[:, 0]
-                    us.append(u)
-                    worst.append(u.max()[None])
-                z = torch.cat([torch.stack(pooled), self.ans(Xa[idx]), torch.stack(worst)], 1)
-                return self.out(z)[:, 0], us
-        sa = SetAttn(UXt.shape[1], Xt.shape[1])
+        sa = make_set_attn(UXt.shape[1], Xt.shape[1])
 
         def bf2(idx, train):
             o, us = sa(idx, Xt, UXt, rows_of)
@@ -308,6 +281,7 @@ def main():
                     "ans_mlp": mlp.state_dict() if "ans_mlp" in scores else None,
                     "set_attn": sa.state_dict() if "set_attn" in scores else None,
                     "stack": {"names": names, "mu": smu, "sd": ssd, "w": st.coef_[0], "b": st.intercept_[0]},
+                    "threshold": best_f1_threshold(scores["stack"][0], y[val]),
                     "report": rep}, a.save)
         log("saved", a.save)
 

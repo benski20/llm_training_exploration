@@ -37,14 +37,18 @@ def log(*a):
     print(f"[{(time.time() - T0) / 60:6.1f} min]", *a, flush=True)
 
 
-def load_records(paths, shard, n_shards, cap=0):
-    """this shard's records; with cap, at most cap per file (a fixed pseudo-random subset: the lowest id hashes)."""
+def load_records(paths, shard, n_shards, cap=0, caps=None):
+    """this shard's records; with cap (or caps[file stem]), at most that many per file (a fixed pseudo-random subset)."""
     h = lambda r: int(hashlib.sha1(r["id"].encode()).hexdigest(), 16)
     recs = []
     for p in paths:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        if caps is not None and stem not in caps:
+            continue
+        c = (caps or {}).get(stem, cap)
         rs = [json.loads(line) for line in open(p)]
-        if cap and len(rs) > cap:
-            rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[:cap]
+        if c and len(rs) > c:
+            rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[:c]
         recs += [r for r in rs if h(r) % n_shards == shard]      # deterministic sharding, independent of file order
     recs.sort(key=lambda r: r["id"])
     return recs
@@ -71,6 +75,7 @@ def main():
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--cap", type=int, default=0, help="at most this many answers per source file")
+    ap.add_argument("--caps", default="", help="per source file: 'ragtruth=15000,fava=8000' (others skipped)")
     ap.add_argument("--gpu-workers", type=int, default=0, help="one model per GPU: split this shard over N "
                     "subprocesses (e.g. 2 on a Kaggle 2x T4 session with a 4-bit 14B)")
     ap.add_argument("--out", required=True)
@@ -104,6 +109,7 @@ def main():
                    str(a.shard * a.gpu_workers + g), "--n-shards", str(a.n_shards * a.gpu_workers),
                    "--max-tokens", str(a.max_tokens), "--res-fracs", a.res_fracs, "--neu-fracs", a.neu_fracs,
                    "--proj", str(a.proj), "--seed", str(a.seed), "--hours", str(a.hours), "--cap", str(a.cap),
+                   "--caps", a.caps,
                    "--out", a.out] + (["--load-4bit"] if a.load_4bit else []) + \
                   (["--limit", str(a.limit)] if a.limit else [])
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
@@ -116,147 +122,63 @@ def main():
             print(f"--- worker{g}.log (tail)\n" + "".join(open(os.path.join(a.out, f"worker{g}.log")).readlines()[-6:]))
         return
     sys.path.insert(0, root)
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    from vt.omni import encode, judge_suffix, make_item, scalar_feats, sentence_spans, token_units
-    if a.threads:
-        torch.set_num_threads(a.threads)
-    recs = load_records(a.data, a.shard, a.n_shards, a.cap)
+    from vt.probe_features import ProbeReader
+    caps = {k: int(v) for k, v in (x.split("=") for x in a.caps.split(",") if x)} if a.caps else None
+    recs = load_records(a.data, a.shard, a.n_shards, a.cap, caps)
     if a.limit:
         recs = recs[:a.limit]
     log("shard", a.shard, "of", a.n_shards, ":", len(recs), "answers from", len(a.data), "files")
     os.makedirs(a.out, exist_ok=True)
-
-    cuda = torch.cuda.is_available()
-    tok = AutoTokenizer.from_pretrained(a.reader)
-    kw = {"device_map": "auto"} if cuda else {}
-    if cuda:
-        kw["torch_dtype"] = torch.float16
-        if a.load_4bit:
-            from transformers import BitsAndBytesConfig
-            kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                                                           bnb_4bit_compute_dtype=torch.float16)
-    else:
-        kw["torch_dtype"] = torch.bfloat16
-    model = AutoModelForCausalLM.from_pretrained(a.reader, **kw).eval()
-    cfg = model.config
-    nL, d, inter = cfg.num_hidden_layers, cfg.hidden_size, cfg.intermediate_size
-    res_layers = sorted({max(1, min(nL, int(round(f * nL)))) for f in map(float, a.res_fracs.split(","))})
-    neu_layers = sorted({max(0, min(nL - 1, int(round(f * nL)))) for f in map(float, a.neu_fracs.split(","))})
-    mid = [res_layers[len(res_layers) // 2 - 1], res_layers[len(res_layers) // 2],
-           res_layers[min(len(res_layers) - 1, len(res_layers) // 2 + 1)]]
-    g = torch.Generator().manual_seed(a.seed)
-    Pr = (torch.randn(d, a.proj, generator=g) / a.proj ** 0.5)
-    Pn = (torch.randn(inter, a.proj, generator=g) / a.proj ** 0.5)
-    dev = model.get_input_embeddings().weight.device
-    suffix = tok(judge_suffix(tok), add_special_tokens=False)["input_ids"]
-    first = lambda ws: [tok(w, add_special_tokens=False)["input_ids"][0] for w in ws]
-    yes, no = first(["Yes", "yes", " Yes"]), first(["No", "no", " No"])
-    meta = {"reader": a.reader, "load_4bit": a.load_4bit, "n_layers": nL, "hidden": d, "intermediate": inter,
-            "res_layers": res_layers, "unit_res_layers": mid, "neu_layers": neu_layers, "proj": a.proj,
-            "seed": a.seed, "max_tokens": a.max_tokens, "layout": "vt.omni.make_item(response, question, documents)"}
-    json.dump(meta, open(os.path.join(a.out, "meta.json"), "w"))
-
-    captured = {}
-
-    def hook(L):
-        def f(mod, inp):
-            captured[L] = inp[0]
-        return f
-    hooks = [model.model.layers[L].mlp.down_proj.register_forward_pre_hook(hook(L)) for L in neu_layers]
-
+    pr = ProbeReader(a.reader, a.load_4bit, tuple(map(float, a.res_fracs.split(","))),
+                     tuple(map(float, a.neu_fracs.split(","))), a.proj, a.seed, a.max_tokens, a.threads)
+    json.dump(pr.meta, open(os.path.join(a.out, "meta.json"), "w"))
     done = set()
     for p in glob.glob(os.path.join(a.out, f"shard{a.shard:03d}_*.npz")):      # resume
         done.update(np.load(p, allow_pickle=True)["ids"].tolist())
     todo = [r for r in recs if r["id"] not in done]
-    log("already done", len(done), "to do", len(todo), "res layers", res_layers, "neuron layers", neu_layers)
-
-    keys_a = ("ids", "label", "source", "task", "a_mean", "a_last", "a_judge", "a_neu", "a_sc", "j_logit", "n_tok",
-              "truncated")
-    keys_u = ("u_row", "u_idx", "u_lab", "u_res", "u_neu", "u_sc", "u_start", "u_end")
+    log("already done", len(done), "to do", len(todo), "res layers", pr.res_layers, "neuron layers", pr.neu_layers)
+    keys = ("ids", "label", "source", "task", "a_mean", "a_last", "a_judge", "a_neu", "a_sc", "j_logit", "n_tok",
+            "truncated", "u_row", "u_idx", "u_lab", "u_res", "u_neu", "u_sc", "u_start", "u_end")
 
     def flush(buf, part):
-        if not buf["ids"]:
-            return
-        out = {k: np.array(v) for k, v in buf.items()}
-        np.savez(os.path.join(a.out, f"shard{a.shard:03d}_{part:04d}.npz"), **out)
+        if buf["ids"]:
+            np.savez(os.path.join(a.out, f"shard{a.shard:03d}_{part:04d}.npz"), **{k: np.array(v) for k, v in buf.items()})
 
     part = len(glob.glob(os.path.join(a.out, f"shard{a.shard:03d}_*.npz")))
-    buf = {k: [] for k in keys_a + keys_u}
+    buf = {k: [] for k in keys}
     t_start = time.time()
     for k, r in enumerate(todo):
         if time.time() - T0 > a.hours * 3600:
             log("time budget reached")
             break
-        it = make_item(r["response"], r.get("question") or "", r.get("documents") or [])
-        ids, r0, roff = encode(tok, it, a.max_tokens, suffix)
-        ns = len(suffix)
-        n = len(ids) - r0 - ns
-        if n <= 0:
+        f = pr.features(r.get("question") or "", r.get("documents") or [], r["response"], r.get("spans") or [],
+                        bool(r.get("has_spans")), int(r["label"]))
+        if f is None:
             continue
-        with torch.no_grad():
-            o = model(input_ids=torch.tensor([ids], device=dev), output_hidden_states=True,
-                      logits_to_keep=n + ns + 1)
-        lg = o.logits[0]
-        last = lg[-1].float().log_softmax(-1)
-        j_logit = float(torch.logsumexp(last[yes], 0) - torch.logsumexp(last[no], 0))
-        logp = lg[:n].float().log_softmax(-1)
-        tgt = torch.tensor(ids[r0:r0 + n], device=logp.device)
-        lp = logp.gather(-1, tgt[:, None])[:, 0]
-        ent = -(logp.exp() * logp).sum(-1)
-        top2 = logp.topk(2, -1).values
-        margin = torch.where(lp >= top2[:, 0] - 1e-6, top2[:, 0] - top2[:, 1], lp - top2[:, 0])
-        lp, ent, margin = lp.cpu().numpy(), ent.cpu().numpy(), margin.cpu().numpy()
-
-        def proj(x, P):
-            return (x.float().cpu() @ P)
-        R = {L: proj(o.hidden_states[L][0, r0:r0 + n], Pr) for L in res_layers}          # n x P each
-        J = np.stack([proj(o.hidden_states[L][0, -1:], Pr)[0].numpy() for L in res_layers])
-        Nn = {L: proj(captured[L][0, r0:r0 + n], Pn) for L in neu_layers}
-        units = sentence_spans(r["response"])
-        tu = token_units(roff[:n], units)
-        spans = r.get("spans") or []
         row = len(buf["ids"])
         buf["ids"].append(r["id"])
         buf["label"].append(int(r["label"]))
         buf["source"].append(r.get("source", ""))
         buf["task"].append(r.get("task", ""))
-        buf["a_mean"].append(np.stack([R[L].mean(0).numpy() for L in res_layers]).astype(np.float16))
-        buf["a_last"].append(np.stack([R[L][-1].numpy() for L in res_layers]).astype(np.float16))
-        buf["a_judge"].append(J.astype(np.float16))
-        buf["a_neu"].append(np.stack([Nn[L].mean(0).numpy() for L in neu_layers]).astype(np.float16))
-        buf["a_sc"].append(scalar_feats(lp, ent, margin))
-        buf["j_logit"].append(j_logit)
-        buf["n_tok"].append(len(ids))
-        buf["truncated"].append(int(n < len(tok(r["response"], add_special_tokens=False)["input_ids"])))
-        for ui, (s, e) in enumerate(units):
-            m = torch.from_numpy(tu == ui)
-            if not bool(m.any()):
-                continue
-            lab = (1 if any(s < b and a_ < e for a_, b in spans) else 0) if r.get("has_spans") else -1
-            if not r.get("has_spans") and int(r["label"]) == 0:
-                lab = 0                                              # a faithful answer: every sentence is fine
+        for key in ("a_mean", "a_last", "a_judge", "a_neu", "a_sc", "j_logit", "n_tok", "truncated"):
+            buf[key].append(f[key])
+        for u in f["units"]:
             buf["u_row"].append(row)
-            buf["u_idx"].append(ui)
-            buf["u_lab"].append(lab)
-            buf["u_start"].append(s)
-            buf["u_end"].append(e)
-            buf["u_res"].append(np.stack([R[L][m].mean(0).numpy() for L in mid]).astype(np.float16))
-            buf["u_neu"].append(np.stack([Nn[L][m].mean(0).numpy() for L in neu_layers]).astype(np.float16))
-            mm = m.numpy()
-            buf["u_sc"].append(scalar_feats(lp[mm], ent[mm], margin[mm]))
-        captured.clear()
+            buf["u_idx"].append(u["idx"])
+            buf["u_lab"].append(u["lab"])
+            buf["u_start"].append(u["start"])
+            buf["u_end"].append(u["end"])
+            buf["u_res"].append(u["res"])
+            buf["u_neu"].append(u["neu"])
+            buf["u_sc"].append(u["sc"])
         if len(buf["ids"]) >= 500:
             flush(buf, part)
             part += 1
-            buf = {k_: [] for k_ in keys_a + keys_u}
+            buf = {k_: [] for k_ in keys}
         if (k + 1) % 100 == 0:
             rate = (k + 1) / (time.time() - t_start)
             log(f"{k + 1}/{len(todo)}  {rate * 3600:.0f} answers/h  ETA {(len(todo) - k - 1) / rate / 3600:.1f} h")
     flush(buf, part)
-    for h in hooks:
-        h.remove()
     log("done")
 
 
