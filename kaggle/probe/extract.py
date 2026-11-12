@@ -46,9 +46,10 @@ def load_records(paths, shard, n_shards, cap=0, caps=None):
         if caps is not None and stem not in caps:
             continue
         c = (caps or {}).get(stem, cap)
+        lo, hi = (0, c) if isinstance(c, int) else c         # "a:b" takes positions a..b of the same fixed order
         rs = [json.loads(line) for line in open(p)]
-        if c and len(rs) > c:
-            rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[:c]
+        if hi and (lo or len(rs) > hi):
+            rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[lo:hi]
         recs += [r for r in rs if h(r) % n_shards == shard]      # deterministic sharding, independent of file order
     recs.sort(key=h)               # hash order mixes the sources, so a time cutoff keeps a balanced subset
     return recs
@@ -75,7 +76,8 @@ def main():
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--cap", type=int, default=0, help="at most this many answers per source file")
-    ap.add_argument("--caps", default="", help="per source file: 'ragtruth=15000,fava=8000' (others skipped)")
+    ap.add_argument("--caps", default="", help="per source file: 'ragtruth=15000,fava=8000' or a range "
+                    "'fava=8000:16000' (others skipped)")
     ap.add_argument("--gpu-workers", type=int, default=0, help="one model per GPU: split this shard over N "
                     "subprocesses (e.g. 2 on a Kaggle 2x T4 session with a 4-bit 14B)")
     ap.add_argument("--out", required=True)
@@ -131,7 +133,8 @@ def main():
         return
     sys.path.insert(0, root)
     from vt.probe_features import ProbeReader
-    caps = {k: int(v) for k, v in (x.split("=") for x in a.caps.split(",") if x)} if a.caps else None
+    rng = lambda v: tuple(int(x) for x in v.split(":")) if ":" in v else int(v)
+    caps = {k: rng(v) for k, v in (x.split("=") for x in a.caps.split(",") if x)} if a.caps else None
     recs = load_records(a.data, a.shard, a.n_shards, a.cap, caps)
     if a.limit:
         recs = recs[:a.limit]
