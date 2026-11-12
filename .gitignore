@@ -30,3 +30,4 @@ data/probe_train/*.jsonl
 results/probe/**/*.npz
 results/probe/**/meta.json
 results/probe/**/*.log
+results/probe/**/repo/
