@@ -75,3 +75,13 @@ nowhere in training. Data: `data/rag_suite.jsonl` (RAGTruth, HaluEval; MIT).
 A probe on one small open model's internals, trained on 50 of a customer's labels, ties two larger LLM judges at
 ranking. It makes better decisions, because it learns the customer's threshold, and it wins on the customer's
 "style" of error. Judges still rank better on realistic RAG answers at this label count.
+
+## Five examples to walk through (Held-out tests → pick the dataset → Run this set → open the answer)
+
+| # | dataset, answer starts with | truth | internals (no judge) | two LLM judges | the point |
+|---|---|---|---|---|---|
+| 1 | RAGTruth questions, "Based on the given passages, here is a brief answer on how to set achievable goals" (id 208) | hallucinated: adds "SMART goals" and ties the 80/20 rule to a step the passages never link it to | **flagged**; suspect sentence is the SMART one | missed (lean right) | catches content that sounds right but is not in the source |
+| 2 | RAGTruth questions, "Based on the provided passages, here are some tips for growing healthy tomatoes" (id 29) | hallucinated: ends by saying the passages give no advice on staking, but they do (put the supports in first) | **flagged** | missed, confidently (−11.7) | a subtle false claim about the source, in a long mostly-faithful answer |
+| 3 | RAGTruth news summaries, "King Charles has been advised to remain dignified" (id 402) | faithful | **cleared** | false alarm (+6.8) | judges' false alarms are what make reviewers stop trusting a checker |
+| 4 | HaluEval dialogue, "Yes, it was" (to "Was Find Me Guilty written by Sidney Lumet?"; id 1218) | faithful: the knowledge says Lumet wrote it | **cleared** | false alarm (+13.9) | judges bring outside beliefs; the probe checks agreement with the given source |
+| 5 | RAGTruth questions, "The time difference between Chicago (CST) and Bangkok (ICT) is currently 13 hours" (id 115) | hallucinated: the last pair, 10:00 pm ICT = 11:00 am CST, is not in the passages (and should be 9:00 am) | missed | **caught** (+31.5) | honest limit: one wrong number at the end of an answer copied from a table |
