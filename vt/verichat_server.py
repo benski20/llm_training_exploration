@@ -963,8 +963,8 @@ def load_omni(a):
     v.causal = a.omni_causal
     if a.omni_profile:
         return v, OmniVerifier.load_profile(a.omni_profile)
-    key = hashlib.sha256(f"{a.omni_head}|{a.omni_judges}|{a.omni_nli}|{a.omni_checkers}|{a.omni_arithmetic}".encode()
-                         ).hexdigest()[:12]
+    key = hashlib.sha256(f"{a.omni_head}|{v.meta['reader']}|{a.omni_reader_4bit}|{a.omni_judges}|{a.omni_nli}|"
+                         f"{a.omni_checkers}|{a.omni_arithmetic}".encode()).hexdigest()[:12]
     stem = os.path.splitext(os.path.basename(a.omni_head))[0] + f".general_{key}.json"
     cache = os.path.join(a.omni_cache_dir, stem) if a.omni_cache_dir else \
         os.path.join(os.path.dirname(os.path.abspath(a.omni_head)), stem)
@@ -1001,7 +1001,8 @@ def load_suite(v, a):
 
     from .omni import LogReg, balanced_weights, make_item
     raw = open(a.rag_suite, "rb").read()
-    key = hashlib.sha256(raw + a.omni_head.encode()).hexdigest()[:12]
+    key = hashlib.sha256(raw + a.omni_head.encode() + v.meta["reader"].encode()
+                         + str(getattr(a, "omni_reader_4bit", False)).encode()).hexdigest()[:12]
     cache = os.path.join(a.omni_cache_dir or os.path.dirname(os.path.abspath(a.rag_suite)), f"rag_suite_{key}.json")
     rows = [_json.loads(l) for l in raw.decode().splitlines() if l.strip()]
     tests = [{k: r[k] for k in ("id", "domain", "label", "messages", "response")} for r in rows if r["split"] == "test"]
