@@ -383,9 +383,11 @@ let SUITE={domains:{},tests:[]},SDOM='all';const SRES={};
 function au(s,y){let a=0,n=0;for(let i=0;i<s.length;i++)if(y[i])for(let j=0;j<s.length;j++)if(!y[j]){n++;a+=s[i]>s[j]?1:s[i]===s[j]?.5:0}return n?a/n:NaN}
 fetch('/suite').then(r=>r.ok?r.json():null).then(x=>{if(!x||!x.tests||!x.tests.length)return;SUITE=x;$('navsuite').hidden=false;
  Object.keys(x.domains).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent='Internals only, '+(DN[d]||d)+' (probe from 50 labels)';$('jprof').appendChild(o)});
- const ds=['all',...Object.keys(x.domains)];$('sdoms').innerHTML=ds.map(d=>'<button class="chip" data-d="'+d+'">'+esc(d==='all'?'All six ('+x.tests.length+')':DN[d]||d)+'</button>').join('');
+ const ds=['all',...Object.keys(x.domains),'disagree'];$('sdoms').innerHTML=ds.map(d=>'<button class="chip" data-d="'+d+'">'+esc(d==='all'?'All six ('+x.tests.length+')':d==='disagree'?'Where internals and judges disagree (run first)':DN[d]||d)+'</button>').join('');
  $('sdoms').onclick=e=>{const b=e.target.closest('[data-d]');if(b){SDOM=b.dataset.d;srender()}};srender()}).catch(()=>{});
-function sitems(){return SUITE.tests.filter(t=>SDOM==='all'||t.domain===SDOM)}
+function jsum(r){return (r.judges_logodds_wrong||[]).reduce((a,b)=>a+b,0)}
+function disagree(t){const r=SRES[t.id];return r&&!r.error&&((r.verdict==='likely wrong')!==(jsum(r)>0))}
+function sitems(){return SUITE.tests.filter(t=>SDOM==='all'||SDOM==='disagree'||t.domain===SDOM).filter(t=>SDOM!=='disagree'||disagree(t))}
 function srender(){[...$('sdoms').children].forEach(b=>b.classList.toggle('on',b.dataset.d===SDOM));
  [...$('sdoms').children].forEach(b=>{b.style.borderColor=b.dataset.d===SDOM?'var(--accent)':'';b.style.color=b.dataset.d===SDOM?'var(--accent)':''});
  const its=sitems(),done=its.filter(t=>SRES[t.id]&&!SRES[t.id].error);
