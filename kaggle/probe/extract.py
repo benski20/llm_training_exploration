@@ -55,6 +55,8 @@ def main():
     ap.add_argument("--build", action="store_true", help="clone the repo and build the data with probe_data.py")
     ap.add_argument("--branch", default="claude/keen-euler-0kccyk")
     ap.add_argument("--sources", default="", help="for --build: comma-separated sources (default all)")
+    ap.add_argument("--eval-sets", default="", help="for --build: build these evaluation sets (probe_evalsets.py) "
+                    "instead of the training data")
     ap.add_argument("--reader", default="Qwen/Qwen3-1.7B")
     ap.add_argument("--load-4bit", action="store_true")
     ap.add_argument("--shard", type=int, default=0)
@@ -76,10 +78,15 @@ def main():
         if not os.path.isdir(repo):
             subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", a.branch,
                             "https://github.com/benski20/llm_training_exploration", repo], check=True)
-        dd = os.path.join(repo, "data", "probe_train_built")
-        cmd = [sys.executable, os.path.join(repo, "experiments", "probe_data.py"), "--out", dd]
-        if a.sources:
-            cmd += ["--sources", a.sources]
+        if a.eval_sets:
+            dd = os.path.join(repo, "data", "probe_eval_built")
+            cmd = [sys.executable, os.path.join(repo, "experiments", "probe_evalsets.py"), "--out", dd,
+                   "--sets", a.eval_sets]
+        else:
+            dd = os.path.join(repo, "data", "probe_train_built")
+            cmd = [sys.executable, os.path.join(repo, "experiments", "probe_data.py"), "--out", dd]
+            if a.sources:
+                cmd += ["--sources", a.sources]
         log("building data:", " ".join(cmd))
         subprocess.run(cmd, check=True, cwd=repo)
         a.data = sorted(glob.glob(os.path.join(dd, "*.jsonl")))
