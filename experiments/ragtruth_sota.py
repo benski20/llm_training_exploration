@@ -75,6 +75,17 @@ def convert(a):
         print("converted", os.path.basename(src), z["X"].shape, flush=True)
 
 
+def _trim():
+    """Hand freed heap memory back to the system. Activation tensors vary in size per answer, and glibc keeps the
+    freed blocks: over ~1,000 answers on CPU the heap reached 7 GB and pushed the memory-mapped weights out of RAM, so
+    every pass re-read them from disk (4 s an answer became 25 s)."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except OSError:
+        pass
+
+
 def extract(a):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -129,6 +140,9 @@ def extract(a):
                 kind.append(kinds[0] if kinds else "")
                 resp.append(i)
                 task.append(r["task_type"])
+            del acts, lw, lo, shift, dis
+            reader.acts.clear()
+            _trim()                                         # glibc keeps freed blocks; without this the heap grows
         np.savez(path, X=np.stack(X), ev=np.array(ev, np.float32), y=np.array(y), resp=np.array(resp),
                  kind=np.array(kind), task=np.array(task),
                  resp_y=np.array([int(bool(spans(r))) for r in rows[start:start + a.shard]]),
