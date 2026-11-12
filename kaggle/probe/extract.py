@@ -50,7 +50,7 @@ def load_records(paths, shard, n_shards, cap=0, caps=None):
         if c and len(rs) > c:
             rs = sorted(rs, key=lambda r: hashlib.sha1(("cap" + r["id"]).encode()).hexdigest())[:c]
         recs += [r for r in rs if h(r) % n_shards == shard]      # deterministic sharding, independent of file order
-    recs.sort(key=lambda r: r["id"])
+    recs.sort(key=h)               # hash order mixes the sources, so a time cutoff keeps a balanced subset
     return recs
 
 
@@ -100,7 +100,13 @@ def main():
         subprocess.run(cmd, check=True, cwd=repo)
         a.data = sorted(glob.glob(os.path.join(dd, "*.jsonl")))
         root = repo
+    if a.load_4bit:
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "bitsandbytes>=0.46.1"], check=True)
     if a.gpu_workers > 1:                                    # one model per GPU, each a sub-shard of this shard
+        from huggingface_hub import snapshot_download
+        snapshot_download(a.reader, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.jinja"])
+        log("weights cached")
+        hours = a.hours - (time.time() - T0) / 3600              # the workers get what is left of the budget
         script = os.path.join(root, "kaggle", "probe", "extract.py")    # the repo copy (no kernel prelude)
         os.makedirs(a.out, exist_ok=True)
         procs = []
@@ -108,7 +114,7 @@ def main():
             cmd = [sys.executable, script, "--data", *a.data, "--reader", a.reader, "--shard",
                    str(a.shard * a.gpu_workers + g), "--n-shards", str(a.n_shards * a.gpu_workers),
                    "--max-tokens", str(a.max_tokens), "--res-fracs", a.res_fracs, "--neu-fracs", a.neu_fracs,
-                   "--proj", str(a.proj), "--seed", str(a.seed), "--hours", str(a.hours), "--cap", str(a.cap),
+                   "--proj", str(a.proj), "--seed", str(a.seed), "--hours", f"{hours:.3f}", "--cap", str(a.cap),
                    "--caps", a.caps,
                    "--out", a.out] + (["--load-4bit"] if a.load_4bit else []) + \
                   (["--limit", str(a.limit)] if a.limit else [])
@@ -120,6 +126,8 @@ def main():
         log("workers done", rc)
         for g in range(a.gpu_workers):
             print(f"--- worker{g}.log (tail)\n" + "".join(open(os.path.join(a.out, f"worker{g}.log")).readlines()[-6:]))
+        if any(rc):
+            raise SystemExit(f"worker failure {rc}")
         return
     sys.path.insert(0, root)
     from vt.probe_features import ProbeReader

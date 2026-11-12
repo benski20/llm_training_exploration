@@ -20,14 +20,16 @@ import tempfile
 BOOT = '''import subprocess, sys
 subprocess.run(["git", "clone", "-q", "--depth", "1", "-b", {branch!r},
                 "https://github.com/benski20/llm_training_exploration", "/kaggle/working/repo"], check=True)
-subprocess.run([sys.executable, "/kaggle/working/repo/" + {entry!r}] + {args!r}, check=True)
+r = subprocess.run([sys.executable, "/kaggle/working/repo/" + {entry!r}] + {args!r})
+subprocess.run(["rm", "-rf", "/kaggle/working/repo"])     # keep only the outputs
+sys.exit(r.returncode)
 '''
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--token", required=True)
-    ap.add_argument("--action", choices=["push", "status", "output"], required=True)
+    ap.add_argument("--action", choices=["push", "status", "output", "delete"], required=True)
     ap.add_argument("--slug", nargs="+", required=True)
     ap.add_argument("--branch", default="claude/keen-euler-0kccyk")
     ap.add_argument("--entry", default="kaggle/probe/extract.py")
@@ -63,6 +65,9 @@ def main():
         elif a.action == "status":
             s = api.kernels_status(ref)
             print("status", ref, getattr(s, "status", s), getattr(s, "failure_message", "") or "", flush=True)
+        elif a.action == "delete":
+            api.kernels_delete(ref, no_confirm=True)
+            print("deleted", ref, flush=True)
         else:
             out = os.path.join("/kaggle/working/out", slug)
             os.makedirs(out, exist_ok=True)
