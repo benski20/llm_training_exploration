@@ -1,0 +1,79 @@
+{
+ "train_answers": 1200,
+ "test_answers": 600,
+ "dims": 1024,
+ "train_tokens": 200494,
+ "hallucinated_token_share": 0.0535,
+ "readouts": {
+  "sentence mean": {
+   "precision": 53.3,
+   "recall": 89.4,
+   "f1": 66.8,
+   "n": 600,
+   "auroc": 0.833,
+   "unit_auroc": 0.862,
+   "C": 0.001,
+   "aggregate": "max",
+   "validation_f1": 66.1,
+   "by_task": {
+    "Data2txt": {
+     "precision": 66.3,
+     "recall": 100.0,
+     "f1": 79.8,
+     "n": 203
+    },
+    "QA": {
+     "precision": 35.2,
+     "recall": 92.5,
+     "f1": 51.0,
+     "n": 196
+    },
+    "Summary": {
+     "precision": 45.0,
+     "recall": 63.2,
+     "f1": 52.6,
+     "n": 201
+    }
+   },
+   "f1_ci95": [
+    62.0,
+    70.8
+   ]
+  },
+  "token": {
+   "precision": 46.6,
+   "recall": 88.1,
+   "f1": 61.0,
+   "n": 600,
+   "auroc": 0.74,
+   "unit_auroc": 0.826,
+   "C": 0.0003,
+   "aggregate": "top8",
+   "validation_f1": 64.8,
+   "by_task": {
+    "Data2txt": {
+     "precision": 66.5,
+     "recall": 97.7,
+     "f1": 79.1,
+     "n": 203
+    },
+    "QA": {
+     "precision": 25.2,
+     "recall": 97.5,
+     "f1": 40.0,
+     "n": 196
+    },
+    "Summary": {
+     "precision": 41.0,
+     "recall": 59.6,
+     "f1": 48.6,
+     "n": 201
+    }
+   },
+   "f1_ci95": [
+    56.7,
+    64.9
+   ]
+  }
+ }
+}
