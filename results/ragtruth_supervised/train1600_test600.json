@@ -1,0 +1,125 @@
+{
+ "reader": "Qwen/Qwen3-4B",
+ "train_answers": 1600,
+ "test_answers": 600,
+ "train_sentences": 13242,
+ "test_sentences": 4505,
+ "test_hallucinated_answers": 227,
+ "published_response_f1": {
+  "Llama-2-13B fine-tuned (RAGTruth paper)": 78.7,
+  "LettuceDetect large (ModernBERT fine-tuned)": 79.22,
+  "GPT-4-turbo prompted (RAGTruth paper)": 63.4
+ },
+ "evidence": {
+  "C": 0.1,
+  "threshold": 0.6047,
+  "validation_f1": 63.0,
+  "response": {
+   "precision": 41.8,
+   "recall": 93.0,
+   "f1": 57.7,
+   "n": 600,
+   "auroc": 0.624,
+   "f1_ci95": [
+    53.3,
+    61.9
+   ]
+  },
+  "sentence_auroc": 0.695,
+  "by_task": {
+   "Data2txt": {
+    "precision": 64.6,
+    "recall": 98.5,
+    "f1": 78.0,
+    "n": 203
+   },
+   "QA": {
+    "precision": 22.6,
+    "recall": 95.0,
+    "f1": 36.5,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 32.4,
+    "recall": 78.9,
+    "f1": 45.9,
+    "n": 201
+   }
+  }
+ },
+ "neurons": {
+  "C": 0.01,
+  "threshold": 0.6167,
+  "validation_f1": 74.7,
+  "response": {
+   "precision": 63.7,
+   "recall": 79.7,
+   "f1": 70.8,
+   "n": 600,
+   "auroc": 0.84,
+   "f1_ci95": [
+    66.4,
+    75.3
+   ]
+  },
+  "sentence_auroc": 0.862,
+  "by_task": {
+   "Data2txt": {
+    "precision": 78.4,
+    "recall": 92.3,
+    "f1": 84.8,
+    "n": 203
+   },
+   "QA": {
+    "precision": 45.9,
+    "recall": 70.0,
+    "f1": 55.4,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 47.1,
+    "recall": 57.9,
+    "f1": 52.0,
+    "n": 201
+   }
+  }
+ },
+ "both": {
+  "C": 0.001,
+  "threshold": 0.6203,
+  "validation_f1": 74.5,
+  "response": {
+   "precision": 63.3,
+   "recall": 81.9,
+   "f1": 71.4,
+   "n": 600,
+   "auroc": 0.861,
+   "f1_ci95": [
+    66.8,
+    75.8
+   ]
+  },
+  "sentence_auroc": 0.887,
+  "by_task": {
+   "Data2txt": {
+    "precision": 73.7,
+    "recall": 94.6,
+    "f1": 82.8,
+    "n": 203
+   },
+   "QA": {
+    "precision": 47.6,
+    "recall": 75.0,
+    "f1": 58.3,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 51.6,
+    "recall": 57.9,
+    "f1": 54.5,
+    "n": 201
+   }
+  }
+ },
+ "timing": null
+}
