@@ -26,6 +26,24 @@ docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v verify-cal:/data verif
 python deploy/verify_smoke.py --url http://127.0.0.1:8000 --key "$KEY"
 ```
 
+**Drop-in guard** (`vt/guard_proxy.py`): an OpenAI-compatible `/v1/chat/completions` endpoint in front of any
+provider. The app changes its base URL and passes its retrieved passages as `documents` (or leaves them in the
+system/tool messages); each reply comes back with a `verification` entry (verdict, unsupported spans, the
+promise) and an `X-Verification` header, or, with `--on-unsupported block`, an unsupported reply is replaced and
+marked `content_filter`. The provider key passes through and is never stored; streaming is refused (a reply is
+checked when complete); if the verification API is down the reply passes marked "error" (or fails, by option).
+
+```python
+client = OpenAI(base_url="http://guard:8080/v1", api_key=OPENAI_KEY)
+r = client.chat.completions.create(model=..., messages=..., extra_body={"documents": passages})
+r.model_extra["verification"][0]    # {"verdict": "unsupported", "spans": [{"text": ..., "confidence": ...}], ...}
+```
+
+Checked through the real OpenAI Python SDK with the LettuceDetect engine: a reply matching its document reads
+"supported" (score 0.09); one with the wrong date, cost and payer reads "unsupported" (0.98) with that sentence as
+the span (`tests/test_guard_proxy.py` covers annotate, block, no documents, streaming, upstream errors and the
+verification API being down).
+
 Measured (`results/verify_engine_choice.json`, `experiments/verify_engine_choice.py`):
 
 * **End to end, through the API on CPU** (RAGTruth QA test replies, `examples/verify_smoke/`): calibrated on 80

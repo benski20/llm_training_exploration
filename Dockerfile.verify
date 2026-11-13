@@ -9,6 +9,9 @@
 #   docker build -f Dockerfile.verify -t verify .
 #   docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v verify-cal:/data verify
 # Calibrations (one per API key) persist in the /data volume. CPU only; 4 GB RAM.
+# The same image runs the drop-in guard for OpenAI-compatible chat APIs (vt/guard_proxy.py):
+#   docker run -p 8080:8080 -e VERIFY_API_KEY="$KEY" --entrypoint python verify -m vt.guard_proxy \
+#       --host 0.0.0.0 --upstream https://api.openai.com --verify-url http://verify:8000
 FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
 ARG LETTUCE_REV=22296c700ef0ba4ab3e5c9afffa0185caaf61e52
@@ -28,6 +31,7 @@ os.makedirs(refs, exist_ok=True)
 with open(os.path.join(refs, "main"), "w") as f:
     f.write(rev)
 EOF
+RUN chmod -R a+rX /opt/hf
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 WORKDIR /app
 COPY pyproject.toml README.md ./
