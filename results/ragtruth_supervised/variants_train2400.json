@@ -1,0 +1,85 @@
+{
+ "train_answers": 2400,
+ "test_answers": 600,
+ "variants": {
+  "linear": {
+   "precision": 62.4,
+   "recall": 85.5,
+   "f1": 72.1,
+   "n": 600,
+   "auroc": 0.856,
+   "hp": 0.001,
+   "epochs": null,
+   "validation_f1": 76.4,
+   "sentence_auroc": 0.895,
+   "f1_ci95": [
+    67.4,
+    76.2
+   ]
+  },
+  "mlp": {
+   "precision": 67.6,
+   "recall": 76.2,
+   "f1": 71.6,
+   "n": 600,
+   "auroc": 0.849,
+   "hp": 0.1,
+   "epochs": 9,
+   "validation_f1": 78.4,
+   "sentence_auroc": 0.867,
+   "f1_ci95": [
+    67.4,
+    76.2
+   ]
+  },
+  "linear+context": {
+   "precision": 64.9,
+   "recall": 82.4,
+   "f1": 72.6,
+   "n": 600,
+   "auroc": 0.862,
+   "hp": 0.001,
+   "epochs": null,
+   "validation_f1": 77.6,
+   "sentence_auroc": 0.893,
+   "f1_ci95": [
+    68.5,
+    76.8
+   ]
+  },
+  "mlp+context": {
+   "precision": 62.3,
+   "recall": 82.4,
+   "f1": 71.0,
+   "n": 600,
+   "auroc": 0.843,
+   "hp": 0.1,
+   "epochs": 9,
+   "validation_f1": 77.1,
+   "sentence_auroc": 0.864,
+   "f1_ci95": [
+    66.4,
+    75.4
+   ]
+  },
+  "mlp + profile": {
+   "precision": 60.6,
+   "recall": 85.5,
+   "f1": 70.9,
+   "n": 600,
+   "auroc": 0.849,
+   "validation_f1": 76.1,
+   "profile_weights": [
+    1.89,
+    2.251,
+    1.695,
+    0.078,
+    0.209
+   ],
+   "f1_ci95": [
+    66.2,
+    74.8
+   ]
+  }
+ }
+}
