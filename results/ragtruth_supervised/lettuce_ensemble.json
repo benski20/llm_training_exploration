@@ -1,0 +1,96 @@
+{
+ "test_answers": 600,
+ "internals_train_answers": 2400,
+ "auroc": {
+  "lettuce": 0.909,
+  "internals": 0.856
+ },
+ "lettuce_published_rule": {
+  "precision": 80.6,
+  "recall": 76.7,
+  "f1": 78.6,
+  "n": 600,
+  "by_task": {
+   "Data2txt": {
+    "precision": 91.7,
+    "recall": 85.4,
+    "f1": 88.4,
+    "n": 203
+   },
+   "QA": {
+    "precision": 58.8,
+    "recall": 75.0,
+    "f1": 65.9,
+    "n": 196
+   },
+   "Summary": {
+    "precision": 75.0,
+    "recall": 57.9,
+    "f1": 65.3,
+    "n": 201
+   }
+  }
+ },
+ "correlation_of_logits": 0.734,
+ "cross_fitted": {
+  "lettuce": {
+   "f1": [
+    79.7,
+    0.5
+   ],
+   "precision": [
+    76.9,
+    1.5
+   ],
+   "recall": [
+    82.8,
+    1.2
+   ],
+   "auroc": [
+    0.909,
+    0.0
+   ]
+  },
+  "internals": {
+   "f1": [
+    73.2,
+    1.2
+   ],
+   "precision": [
+    69.8,
+    2.3
+   ],
+   "recall": [
+    77.2,
+    2.4
+   ],
+   "auroc": [
+    0.856,
+    0.0
+   ]
+  },
+  "combined": {
+   "f1": [
+    80.0,
+    0.8
+   ],
+   "precision": [
+    77.4,
+    1.5
+   ],
+   "recall": [
+    83.0,
+    2.9
+   ],
+   "auroc": [
+    0.913,
+    0.003
+   ]
+  }
+ },
+ "combined_weights_mean": [
+  0.567,
+  0.458
+ ],
+ "combined_beats_lettuce_share": 0.6
+}
