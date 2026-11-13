@@ -9,6 +9,7 @@ import pytest
 from vt.aitext import (
     Detector,
     Service,
+    audit_from_flags,
     calibration_from_scores,
     min_texts,
     train_head,
@@ -74,6 +75,16 @@ def test_calibration_from_scores_uses_half_budgets():
         assert (s["probe"] > t).mean() <= 0.025
 
 
+def test_audit_reports_whether_the_promise_held(detector):
+    ok = audit_from_flags([True] * 4 + [False] * 196, 0.05)
+    assert ok["status"] == "consistent" and ok["flagged"] == 4 and ok["ci95"][0] < 0.02 < ok["ci95"][1]
+    bad = audit_from_flags([True] * 25 + [False] * 175, 0.05)
+    assert bad["status"] == "exceeded" and bad["p_value"] < 0.05 and bad["flagged_indices"][:2] == [0, 1]
+    cal = detector.calibrate(texts(150, False, 3))
+    assert detector.audit(texts(200, False, 11), cal)["status"] == "consistent"
+    assert detector.audit(texts(50, True, 12), cal)["status"] == "exceeded"     # AI passed off as human
+
+
 def test_check_rejects_a_calibration_from_another_head(detector):
     cal = detector.calibrate(texts(150, False, 3))
     cal["head_sha256"] = "0" * 16
@@ -113,6 +124,9 @@ def test_api_per_key_calibration(detector, tmp_path):
         assert code == 200 and r["verdict"] == "ai" and r["promise"] == cal["promise"]
         code, r = post(url, {"text": texts(1, True, 9)[0]}, "k2")              # another key: its own calibration
         assert code == 200 and r["verdict"] is None
+        code, r = post(url + "/audit", {"human_texts": texts(160, False, 13)}, "k1")
+        assert code == 200 and r["status"] == "consistent" and r["human_texts"] == 160
+        assert post(url + "/audit", {"human_texts": texts(5, False)}, "k2")[0] == 422      # k2 has no calibration
         code, r = post(url + "/batch", {"items": [{"text": t} for t in texts(2, False, 7)]}, "k1")
         assert code == 200 and len(r["results"]) == 2
         assert post(url, {"text": texts(1, True)[0]}, "bad")[0] == 401

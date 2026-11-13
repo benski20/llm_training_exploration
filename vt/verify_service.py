@@ -125,11 +125,13 @@ class Verifier:
 def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minute=120, max_body=1 << 20,
                 deadline=300.0, path="/v1/verify", validator=validate):
     """`verifier.verify(item[, key_name])` answers `path` and `path`/batch. A verifier with a `calibrate`
-    method also answers `path`/calibrate: {"human_texts": [...], "fpr"?, "confidence"?} sets that key's calibration."""
+    method also answers `path`/calibrate: {"human_texts": [...], "fpr"?, "confidence"?} sets that key's calibration;
+    one with an `audit` method answers `path`/audit: {"human_texts": [...]} checks that key's promise on new texts."""
     keys = keys or {}
     usage, limiter = Usage(), RateLimiter(rate_per_minute)
     base = path
     can_calibrate = hasattr(verifier, "calibrate")
+    can_audit = hasattr(verifier, "audit")
     import inspect
     takes_key = len(inspect.signature(verifier.verify).parameters) > 1
 
@@ -156,7 +158,8 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
 
         def do_POST(self):
             path = self.path
-            if path not in (base, base + "/batch") and not (can_calibrate and path == base + "/calibrate"):
+            if path not in (base, base + "/batch") and not (can_calibrate and path == base + "/calibrate") \
+                    and not (can_audit and path == base + "/audit"):
                 usage.code("other", 404)
                 return self.send_json(404, {"error": "not found"})
             name = "open"
@@ -186,7 +189,7 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             except ValueError:
                 usage.code(path, 400)
                 return self.send_json(400, {"error": "invalid JSON"})
-            if path.endswith("/calibrate"):
+            if path.endswith(("/calibrate", "/audit")):
                 return self.calibrate(path, req, name)
             items = req.get("items") if path.endswith("/batch") and isinstance(req, dict) else [req]
             if not isinstance(items, list) or not 1 <= len(items) <= MAX_BATCH:
@@ -224,8 +227,11 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
                 usage.code(path, 400)
                 return self.send_json(400, {"error": "fpr in [0.001, 0.5], confidence in [0.5, 0.999]"})
             try:
-                cal = verifier.calibrate(texts, fpr, conf, name)
-            except ValueError as e:                             # too few texts for the promise asked
+                if path.endswith("/audit"):
+                    cal = verifier.audit(texts, name)
+                else:
+                    cal = verifier.calibrate(texts, fpr, conf, name)
+            except ValueError as e:                             # too few texts, or nothing to audit
                 usage.code(path, 422)
                 return self.send_json(422, {"error": str(e)})
             except Exception as e:                              # noqa: BLE001 — say so, keep serving

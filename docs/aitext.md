@@ -108,6 +108,7 @@ on their own new human writing at any time, and the report says whether it held.
 pip install ".[verifier]"
 vt-aitext calibrate --human my_human_texts.jsonl --out calibration.json      # 150+ texts; {"text": ...} per line
 vt-aitext check --calibration calibration.json --file to_check.txt
+vt-aitext audit --calibration calibration.json --human new_human_texts.jsonl  # did the promise hold?
 vt-aitext serve --calibration-dir calibrations/ --port 8000                  # API keys: VERIFY_API_KEYS="acme:key1"
 ```
 
@@ -119,6 +120,13 @@ API (same server hardening, API keys, per-key rate limits and `/metrics` as the 
                                -> {"verdict": "ai" | "not flagged", "fired": ["probe" | "binoculars"],
                                    "probe", "binoculars", "tokens", "promise", "ms"}
     POST /v1/aitext/batch      {"items": [{"text": ...}, ...up to 16]}
+    POST /v1/aitext/audit      {"human_texts": [...new human texts, not the calibration set...]}
+                               -> {"flagged_share", "ci95", "promised", "p_value",
+                                   "status": "consistent" | "exceeded", "flagged_indices"}
+
+The audit is the customer's own check of the promise: run it on human writing collected after calibration
+(this term's essays, last month's submissions). "exceeded" means the flagged share is significantly above the
+promise (one-sided exact binomial test at the calibration's confidence): recalibrate on recent writing.
 
 Reproduce: `experiments/ai_text_detect.py` (sample RAID, read, evaluate) and `experiments/ai_text_generalize.py`
 (unseen generator families, paraphrase, the union).

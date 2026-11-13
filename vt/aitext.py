@@ -19,6 +19,7 @@ caught; probe AUROC 0.96 on generator families it never saw.
     vt-aitext train-head --sample sample.jsonl --features features.npz --out heads/aitext_probe_qwen3_0.6b.npz
     vt-aitext calibrate --human my_human_texts.jsonl --out calibration.json
     vt-aitext check --calibration calibration.json "some text" ...
+    vt-aitext audit --calibration calibration.json --human new_human_texts.jsonl     # did the promise hold?
     vt-aitext serve --calibration calibration.json --port 8000         # POST /v1/aitext {"text": "..."}
 """
 import argparse
@@ -147,6 +148,10 @@ class Detector:
     def calibrate(self, human_texts, fpr=0.05, confidence=0.95, batch=2):
         return calibration_from_scores(self.scores(human_texts, batch), fpr, confidence, self.head_sha)
 
+    def audit(self, human_texts, calibration, batch=2):
+        res = self.check(human_texts, calibration, batch)
+        return audit_from_flags([r["verdict"] == "ai" for r in res], calibration["fpr"], calibration["confidence"])
+
     def check(self, texts, calibration=None, batch=2):
         s = self.scores(texts, batch)
         if calibration and calibration.get("head_sha256") not in (None, self.head_sha):
@@ -179,6 +184,26 @@ def calibration_from_scores(s, fpr=0.05, confidence=0.95, head_sha=None):
             "promise": f"on new human texts like these, at most {fpr:.0%} are flagged as AI, with {confidence:.0%} "
                        f"confidence (union of two one-sided Clopper-Pearson bounds over {n} human texts)",
             "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def audit_from_flags(flagged, fpr, confidence=0.95):
+    """Did the promise hold on new human texts? `flagged`: one bool per text, from the calibrated detector.
+    The promise is about the share flagged, so the audit reports that share with its exact 95% interval and the
+    one-sided binomial p-value of seeing this many flags if the true rate were exactly fpr: "exceeded" when
+    p < 1 - confidence (the evidence says the rate is above the promise), "consistent" otherwise."""
+    from scipy.stats import beta, binom
+    flagged = np.asarray(flagged, bool)
+    n, k = len(flagged), int(flagged.sum())
+    if not n:
+        raise ValueError("no texts to audit")
+    lo = float(beta.ppf(0.025, k, n - k + 1)) if k else 0.0
+    hi = float(beta.ppf(0.975, k + 1, n - k)) if k < n else 1.0
+    p = float(binom.sf(k - 1, n, fpr))
+    return {"human_texts": n, "flagged": k, "flagged_share": round(k / n, 4), "ci95": [round(lo, 4), round(hi, 4)],
+            "promised": fpr, "p_value": round(p, 4), "status": "exceeded" if p < 1 - confidence else "consistent",
+            "flagged_indices": np.flatnonzero(flagged).tolist(),
+            "note": "consistent means these texts give no evidence that more than the promised share of human "
+                    "texts is flagged; with few texts the interval is wide"}
 
 
 def read_texts(path):
@@ -233,6 +258,13 @@ class Service:
         r["ms"] = round(1000 * (time.time() - t), 1)
         return r
 
+    def audit(self, texts, key_name):
+        cal = self.calibration_for(key_name)
+        if not cal:
+            raise ValueError("not calibrated: nothing to audit")
+        with self.lock:
+            return self.d.audit(texts, cal)
+
     def calibrate(self, texts, fpr, confidence, key_name):
         with self.lock:
             cal = self.d.calibrate(texts, fpr, confidence)
@@ -253,7 +285,7 @@ def main(argv=None):
     p.add_argument("--features", required=True)
     p.add_argument("--out", default=HEAD)
     p.add_argument("--C", type=float, default=0.01)
-    for name in ("calibrate", "check", "serve"):
+    for name in ("calibrate", "check", "audit", "serve"):
         q = sub.add_parser(name)
         q.add_argument("--head", default=HEAD)
         q.add_argument("--threads", type=int, default=None)
@@ -265,6 +297,8 @@ def main(argv=None):
             q.add_argument("--out", required=True)
         else:
             q.add_argument("--calibration", default=None)
+        if name == "audit":
+            q.add_argument("--human", required=True, help="new human texts, not the calibration set")
         if name == "check":
             q.add_argument("texts", nargs="*", help="texts; or --file")
             q.add_argument("--file", default=None)
@@ -293,6 +327,11 @@ def main(argv=None):
     if a.calibration:
         with open(a.calibration) as f:
             cal = json.load(f)
+    if a.cmd == "audit":
+        if not cal:
+            raise SystemExit("audit needs --calibration")
+        print(json.dumps(det.audit(read_texts(a.human), cal, a.batch), indent=1))
+        return
     if a.cmd == "check":
         texts = (read_texts(a.file) if a.file else []) + a.texts
         for r in det.check(texts, cal, a.batch):
