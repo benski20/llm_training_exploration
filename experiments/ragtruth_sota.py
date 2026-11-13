@@ -126,21 +126,23 @@ def extract(a):
                 torch.cuda.synchronize()
             t_sec.append(time.time() - t_r)                  # both passes, as a served check reads them
             t_tok.append(len(pre) + len(enc.input_ids))
-            sp = spans(r)
+            sp, xs = spans(r), []
             for s, e in sentences(out):
                 js = [j for j, (ts, te) in enumerate(enc.offset_mapping) if ts >= s and te <= e]
                 if not js:
                     continue
                 a_, b_ = len(pre) + js[0], len(pre) + js[-1] + 1
                 x = np.concatenate([acts[li][a_:b_].float().mean(0).numpy() for li in reader.layers])
-                X.append(project(x, P)[0] if P is not None else x.astype(np.float16))
+                xs.append(x)
                 ev.append((float(shift[js].mean()), float(dis[js].max())))
                 kinds = [k for x_, y_, k in sp if s < y_ and x_ < e]
                 y.append(int(bool(kinds)))
                 kind.append(kinds[0] if kinds else "")
                 resp.append(i)
                 task.append(r["task_type"])
-            del acts, lw, lo, shift, dis
+            if xs:                                          # one projection per answer, not per sentence
+                X.extend(project(np.stack(xs), P) if P is not None else np.stack(xs).astype(np.float16))
+            del acts, lw, lo, shift, dis, xs
             reader.acts.clear()
             _trim()                                         # glibc keeps freed blocks; without this the heap grows
         np.savez(path, X=np.stack(X), ev=np.array(ev, np.float32), y=np.array(y), resp=np.array(resp),
