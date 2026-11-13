@@ -20,7 +20,8 @@ Measured on public benchmarks the detector never trained on (RAID; HAP-E):
 * 74% of GPT-4o and Llama-3 text caught, and 74% of paraphrased AI text;
 * runs on an ordinary 4-core server: about 2 seconds a text, no GPU, and it can run inside your own network.
 
-Limits, said up front: it reads the first 256 tokens of a text; it is weaker on poetry, short product reviews and
+Limits, said up front: reading a whole document costs one check per 256 tokens, and an AI body behind a
+human opening is caught about half the time (56%) against three in four for text that is AI throughout; it is weaker on poetry, short product reviews and
 text continued by base models; Claude, Gemini and reasoning models are not yet tested.
 
 ## Who to ask first

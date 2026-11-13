@@ -4,7 +4,8 @@
 a promise the customer sets and can audit: send 150 of your own human-written texts, choose the rate (say 5%), and
 the detector picks its thresholds so that at most that share of human texts like yours is flagged, with 95%
 confidence. No AI samples are needed from you. It runs on a CPU: two small open models (Qwen3-0.6B base and
-Qwen3-0.6B, Apache-2.0) read the first 256 tokens of each text.
+Qwen3-0.6B, Apache-2.0) read each text in 256-token windows: the first window by default, or up to eight for
+whole-document reading.
 
 Why this angle: false accusations, of students above all, are the main complaint against AI detectors. Existing
 tools publish an accuracy figure measured on their own data; none lets a customer set the false-accusation rate
@@ -62,6 +63,25 @@ its AI texts test.
   every other genre at most 4%); 74% of AI text caught (59% academic to 95% spoken). GPT-4o is where the trained
   probe earns its place: Binoculars barely separates it (0.59). Base models continuing a human text are the
   hardest case.
+* **An AI body behind a human opening (whole-document reading).** HAP-E documents whose first ~620 tokens are
+  human and whose rest (~770 tokens) is either the real human continuation or a model's (`hape_mixed.json`,
+  `experiments/ai_text_mixed.py`; academic, news, fiction; 600 human, 360 mixed; each genre calibrated 50 times
+  on 150 human documents, read the same way). A document's score is its most AI-like window:
+
+  | windows read (256 tokens each) | mixed documents caught | human flagged (promise 5%) | promise broken in |
+  |---|---|---|---|
+  | 1 (default) | 1% | 1.2% | 4.0% of calibrations |
+  | 2 | 2% | 1.3% | 4.0% |
+  | 3 | 20% | 1.2% | 3.3% |
+  | 4 | 41% | 1.2% | 4.0% |
+  | 6 (whole document) | **56%** | 1.3% | 4.7% |
+
+  Reading the first window alone, a mixed document passes. Reading all of it, 56% are caught (Llama-3 Instruct
+  83-93%, GPT-4o-mini 57%, GPT-4o 35%, Llama-3-70B base 14%) with false alarms unchanged. A window that is
+  mostly AI scores 0.92 probe AUROC alone, as on whole AI texts; the price of reading more is that human
+  documents also get more chances to look AI-like, so the calibrated thresholds rise. That is why 56% here
+  against 74% on texts that are AI from the first word. Cost grows with the windows read (about 2 s each on
+  4 vCPUs).
 * **A threshold does not carry between kinds of writing.** Set at 1% false alarms on seven domains, the probe
   flagged 29% of human recipes (`raid_qwen3_0.6b.json`, `transfer_1pct`). This is why calibration on the
   customer's own writing is the product, not an option.
@@ -80,7 +100,7 @@ GPTZero about $135 for 1M words ($0.135 per 1,000 words); Pangram about $0.05 pe
 
 | plan | price | basis |
 |---|---|---|
-| API | $1 per 1,000 texts checked (up to 256 tokens read each), calibrations free | ~90% gross margin on the measured $0.11 |
+| API | $1 per 1,000 texts checked (per 256-token window read), calibrations free | ~90% gross margin on the measured $0.11 |
 | Institution | $500 a month: 1M checks, private calibrations per course or department, monthly audit report of measured false alarms on new human texts | |
 | Self-hosted | annual licence; runs on the customer's own CPU, no text leaves their network | for schools and publishers that cannot send student or author text out |
 
@@ -92,7 +112,9 @@ on their own new human writing at any time, and the report says whether it held.
 * **The human texts in both tests are mostly from before ChatGPT.** Human writing today is partly AI-edited;
   whether that writing counts as human is the customer's policy, and the calibration set should reflect it.
   GPT-4o and Llama 3 are tested (HAP-E); Claude, Gemini and reasoning models are not.
-* **Only the first 256 tokens are read.** A long document mixing human and AI passages is judged on its start.
+* **By default only the first 256 tokens are read.** A document with a human opening and an AI body passes
+  unless it is calibrated and checked with `--windows` (see above: 56% caught when reading the whole document).
+  Up to 8 windows (2,048 tokens) are read; text beyond that is not.
 * **Only the paraphrase attack was tested.** RAID's other attacks (homoglyphs, misspellings, synonym swaps,
   whitespace) and humanizer tools were not.
 * **Poetry and reviews**: at 5% the pair catches only about half of AI text.
@@ -107,6 +129,7 @@ on their own new human writing at any time, and the report says whether it held.
 ```bash
 pip install ".[verifier]"
 vt-aitext calibrate --human my_human_texts.jsonl --out calibration.json      # 150+ texts; {"text": ...} per line
+vt-aitext calibrate --human essays.jsonl --out essays.json --windows 6        # whole-document reading (6x the cost)
 vt-aitext check --calibration calibration.json --file to_check.txt
 vt-aitext audit --calibration calibration.json --human new_human_texts.jsonl  # did the promise hold?
 vt-aitext serve --calibration-dir calibrations/ --port 8000                  # API keys: VERIFY_API_KEYS="acme:key1"
@@ -114,8 +137,9 @@ vt-aitext serve --calibration-dir calibrations/ --port 8000                  # A
 
 API (same server hardening, API keys, per-key rate limits and `/metrics` as the grounding verifier):
 
-    POST /v1/aitext/calibrate  {"human_texts": [...150+...], "fpr"?: 0.05, "confidence"?: 0.95}
-                               -> the calibration, stored for this API key
+    POST /v1/aitext/calibrate  {"human_texts": [...150+...], "fpr"?: 0.05, "confidence"?: 0.95, "windows"?: 1}
+                               -> the calibration, stored for this API key; checks and audits then read
+                                  the same number of windows
     POST /v1/aitext            {"text": "..."}
                                -> {"verdict": "ai" | "not flagged", "fired": ["probe" | "binoculars"],
                                    "probe", "binoculars", "tokens", "promise", "ms"}
