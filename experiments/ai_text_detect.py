@@ -74,16 +74,25 @@ def sample(a):
             j = rng.randrange(seen[key])
             if j < caps[key]:
                 res[key][j] = rec
+        if n % 500000 == 0 and n:                                  # survive a restart: the domains read so far
+            _save(res, done=False)
         if n % 200000 == 0:
             print(f"{n} rows {time.time() - t0:.0f}s", {k[0][:4] + k[1][0] + k[2][0]: v for k, v in seen.items()},
                   flush=True)
-    rows = [r for k in sorted(res) for r in res[k]]
-    os.makedirs(SCRATCH, exist_ok=True)
-    with open(f"{SCRATCH}/sample.jsonl", "w") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    rows = _save(res, done=True)
     print(json.dumps({"rows": len(rows), "by_bucket": {"/".join(k): len(v) for k, v in res.items()},
                       "models": Counter(r["model"] for r in rows)}, indent=1))
+
+
+def _save(res, done):
+    rows = [r for k in sorted(res) for r in res[k]]
+    os.makedirs(SCRATCH, exist_ok=True)
+    path = f"{SCRATCH}/sample.jsonl" if done else f"{SCRATCH}/sample.partial.jsonl"
+    with open(path + ".tmp", "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    os.replace(path + ".tmp", path)
+    return rows
 
 
 def read(a):
