@@ -38,7 +38,23 @@ PUBLISHED = {"Llama-2-13B fine-tuned (RAGTruth paper)": 78.7, "LettuceDetect lar
              "GPT-4-turbo prompted (RAGTruth paper)": 63.4}
 
 
+def halubench_rows(n, seed=1, per_source=50):
+    """HaluBench answers (experiments/halubench_compare.py's sample, same order) as RAGTruth-shaped rows, for scoring
+    a probe trained on RAGTruth out of its domain: a hallucinated answer is labelled as one span covering it
+    (HaluBench labels answers, not spans), its source as the task."""
+    from halubench_compare import sample
+    rows = []
+    for r in sample(per_source, seed)[:n]:
+        bad = r["label"] == "FAIL"
+        rows.append({"query": r["question"], "context": r["passage"], "output": r["answer"],
+                     "task_type": r["source_ds"],
+                     "hallucination_labels": json.dumps([{"start": 0, "end": len(r["answer"])}] if bad else [])})
+    return rows
+
+
 def rows_for(split, n, seed=0):
+    if split == "halu":                                         # out of domain: HaluBench (seed 1 by default)
+        return halubench_rows(n, seed or 1)
     from datasets import load_dataset
     rows = list(load_dataset("wandb/RAGTruth-processed", split=split))
     random.Random(seed).shuffle(rows)                          # a random subset keeps the natural mix
@@ -94,8 +110,9 @@ def extract(a):
     os.makedirs(a.out, exist_ok=True)
     rows = rows_for(a.split, a.n, a.seed)
     tok = AutoTokenizer.from_pretrained(a.reader)
-    if torch.cuda.is_available():                               # e.g. a Kaggle T4: float16 on one GPU
-        model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.float16, device_map="auto").eval()
+    if torch.cuda.is_available():                               # bfloat16 where supported (L4, A100); a T4: float16
+        dt = torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16
+        model = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=dt, device_map="auto").eval()
         if torch.cuda.get_device_capability(0)[0] < 8:
             for mod in model.modules():
                 if getattr(mod, "compute_dtype", None) == torch.bfloat16:

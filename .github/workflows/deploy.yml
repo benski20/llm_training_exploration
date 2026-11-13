@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2, streamprobe]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2, streamprobe, bigreader]
         default: deploy
       n:
         description: questions for the correction test
@@ -122,6 +122,16 @@ jobs:
           modal deploy deploy/stream_probe.py | tee probe.log
           for u in $(grep -o 'https://[^ ]*modal\.run' probe.log); do echo "== $u"; python deploy/stream_probe.py "$u" || true; done
           modal app stop -y verichat-stream-probe
+      - name: bigger reader for the internals probe (one GPU, time-capped in deploy/modal_bigreader.py)
+        if: steps.req.outputs.action == 'bigreader'
+        timeout-minutes: 120
+        run: modal run deploy/modal_bigreader.py --train "${{ github.event.inputs.n || 1600 }}"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.req.outputs.action == 'bigreader'
+        with:
+          name: bigreader
+          path: results/bigreader_halubench_*.json
+          if-no-files-found: ignore
       - name: recent server logs (no GPU started)
         if: steps.req.outputs.action == 'logs'
         run: modal app logs verichat --since 3h --tail 1000
