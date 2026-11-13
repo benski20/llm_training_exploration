@@ -1,0 +1,19 @@
+{
+ "machine": "4 vCPU, \t: Intel(R) Xeon(R) Processor @ 2.30GHz",
+ "threads": 4,
+ "model_load_s": 5.6,
+ "calibrate_150_texts_s": 362.2,
+ "calibration_thresholds": {
+  "probe": 4.340432337330672,
+  "binoculars": -0.8891247452511697
+ },
+ "single_request_s": {
+  "median": 2.191,
+  "p90": 2.391
+ },
+ "batch_of_8_s_per_text": 2.04,
+ "peak_memory_gb": 7.9,
+ "texts_per_hour": 1764,
+ "price_per_hour_usd_assumed": 0.2016,
+ "usd_per_1000_texts": 0.1143
+}

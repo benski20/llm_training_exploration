@@ -1,0 +1,135 @@
+{
+ "texts": 3300,
+ "head_sha256": "0307d037065e54c6",
+ "by_genre": {
+  "acad": {
+   "auroc_probe": 0.912,
+   "auroc_binoculars": 0.802,
+   "false_alarms_mean": 0.011,
+   "splits_over_5pct": 0.02,
+   "caught": 0.589,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.386,
+    "gpt-4o-mini-2024-07-18": 0.63,
+    "llama-3-70B-Instruct": 0.859,
+    "llama-3-8B-Instruct": 0.676,
+    "llama-3-70B": 0.316,
+    "llama-3-8B": 0.669
+   }
+  },
+  "blog": {
+   "auroc_probe": 0.95,
+   "auroc_binoculars": 0.84,
+   "false_alarms_mean": 0.013,
+   "splits_over_5pct": 0.0,
+   "caught": 0.718,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.623,
+    "gpt-4o-mini-2024-07-18": 0.67,
+    "llama-3-70B-Instruct": 0.938,
+    "llama-3-8B-Instruct": 0.994,
+    "llama-3-70B": 0.429,
+    "llama-3-8B": 0.654
+   }
+  },
+  "fic": {
+   "auroc_probe": 0.957,
+   "auroc_binoculars": 0.871,
+   "false_alarms_mean": 0.014,
+   "splits_over_5pct": 0.04,
+   "caught": 0.72,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.596,
+    "gpt-4o-mini-2024-07-18": 0.73,
+    "llama-3-70B-Instruct": 1.0,
+    "llama-3-8B-Instruct": 1.0,
+    "llama-3-70B": 0.389,
+    "llama-3-8B": 0.606
+   }
+  },
+  "news": {
+   "auroc_probe": 0.948,
+   "auroc_binoculars": 0.823,
+   "false_alarms_mean": 0.016,
+   "splits_over_5pct": 0.1,
+   "caught": 0.731,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.816,
+    "gpt-4o-mini-2024-07-18": 0.988,
+    "llama-3-70B-Instruct": 0.98,
+    "llama-3-8B-Instruct": 0.98,
+    "llama-3-70B": 0.148,
+    "llama-3-8B": 0.478
+   }
+  },
+  "spok": {
+   "auroc_probe": 0.996,
+   "auroc_binoculars": 0.9,
+   "false_alarms_mean": 0.015,
+   "splits_over_5pct": 0.02,
+   "caught": 0.952,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.925,
+    "gpt-4o-mini-2024-07-18": 0.982,
+    "llama-3-70B-Instruct": 1.0,
+    "llama-3-8B-Instruct": 1.0,
+    "llama-3-70B": 0.898,
+    "llama-3-8B": 0.907
+   }
+  },
+  "tvm": {
+   "auroc_probe": 0.954,
+   "auroc_binoculars": 0.863,
+   "false_alarms_mean": 0.018,
+   "splits_over_5pct": 0.02,
+   "caught": 0.739,
+   "caught_by_generator": {
+    "gpt-4o-2024-08-06": 0.577,
+    "gpt-4o-mini-2024-07-18": 0.574,
+    "llama-3-70B-Instruct": 0.957,
+    "llama-3-8B-Instruct": 1.0,
+    "llama-3-70B": 0.483,
+    "llama-3-8B": 0.842
+   }
+  }
+ },
+ "by_generator": {
+  "gpt-4o-2024-08-06": {
+   "auroc_probe": 0.974,
+   "auroc_binoculars": 0.591,
+   "caught_mean_over_genres": 0.654
+  },
+  "gpt-4o-mini-2024-07-18": {
+   "auroc_probe": 0.979,
+   "auroc_binoculars": 0.706,
+   "caught_mean_over_genres": 0.762
+  },
+  "llama-3-70B-Instruct": {
+   "auroc_probe": 0.984,
+   "auroc_binoculars": 0.976,
+   "caught_mean_over_genres": 0.956
+  },
+  "llama-3-8B-Instruct": {
+   "auroc_probe": 0.984,
+   "auroc_binoculars": 0.979,
+   "caught_mean_over_genres": 0.942
+  },
+  "llama-3-70B": {
+   "auroc_probe": 0.862,
+   "auroc_binoculars": 0.888,
+   "caught_mean_over_genres": 0.444
+  },
+  "llama-3-8B": {
+   "auroc_probe": 0.921,
+   "auroc_binoculars": 0.962,
+   "caught_mean_over_genres": 0.693
+  }
+ },
+ "mean": {
+  "auroc_probe": 0.953,
+  "auroc_binoculars": 0.85,
+  "false_alarms_mean": 0.015,
+  "splits_over_5pct": 0.033,
+  "caught": 0.741
+ }
+}
