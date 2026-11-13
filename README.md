@@ -1,5 +1,10 @@
 # vt — training models that are proved correct
 
+> **Calibrated AI-text detection (product).** Send 150 of your own human texts, set the false-accusation rate
+> (say 5%), and get a detector that keeps it with 95% confidence on texts like yours, read from two 0.6B open models
+> on a CPU (2 s a text). On RAID domains it never trained on: 1.3% measured false alarms, 77% of AI text and 74% of
+> paraphrased AI text caught; 0.96 AUROC on generator families it never saw. See [docs/aitext.md](docs/aitext.md).
+>
 > **The grounding verifier (product).** A verification API that sits behind any chatbot or RAG system and
 > flags, sentence by sentence, what the evidence contradicts or does not hold, read from a small open model's
 > internals in two forward passes, with a probe trained without human labels. On three HaluBench samples it is level

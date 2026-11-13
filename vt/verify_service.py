@@ -123,9 +123,15 @@ class Verifier:
 
 
 def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minute=120, max_body=1 << 20,
-                deadline=300.0):
+                deadline=300.0, path="/v1/verify", validator=validate):
+    """`verifier.verify(item[, key_name])` answers `path` and `path`/batch. A verifier with a `calibrate`
+    method also answers `path`/calibrate: {"human_texts": [...], "fpr"?, "confidence"?} sets that key's calibration."""
     keys = keys or {}
     usage, limiter = Usage(), RateLimiter(rate_per_minute)
+    base = path
+    can_calibrate = hasattr(verifier, "calibrate")
+    import inspect
+    takes_key = len(inspect.signature(verifier.verify).parameters) > 1
 
     class Handler(HardenedHandler):
         timeout_s, deadline_s = 30.0, deadline
@@ -150,7 +156,7 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
 
         def do_POST(self):
             path = self.path
-            if path not in ("/v1/verify", "/v1/verify/batch"):
+            if path not in (base, base + "/batch") and not (can_calibrate and path == base + "/calibrate"):
                 usage.code("other", 404)
                 return self.send_json(404, {"error": "not found"})
             name = "open"
@@ -180,20 +186,22 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             except ValueError:
                 usage.code(path, 400)
                 return self.send_json(400, {"error": "invalid JSON"})
+            if path.endswith("/calibrate"):
+                return self.calibrate(path, req, name)
             items = req.get("items") if path.endswith("/batch") and isinstance(req, dict) else [req]
             if not isinstance(items, list) or not 1 <= len(items) <= MAX_BATCH:
                 usage.code(path, 400)
                 return self.send_json(400, {"error": f"items: a list of 1 to {MAX_BATCH}"})
             checked = []
             for it in items:
-                ok, why = validate(it)
+                ok, why = validator(it)
                 if why:
                     usage.code(path, 400)
                     return self.send_json(400, {"error": why})
                 checked.append(ok)
             t = time.time()
             try:
-                results = [verifier.verify(it) for it in checked]
+                results = [verifier.verify(it, name) if takes_key else verifier.verify(it) for it in checked]
             except Exception as e:                              # the reader failed: say so, keep serving
                 print(f"verify failed: {e!r}", flush=True)
                 usage.code(path, 500)
@@ -201,6 +209,32 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             usage.add(name, sum(r["usage"]["tokens"] for r in results), time.time() - t)
             usage.code(path, 200)
             self.send_json(200, {"results": results} if path.endswith("/batch") else results[0])
+
+        def calibrate(self, path, req, name):
+            texts = req.get("human_texts") if isinstance(req, dict) else None
+            if not isinstance(texts, list) or not all(isinstance(t, str) and t.strip() for t in texts) \
+                    or not 1 <= len(texts) <= 2000:
+                usage.code(path, 400)
+                return self.send_json(400, {"error": "human_texts: a list of 1 to 2000 non-empty strings"})
+            try:
+                fpr, conf = float(req.get("fpr", 0.05)), float(req.get("confidence", 0.95))
+            except (TypeError, ValueError):
+                fpr = conf = -1.0
+            if not (0.001 <= fpr <= 0.5 and 0.5 <= conf <= 0.999):
+                usage.code(path, 400)
+                return self.send_json(400, {"error": "fpr in [0.001, 0.5], confidence in [0.5, 0.999]"})
+            try:
+                cal = verifier.calibrate(texts, fpr, conf, name)
+            except ValueError as e:                             # too few texts for the promise asked
+                usage.code(path, 422)
+                return self.send_json(422, {"error": str(e)})
+            except Exception as e:                              # noqa: BLE001 — say so, keep serving
+                print(f"calibration failed: {e!r}", flush=True)
+                usage.code(path, 500)
+                return self.send_json(500, {"error": "calibration failed"})
+            usage.add(name, 0, 0.0)
+            usage.code(path, 200)
+            self.send_json(200, cal)
 
     srv = ThreadingHTTPServer((host, port), Handler)
     srv.daemon_threads = True
