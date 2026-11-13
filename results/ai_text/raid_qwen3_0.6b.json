@@ -1,0 +1,386 @@
+{
+ "texts": 5280,
+ "reader": [
+  "Qwen/Qwen3-0.6B-Base",
+  "Qwen/Qwen3-0.6B"
+ ],
+ "seconds_per_text_cpu": 2.042,
+ "by_score": {
+  "log-perplexity": {
+   "abstracts": {
+    "auroc": 0.742,
+    "transfer_1pct": {
+     "false_alarms": 0.017,
+     "caught": 0.323,
+     "caught_paraphrased": 0.017
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.021,
+     "splits_over_5pct": 0.08,
+     "caught": 0.354,
+     "caught_paraphrased": 0.047
+    }
+   },
+   "books": {
+    "auroc": 0.867,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.193,
+     "caught_paraphrased": 0.033
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.022,
+     "splits_over_5pct": 0.14,
+     "caught": 0.689,
+     "caught_paraphrased": 0.388
+    }
+   },
+   "news": {
+    "auroc": 0.821,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.16,
+     "caught_paraphrased": 0.017
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.017,
+     "splits_over_5pct": 0.06,
+     "caught": 0.537,
+     "caught_paraphrased": 0.112
+    }
+   },
+   "poetry": {
+    "auroc": 0.824,
+    "transfer_1pct": {
+     "false_alarms": 0.007,
+     "caught": 0.12,
+     "caught_paraphrased": 0.05
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.018,
+     "splits_over_5pct": 0.06,
+     "caught": 0.226,
+     "caught_paraphrased": 0.06
+    }
+   },
+   "recipes": {
+    "auroc": 0.745,
+    "transfer_1pct": {
+     "false_alarms": 0.167,
+     "caught": 0.707,
+     "caught_paraphrased": 0.267
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.022,
+     "splits_over_5pct": 0.04,
+     "caught": 0.645,
+     "caught_paraphrased": 0.16
+    }
+   },
+   "reddit": {
+    "auroc": 0.855,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.163,
+     "caught_paraphrased": 0.067
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.02,
+     "caught": 0.663,
+     "caught_paraphrased": 0.569
+    }
+   },
+   "reviews": {
+    "auroc": 0.862,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.19,
+     "caught_paraphrased": 0.083
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.02,
+     "splits_over_5pct": 0.02,
+     "caught": 0.694,
+     "caught_paraphrased": 0.491
+    }
+   },
+   "wiki": {
+    "auroc": 0.771,
+    "transfer_1pct": {
+     "false_alarms": 0.007,
+     "caught": 0.46,
+     "caught_paraphrased": 0.167
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.04,
+     "caught": 0.526,
+     "caught_paraphrased": 0.217
+    }
+   },
+   "all": {
+    "auroc_pooled": 0.772,
+    "auroc_mean_over_domains": 0.811,
+    "transfer_false_alarms_max": 0.167,
+    "promise_caught_mean": 0.542,
+    "promise_splits_over_5pct_mean": 0.058
+   }
+  },
+  "binoculars": {
+   "abstracts": {
+    "auroc": 0.805,
+    "transfer_1pct": {
+     "false_alarms": 0.017,
+     "caught": 0.64,
+     "caught_paraphrased": 0.817
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.021,
+     "splits_over_5pct": 0.06,
+     "caught": 0.638,
+     "caught_paraphrased": 0.82
+    }
+   },
+   "books": {
+    "auroc": 0.776,
+    "transfer_1pct": {
+     "false_alarms": 0.003,
+     "caught": 0.453,
+     "caught_paraphrased": 0.7
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.06,
+     "caught": 0.5,
+     "caught_paraphrased": 0.772
+    }
+   },
+   "news": {
+    "auroc": 0.806,
+    "transfer_1pct": {
+     "false_alarms": 0.017,
+     "caught": 0.527,
+     "caught_paraphrased": 0.733
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.02,
+     "splits_over_5pct": 0.04,
+     "caught": 0.513,
+     "caught_paraphrased": 0.687
+    }
+   },
+   "poetry": {
+    "auroc": 0.755,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.417,
+     "caught_paraphrased": 0.5
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.024,
+     "splits_over_5pct": 0.12,
+     "caught": 0.508,
+     "caught_paraphrased": 0.611
+    }
+   },
+   "recipes": {
+    "auroc": 0.717,
+    "transfer_1pct": {
+     "false_alarms": 0.007,
+     "caught": 0.35,
+     "caught_paraphrased": 0.567
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.018,
+     "splits_over_5pct": 0.02,
+     "caught": 0.447,
+     "caught_paraphrased": 0.666
+    }
+   },
+   "reddit": {
+    "auroc": 0.745,
+    "transfer_1pct": {
+     "false_alarms": 0.01,
+     "caught": 0.447,
+     "caught_paraphrased": 0.617
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.021,
+     "splits_over_5pct": 0.14,
+     "caught": 0.464,
+     "caught_paraphrased": 0.667
+    }
+   },
+   "reviews": {
+    "auroc": 0.747,
+    "transfer_1pct": {
+     "false_alarms": 0.013,
+     "caught": 0.423,
+     "caught_paraphrased": 0.75
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.02,
+     "splits_over_5pct": 0.02,
+     "caught": 0.435,
+     "caught_paraphrased": 0.776
+    }
+   },
+   "wiki": {
+    "auroc": 0.789,
+    "transfer_1pct": {
+     "false_alarms": 0.02,
+     "caught": 0.573,
+     "caught_paraphrased": 0.783
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.04,
+     "caught": 0.548,
+     "caught_paraphrased": 0.753
+    }
+   },
+   "all": {
+    "auroc_pooled": 0.764,
+    "auroc_mean_over_domains": 0.768,
+    "transfer_false_alarms_max": 0.02,
+    "promise_caught_mean": 0.507,
+    "promise_splits_over_5pct_mean": 0.062
+   }
+  },
+  "probe (other domains)": {
+   "abstracts": {
+    "auroc": 0.981,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.41,
+     "caught_paraphrased": 0.033
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.1,
+     "caught": 0.876,
+     "caught_paraphrased": 0.546
+    }
+   },
+   "books": {
+    "auroc": 0.963,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.757,
+     "caught_paraphrased": 0.067
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.018,
+     "splits_over_5pct": 0.0,
+     "caught": 0.85,
+     "caught_paraphrased": 0.164
+    }
+   },
+   "news": {
+    "auroc": 0.996,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.6,
+     "caught_paraphrased": 0.033
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.02,
+     "caught": 0.974,
+     "caught_paraphrased": 0.596
+    }
+   },
+   "poetry": {
+    "auroc": 0.973,
+    "transfer_1pct": {
+     "false_alarms": 0.01,
+     "caught": 0.42,
+     "caught_paraphrased": 0.05
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.019,
+     "splits_over_5pct": 0.04,
+     "caught": 0.751,
+     "caught_paraphrased": 0.411
+    }
+   },
+   "recipes": {
+    "auroc": 0.975,
+    "transfer_1pct": {
+     "false_alarms": 0.293,
+     "caught": 0.977,
+     "caught_paraphrased": 0.683
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.021,
+     "splits_over_5pct": 0.0,
+     "caught": 0.832,
+     "caught_paraphrased": 0.11
+    }
+   },
+   "reddit": {
+    "auroc": 0.982,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.547,
+     "caught_paraphrased": 0.1
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.018,
+     "splits_over_5pct": 0.0,
+     "caught": 0.886,
+     "caught_paraphrased": 0.567
+    }
+   },
+   "reviews": {
+    "auroc": 0.957,
+    "transfer_1pct": {
+     "false_alarms": 0.023,
+     "caught": 0.66,
+     "caught_paraphrased": 0.117
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.018,
+     "splits_over_5pct": 0.04,
+     "caught": 0.587,
+     "caught_paraphrased": 0.107
+    }
+   },
+   "wiki": {
+    "auroc": 0.964,
+    "transfer_1pct": {
+     "false_alarms": 0.0,
+     "caught": 0.493,
+     "caught_paraphrased": 0.067
+    },
+    "promise_5pct_from_150_human": {
+     "false_alarms_mean": 0.022,
+     "splits_over_5pct": 0.02,
+     "caught": 0.836,
+     "caught_paraphrased": 0.275
+    }
+   },
+   "all": {
+    "auroc_pooled": 0.944,
+    "auroc_mean_over_domains": 0.974,
+    "transfer_false_alarms_max": 0.293,
+    "promise_caught_mean": 0.824,
+    "promise_splits_over_5pct_mean": 0.028
+   }
+  }
+ },
+ "probe_auroc_by_generator": {
+  "chatgpt": 0.974,
+  "cohere": 0.845,
+  "cohere-chat": 0.901,
+  "gpt2": 0.936,
+  "gpt3": 0.964,
+  "gpt4": 0.956,
+  "llama-chat": 0.989,
+  "mistral": 0.896,
+  "mistral-chat": 0.988,
+  "mpt": 0.916,
+  "mpt-chat": 0.981
+ }
+}
