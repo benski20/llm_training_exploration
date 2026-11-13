@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# The AI-text detection API (vt/aitext.py): POST /v1/aitext, /batch, /calibrate, /audit; GET /health, /metrics.
+# Both models (Qwen3-0.6B-Base and Qwen3-0.6B, Apache-2.0) are baked into the image at pinned revisions and the
+# hub is set offline, so the container needs no network at all: it can run inside a customer's network with
+# --network none, and no text it reads leaves it.
+#   docker build -f Dockerfile.aitext -t aitext .
+#   docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v aitext-cal:/data aitext
+# Calibrations (one per API key) are stored in the /data volume and survive restarts. Keys come from the
+# environment (VERIFY_API_KEYS="name:key,...") or a mounted file (VERIFY_API_KEYS_FILE). CPU only; 8 GB RAM.
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
+ARG OBSERVER_REV=da87bfb608c14b7cf20ba1ce41287e8de496c0cd
+ARG PERFORMER_REV=c1899de289a04d12100db370d81485cdf75e47ca
+ENV HF_HOME=/opt/hf PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir torch==2.14.1 --index-url "$TORCH_INDEX" && \
+    pip install --no-cache-dir transformers==5.2.0 huggingface_hub==1.4.0 numpy==2.5.3 scipy==1.18.1 \
+        scikit-learn==1.9.1
+# Download each model at its pinned commit and point the cache's "main" at it, so loading by name works offline.
+RUN python - <<EOF
+import os
+from huggingface_hub import snapshot_download
+for repo, rev in (("Qwen/Qwen3-0.6B-Base", "$OBSERVER_REV"), ("Qwen/Qwen3-0.6B", "$PERFORMER_REV")):
+    snapshot_download(repo, revision=rev, allow_patterns=["*.json", "*.safetensors", "*.txt"])
+    refs = os.path.join(os.environ["HF_HOME"], "hub", "models--" + repo.replace("/", "--"), "refs")
+    os.makedirs(refs, exist_ok=True)
+    with open(os.path.join(refs, "main"), "w") as f:
+        f.write(rev)
+EOF
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY vt ./vt
+COPY heads/aitext_probe_qwen3_0.6b.npz ./heads/
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir --no-deps . && useradd --create-home --uid 10001 vt && \
+    mkdir -p /data && chown vt /data
+USER vt
+VOLUME /data
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+ENTRYPOINT ["vt-aitext", "serve", "--host", "0.0.0.0", "--port", "8000", "--calibration-dir", "/data", \
+            "--head", "/app/heads/aitext_probe_qwen3_0.6b.npz"]

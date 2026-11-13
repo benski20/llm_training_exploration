@@ -1,0 +1,40 @@
+name: aitext-image
+# Builds the AI-text container (Dockerfile.aitext) and checks it end to end with no network: calibrate on 150
+# human news texts, audit 50 others, check 20 AI texts, refuse a bad key, keep the calibration across a restart.
+# About 15 minutes on a standard runner (reading 240 texts on CPU), so it runs only when the product changes.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - vt/aitext.py
+      - vt/verify_service.py
+      - Dockerfile.aitext
+      - heads/aitext_probe_qwen3_0.6b.npz
+      - deploy/aitext_smoke.py
+      - examples/aitext_smoke/**
+      - .github/workflows/aitext-image.yml
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: docker build -f Dockerfile.aitext -t aitext .
+      - name: size
+        run: docker image ls aitext
+      - name: run with no network and check end to end
+        run: |
+          KEY=$(openssl rand -hex 16)
+          echo "::add-mask::$KEY"
+          docker volume create aitext-cal
+          docker run -d --name ai --network none -e VERIFY_API_KEYS="ci:$KEY" -v aitext-cal:/data \
+            -v "$PWD/examples/aitext_smoke:/smoke/data:ro" -v "$PWD/deploy/aitext_smoke.py:/smoke/aitext_smoke.py:ro" aitext
+          docker exec ai python /smoke/aitext_smoke.py --key "$KEY" --data /smoke/data
+          docker restart ai
+          docker exec ai python /smoke/aitext_smoke.py --key "$KEY" --data /smoke/data --after-restart
+      - name: server log
+        if: always()
+        run: docker logs ai 2>&1 | tail -50

@@ -135,6 +135,20 @@ vt-aitext audit --calibration calibration.json --human new_human_texts.jsonl  # 
 vt-aitext serve --calibration-dir calibrations/ --port 8000                  # API keys: VERIFY_API_KEYS="acme:key1"
 ```
 
+Container (`Dockerfile.aitext`): both models baked in at pinned revisions and the hub set offline, so it runs
+with no network (`--network none`) inside a customer's own infrastructure; calibrations persist in `/data`.
+
+```bash
+docker build -f Dockerfile.aitext -t aitext .
+docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v aitext-cal:/data aitext
+python deploy/aitext_smoke.py --url http://127.0.0.1:8000 --key "$KEY"     # end-to-end check, stdlib only
+```
+
+The `aitext-image` workflow builds it and runs that check with the network off on every change to the product:
+calibrate on 150 human news texts, audit 50 others, check 20 AI texts, refuse a bad key, keep the calibration
+across a restart (`examples/aitext_smoke/`, from HAP-E). Locally: calibration 304 s, audit 3 of 50 flagged
+("consistent"), 20 of 20 AI texts flagged.
+
 API (same server hardening, API keys, per-key rate limits and `/metrics` as the grounding verifier):
 
     POST /v1/aitext/calibrate  {"human_texts": [...150+...], "fpr"?: 0.05, "confidence"?: 0.95, "windows"?: 1}
