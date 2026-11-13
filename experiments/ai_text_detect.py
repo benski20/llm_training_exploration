@@ -230,7 +230,7 @@ def main():
     s.add_argument("--paraphrased", type=int, default=60)
     s.add_argument("--max-rows", type=int, default=0)
     r = sub.add_parser("read")
-    r.add_argument("--batch", type=int, default=8)
+    r.add_argument("--batch", type=int, default=2)
     r.add_argument("--max-tokens", type=int, default=256)
     r.add_argument("--threads", type=int, default=4)
     e = sub.add_parser("evaluate")
