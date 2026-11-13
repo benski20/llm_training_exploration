@@ -69,6 +69,8 @@ Measured (`results/verify_engine_choice.json`, `experiments/verify_engine_choice
   check (2.6 s against 5.9 s on HaluBench), a 0.4B model instead of 4B, and it gives word spans. The internals
   check stays one flag away for customers whose documents are far from RAGTruth's.
 
+Getting a customer (one-pager, interview, pilot, what counts as validated): [verify_outreach.md](verify_outreach.md).
+
 ## Who buys it
 
 Teams shipping answers written from documents, where an unsupported sentence has a cost:
