@@ -125,8 +125,10 @@ class Verifier:
 def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minute=120, max_body=1 << 20,
                 deadline=300.0, path="/v1/verify", validator=validate):
     """`verifier.verify(item[, key_name])` answers `path` and `path`/batch. A verifier with a `calibrate`
-    method also answers `path`/calibrate: {"human_texts": [...], "fpr"?, "confidence"?} sets that key's calibration;
-    one with an `audit` method answers `path`/audit: {"human_texts": [...]} checks that key's promise on new texts."""
+    method also answers `path`/calibrate: {field: [...], "fpr"?, "confidence"?} sets that key's calibration; one
+    with an `audit` method answers `path`/audit: {field: [...]} checks that key's promise on new known-good items.
+    field is the verifier's `calibration_field`: "human_texts" (strings) by default, else items checked by
+    `validator` ("replies" for the verification engine)."""
     keys = keys or {}
     usage, limiter = Usage(), RateLimiter(rate_per_minute)
     base = path
@@ -205,6 +207,9 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             t = time.time()
             try:
                 results = [verifier.verify(it, name) if takes_key else verifier.verify(it) for it in checked]
+            except ValueError as e:                             # e.g. a calibration from other scorers
+                usage.code(path, 422)
+                return self.send_json(422, {"error": str(e)})
             except Exception as e:                              # the reader failed: say so, keep serving
                 print(f"verify failed: {e!r}", flush=True)
                 usage.code(path, 500)
@@ -214,11 +219,22 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             self.send_json(200, {"results": results} if path.endswith("/batch") else results[0])
 
         def calibrate(self, path, req, name):
-            texts = req.get("human_texts") if isinstance(req, dict) else None
-            if not isinstance(texts, list) or not all(isinstance(t, str) and t.strip() for t in texts) \
-                    or not 1 <= len(texts) <= 2000:
+            field = getattr(verifier, "calibration_field", "human_texts")
+            texts = req.get(field) if isinstance(req, dict) else None
+            if field == "human_texts":                          # plain strings (the AI-text detector)
+                ok = isinstance(texts, list) and all(isinstance(t, str) and t.strip() for t in texts)
+            else:                                               # items, each checked like a request
+                ok = isinstance(texts, list)
+                if ok:
+                    checked = [validator(t) for t in texts]
+                    bad = next((why for _, why in checked if why), None)
+                    if bad:
+                        usage.code(path, 400)
+                        return self.send_json(400, {"error": f"{field}: {bad}"})
+                    texts = [it for it, _ in checked]
+            if not ok or not 1 <= len(texts) <= 2000:
                 usage.code(path, 400)
-                return self.send_json(400, {"error": "human_texts: a list of 1 to 2000 non-empty strings"})
+                return self.send_json(400, {"error": f"{field}: a list of 1 to 2000 items"})
             try:
                 fpr, conf = float(req.get("fpr", 0.05)), float(req.get("confidence", 0.95))
             except (TypeError, ValueError):
@@ -256,13 +272,22 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
 
 def build(argv=None):
     ap = argparse.ArgumentParser(prog="python -m vt.verify_service")
-    ap.add_argument("--reader", required=True, help="the model whose neurons the probe reads")
-    ap.add_argument("--probe", required=True, help="a probe from vt.verifier_pipeline (calibrated, ideally)")
+    ap.add_argument("--engine", default=None,
+                    help="scorers, '+'-joined: lettuce (LettuceDetect, span-level), internals (the reader's neurons; "
+                         "needs --reader and --probe). With it, per-key promises via /v1/verify/calibrate and /audit")
+    ap.add_argument("--calibration-dir", default=None, help="per-API-key calibrations (with --engine)")
+    ap.add_argument("--threads", type=int, default=None)
+    ap.add_argument("--reader", default=None, help="the model whose neurons the probe reads")
+    ap.add_argument("--probe", default=None, help="a probe from vt.verifier_pipeline (calibrated, ideally)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--rate-per-minute", type=int, default=120)
     ap.add_argument("--wikipedia", action="store_true", help="allow \"lookup\": true (Wikipedia search for evidence)")
     a = ap.parse_args(argv)
+    if a.engine:
+        return build_engine(a), a
+    if not (a.reader and a.probe):
+        ap.error("--engine, or --reader and --probe")
     from vt.grounding import Grounding
     from vt.verifier_pipeline import load_reader, sha256
     model, tok = load_reader(a.reader)
@@ -275,6 +300,28 @@ def build(argv=None):
             "calibrated": g.calibration is not None, "evidence_signals": len(g.natural) == 3,
             "lookup": retriever is not None}
     return make_server(Verifier(g, info), a.host, a.port, keys_from_env(), a.rate_per_minute), a
+
+
+def build_engine(a):
+    """The engine server (vt/verify_engine.py): scorers chosen by --engine, promises per API key."""
+    from vt.verify_engine import Engine, InternalsScorer, LettuceScorer, Service
+    names = a.engine.split("+")
+    if not names or any(n not in ("lettuce", "internals") for n in names):
+        raise SystemExit("--engine: lettuce, internals, or both joined by '+'")
+    scorers, info = [], {}
+    for n in names:
+        if n == "lettuce":
+            scorers.append(LettuceScorer(threads=a.threads))
+        else:
+            if not (a.reader and a.probe):
+                raise SystemExit("--engine internals needs --reader and --probe")
+            from vt.grounding import Grounding
+            from vt.verifier_pipeline import load_reader, sha256
+            model, tok = load_reader(a.reader)
+            scorers.append(InternalsScorer(Grounding(model, tok, a.probe)))
+            info.update(reader=a.reader, probe_sha256=sha256(a.probe)[:16])
+    svc = Service(Engine(scorers), calibration_dir=a.calibration_dir, info=info)
+    return make_server(svc, a.host, a.port, keys_from_env(), a.rate_per_minute, max_body=8 << 20, deadline=1800.0)
 
 
 def main(argv=None):

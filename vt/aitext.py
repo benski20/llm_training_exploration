@@ -25,12 +25,13 @@ caught; probe AUROC 0.96 on generator families it never saw.
 import argparse
 import hashlib
 import json
-import math
 import os
 import sys
 import time
 
 import numpy as np
+
+from vt import promise
 
 OBSERVER, PERFORMER = "Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-0.6B"
 REVISIONS = {OBSERVER: "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",          # the commits the probe head was
@@ -140,7 +141,7 @@ def file_sha(path):
 
 def min_texts(fpr, confidence, k=2):
     """The fewest human texts for which a threshold can promise fpr at this confidence (union over k scores)."""
-    return math.ceil(math.log((1 - confidence) / k) / math.log(1 - fpr / k))
+    return promise.min_items(fpr, confidence, k)
 
 
 class Detector:
@@ -198,39 +199,18 @@ class Detector:
 
 
 def calibration_from_scores(s, fpr=0.05, confidence=0.95, head_sha=None):
-    from vt.verifier_pipeline import guaranteed_threshold
     n = len(s["probe"])
-    need = min_texts(fpr, confidence)
-    if n < need:
-        raise ValueError(f"{n} human texts: at least {need} are needed to promise {fpr:.0%} false alarms "
-                         f"with {confidence:.0%} confidence (150+ recommended; more texts, more AI caught)")
-    k, zero = 2, np.zeros(n, int)
-    thr = {name: guaranteed_threshold(np.asarray(s[name], float), zero, fpr / k, 1 - (1 - confidence) / k)
-           for name in ("probe", "binoculars")}
-    return {"fpr": fpr, "confidence": confidence, "human_texts": n, "thresholds": thr, "head_sha256": head_sha,
-            "promise": f"on new human texts like these, at most {fpr:.0%} are flagged as AI, with {confidence:.0%} "
-                       f"confidence (union of two one-sided Clopper-Pearson bounds over {n} human texts)",
-            "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    cal = promise.promise_from_scores({name: s[name] for name in ("probe", "binoculars")}, fpr, confidence,
+                                      good="human texts", flagged_as="AI", extra={"head_sha256": head_sha})
+    cal["human_texts"] = n
+    return cal
 
 
 def audit_from_flags(flagged, fpr, confidence=0.95):
-    """Did the promise hold on new human texts? `flagged`: one bool per text, from the calibrated detector.
-    The promise is about the share flagged, so the audit reports that share with its exact 95% interval and the
-    one-sided binomial p-value of seeing this many flags if the true rate were exactly fpr: "exceeded" when
-    p < 1 - confidence (the evidence says the rate is above the promise), "consistent" otherwise."""
-    from scipy.stats import beta, binom
-    flagged = np.asarray(flagged, bool)
-    n, k = len(flagged), int(flagged.sum())
-    if not n:
-        raise ValueError("no texts to audit")
-    lo = float(beta.ppf(0.025, k, n - k + 1)) if k else 0.0
-    hi = float(beta.ppf(0.975, k + 1, n - k)) if k < n else 1.0
-    p = float(binom.sf(k - 1, n, fpr))
-    return {"human_texts": n, "flagged": k, "flagged_share": round(k / n, 4), "ci95": [round(lo, 4), round(hi, 4)],
-            "promised": fpr, "p_value": round(p, 4), "status": "exceeded" if p < 1 - confidence else "consistent",
-            "flagged_indices": np.flatnonzero(flagged).tolist(),
-            "note": "consistent means these texts give no evidence that more than the promised share of human "
-                    "texts is flagged; with few texts the interval is wide"}
+    """Did the promise hold on new human texts? (vt/promise.py)"""
+    res = promise.audit_from_flags(flagged, fpr, confidence, good="human texts")
+    res["human_texts"] = res["items"]
+    return res
 
 
 def read_texts(path):

@@ -92,6 +92,28 @@ def add_hhem(path, per_source, seed=0):
     print(json.dumps({k: v for k, v in res.items() if k != "rows"}, indent=1))
 
 
+def add_lettuce(path, per_source, seed=0, threads=4):
+    """LettuceDetect-large (KRLabsOrg, ModernBERT fine-tuned on RAGTruth token labels, MIT) on the answers of an
+    earlier run (same sample), merged into its results: its answer score is its highest token probability. It was
+    trained on RAGTruth, so its RAGTruth row is in-domain; the other five sources are not."""
+    import torch
+    from lettucedetect.models.inference import HallucinationDetector
+    torch.set_num_threads(threads)
+    det = HallucinationDetector(method="transformer", model_path="KRLabsOrg/lettucedect-large-modernbert-en-v1")
+    res = json.load(open(path))
+    rows, t = sample(per_source, seed), time.time()
+    assert [r["source_ds"] for r in rows] == [o["source"] for o in res["rows"]], "not the same sample"
+    for i, (r, o) in enumerate(zip(rows, res["rows"])):
+        toks = det.predict(context=[r["passage"]], question=r["question"], answer=r["answer"], output_format="tokens")
+        o["lettuce"] = max([float(x["prob"]) for x in toks] or [0.0])
+        if (i + 1) % 50 == 0:
+            print(f"{i + 1}/{len(rows)} {(time.time() - t) / (i + 1):.2f}s an answer", flush=True)
+    res["seconds_per_answer"]["lettuce"] = round((time.time() - t) / len(rows), 2)
+    res.update(summarize(res["rows"], ["lettuce"]))
+    json.dump(res, open(path, "w"), indent=1)
+    print(json.dumps({k: v for k, v in res.items() if k != "rows"}, indent=1))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--reader", default="Qwen/Qwen3-4B")
@@ -105,7 +127,11 @@ def main():
     ap.add_argument("--no-minicheck", action="store_true", help="the grounding check only")
     ap.add_argument("--add-hhem", metavar="RESULTS", help="score HHEM-2.1-open (Vectara; runs its own model code) on "
                     "the answers of an earlier run and merge it into that results file")
+    ap.add_argument("--add-lettuce", metavar="RESULTS", help="score LettuceDetect-large on the answers of an earlier "
+                    "run and merge it into that results file")
     a = ap.parse_args()
+    if a.add_lettuce:
+        return add_lettuce(a.add_lettuce, a.per_source, a.seed)
     if a.add_hhem:
         return add_hhem(a.add_hhem, a.per_source, a.seed)
     import torch
