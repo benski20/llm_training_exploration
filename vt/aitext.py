@@ -57,10 +57,21 @@ class Reader:
     def features(self, texts, batch=2, max_tokens=MAX_TOKENS):
         """(scalars [n, 7], hidden [n, 4 * d]) for each text; batches of `batch` (the full-vocabulary float32
         logits of both models dominate memory: about 2.5 GB a text at 256 tokens)."""
+        return self.features_ids([self.tok(t, add_special_tokens=False).input_ids[:max_tokens] for t in texts], batch)
+
+    def windows(self, text, size=MAX_TOKENS, most=8, min_last=64):
+        """The text's tokens in consecutive windows of `size`, at most `most` of them; a short last window
+        (under `min_last` tokens) is dropped unless it is the only one."""
+        ids = self.tok(text, add_special_tokens=False).input_ids
+        w = [ids[i:i + size] for i in range(0, max(len(ids), 1), size)][:most]
+        return w[:-1] if len(w) > 1 and len(w[-1]) < min_last else w
+
+    def features_ids(self, token_lists, batch=2):
+        """Features for texts already tokenized (each list at most MAX_TOKENS long)."""
         import torch
         S, H = [], []
-        for b in range(0, len(texts), batch):
-            enc = [self.tok(t, add_special_tokens=False).input_ids[:max_tokens] for t in texts[b:b + batch]]
+        for b in range(0, len(token_lists), batch):
+            enc = [list(e) for e in token_lists[b:b + batch]]
             enc = [e if len(e) >= 2 else e + [self.tok.eos_token_id] * (2 - len(e)) for e in enc]
             L = max(map(len, enc))
             ids = torch.full((len(enc), L), self.tok.pad_token_id or 0)
@@ -142,18 +153,31 @@ class Detector:
         probe = ((X - self.mean) / self.scale) @ self.coef + self.b
         return {"probe": probe, "binoculars": binoculars(scalars), "tokens": scalars[:, 6].astype(int)}
 
-    def scores(self, texts, batch=2):
-        return self.score_features(*self.reader.features(list(texts), batch, self.meta["max_tokens"]))
+    def scores(self, texts, batch=2, windows=1):
+        """Per text: with windows=1 its first 256 tokens; with windows=k up to k consecutive 256-token windows,
+        each read on its own, and the text's score is its most AI-like window (per score), so an AI-written
+        passage anywhere in the first k * 256 tokens can raise it."""
+        if windows == 1:
+            return self.score_features(*self.reader.features(list(texts), batch, self.meta["max_tokens"]))
+        per = [self.reader.windows(t, self.meta["max_tokens"], windows) for t in texts]
+        owner = np.repeat(np.arange(len(per)), [len(w) for w in per])
+        s = self.score_features(*self.reader.features_ids([w for ws in per for w in ws], batch))
+        out = {k: np.array([s[k][owner == i].max() for i in range(len(per))]) for k in ("probe", "binoculars")}
+        out["tokens"] = np.array([sum(map(len, w)) for w in per])
+        out["windows"] = np.array([len(w) for w in per])
+        return out
 
-    def calibrate(self, human_texts, fpr=0.05, confidence=0.95, batch=2):
-        return calibration_from_scores(self.scores(human_texts, batch), fpr, confidence, self.head_sha)
+    def calibrate(self, human_texts, fpr=0.05, confidence=0.95, batch=2, windows=1):
+        cal = calibration_from_scores(self.scores(human_texts, batch, windows), fpr, confidence, self.head_sha)
+        cal["windows"] = windows
+        return cal
 
     def audit(self, human_texts, calibration, batch=2):
         res = self.check(human_texts, calibration, batch)
         return audit_from_flags([r["verdict"] == "ai" for r in res], calibration["fpr"], calibration["confidence"])
 
     def check(self, texts, calibration=None, batch=2):
-        s = self.scores(texts, batch)
+        s = self.scores(texts, batch, (calibration or {}).get("windows", 1))
         if calibration and calibration.get("head_sha256") not in (None, self.head_sha):
             raise ValueError("calibration was made with a different probe head; recalibrate")
         out = []
@@ -294,6 +318,8 @@ def main(argv=None):
             q.add_argument("--human", required=True, help=".jsonl of {\"text\"} or .txt of blank-line-separated texts")
             q.add_argument("--fpr", type=float, default=0.05)
             q.add_argument("--confidence", type=float, default=0.95)
+            q.add_argument("--windows", type=int, default=1,
+                           help="read up to this many 256-token windows of each text (whole-document reading)")
             q.add_argument("--out", required=True)
         else:
             q.add_argument("--calibration", default=None)
@@ -318,7 +344,7 @@ def main(argv=None):
         return
     det = Detector(a.head, threads=a.threads)
     if a.cmd == "calibrate":
-        cal = det.calibrate(read_texts(a.human), a.fpr, a.confidence, a.batch)
+        cal = det.calibrate(read_texts(a.human), a.fpr, a.confidence, a.batch, a.windows)
         with open(a.out, "w") as f:
             json.dump(cal, f, indent=1)
         print(json.dumps(cal, indent=1))
