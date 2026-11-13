@@ -226,9 +226,15 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             if not (0.001 <= fpr <= 0.5 and 0.5 <= conf <= 0.999):
                 usage.code(path, 400)
                 return self.send_json(400, {"error": "fpr in [0.001, 0.5], confidence in [0.5, 0.999]"})
+            windows = req.get("windows", 1)
+            if not isinstance(windows, int) or isinstance(windows, bool) or not 1 <= windows <= 8:
+                usage.code(path, 400)
+                return self.send_json(400, {"error": "windows: an integer from 1 to 8"})
             try:
                 if path.endswith("/audit"):
                     cal = verifier.audit(texts, name)
+                elif windows != 1:
+                    cal = verifier.calibrate(texts, fpr, conf, name, windows=windows)
                 else:
                     cal = verifier.calibrate(texts, fpr, conf, name)
             except ValueError as e:                             # too few texts, or nothing to audit

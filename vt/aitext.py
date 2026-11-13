@@ -289,9 +289,9 @@ class Service:
         with self.lock:
             return self.d.audit(texts, cal)
 
-    def calibrate(self, texts, fpr, confidence, key_name):
+    def calibrate(self, texts, fpr, confidence, key_name, windows=1):
         with self.lock:
-            cal = self.d.calibrate(texts, fpr, confidence)
+            cal = self.d.calibrate(texts, fpr, confidence, windows=windows)
         if self.dir:
             os.makedirs(self.dir, exist_ok=True)
             with open(os.path.join(self.dir, f"{key_name}.json"), "w") as f:

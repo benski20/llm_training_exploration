@@ -8,13 +8,14 @@ follows differs.
 
 Per genre (academic, news, fiction): 200 human documents and 120 mixed ones (20 per generator: GPT-4o,
 GPT-4o-mini, Llama-3-70B/8B base and instruct), from distinct source texts. Each document is read in up to four
-consecutive 256-token windows (about 1,000 tokens: the human opening is about 650), every window's features kept,
-so reading 1, 2, 3 or 4 windows is compared on the same pass. A document's score is its most AI-like window.
+consecutive 256-token windows, then windows 5-6 in a second pass (documents are about 1,390 tokens, the human
+opening about 620), every window's features kept, so reading 1 to 6 windows is compared on the same features. A document's score is its most AI-like window.
 The promise (5% false alarms, 95% confidence, union of probe and Binoculars) is calibrated per genre on 150 human
 documents and tested on the other 50 and the mixed ones, 50 times.
 
     AI_TEXT_SCRATCH=<dir> python experiments/ai_text_mixed.py sample --hape <dir of the parquet files>
-    AI_TEXT_SCRATCH=<dir> python experiments/ai_text_mixed.py read
+    AI_TEXT_SCRATCH=<dir> python experiments/ai_text_mixed.py read --to-window 4
+    AI_TEXT_SCRATCH=<dir> python experiments/ai_text_mixed.py read --from-window 4 --to-window 6
     AI_TEXT_SCRATCH=<dir> python experiments/ai_text_mixed.py evaluate
 """
 import argparse
@@ -31,7 +32,7 @@ SCRATCH = os.environ.get("AI_TEXT_SCRATCH", "results/ai_text")
 GENERATORS = ("gpt-4o-2024-08-06", "gpt-4o-mini-2024-07-18", "llama-3-70B-Instruct", "llama-3-8B-Instruct",
               "llama-3-70B", "llama-3-8B")
 GENRES = ("acad", "news", "fic")
-WINDOWS = 4
+WINDOWS = 6
 
 
 def sample(a):
@@ -54,8 +55,7 @@ def sample(a):
                 rows.append({"text": c1[d] + "\n\n" + gens[g][d], "genre": genre, "model": g, "doc": d, "y": 1,
                              "human_chars": len(c1[d])})
     with open(f"{SCRATCH}/mixed_sample.jsonl", "w") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+        f.writelines(json.dumps(r) + "\n" for r in rows)
     print(len(rows), "documents")
 
 
@@ -64,7 +64,8 @@ def read(a):
     with open(f"{SCRATCH}/mixed_sample.jsonl") as f:
         rows = [json.loads(line) for line in f]
     r = Reader(threads=a.threads)
-    path = f"{SCRATCH}/mixed_features.npz"
+    lo, hi = a.from_window, a.to_window
+    path = f"{SCRATCH}/mixed_features.npz" if lo == 0 else f"{SCRATCH}/mixed_features_w{lo + 1}-{hi}.npz"
     have = dict(np.load(path)) if os.path.exists(path) else None
     S, H, O, W = ([have[k]] for k in ("scalars", "hidden", "owner", "window")) if have else ([], [], [], [])
     start = int(have["owner"].max()) + 1 if have else 0
@@ -72,10 +73,12 @@ def read(a):
     for b in range(start, len(rows), a.docs_per_save):
         ws, own, idx = [], [], []
         for i in range(b, min(b + a.docs_per_save, len(rows))):
-            w = r.windows(rows[i]["text"], most=WINDOWS)
+            w = r.windows(rows[i]["text"], most=hi)[lo:]
             ws += w
             own += [i] * len(w)
-            idx += list(range(len(w)))
+            idx += list(range(lo, lo + len(w)))
+        if not ws:
+            continue
         s, h = r.features_ids(ws, a.batch)
         S.append(s)
         H.append(h)
@@ -92,7 +95,9 @@ def evaluate(a):
     from vt.correctness import auroc
     with open(f"{SCRATCH}/mixed_sample.jsonl") as f:
         rows = [json.loads(line) for line in f]
-    z = np.load(f"{SCRATCH}/mixed_features.npz")
+    import glob
+    parts = [np.load(p) for p in sorted(glob.glob(f"{SCRATCH}/mixed_features*.npz"))]
+    z = {k: np.concatenate([p[k] for p in parts]) for k in ("scalars", "hidden", "owner", "window")}
 
     class NoReader:
         names = ()
@@ -104,8 +109,10 @@ def evaluate(a):
     genre = np.array([r["genre"] for r in rows])
     model = np.array([r["model"] for r in rows])
     y = np.array([r["y"] for r in rows])
-    res = {"documents": n, "windows_read": {}}
-    for k in range(1, WINDOWS + 1):
+    res = {"documents": n, "windows_read": {},
+           "window_alone_auroc": {int(k) + 1: {x: round(float(auroc(s[x][win == k], y[owner[win == k]].astype(float))), 3)
+                                              for x in ("probe", "binoculars")} for k in np.unique(win)}}
+    for k in range(1, int(win.max()) + 2):
         doc = {}
         for name in ("probe", "binoculars"):
             v = np.full(n, -np.inf)
@@ -151,6 +158,8 @@ def main():
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--batch", type=int, default=2)
     ap.add_argument("--docs-per-save", type=int, default=20)
+    ap.add_argument("--from-window", type=int, default=0)
+    ap.add_argument("--to-window", type=int, default=WINDOWS)
     ap.add_argument("--cal", type=int, default=150)
     ap.add_argument("--splits", type=int, default=50)
     ap.add_argument("--fpr", type=float, default=0.05)

@@ -28,13 +28,20 @@ class FakeReader:
         S, H = [], []
         for t in texts:
             rng = np.random.default_rng(abs(hash(t)) % 2**32)
-            ai = "delve" in t
+            ai = "delve" in t.split()[:20]                   # the fake reads 20 "tokens", like the first window
             nll = rng.normal(2.0 if ai else 3.5, 0.3)
             S.append([nll, nll * 0.9, nll * (1.3 if ai else 1.0), 2.5, 1.0, 0.4, min(256, len(t.split()))])
             h = rng.normal(0, 1, 4 * D)
             h[0] += 3 if ai else 0
             H.append(h)
         return np.array(S, np.float32), np.array(H, np.float16)
+
+    def windows(self, text, size=256, most=8, min_last=64):
+        w = text.split()
+        return [w[i:i + 20] for i in range(0, len(w), 20)][:most]     # 20 "tokens" a window in the fake
+
+    def features_ids(self, token_lists, batch=2):
+        return self.features([" ".join(t) for t in token_lists], batch)
 
 
 def texts(n, ai, seed=0):
@@ -130,5 +137,28 @@ def test_api_per_key_calibration(detector, tmp_path):
         code, r = post(url + "/batch", {"items": [{"text": t} for t in texts(2, False, 7)]}, "k1")
         assert code == 200 and len(r["results"]) == 2
         assert post(url, {"text": texts(1, True)[0]}, "bad")[0] == 401
+    finally:
+        srv.shutdown()
+
+
+def test_windows_catch_an_ai_body_behind_a_human_opening(detector):
+    mixed = [h + " " + a for h, a in zip(texts(40, False, 20), texts(40, True, 21))]   # human first 81 words
+    cal = detector.calibrate(texts(150, False, 3), windows=8)
+    assert cal["windows"] == 8
+    first = detector.check(mixed, detector.calibrate(texts(150, False, 3)))
+    whole = detector.check(mixed, cal)
+    assert np.mean([r["verdict"] == "ai" for r in whole]) > np.mean([r["verdict"] == "ai" for r in first]) + 0.5
+    assert np.mean([r["verdict"] == "ai" for r in detector.check(texts(200, False, 22), cal)]) <= 0.05
+
+
+def test_api_calibrate_takes_windows(detector, tmp_path):
+    srv = make_server(Service(detector, calibration_dir=str(tmp_path)), port=0, keys={"k1": "acme"},
+                      rate_per_minute=100, max_body=8 << 20, path="/v1/aitext", validator=validate)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/v1/aitext"
+    try:
+        assert post(url + "/calibrate", {"human_texts": texts(150, False, 3), "windows": 0}, "k1")[0] == 400
+        code, cal = post(url + "/calibrate", {"human_texts": texts(150, False, 3), "windows": 4}, "k1")
+        assert code == 200 and cal["windows"] == 4
     finally:
         srv.shutdown()
