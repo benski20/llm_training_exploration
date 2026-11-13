@@ -1,0 +1,324 @@
+{
+ "texts": 5280,
+ "C": 0.01,
+ "unseen_family": {
+  "openai": {
+   "auroc_probe": 0.977,
+   "auroc_binoculars": 0.858,
+   "caught_probe": 0.82,
+   "caught_binoculars": 0.621
+  },
+  "meta": {
+   "auroc_probe": 0.996,
+   "auroc_binoculars": 0.848,
+   "caught_probe": 0.937,
+   "caught_binoculars": 0.48
+  },
+  "mistral": {
+   "auroc_probe": 0.959,
+   "auroc_binoculars": 0.721,
+   "caught_probe": 0.773,
+   "caught_binoculars": 0.453
+  },
+  "mosaicml": {
+   "auroc_probe": 0.957,
+   "auroc_binoculars": 0.57,
+   "caught_probe": 0.775,
+   "caught_binoculars": 0.359
+  },
+  "cohere": {
+   "auroc_probe": 0.921,
+   "auroc_binoculars": 0.928,
+   "caught_probe": 0.646,
+   "caught_binoculars": 0.611
+  },
+  "mean": {
+   "auroc_probe": 0.962,
+   "auroc_binoculars": 0.785,
+   "caught_probe": 0.79,
+   "caught_binoculars": 0.505
+  }
+ },
+ "promise_5pct_from_150_human": {
+  "binoculars": {
+   "abstracts": {
+    "false_alarms_mean": 0.021,
+    "splits_over_5pct": 0.06,
+    "caught": 0.638,
+    "caught_paraphrased": 0.82
+   },
+   "books": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.06,
+    "caught": 0.5,
+    "caught_paraphrased": 0.772
+   },
+   "news": {
+    "false_alarms_mean": 0.02,
+    "splits_over_5pct": 0.04,
+    "caught": 0.513,
+    "caught_paraphrased": 0.687
+   },
+   "poetry": {
+    "false_alarms_mean": 0.024,
+    "splits_over_5pct": 0.12,
+    "caught": 0.508,
+    "caught_paraphrased": 0.611
+   },
+   "recipes": {
+    "false_alarms_mean": 0.018,
+    "splits_over_5pct": 0.02,
+    "caught": 0.447,
+    "caught_paraphrased": 0.666
+   },
+   "reddit": {
+    "false_alarms_mean": 0.021,
+    "splits_over_5pct": 0.14,
+    "caught": 0.464,
+    "caught_paraphrased": 0.667
+   },
+   "reviews": {
+    "false_alarms_mean": 0.02,
+    "splits_over_5pct": 0.02,
+    "caught": 0.435,
+    "caught_paraphrased": 0.776
+   },
+   "wiki": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.04,
+    "caught": 0.548,
+    "caught_paraphrased": 0.753
+   },
+   "mean": {
+    "false_alarms_mean": 0.02,
+    "splits_over_5pct": 0.062,
+    "caught": 0.507,
+    "caught_paraphrased": 0.719
+   }
+  },
+  "probe": {
+   "abstracts": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.1,
+    "caught": 0.876,
+    "caught_paraphrased": 0.546
+   },
+   "books": {
+    "false_alarms_mean": 0.018,
+    "splits_over_5pct": 0.0,
+    "caught": 0.85,
+    "caught_paraphrased": 0.164
+   },
+   "news": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.02,
+    "caught": 0.974,
+    "caught_paraphrased": 0.596
+   },
+   "poetry": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.04,
+    "caught": 0.751,
+    "caught_paraphrased": 0.411
+   },
+   "recipes": {
+    "false_alarms_mean": 0.021,
+    "splits_over_5pct": 0.0,
+    "caught": 0.832,
+    "caught_paraphrased": 0.11
+   },
+   "reddit": {
+    "false_alarms_mean": 0.018,
+    "splits_over_5pct": 0.0,
+    "caught": 0.886,
+    "caught_paraphrased": 0.567
+   },
+   "reviews": {
+    "false_alarms_mean": 0.018,
+    "splits_over_5pct": 0.04,
+    "caught": 0.587,
+    "caught_paraphrased": 0.107
+   },
+   "wiki": {
+    "false_alarms_mean": 0.022,
+    "splits_over_5pct": 0.02,
+    "caught": 0.836,
+    "caught_paraphrased": 0.275
+   },
+   "mean": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.028,
+    "caught": 0.824,
+    "caught_paraphrased": 0.347
+   }
+  },
+  "probe+para": {
+   "abstracts": {
+    "false_alarms_mean": 0.017,
+    "splits_over_5pct": 0.04,
+    "caught": 0.888,
+    "caught_paraphrased": 0.809
+   },
+   "books": {
+    "false_alarms_mean": 0.02,
+    "splits_over_5pct": 0.06,
+    "caught": 0.854,
+    "caught_paraphrased": 0.474
+   },
+   "news": {
+    "false_alarms_mean": 0.015,
+    "splits_over_5pct": 0.02,
+    "caught": 0.949,
+    "caught_paraphrased": 0.882
+   },
+   "poetry": {
+    "false_alarms_mean": 0.018,
+    "splits_over_5pct": 0.02,
+    "caught": 0.739,
+    "caught_paraphrased": 0.698
+   },
+   "recipes": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.0,
+    "caught": 0.908,
+    "caught_paraphrased": 0.735
+   },
+   "reddit": {
+    "false_alarms_mean": 0.02,
+    "splits_over_5pct": 0.06,
+    "caught": 0.797,
+    "caught_paraphrased": 0.697
+   },
+   "reviews": {
+    "false_alarms_mean": 0.022,
+    "splits_over_5pct": 0.08,
+    "caught": 0.534,
+    "caught_paraphrased": 0.137
+   },
+   "wiki": {
+    "false_alarms_mean": 0.021,
+    "splits_over_5pct": 0.08,
+    "caught": 0.826,
+    "caught_paraphrased": 0.544
+   },
+   "mean": {
+    "false_alarms_mean": 0.019,
+    "splits_over_5pct": 0.045,
+    "caught": 0.812,
+    "caught_paraphrased": 0.622
+   }
+  },
+  "union(probe, binoculars)": {
+   "abstracts": {
+    "false_alarms_mean": 0.015,
+    "splits_over_5pct": 0.02,
+    "caught": 0.87,
+    "caught_paraphrased": 0.78
+   },
+   "books": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.02,
+    "caught": 0.874,
+    "caught_paraphrased": 0.655
+   },
+   "news": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.04,
+    "caught": 0.964,
+    "caught_paraphrased": 0.684
+   },
+   "poetry": {
+    "false_alarms_mean": 0.01,
+    "splits_over_5pct": 0.0,
+    "caught": 0.503,
+    "caught_paraphrased": 0.572
+   },
+   "recipes": {
+    "false_alarms_mean": 0.012,
+    "splits_over_5pct": 0.02,
+    "caught": 0.804,
+    "caught_paraphrased": 0.372
+   },
+   "reddit": {
+    "false_alarms_mean": 0.014,
+    "splits_over_5pct": 0.02,
+    "caught": 0.848,
+    "caught_paraphrased": 0.641
+   },
+   "reviews": {
+    "false_alarms_mean": 0.01,
+    "splits_over_5pct": 0.0,
+    "caught": 0.59,
+    "caught_paraphrased": 0.644
+   },
+   "wiki": {
+    "false_alarms_mean": 0.012,
+    "splits_over_5pct": 0.02,
+    "caught": 0.81,
+    "caught_paraphrased": 0.616
+   },
+   "mean": {
+    "false_alarms_mean": 0.012,
+    "splits_over_5pct": 0.018,
+    "caught": 0.783,
+    "caught_paraphrased": 0.62
+   }
+  },
+  "union(probe+para, binoculars)": {
+   "abstracts": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.0,
+    "caught": 0.864,
+    "caught_paraphrased": 0.828
+   },
+   "books": {
+    "false_alarms_mean": 0.014,
+    "splits_over_5pct": 0.02,
+    "caught": 0.862,
+    "caught_paraphrased": 0.733
+   },
+   "news": {
+    "false_alarms_mean": 0.009,
+    "splits_over_5pct": 0.02,
+    "caught": 0.932,
+    "caught_paraphrased": 0.869
+   },
+   "poetry": {
+    "false_alarms_mean": 0.01,
+    "splits_over_5pct": 0.0,
+    "caught": 0.494,
+    "caught_paraphrased": 0.585
+   },
+   "recipes": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.04,
+    "caught": 0.87,
+    "caught_paraphrased": 0.743
+   },
+   "reddit": {
+    "false_alarms_mean": 0.016,
+    "splits_over_5pct": 0.02,
+    "caught": 0.76,
+    "caught_paraphrased": 0.754
+   },
+   "reviews": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.0,
+    "caught": 0.535,
+    "caught_paraphrased": 0.661
+   },
+   "wiki": {
+    "false_alarms_mean": 0.012,
+    "splits_over_5pct": 0.0,
+    "caught": 0.803,
+    "caught_paraphrased": 0.727
+   },
+   "mean": {
+    "false_alarms_mean": 0.013,
+    "splits_over_5pct": 0.013,
+    "caught": 0.765,
+    "caught_paraphrased": 0.737
+   }
+  }
+ }
+}
