@@ -128,5 +128,7 @@ The audit is the customer's own check of the promise: run it on human writing co
 (this term's essays, last month's submissions). "exceeded" means the flagged share is significantly above the
 promise (one-sided exact binomial test at the calibration's confidence): recalibrate on recent writing.
 
+Getting a customer (one-pager, interview, pilot, what counts as validated): [aitext_outreach.md](aitext_outreach.md).
+
 Reproduce: `experiments/ai_text_detect.py` (sample RAID, read, evaluate) and `experiments/ai_text_generalize.py`
 (unseen generator families, paraphrase, the union).
