@@ -1,0 +1,130 @@
+{
+ "out_of_domain_halubench": {
+  "answers": 300,
+  "hallucinated": 150,
+  "auroc": {
+   "lettuce": 0.682,
+   "internals": 0.724,
+   "minicheck": 0.635,
+   "combined": 0.746
+  },
+  "per_source": {
+   "lettuce": {
+    "DROP": 0.466,
+    "FinanceBench": 0.661,
+    "RAGTruth": 0.949,
+    "covidQA": 0.667,
+    "halueval": 0.73,
+    "pubmedQA": 0.59
+   },
+   "internals": {
+    "DROP": 0.671,
+    "FinanceBench": 0.563,
+    "RAGTruth": 0.921,
+    "covidQA": 0.749,
+    "halueval": 0.897,
+    "pubmedQA": 0.591
+   },
+   "minicheck": {
+    "DROP": 0.454,
+    "FinanceBench": 0.523,
+    "RAGTruth": 0.653,
+    "covidQA": 0.885,
+    "halueval": 0.73,
+    "pubmedQA": 0.814
+   },
+   "combined": {
+    "DROP": 0.571,
+    "FinanceBench": 0.63,
+    "RAGTruth": 0.97,
+    "covidQA": 0.749,
+    "halueval": 0.89,
+    "pubmedQA": 0.592
+   }
+  },
+  "caught": {
+   "lettuce": {
+    "5%": 0.247,
+    "10%": 0.327
+   },
+   "internals": {
+    "5%": 0.247,
+    "10%": 0.347
+   },
+   "minicheck": {
+    "5%": 0.067,
+    "10%": 0.113
+   },
+   "combined": {
+    "5%": 0.2,
+    "10%": 0.367
+   },
+   "union": {
+    "5%": 0.153,
+    "false_alarms_at_5%": 0.033,
+    "10%": 0.36,
+    "false_alarms_at_10%": 0.067
+   }
+  },
+  "auroc_difference_ci95": {
+   "lettuce - internals": [
+    -0.106,
+    -0.043,
+    0.021
+   ],
+   "combined - lettuce": [
+    0.025,
+    0.063,
+    0.104
+   ],
+   "combined - internals": [
+    -0.016,
+    0.022,
+    0.06
+   ]
+  }
+ },
+ "lettuce_promise_ragtruth": {
+  "promise": "at most 10% false alarms, 95% confidence",
+  "splits": 200,
+  "by_task": {
+   "Data2txt": {
+    "clean": 73,
+    "hallucinated": 130,
+    "calibrated_on": 36,
+    "false_alarms_mean": 0.024,
+    "test_halves_over_promise": 0.045,
+    "caught": 0.618,
+    "published_cut_0.5": {
+     "false_alarms": 0.137,
+     "caught": 0.854
+    }
+   },
+   "QA": {
+    "clean": 156,
+    "hallucinated": 40,
+    "calibrated_on": 78,
+    "false_alarms_mean": 0.055,
+    "test_halves_over_promise": 0.12,
+    "caught": 0.561,
+    "published_cut_0.5": {
+     "false_alarms": 0.135,
+     "caught": 0.75
+    }
+   },
+   "Summary": {
+    "clean": 144,
+    "hallucinated": 57,
+    "calibrated_on": 72,
+    "false_alarms_mean": 0.041,
+    "test_halves_over_promise": 0.05,
+    "caught": 0.43,
+    "published_cut_0.5": {
+     "false_alarms": 0.076,
+     "caught": 0.579
+    }
+   }
+  },
+  "note": "test_halves_over_promise counts halves whose measured rate exceeds the promise; with 20-80 clean test answers a half can exceed it by chance even when the true rate is within it"
+ }
+}

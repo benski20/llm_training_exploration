@@ -9,9 +9,17 @@ Scorers (higher score = more likely to hold something the documents do not suppo
     internals   the frozen-reader grounding check (vt/grounding.py): a probe on Qwen3-4B's neurons plus how much
                 the documents raise the words written. Trained without human labels; per-sentence verdicts.
 
+With two scorers the engine reads one combined score: each scorer's value on a fixed scale (LettuceDetect's logit
+divided by 2.92, the internals total by 0.94: their spreads over clean HaluBench answers), summed. On 300 HaluBench
+answers outside LettuceDetect's training domain this ranks better than LettuceDetect alone (AUROC 0.746 against
+0.682; difference +0.063, 95% CI [+0.025, +0.104]) and level with the internals (0.724), while flagging when either
+scorer passes a threshold at half the budget wastes it (results/verify_engine_choice.json). The scales are fixed,
+not fitted on the customer's replies, so the calibration's guarantee is exact.
+
 Without a calibration each scorer uses its own default cut (LettuceDetect's published 0.5; the grounding check's
-own threshold). With one, a reply is flagged when any scorer passes its calibrated threshold, and the promise
-says at most that share of good replies like the calibration set are flagged, with that confidence.
+own threshold) and a reply is flagged when any passes. With one, the reply is flagged when its score (or the
+combined score) passes the calibrated threshold, and the promise says at most that share of good replies like the
+calibration set are flagged, with that confidence.
 """
 import json
 import os
@@ -44,8 +52,16 @@ def spans_from_probs(answer, offsets, probs, threshold):
     return out
 
 
+def _logit(p):
+    p = min(max(p, 1e-6), 1 - 1e-6)
+    return float(np.log(p / (1 - p)))
+
+
 class LettuceScorer:
-    name, default_threshold = "lettuce", 0.5
+    name, default_threshold, spread = "lettuce", 0.5, 2.92
+
+    def z(self, value):
+        return _logit(value) / self.spread
 
     def __init__(self, model=LETTUCE, revision=LETTUCE_REV, threads=None, detector=None):
         if detector is None:
@@ -77,7 +93,10 @@ class LettuceScorer:
 
 
 class InternalsScorer:
-    name = "internals"
+    name, spread = "internals", 0.94
+
+    def z(self, value):
+        return value / self.spread
 
     def __init__(self, grounding):
         self.g = grounding
@@ -106,24 +125,31 @@ class Engine:
     def names(self):
         return [s.name for s in self.scorers]
 
+    @property
+    def keys(self):
+        """The scores a calibration thresholds: the one scorer's, or the combined score."""
+        return self.names if len(self.scorers) == 1 else ["combined"]
+
     def scores(self, item):
         with self.lock:
-            return {s.name: s.score(item) for s in self.scorers}
+            raw = {s.name: s.score(item) for s in self.scorers}
+        values = {k: v for k, (v, _) in raw.items()}
+        if len(self.scorers) > 1:
+            values["combined"] = sum(s.z(values[s.name]) for s in self.scorers)
+        return values, raw
 
     def verify(self, item, calibration=None):
         t = time.time()
-        raw = self.scores(item)
-        values = {k: v for k, (v, _) in raw.items()}
+        values, raw = self.scores(item)
         if calibration:
-            thr = calibration["thresholds"]
             fired = promise.fired(calibration, values)
         else:
-            thr = {s.name: s.default_threshold for s in self.scorers}
-            fired = [k for k, v in values.items() if v > thr[k]]
+            fired = [s.name for s in self.scorers if values[s.name] > s.default_threshold]
         out = {"verdict": FLAGGED if fired else "supported", "fired": fired,
                "scores": {k: round(v, 4) for k, v in values.items()}}
         for s in self.scorers:
-            out.update(s.detail(item, raw[s.name][1], thr[s.name]))
+            thr = (calibration or {}).get("thresholds", {}).get(s.name, s.default_threshold)
+            out.update(s.detail(item, raw[s.name][1], thr))
         if calibration:
             out["promise"] = calibration["promise"]
         else:
@@ -135,13 +161,13 @@ class Engine:
         return out
 
     def calibrate(self, items, fpr=0.05, confidence=0.95):
-        per = [self.scores(it) for it in items]
-        s = {name: np.array([p[name][0] for p in per]) for name in self.names}
+        per = [self.scores(it)[0] for it in items]
+        s = {k: np.array([p[k] for p in per]) for k in self.keys}
         return promise.promise_from_scores(s, fpr, confidence, good=GOOD, flagged_as=FLAGGED,
                                            extra={"scorers": self.names})
 
     def audit(self, items, calibration):
-        flags = [bool(promise.fired(calibration, {k: v for k, (v, _) in self.scores(it).items()})) for it in items]
+        flags = [bool(promise.fired(calibration, self.scores(it)[0])) for it in items]
         return promise.audit_from_flags(flags, calibration["fpr"], calibration["confidence"], good=GOOD)
 
 

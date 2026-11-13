@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# The verification engine (vt/verify_engine.py behind vt/verify_service.py --engine lettuce): POST /v1/verify,
+# /batch, /calibrate, /audit; GET /health, /metrics. Each reply is checked against its documents; unsupported
+# words come back as character spans; each API key gets its own false-alarm promise, set on replies it knows are
+# supported and auditable later.
+# LettuceDetect-large (KRLabsOrg, MIT) is baked in at a pinned revision and the hub is set offline, so the
+# container needs no network: it runs inside a customer's network with --network none, and no reply or document
+# leaves it.
+#   docker build -f Dockerfile.verify -t verify .
+#   docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v verify-cal:/data verify
+# Calibrations (one per API key) persist in the /data volume. CPU only; 4 GB RAM.
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
+ARG LETTUCE_REV=22296c700ef0ba4ab3e5c9afffa0185caaf61e52
+ENV HF_HOME=/opt/hf PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir torch==2.14.1 --index-url "$TORCH_INDEX" && \
+    pip install --no-cache-dir transformers==5.22.0 huggingface_hub==2.4.0 numpy==2.5.3 scipy==1.18.1 \
+        scikit-learn==1.9.1 lettucedetect==0.2.3 openai==3.50.0 rag-fact-checker==0.1.5
+RUN python - <<EOF
+import os
+from huggingface_hub import snapshot_download
+repo, rev = "KRLabsOrg/lettucedect-large-modernbert-en-v1", "$LETTUCE_REV"
+snapshot_download(repo, revision=rev)
+refs = os.path.join(os.environ["HF_HOME"], "hub", "models--" + repo.replace("/", "--"), "refs")
+os.makedirs(refs, exist_ok=True)
+with open(os.path.join(refs, "main"), "w") as f:
+    f.write(rev)
+EOF
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY vt ./vt
+RUN --mount=type=secret,id=pipca,required=false \
+    if [ -f /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
+    pip install --no-cache-dir --no-deps . && useradd --create-home --uid 10001 vt && \
+    mkdir -p /data && chown vt /data
+USER vt
+VOLUME /data
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+ENTRYPOINT ["python", "-m", "vt.verify_service", "--engine", "lettuce", "--host", "0.0.0.0", "--port", "8000", \
+            "--calibration-dir", "/data"]

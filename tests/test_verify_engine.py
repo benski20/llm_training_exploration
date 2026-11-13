@@ -21,6 +21,9 @@ class Fake:
         bad = "never" in item["reply"]
         return float(rng.normal(0.8 if bad else 0.2, 0.1) + self.shift), {"probs": [], "offsets": []}
 
+    def z(self, value):
+        return value / 0.1
+
     def detail(self, item, extra, threshold):
         return {}
 
@@ -55,10 +58,12 @@ def test_uncalibrated_uses_default_thresholds(engine):
 
 
 def test_calibration_promise_and_audit(engine):
-    with pytest.raises(ValueError, match="at least 146"):
+    with pytest.raises(ValueError, match="at least 59"):          # one combined score: no union penalty
         engine.calibrate(items(50))
     cal = engine.calibrate(items(150))
-    assert cal["items"] == 150 and set(cal["thresholds"]) == {"a", "b"} and "5%" in cal["promise"]
+    assert cal["items"] == 150 and set(cal["thresholds"]) == {"combined"} and "5%" in cal["promise"]
+    one = Engine([Fake("a")]).calibrate(items(150))
+    assert set(one["thresholds"]) == {"a"}
     flagged = [engine.verify(it, cal)["verdict"] == "unsupported" for it in items(300, seed=1)]
     assert np.mean(flagged) <= 0.05
     assert all(engine.verify(it, cal)["verdict"] == "unsupported" for it in items(20, bad=True, seed=2))

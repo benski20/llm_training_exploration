@@ -5,6 +5,52 @@ evidence the reply should rest on, and says, sentence by sentence, which stateme
 does not hold. It reads a small open "reader" model's internals in two forward passes; nothing is generated and no
 LLM is asked for an opinion. It works with replies from any model, open or closed.
 
+## What ships now: the verification engine (`vt/verify_engine.py`, `Dockerfile.verify`)
+
+A guardrail for answers written from documents. Each reply is checked against its documents; the words the
+documents do not support come back as character spans; and each customer sets a **false-alarm promise on their
+own traffic** and can audit it. Accuracy is not where it can lead (open detectors are free); the promise, the
+audit and running inside the customer's network with no network access are.
+
+| piece | what it is |
+|---|---|
+| scorer | LettuceDetect-large (ModernBERT fine-tuned on RAGTruth, MIT): a probability per reply token; the reply's score is the highest; tokens above the threshold become spans. Optionally plus the frozen-reader internals check (`--engine lettuce+internals`), read as one combined score |
+| promise | `POST /v1/verify/calibrate {"replies": [...]}` with replies the customer knows are supported (no hallucinated examples needed): "at most 5% of supported replies like these flagged, with 95% confidence" (one-sided Clopper-Pearson, 59+ replies; `vt/promise.py`) |
+| audit | `POST /v1/verify/audit {"replies": [...]}` on new supported replies: flagged share, exact interval, "consistent" or "exceeded" |
+| container | `Dockerfile.verify`: model baked in at a pinned revision, hub offline, runs with `--network none`; calibrations per API key in `/data` |
+| check | `deploy/verify_smoke.py`, run by the `verify-image` workflow with the network off on every change |
+
+```bash
+docker build -f Dockerfile.verify -t verify .
+docker run -p 8000:8000 -e VERIFY_API_KEYS="acme:$KEY" -v verify-cal:/data verify
+python deploy/verify_smoke.py --url http://127.0.0.1:8000 --key "$KEY"
+```
+
+Measured (`results/verify_engine_choice.json`, `experiments/verify_engine_choice.py`):
+
+* **End to end, through the API on CPU** (RAGTruth QA test replies, `examples/verify_smoke/`): calibrated on 80
+  supported replies at 5% / 95%; audit of 40 new supported replies: 0 flagged, "consistent"; 7 of 20 replies with
+  labelled hallucinations flagged, and in all 7 the flagged words overlap the human-labelled span; about 1 s a
+  check on 4 CPU cores (2.6 s on HaluBench's longer documents).
+* **The promise holds per task where the default cut does not** (RAGTruth test, LettuceDetect's scores; promise
+  "at most 10%" calibrated on half of each task's supported replies, 200 random halves):
+
+  | task | published 0.5 cut: false alarms / caught | promise: false alarms / caught |
+  |---|---|---|
+  | data-to-text | 13.7% / 85% | 2.4% / 62% |
+  | QA | 13.5% / 75% | 5.5% / 56% |
+  | summaries | 7.6% / 58% | 4.1% / 43% |
+
+* **Out of LettuceDetect's training domain** (HaluBench, 300 answers, 6 sources): AUROC LettuceDetect 0.682,
+  internals 0.724, MiniCheck 0.635; the combined score 0.746, above LettuceDetect by +0.063 (95% CI +0.025 to
+  +0.104), level with the internals. At the operating points that matter the gain is small: hallucinations caught
+  at 10% false alarms 37% combined, 35% internals, 33% LettuceDetect; at 5%, 20% / 25% / 25%. Flagging when either
+  scorer passes at half the budget wastes it (36% caught at 6.7% false alarms), so two scorers are combined into
+  one score. In-domain (RAGTruth) LettuceDetect alone: 0.949.
+* **Why LettuceDetect is the default:** level at the operating points, 2.2x faster on CPU than the internals
+  check (2.6 s against 5.9 s on HaluBench), a 0.4B model instead of 4B, and it gives word spans. The internals
+  check stays one flag away for customers whose documents are far from RAGTruth's.
+
 ## Who buys it
 
 Teams shipping answers written from documents, where an unsupported sentence has a cost:
