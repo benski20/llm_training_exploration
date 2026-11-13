@@ -569,8 +569,8 @@ def build(argv=None, host=None, port=None):
         if a.grounding_model and a.grounding_model != a.model:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
-            rtok = AutoTokenizer.from_pretrained(a.grounding_model)
-            reader = AutoModelForCausalLM.from_pretrained(
+            rtok = AutoTokenizer.from_pretrained(a.grounding_model)  # nosec B615: operator-chosen model; pin it by revision in deployment
+            reader = AutoModelForCausalLM.from_pretrained(  # nosec B615: operator-chosen model; pin it by revision in deployment
                 a.grounding_model, torch_dtype=torch.bfloat16, device_map="auto" if torch.cuda.is_available() else None).eval()
         else:
             reader, rtok = bot.model, bot.tok

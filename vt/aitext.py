@@ -33,6 +33,8 @@ import time
 import numpy as np
 
 OBSERVER, PERFORMER = "Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-0.6B"
+REVISIONS = {OBSERVER: "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",          # the commits the probe head was
+             PERFORMER: "c1899de289a04d12100db370d81485cdf75e47ca"}         # trained on (also Dockerfile.aitext)
 LAYERS = (7, 14, 21, 28)
 MAX_TOKENS = 256
 SCALARS = ("nll_observer", "nll_performer", "xent_obs_perf", "entropy_observer", "nll_sd", "top1_share", "tokens")
@@ -49,9 +51,10 @@ class Reader:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         if threads:
             torch.set_num_threads(threads)
-        self.tok = AutoTokenizer.from_pretrained(observer)
-        self.obs = AutoModelForCausalLM.from_pretrained(observer, dtype=torch.float32).eval()
-        self.perf = AutoModelForCausalLM.from_pretrained(performer, dtype=torch.float32).eval()
+        ro, rp = REVISIONS.get(observer, "main"), REVISIONS.get(performer, "main")
+        self.tok = AutoTokenizer.from_pretrained(observer, revision=ro)
+        self.obs = AutoModelForCausalLM.from_pretrained(observer, revision=ro, dtype=torch.float32).eval()
+        self.perf = AutoModelForCausalLM.from_pretrained(performer, revision=rp, dtype=torch.float32).eval()
         self.names = (observer, performer)
 
     def features(self, texts, batch=2, max_tokens=MAX_TOKENS):

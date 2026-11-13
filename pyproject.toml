@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = ["torch>=2.2", "numpy>=1.24", "scipy>=1.11"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "scikit-learn>=1.3"]
 sign = ["cryptography>=42"]                  # signed artifacts (vt/artifact.py)
 chat = ["tokenizers==0.23.3"]
 retrofit = ["tokenizers==0.23.3", "transformers==4.46.3", "peft==0.13.2"]

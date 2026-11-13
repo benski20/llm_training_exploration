@@ -97,7 +97,7 @@ def html_to_text(html):
     p = _Text()
     try:
         p.feed(html)
-    except Exception:                                        # malformed HTML: what was read so far
+    except Exception:  # nosec B110: malformed HTML keeps what was read so far
         pass
     lines = [" ".join(line.split()) for line in "".join(p.parts).split("\n")]
     return " ".join(p.title.split()), "\n".join(line for line in lines if len(line) > 1)

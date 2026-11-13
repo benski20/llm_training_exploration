@@ -36,15 +36,15 @@ import numpy as np
 def load_reader(name):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(name)
+    tok = AutoTokenizer.from_pretrained(name)  # nosec B615: operator-chosen model; pin it by revision in deployment
     if torch.cuda.is_available():
-        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.float16, device_map="auto").eval()
+        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.float16, device_map="auto").eval()  # nosec B615: operator-chosen model; pin it by revision in deployment
         if torch.cuda.get_device_capability(0)[0] < 8:          # T4: no bfloat16 matmuls
             for m in model.modules():
                 if getattr(m, "compute_dtype", None) == torch.bfloat16:
                     m.compute_dtype = torch.float16
     else:
-        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.bfloat16).eval()
+        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.bfloat16).eval()  # nosec B615: operator-chosen model; pin it by revision in deployment
     return model, tok
 
 
@@ -154,7 +154,7 @@ def cmd_calibrate(a):
     from vt.grounding import Grounding
     from vt.probe_train import load_probe, save_probe
     rows = read_jsonl(a.labeled)
-    rng = random.Random(a.seed)
+    rng = random.Random(a.seed)  # nosec B311: seeded sampling of evaluation data, not security
     idx = list(range(len(rows)))
     rng.shuffle(idx)
     cut = len(idx) - int(a.holdout * len(idx))
@@ -309,7 +309,7 @@ def cmd_augment(a):
                 for r in read_jsonl(a.unlabeled)]
     else:
         from datasets import load_dataset
-        ds = load_dataset("wandb/RAGTruth-processed", split="train").shuffle(seed=a.seed)
+        ds = load_dataset("wandb/RAGTruth-processed", split="train").shuffle(seed=a.seed)  # nosec B615: public evaluation data, not served
         rows = [{"question": r["query"], "reply": r["output"], "documents": [r["context"]]}
                 for r in ds.select(range(a.n))]
     g = Grounding(model, tok, tmp)
@@ -333,8 +333,8 @@ def cmd_augment(a):
 
 def cmd_halubench(a):
     from datasets import load_dataset
-    rows = list(load_dataset("PatronusAI/HaluBench", split="test"))
-    random.Random(a.seed).shuffle(rows)
+    rows = list(load_dataset("PatronusAI/HaluBench", split="test"))  # nosec B615: public evaluation data, not served
+    random.Random(a.seed).shuffle(rows)  # nosec B311: seeded sampling of evaluation data, not security
     per = {}
     out = []
     for r in rows:

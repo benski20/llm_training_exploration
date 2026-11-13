@@ -58,7 +58,7 @@ def phrase(s, rng):
 
 def construct(documents, n=600, seed=0, phrasing=True):
     """n labeled examples {"context", "reply", "kind", "y"} from documents, a third of each kind."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311: seeded sampling of evaluation data, not security
     docs = [d for d in documents if d and 60 <= len(d.split()) <= 600]
     rng.shuffle(docs)
     names = sorted({w for c in docs[:2000] for w in re.findall(r"\b[A-Z][a-z]{3,}\b", c)})
@@ -87,7 +87,7 @@ def construct(documents, n=600, seed=0, phrasing=True):
 def general_documents():
     """The general documents the measured probes were built from: Dolly's reference paragraphs (CC-BY-SA)."""
     from datasets import load_dataset
-    return [r["context"] for r in load_dataset("databricks/databricks-dolly-15k")["train"]
+    return [r["context"] for r in load_dataset("databricks/databricks-dolly-15k")["train"]  # nosec B615: public evaluation data, not served
             if r["context"] and 60 <= len(r["context"].split()) <= 400]
 
 
