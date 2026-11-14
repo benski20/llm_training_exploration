@@ -9,7 +9,7 @@ on:
     inputs:
       action:
         type: choice
-        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2, streamprobe, bigreader]
+        options: [deploy, stop, logs, wikicheck, correction, judge32, study, rejudge, study2, streamprobe, bigreader, bench, benchstop]
         default: deploy
       n:
         description: questions for the correction test
@@ -122,6 +122,21 @@ jobs:
           modal deploy deploy/stream_probe.py | tee probe.log
           for u in $(grep -o 'https://[^ ]*modal\.run' probe.log); do echo "== $u"; python deploy/stream_probe.py "$u" || true; done
           modal app stop -y verichat-stream-probe
+      - name: the verifier's test bench (CPU only, scales to zero when idle)
+        if: steps.req.outputs.action == 'bench'
+        id: bench
+        run: |
+          modal deploy deploy/modal_bench.py | tee bench.log
+          URL=$(grep -o 'https://[^ ]*modal\.run' bench.log | head -1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          for i in $(seq 60); do curl -sf -m 30 "$URL/health" && break; sleep 10; done
+          curl -sf -m 120 "$URL/v1/verify" -H 'Content-Type: application/json' -d '{"question": "When did it reopen?", "reply": "It reopened in June.", "documents": ["The bridge reopened on 14 March 2024."]}'
+          echo
+          echo "Test bench: $URL"
+          echo "### Test bench: $URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: take the test bench down
+        if: steps.req.outputs.action == 'benchstop'
+        run: modal app stop -y verify-bench
       - name: bigger reader for the internals probe (one GPU, time-capped in deploy/modal_bigreader.py)
         if: steps.req.outputs.action == 'bigreader'
         timeout-minutes: 120
