@@ -38,7 +38,8 @@ def load_reader(name):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(name)  # nosec B615: operator-chosen model; pin it by revision in deployment
     if torch.cuda.is_available():
-        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=torch.float16, device_map="auto").eval()  # nosec B615: operator-chosen model; pin it by revision in deployment
+        dt = torch.bfloat16 if torch.cuda.get_device_capability(0)[0] >= 8 else torch.float16    # T4: float16
+        model = AutoModelForCausalLM.from_pretrained(name, torch_dtype=dt, device_map="auto").eval()  # nosec B615: operator-chosen model; pin it by revision in deployment
         if torch.cuda.get_device_capability(0)[0] < 8:          # T4: no bfloat16 matmuls
             for m in model.modules():
                 if getattr(m, "compute_dtype", None) == torch.bfloat16:

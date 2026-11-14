@@ -140,7 +140,8 @@ def main():
     from vt.grounding import Grounding
     rows = [r for r in sample(a.per_source, a.seed) if not a.sources or r["source_ds"] in a.sources]
     tok = AutoTokenizer.from_pretrained(a.reader)
-    reader = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16).eval()
+    reader = AutoModelForCausalLM.from_pretrained(a.reader, torch_dtype=torch.bfloat16,
+                                                  device_map="auto" if torch.cuda.is_available() else None).eval()
     g = Grounding(reader, tok, a.probe, max_context_chars=12000)
     mc = None if a.no_minicheck else MiniCheck()
     out, t_g, t_m = [], 0.0, 0.0
