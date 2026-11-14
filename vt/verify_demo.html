@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grounding Guard test bench</title>
+<style>
+/* One column of panels: check an answer, set your false-alarm promise, audit it, run the labelled samples. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #17202b; --muted: #5a6573; --line: #dfe3e8;
+  --accent: #1f5f8b; --accent-soft: #e4eef6; --mark: #ffe58a; --mark-fg: #3a2c00;
+  --ok: #1d6b45; --ok-soft: #e2f2e9; --bad: #a33a2a; --bad-soft: #f8e5e1; --warn: #7a5600; --warn-soft: #fbf0d5;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #11161c; --surface: #18202a; --fg: #e6ebf1; --muted: #9aa6b4; --line: #2a3542;
+  --accent: #7db5dd; --accent-soft: #1d2f40; --mark: #7a6514; --mark-fg: #fff6d6;
+  --ok: #7fd1a6; --ok-soft: #173327; --bad: #f0a091; --bad-soft: #3a1f1a; --warn: #f0cf7f; --warn-soft: #3a3016;
+  color-scheme: dark } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); }
+.wrap { max-width: 920px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 20px; }
+h1 { margin: 0; font-size: 1.6rem; }
+h2 { margin: 0; font-size: 1.1rem; }
+p { margin: 0; }
+.sub { color: var(--muted); max-width: 70ch; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+textarea, input, select { font: 14px/1.5 var(--body); color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; width: 100%; }
+textarea { resize: vertical; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+button { font: 600 14px/1 var(--body); padding: 10px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); cursor: pointer; }
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: progress; }
+button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pill { display: inline-block; font: 600 0.8rem/1 var(--mono); padding: 6px 10px; border-radius: 999px; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+mark { background: var(--mark); color: var(--mark-fg); border-radius: 3px; padding: 0 2px; }
+.answer { white-space: pre-wrap; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.meta { font-size: 0.85rem; color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 0.85rem; }
+.status { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.results { display: grid; gap: 10px; }
+.item { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 6px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+@media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:grid;gap:6px">
+    <h1>Grounding Guard test bench</h1>
+    <p class="sub">Paste an answer and the documents it should rest on. The checker marks it supported or unsupported and highlights the words the documents don't support. Calibrate to set a false-alarm promise on known-good answers, then audit it.</p>
+    <p class="meta" id="health">Connecting to the checker…</p>
+  </header>
+
+  <section class="panel" aria-labelledby="check-h">
+    <h2 id="check-h">Check an answer</h2>
+    <div class="row">
+      <label style="flex:1;min-width:220px">Load an example
+        <select id="example"></select>
+      </label>
+    </div>
+    <label>Question <input id="q" type="text"></label>
+    <label>Answer to check <textarea id="a" rows="4"></textarea></label>
+    <label>Documents (separate several with a line containing only ---) <textarea id="d" rows="6"></textarea></label>
+    <div class="row"><button id="check" type="button">Check</button><span class="status" id="check-status"></span></div>
+    <div id="check-out" class="results"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="cal-h">
+    <h2 id="cal-h">Set a false-alarm promise</h2>
+    <p class="sub">Calibrates on 80 answers known to be supported (RAGTruth Q&amp;A, human-labelled). Without this, the checker uses its default cutoff. About 1 to 3 minutes on this machine.</p>
+    <div class="row">
+      <label style="width:auto">Wrongly flagged good answers, at most
+        <select id="fpr"><option value="0.05">5%</option><option value="0.10" selected>10%</option><option value="0.20">20%</option></select>
+      </label>
+      <button id="calibrate" type="button">Calibrate on 80 sample answers</button>
+    </div>
+    <div class="status" id="cal-status"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="audit-h">
+    <h2 id="audit-h">Test it on samples</h2>
+    <div class="grid2">
+      <div style="display:grid;gap:8px;align-content:start">
+        <p class="sub">Audit: run 40 new answers known to be supported. The report says whether the promise held.</p>
+        <button id="audit" type="button" class="secondary">Audit on 40 good answers</button>
+        <div class="status" id="audit-status"></div>
+      </div>
+      <div style="display:grid;gap:8px;align-content:start">
+        <p class="sub">Catch rate: run 20 answers with human-labelled hallucinations and compare the highlights with the labels.</p>
+        <button id="catch" type="button" class="secondary">Run 20 labelled hallucinations</button>
+        <div class="status" id="catch-status"></div>
+      </div>
+    </div>
+    <div id="catch-out" class="results"></div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const API = "/v1/verify";
+let samples = { good_calibrate: [], good_audit: [], unsupported: [] };
+const BRIDGE = "The Harbour Bridge was closed for repairs in January 2024 and reopened to traffic on 14 March 2024. The repairs cost 42 million dollars and were paid for by the regional government.";
+const examples = [
+  { name: "Bridge: answer with three errors", question: "When did the bridge reopen and what did it cost?",
+    reply: "The bridge reopened on 2 June 2024 after repairs costing 90 million dollars, paid for by a private company.", documents: [BRIDGE] },
+  { name: "Bridge: correct answer", question: "When did the bridge reopen and what did it cost?",
+    reply: "The bridge reopened on 14 March 2024 after repairs costing 42 million dollars.", documents: [BRIDGE] },
+];
+
+async function post(path, body) {
+  const res = await fetch(API + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function highlight(text, spans) {
+  let out = "", pos = 0;
+  for (const s of (spans || []).filter((s) => s.start != null).sort((a, b) => a.start - b.start)) {
+    if (s.start < pos) continue;
+    out += esc(text.slice(pos, s.start)) + '<mark title="confidence ' + s.confidence + '">' + esc(text.slice(s.start, s.end)) + "</mark>";
+    pos = s.end;
+  }
+  return out + esc(text.slice(pos));
+}
+
+function verdictPill(v) {
+  const cls = v === "supported" ? "ok" : v === "unsupported" ? "bad" : "warn";
+  return '<span class="pill ' + cls + '">' + esc(v) + "</span>";
+}
+
+function renderResult(item, r, extra) {
+  const scores = Object.entries(r.scores || {}).map(([k, v]) => k + " " + v).join(", ");
+  return '<div class="item">' +
+    '<div class="row">' + verdictPill(r.verdict) + '<span class="meta mono">' + esc(scores) + " · " + esc(r.ms) + " ms</span></div>" +
+    '<div class="answer">' + highlight(item.reply, r.spans) + "</div>" +
+    (extra || "") +
+    '<p class="meta">' + esc(r.promise || r.note || "") + "</p></div>";
+}
+
+function fillExamples() {
+  const sel = $("example");
+  const opts = examples.map((e, i) => ({ label: e.name, value: "ex" + i }));
+  samples.unsupported.slice(0, 5).forEach((e, i) => opts.push({ label: "RAGTruth sample with a labelled hallucination " + (i + 1), value: "bad" + i }));
+  samples.good_audit.slice(0, 3).forEach((e, i) => opts.push({ label: "RAGTruth sample, supported " + (i + 1), value: "good" + i }));
+  sel.innerHTML = opts.map((o) => '<option value="' + o.value + '">' + esc(o.label) + "</option>").join("");
+  load(opts[0].value);
+}
+
+function load(value) {
+  let e;
+  if (value.startsWith("ex")) e = examples[+value.slice(2)];
+  else if (value.startsWith("bad")) e = samples.unsupported[+value.slice(3)];
+  else e = samples.good_audit[+value.slice(4)];
+  $("q").value = e.question || "";
+  $("a").value = e.reply || "";
+  $("d").value = (e.documents || []).join("\n---\n");
+  $("check-out").innerHTML = "";
+}
+
+$("example").addEventListener("change", (ev) => load(ev.target.value));
+
+$("check").addEventListener("click", async () => {
+  const item = { question: $("q").value, reply: $("a").value,
+    documents: $("d").value.split(/\n\s*---\s*\n/).map((s) => s.trim()).filter(Boolean) };
+  if (!item.reply.trim()) { $("check-status").textContent = "Enter an answer to check."; return; }
+  $("check").disabled = true; $("check-status").textContent = "Checking…";
+  try {
+    const r = await post("", item);
+    $("check-out").innerHTML = renderResult(item, r);
+    $("check-status").textContent = "";
+  } catch (e) { $("check-status").textContent = "Check failed: " + e.message; }
+  $("check").disabled = false;
+});
+
+const strip = (r) => ({ question: r.question, reply: r.reply, documents: r.documents });
+
+$("calibrate").addEventListener("click", async () => {
+  if (!samples.good_calibrate.length) { $("cal-status").textContent = "No sample answers on this server."; return; }
+  $("calibrate").disabled = true; $("cal-status").textContent = "Calibrating on 80 answers… this takes a minute or more.";
+  try {
+    const c = await post("/calibrate", { replies: samples.good_calibrate.map(strip), fpr: +$("fpr").value, confidence: 0.95 });
+    $("cal-status").innerHTML = "<b>Calibrated.</b> " + esc(c.promise);
+    refreshHealth();
+  } catch (e) { $("cal-status").textContent = "Calibration failed: " + e.message; }
+  $("calibrate").disabled = false;
+});
+
+$("audit").addEventListener("click", async () => {
+  $("audit").disabled = true; $("audit-status").textContent = "Auditing 40 answers…";
+  try {
+    const r = await post("/audit", { replies: samples.good_audit.map(strip) });
+    $("audit-status").innerHTML = verdictPill(r.status === "consistent" ? "supported" : "unsupported").replace(/supported|unsupported/, esc(r.status)) +
+      " " + r.flagged + " of " + r.items + " good answers flagged (" + (100 * r.flagged_share).toFixed(1) +
+      "%, 95% interval " + (100 * r.ci95[0]).toFixed(1) + "–" + (100 * r.ci95[1]).toFixed(1) + "%) against a promise of " + (100 * r.promised) + "%.";
+  } catch (e) { $("audit-status").textContent = "Audit failed: " + e.message + (/calibrat/.test(e.message) ? " Calibrate first." : ""); }
+  $("audit").disabled = false;
+});
+
+$("catch").addEventListener("click", async () => {
+  $("catch").disabled = true; $("catch-out").innerHTML = "";
+  const items = samples.unsupported;
+  let caught = 0, done = 0;
+  try {
+    for (let i = 0; i < items.length; i += 5) {
+      $("catch-status").textContent = "Checking " + (i + 1) + "–" + Math.min(i + 5, items.length) + " of " + items.length + "…";
+      const batch = items.slice(i, i + 5);
+      const r = await post("/batch", { items: batch.map(strip) });
+      r.results.forEach((res, j) => {
+        const it = batch[j]; done++;
+        if (res.verdict === "unsupported") caught++;
+        const labels = '<details><summary>Human-labelled hallucination</summary><p class="meta">' +
+          (it.labelled_spans || []).map(esc).join(" · ") + "</p></details>";
+        $("catch-out").insertAdjacentHTML("beforeend", renderResult(it, res, labels));
+      });
+    }
+    $("catch-status").innerHTML = "<b>" + caught + " of " + done + "</b> labelled hallucinations flagged. Highlights are the checker's; open each to see the human label.";
+  } catch (e) { $("catch-status").textContent = "Run failed: " + e.message; }
+  $("catch").disabled = false;
+});
+
+async function refreshHealth() {
+  try {
+    const h = await (await fetch("/health")).json();
+    $("health").textContent = "Checker: " + (h.scorers || []).join(" + ") + " · " +
+      (h.calibrated ? "calibrated" : "default cutoff until you calibrate") + (h.per_key_calibration ? " (per API key)" : "");
+  } catch (e) { $("health").textContent = "Can't reach the checker."; }
+}
+
+(async () => {
+  refreshHealth();
+  try { samples = await (await fetch("/demo/samples.json")).json(); } catch (e) { /* examples still work */ }
+  fillExamples();
+})();
+</script>
+</body>
+</html>

@@ -214,4 +214,5 @@ class Service:
                 json.dump(cal, f, indent=1)
         else:
             self.default = cal
+            self.info["calibrated"] = True
         return cal

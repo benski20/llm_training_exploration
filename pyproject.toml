@@ -27,5 +27,8 @@ vt-aitext = "vt.aitext:main"
 [tool.setuptools]
 packages = ["vt"]
 
+[tool.setuptools.package-data]
+vt = ["*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

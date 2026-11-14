@@ -111,3 +111,19 @@ def test_calibration_from_other_scorers_is_refused(engine, tmp_path):
     (tmp_path / "acme.json").write_text(json.dumps(cal))
     with pytest.raises(ValueError, match="recalibrate"):
         svc.verify(items(1)[0], "acme")
+
+
+def test_demo_pages_are_served(engine, tmp_path):
+    from vt.verify_service import demo_pages
+    (tmp_path / "good_calibrate.jsonl").write_text(json.dumps(items(1)[0]) + "\n")
+    pages = demo_pages(str(tmp_path))
+    srv = make_server(Service(engine), port=0, pages=pages)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        with urllib.request.urlopen(base + "/") as r:
+            assert r.headers["Content-Type"].startswith("text/html") and b"/v1/verify" in r.read()
+        with urllib.request.urlopen(base + "/demo/samples.json") as r:
+            assert len(json.load(r)["good_calibrate"]) == 1
+    finally:
+        srv.shutdown()

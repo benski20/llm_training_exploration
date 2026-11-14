@@ -123,13 +123,14 @@ class Verifier:
 
 
 def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minute=120, max_body=1 << 20,
-                deadline=300.0, path="/v1/verify", validator=validate):
+                deadline=300.0, path="/v1/verify", validator=validate, pages=None):
     """`verifier.verify(item[, key_name])` answers `path` and `path`/batch. A verifier with a `calibrate`
     method also answers `path`/calibrate: {field: [...], "fpr"?, "confidence"?} sets that key's calibration; one
     with an `audit` method answers `path`/audit: {field: [...]} checks that key's promise on new known-good items.
     field is the verifier's `calibration_field`: "human_texts" (strings) by default, else items checked by
-    `validator` ("replies" for the verification engine)."""
-    keys = keys or {}
+    `validator` ("replies" for the verification engine). `pages`: {GET path: (content type, bytes)} served as is
+    (the test page and its samples, with --demo)."""
+    keys, pages = keys or {}, pages or {}
     usage, limiter = Usage(), RateLimiter(rate_per_minute)
     base = path
     can_calibrate = hasattr(verifier, "calibrate")
@@ -147,6 +148,16 @@ def make_server(verifier, host="127.0.0.1", port=8000, keys=None, rate_per_minut
             if self.path == "/health":
                 usage.code("/health", 200)
                 return self.send_json(200, dict(status="ok", **verifier.info))
+            if self.path in pages:
+                ctype, body = pages[self.path]
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                return usage.code("page", 200)
             if self.path == "/metrics":
                 body = usage.text().encode()
                 self.send_response(200)
@@ -276,6 +287,8 @@ def build(argv=None):
                     help="scorers, '+'-joined: lettuce (LettuceDetect, span-level), internals (the reader's neurons; "
                          "needs --reader and --probe). With it, per-key promises via /v1/verify/calibrate and /audit")
     ap.add_argument("--calibration-dir", default=None, help="per-API-key calibrations (with --engine)")
+    ap.add_argument("--demo", nargs="?", const="examples/verify_smoke", default=None, metavar="SAMPLES",
+                    help="serve a test page at / (with --engine), with sample answers from this folder")
     ap.add_argument("--threads", type=int, default=None)
     ap.add_argument("--reader", default=None, help="the model whose neurons the probe reads")
     ap.add_argument("--probe", default=None, help="a probe from vt.verifier_pipeline (calibrated, ideally)")
@@ -321,7 +334,22 @@ def build_engine(a):
             scorers.append(InternalsScorer(Grounding(model, tok, a.probe)))
             info.update(reader=a.reader, probe_sha256=sha256(a.probe)[:16])
     svc = Service(Engine(scorers), calibration_dir=a.calibration_dir, info=info)
-    return make_server(svc, a.host, a.port, keys_from_env(), a.rate_per_minute, max_body=8 << 20, deadline=1800.0)
+    return make_server(svc, a.host, a.port, keys_from_env(), a.rate_per_minute, max_body=8 << 20, deadline=1800.0,
+                       pages=demo_pages(a.demo) if a.demo else None)
+
+
+def demo_pages(samples):
+    """The test page (vt/verify_demo.html) and the sample answers it offers (examples/verify_smoke layout)."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_demo.html"), "rb") as f:
+        page = f.read()
+    data = {}
+    for name in ("good_calibrate", "good_audit", "unsupported"):
+        path = os.path.join(samples, f"{name}.jsonl")
+        if os.path.exists(path):
+            with open(path) as f:
+                data[name] = [json.loads(line) for line in f if line.strip()]
+    return {"/": ("text/html; charset=utf-8", page),
+            "/demo/samples.json": ("application/json", json.dumps(data).encode())}
 
 
 def main(argv=None):
