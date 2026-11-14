@@ -1,0 +1,72 @@
+{
+ "reader": "Qwen/Qwen3-4B",
+ "train_answers": 1600,
+ "train_sentences": 13242,
+ "halubench_answers": 300,
+ "C": 0.01,
+ "probe": {
+  "auroc": 0.622,
+  "per_source": {
+   "DROP": 0.416,
+   "FinanceBench": 0.65,
+   "RAGTruth": 0.915,
+   "covidQA": 0.49,
+   "halueval": 0.666,
+   "pubmedQA": 0.68
+  },
+  "caught_at_5pct": 0.067,
+  "caught_at_10pct": 0.147
+ },
+ "probe+lettuce": {
+  "auroc": 0.678,
+  "per_source": {
+   "DROP": 0.421,
+   "FinanceBench": 0.718,
+   "RAGTruth": 0.95,
+   "covidQA": 0.61,
+   "halueval": 0.725,
+   "pubmedQA": 0.661
+  },
+  "caught_at_5pct": 0.12,
+  "caught_at_10pct": 0.213
+ },
+ "lettuce": {
+  "auroc": 0.682,
+  "per_source": {
+   "DROP": 0.466,
+   "FinanceBench": 0.661,
+   "RAGTruth": 0.949,
+   "covidQA": 0.667,
+   "halueval": 0.73,
+   "pubmedQA": 0.59
+  },
+  "caught_at_5pct": 0.247,
+  "caught_at_10pct": 0.327
+ },
+ "grounding_check_4b": {
+  "auroc": 0.724,
+  "per_source": {
+   "DROP": 0.671,
+   "FinanceBench": 0.563,
+   "RAGTruth": 0.921,
+   "covidQA": 0.749,
+   "halueval": 0.897,
+   "pubmedQA": 0.591
+  },
+  "caught_at_5pct": 0.247,
+  "caught_at_10pct": 0.347
+ },
+ "minicheck": {
+  "auroc": 0.635,
+  "per_source": {
+   "DROP": 0.454,
+   "FinanceBench": 0.523,
+   "RAGTruth": 0.653,
+   "covidQA": 0.885,
+   "halueval": 0.73,
+   "pubmedQA": 0.814
+  },
+  "caught_at_5pct": 0.067,
+  "caught_at_10pct": 0.113
+ }
+}
