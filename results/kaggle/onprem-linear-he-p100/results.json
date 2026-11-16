@@ -1,0 +1,85 @@
+{
+ "package": "desilofhe-cu124",
+ "mode": "gpu",
+ "device": "Tesla T4",
+ "citation": "This work uses the DESILO FHE library developed by DESILO Inc. (https://desilo.ai)",
+ "selftest": {
+  "err_Mx": 3.862763087170151e-08,
+  "err_MTx": 25.320299422688826,
+  "transposed": false
+ },
+ "A_tile": {
+  "slot_count": 4096,
+  "light": {
+   "encode_s": 1.82,
+   "multiply_s": 0.4106,
+   "decrypt_s": 0.0016,
+   "rel_err": 2.0166448276788414e-08,
+   "torch_free_GB": 15.08
+  },
+  "plain": {
+   "encode_s": 2.108,
+   "multiply_s": 0.2677,
+   "decrypt_s": 0.0015,
+   "rel_err": 2.0166448276788414e-08,
+   "torch_free_GB": 14.49
+  },
+  "encrypt_s": 0.002,
+  "ct_up_bytes": 393254,
+  "ct_down_bytes": 262182,
+  "ct_add_s": 0.00016
+ },
+ "A_extrapolation": {
+  "llama-3-8b": {
+   "tiles_per_token": 448,
+   "server_gpu_s_per_token_cached_weights": 119.93,
+   "server_gpu_s_per_token_reencoding_weights": 935.3,
+   "client_encrypts": 224,
+   "client_decrypts": 352,
+   "client_crypto_s_per_token_on_T4": 1.01,
+   "upload_MB_per_token": 88.1,
+   "download_MB_per_token": 92.3,
+   "rounds_per_token": 128,
+   "lm_head_on_client_GFLOP": 1.05
+  },
+  "llama-3-70b": {
+   "tiles_per_token": 4160,
+   "server_gpu_s_per_token_cached_weights": 1113.63,
+   "server_gpu_s_per_token_reencoding_weights": 8684.8,
+   "client_encrypts": 1040,
+   "client_decrypts": 1680,
+   "client_crypto_s_per_token_on_T4": 4.77,
+   "upload_MB_per_token": 409.0,
+   "download_MB_per_token": 440.5,
+   "rounds_per_token": 320,
+   "lm_head_on_client_GFLOP": 2.1
+  }
+ },
+ "B_server_setup": {
+  "tiles": 432,
+  "cached_all": false,
+  "one_time_encode_s": 0.0
+ },
+ "B_plain": {
+  "prompt_tokens": 15,
+  "manual_forward_matches_hf": false,
+  "answer": " help her. She is a victim of"
+ },
+ "B_he": {
+  "answer": " help her. She is a victim of",
+  "tokens_generated": 8,
+  "identical_tokens_to_plaintext": true,
+  "max_abs_logit_diff": 2.8389840553977308e-05,
+  "max_logit": 20.75884712985208,
+  "prefill_s": 767.9,
+  "decode_s_per_token": 123.04,
+  "server_gpu_s_total": 1061.0,
+  "server_encode_s_total": 639.8,
+  "client_crypto_s_total": 7.9,
+  "n_encrypt": 4416,
+  "n_decrypt": 7728,
+  "n_tile_mults": 9936,
+  "note": "client encrypt/decrypt here also ran on the T4; 0.5B dims are padded into 1024-slot tiles"
+ },
+ "minutes": 30.2
+}

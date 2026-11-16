@@ -43,3 +43,29 @@ Every linear layer was delegated with dual-LPN masking: t = 160 nonzeros, code r
   16 bytes per parameter, and per-token client work is close to running the model locally until about 70B. Prefill costs the
   same per prompt token, with no batching benefit. A smaller field and smaller t help (perhaps 4x), but they don't change the conclusion.
   The **two-server** variant (additive shares, as in Gupta et al.) has trivial client compute and no storage, but it needs two non-colluding operators.
+
+## Linear-only HE measured (DESILO CUDA CKKS, Kaggle T4 and 4-core CPU), 2026-11-16
+Protocol: customer encrypts each activation vector, server multiplies by public weights under CKKS (depth 1, no bootstrapping),
+customer decrypts and does norms/attention/SiLU and the LM head in plaintext. Results: `results/kaggle/onprem-linear-he-p100` (ran on a T4),
+`results/kaggle/onprem-linear-he-cpu`.
+
+| per 4096x4096 weight tile | 4-core CPU | T4 GPU |
+|---|---|---|
+| multiply, weights pre-encoded | 0.75 s | 0.27 s |
+| encrypt / decrypt (customer) | 6 ms / 8 ms | 2 ms / 1.6 ms |
+| relative error | 1.5e-8 | 2.0e-8 |
+
+| per generated token | Llama-3-8B | Llama-3-70B |
+|---|---|---|
+| server, T4, cached weights | 120 s | 1,114 s |
+| server, 4-core CPU | 336 s | 3,118 s |
+| customer crypto (4-core CPU) | 3.8 s | 18 s |
+| upload + download | 88 + 92 MB | 409 + 441 MB |
+| round trips | 128 | 320 |
+| customer storage | ~1 GB (embeddings + LM head) | ~2 GB |
+
+End to end on Qwen2.5-0.5B (T4): 8 generated tokens identical to plaintext, max logit diff 2.8e-5 (max logit 20.8);
+123 s/token decode (tiles re-encoded per call; padded 1024-slot tiles).
+
+Verdict: customer load is solved (~1 GB, seconds of CPU), but the GPU only gave 3-6x over 4 CPU cores on this library, leaving the
+server at ~2 minutes and ~180 MB per 8B token: roughly 10,000x plaintext cost. Not commercially viable for generation today.
