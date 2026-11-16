@@ -1,0 +1,38 @@
+{
+ "package": "desilofhe-cu124",
+ "mode": "parallel",
+ "device": "cpu x4",
+ "citation": "This work uses the DESILO FHE library developed by DESILO Inc. (https://desilo.ai)",
+ "selftest": {
+  "err_Mx": 3.128854686451632e-08,
+  "err_MTx": 25.320299421688567,
+  "transposed": false
+ },
+ "B_server_setup": {
+  "tiles": 432,
+  "cached_all": false,
+  "one_time_encode_s": 0.0
+ },
+ "B_plain": {
+  "prompt_tokens": 15,
+  "manual_forward_matches_hf": false,
+  "answer": " help her. She is a victim of"
+ },
+ "B_he": {
+  "answer": " help her. She is a victim of",
+  "tokens_generated": 8,
+  "identical_tokens_to_plaintext": true,
+  "max_abs_logit_diff": 3.396446348280513e-05,
+  "max_logit": 20.75884712985207,
+  "prefill_s": 4172.4,
+  "decode_s_per_token": 391.46,
+  "server_gpu_s_total": 6180.4,
+  "server_encode_s_total": 1065.5,
+  "client_crypto_s_total": 33.3,
+  "n_encrypt": 4416,
+  "n_decrypt": 7728,
+  "n_tile_mults": 9936,
+  "note": "client encrypt/decrypt here also ran on the T4; 0.5B dims are padded into 1024-slot tiles"
+ },
+ "minutes": 122.5
+}
