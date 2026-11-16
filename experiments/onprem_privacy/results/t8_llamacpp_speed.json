@@ -1,0 +1,16 @@
+[
+ {
+  "model": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+  "prompt_tokens": 113,
+  "prefill_s": 0.42,
+  "decode_tok_per_s": 24.07,
+  "gen_tokens": 96
+ },
+ {
+  "model": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+  "prompt_tokens": 113,
+  "prefill_s": 2.03,
+  "decode_tok_per_s": 7.04,
+  "gen_tokens": 96
+ }
+]
