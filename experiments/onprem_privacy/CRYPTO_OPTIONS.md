@@ -26,3 +26,20 @@ non-interactive. These protocols use fresh randomness for every query and one in
 - The latency floor depends on RTT. With servers in the same region (about 10 ms) it is roughly 0.2 s/token; at 50 ms it is about 1 s/token.
 - Open questions to validate: client storage at 8B-70B scale, GPU server throughput, handling of attention/KV cache, and
   maturity (Maverick is a Sept 2026 preprint; no peer review or independent replication).
+
+## Our replication: single-server LPN masking on Qwen2.5-0.5B (Kaggle CPU, `kaggle/onprem_lpn/`)
+Every linear layer was delegated with dual-LPN masking: t = 160 nonzeros, code rate 1/2, field 2^61-1, int8 weights, 20-bit activations.
+- **Correctness:** tokens identical to the plaintext int8 model, with a maximum logit difference of **0.0** (the arithmetic is exact).
+  Per-row int8 weight quantization on its own changed the answer compared with fp32 after 1 token. That is a quantization issue, not
+  a protocol issue; any integer-weight quantization scheme can be used.
+- **Security sanity check:** an inverter trained on exactly what the server sees scored **3.3% / 2.7%** (layers 1 / 12), against a
+  majority-class baseline of 3.4%. The unmasked control scored 78% / 64%. The top 8 bits are uniform (chi-square 256 / 268 with df = 255).
+- **Costs per decoded token (0.5B):** 97 rounds; 1.5 MB up and 3.6 MB down; server 0.85 s (numpy, CPU); client 10.3 s (unoptimised numpy).
+  The client reads 817 MB of tables per token, against 247 MB to run a 4-bit model locally. Client precompute took 9 min and needs **7.9 GB of storage (16x the int8 model)**.
+- **Scaling (analytic, same parameters):**
+  - 8B: 120 GB client storage; the client reads 3.0 GB per token, against 3.75 GB for local int4; 129 rounds; 19 MB per token.
+  - 70B: 1.1 TB storage; 14 GB read per token, against 35 GB for local int4; 321 rounds; 89 MB per token.
+- **Verdict:** the cryptography works and is exact. The single-server variant is a poor deal for the client: storage is
+  16 bytes per parameter, and per-token client work is close to running the model locally until about 70B. Prefill costs the
+  same per prompt token, with no batching benefit. A smaller field and smaller t help (perhaps 4x), but they don't change the conclusion.
+  The **two-server** variant (additive shares, as in Gupta et al.) has trivial client compute and no storage, but it needs two non-colluding operators.
