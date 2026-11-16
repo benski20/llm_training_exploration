@@ -4,7 +4,15 @@ Server (us): plaintext-weight x ciphertext matrix-vector products (BSGS diagonal
 Part A: cost of one dense 4096x4096 block (8B-scale shapes) -> per-token extrapolation for 8B / 70B.
 Part B: end-to-end Qwen2.5-0.5B, all transformer linear layers encrypted, compared with plaintext."""
 import subprocess, sys, os, json, time, math
-subprocess.run([sys.executable, "-m", "pip", "install", "-q", "openfhe"], check=False)
+if sys.version_info[:2] != (3, 12):                      # openfhe wheel ships a CPython 3.12 extension
+    print(subprocess.run(["ldd", "--version"], capture_output=True, text=True).stdout.splitlines()[0], flush=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "uv"], check=True)
+    subprocess.run(["uv", "venv", "--python", "3.12", "/tmp/py312"], check=True)
+    py = "/tmp/py312/bin/python"
+    subprocess.run(["uv", "pip", "install", "--python", py, "-q", "openfhe==1.6.1.0.24.4", "numpy", "transformers", "huggingface_hub",
+                    "torch", "--index-url", "https://download.pytorch.org/whl/cpu", "--extra-index-url", "https://pypi.org/simple",
+                    "--index-strategy", "unsafe-best-match"], check=True)
+    sys.exit(subprocess.run([py, os.path.abspath(__file__)]).returncode)
 OUT = "/kaggle/working"; R = {"cpu_count": os.cpu_count()}; T0 = time.time()
 def log(*a): print(f"[{(time.time()-T0)/60:6.1f}m]", *a, flush=True)
 def save(): json.dump(R, open(f"{OUT}/results.json", "w"), indent=1)
