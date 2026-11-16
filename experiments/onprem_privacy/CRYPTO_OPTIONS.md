@@ -81,3 +81,11 @@ Results: `results/kaggle/onprem-otp-masks`. Explainer page: `experiments/onprem_
 - 70B per token: server 3.1 s batch-1 / 0.093 s amortized; 26 + 40 MB; 40 MB of masks (25k tokens/TB); 320 rounds; mask gen ~141 s on 4 cores (est).
 Verdict: exact and information-theoretically private, server cost near normal serving. The load moved to mask generation (needs a GPU)
 and bandwidth/mask volume. Most practical form: an independent mask provider on its own GPUs (non-collusion assumption).
+
+### Mask-generation cost (Kaggle T4 + 4 vCPU Xeon 2.0 GHz, avx512f, no VNNI), `results/kaggle/onprem-otp-cost`
+- T4, 8B (weights resident): ring 2^48 0.0066 s/token (550k tok/h, $0.36 spot / $0.96 on-demand per M tokens); ring 2^32 0.0043 s ($0.24 / $0.62).
+- T4, 70B (weights streamed from host RAM per batch, batch >= 1024): ring 2^48 0.047 s/token (77k tok/h, $2.60 / $6.85 per M); ring 2^32 0.032 s ($1.78 / $4.68).
+- CPU: fbgemm int8 0.30 TOPS effective (torch._int_mm CPU only 0.005 TOPS, which explains the earlier 14 s/token). => 8B 0.28 s/token, 70B 2.8 s/token (ring 2^48, GEMM only).
+  Laptop NPU (40 TOPS at 30-60% util) estimate: 8B 3-7 ms/token, 70B 34-69 ms/token. Untested.
+- Quality (Qwen2.5-0.5B, 2048 wikitext tokens, int8 weights): A16/A20 ppl 10.92, top-1 agreement with float 97.3%; A12 10.93 / 97.4%;
+  naive per-token A8 11.09 / 92.6%. So the 32-bit ring (needs A8) costs quality unless SmoothQuant-style fixes work; a 40-bit ring with A12 is safe.

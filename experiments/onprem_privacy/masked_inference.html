@@ -178,8 +178,8 @@ code{font-family:var(--mono);font-size:.88em}
       <tr><td>Data sent + received</td><td class="num">5.1 + 8.3 MB</td><td class="num">26 + 40 MB</td></tr>
       <tr><td>Mask storage used</td><td class="num">8.3 MB</td><td class="num">40 MB</td></tr>
       <tr><td>Words per 1 TB of masks</td><td class="num">121,000</td><td class="num">25,000</td></tr>
-      <tr><td>Making the masks on 4 CPU cores</td><td class="num"><span class="pill bad">14 s</span></td><td class="num"><span class="pill bad">~140 s (est.)</span></td></tr>
-      <tr><td>Making the masks on a GPU</td><td class="num">~0.014 s</td><td class="num">~0.09 s</td></tr>
+      <tr><td>Making the masks on 4 old CPU cores (optimized int8 library)</td><td class="num"><span class="pill mid">0.28 s</span></td><td class="num"><span class="pill bad">2.8 s</span></td></tr>
+      <tr><td>Making the masks on one T4 GPU, large batches</td><td class="num">0.0066 s</td><td class="num">0.047 s (model streamed)</td></tr>
       <tr><td>Round trips</td><td class="num">128</td><td class="num">320</td></tr>
     </tbody>
   </table></div>
@@ -187,10 +187,25 @@ code{font-family:var(--mono);font-size:.88em}
 </section>
 
 <section>
+  <h2>What mask making costs</h2>
+  <p>A second Kaggle run measured mask making at large batches. The 70B model was streamed from memory, as on a GPU smaller than the model.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Where masks are made</th><th>Llama-3-8B</th><th>Llama-3-70B</th></tr></thead>
+    <tbody>
+      <tr><td>One T4 GPU: words per hour</td><td class="num">550,000</td><td class="num">77,000</td></tr>
+      <tr><td>One T4 GPU: cost per million words (spot / on-demand)</td><td class="num">$0.36 / $0.96</td><td class="num">$2.60 / $6.85</td></tr>
+      <tr><td>4 old server CPU cores: seconds per word</td><td class="num">0.28</td><td class="num">2.8</td></tr>
+      <tr><td>Laptop AI chip (NPU), estimate only</td><td class="num">~0.003–0.007 s</td><td class="num">~0.03–0.07 s</td></tr>
+    </tbody>
+  </table></div>
+  <p>A cheaper 32-bit version cuts these by about a third, but needs 8-bit activations. In our quality check that changed 7% of the model's top predictions, against 2.7% for 12-bit and above. A 40-bit middle setting with 12-bit activations keeps quality and saves about a sixth.</p>
+</section>
+
+<section>
   <h2>Trade-offs to know</h2>
   <ul class="plain">
     <li><b>Masks get used up.</b> Every word read or written uses one set (8 MB for an 8B model). They must be refilled, like ink.</li><li><b>Data volume.</b> About 13 MB crosses the internet per word for an 8B model. A 2,000-word document is about 27 GB: minutes on a fast office line.</li>
-    <li><b>Making masks is real work.</b> It is the same maths as running the model, six times over. On 4 CPU cores it took 14 s per word for an 8B model, so it needs a GPU somewhere that is not ours.</li>
+    <li><b>Making masks is real work.</b> It is the same maths as running the model, six times over. A cheap GPU makes 8B masks for well under a dollar per million words; ordinary CPUs manage a few words per second.</li>
     <li><b>Many short trips.</b> Each word needs a round trip per layer section (about 128 for an 8B model). Fine for documents; for chat, our servers need to be close to the customer.</li>
     <li><b>The mask drive is a key.</b> Someone who steals it <i>and</i> our server logs could read the data. Store it like a security key.</li>
     <li><b>Privacy holds even if we cheat.</b> A dishonest server could return wrong numbers, which spot checks catch, but it can never read anything.</li>

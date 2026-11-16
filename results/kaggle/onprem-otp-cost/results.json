@@ -1,0 +1,153 @@
+{
+ "gpu": "Tesla T4",
+ "cpu_model": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+ "cpu_flags": [
+  "avx2",
+  "avx512f"
+ ],
+ "cpu_count": 4,
+ "torch_threads": 2,
+ "exact_ring48": true,
+ "exact_ring32": true,
+ "T1_gpu_mask_generation": {
+  "llama-3-8b|ring48|B256": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.00737,
+   "tokens_per_hour": 488480,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 1.08,
+   "usd_per_M_tokens_T4 spot (approx)": 0.41,
+   "mask_MB_per_token": 8.26
+  },
+  "llama-3-8b|ring48|B1024": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.00652,
+   "tokens_per_hour": 552146,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 0.95,
+   "usd_per_M_tokens_T4 spot (approx)": 0.36,
+   "mask_MB_per_token": 8.26
+  },
+  "llama-3-8b|ring48|B4096": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.00656,
+   "tokens_per_hour": 548988,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 0.96,
+   "usd_per_M_tokens_T4 spot (approx)": 0.36,
+   "mask_MB_per_token": 8.26
+  },
+  "llama-3-8b|ring32|B256": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.0046,
+   "tokens_per_hour": 782063,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 0.67,
+   "usd_per_M_tokens_T4 spot (approx)": 0.26,
+   "mask_MB_per_token": 5.51
+  },
+  "llama-3-8b|ring32|B1024": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.00426,
+   "tokens_per_hour": 844633,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 0.62,
+   "usd_per_M_tokens_T4 spot (approx)": 0.24,
+   "mask_MB_per_token": 5.51
+  },
+  "llama-3-8b|ring32|B4096": {
+   "weights": "resident on GPU",
+   "gpu_s_per_token": 0.00426,
+   "tokens_per_hour": 844810,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 0.62,
+   "usd_per_M_tokens_T4 spot (approx)": 0.24,
+   "mask_MB_per_token": 5.51
+  },
+  "llama-3-70b|ring48|B256": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.06441,
+   "tokens_per_hour": 55895,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 9.41,
+   "usd_per_M_tokens_T4 spot (approx)": 3.58,
+   "mask_MB_per_token": 40.3
+  },
+  "llama-3-70b|ring48|B1024": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.04687,
+   "tokens_per_hour": 76800,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 6.85,
+   "usd_per_M_tokens_T4 spot (approx)": 2.6,
+   "mask_MB_per_token": 40.3
+  },
+  "llama-3-70b|ring48|B4096": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.04685,
+   "tokens_per_hour": 76835,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 6.85,
+   "usd_per_M_tokens_T4 spot (approx)": 2.6,
+   "mask_MB_per_token": 40.3
+  },
+  "llama-3-70b|ring32|B256": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.05043,
+   "tokens_per_hour": 71382,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 7.37,
+   "usd_per_M_tokens_T4 spot (approx)": 2.8,
+   "mask_MB_per_token": 26.87
+  },
+  "llama-3-70b|ring32|B1024": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.03272,
+   "tokens_per_hour": 110013,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 4.78,
+   "usd_per_M_tokens_T4 spot (approx)": 1.82,
+   "mask_MB_per_token": 26.87
+  },
+  "llama-3-70b|ring32|B4096": {
+   "weights": "streamed from host RAM per batch",
+   "gpu_s_per_token": 0.03204,
+   "tokens_per_hour": 112354,
+   "usd_per_M_tokens_T4 on-demand (AWS g4dn.xlarge)": 4.68,
+   "usd_per_M_tokens_T4 spot (approx)": 1.78,
+   "mask_MB_per_token": 26.87
+  }
+ },
+ "T2_cpu_mask_generation": {
+  "torch_int_mm_int8": 0.005,
+  "mkl_fp32_exact_chunks": 0.143,
+  "fbgemm_quantized_linear_int8": 0.297,
+  "best_effective_int8_TOPS": 0.297,
+  "cpu_s_per_token_8b_ring48": 0.28,
+  "laptop NPU 40 TOPS at 30% util (estimate)|s_per_token_8b_ring48": 0.007,
+  "laptop NPU 40 TOPS at 60% util (estimate)|s_per_token_8b_ring48": 0.003,
+  "cpu_s_per_token_70b_ring48": 2.77,
+  "laptop NPU 40 TOPS at 30% util (estimate)|s_per_token_70b_ring48": 0.069,
+  "laptop NPU 40 TOPS at 60% util (estimate)|s_per_token_70b_ring48": 0.034,
+  "cpu_s_per_token_8b_ring32": 0.19,
+  "laptop NPU 40 TOPS at 30% util (estimate)|s_per_token_8b_ring32": 0.005,
+  "laptop NPU 40 TOPS at 60% util (estimate)|s_per_token_8b_ring32": 0.002,
+  "cpu_s_per_token_70b_ring32": 1.85,
+  "laptop NPU 40 TOPS at 30% util (estimate)|s_per_token_70b_ring32": 0.046,
+  "laptop NPU 40 TOPS at 60% util (estimate)|s_per_token_70b_ring32": 0.023
+ },
+ "T3_quality": {
+  "tokens": 2048,
+  "float_ppl": 10.979,
+  "W8Afloat": {
+   "ppl": 10.923,
+   "top1_agreement_with_float": 0.9731
+  },
+  "W8A20": {
+   "ppl": 10.923,
+   "top1_agreement_with_float": 0.9731
+  },
+  "W8A16": {
+   "ppl": 10.922,
+   "top1_agreement_with_float": 0.9731
+  },
+  "W8A12": {
+   "ppl": 10.928,
+   "top1_agreement_with_float": 0.9736
+  },
+  "W8A8": {
+   "ppl": 11.092,
+   "top1_agreement_with_float": 0.9257
+  }
+ },
+ "minutes": 2.6
+}
