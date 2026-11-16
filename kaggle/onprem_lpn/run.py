@@ -110,7 +110,8 @@ def linear(name, X, mode, keep_view=False):
     y = y_int * s[None, :] * sx
     return y + b[None, :] if b is not None else y
 def rms(x, w): return x / np.sqrt((x * x).mean(-1, keepdims=True) + cfg.rms_norm_eps) * w
-inv = 1.0 / (cfg.rope_theta ** (np.arange(0, HD, 2) / HD))
+THETA = getattr(cfg, "rope_theta", None) or (getattr(cfg, "rope_parameters", None) or {}).get("rope_theta", 1e6)
+inv = 1.0 / (THETA ** (np.arange(0, HD, 2) / HD))
 def rope(x, pos):                    # x (T, h, HD)
     f = pos[:, None] * inv[None]; c, s = np.cos(np.concatenate([f, f], -1))[:, None], np.sin(np.concatenate([f, f], -1))[:, None]
     x1, x2 = x[..., :HD // 2], x[..., HD // 2:]; return x * c + np.concatenate([-x2, x1], -1) * s
