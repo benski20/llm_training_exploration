@@ -1,0 +1,4 @@
+{
+ "cpu_count": 4,
+ "import_error": "Traceback (most recent call last):\n  File \"/kaggle/src/script.py\", line 12, in <module>\n    import openfhe as of\n  File \"/usr/local/lib/python3.13/dist-packages/openfhe/__init__.py\", line 1, in <module>\n    from .openfhe import *\nModuleNotFoundError: No module named 'openfhe.openfhe'\n"
+}
