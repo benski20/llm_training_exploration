@@ -1,0 +1,179 @@
+{
+ "started": "Mon Nov 16 11:58:20 2026",
+ "data": {
+  "train_notes": 612,
+  "test_notes": 260,
+  "test_example": {
+   "id": 10000,
+   "cat": "academic",
+   "risk": "high",
+   "contact": "teacher",
+   "note_date": "2026-10-05",
+   "days": 3,
+   "follow_up_date": "2026-10-08",
+   "student": "Oscar Zhang",
+   "parent": "Emma Fischer",
+   "sid": "S376723",
+   "grade": 6,
+   "details": "the student wrote in a journal that they have thought about hurting themselves over grades.",
+   "note": "Date: 2026-10-05\n\nStudent: Oscar Zhang, Grade 6, Student ID S376723\nParent/Guardian: Emma Fischer\n\nDuring our session today, Oscar shared his concerns about his academic performance, specifically his falling grades and missing assignments. In an effort to cope, he mentioned that he has been writing in a journal about his feelings, which have included thoughts of harming himself. This revelation was both surprising and concerning.\n\nI have decided to involve Oscar's homeroom teacher, Mr. Lee, in this matter to ensure a comprehensive understanding of Oscar's current state and to collaborate on appropriate interventions. I will follow up with both Oscar and Mr. Lee within the next 3 days to discuss potential strategies to support Oscar's academic success while addressing his emotional well-being.\n\nI will also reach out to Emma, Oscar's mother, to discuss the situation and ensure that she is aware of the steps being taken to support Oscar. It is crucial that we work together to create a safe and supportive environment for Oscar as he navigates these challenging times.\n\nI will keep detailed records of our conversations and any interventions implemented to monitor Oscar's progress and adjust our approach as necessary. My primary goal is to ensure Oscar's safety and well-being, and I am committed to working diligently towards that end."
+  }
+ },
+ "pii_detection": {
+  "gliner_multi_pii_v1_recall": {
+   "student_name": 1.0,
+   "parent_name": 1.0,
+   "student_id": 0.9731
+  },
+  "regex_id_recall": 1.0,
+  "counts": {
+   "student_name": 260,
+   "parent_name": 258,
+   "student_id": 260
+  },
+  "note": "recall of the first name (any detected span containing it); names a model misses leak to the cloud"
+ },
+ "extraction": {
+  "qwen2.5-0.5b": {
+   "category": 0.15,
+   "risk": 0.3192,
+   "contact": 0.3731,
+   "follow_up_date": 0.2308,
+   "all": 0.0115,
+   "valid_json": 1.0,
+   "n": 260,
+   "s_total": 25.0,
+   "risk_by_true_class": {
+    "high": 0.0,
+    "medium": 1.0,
+    "low": 0.0
+   }
+  },
+  "qwen2.5-1.5b": {
+   "category": 0.5885,
+   "risk": 0.4962,
+   "contact": 0.7962,
+   "follow_up_date": 0.4346,
+   "all": 0.1,
+   "valid_json": 1.0,
+   "n": 260,
+   "s_total": 42.5,
+   "risk_by_true_class": {
+    "high": 1.0,
+    "medium": 0.349,
+    "low": 0.083
+   }
+  },
+  "qwen2.5-3b": {
+   "category": 0.6115,
+   "risk": 0.6769,
+   "contact": 0.7308,
+   "follow_up_date": 0.8308,
+   "all": 0.2462,
+   "valid_json": 1.0,
+   "n": 260,
+   "s_total": 77.4,
+   "risk_by_true_class": {
+    "high": 0.925,
+    "medium": 1.0,
+    "low": 0.083
+   }
+  },
+  "qwen2.5-7b": {
+   "category": 0.7231,
+   "risk": 0.9077,
+   "contact": 0.7154,
+   "follow_up_date": 0.9385,
+   "all": 0.4269,
+   "valid_json": 1.0,
+   "n": 260,
+   "s_total": 159.6,
+   "risk_by_true_class": {
+    "high": 1.0,
+    "medium": 1.0,
+    "low": 0.714
+   },
+   "pseudonymized": {
+    "category": 0.7077,
+    "risk": 0.9231,
+    "contact": 0.7038,
+    "follow_up_date": 0.9269,
+    "all": 0.4346,
+    "valid_json": 1.0,
+    "n": 260
+   },
+   "placeholder_leak_in_output": 0
+  }
+ },
+ "samples": {
+  "qwen2.5-0.5b": [
+   "```json\n{\n  \"category\": \"behavior\",\n  \"risk\": \"medium\",\n  \"contact\": \"teacher\",\n  \"follow_up_date\": \"2026-10-08\"\n}\n```",
+   "```json\n{\n  \"category\": \"behavior\",\n  \"risk\": \"medium\",\n  \"contact\": \"student\",\n  \"follow_up_date\": \"2026-09-18\"\n}\n```",
+   "```json\n{\n  \"category\": \"behavior\",\n  \"risk\": \"medium\",\n  \"contact\": \"school nurse\",\n  \"follow_up_date\": \"2026-11-07\"\n}\n```"
+  ],
+  "qwen2.5-1.5b": [
+   "```json\n{\n  \"category\": \"mental_health\",\n  \"risk\": \"high\",\n  \"contact\": \"teacher\",\n  \"follow_up_date\": \"2026-10-08\"\n}\n```",
+   "```json\n{\n  \"category\": \"academic\",\n  \"risk\": \"medium\",\n  \"contact\": \"social worker\",\n  \"follow_up_date\": \"2026-10-05\"\n}\n```",
+   "```json\n{\n  \"category\": \"financial\",\n  \"risk\": \"medium\",\n  \"contact\": \"social worker\",\n  \"follow_up_date\": \"2026-11-07\"\n}\n```"
+  ],
+  "qwen2.5-3b": [
+   "```json\n{\n  \"category\": \"academic\",\n  \"risk\": \"high\",\n  \"contact\": \"teacher\",\n  \"follow_up_date\": \"2026-10-08\"\n}\n```",
+   "```json\n{\n  \"category\": \"academic\",\n  \"risk\": \"medium\",\n  \"contact\": \"school nurse\",\n  \"follow_up_date\": \"2026-09-21\"\n}\n```",
+   "```json\n{\n  \"category\": \"academic\",\n  \"risk\": \"medium\",\n  \"contact\": \"social worker\",\n  \"follow_up_date\": \"2026-11-07\"\n}\n```"
+  ],
+  "qwen2.5-7b": [
+   "```json\n{\n  \"category\": \"mental_health\",\n  \"risk\": \"high\",\n  \"contact\": \"parent\",\n  \"follow_up_date\": \"2026-10-08\"\n}\n```",
+   "```json\n{\n  \"category\": \"medical\",\n  \"risk\": \"medium\",\n  \"contact\": \"social worker\",\n  \"follow_up_date\": \"2026-09-21\"\n}\n```",
+   "```json\n{\n  \"category\": \"family_housing\",\n  \"risk\": \"low\",\n  \"contact\": \"social_worker\",\n  \"follow_up_date\": \"2026-11-07\"\n}\n```"
+  ]
+ },
+ "throughput": {
+  "qwen2.5-1.5b": [
+   {
+    "batch": 1,
+    "prompt_tokens": 480,
+    "gen_tokens_per_s": 17.8,
+    "s_per_request": 7.21
+   },
+   {
+    "batch": 8,
+    "prompt_tokens": 480,
+    "gen_tokens_per_s": 135.2,
+    "s_per_request": 7.57
+   },
+   {
+    "batch": 32,
+    "prompt_tokens": 480,
+    "gen_tokens_per_s": 228.7,
+    "s_per_request": 17.91
+   }
+  ],
+  "qwen2.5-7b": [
+   {
+    "batch": 1,
+    "prompt_tokens": 480,
+    "gen_tokens_per_s": 13.8,
+    "s_per_request": 9.26
+   },
+   {
+    "batch": 8,
+    "prompt_tokens": 480,
+    "gen_tokens_per_s": 56.6,
+    "s_per_request": 18.08
+   },
+   {
+    "batch": 32,
+    "oom": true
+   }
+  ]
+ },
+ "errors": {
+  "qwen3-8b": " 192, in new_forward\n    output = module._old_forward(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/transformers/models/qwen3/modeling_qwen3.py\", line 297, in forward\n    hidden_states = self.input_layernorm(hidden_states)\n  File \"/usr/local/lib/python3.13/dist-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/accelerate/hooks.py\", line 192, in new_forward\n    output = module._old_forward(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/transformers/models/qwen3/modeling_qwen3.py\", line 60, in forward\n    hidden_states = hidden_states.to(torch.float32)\ntorch.OutOfMemoryError: CUDA out of memory. Tried to allocate 122.00 MiB. GPU 1 has a total capacity of 14.56 GiB of which 50.81 MiB is free. Including non-PyTorch memory, this process has 14.51 GiB memory in use. Of the allocated memory 14.36 GiB is allocated by PyTorch, and 25.27 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n",
+  "qwen2.5-14b-4bit": "on3.13/dist-packages/transformers/models/qwen2/modeling_qwen2.py\", line 288, in forward\n    hidden_states = self.mlp(hidden_states)\n  File \"/usr/local/lib/python3.13/dist-packages/torch/nn/modules/module.py\", line 1779, in _wrapped_call_impl\n    return self._call_impl(*args, **kwargs)\n           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/torch/nn/modules/module.py\", line 1790, in _call_impl\n    return forward_call(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/accelerate/hooks.py\", line 192, in new_forward\n    output = module._old_forward(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/transformers/models/qwen2/modeling_qwen2.py\", line 46, in forward\n    down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))\n                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~\ntorch.OutOfMemoryError: CUDA out of memory. Tried to allocate 212.00 MiB. GPU 1 has a total capacity of 14.56 GiB of which 60.81 MiB is free. Including non-PyTorch memory, this process has 14.50 GiB memory in use. Of the allocated memory 13.90 GiB is allocated by PyTorch, and 481.76 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)\n",
+  "qwen2.5-1.5b-lora": "l/lib/python3.13/dist-packages/peft/tuners/tuners_utils.py\", line 344, in __init__\n    self.inject_adapter(self.model, adapter_name, low_cpu_mem_usage=low_cpu_mem_usage, state_dict=state_dict)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/tuners_utils.py\", line 978, in inject_adapter\n    self._create_and_replace(\n    ~~~~~~~~~~~~~~~~~~~~~~~~^\n        peft_config, adapter_name, target, target_name, parent, current_key=key\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/model.py\", line 389, in _create_and_replace\n    new_module = self._create_new_module(lora_config, adapter_name, target, device_map=device_map, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/model.py\", line 552, in _create_new_module\n    new_module = dispatcher(target, adapter_name, config=lora_config, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/torchao.py\", line 160, in dispatch_torchao\n    if not is_torchao_available():\n           ~~~~~~~~~~~~~~~~~~~~^^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/import_utils.py\", line 162, in is_torchao_available\n    raise ImportError(\n    ...<2 lines>...\n    )\nImportError: Found an incompatible version of torchao. Found version 0.10.0, but only versions above 0.16.0 are supported\n",
+  "qwen2.5-0.5b-lora": "l/lib/python3.13/dist-packages/peft/tuners/tuners_utils.py\", line 344, in __init__\n    self.inject_adapter(self.model, adapter_name, low_cpu_mem_usage=low_cpu_mem_usage, state_dict=state_dict)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/tuners_utils.py\", line 978, in inject_adapter\n    self._create_and_replace(\n    ~~~~~~~~~~~~~~~~~~~~~~~~^\n        peft_config, adapter_name, target, target_name, parent, current_key=key\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/model.py\", line 389, in _create_and_replace\n    new_module = self._create_new_module(lora_config, adapter_name, target, device_map=device_map, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/model.py\", line 552, in _create_new_module\n    new_module = dispatcher(target, adapter_name, config=lora_config, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/peft/tuners/lora/torchao.py\", line 160, in dispatch_torchao\n    if not is_torchao_available():\n           ~~~~~~~~~~~~~~~~~~~~^^\n  File \"/usr/local/lib/python3.13/dist-packages/peft/import_utils.py\", line 162, in is_torchao_available\n    raise ImportError(\n    ...<2 lines>...\n    )\nImportError: Found an incompatible version of torchao. Found version 0.10.0, but only versions above 0.16.0 are supported\n",
+  "qwen2.5-32b-4bit": "     ^^^^^^^^\n    ...<14 lines>...\n        dry_run=dry_run,\n        ^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/dist-packages/huggingface_hub/utils/_validators.py\", line 89, in _inner_fn\n    return fn(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/huggingface_hub/utils/_http.py\", line 266, in _inner\n    return fn(*args, **kwargs)\n  File \"/usr/local/lib/python3.13/dist-packages/huggingface_hub/file_download.py\", line 1047, in hf_hub_download\n    return _hf_hub_download_to_cache_dir(\n        # Destination\n    ...<15 lines>...\n        dry_run=dry_run,\n    )\n  File \"/usr/local/lib/python3.13/dist-packages/huggingface_hub/file_download.py\", line 1285, in _hf_hub_download_to_cache_dir\n    _download_to_tmp_and_move(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        incomplete_path=Path(blob_path + \".incomplete\"),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<8 lines>...\n        tqdm_class=tqdm_class,\n        ^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/usr/local/lib/python3.13/dist-packages/huggingface_hub/file_download.py\", line 2045, in _download_to_tmp_and_move\n    tmp_path.unlink(missing_ok=True)\n    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/pathlib/_local.py\", line 746, in unlink\n    os.unlink(self)\n    ~~~~~~~~~^^^^^^\nOSError: [Errno 30] Read-only file system: '/root/.cache/huggingface/hub/models--Qwen--Qwen2.5-32B-Instruct/blobs/fa006a0382517a4e9a8781d8e7d3405cd6bdd1b9100fb344d73f925b7da9341c.de4dd684.incomplete'\n"
+ },
+ "finished": "Mon Nov 16 12:51:32 2026",
+ "minutes": 53.2
+}

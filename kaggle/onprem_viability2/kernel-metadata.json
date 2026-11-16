@@ -1,0 +1,4 @@
+{"id": "bensliv/onprem-viability-2", "title": "onprem-viability-2", "code_file": "run.py",
+ "language": "python", "kernel_type": "script", "is_private": true, "enable_gpu": true,
+ "machine_shape": "NvidiaTeslaT4", "enable_internet": true,
+ "dataset_sources": [], "competition_sources": [], "kernel_sources": ["bensliv/onprem-viability"], "model_sources": []}
