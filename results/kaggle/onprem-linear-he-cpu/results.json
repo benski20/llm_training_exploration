@@ -1,0 +1,56 @@
+{
+ "package": "desilofhe-cu124",
+ "mode": "parallel",
+ "device": "cpu x4",
+ "citation": "This work uses the DESILO FHE library developed by DESILO Inc. (https://desilo.ai)",
+ "selftest": {
+  "err_Mx": 1.9419405639098386e-08,
+  "err_MTx": 25.320299427757647,
+  "transposed": false
+ },
+ "A_tile": {
+  "slot_count": 4096,
+  "light": {
+   "encode_s": 2.517,
+   "multiply_s": 2.3687,
+   "decrypt_s": 0.0071,
+   "rel_err": 1.5296137673484596e-08
+  },
+  "plain": {
+   "encode_s": 9.57,
+   "multiply_s": 0.7495,
+   "decrypt_s": 0.0078,
+   "rel_err": 1.5296137673484596e-08
+  },
+  "encrypt_s": 0.006,
+  "ct_up_bytes": 393254,
+  "ct_down_bytes": 262182,
+  "ct_add_s": 0.00029
+ },
+ "A_extrapolation": {
+  "llama-3-8b": {
+   "tiles_per_token": 448,
+   "server_gpu_s_per_token_cached_weights": 335.78,
+   "server_gpu_s_per_token_reencoding_weights": 1463.4,
+   "client_encrypts": 224,
+   "client_decrypts": 352,
+   "client_crypto_s_per_token_on_T4": 3.84,
+   "upload_MB_per_token": 88.1,
+   "download_MB_per_token": 92.3,
+   "rounds_per_token": 128,
+   "lm_head_on_client_GFLOP": 1.05
+  },
+  "llama-3-70b": {
+   "tiles_per_token": 4160,
+   "server_gpu_s_per_token_cached_weights": 3117.92,
+   "server_gpu_s_per_token_reencoding_weights": 13588.6,
+   "client_encrypts": 1040,
+   "client_decrypts": 1680,
+   "client_crypto_s_per_token_on_T4": 18.17,
+   "upload_MB_per_token": 409.0,
+   "download_MB_per_token": 440.5,
+   "rounds_per_token": 320,
+   "lm_head_on_client_GFLOP": 2.1
+  }
+ }
+}
