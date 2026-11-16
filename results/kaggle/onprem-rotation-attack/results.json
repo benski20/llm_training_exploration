@@ -1,0 +1,23 @@
+{
+ "functional": {
+  "max_abs_logit_diff": 3.933168013947608e-05,
+  "same_next_token_all_positions": true
+ },
+ "customer_answer_decoded_by_customer": "To address Maria's concerns and provide support, I will first schedule an initial meeting with her to discuss the situation in detail. During this session, I will listen attentively to her feelings and thoughts,",
+ "attack": {
+  "seconds": 1.14,
+  "procrustes_key_error": 5.963946878018156e-09,
+  "gram_eig_key_error_with_permutations": 2.1321312770883338e-13,
+  "procrustes": {
+   "input_token_recovery": 1.0,
+   "recovered_input": "<|im_start|>user\nCounselor note: Maria Lopez, grade 8, student ID S482913, told me she has been thinking about hurting herself since her parents separated. Her mother Ana Lopez works nights. Write a two-sentence follow-up plan.<|im_end|>\n<|im_start|>assistant\n",
+   "recovered_answer": "To follow Maria Lopez concerns and provide support, I will first schedule a initial meeting with her to discuss her situation in detail. I this meeting, I will listen toively to her feelings and concerns,"
+  },
+  "gram": {
+   "input_token_recovery": 1.0,
+   "recovered_input": "<|im_start|>user\nCounselor note: Maria Lopez, grade 8, student ID S482913, told me she has been thinking about hurting herself since her parents separated. Her mother Ana Lopez works nights. Write a two-sentence follow-up plan.<|im_end|>\n<|im_start|>assistant\n",
+   "recovered_answer": "To follow Maria Lopez concerns and provide support, I will first schedule a initial meeting with her to discuss her situation in detail. I this meeting, I will listen toively to her feelings and concerns,"
+  }
+ },
+ "minutes": 0.9
+}
