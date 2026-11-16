@@ -21,6 +21,7 @@ cc = of.GenCryptoContext(prm)
 for f in (of.PKESchemeFeature.PKE, of.PKESchemeFeature.KEYSWITCH, of.PKESchemeFeature.LEVELEDSHE): cc.Enable(f)
 t = time.time(); keys = cc.KeyGen()
 rot_idx = list(range(1, B)) + [g * B for g in range(1, S // B)]
+rot_idx = rot_idx + [-r for r in rot_idx]; ROT = [1]
 cc.EvalRotateKeyGen(keys.secretKey, rot_idx)
 R["context"] = {"ring_dim": cc.GetRingDimension(), "slots": S, "security": "HEStd_128_classic", "depth": 1,
                 "scale_bits": 40, "first_mod_bits": 60, "rotation_keys": len(rot_idx), "keygen_s": round(time.time() - t, 1)}
@@ -45,16 +46,18 @@ def server_matvec(W, cts):                            # SERVER: W (d x n) plaint
     babies = []
     for ct in cts:                                    # hoisted baby-step rotations of each input ciphertext
         t = time.time(); pre = cc.EvalFastRotationPrecompute(ct)
-        rs = [ct] + [cc.EvalFastRotation(ct, j, M, pre) for j in range(1, B)]
+        rs = [ct] + [cc.EvalFastRotation(ct, ROT[0] * j, M, pre) for j in range(1, B)]
         TM["rot_s"] += time.time() - t; TM["n_rot"] += B - 1; babies.append(rs)
     ar = np.arange(S); outs = []
     for r in range(nr):
-        acc = None
+        acc = None; t = time.time(); tiles = []
+        for c in range(nc):
+            tile = np.zeros((S, S)); blk = W[r * S:(r + 1) * S, c * S:(c + 1) * S]; tile[:blk.shape[0], :blk.shape[1]] = blk; tiles.append(tile)
+        TM["prep_s"] += time.time() - t
         for g in range(S // B):
             inner = None
             for c in range(nc):
-                t = time.time()
-                tile = np.zeros((S, S)); blk = W[r * S:(r + 1) * S, c * S:(c + 1) * S]; tile[:blk.shape[0], :blk.shape[1]] = blk
+                t = time.time(); tile = tiles[c]
                 ks = g * B + np.arange(B)
                 D = tile[ar[None, :], (ar[None, :] + ks[:, None]) % S]           # diagonals k = gB + j, shape (B, S)
                 D = np.roll(D, g * B, axis=1)                                     # pre-rotate for the giant step
@@ -66,7 +69,7 @@ def server_matvec(W, cts):                            # SERVER: W (d x n) plaint
                     TM["mult_s"] += time.time() - t; TM["n_mult"] += 1
             if inner is None: continue
             t = time.time()
-            if g: inner = cc.EvalRotate(inner, g * B); TM["n_rot"] += 1
+            if g: inner = cc.EvalRotate(inner, ROT[0] * g * B); TM["n_rot"] += 1
             acc = inner if acc is None else cc.EvalAdd(acc, inner); TM["rot_s"] += time.time() - t
         outs.append(acc)
     return outs
@@ -77,7 +80,10 @@ def decrypt_vec(cts, d):                              # CUSTOMER
 rng = np.random.default_rng(0)
 Wt = rng.normal(0, 0.05, (300, 5000)); xt = rng.normal(0, 1, 5000)
 yt = decrypt_vec(server_matvec(Wt, encrypt_vec(xt)), 300)
-err = float(np.abs(yt - Wt @ xt).max()); R["self_test_max_abs_err"] = err; log("self-test err", err); save()
+err = float(np.abs(yt - Wt @ xt).max())
+if err > 1e-3:                                         # OpenFHE rotation sign convention: flip and retry
+    ROT[0] = -1; yt = decrypt_vec(server_matvec(Wt, encrypt_vec(xt)), 300); err = float(np.abs(yt - Wt @ xt).max())
+R["self_test_max_abs_err"] = err; R["rotation_sign"] = ROT[0]; log("self-test err", err, "sign", ROT[0]); save()
 assert err < 1e-3, err
 # ================= Part A: one dense 4096x4096 block =================
 for k in TM: TM[k] = 0 if isinstance(TM[k], int) else 0.0
@@ -160,8 +166,8 @@ def forward(ids, cache, mode):
         x = x + linear(f"{i}.down", gu[:, :I] / (1 + np.exp(-gu[:, :I])) * gu[:, I:], mode)
     cache["len"] += T
     return rms(x[-1:], sd["model.norm.weight"]) @ HEAD.T            # LM head on the customer (plaintext)
-prompt = "Counselor note: Maria Lopez, grade 8, said she has been thinking about hurting herself. Next step:"
-ids = np.array(tok(prompt).input_ids); NEW = 4; BUDGET_S = 4.5 * 3600
+prompt = "Maria Lopez, grade 8, said she feels unsafe. The counselor will"
+ids = np.array(tok(prompt).input_ids); NEW = 3; BUDGET_S = 9 * 3600
 def run(mode, n_new):
     cache = {"len": 0}; out, lgs, times = [], [], []
     t = time.time(); lg = forward(ids, cache, mode); times.append(time.time() - t)
