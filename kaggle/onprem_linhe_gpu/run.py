@@ -15,13 +15,18 @@ for pkg in ("desilofhe-cu124", "desilofhe-cu128"):
     except Exception as e: log("install/import failed", pkg, r.stderr[-500:], e)
 import numpy as np, torch
 from desilofhe import Engine
-log("python", sys.version.split()[0], "gpu", torch.cuda.get_device_name(0))
-R["gpu"] = torch.cuda.get_device_name(0); R["citation"] = "This work uses the DESILO FHE library developed by DESILO Inc. (https://desilo.ai)"
+MODE = "gpu" if torch.cuda.is_available() else "parallel"
+if MODE == "gpu":
+    try: Engine(slot_count=64, max_level=1, mode="gpu")
+    except Exception as e: log("gpu engine failed -> CPU parallel", repr(e)[:300]); MODE = "parallel"
+R["mode"] = MODE; R["device"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else f"cpu x{os.cpu_count()}"
+log("python", sys.version.split()[0], R["device"], MODE); R["citation"] = "This work uses the DESILO FHE library developed by DESILO Inc. (https://desilo.ai)"
 
 def make(S):
-    eng = Engine(slot_count=S, max_level=1, mode="gpu"); sk = eng.create_secret_key()
+    eng = Engine(slot_count=S, max_level=1, mode=MODE, **({} if MODE == "gpu" else {"thread_count": os.cpu_count()})); sk = eng.create_secret_key()
     mk = eng.create_matrix_multiplication_key(sk); return eng, sk, mk
-def sync(): torch.cuda.synchronize()
+def sync():
+    if MODE == "gpu": torch.cuda.synchronize()
 def ct_bytes(eng, ct):
     for f in (lambda: len(ct.serialize()), lambda: len(eng.serialize(ct)), lambda: len(eng.serialize_ciphertext(ct))):
         try: return int(f())
@@ -52,7 +57,7 @@ for kind in ("light", "plain"):
         for _ in range(5): t = time.time(); out = eng.multiply_matrix(pm, ct, mk); sync(); ts.append(time.time() - t)
         t = time.time(); y = np.array(eng.decrypt(out, sk))[:S]; t_dec = time.time() - t
         A[kind] = {"encode_s": round(te, 3), "multiply_s": round(float(np.median(ts)), 4), "decrypt_s": round(t_dec, 4),
-                   "rel_err": float(np.abs(y - W @ x).max() / np.abs(W @ x).max()), "gpu_mem_GB": round(torch.cuda.max_memory_allocated() / 1e9, 2)}
+                   "rel_err": float(np.abs(y - W @ x).max() / np.abs(W @ x).max()), }
         try: A[kind]["torch_free_GB"] = round(torch.cuda.mem_get_info()[0] / 1e9, 2)
         except Exception: pass
         del pm
