@@ -1,0 +1,20 @@
+{
+ "enc2": 8,
+ "enc5": 26,
+ "product_ct": 10,
+ "decrypts_to": 10,
+ "enc10": 10,
+ "homomorphic_ok": true,
+ "dictionary_attack_recovers_all": true,
+ "fixed_points": [
+  0,
+  1,
+  10,
+  11,
+  12,
+  21,
+  22,
+  23,
+  32
+ ]
+}

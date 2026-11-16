@@ -1,0 +1,108 @@
+{
+ "a_vector_search": {
+  "docs": 2000,
+  "dim": 384,
+  "encrypt_query_s": 0.004369814000028782,
+  "fhe_search_s": 1.8355360709999786,
+  "fhe_ms_per_doc": 0.9177680354999893,
+  "plain_s": 0.0011324039999749402,
+  "slowdown_x": 1620.919805158405,
+  "max_abs_err": 5.7099153571993355e-08,
+  "top1_match": true,
+  "ciphertext_query_bytes": 331671
+ },
+ "b_linear_layer": [
+  {
+   "d": 128,
+   "fhe_s": 0.3067974649999883,
+   "plain_s": 3.23686000001544e-06,
+   "slowdown_x": 94782.43266577016,
+   "max_abs_err": 4.0240560350568444e-07
+  },
+  {
+   "d": 256,
+   "fhe_s": 0.5569257740000353,
+   "plain_s": 6.757120000315808e-06,
+   "slowdown_x": 82420.58361757763,
+   "max_abs_err": 3.2410512140756964e-07
+  },
+  {
+   "d": 512,
+   "fhe_s": 1.2002586560000168,
+   "plain_s": 5.7000900000048205e-05,
+   "slowdown_x": 21056.836927118726,
+   "max_abs_err": 3.956530574278361e-07
+  },
+  {
+   "d": 1024,
+   "fhe_s": 2.623211771000001,
+   "plain_s": 0.000144309929999622,
+   "slowdown_x": 18177.624859265554,
+   "max_abs_err": 4.5349086352786117e-07
+  }
+ ],
+ "b_extrapolation": {
+  "fit_exponent": 1.0395715814342572,
+  "est_s_4096x4096_matvec": 10.665644919018163,
+  "equiv_4096_matvecs_per_layer": 13.0,
+  "est_linear_only_s_per_token_llama8b_1cpu_core": 4436.908286311556,
+  "note": "naive TenSEAL diagonal method, single thread, linear layers only; ignores attention-over-KV, non-linearities, bootstrapping. Lower bound for this naive method; specialised GPU CKKS is 100-1000x faster."
+ },
+ "c_poly_approx": {
+  "gelu": [
+   {
+    "degree": 3,
+    "max_err": 0.682717708430824,
+    "mult_depth_needed": 2
+   },
+   {
+    "degree": 7,
+    "max_err": 0.22044187147391936,
+    "mult_depth_needed": 3
+   },
+   {
+    "degree": 15,
+    "max_err": 0.03642848823924005,
+    "mult_depth_needed": 4
+   },
+   {
+    "degree": 31,
+    "max_err": 0.0001911724334657805,
+    "mult_depth_needed": 5
+   }
+  ],
+  "exp_softmax": [
+   {
+    "degree": 3,
+    "max_err": 0.36369660326262854,
+    "mult_depth_needed": 2
+   },
+   {
+    "degree": 7,
+    "max_err": 0.021779011237215817,
+    "mult_depth_needed": 3
+   },
+   {
+    "degree": 15,
+    "max_err": 1.5095313161683777e-06,
+    "mult_depth_needed": 4
+   },
+   {
+    "degree": 31,
+    "max_err": 6.217248937900877e-15,
+    "mult_depth_needed": 5
+   }
+  ]
+ },
+ "c_encrypted_poly": {
+  "degree": 7,
+  "slots": 4096,
+  "fhe_s": 0.18888586400004215,
+  "max_err_vs_true_gelu": 0.22044181524989864,
+  "note": "one GELU over 4096 values. Llama-8B MLP has 14336 activations x 32 layers per token; softmax needs exp+reciprocal over every attention score."
+ },
+ "d_encrypted_classifier": {
+  "fhe_s": 0.9014378739999529,
+  "argmax_match": true
+ }
+}

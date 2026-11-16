@@ -1,0 +1,26 @@
+{
+ "vocab": 151643,
+ "hidden": 896,
+ "results": [
+  {
+   "noise_rel": 0.0,
+   "recovered_by_norm_sort": 0.9999340556438477,
+   "recovered_after_procrustes_nn (5k sample)": 0.733
+  },
+  {
+   "noise_rel": 0.01,
+   "recovered_by_norm_sort": 0.007438523373977038,
+   "recovered_after_procrustes_nn (5k sample)": 0.0626
+  },
+  {
+   "noise_rel": 0.05,
+   "recovered_by_norm_sort": 0.0013452648655064856,
+   "recovered_after_procrustes_nn (5k sample)": 0.0004
+  },
+  {
+   "noise_rel": 0.1,
+   "recovered_by_norm_sort": 0.0008045211450578002,
+   "recovered_after_procrustes_nn (5k sample)": 0.0004
+  }
+ ]
+}

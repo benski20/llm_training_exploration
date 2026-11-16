@@ -1,0 +1,35 @@
+{
+ "public_reference_tokens": 13828255,
+ "vocab": 151665,
+ "K_top_types_attacked": 3000,
+ "wikitext2_heldout (same domain)": {
+  "victim_tokens": 561149,
+  "occurrence_recovery_by_round": [
+   0.3025007618297458,
+   0.5575078989715744,
+   0.6880222543388654,
+   0.7091182555791777,
+   0.7121370616360361,
+   0.7103763884458495,
+   0.7119588558475557
+  ],
+  "top500_types_correct": 0.842,
+  "true_snippet": " a minor scholar @-@ official , his youth was spent on the standard education of a future civil servant : study and memorisation of the Confucian classics of philosophy , history and poetry . He later claimed to have produced creditable poems by his early teens , but these have been lost . \n\n",
+  "attacker_decoded_snippet": " a minor? @-@ official , his hair was spent on the?? of a future civil? :? and Gu? of the??el? of? , history and movement . He later claimed to have produced?able stories by his early? , but these have been lost . \n\n"
+ },
+ "repo_docs_markdown (different domain)": {
+  "victim_tokens": 63582,
+  "occurrence_recovery_by_round": [
+   7.863860841118556e-05,
+   0.04468245729923563,
+   0.020194394639992452,
+   0.024110597338869492,
+   0.022396275675505645,
+   0.027617879274008366,
+   0.021043691610833255
+  ],
+  "top500_types_correct": 0.012,
+  "true_snippet": "1,764 texts an hour, peak memory 7.9 GB, model load 6 s, calibration on 150 texts 6 minutes. At the\n  on-demand price of a 4-vCPU, 16 GB AWS m7i.xlarge (us",
+  "attacker_decoded_snippet": "3 of950 part its parts of? name the9 .8 rating of team tracks the5 million of track on the34 , part the5 feet . created and to the on? River by a the0 l structure of the35 rating? routes9 ships?? @,@"
+ }
+}

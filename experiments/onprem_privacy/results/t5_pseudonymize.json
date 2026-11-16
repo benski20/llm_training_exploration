@@ -1,0 +1,92 @@
+{
+ "b_reidentification": {
+  "district_students": 6000,
+  "notes_about_sensitive_students": 2000,
+  "scenarios": [
+   {
+    "keys_left_in_text": [
+     "school",
+     "grade"
+    ],
+    "frac_unique_k1": 0.0,
+    "frac_k_le_3": 0.0,
+    "median_k": 72
+   },
+   {
+    "keys_left_in_text": [
+     "school",
+     "grade",
+     "gender"
+    ],
+    "frac_unique_k1": 0.0,
+    "frac_k_le_3": 0.0,
+    "median_k": 36
+   },
+   {
+    "keys_left_in_text": [
+     "school",
+     "grade",
+     "gender",
+     "program"
+    ],
+    "frac_unique_k1": 0.0265,
+    "frac_k_le_3": 0.2255,
+    "median_k": 8
+   },
+   {
+    "keys_left_in_text": [
+     "school",
+     "grade",
+     "gender",
+     "program",
+     "cond"
+    ],
+    "frac_unique_k1": 0.571,
+    "frac_k_le_3": 0.9555,
+    "median_k": 1
+   }
+  ]
+ },
+ "a_task_survival": [
+  {
+   "issue": "missed 9 days this month and stopped submitting math homework",
+   "placeholder_kept_in_output": true,
+   "overlap_real_vs_pseudo_restored": 0.3559322033898305,
+   "overlap_real_vs_other_real_names (baseline)": 0.3064516129032258,
+   "out_real": "Based on the information provided in the counselor note:\n\n1. **Maria Lopez**:\n   - **Next Step**: Contact Maria Lopez directly via phone or email to inquire about her absence from school and to check if she is still able to submit her math homework.\n     - Who will do it? Maria Lopez herself.\n\n2. **Parent Kofi Mensah**:\n   - **Next Step**: Reach out to Parent Kofi Mensah to confirm whether he received any messages regarding Maria Lopez's absence and to ask for an update on when Maria might be",
+   "out_pseudo_restored": "Certainly! Based on the information provided in the counselor's note, here are three concrete next steps:\n\n1. **Contact Student Maria Lopez**:\n   - **Action**: Reach out directly to Maria Lopez via phone or email.\n   - **Purpose**: Confirm their attendance for the missing days and inquire about any issues preventing them from completing assignments.\n   - **Who Does This Step?**:\n     - Counselor\n     - Parent Kofi Mensah\n\n2. **Follow Up with Parent [PARENT_"
+  },
+  {
+   "issue": "reported being bullied on the bus and asked to change routes",
+   "placeholder_kept_in_output": true,
+   "overlap_real_vs_pseudo_restored": 0.22388059701492538,
+   "overlap_real_vs_other_real_names (baseline)": 0.14035087719298245,
+   "out_real": "1. **Step 1:** Contact James Chen directly via his school's student support team or principal's office to confirm if he is still at the school and needs any assistance with changing routes.\n   - **Who Does This Step?** Student Support Team/Principal\n\n2. **Step 2:** Reach out to Priya Patel through her work email or phone number to inquire about her whereabouts and whether she received the message from James regarding the bullying incident.\n   - **Who Does This Step?** Priya Patel\n\n3. **Step ",
+   "out_pseudo_restored": "Certainly! Based on the information provided in the counselor's note, here are three concrete next steps:\n\n1. **Contact Student 1 Directly**: Reach out to James Chen directly via phone or email to confirm their report of bullying and discuss alternative transportation options.\n   - Who: James Chen\n\n2. **Follow Up with PARENT_1**: Contact Priya Patel again after an appropriate time frame to check if they have received any messages regarding the situation.\n   - Who: [PARENT_"
+  },
+  {
+   "issue": "had two panic attacks in class and was sent to the nurse",
+   "placeholder_kept_in_output": true,
+   "overlap_real_vs_pseudo_restored": 0.2545454545454545,
+   "overlap_real_vs_other_real_names (baseline)": 0.22950819672131148,
+   "out_real": "Based on the information provided in the counselor's note:\n\n1. **Immediate Action for Aisha Okafor**:\n   - The counselor should immediately contact Aisha Okafor to check her well-being and provide support.\n   - Person responsible: Counselor\n\n2. **Follow-up with Parents**:\n   - The counselor needs to follow up with Tom Brown to inform him about Aisha\u2019s situation and request that he return his call.\n   - Person responsible: Counselor\n\n3. **Monitor Student Health**:\n   - The counselor should",
+   "out_pseudo_restored": "Certainly! Based on the information provided in the counselor's note, here are three concrete next steps:\n\n1. **Contact Parent Tom Brown**:\n   - Next Step: Reach out to Parent Tom Brown via phone or email.\n     - Who Does This Step? Parent Tom Brown.\n     - Purpose: To inform them about the student's condition and request their presence at school if possible.\n\n2. **Monitor Student Aisha Okafor**:\n   - Next Step: Keep an eye on [ST"
+  },
+  {
+   "issue": "is failing chemistry after a strong first semester",
+   "placeholder_kept_in_output": true,
+   "overlap_real_vs_pseudo_restored": 0.2857142857142857,
+   "overlap_real_vs_other_real_names (baseline)": 0.20689655172413793,
+   "out_real": "Certainly! Based on the information provided in the counselor's note:\n\n1. **Contact Parent Sofia Rossi**: \n   - Who: Parent Sofia Rossi\n   - Action: Send follow-up emails or messages to ensure she has received them.\n   \n2. **Review Student Records**:\n   - Who: Counselor\n   - Action: Review Dmitri Ivanov\u2019s academic records for any additional issues that might be affecting his performance in chemistry.\n   \n3. **Schedule a Meeting with Dmitri**:\n   - Who: Counselor\n   - Action",
+   "out_pseudo_restored": "Certainly! Based on the information provided in the counselor's note, here are three concrete next steps:\n\n1. **Contact Parent Sofia Rossi**:\n   - Next Step: Reach out directly to Parent Sofia Rossi via email or phone to inquire about their whereabouts and any recent communication.\n     - Who Does This Step? Parent Sofia Rossi\n\n2. **Schedule an Appointment with STUDENT_1**:\n   - Next Step: Arrange a meeting with STUDENT_1 to discuss their current performance in chemistry and"
+  },
+  {
+   "issue": "told a teacher their family may be evicted next month",
+   "placeholder_kept_in_output": true,
+   "overlap_real_vs_pseudo_restored": 0.2857142857142857,
+   "overlap_real_vs_other_real_names (baseline)": 0.6,
+   "out_real": "Based on the information provided in the counselor note:\n\n1. **Immediate Action for Lena Schmidt**:\n   - **Step**: Contact Lena Schmidt directly.\n   - **Who Does It**: Counselor or another designated staff member from the school administration.\n\n2. **Follow-Up with Wei Zhang**:\n   - **Step**: Reach out to Wei Zhang via email or text message.\n   - **Who Does It**: Counselor or another designated staff member from the school administration.\n\n3. **Monitor Family Situation**:\n   - **Step**: Keep an eye",
+   "out_pseudo_restored": "Certainly! Based on the information provided in the counselor note, here are three concrete next steps:\n\n1. **Contact Parent Wei Zhang**:\n   - Next Step: Reach out directly to Parent Wei Zhang via phone or email.\n     - Who Does This Step: Student Lena Schmidt, Counselor [COUNSELOR_NAME]\n     - Reason: To confirm if they have received any updates about eviction notices and to discuss potential solutions with them.\n\n2. **Follow Up with Teacher**:\n   - Next"
+  }
+ ]
+}

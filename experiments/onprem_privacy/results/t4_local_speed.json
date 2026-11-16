@@ -1,0 +1,16 @@
+[
+ {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "params_B": 0.494032768,
+  "new_tokens": 64,
+  "s_per_token": 0.040327925015624544,
+  "tok_per_s": 24.796713433993013
+ },
+ {
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "params_B": 1.543714304,
+  "new_tokens": 64,
+  "s_per_token": 0.09360466729687467,
+  "tok_per_s": 10.683227972259335
+ }
+]

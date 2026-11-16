@@ -1,0 +1,33 @@
+{
+ "prefix_tokens": 24,
+ "len_a": 48,
+ "len_b": 47,
+ "layers": [
+  {
+   "layer": 1,
+   "prefix_max_abs_diff": 0.0,
+   "suffix_positions_changed": 14,
+   "suffix_positions": 14,
+   "suffix_min_rel_change": 0.030268580474908397,
+   "suffix_mean_rel_change": 0.05661511191731854
+  },
+  {
+   "layer": 12,
+   "prefix_max_abs_diff": 0.0,
+   "suffix_positions_changed": 14,
+   "suffix_positions": 14,
+   "suffix_min_rel_change": 0.058803054824915865,
+   "suffix_mean_rel_change": 0.11927917576485488
+  },
+  {
+   "layer": 24,
+   "prefix_max_abs_diff": 0.0,
+   "suffix_positions_changed": 14,
+   "suffix_positions": 14,
+   "suffix_min_rel_change": 0.07788302747290718,
+   "suffix_mean_rel_change": 0.16285475193356236
+  }
+ ],
+ "gen_a": " Schedule an appointment to discuss her condition and provide support. Offer resources such as counseling services or diabetes education classes. Encourage Maria to seek medical attention if necessary. Provide information on the importance of regular exercise",
+ "gen_b": " Schedule an appointment with the school counselor to discuss his situation and provide support. Encourage him to seek additional counseling services if needed. Offer to help him find resources that can assist him in adjusting to life"
+}
