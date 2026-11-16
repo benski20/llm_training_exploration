@@ -45,7 +45,7 @@ def enc_mat(eng, W, light=True):           # W (S x S): want y = W x
     return eng.encode_to_light_plain_matrix(A) if light else eng.encode_to_plain_matrix(A)
 
 # ================= Part A: one 4096 x 4096 tile on the GPU =================
-SKIP_A = True
+SKIP_A = False
 S = 4096; eng, sk, mk = make(S if not SKIP_A else 64)
 if not SKIP_A:
     W = rng.standard_normal((S, S)) / 64; x = rng.standard_normal(S)
