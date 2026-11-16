@@ -30,12 +30,15 @@ def field_matmul(Wf, X):            # Wf: float64 int8-valued (d_out x n); X: ui
         t = shl(Ri.astype(np.uint64), 16 * k); acc = t if acc is None else addmod(acc, t)
     return acc
 def field_matmul_right(Wf, G):      # Wf (d_out x n) float64 int8-valued, G (n x N) uint64 -> (W G)^T as (N x d_out)
-    acc = None
-    for k in range(4):
-        Gk = ((G >> U(16 * k)) & U(0xFFFF)).astype(np.float64)
-        Ri = np.rint(Gk.T @ Wf.T).astype(np.int64) % np.int64(p)
-        t = shl(Ri.astype(np.uint64), 16 * k); acc = t if acc is None else addmod(acc, t)
-    return acc
+    out = np.empty((G.shape[1], Wf.shape[0]), dtype=np.uint64); WT = np.ascontiguousarray(Wf.T)
+    for c in range(0, G.shape[1], 128):
+        Gc = np.ascontiguousarray(G[:, c:c + 128].T); acc = None
+        for k in range(4):
+            Gk = ((Gc >> U(16 * k)) & U(0xFFFF)).astype(np.float64)
+            Ri = np.rint(Gk @ WT).astype(np.int64) % np.int64(p)
+            t = shl(Ri.astype(np.uint64), 16 * k); acc = t if acc is None else addmod(acc, t)
+        out[c:c + 128] = acc
+    return out
 # self-tests against Python big ints
 rng = np.random.default_rng(0)
 a = rng.integers(0, p, 1000, dtype=np.uint64); b = rng.integers(0, p, 1000, dtype=np.uint64)
@@ -44,6 +47,9 @@ assert all(int(x) == (int(y) << 37) % p for x, y in zip(shl(a, 37), a)), "shl"
 Wt = rng.integers(-127, 128, (5, 7)).astype(np.float64); Xt = rng.integers(0, p, (3, 7), dtype=np.uint64)
 ref = [[sum(int(Wt[o, i]) * int(Xt[r, i]) for i in range(7)) % p for o in range(5)] for r in range(3)]
 assert (field_matmul(Wt, Xt).astype(object) == np.array(ref, dtype=object)).all(), "field_matmul"
+Gt = rng.integers(0, p, (7, 300), dtype=np.uint64)
+refP = [[sum(int(Wt[o, i]) * int(Gt[i, c]) for i in range(7)) % p for o in range(5)] for c in range(300)]
+assert (field_matmul_right(Wt, Gt).astype(object) == np.array(refP, dtype=object)).all(), "field_matmul_right"
 log("field self-tests passed")
 # ---------------- model ----------------
 M = "Qwen/Qwen2.5-0.5B-Instruct"; tok = AutoTokenizer.from_pretrained(M)
@@ -153,9 +159,9 @@ def generate(prompt_ids, n_new, mode):
 # ---------------- 1. quality: fp32 vs int8 path (plaintext) ----------------
 note = ("Counselor note: Maria Lopez, grade 8, student ID S482913, told me she has been thinking about hurting herself "
         "since her parents separated. Her mother Ana Lopez works nights. Write a two-sentence follow-up plan.")
-ids = tok.apply_chat_template([{"role": "user", "content": note}], add_generation_prompt=True, tokenize=True)
-if isinstance(ids, dict): ids = ids["input_ids"]
-ids = np.array(ids); NEW = 24
+chat = tok.apply_chat_template([{"role": "user", "content": note}], add_generation_prompt=True, tokenize=False)
+ids = np.array(tok(chat, add_special_tokens=False).input_ids, dtype=np.int64); NEW = 24
+assert ids.ndim == 1 and len(ids) > 20, ids
 with torch.no_grad():
     g = hf.generate(torch.tensor([ids]), max_new_tokens=NEW, do_sample=False)[0, len(ids):].tolist()
 R["fp32_hf_answer"] = tok.decode(g)
