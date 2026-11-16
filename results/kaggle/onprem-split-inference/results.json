@@ -1,0 +1,175 @@
+{
+ "started": "Mon Nov 16 12:04:24 2026",
+ "cpu_count": 4,
+ "llama_cpp": [],
+ "llama_cpp_error": "Traceback (most recent call last):\n  File \"/kaggle/src/script.py\", line 24, in <module>\n    t = time.time(); o = llm(prompt, max_tokens=128, temperature=0, ignore_eos=True); dt = time.time() - t\n                         ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: Llama.__call__() got an unexpected keyword argument 'ignore_eos'\n",
+ "split_setup": {
+  "train_tokens": 160000,
+  "eval_wikitext_tokens": 29952,
+  "eval_note_tokens": 7258,
+  "name_tokens": 2021,
+  "candidate_vocab": 15538
+ },
+ "clean_eval_loss": 3.2633455455303193,
+ "split": [
+  {
+   "layer_k": 0,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 1.0,
+   "token_recovery_notes": 1.0,
+   "name_token_recovery_notes": 1.0,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 175,
+   "loss_increase": -0.0
+  },
+  {
+   "layer_k": 1,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9941,
+   "token_recovery_notes": 0.9398,
+   "name_token_recovery_notes": 0.9193,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 173,
+   "loss_increase": -0.0
+  },
+  {
+   "layer_k": 2,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9827,
+   "token_recovery_notes": 0.9303,
+   "name_token_recovery_notes": 0.8852,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 173,
+   "loss_increase": -0.0,
+   "example_true": "Diego Silva is failing algebra after a strong start. Diego Silva asked for a tutor; I emailed James Rossi to set up a meeting.Diego Zhang is failing algebra after a strong start. Diego",
+   "example_recovered": "Diego Silva is failing algebra after a strong start. Diego Silva asked for a tutor ; I emailed James Rossi to set up a meeting.Diego Zhang is failing algebra after a strong start. Diego"
+  },
+  {
+   "layer_k": 4,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9591,
+   "token_recovery_notes": 0.8311,
+   "name_token_recovery_notes": 0.8476,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 173,
+   "loss_increase": -0.0
+  },
+  {
+   "layer_k": 8,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9455,
+   "token_recovery_notes": 0.8143,
+   "name_token_recovery_notes": 0.8278,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 174,
+   "loss_increase": -0.0,
+   "example_true": "Diego Silva is failing algebra after a strong start. Diego Silva asked for a tutor; I emailed James Rossi to set up a meeting.Diego Zhang is failing algebra after a strong start. Diego",
+   "example_recovered": " theio Silva is failing algebra after a strong start . Diego Silva asked for a tutor ; I emailed James Rossi to set up a meeting . theio Zhang is failing algebra after a strong start . Diego"
+  },
+  {
+   "layer_k": 12,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9394,
+   "token_recovery_notes": 0.8034,
+   "name_token_recovery_notes": 0.7689,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 173,
+   "loss_increase": -0.0
+  },
+  {
+   "layer_k": 18,
+   "noise_rel": 0.0,
+   "token_recovery_wikitext": 0.9136,
+   "token_recovery_notes": 0.8136,
+   "name_token_recovery_notes": 0.7293,
+   "lm_loss_with_noise": 3.2633,
+   "train_s": 173,
+   "loss_increase": -0.0
+  },
+  {
+   "layer_k": 2,
+   "noise_rel": 0.25,
+   "token_recovery_wikitext": 0.979,
+   "token_recovery_notes": 0.9197,
+   "name_token_recovery_notes": 0.8892,
+   "lm_loss_with_noise": 3.2978,
+   "train_s": 253,
+   "loss_increase": 0.0345
+  },
+  {
+   "layer_k": 2,
+   "noise_rel": 0.5,
+   "token_recovery_wikitext": 0.9706,
+   "token_recovery_notes": 0.8823,
+   "name_token_recovery_notes": 0.8827,
+   "lm_loss_with_noise": 3.4094,
+   "train_s": 254,
+   "loss_increase": 0.1461
+  },
+  {
+   "layer_k": 2,
+   "noise_rel": 1.0,
+   "token_recovery_wikitext": 0.943,
+   "token_recovery_notes": 0.868,
+   "name_token_recovery_notes": 0.8288,
+   "lm_loss_with_noise": 4.3185,
+   "train_s": 261,
+   "loss_increase": 1.0552,
+   "example_true": "Diego Silva is failing algebra after a strong start. Diego Silva asked for a tutor; I emailed James Rossi to set up a meeting.Diego Zhang is failing algebra after a strong start. Diego",
+   "example_recovered": " Thego Silva is failing algebra after a strong start . Diego Silva asked for a tutor ; I emailed James Rossi to set up a meeting . diego Zhang is failed algebra after a strong start. Diego"
+  },
+  {
+   "layer_k": 2,
+   "noise_rel": 2.0,
+   "token_recovery_wikitext": 0.8318,
+   "token_recovery_notes": 0.6554,
+   "name_token_recovery_notes": 0.5388,
+   "lm_loss_with_noise": 7.0357,
+   "train_s": 256,
+   "loss_increase": 3.7724
+  },
+  {
+   "layer_k": 8,
+   "noise_rel": 0.25,
+   "token_recovery_wikitext": 0.7505,
+   "token_recovery_notes": 0.4766,
+   "name_token_recovery_notes": 0.2593,
+   "lm_loss_with_noise": 5.9318,
+   "train_s": 256,
+   "loss_increase": 2.6685
+  },
+  {
+   "layer_k": 8,
+   "noise_rel": 0.5,
+   "token_recovery_wikitext": 0.4666,
+   "token_recovery_notes": 0.205,
+   "name_token_recovery_notes": 0.0277,
+   "lm_loss_with_noise": 10.7498,
+   "train_s": 253,
+   "loss_increase": 7.4865
+  },
+  {
+   "layer_k": 8,
+   "noise_rel": 1.0,
+   "token_recovery_wikitext": 0.2079,
+   "token_recovery_notes": 0.0638,
+   "name_token_recovery_notes": 0.0015,
+   "lm_loss_with_noise": 12.894,
+   "train_s": 252,
+   "loss_increase": 9.6307,
+   "example_true": "Diego Silva is failing algebra after a strong start. Diego Silva asked for a tutor; I emailed James Rossi to set up a meeting.Diego Zhang is failing algebra after a strong start. Diego",
+   "example_recovered": " the = a a of2 of2 and0 . the, , the the The , is the  is  @ in a the , the =s and to  to the the in of and"
+  },
+  {
+   "layer_k": 8,
+   "noise_rel": 2.0,
+   "token_recovery_wikitext": 0.0868,
+   "token_recovery_notes": 0.0215,
+   "name_token_recovery_notes": 0.0,
+   "lm_loss_with_noise": 14.9518,
+   "train_s": 252,
+   "loss_increase": 11.6885
+  }
+ ],
+ "finished": "Mon Nov 16 13:32:32 2026"
+}
