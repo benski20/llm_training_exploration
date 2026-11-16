@@ -159,14 +159,38 @@ code{font-family:var(--mono);font-size:.88em}
 
 <section id="results">
   <h2>What the test showed</h2>
-  <p id="results-intro">Results pending.</p>
+  <p>We ran the full scheme on Kaggle (Tesla T4 GPU, 4-core CPU): Qwen2.5-0.5B end to end, plus timing at Llama-3-8B and 70B layer sizes.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Check (0.5B, end to end)</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Answer with masking vs. without</td><td><span class="pill ok">identical</span> " help her. She is a victim of"</td></tr>
+      <tr><td>Difference in model scores caused by masking</td><td class="num">0.0 (exact)</td></tr>
+      <tr><td>Do the numbers we receive look random?</td><td><span class="pill ok">yes</span> chi² 241 on 255 d.o.f.; correlation with the real data −0.0006 over 141,312 values</td></tr>
+      <tr><td>Laptop's online work for the whole answer</td><td class="num">0.18 s</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Per word (token)</th><th>Llama-3-8B</th><th>Llama-3-70B</th></tr></thead>
+    <tbody>
+      <tr><td>Our GPU time, one user (T4)</td><td class="num">0.45 s</td><td class="num">3.1 s</td></tr>
+      <tr><td>Our GPU time, 32 users batched</td><td class="num">0.014 s</td><td class="num">0.093 s</td></tr>
+      <tr><td>Plain unprotected model, one user (T4)</td><td class="num">0.059 s</td><td class="num">0.54 s</td></tr>
+      <tr><td>Data sent + received</td><td class="num">5.1 + 8.3 MB</td><td class="num">26 + 40 MB</td></tr>
+      <tr><td>Mask storage used</td><td class="num">8.3 MB</td><td class="num">40 MB</td></tr>
+      <tr><td>Words per 1 TB of masks</td><td class="num">121,000</td><td class="num">25,000</td></tr>
+      <tr><td>Making the masks on 4 CPU cores</td><td class="num"><span class="pill bad">14 s</span></td><td class="num"><span class="pill bad">~140 s (est.)</span></td></tr>
+      <tr><td>Making the masks on a GPU</td><td class="num">~0.014 s</td><td class="num">~0.09 s</td></tr>
+      <tr><td>Round trips</td><td class="num">128</td><td class="num">320</td></tr>
+    </tbody>
+  </table></div>
+  <p><b>Verdict.</b> The privacy is exact and our server cost is close to normal AI. The weak spot moved to mask making: on ordinary CPUs it is far too slow, while on a GPU it is cheap. So masks should come from a GPU that is not ours: an independent mask provider, or a GPU workstation the customer already owns.</p>
 </section>
 
 <section>
   <h2>Trade-offs to know</h2>
   <ul class="plain">
-    <li><b>Masks get used up.</b> Every word read or written uses one set. They must be refilled, like ink.</li>
-    <li><b>Making masks is real work.</b> It costs about as much computing as running the model, but it can happen any time, in bulk, on ordinary CPUs, with the model streamed from disk.</li>
+    <li><b>Masks get used up.</b> Every word read or written uses one set (8 MB for an 8B model). They must be refilled, like ink.</li><li><b>Data volume.</b> About 13 MB crosses the internet per word for an 8B model. A 2,000-word document is about 27 GB: minutes on a fast office line.</li>
+    <li><b>Making masks is real work.</b> It is the same maths as running the model, six times over. On 4 CPU cores it took 14 s per word for an 8B model, so it needs a GPU somewhere that is not ours.</li>
     <li><b>Many short trips.</b> Each word needs a round trip per layer section (about 128 for an 8B model). Fine for documents; for chat, our servers need to be close to the customer.</li>
     <li><b>The mask drive is a key.</b> Someone who steals it <i>and</i> our server logs could read the data. Store it like a security key.</li>
     <li><b>Privacy holds even if we cheat.</b> A dishonest server could return wrong numbers, which spot checks catch, but it can never read anything.</li>
@@ -181,7 +205,8 @@ code{font-family:var(--mono);font-size:.88em}
     <div class="idea"><h3>Store a seed, not the mask</h3><p>The random mask regenerates from a 32-byte seed, so only the pre-computed answers are stored. This halves storage.</p></div>
     <div class="idea"><h3>Spend masks only on secrets</h3><p>Public text (system prompts, policy documents, templates) goes through without masks or is cached once. Only the private parts consume the mask budget.</p></div>
     <div class="idea"><h3>Process documents in batches</h3><p>All words of a document go through each layer together, so round trips depend on model depth rather than document length. Best fit: summarising, extracting and classifying files.</p></div>
-    <div class="idea"><h3>Optional independent mask service</h3><p>For customers with no spare computer, a separate company makes masks and ships them. Safe as long as that company never shares masks with us.</p></div>
+    <div class="idea"><h3>Independent mask provider</h3><p>The most practical setup. A separate company, on separate GPUs, makes masks for about the cost of our own serving and streams them to the customer. Safe as long as the two companies never share data.</p></div>
+    <div class="idea"><h3>Use 8-bit activations</h3><p>Standard W8A8 quantization lets the maths run in 32-bit numbers instead of 48-bit. That cuts masks, data volume and mask making by about a third.</p></div>
   </div>
 </section>
 

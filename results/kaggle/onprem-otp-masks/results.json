@@ -1,0 +1,57 @@
+{
+ "device": "Tesla T4",
+ "cpu_count": 4,
+ "selftest_exact_cpu": true,
+ "selftest_exact_cuda": true,
+ "A": {
+  "llama-3-8b": {
+   "server_gpu_s_per_token_batch1": 0.452,
+   "server_gpu_s_per_token_amortized_batch32": 0.014,
+   "plain_fp16_gpu_s_per_token_batch1": 0.0585,
+   "mask_storage_MB_per_token": 8.26,
+   "upload_MB_per_token": 5.11,
+   "download_MB_per_token": 8.26,
+   "rounds_per_token": 128,
+   "customer_online_work": "add r (from seed) and subtract stored W r: O(MB) of integer adds per token",
+   "customer_offline_cpu_s_per_token_mask_generation": 14.36,
+   "tokens_per_TB_of_masks": 121065
+  },
+  "llama-3-70b": {
+   "server_gpu_s_per_token_batch1": 3.094,
+   "server_gpu_s_per_token_amortized_batch32": 0.0927,
+   "plain_fp16_gpu_s_per_token_batch1": 0.5363,
+   "mask_storage_MB_per_token": 40.3,
+   "upload_MB_per_token": 25.56,
+   "download_MB_per_token": 40.3,
+   "rounds_per_token": 320,
+   "customer_online_work": "add r (from seed) and subtract stored W r: O(MB) of integer adds per token",
+   "customer_offline_cpu_s_per_token_mask_generation_est": 140.93,
+   "tokens_per_TB_of_masks": 24813
+  }
+ },
+ "B_offline": {
+  "tokens": 23,
+  "mask_gen_cpu_s_total": 24.4,
+  "mask_bank_MB": 41.97,
+  "mask_MB_per_token": 1.825
+ },
+ "B": {
+  "answer_float": " help her. She is a victim of",
+  "answer_masked": " help her. She is a victim of",
+  "masked_tokens_identical_to_quantized_plaintext": true,
+  "masked_vs_quantized_max_logit_diff": 0.0,
+  "masked_tokens_identical_to_float_model": true,
+  "masked_vs_float_max_logit_diff": 1.5584997328774248,
+  "prefill_s": 0.35,
+  "decode_s_per_token": 0.24,
+  "server_gpu_s_total": 1.48,
+  "client_online_crypto_s_total": 0.183,
+  "upload_MB_total": 25.01,
+  "download_MB_total": 41.97,
+  "rounds": 864,
+  "server_view_top_byte_chi2_255dof": 241.4,
+  "server_view_corr_with_plaintext": -0.0006,
+  "server_view_samples": 141312
+ },
+ "minutes": 3.0
+}

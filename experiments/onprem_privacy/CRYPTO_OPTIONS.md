@@ -69,3 +69,15 @@ End to end on Qwen2.5-0.5B (T4): 8 generated tokens identical to plaintext, max 
 
 Verdict: customer load is solved (~1 GB, seconds of CPU), but the GPU only gave 3-6x over 4 CPU cores on this library, leaving the
 server at ~2 minutes and ~180 MB per 8B token: roughly 10,000x plaintext cost. Not commercially viable for generation today.
+
+## One-time-mask masking with public weights, measured (Kaggle T4 + 4-core CPU), 2026-11-16
+Offline: r uniform in Z_2^48, store W r (r from a seed). Online: send x+r, server returns W(x+r) via 6 int8 limb GEMMs, customer subtracts W r.
+Results: `results/kaggle/onprem-otp-masks`. Explainer page: `experiments/onprem_privacy/masked_inference.html`.
+
+- 0.5B end to end: identical tokens, logit diff 0.0 vs quantized plaintext; same tokens as the float model.
+  Server view uniform (top-byte chi2 241, 255 dof; corr with plaintext -0.0006, 141k values). Customer online crypto 0.18 s for 23 tokens.
+- 8B per token: server 0.45 s batch-1 / 0.014 s amortized at batch 32 on T4 (plain fp16 batch-1: 0.059 s); 5.1 MB up + 8.3 MB down;
+  8.3 MB of masks (121k tokens/TB); 128 rounds; mask generation 14.4 s on 4 CPU cores (torch int8), ~0.014 s on a T4.
+- 70B per token: server 3.1 s batch-1 / 0.093 s amortized; 26 + 40 MB; 40 MB of masks (25k tokens/TB); 320 rounds; mask gen ~141 s on 4 cores (est).
+Verdict: exact and information-theoretically private, server cost near normal serving. The load moved to mask generation (needs a GPU)
+and bandwidth/mask volume. Most practical form: an independent mask provider on its own GPUs (non-collusion assumption).
