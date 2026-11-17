@@ -1,0 +1,106 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pgw"
+version = "0.1.0"
+description = "PGW (Private Gateway): private LLM inference over public open weights with one-time masks"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "PGW maintainers" }]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Typing :: Typed",
+]
+# Core dependencies: everything pgw.core, pgw.modelpack and pgw.wire need.
+dependencies = [
+    "numpy>=1.26",
+    "torch>=2.4",
+    "cryptography>=42",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "msgpack>=1.0.7",
+    "safetensors>=0.4",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+# CUDA int8 GEMMs come from the CUDA build of torch; this extra adds GPU helpers only.
+gpu = ["nvidia-ml-py>=12"]
+# Customer-side OpenAI-compatible gateway (also runs the plaintext engine).
+gateway = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "hypercorn>=0.16",
+    "httpx[http2]>=0.27",
+    "sse-starlette>=2.0",
+    "transformers>=4.44",
+    "tokenizers>=0.19",
+    "prometheus-client>=0.20",
+]
+# Our stateless masked-compute service.
+service = [
+    "fastapi>=0.110",
+    "hypercorn>=0.16",
+    "uvicorn[standard]>=0.29",
+    "prometheus-client>=0.20",
+]
+# Mask factory (customer-run or independent partner).
+factory = [
+    "httpx[http2]>=0.27",
+    "prometheus-client>=0.20",
+]
+# Model pack tool (reads HF checkpoints).
+pack = ["transformers>=4.44", "huggingface-hub>=0.23"]
+dev = [
+    "pgw[gateway,service,factory,pack]",
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.3",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+pgw = "pgw.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pgw = ["py.typed", "observability/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: tests that take more than a few seconds",
+    "gpu: tests that need CUDA (skipped automatically when unavailable)",
+    "network: tests that download from the HF hub (skipped when PGW_OFFLINE=1)",
+]
+filterwarnings = ["ignore::DeprecationWarning:transformers.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "S", "RUF"]
+ignore = ["S101", "N803", "N806", "N812", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501", "S106", "B017", "S311"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+mypy_path = "src"

@@ -1,0 +1,73 @@
+# PGW: Private Gateway
+
+PGW runs private LLM inference on **public open-weight models** using **one-time masks**. Your
+gateway keeps prompts, activations and outputs in plaintext on your side. Our GPU compute service
+does the heavy matrix multiplications on data that, to it, is uniformly random noise. Results are
+bit-exact, and every result is integrity-checked (Freivalds).
+
+```
+apps ── OpenAI API ──▶ gateway (your side) ──x+r──▶ compute service (ours) ──W(x+r)──▶ gateway
+                         ▲ masks (r, W r)                                  subtract W r, continue
+                       mask store ◀── mask factory (you, or an independent partner)
+```
+
+See **[SPEC.md](SPEC.md)** for the architecture, threat model, wire protocol, formats and targets.
+
+## Install
+
+```bash
+pip install -e ".[dev]"          # everything + test tools
+pip install -e ".[gateway]"      # customer gateway
+pip install -e ".[service]"      # compute service
+pip install -e ".[factory]"      # mask factory
+```
+Python 3.12+ and torch 2.4+ are required. On GPU hosts, install the CUDA build of torch.
+
+## Quick check
+
+```bash
+pgw doctor          # verifies exact ring arithmetic on every available backend
+pytest              # unit tests (CPU only, a few minutes)
+```
+
+## Workflow (target CLI)
+
+```bash
+pgw pack Qwen/Qwen2.5-0.5B-Instruct packs/qwen0.5b                 # int8 pack + fingerprint
+pgw maskstore init --root /var/lib/pgw/masks --key-file /etc/pgw/kek
+pgw factory generate --pack packs/qwen0.5b --store /var/lib/pgw/masks --slots 4096
+PGW_SERVICE_PACKS='["packs/qwen0.5b"]' pgw service serve           # our side
+PGW_GATEWAY_MODELS_FILE=models.json pgw gateway serve              # your side
+curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...}'
+```
+
+## Layout
+
+| path | contents |
+|---|---|
+| `src/pgw/core` | ring arithmetic, exact ring matmul (CPU/GPU), masks, Freivalds, CSPRNG, errors (**implemented**) |
+| `src/pgw/modelpack` | HF checkpoint → int8 model pack + manifest/fingerprint |
+| `src/pgw/engine` | plaintext transformer runtime with pluggable linear backends |
+| `src/pgw/factory` | offline mask generation |
+| `src/pgw/maskstore` | encrypted single-use mask store |
+| `src/pgw/wire` | HTTP/2 + msgpack protocol |
+| `src/pgw/service` | stateless masked compute service |
+| `src/pgw/gateway` | OpenAI-compatible gateway |
+| `src/pgw/observability` | metrics, outbound-noise monitor, dashboard |
+| `src/pgw/cli` | `pgw` command |
+| `tests/` | per-subpackage tests; shared fixtures in `tests/conftest.py` |
+| `INTERFACE_NOTES.md` | log of requested interface changes between teams |
+
+## Status
+
+v0.1: `pgw.core` is complete and tested. The other subpackages are interface stubs (signatures,
+docstrings and data models) under construction by the component teams.
+
+## Measured basis (Kaggle T4 prototype)
+
+| | value |
+|---|---|
+| Qwen2.5-0.5B masked vs quantized plaintext | identical tokens, max logit diff 0.0 |
+| Llama-3-8B server time, batch 1 / amortized batch 32 | 0.45 s / 0.014 s per token |
+| mask generation, 8B, T4, K=48 | 0.0066 s per token |
+| mask storage, 8B | 8.3 MB/token (K48), 6.9 MB/token (K40) |
