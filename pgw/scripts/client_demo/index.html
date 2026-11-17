@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Private Inference Demo</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#14171c; --muted:#5d6673; --line:#e3e6eb;
+  --accent:#2457d6; --accent-soft:#e8eefc; --ok:#13804b; --ok-soft:#e5f4ec; --bad:#c0362c; --bad-soft:#fbeae8;
+  --dark:#0f1419; --dark-2:#171e26; --dark-line:#26303b; --dark-ink:#d8dee6; --dark-muted:#8693a3; --noise:#7fd1b9;
+  --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+header{padding:22px 28px 6px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
+h1{font-size:22px;margin:0;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:2px 0 0}
+.pill{font:12px var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px 10px;color:var(--muted)}
+.flow{margin:14px 28px 0;display:grid;grid-template-columns:1fr auto 1.2fr auto 1fr;align-items:center;gap:10px}
+.node{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.node b{display:block;font-size:14px}
+.node span{color:var(--muted);font-size:12.5px}
+.node.ours{background:var(--dark);border-color:var(--dark);color:var(--dark-ink)}
+.node.ours span{color:var(--dark-muted)}
+.node.gw{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.arrow{font:12px var(--mono);color:var(--muted);text-align:center;white-space:nowrap}
+.arrow i{display:block;font-style:normal;font-size:18px;color:var(--accent);line-height:1}
+.zone{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:700}
+.node.ours .zone{color:var(--noise)}
+main{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:18px;padding:18px 28px 10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);display:flex;flex-direction:column;min-height:0}
+.card h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin:0;padding:14px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card h2 small{font-weight:500;letter-spacing:0;text-transform:none;color:var(--muted);font-size:12.5px}
+#chat{height:430px;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;padding:10px 14px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-start;background:#f0f2f5;border-bottom-left-radius:4px}
+.msg.err{align-self:stretch;max-width:100%;background:var(--bad-soft);color:var(--bad);border:1px solid #f1c4bf}
+.msg .meta{display:block;margin-top:6px;font:11.5px var(--mono);color:var(--muted)}
+.msg .meta.okm{color:var(--ok)}
+.empty{color:var(--muted);margin:auto;text-align:center;max-width:380px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:0 18px 10px}
+.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 11px;font-size:13px;cursor:pointer;color:var(--ink)}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+form{display:flex;gap:10px;padding:12px 18px 16px;border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;height:46px;border:1px solid var(--line);border-radius:10px;padding:11px 12px;font:inherit}
+textarea:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+button{font:inherit;border-radius:10px;border:1px solid transparent;padding:0 16px;cursor:pointer}
+.primary{background:var(--accent);color:#fff;min-width:84px}
+.primary:disabled{opacity:.5;cursor:default}
+.dark{background:var(--dark);border-color:var(--dark);color:var(--dark-ink)}
+.dark h2{border-color:var(--dark-line)}
+.dark h2 small{color:var(--dark-muted)}
+.dark .body{padding:14px 18px;display:flex;flex-direction:column;gap:14px}
+.lbl{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dark-muted);margin-bottom:6px}
+.vals{font:14px var(--mono);color:var(--noise);background:var(--dark-2);border:1px solid var(--dark-line);border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;min-height:86px}
+.vals div{text-align:right;overflow:hidden;text-overflow:ellipsis}
+.hist{display:flex;align-items:flex-end;gap:2px;height:72px;background:var(--dark-2);border:1px solid var(--dark-line);border-radius:10px;padding:8px}
+.hist div{flex:1;background:var(--noise);opacity:.85;border-radius:2px 2px 0 0;min-height:1px;transition:height .3s}
+.histnote{font-size:12.5px;color:var(--dark-muted);margin-top:6px}
+.feed{font:12px var(--mono);color:var(--dark-ink);background:var(--dark-2);border:1px solid var(--dark-line);border-radius:10px;padding:8px 12px;height:150px;overflow:hidden}
+.feed div{display:flex;justify-content:space-between;gap:10px;padding:2px 0;border-bottom:1px dashed #1f2832;white-space:nowrap}
+.feed span:first-child{color:var(--dark-muted)}
+.verify{margin:0 28px 28px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) minmax(0,1.3fr);gap:12px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.tile .n{font:600 24px/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.tile .t{font-size:12.5px;color:var(--muted)}
+.tile.good .n{color:var(--ok)}
+.tile.alert{border-color:var(--bad);background:var(--bad-soft)}
+.tile.alert .n{color:var(--bad)}
+.attack{display:flex;flex-direction:column;gap:8px;justify-content:center}
+.attack p{margin:0;font-size:12.5px;color:var(--muted)}
+.attack .row{display:flex;gap:8px}
+.danger{background:#fff;color:var(--bad);border-color:#efc0bb;padding:8px 12px}
+.danger.armed{background:var(--bad);color:#fff}
+.ghost{background:#fff;border-color:var(--line);color:var(--ink);padding:8px 12px}
+.live{display:inline-block;width:8px;height:8px;border-radius:50%;background:#3b4652;margin-right:6px}
+.live.on{background:var(--noise);box-shadow:0 0 0 3px rgba(127,209,185,.2)}
+@media (max-width:980px){main{grid-template-columns:1fr}.verify{grid-template-columns:1fr 1fr}.flow{grid-template-columns:1fr;}.arrow i{transform:rotate(90deg)}}
+@media (max-width:560px){.chips{flex-wrap:nowrap;overflow-x:auto}.chip{white-space:nowrap}#chat{height:360px}header,.flow,main{padding-left:16px;padding-right:16px}.flow{margin:12px 16px 0}.verify{margin:0 16px 20px}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Private inference, without hardware on your premises</h1>
+    <p class="sub">Your prompts and answers stay readable only inside your network. Our GPU cloud computes on one-time-masked numbers.</p>
+  </div>
+  <span class="pill" id="modelpill">loading…</span>
+</header>
+
+<section class="flow" aria-label="Data flow">
+  <div class="node"><div class="zone">Your network</div><b>Your app / users</b><span>OpenAI-compatible API</span></div>
+  <div class="arrow"><i>→</i>plain text</div>
+  <div class="node gw"><div class="zone">Your network</div><b>Private Gateway</b><span>Runs the model's plaintext steps, applies one-time masks, verifies every reply</span></div>
+  <div class="arrow"><i>⇄</i><span id="flowbytes">masked numbers</span></div>
+  <div class="node ours"><div class="zone">Our cloud</div><b>Masked Compute Service</b><span>Stateless GPU matrix multiplies on masked data</span></div>
+</section>
+
+<main>
+  <section class="card">
+    <h2>What your team sees <small>inside your network</small></h2>
+    <div id="chat"><div class="empty" id="empty">Ask anything — try something confidential. Every word is processed privately, and every reply from our cloud is mathematically checked before you see it.</div></div>
+    <div class="chips" id="chips"></div>
+    <form id="form">
+      <textarea id="input" placeholder="Type a message…" aria-label="Message"></textarea>
+      <button class="primary" id="send" type="submit">Send</button>
+    </form>
+  </section>
+
+  <section class="card dark">
+    <h2>What our cloud service receives <small><span class="live" id="live"></span><span id="calls">0 calls</span></small></h2>
+    <div class="body">
+      <div>
+        <div class="lbl">Latest values sent to the service <span id="vlin"></span></div>
+        <div class="vals" id="vals"><div style="grid-column:1/3;text-align:left;color:var(--dark-muted)">Waiting for the first request…</div></div>
+      </div>
+      <div>
+        <div class="lbl">Distribution of every value received, across the whole number range</div>
+        <div class="hist" id="hist"></div>
+        <div class="histnote" id="histnote">Readable data would show up as one narrow spike in the middle. Masked data is spread evenly, so it looks like random noise.</div>
+      </div>
+      <div>
+        <div class="lbl">Live request log (all the service gets: layer name, size)</div>
+        <div class="feed" id="feed"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<section class="verify">
+  <div class="tile"><div class="n" id="rt">0</div><div class="t">masked round trips</div></div>
+  <div class="tile good"><div class="n" id="fv">0</div><div class="t">replies verified (Freivalds check)</div></div>
+  <div class="tile" id="iftile"><div class="n" id="if">0</div><div class="t">tampered replies caught</div></div>
+  <div class="tile"><div class="n" id="mk">–</div><div class="t">one-time masks left (each used once, then destroyed)</div></div>
+  <div class="tile attack">
+    <p><b>What if our service cheated?</b> Corrupt a single bit of one reply and watch the gateway reject it.</p>
+    <div class="row">
+      <button class="danger" id="tamper" type="button">Simulate a compromised service</button>
+      <button class="ghost" id="reset" type="button">Reset</button>
+    </div>
+  </div>
+</section>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => (n ?? 0).toLocaleString();
+const mb = b => (b/1e6).toFixed(1) + ' MB';
+const history = [];
+let busy = false;
+
+const CHIPS = [
+  "Summarize in two sentences: Q3 revenue fell 12% to $41M; we plan to cut 60 roles in the Austin office before the board meeting on Oct 3.",
+  "Draft a polite reply declining a supplier's 8% price increase.",
+  "Explain what a one-time pad is in one paragraph.",
+  "List three risks of sending patient records to a third-party AI service."
+];
+for (const c of CHIPS) {
+  const b = document.createElement('button'); b.type='button'; b.className='chip';
+  b.textContent = c.length > 58 ? c.slice(0,56)+'…' : c; b.title = c;
+  b.onclick = () => { $('input').value = c; $('input').focus(); };
+  $('chips').appendChild(b);
+}
+
+function bubble(cls, text) {
+  $('empty')?.remove();
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight; return d;
+}
+
+let lastState = null;
+async function send(text) {
+  busy = true; $('send').disabled = true;
+  history.push({role:'user', content:text}); bubble('user', text);
+  const bot = bubble('bot', ''); const textNode = document.createTextNode(''); bot.appendChild(textNode);
+  const before = lastState?.gateway || {};
+  const t0 = performance.now(); let first = null, out = '', tokens = 0, failed = null;
+  try {
+    const r = await fetch('api/chat', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({messages: history, max_tokens: 90})});
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const ev = buf.slice(0, i); buf = buf.slice(i+2);
+        for (const line of ev.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim(); if (data === '[DONE]') continue;
+          let j; try { j = JSON.parse(data); } catch { continue; }
+          if (j.demo_error || j.error) { failed = j.demo_error || j.error; continue; }
+          const delta = j.choices?.[0]?.delta?.content;
+          if (delta) { if (!first) first = performance.now(); out += delta; tokens++; textNode.data = out; $('chat').scrollTop = $('chat').scrollHeight; }
+        }
+      }
+    }
+  } catch (e) { failed = String(e); }
+  const secs = (performance.now() - t0) / 1000;
+  if (failed) {
+    bot.remove();
+    let msg = typeof failed === 'string' ? failed : JSON.stringify(failed);
+    try { const j = JSON.parse(msg); msg = j.error?.message || j.message || msg; } catch {}
+    const e = bubble('err', '');
+    e.innerHTML = '<b>Reply rejected by your gateway.</b> ';
+    e.append(document.createTextNode(/integrity|freivalds|breaker/i.test(msg)
+      ? 'A reply from the compute service failed the integrity check, so nothing was shown. The gateway has stopped sending traffic to that service until an administrator resets it.'
+      : msg));
+    history.pop();
+  } else {
+    history.push({role:'assistant', content:out});
+    await refresh();
+    const after = lastState?.gateway || {};
+    const m = document.createElement('span'); m.className = 'meta okm';
+    const rts = (after.round_trips ?? 0) - (before.round_trips ?? 0);
+    m.textContent = `✓ ${fmt(rts)} masked round trips, all verified · ${tokens} tokens in ${secs.toFixed(1)} s`;
+    bot.appendChild(m);
+  }
+  busy = false; $('send').disabled = false; $('input').focus();
+}
+
+$('form').onsubmit = e => { e.preventDefault(); const t = $('input').value.trim(); if (!t || busy) return; $('input').value=''; send(t); };
+$('input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); } });
+
+$('tamper').onclick = async () => { await fetch('api/tamper', {method:'POST'}); refresh(); };
+$('reset').onclick = async () => { await fetch('api/reset', {method:'POST'}); refresh(); };
+
+for (let i = 0; i < 32; i++) $('hist').appendChild(document.createElement('div'));
+let lastCalls = 0;
+async function refresh() {
+  let s; try { s = await (await fetch('api/state')).json(); } catch { return; }
+  lastState = s;
+  $('modelpill').textContent = `${s.model} · ring ${s.ring} · pack ${s.fingerprint}…`;
+  const t = s.tap, g = s.gateway || {};
+  $('calls').textContent = `${fmt(t.calls)} calls · ${mb(t.bytes_up)} in · ${mb(t.bytes_down)} out`;
+  $('flowbytes').textContent = t.calls ? `${mb(t.bytes_up + t.bytes_down)} of masked numbers` : 'masked numbers';
+  $('live').classList.toggle('on', t.calls !== lastCalls); lastCalls = t.calls;
+  if (t.sample.length) {
+    $('vals').innerHTML = ''; for (const v of t.sample) { const d = document.createElement('div'); d.textContent = v; $('vals').appendChild(d); }
+    $('vlin').textContent = '(' + t.sample_linear + ')';
+  }
+  if (t.hist.length) { const mx = Math.max(...t.hist, 1e-9); [...$('hist').children].forEach((d, i) => d.style.height = (100 * t.hist[i] / mx).toFixed(1) + '%');
+    $('histnote').textContent = `${fmt(t.values_seen)} values received. Readable data would be one narrow spike in the middle bar; masked data is spread evenly, so it looks like random noise.`; }
+  $('feed').innerHTML = t.recent.map(r => `<div><span>${new Date(r.t*1000).toLocaleTimeString()}</span><span>${r.linear}</span><span>${r.rows} row${r.rows>1?'s':''} · ${(r.bytes/1024).toFixed(0)} KB</span></div>`).join('');
+  $('rt').textContent = fmt(g.round_trips); $('fv').textContent = fmt(g.freivalds_checked);
+  $('if').textContent = fmt(g.integrity_failures); $('iftile').classList.toggle('alert', (g.integrity_failures||0) > 0);
+  $('mk').textContent = g.masks_available == null ? '–' : fmt(g.masks_available);
+  $('tamper').classList.toggle('armed', t.tamper_armed);
+  $('tamper').textContent = t.tamper_armed ? 'Armed: next reply will be corrupted' : 'Simulate a compromised service';
+}
+refresh(); setInterval(refresh, 800);
+</script>
+</body>
+</html>

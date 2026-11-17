@@ -48,3 +48,9 @@ def configure_logging(level: str | int = "INFO", json_lines: bool = False) -> No
     )
     root.addHandler(handler)
     root.setLevel(level)
+    # httpx/httpcore log every request at INFO: one line per masked round trip (100+ per token) on the
+    # gateway. Keep them at WARNING unless the operator asked for DEBUG.
+    lvl = logging.getLevelName(level) if isinstance(level, str) else level
+    if not isinstance(lvl, int) or lvl > logging.DEBUG:
+        for name in ("httpx", "httpcore"):
+            logging.getLogger(name).setLevel(logging.WARNING)
