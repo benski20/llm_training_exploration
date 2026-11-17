@@ -73,6 +73,11 @@ def main() -> None:
     ap.add_argument("--slots", type=int, default=800, help="mask slots (one per prompt or generated token)")
     ap.add_argument("--port", type=int, default=8080, help="demo UI port")
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--pack-dir", default=None, help="use (or create) the model pack here instead of <work>/packs")
+    ap.add_argument("--pack-only", action="store_true", help="build the model pack and exit (image build step)")
+    ap.add_argument("--refill-low", type=int, default=0,
+                    help="run the mask factory daemon: refill when fewer slots than this remain (0 = off)")
+    ap.add_argument("--refill-target", type=int, default=0, help="factory daemon fills up to this many slots")
     args = ap.parse_args()
 
     work = Path(args.work)
@@ -83,12 +88,14 @@ def main() -> None:
     env.update({"PGW_LOG_LEVEL": "INFO", "PGW_MASKSTORE_COUNTER": "file",
                 "PGW_MASKSTORE_COUNTER_FILE": str(work / "counter" / "generation.counter")})
 
-    pack = work / "packs" / args.name
+    pack = Path(args.pack_dir) if args.pack_dir else work / "packs" / args.name
     if not (pack / "manifest.json").exists():
         log(f"packing {args.model} (int8 weights + SHA-256 fingerprint)")
         pgw("pack", args.model, str(pack), "--name", args.name, env=env, out=work / "logs" / "pack.log")
     fp = json.loads(pgw("inspect", str(pack), "--json", env=env))["fingerprint"]
     log(f"pack fingerprint {fp[:16]}...")
+    if args.pack_only:
+        return
 
     masks, kek = work / "masks", work / "secrets" / "kek"
     if not (masks / "state.sqlite").exists():
@@ -161,6 +168,13 @@ def main() -> None:
         "PGW_GATEWAY_AUDIT_LOG_FILE": str(work / "state" / "audit.jsonl"),
         "PGW_MASKSTORE_ROOT": str(masks), "PGW_MASKSTORE_KEY_FILE": str(kek), "PGW_MASKSTORE_LOW_WATER_SLOTS": "16"})
     wait_ready(f"http://127.0.0.1:{gw_port}/readyz?models=all", gw, "gateway", work / "logs" / "gateway.log")
+
+    if args.refill_low > 0:
+        target = max(args.refill_target, args.refill_low * 2)
+        log(f"mask factory daemon: refill below {args.refill_low} slots, up to {target}")
+        start("factory", [sys.executable, "-m", "pgw.cli", "factory", "run", "--pack", str(pack), "--store", str(masks),
+                          "--key-file", str(kek), "--ring", args.ring, "--low-water", str(args.refill_low),
+                          "--target", str(target), "--segment-slots", "256", "--nice", "10", "--threads", "1", "--poll", "10"], env)
 
     log(f"READY: demo UI on http://127.0.0.1:{args.port}/   (logs in {work / 'logs'})")
     while True:
