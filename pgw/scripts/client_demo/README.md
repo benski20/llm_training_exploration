@@ -20,3 +20,14 @@ State lives in `~/.pgw-client-demo` (pack, masks, demo-only keys, logs). On a 4-
 0.5B runs at about 1.3 tokens/s, because each token is 96 sequential masked round trips. A GPU
 service and speculative decoding are the planned fixes. All keys and tokens are demo-only. Gateway
 and service use plain HTTP on loopback; production uses TLS/mTLS.
+
+## Shareable recording
+
+`record.py` drives the running demo through five scenarios (three questions, a tampered reply,
+the same question after reset) and saves every token and service-side snapshot with its timing.
+`replay_template.html` replays that file as a standalone page (replace `__DATA__` with the JSON,
+escaping `</` as `<\/`).
+
+```bash
+python scripts/client_demo/record.py recording.json   # with run.py already serving on :8080
+```

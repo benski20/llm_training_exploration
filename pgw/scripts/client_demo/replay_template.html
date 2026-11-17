@@ -1,0 +1,289 @@
+<title>Masked Inference Demo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one working screen. Customer side (light) beside our cloud (always dark), proof counters below. */
+:root{
+  --bg:#f3f5f8; --panel:#ffffff; --ink:#131820; --muted:#596474; --line:#dfe4ea;
+  --accent:#1f56d6; --accent-soft:#e6edfc; --on-accent:#ffffff;
+  --ok:#11784a; --ok-soft:#e3f3ea; --bad:#b9322a; --bad-soft:#fbe9e7; --bad-line:#eec0bb;
+  --bubble:#eef1f5;
+  --vault:#0e1318; --vault-2:#151c24; --vault-line:#25303c; --vault-ink:#d6dde6; --vault-muted:#8592a3; --noise:#7dd3b8;
+  --sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0b0f14; --panel:#121820; --ink:#e4e9ef; --muted:#93a0b0; --line:#232c37;
+  --accent:#6f9bff; --accent-soft:#18243d; --on-accent:#0b0f14;
+  --ok:#5ccf98; --ok-soft:#10261c; --bad:#ff8a80; --bad-soft:#2a1514; --bad-line:#5a2622;
+  --bubble:#1a222c; --vault:#05080b; --vault-2:#0c1117; --vault-line:#1f2934; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0b0f14; --panel:#121820; --ink:#e4e9ef; --muted:#93a0b0; --line:#232c37;
+  --accent:#6f9bff; --accent-soft:#18243d; --on-accent:#0b0f14;
+  --ok:#5ccf98; --ok-soft:#10261c; --bad:#ff8a80; --bad-soft:#2a1514; --bad-line:#5a2622;
+  --bubble:#1a222c; --vault:#05080b; --vault-2:#0c1117; --vault-line:#1f2934; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans)}
+.wrap{max-width:1360px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:22px 32px;display:flex;flex-direction:column;gap:16px}
+header{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:flex-end;justify-content:space-between}
+h1{font-size:clamp(20px,2.4vw,26px);line-height:1.2;margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;max-width:70ch}
+.rec{font:12px var(--mono);color:var(--muted);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:5px 11px;display:inline-flex;align-items:center;gap:8px}
+.rec::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--bad)}
+.player{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.scen{font:inherit;font-size:13.5px;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:10px;padding:7px 12px;cursor:pointer;display:inline-flex;gap:8px;align-items:center}
+.scen .n{font:600 12px var(--mono);color:var(--muted)}
+.scen:hover{border-color:var(--accent)}
+.scen[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.scen[aria-pressed="true"] .n{color:var(--accent)}
+.scen.attack{color:var(--bad)}
+.scen.attack[aria-pressed="true"]{background:var(--bad-soft);border-color:var(--bad)}
+.speed{margin-left:auto;display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.speed button{font:12.5px var(--mono);border:0;background:transparent;color:var(--muted);padding:7px 11px;cursor:pointer}
+.speed button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.flow{display:grid;grid-template-columns:1fr auto 1.25fr auto 1fr;align-items:center;gap:10px}
+.node{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;min-width:0}
+.node b{display:block;font-size:14px}
+.node span{color:var(--muted);font-size:12.5px}
+.zone{font:600 10.5px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+.node.gw{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.node.ours{background:var(--vault);border-color:var(--vault);color:var(--vault-ink)}
+.node.ours span{color:var(--vault-muted)}
+.node.ours .zone{color:var(--noise)}
+.arrow{font:11.5px var(--mono);color:var(--muted);text-align:center}
+.arrow i{display:block;font-style:normal;font-size:18px;color:var(--accent);line-height:1.1}
+main{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;display:flex;flex-direction:column;min-width:0}
+.card h2{font:600 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;margin:0;padding:13px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.card h2 small{font:12px var(--sans);letter-spacing:0;text-transform:none;color:var(--muted)}
+#chat{height:420px;overflow:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;padding:10px 14px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-start;background:var(--bubble);border-bottom-left-radius:4px}
+.msg.bot.typing::after{content:"▍";color:var(--accent);animation:blink 1s steps(1) infinite}
+.msg.err{align-self:stretch;max-width:100%;background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad-line)}
+.msg.note{align-self:center;max-width:100%;font:12px var(--mono);color:var(--bad);background:transparent;padding:2px 0}
+.meta{display:block;margin-top:6px;font:11.5px var(--mono);color:var(--ok)}
+.wait{align-self:flex-start;font:12px var(--mono);color:var(--muted)}
+@keyframes blink{50%{opacity:0}}
+.vault{background:var(--vault);border-color:var(--vault);color:var(--vault-ink)}
+.vault h2{border-color:var(--vault-line)}
+.vault h2 small{color:var(--vault-muted)}
+.vbody{padding:14px 18px;display:flex;flex-direction:column;gap:14px}
+.lbl{font:500 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--vault-muted);margin-bottom:6px}
+.vals{font:14px var(--mono);font-variant-numeric:tabular-nums;color:var(--noise);background:var(--vault-2);border:1px solid var(--vault-line);border-radius:10px;padding:10px 12px;display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;min-height:86px}
+.vals div{text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist{display:flex;align-items:flex-end;gap:2px;height:70px;background:var(--vault-2);border:1px solid var(--vault-line);border-radius:10px;padding:8px}
+.hist div{flex:1;background:var(--noise);border-radius:2px 2px 0 0;min-height:1px;transition:height .25s}
+.note2{font-size:12.5px;color:var(--vault-muted);margin-top:6px}
+.feed{font:12px var(--mono);background:var(--vault-2);border:1px solid var(--vault-line);border-radius:10px;padding:6px 12px;min-height:150px}
+.feed div{display:flex;justify-content:space-between;gap:10px;padding:2px 0;border-bottom:1px dashed var(--vault-line);white-space:nowrap}
+.feed div:last-child{border-bottom:0}
+.feed span:last-child{color:var(--vault-muted)}
+.proof{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-width:0}
+.tile .v{font:600 24px/1.2 var(--mono);font-variant-numeric:tabular-nums}
+.tile .t{font-size:12.5px;color:var(--muted)}
+.tile.good .v{color:var(--ok)}
+.tile.alert{border-color:var(--bad);background:var(--bad-soft)}
+.tile.alert .v{color:var(--bad)}
+.how{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.how div{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--muted)}
+.how b{display:block;color:var(--ink);font-size:14px;margin-bottom:2px}
+footer{font-size:12.5px;color:var(--muted);max-width:110ch}
+@media (max-width:980px){main{grid-template-columns:1fr}.proof{grid-template-columns:1fr 1fr}.how{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.arrow i{transform:rotate(90deg)}.speed{margin-left:0}}
+@media (max-width:520px){#chat{height:360px}.vals{font-size:12.5px}}
+@media (prefers-reduced-motion:reduce){.hist div{transition:none}.msg.bot.typing::after{animation:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Private AI inference, without hardware on your premises</h1>
+      <p class="sub">Your prompts and answers are readable only inside your network. Our GPU cloud computes on one-time-masked numbers, and every reply it sends back is checked before you see it.</p>
+    </div>
+    <span class="rec" id="rec">Recording of the live system</span>
+  </header>
+
+  <div class="player" role="group" aria-label="Choose a recorded session">
+    <button class="scen" data-i="0" aria-pressed="true"><span class="n">1</span>Confidential memo</button>
+    <button class="scen" data-i="1" aria-pressed="false"><span class="n">2</span>Supplier email</button>
+    <button class="scen" data-i="2" aria-pressed="false"><span class="n">3</span>Patient data question</button>
+    <button class="scen attack" data-i="3" aria-pressed="false"><span class="n">4</span>Attack: our service cheats</button>
+    <button class="scen" data-i="4" aria-pressed="false"><span class="n">5</span>After reset</button>
+    <div class="speed" role="group" aria-label="Playback speed">
+      <button data-s="1" aria-pressed="true">real time</button>
+      <button data-s="4" aria-pressed="false">4× faster</button>
+    </div>
+  </div>
+
+  <section class="flow" aria-label="Where data goes">
+    <div class="node"><div class="zone">Your network</div><b>Your apps and users</b><span>Standard OpenAI-compatible API</span></div>
+    <div class="arrow"><i>→</i>plain text</div>
+    <div class="node gw"><div class="zone">Your network</div><b>Private Gateway</b><span>Runs the model's plaintext steps, applies one-time masks, verifies every reply</span></div>
+    <div class="arrow"><i>⇄</i><span id="flowbytes">masked numbers only</span></div>
+    <div class="node ours"><div class="zone">Our cloud</div><b>Masked Compute Service</b><span>Stateless GPU matrix multiplies on masked data</span></div>
+  </section>
+
+  <main>
+    <section class="card" aria-label="Customer view">
+      <h2>What your team sees <small>inside your network</small></h2>
+      <div id="chat" aria-live="polite"></div>
+    </section>
+    <section class="card vault" aria-label="Service view">
+      <h2>What our cloud service receives <small id="calls">0 calls</small></h2>
+      <div class="vbody">
+        <div>
+          <div class="lbl">Latest values sent to the service <span id="vlin"></span></div>
+          <div class="vals" id="vals"></div>
+        </div>
+        <div>
+          <div class="lbl">Distribution of every value received, over the full number range</div>
+          <div class="hist" id="hist"></div>
+          <div class="note2" id="histnote">Readable data would form one narrow spike in the middle bar. Masked data spreads evenly, so it looks like random noise.</div>
+        </div>
+        <div>
+          <div class="lbl">Request log: all the service learns is the layer name and the size</div>
+          <div class="feed" id="feed"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="proof" aria-label="Verification">
+    <div class="tile"><div class="v" id="rt">0</div><div class="t">masked round trips to our cloud</div></div>
+    <div class="tile good"><div class="v" id="fv">0</div><div class="t">replies verified (Freivalds check)</div></div>
+    <div class="tile" id="iftile"><div class="v" id="if">0</div><div class="t">tampered replies caught</div></div>
+    <div class="tile"><div class="v" id="mk">0</div><div class="t">one-time masks left (each used once, then destroyed)</div></div>
+  </section>
+
+  <section class="how" aria-label="How it works">
+    <div><b>Masked before it leaves</b>For every layer, the gateway adds a fresh random mask that is used once. Our service only ever sees the masked numbers.</div>
+    <div><b>Computed blind</b>Our GPUs multiply the masked numbers by the model weights. The gateway removes the mask from the result, which is exact, with no approximation.</div>
+    <div><b>Checked every time</b>A cheap random check (Freivalds) proves each reply is the correct product. A single flipped bit is caught, and the answer is never shown.</div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n || 0).toLocaleString('en-US');
+const mb = b => (b / 1e6).toFixed(1) + ' MB';
+const base = D.start;
+let speed = 1, cur = 0, timer = null, token = 0;
+
+for (let i = 0; i < 32; i++) $('hist').appendChild(document.createElement('div'));
+$('foot').textContent = `Recorded on ${D.recorded_at} from the running system (Qwen2.5-0.5B-Instruct, ring K40A12, gateway and service on a 4-core CPU machine). ` +
+  `Playback uses the recorded timing; "4× faster" speeds it up. Answers stream at about one token per second here because each token takes 96 masked round trips and the service ran on CPU; on a GPU the service step is several times faster. The questions are made-up examples.`;
+
+function paintState(s) {
+  const calls = s.calls - base.calls;
+  $('calls').textContent = `${fmt(calls)} calls · ${mb(s.up - base.up)} in · ${mb(s.down - base.down)} out`;
+  $('flowbytes').textContent = calls > 0 ? `${mb(s.up - base.up + s.down - base.down)} of masked numbers` : 'masked numbers only';
+  if (s.sample?.length) {
+    $('vals').replaceChildren(...s.sample.map(v => { const d = document.createElement('div'); d.textContent = v; return d; }));
+    $('vlin').textContent = s.lin ? `(layer ${s.lin})` : '';
+  }
+  if (s.hist?.length) {
+    const mx = Math.max(...s.hist, 1e-9);
+    [...$('hist').children].forEach((d, i) => d.style.height = (100 * s.hist[i] / mx).toFixed(1) + '%');
+    $('histnote').textContent = `${fmt(s.values)} values received so far. Readable data would form one narrow spike in the middle bar. Masked data spreads evenly, so it looks like random noise.`;
+  }
+  $('feed').replaceChildren(...(s.recent || []).map(r => {
+    const d = document.createElement('div');
+    d.innerHTML = `<span></span><span></span>`;
+    d.children[0].textContent = r.linear;
+    d.children[1].textContent = `${r.rows} row${r.rows > 1 ? 's' : ''} · ${(r.bytes / 1024).toFixed(0)} KB`;
+    return d;
+  }));
+  $('rt').textContent = fmt(s.rt - base.rt);
+  $('fv').textContent = fmt(s.fv - base.fv);
+  const caught = (s.if || 0) - (base.if || 0);
+  $('if').textContent = fmt(caught);
+  $('iftile').classList.toggle('alert', caught > 0);
+  $('mk').textContent = fmt(s.masks);
+}
+
+function bubble(cls, text) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  $('chat').appendChild(d); $('chat').scrollTop = $('chat').scrollHeight; return d;
+}
+
+function endMsg(sc, bot, tokens, secs) {
+  const end = sc.events[sc.events.length - 1];
+  if (end.err) {
+    bot?.remove();
+    const e = bubble('err', '');
+    const b = document.createElement('b'); b.textContent = 'Reply rejected by your gateway. ';
+    e.append(b, 'One reply from the compute service failed the integrity check (Freivalds), so nothing was shown. The gateway has stopped sending traffic to that service until an administrator resets it.');
+    const m = document.createElement('span'); m.className = 'meta'; m.style.color = 'var(--bad)';
+    m.textContent = `gateway error code: ${end.err.code || 'integrity_check_failed'} · caught ${secs.toFixed(1)} s after sending`;
+    e.appendChild(m);
+  } else if (bot) {
+    bot.classList.remove('typing');
+    const rts = lastState(sc).rt - firstState(sc).rt;
+    const m = document.createElement('span'); m.className = 'meta';
+    m.textContent = `✓ ${fmt(rts)} masked round trips, all verified · ${tokens} tokens in ${secs.toFixed(1)} s`;
+    bot.appendChild(m);
+  }
+}
+const states = sc => sc.events.filter(e => e.k === 's');
+const firstState = sc => states(sc)[0].s;
+const lastState = sc => states(sc).at(-1).s;
+
+function intro(sc) {
+  $('chat').replaceChildren();
+  if (sc.tamper) bubble('note', 'Attack switch on: the next reply from our service will have one bit flipped');
+  if (D.scenarios.indexOf(sc) === 4) bubble('note', 'An administrator reset the gateway. Same question, honest service:');
+  bubble('user', sc.prompt);
+}
+
+function showFinal(i) {
+  const sc = D.scenarios[i];
+  intro(sc);
+  const text = sc.events.filter(e => e.k === 'tok').map(e => e.x).join('');
+  const tokens = sc.events.filter(e => e.k === 'tok').length;
+  const end = sc.events.at(-1);
+  const bot = end.err ? null : bubble('bot', text);
+  endMsg(sc, bot, tokens, end.t);
+  paintState(lastState(sc));
+  $('chat').scrollTop = 0;
+}
+
+function play(i) {
+  const my = ++token; clearTimeout(timer); cur = i;
+  document.querySelectorAll('.scen').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === i)));
+  const sc = D.scenarios[i];
+  intro(sc);
+  paintState(i === 0 ? base : lastState(D.scenarios[i - 1]));
+  const wait = document.createElement('div'); wait.className = 'wait'; wait.textContent = 'masked prefill in progress…';
+  $('chat').appendChild(wait);
+  let bot = null, k = 0, tokens = 0; const t0 = performance.now();
+  const step = () => {
+    if (my !== token) return;
+    const now = (performance.now() - t0) / 1000 * speed;
+    while (k < sc.events.length && sc.events[k].t <= now) {
+      const e = sc.events[k++];
+      if (e.k === 's') paintState(e.s);
+      else if (e.k === 'tok') {
+        if (!bot) { wait.remove(); bot = bubble('bot', ''); bot.classList.add('typing'); }
+        bot.textContent += e.x; tokens++; $('chat').scrollTop = $('chat').scrollHeight;
+      } else if (e.k === 'end') { wait.remove(); endMsg(sc, bot, tokens, e.t); return; }
+    }
+    timer = setTimeout(step, 50);
+  };
+  step();
+}
+
+document.querySelectorAll('.scen').forEach(b => b.addEventListener('click', () => play(+b.dataset.i)));
+document.querySelectorAll('.speed button').forEach(b => b.addEventListener('click', () => {
+  speed = +b.dataset.s;
+  document.querySelectorAll('.speed button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+}));
+showFinal(0);
+</script>
