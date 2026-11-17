@@ -67,7 +67,7 @@ def _base_env() -> dict[str, str]:
 
 def run_cli(*args: str, env: dict[str, str] | None = None, timeout: float = 1800) -> subprocess.CompletedProcess[str]:
     """``pgw <args>`` in a subprocess; raises with the output on failure."""
-    r = subprocess.run([sys.executable, "-m", "pgw.cli.main", *args], env=env or _base_env(),  # noqa: S603
+    r = subprocess.run([sys.executable, "-m", "pgw.cli", *args], env=env or _base_env(),  # noqa: S603
                        capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise AssertionError(f"pgw {' '.join(args)} exited {r.returncode}:\n{r.stdout[-3000:]}\n{r.stderr[-6000:]}")
@@ -101,7 +101,7 @@ class Proc:
 def start_proc(name: str, args: list[str], env: dict[str, str], logdir: Path) -> Proc:
     log = logdir / f"{name}.log"
     fh = log.open("ab")
-    p = subprocess.Popen([sys.executable, "-m", "pgw.cli.main", *args], env=env,  # noqa: S603
+    p = subprocess.Popen([sys.executable, "-m", "pgw.cli", *args], env=env,  # noqa: S603
                          stdout=fh, stderr=subprocess.STDOUT)
     fh.close()
     return Proc(name, p, log)
@@ -184,7 +184,7 @@ class E2EStack:
         """Stop the gateway (SIGKILL simulates a crash) and start a fresh process."""
         self.gateway.stop(sig)
         self.gateway = start_proc("gateway", ["gateway", "serve"], self.gw_env, self.logdir)
-        wait_ready(f"{self.gw_url}/readyz", self.gateway)
+        wait_ready(f"{self.gw_url}/readyz?models=all", self.gateway)
 
 
 def _slots_for(label: str) -> tuple[int, int]:
@@ -234,7 +234,8 @@ def e2e_stack(tiny_hf_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> It
     svc_port = free_port()
     svc_env = {**env, "PGW_SERVICE_HOST": "127.0.0.1", "PGW_SERVICE_PORT": str(svc_port),
                "PGW_SERVICE_PACKS": json.dumps([str(pack_dir)]), "PGW_SERVICE_RINGS": json.dumps([RING]),
-               "PGW_SERVICE_TOKENS_FILE": str(secrets / "tokens"), "PGW_SERVICE_DEVICE": "cpu",
+               "PGW_SERVICE_TOKENS_FILE": str(secrets / "tokens"),
+               "PGW_SERVICE_DEVICE": os.environ.get("PGW_E2E_SERVICE_DEVICE", "cpu"),
                "PGW_SERVICE_VERIFY_PACKS": "full", "PGW_SERVICE_CPU_WORKERS": "1"}
     service = start_proc("service", ["service", "serve"], svc_env, logdir)
     proxy: RecordingProxy | None = None
@@ -258,10 +259,13 @@ def e2e_stack(tiny_hf_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> It
                   "PGW_GATEWAY_AUDIT_LOG_FILE": str(root / "state" / "audit.jsonl"),
                   "PGW_GATEWAY_NOISE_SAMPLE_RATE": "1.0", "PGW_GATEWAY_NOISE_MONITOR_REQUIRED": "true",
                   "PGW_MASKSTORE_ROOT": str(store_root), "PGW_MASKSTORE_KEY_FILE": str(key_file),
-                  "PGW_MASKSTORE_LOW_WATER_SLOTS": "16"}
+                  "PGW_MASKSTORE_LOW_WATER_SLOTS": "16",
+                  # production setting: external rollback counter on separate storage
+                  "PGW_MASKSTORE_COUNTER": "file",
+                  "PGW_MASKSTORE_COUNTER_FILE": str(root / "counter-volume" / "generation.counter")}
         gateway = start_proc("gateway", ["gateway", "serve"], gw_env, logdir)
         gw_url = f"http://127.0.0.1:{gw_port}"
-        wait_ready(f"{gw_url}/readyz", gateway)
+        wait_ready(f"{gw_url}/readyz?models=all", gateway)
         stack = E2EStack(root, label, hf_dir, pack_dir, fp, ring, store_root, key_file, slots * segments,
                          gw_key, service, gateway, proxy, gw_url, gw_env, gw_port, logdir, in_features)
         yield stack

@@ -29,6 +29,7 @@ PACK = Path("/nonexistent/pack")
 
 
 def masked(name: str = "m", url: str = "https://compute.example.net:8443", **kw: object) -> GatewayModelConfig:
+    kw.setdefault("fingerprint", "ab" * 32)
     return GatewayModelConfig(name=name, pack_path=PACK, service_url=url, **kw)  # type: ignore[arg-type]
 
 
@@ -68,6 +69,22 @@ def test_production_policy_freivalds_and_anonymous_and_tls() -> None:
         GatewaySettings(models=[masked(url="http://compute.example.net")]).validate_policy()
     GatewaySettings(models=[masked(url="http://127.0.0.1:9000")]).validate_policy()  # loopback sidecar ok
     GatewaySettings(models=[masked(url="http://compute.internal")], require_service_tls=False).validate_policy()
+
+
+def test_security_review_production_defaults() -> None:
+    """Fail-closed defaults from the security review (fingerprint pin, full pack hash, breaker, monitor)."""
+    s = GatewaySettings()
+    assert s.integrity_cooldown_s is None  # admin reset only (SPEC 3.2)
+    assert s.pack_verify == "full" and s.min_soundness_bits >= 20
+    assert s.noise_monitor_is_required
+    assert GatewaySettings(allow_dev_modes=True).noise_monitor_is_required is False
+    with pytest.raises(ConfigError, match="fingerprint"):
+        GatewaySettings(models=[masked(fingerprint=None)]).validate_policy()
+    GatewaySettings(models=[masked(fingerprint=None)], allow_dev_modes=True).validate_policy()
+    with pytest.raises(ConfigError, match="pack_verify"):
+        GatewaySettings(models=[masked()], pack_verify="fingerprint").validate_policy()
+    with pytest.raises(ConfigError, match="noise_monitor_required"):
+        GatewaySettings(models=[masked()], noise_monitor_required=False).validate_policy()
 
 
 def test_egress_origins() -> None:
@@ -225,3 +242,20 @@ def test_audit_allowlist_and_file_mode(tmp_path: Path) -> None:
     assert line["event"] == "inference" and line["prompt_tokens"] == 3 and line["request_id"] == "r1"
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     assert "prompt" not in AUDIT_FIELDS and "text" not in AUDIT_FIELDS
+
+
+def test_gateway_refuses_store_without_external_counter_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a monotonic counter the gateway fails at start-up instead of 500ing every request."""
+    from pgw.gateway.runtime import InferenceRuntime
+    from pgw.maskstore.admin import init_store
+
+    root, kek = tmp_path / "masks", tmp_path / "kek"
+    init_store(root, kek)
+    monkeypatch.setenv("PGW_MASKSTORE_KEY_FILE", str(kek))
+    monkeypatch.setenv("PGW_MASKSTORE_COUNTER", "none")
+    monkeypatch.setenv("PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER", "false")
+    settings = GatewaySettings(models=[masked(url="http://127.0.0.1:9000")], maskstore_root=root)
+    with pytest.raises(ConfigError, match="monotonic counter"):
+        InferenceRuntime(settings)

@@ -126,7 +126,8 @@ def test_policy_warns_on_plain_http_service_without_tls_requirement(tiny_pack_di
                                                                      caplog: pytest.LogCaptureFixture) -> None:
     from pgw.gateway import GatewayModelConfig, GatewaySettings
 
-    m = GatewayModelConfig(name=MODEL, pack_path=tiny_pack_dir, service_url="http://10.0.0.5:8443")
+    m = GatewayModelConfig(name=MODEL, pack_path=tiny_pack_dir, service_url="http://10.0.0.5:8443",
+                           fingerprint="ab" * 32)
     with caplog.at_level("WARNING", logger="pgw.gateway.config"):
         GatewaySettings(models=[m], require_service_tls=False).validate_policy()
     assert any("plain-http" in r.getMessage() for r in caplog.records)

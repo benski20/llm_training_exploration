@@ -13,8 +13,8 @@ spec:
     matchLabels:
       {{- include "pgw-gateway.selectorLabels" . | nindent 6 }}
   endpoints:
-    - port: http
+    - port: ops         # internal plain-HTTP listener (works with mTLS on the API port)
       path: /metrics
       interval: {{ .Values.serviceMonitor.interval }}
-      scheme: {{ include "pgw-gateway.scheme" . | lower }}
+      scheme: http
 {{- end }}

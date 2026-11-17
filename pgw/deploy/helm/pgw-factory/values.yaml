@@ -63,7 +63,9 @@ modelPacks:
 store:
   existingClaim: ""            # REQUIRED for output=store
   mountPath: /var/lib/pgw/state
-  # With a ReadWriteOnce volume the factory must run on the gateway's node.
+  # The store is shared with the gateway pod, so the factory MUST run on the gateway's node (same
+  # kernel: SQLite WAL + flock work). Never share a store across nodes via RWX/NFS; a factory on
+  # other hardware uses output=export and the gateway imports its segments.
   colocateWithGateway:
     enabled: true
     gatewayRelease: ""         # pgw-gateway release name (instance label); empty = any gateway
@@ -85,8 +87,17 @@ config:
   segmentSlots: 4096
   chunkSlots: 256
   checks: 2
-  lowWaterSlots: 16384
-  targetSlots: 65536
+  # Keep consistent with the gateway chart (maskstore.lowWaterSlots/targetSlots) and the volume:
+  # 16384 slots x 6.9 MB (8B at K40) = 113 GB on the gateway's 200Gi state volume.
+  lowWaterSlots: 4096
+  targetSlots: 16384
+  # Slots per encrypted chunk in segment files: unset = sized to ~segmentChunkBytes for the widest
+  # linear (bounds the decrypted masks each gateway session caches).
+  segmentChunkBytes: 1048576
+  # Disk guards: never produce a segment that would leave less than minFreeBytes free on the target
+  # volume (the gateway's state.sqlite lives there); maxStoreBytes caps segment bytes (0 = off).
+  minFreeBytes: 10737418240
+  maxStoreBytes: 0
   maxSlotsPerHour: 0           # 0 = unlimited
   dutyCycle: 1.0
   nice: 10                     # low CPU priority next to the gateway
@@ -94,6 +105,21 @@ config:
   pollIntervalSeconds: 30
   factoryId: ""                # recorded in segment headers; default = release name
   extraEnv: {}
+
+# Internal /metrics + /healthz listener (liveness: recent scheduler progress, no failure streak).
+metrics:
+  enabled: true
+  port: 9100
+  healthMaxStaleSeconds: 3600   # liveness fails when no plan/segment completed for this long
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  # Prometheus scraping peers (namespaceSelector of the monitoring namespace).
+  from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
 
 secrets:
   existingSecret: ""           # REQUIRED for output=store with keyProvider=env

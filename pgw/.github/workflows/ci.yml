@@ -31,8 +31,8 @@ jobs:
     name: lint (ruff)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
       - run: pip install "ruff>=0.4"
@@ -44,8 +44,8 @@ jobs:
     name: type-check (mypy --strict)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: "3.12"
           cache: pip
@@ -68,8 +68,8 @@ jobs:
       matrix:
         python: ["3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -85,7 +85,7 @@ jobs:
       - name: pytest
         working-directory: ${{ env.PGW_DIR }}
         run: pytest -q -m "not gpu" --timeout=900 --junitxml=pytest-${{ matrix.python }}.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with:
           name: pytest-${{ matrix.python }}
@@ -95,8 +95,8 @@ jobs:
     name: deployment artifacts (helm, compose, dockerfiles, shell)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a  # v4
         with:
           version: v3.16.4
       - name: helm lint + template (strict)
@@ -123,19 +123,47 @@ jobs:
           shellcheck -s sh ${PGW_DIR}/deploy/docker/entrypoint.sh ${PGW_DIR}/deploy/compose/demo-init.sh \
             ${PGW_DIR}/deploy/systemd/install.sh ${PGW_DIR}/deploy/vmware/pgw-ovf-config.sh ${PGW_DIR}/ci/check.sh
 
+  audit:
+    name: dependency audit (pip-audit on the image locks, cargo audit)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12"
+      - name: locks are complete and hashed
+        working-directory: ${{ env.PGW_DIR }}
+        run: |
+          for f in requirements/*.txt; do
+            grep -q -- "--hash=sha256:" "$f" || { echo "$f has no hashes"; exit 1; }
+            grep -q "^torch==" "$f" || { echo "$f does not pin torch"; exit 1; }
+          done
+      - name: pip-audit
+        working-directory: ${{ env.PGW_DIR }}
+        run: |
+          pip install "pip-audit==2.9.0"
+          for f in requirements/*.txt; do
+            pip-audit --strict --disable-pip --no-deps -r "$f"
+          done
+      - name: cargo audit
+        working-directory: ${{ env.PGW_DIR }}/rust
+        run: |
+          cargo install --locked cargo-audit --version 0.21.2
+          cargo audit --deny warnings
+
   images:
     name: image ${{ matrix.image }}
-    needs: [lint, test, deploy-lint]
+    needs: [lint, test, deploy-lint, audit]
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         image: [gateway, factory, service-cpu, factory-cuda, service-cuda]
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
       - name: build (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
         with:
           context: ${{ env.PGW_DIR }}
           file: ${{ env.PGW_DIR }}/deploy/docker/${{ matrix.image }}.Dockerfile

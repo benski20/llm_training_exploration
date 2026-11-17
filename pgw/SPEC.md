@@ -12,7 +12,8 @@ customer keeps the plaintext and the small non-linear work, and holds the one-ti
 ## 1. Goals and non-goals
 
 **Goals**
-- Information-theoretic input privacy of every activation against the compute service.
+- Input privacy of every activation against the compute service: perfect secrecy for ideal one-time
+  masks; computational at the PRG level as deployed (masks are expanded from ChaCha20 seeds, 7.3).
 - Bit-exact results: masked inference gives exactly the logits of the same quantized model run locally.
 - Integrity: wrong or malicious service results are detected with overwhelming probability.
 - Production operations: an OpenAI-compatible API, API keys, rate limits, metrics, mTLS, crash-safe
@@ -68,16 +69,27 @@ forward pass. Prefill sends all prompt tokens of a group in one round trip.
 | Network | TLS ciphertext | nothing |
 
 ### 3.2 Guarantees
-- **Privacy (information-theoretic).** Each `r` is uniform over `Z_{2^K}^n`, secret, and used
-  exactly once, so `x_hat` is uniform and independent of `x`. This holds against unbounded adversaries
-  as long as (a) masks never reach the service, (b) no mask is reused, and (c) factory and service do
+- **Privacy.** Each `r` is uniform over `Z_{2^K}^n`, secret, and used exactly once, so `x_hat` is
+  uniform and independent of `x`. For ideal masks this holds against unbounded adversaries; as
+  deployed, masks come from HKDF-SHA-256 + ChaCha20 seeds (7.3), so the guarantee is computational at
+  the PRG level (whitepaper 4.4). Either way it requires that (a) masks never reach the service, (b) no mask is reused, and (c) factory and service do
   not collude. The activation scales `sx` never leave the gateway.
-- **Integrity.** Every result passes a range check and `c` Freivalds checks (default `c = 2`,
-  checking every call). False-accept probability per call is at most `2^(−c·h)` with
-  `h = K − ⌈log2(4·qmax·127·n)⌉` (`pgw.core.soundness_bits`). For K40A12 and n = 4096, h = 8, so
-  2⁻¹⁶ per call with c = 2. **Any** failure aborts the request, raises `integrity_check_failed`, and
-  trips a per-service circuit breaker (operator alert). An adaptive attacker who probes the check
-  is caught with constant probability on each probe, and is then cut off.
+- **Integrity.** Every result passes a range check and `c` Freivalds checks on every call.
+  False-accept probability per call is at most `2^(−c·h)` with
+  `h = K − ⌈log2(4·qmax·127·n)⌉` (`pgw.core.soundness_bits`). For K40A12, `h` is 8 at n = 4096,
+  6 for Llama-3-8B `down_proj` (n = 14336) and 5 for Qwen2.5-7B `down` (n = 18944). The factory
+  therefore picks `c` per pack by default (`checks` unset = smallest `c` in [2, 8] giving at least
+  20 bits for the worst linear): `c = 3` for n = 4096 (24 bits) and `c = 4` for 8B-class layers
+  (24 and 20 bits). Gateways and mask stores refuse segments whose checks give fewer than
+  `min_soundness_bits` (default 20) before any mask row is used. **Any** failure aborts the
+  request, raises `integrity_check_failed`, and trips a per-service circuit breaker (operator
+  alert). An adaptive attacker who probes the check is caught with constant probability on each
+  probe, and is then cut off.
+  Freivalds covers the service product only. A wrong `W r` from the factory is caught by the
+  factory's own self-check (7.4) and, for gross errors, by the gateway range check; an independent
+  spot-check of `W r` by a party holding the weights is planned (threat model T-29). At K32A8 very
+  wide layers have `h` of 1–2 bits, so even `c = 8` cannot reach the floor: such packs need K40A12
+  or K48A20 (the factory warns and the gateway refuses the segments).
 - **Correctness.** Results are exact modulo `2^K`. Decoding is unambiguous because
   `qmax·127·n < 2^(K−1)` (checked when a pack is loaded).
 
@@ -90,8 +102,9 @@ forward pass. Prefill sends all prompt tokens of a group in one round trip.
 
 ### 3.4 Metadata leakage (accepted, with mitigations)
 The service learns the model, the number of tokens per round (prompt length, generation length),
-timing, and the tenant. Optional mitigations: pad prompt rows to buckets (`pad_rows_to`), batch
-several sessions per request, and send constant-rate dummy rounds. Each costs masks and compute.
+timing, and the tenant. Optional mitigations: batch several sessions per request (implemented),
+pad prompt rows to buckets (`pad_rows_to`) and send constant-rate dummy rounds (both planned, not
+implemented in v1). Each costs masks and compute.
 
 ## 4. Components and ownership
 
@@ -129,7 +142,7 @@ on `core`. `maskstore` depends on `core`. `engine` depends on `core`, `modelpack
 - **Ring matmul** (`pgw.core.ringmm`, exact mod `2^K` on every backend):
   - `cuda_int8`: K/8 `torch._int_mm` GEMMs on balanced base-256 digits `d ∈ [−128,127]`. Rows are
     padded to at least 32 and to a multiple of 8; `n` and `m` are padded to multiples of 8. Accumulation
-    is int32, and the inner dimension is chunked at ≤131064.
+    is int32, and the inner dimension is chunked at ≤131040 (a multiple of 32: CUDA operands are padded to multiples of 32).
   - `cpu_f64` (CPU default): wide balanced digits with `2^(b−1)·128·n ≤ 2^52`, giving 2 float64 GEMMs
     for K≤48 when n≤4096. Every partial sum is an exact integer.
   - `cpu_f32`: base-256 digits with float32 GEMMs over inner chunks of 1024 (partial sums ≤ 2^24).
@@ -280,8 +293,20 @@ per slot, about 550k slots/h). Weight streaming covers models larger than device
 - Envelope encryption: a random 32-byte DEK per segment, wrapped by a KEK from a `KeyProvider`:
   `file` (0600 key file), `env` (base64), `pkcs11` (HSM, AES-KWP) or `kms` (AWS, GCP or Azure; stub in v1).
 - Rollback protection: restoring an old `state.sqlite` would allow reuse. The generation counter is
-  mirrored to the provider's hardware monotonic counter where available (HSM, TPM, KMS-backed
-  counter). The file and env providers fall back to an HMAC-chained journal and log a warning.
+  mirrored to a monotonic counter when `PGW_MASKSTORE_COUNTER` is set (`provider`, `file` on separate
+  storage, `tpm` preliminary). MAC-capable providers also keep an HMAC-chained generation journal
+  (default `<root>/generation.journal`). The journal detects a restore of the database alone, but
+  not a restore of a snapshot of the whole volume (database and journal together): only a counter off
+  the mask volume detects that. With `counter = none` the store refuses to hand out masks
+  (`reserve()` raises `config`) unless `PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER` is set (dev/staging
+  only), and `pgw doctor` reports `fail`. Every shipped deployment configures a counter (Helm: a
+  separate `<release>-counter` PVC excluded from backups; systemd/compose: a counter file on its own
+  volume; VMware: an independent-persistent disk or the vTPM). If the mask volume is ever restored,
+  burn every ACTIVE segment and rebind witnesses before serving.
+- The store refuses to open on a network filesystem (NFS, CIFS, CephFS, GlusterFS, FUSE, ...):
+  SQLite WAL and `flock` are unreliable there (`allow_network_filesystem` overrides). A store is
+  never shared between hosts; factories on other hosts deliver segments for `import_segment`. A store with neither a MAC journal nor a counter refuses to open unless
+  `allow_no_rollback_witness` is set (development, and the partner's write-only staging store).
   `verify_integrity()` runs at startup and refuses to serve on mismatch.
 
 ### 7.7 Partner delivery
@@ -290,6 +315,20 @@ partner writes segments whose DEK is HPKE-sealed (RFC 9180, X25519/HKDF-SHA256/A
 `kek_id = "hpke:<key id>"`, and delivers them by any channel. `import_segment` verifies the header and
 every chunk's AEAD, then re-wraps the DEK under the local KEK. The partner must be independent of the
 service operator (3.1).
+HPKE base mode does not authenticate the sender, so the partner also signs each segment with an
+Ed25519 key (`pgw maskstore partner-key create`; factory `--partner-key` /
+`PGW_FACTORY_PARTNER_SIGNING_KEY_FILE`). The signature sidecar `<file>.pgwm.sig` covers SHA-256 of the
+header (which carries the sealed DEK and is the AAD of every chunk); the factory places it in the
+outbox before the segment. Customers set `PGW_MASKSTORE_TRUSTED_PARTNER_KEYS`; unsigned, untrusted,
+copied or invalid signatures are refused, and without trusted keys every HPKE segment is refused (fail
+closed; `PGW_MASKSTORE_ALLOW_UNSIGNED_PARTNER_SEGMENTS` is a development-only escape hatch).
+Each partner segment is also bound to exactly one store: the signed header carries
+`destination = <store_id>` (factory `--destination-store` / `PGW_FACTORY_DESTINATION_STORE_ID`, taken
+from `pgw maskstore status`), and `import_segment` refuses a missing or different destination
+(`PGW_MASKSTORE_ALLOW_UNBOUND_PARTNER_SEGMENTS` for development). A recipient key pair must never be
+shared by two stores. `pgw maskstore import` removes each imported file and its `.sig` by default
+(`--keep-source` opts out). Segments whose Freivalds checks give fewer than `min_soundness_bits`
+(default 20) for any linear are refused on import and by the gateway.
 
 ## 8. Model pack
 
@@ -328,8 +367,11 @@ each mask segment header.
 with `data: [DONE]`, and supports `stream_options.include_usage`), and `GET /v1/models`. `n=1` only.
 Errors use the OpenAI shape `{"error":{"message","type","code","param"}}` with `code` set to an
 `ErrorCode` value. `system_fingerprint` is the short model fingerprint.
-Admin endpoints (admin token): `GET /admin/status`, `GET /admin/masks`, `POST/DELETE /admin/keys`,
-`POST /admin/models/{name}/reload`. Ops endpoints: `/healthz`, `/readyz`, `/metrics`, `/dashboard`.
+`GET /v1/models/{name}` returns one model card.
+Admin endpoints (admin token, or an API key with scope `admin`): `GET /admin/status`,
+`GET /admin/masks`, `GET /admin/keys`, `POST /admin/keys`, `DELETE /admin/keys/{key_id}`,
+`POST /admin/models/{name}/reload`, `POST /admin/models/{name}/reset` (`{"breaker": bool,
+"noise": bool}`). Ops endpoints: `/healthz`, `/readyz`, `/metrics`, `/dashboard`.
 
 ### 9.2 Engine loop
 `TransformerModel.forward` runs, per layer: RMSNorm → `qkv` → split, RoPE, causal GQA attention
@@ -382,12 +424,16 @@ A self-contained HTML page at `/dashboard` (no external assets) shows throughput
 inventory, integrity and noise status.
 
 ## 12. CLI and configuration
-`pgw version | doctor [--pack] | pack SRC OUT | factory generate|run | maskstore init|status|import|gc |
-service serve | gateway serve | gateway keys create|list|revoke`.
+`pgw version | doctor [--role] [--pack] [--ring] [--maskstore --key-file] [--service-url ...] [--strict] [--json] |
+inspect PACK | pack SRC OUT | factory generate|run|status|benchmark | maskstore init|status|import|gc|rotate-key |
+maskstore recipient-key create|show | maskstore partner-key create|show | service serve |
+service token create|hash | gateway serve | gateway keys create|list|revoke | bench ring|factory|service |
+config show ROLE | config render TEMPLATE OUT`. `python -m pgw.cli` is equivalent to `pgw`.
 Configuration uses pydantic-settings classes with env prefixes `PGW_` (common: `PGW_LOG_LEVEL`,
 `PGW_LOG_JSON`, `PGW_RING`), `PGW_SERVICE_`, `PGW_GATEWAY_`, `PGW_FACTORY_` and `PGW_MASKSTORE_`.
 Nested keys use `__` (for example `PGW_SERVICE_TLS__CERT_FILE`). Secrets are `SecretStr` and can
-come from files or env; they are never written to the command line. Exit codes: 0 ok, 1 `PGWError`, 3 not implemented.
+come from files or env; they are never written to the command line. Exit codes: 0 ok, 1 `PGWError`, 3 not
+implemented, 130 interrupted.
 
 ## 13. Deployment topologies
 **A. On-prem gateway.** Gateway, mask store and (optionally) factory run in the customer data
@@ -395,7 +441,7 @@ center (container or VM; Docker image `pgw-gateway`). The service runs in our cl
 over the internet or a dedicated link. Masks come from the customer's own GPU factory or a partner
 (7.7). Expect RTT of 10–30 ms, which gives 1.3–4 s per token for 8B at 128 rounds unless sessions are batched.
 
-**B. Gateway in the customer's cloud account.** We ship Terraform/Helm, and the customer deploys
+**B. Gateway in the customer's cloud account.** We ship Helm charts (Terraform modules planned, not in v0.1), and the customer deploys
 it into their VPC in the same region as our service, over PrivateLink or PSC (RTT about 1 ms, so the
 round-trip floor is about 0.13 s per token for 8B). The mask store uses an encrypted volume with
 `kms` key provider and the customer's KMS key. A customer-account GPU instance can run the factory.
@@ -405,6 +451,12 @@ and delivers HPKE-wrapped segments (7.7) to customers' stores. This is the cheap
 customers without GPUs (T4 spot: about $0.36 per million 8B tokens at K48).
 
 In every topology the service operator never receives seeds, masks or `u`.
+
+Shipped artefacts live in `deploy/`: Docker images and entrypoint (`deploy/docker`), a docker-compose
+demo of the whole pipeline on one machine (`deploy/compose`), Helm charts for gateway, service and
+factory (`deploy/helm`), systemd units (`deploy/systemd`), a VMware appliance (`deploy/vmware`) and
+marketplace listings (`deploy/marketplace`). `scripts/e2e_demo.sh` runs the pipeline by hand without
+containers.
 
 ## 14. Performance targets (v1 release gates)
 | item | target | measured basis |
@@ -427,6 +479,11 @@ In every topology the service operator never receives seeds, masks or `u`.
 - Tests live in `tests/<subpackage>/`, run on CPU with tiny random models (`tests/conftest.py`), and
   finish in minutes. GPU tests are marked `@pytest.mark.gpu` and network tests `@pytest.mark.network`.
 - Interface changes: append to `INTERFACE_NOTES.md` (who, what, why). The lead architect updates SPEC.
+- `tests/e2e` runs the real CLI and real processes on localhost (pack, factory, encrypted store, service,
+  gateway) with Qwen2.5-0.5B-Instruct (tiny random model offline) and checks exactness against
+  QuantPlain, Freivalds, tamper detection, single use and that the service never sees plaintext.
+- Cross-language vectors: `tests/vectors/core_v1.json` (generated from `pgw.core`) are checked by
+  `pytest tests/vectors` and by `cargo test` in `rust/` next to the KATs of 7.3.
 - No real secrets, personal data or customer data in code, tests or fixtures.
 
 ## 16. Open items / roadmap
@@ -436,3 +493,62 @@ In every topology the service operator never receives seeds, masks or `u`.
   store a seed and recompute `W r` on the gateway GPU when one exists ("self-factory" mode).
 - Speculative decoding and prefix caching on the gateway (fewer rounds per accepted token).
 - Formal write-up of the security argument and an external audit.
+
+## 17. Amendments v1.1 (integration review; folded from INTERFACE_NOTES.md)
+
+All additive and backwards compatible unless noted.
+
+**Core (5, 7.3).** `mask_activations` rejects `|xq| > qmax` (`ring_overflow`); `quantize_weight_rows`
+rejects non-finite weights; `freivalds_check`/`verify` refuse `c = 0` (`config`). The mask store
+already refuses to hand out check vectors of a `checks = 0` segment. These match the Rust core.
+
+**Engine (9.2–9.4).** `Generator(model, tokenizer, *, max_batch=32, session_factory=None, batching=True)`;
+`generate/stream/agenerate/astream(..., session=, own_session=False)`; with `own_session=True` the
+engine closes (burns) the reservation at a safe point, also when request validation fails.
+`generate_many`, `aclose`; `TokenEvent.top_logprobs`, `GenerationResult.logprobs`;
+`SamplingParams.ignore_eos`, `include_stop_str_in_output`, `stop` may be a string.
+`ContextOverflowError` (`bad_shape`). `PlainBackend` is exported as `QuantPlainBackend`.
+`MaskedBackend(..., on_integrity_failure=fn, max_rows_per_item=8192)` checks the reservation's
+fingerprint before taking rows, validates and quantizes every call of a batch before taking any mask
+row, and wipes `W r` on every failure path. `LocalComputeClient`, `LocalMaskSource`, `InMemoryPack`
+are in-process stand-ins for development and tests.
+
+**Mask store (7.1–7.7).** `reserve(fp, ring, slots, *, session_id="")`, `inventory`, `status()` (the
+`/admin/masks` payload), `metrics()`, `add_low_water_listener`, `export_segment`, `cleanup_partials`,
+`rotate_kek` (offline, resumable). Reservation owners are recorded as `hostname|pid-namespace` and
+live reservations are tracked process-wide. Rollback witness and partner signatures: 7.6, 7.7.
+
+**Factory (7.4).** Self-check before each chunk is written: sampled rows verify
+`u·(W8 r) == (u W8)·r (mod 2^K)` (`PGW_FACTORY_SELF_CHECK_ROWS`, default 8, -1 all, 0 off); a mismatch
+aborts the segment (`IntegrityError`). `cpu_int8` backend behind an exactness probe. Recipient keys
+are validated (small-order X25519 points refused). `ExportSink.recover()` at every start publishes
+segments stranded in staging and signs unsigned outbox segments. `Throttle.max_slots_per_hour`
+accumulates no idle credit. Partner signing: 7.7.
+
+**Service (10).** `create_app(settings, *, registry, authenticator, metrics)`, `serve()`,
+`create_metrics_app(state)` serving `/metrics`, `/healthz` and `/readyz` on the internal metrics
+listener (for probes when the main port requires client certificates). Settings: `devices`,
+`placement`, `verify_packs`, backend `cpu_int8`, metrics listener, admission limits and tenant
+quotas (`PGW_SERVICE_*`). Unknown fingerprint `fingerprint_mismatch`; ring not served `config`;
+overload/drain `unavailable` + `Retry-After`; tenant quota `rate_limited`.
+
+**Gateway (9.1, 9.5).** Extra endpoints `GET /v1/models/{name}`, `GET /admin/keys`,
+`POST /admin/models/{name}/reset` (`{"breaker": bool, "noise": bool}`). Settings `allow_dev_modes`
+(required for `plain`/`float`, `freivalds_rate < 1`, anonymous access), `require_service_tls` (plain
+http only to loopback; with `false` a non-loopback http URL is allowed for service-mesh mTLS and
+logged), `egress_allowlist`, `integrity_cooldown_s`, `audit_log_file`, quotas, limits, noise-monitor
+options. `admin_token` needs at least 16 characters. Per model: `fingerprint` pin, queue limits,
+service timeouts/retries/deadline, `device`, and `service_token_file` (exclusive with
+`service_token`). The integrity breaker is checked before every compute round trip, so running
+sessions stop too. Integrity failures and noise-monitor alarms are written to the audit log at once
+(`safety.integrity_failure`, `safety.noise_alarm`; no content).
+
+**Observability (11).** `PGWMetrics(registry=None, *, enabled, prefixes)`; `OutboundNoiseMonitor`
+options (`alpha`, `always_sample_first`, `duplicate_*`, `feature_window_rows`, `metrics`, `model`,
+`seed`), `add_alarm_listener`, `flush`, `NoiseReport.to_dict()`; the ring range check runs on every
+call. `dashboard_html`, `mount_dashboard` (CSP, no-store, frame deny).
+
+**Deferred.** AWS Marketplace metering hook (`PGW_GATEWAY_MARKETPLACE__*`); adopting `cpu_int8` as
+the default of `pgw.core.ringmm.select_backend` (it stays the exact reference; service and factory
+already select `cpu_int8` after their probes); copying `pgw/.github/workflows/ci.yml` to the
+repository root (outside the `pgw/` tree).

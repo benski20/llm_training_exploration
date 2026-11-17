@@ -58,11 +58,14 @@ removable media. Use the HPKE mechanism from section 4 in-house as well. Create 
 pair on the gateway host (section 4.1), copy only the **public** key to the offline host, then:
 
 ```bash
-# offline host: no store KEK needed, segments are sealed to the gateway's public key
+# offline host: no store KEK needed, segments are sealed to the gateway's public key, signed by the
+# factory's own key (its public key is in the gateway's PGW_MASKSTORE_TRUSTED_PARTNER_KEYS) and bound
+# to the gateway's store (store_id from `pgw maskstore status` on the gateway host)
 pgw factory generate --pack /data/packs/llama8b --ring K40A12 --slots 4096 --segments 32 \
-    --export-dir /media/outbox --recipient-key /data/keys/gateway.pub.hex
+    --export-dir /media/outbox --recipient-key /data/keys/gateway.pub.hex \
+    --partner-key /data/keys/factory-sign.key --destination-store <gateway store_id>
 # gateway host
-pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek --delete-source /media/outbox/*.pgwm
+pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek /media/outbox/*.pgwm
 ```
 
 The media then carry only sealed segments. Losing them reveals nothing to anyone without the
@@ -73,19 +76,15 @@ Media handling:
 * Each segment file is encrypted and AEAD-protected. Tampering is detected on import.
 * Use write-once or freshly wiped media. Log each transfer (who, when, segment ids) in the audit
   evidence (audit checklist M-04).
-* After a successful `pgw maskstore import --delete-source`, wipe the media.
+* After a successful `pgw maskstore import` (it removes each imported file and its `.sig`), wipe the media.
 
 ## 4. Partner delivery (HPKE)
 
 ### 4.1 Customer: create the recipient key pair (once)
 
 ```bash
-python - <<'EOF'
-from pgw.maskstore import RecipientKeyPair
-kp = RecipientKeyPair.generate("/etc/pgw/secrets/recipient.key")   # private key, mode 0600
-open("/etc/pgw/recipient.pub.hex", "w").write(kp.public_bytes().hex() + "\n")
-print("recipient key id:", kp.kek_id)
-EOF
+pgw maskstore recipient-key create /etc/pgw/secrets/recipient.key --public-out /etc/pgw/recipient.pub.hex
+# prints key_id, kek_id ("hpke:...") and public_key_hex; the private key is written with mode 0600
 ```
 
 Set `PGW_MASKSTORE_RECIPIENT_KEY_FILE=/etc/pgw/secrets/recipient.key` on the gateway host. Give
@@ -93,12 +92,24 @@ Set `PGW_MASKSTORE_RECIPIENT_KEY_FILE=/etc/pgw/secrets/recipient.key` on the gat
 (for example by phone). The public key is not secret, but a substituted one would let someone else
 read the masks.
 
-### 4.2 Partner: generate and export
+### 4.2 Partner: signing key, generate and export
+
+HPKE seals each segment to the customer but does not say who produced it: anyone who knows the
+customer's public key could craft a segment from a seed they know. The partner therefore signs every
+segment with an Ed25519 key, and the customer accepts only signatures from trusted partner keys.
 
 ```bash
+# once: the partner's signing key; give partner.pub.hex to the customer over an authenticated channel
+pgw maskstore partner-key create /keys/partner-sign.key --public-out /keys/partner.pub.hex
 pgw factory run --pack /data/packs/llama8b --ring K40A12 \
-    --export-dir /export/customer-a --recipient-key /keys/customer-a.pub.hex
+    --export-dir /export/customer-a --recipient-key /keys/customer-a.pub.hex \
+    --partner-key /keys/partner-sign.key --destination-store <customer store_id>
 ```
+
+Each segment `<id>.pgwm` in the outbox gets a sidecar `<id>.pgwm.sig`, which the factory writes
+before the segment appears. Deliver both files. The signed header names the customer's mask store
+(`--destination-store`, the `store_id` the customer reads from `pgw maskstore status` and sends with
+the public key); no other store will import it. One recipient key pair per store: never share it.
 
 Each exported segment's data key is sealed with HPKE (RFC 9180: DHKEM X25519, HKDF-SHA-256,
 AES-256-GCM) to the customer's key, with `kek_id = "hpke:<key id>"`. Contractually, the partner
@@ -116,8 +127,16 @@ Partner independence requirements (put them in the contract; audit annually):
 ### 4.3 Customer: import
 
 ```bash
-pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek --delete-source /srv/incoming/*.pgwm
+pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek /srv/incoming/*.pgwm
 ```
+
+Before the first import, set `PGW_MASKSTORE_TRUSTED_PARTNER_KEYS` to the partner's public key
+(`partner.pub.hex`, confirmed out of band like the recipient key). A segment without a valid
+signature from one of them is refused, and without trusted keys every partner segment is refused
+(`PGW_MASKSTORE_ALLOW_UNSIGNED_PARTNER_SEGMENTS` exists for development only). Segments not bound to
+this store (`destination`) and segments with fewer than 20 bits of Freivalds soundness are refused
+too. Keep each `.sig` next to its segment when importing; after a successful import both files are
+removed (`--keep-source` keeps them).
 
 The import verifies the header, the fingerprint, the ring and **every chunk's** AEAD tag. It then
 re-wraps the data key under your local KEK. A segment sealed to another recipient, or with any

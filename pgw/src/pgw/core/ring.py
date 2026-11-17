@@ -156,6 +156,8 @@ def quantize_weight_rows(w: torch.Tensor | np.ndarray) -> tuple[torch.Tensor, to
     wt = torch.as_tensor(w).detach().to(torch.float64)
     if wt.ndim != 2:
         raise ShapeError(f"weight must be 2-D, got shape {tuple(wt.shape)}")
+    if not torch.isfinite(wt).all():
+        raise RingOverflowError("weights contain NaN/Inf and cannot be quantized")
     amax = wt.abs().amax(dim=1)
     sw = torch.where(amax > 0, amax / 127.0, torch.ones_like(amax))
     w8 = torch.round(wt / sw[:, None]).clamp_(-127, 127).to(torch.int8)

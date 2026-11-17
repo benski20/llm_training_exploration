@@ -98,7 +98,7 @@ def fill_store(store: Any, pack: Any, ring: RingParams, slots: int, *, segment_s
     left = slots
     while left > 0:
         n = min(left, segment_slots)
-        gen.generate_into_store(store, n, checks=2, chunk_slots=16, factory_id="test")
+        gen.generate_into_store(store, n, chunk_slots=16, factory_id="test")
         left -= n
 
 
@@ -127,7 +127,11 @@ def make_store(tmp_path: Path, gw_pack: Any) -> Any:
 def masked_settings(tiny_pack_dir: Path, tmp_path: Path, **kw: Any) -> Any:
     from pgw.gateway import GatewayModelConfig, GatewaySettings
 
-    model_kw = kw.pop("model_kw", {})
+    model_kw = dict(kw.pop("model_kw", {}))
+    if "fingerprint" not in model_kw and not kw.get("allow_dev_modes"):
+        from pgw.modelpack import ModelPack
+
+        model_kw["fingerprint"] = ModelPack.open(tiny_pack_dir).fingerprint  # production policy: pinned
     model = GatewayModelConfig(name=MODEL, pack_path=tiny_pack_dir, mode="masked", service_url=SERVICE_URL,
                                **model_kw)
     base: dict[str, Any] = {

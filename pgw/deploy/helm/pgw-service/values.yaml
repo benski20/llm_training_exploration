@@ -15,7 +15,14 @@ autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 8
+  # CPU utilization only tracks load for the CPU image (gpu.enabled=false). GPU deployments are
+  # GPU-bound with idle CPUs, so scale on a service metric through prometheus-adapter or KEDA:
+  # pods metric `pgw_service_inflight` (or pgw_service_queue_depth) averaged per pod. The chart
+  # refuses autoscaling with gpu.enabled and no custom metric.
   targetCPUUtilizationPercentage: 70
+  customMetric:
+    name: ""                    # e.g. pgw_service_inflight (exposed to the HPA by prometheus-adapter)
+    targetAverageValue: "16"    # per pod
 
 serviceAccount:
   create: true

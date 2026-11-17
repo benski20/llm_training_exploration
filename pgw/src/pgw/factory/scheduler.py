@@ -18,10 +18,12 @@ Crash safety and resume:
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import logging
 import math
 import os
+import shutil
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -241,6 +243,19 @@ class FactoryScheduler:
         self.lock = FactoryLock(self.state_dir / LOCK_FILE)
         self.state = FactoryState.load(self.state_path)
         self._refilling: set[tuple[str, str]] = set()
+        #: True when the last plan was cut short by the disk budget.
+        self.disk_limited = False
+        #: Liveness: wall time of the last completed plan or segment, and the failure streak.
+        self.last_progress_at = time.time()
+        self.consecutive_errors = 0
+        self.last_run_error: str | None = None
+        for (fp, ring), gen in self.generators.items():
+            max_slots = getattr(gen, "max_segment_slots", None)
+            if callable(max_slots) and int(settings.segment_slots) > int(max_slots()):
+                raise ConfigError(
+                    f"segment_slots={settings.segment_slots} exceeds the PRNG stream range for "
+                    f"{short_fingerprint(fp)}/{ring} (max {int(max_slots())} slots per segment)",
+                )
         self._wake = threading.Event()
         self._resumed = False
         if hasattr(self.sink, "add_low_water_listener"):
@@ -336,7 +351,66 @@ class FactoryScheduler:
             )
             plans.append(RefillPlan(fp, ring, n, seg, reason, avail, self.low_water_slots, self.target_slots))
         plans.sort(key=lambda p: (p.fill_ratio, p.available))
-        return plans
+        self._heartbeat()
+        return self._fit_to_disk(plans)
+
+    def _heartbeat(self) -> None:
+        self.last_progress_at = time.time()
+        self.metrics.run_ok(self.last_progress_at)
+
+    # ---- disk budget ---------------------------------------------------------------------------
+    def _segment_bytes(self, plan: RefillPlan) -> int:
+        gen = self.generators[(plan.fingerprint, plan.ring)]
+        fn = getattr(gen, "segment_bytes", None)
+        if callable(fn):
+            return int(fn(plan.slots_per_segment))
+        bps = getattr(gen, "bytes_per_slot", None)
+        return int(bps) * plan.slots_per_segment if isinstance(bps, int) else 0
+
+    def disk_budget(self) -> int | None:
+        """Bytes that may still be written (free space minus ``min_free_bytes``, and the
+        ``max_store_bytes`` cap); ``None`` when the sink has no local volume to measure."""
+        path = self.sink.state_dir() if hasattr(self.sink, "state_dir") else None
+        if path is None:
+            return None
+        try:
+            free = shutil.disk_usage(Path(path)).free
+        except OSError as exc:
+            log.warning("cannot measure free space of %s: %s", path, exc)
+            return None
+        budget = int(free) - int(getattr(self.settings, "min_free_bytes", 0) or 0)
+        cap = int(getattr(self.settings, "max_store_bytes", 0) or 0)
+        if cap and hasattr(self.sink, "stored_bytes"):
+            budget = min(budget, cap - int(self.sink.stored_bytes()))
+        return max(budget, 0)
+
+    def _fit_to_disk(self, plans: list[RefillPlan]) -> list[RefillPlan]:
+        """Cap planned segments to what fits on the volume (the factory must never fill it up:
+        the gateway's state database lives on the same volume and stops serving on ENOSPC)."""
+        budget = self.disk_budget()
+        self.disk_limited = False
+        if budget is None or not plans:
+            return plans
+        out: list[RefillPlan] = []
+        for p in plans:
+            seg_bytes = self._segment_bytes(p)
+            if seg_bytes <= 0:
+                out.append(p)
+                continue
+            fit = min(p.segments, budget // seg_bytes)
+            if fit < p.segments:
+                self.disk_limited = True
+                log.warning(
+                    "disk budget: %s/%s needs %d segment(s) of %.2f GB but only %d fit (budget %.2f GB; "
+                    "min_free_bytes=%d, max_store_bytes=%d); not producing more",
+                    short_fingerprint(p.fingerprint), p.ring, p.segments, seg_bytes / 1e9, fit, budget / 1e9,
+                    int(getattr(self.settings, "min_free_bytes", 0) or 0),
+                    int(getattr(self.settings, "max_store_bytes", 0) or 0),
+                )
+            if fit > 0:
+                out.append(dataclasses.replace(p, segments=int(fit)))
+                budget -= fit * seg_bytes
+        return out
 
     # ---- execution ---------------------------------------------------------------------------
     def _produce(self, plan: RefillPlan) -> str:
@@ -346,9 +420,14 @@ class FactoryScheduler:
                           "started_at": time.time(), "pid": os.getpid()}
         self._save_state()
         t0 = time.perf_counter()
+        kw: dict[str, Any] = {}
+        if getattr(self.settings, "segment_chunk_slots", None) is not None:
+            kw["store_chunk_slots"] = int(self.settings.segment_chunk_slots)
+        if getattr(self.settings, "segment_chunk_bytes", None) is not None:
+            kw["store_chunk_bytes"] = int(self.settings.segment_chunk_bytes)
         seg_id: str = gen.generate_into_store(
             self.sink, plan.slots_per_segment, checks=self.settings.checks, chunk_slots=self.settings.chunk_slots,
-            factory_id=self.settings.factory_id, throttle=self.throttle,
+            factory_id=self.settings.factory_id, throttle=self.throttle, **kw,
         )
         dt = time.perf_counter() - t0
         st.in_progress = None
@@ -358,6 +437,7 @@ class FactoryScheduler:
         self._save_state()
         self.metrics.segment_done(plan.fingerprint, plan.ring, str(getattr(gen, "device", "?")),
                                   plan.slots_per_segment, plan.slots_per_segment / dt if dt > 0 else 0.0)
+        self._heartbeat()
         return seg_id
 
     def run_once(self) -> list[str]:
@@ -428,13 +508,17 @@ class FactoryScheduler:
                 try:
                     produced = self.run_once()
                     backoff = float(self.settings.error_backoff_s)
+                    self.consecutive_errors = 0
+                    self.last_run_error = None
                     if produced:
                         wait = 0.0  # re-plan immediately; inventory may still be below target
                 except FactoryStopped:
                     break
-                except ConfigError:
+                except ConfigError as exc:
+                    self._record_error(exc)
                     raise
                 except Exception as exc:
+                    self._record_error(exc)
                     log.error("factory run failed (%s); retrying in %.0fs", exc, backoff)
                     wait = backoff
                     backoff = min(backoff * 2, _MAX_BACKOFF_S)
@@ -445,7 +529,29 @@ class FactoryScheduler:
             log.info("mask factory scheduler stopped")
             self.close()
 
+    def _record_error(self, exc: BaseException) -> None:
+        self.consecutive_errors += 1
+        self.last_run_error = f"{type(exc).__name__}: {getattr(exc, 'message', str(exc))}"[:300]
+        self.metrics.run_failed()
+
     # ---- reporting ---------------------------------------------------------------------------
+    def health(self) -> tuple[bool, dict[str, Any]]:
+        """Liveness for ``/healthz``: recent progress and no persistent failure streak."""
+        now = time.time()
+        stale_s = now - self.last_progress_at
+        max_stale = float(getattr(self.settings, "health_max_stale_s", 3600.0))
+        max_err = int(getattr(self.settings, "health_max_consecutive_errors", 5))
+        reasons = []
+        if stale_s > max(max_stale, 3 * float(self.settings.poll_interval_s)):
+            reasons.append(f"no progress for {stale_s:.0f}s")
+        if self.consecutive_errors >= max_err:
+            reasons.append(f"{self.consecutive_errors} consecutive failed runs")
+        return not reasons, {
+            "healthy": not reasons, "reasons": reasons, "seconds_since_progress": round(stale_s, 1),
+            "consecutive_errors": self.consecutive_errors, "last_error": self.last_run_error,
+            "disk_limited": self.disk_limited,
+        }
+
     def status(self) -> dict[str, Any]:
         """Inventory, plan and lifetime totals (JSON-serialisable; no secrets)."""
         rows = []
@@ -471,6 +577,8 @@ class FactoryScheduler:
             "factory_id": self.settings.factory_id,
             "running_elsewhere": self._lock_held_elsewhere(),
             "crash_recoveries": self.state.crash_recoveries,
+            "disk_limited": self.disk_limited,
+            "disk_budget_bytes": self.disk_budget(),
             "interrupted_segment": self.state.in_progress,
             "last_error": self.state.last_error,
             "last_segment_id": self.state.last_segment_id,

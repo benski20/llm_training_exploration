@@ -31,6 +31,7 @@ from pgw.core.errors import (
     FingerprintMismatchError,
     IntegrityError,
     MaskExhaustedError,
+    MaskStoreError,
     PGWError,
     ProtocolError,
     ServiceUnavailableError,
@@ -40,6 +41,7 @@ from pgw.core.freivalds import freivalds_check
 from pgw.core.masking import mask_activations, unmask_outputs
 from pgw.core.packing import pack_ring, unpack_ring
 from pgw.core.ring import RingParams, balanced_digits, dequantize_outputs, quantize_activations
+from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_available, int8_digit_gemm
 from pgw.core.types import LinearId
 
 __all__ = [
@@ -133,22 +135,6 @@ class LinearBackend(abc.ABC):
 
 
 # ---- exact integer product -----------------------------------------------------------------------
-_INT_MM_MAX_N = 131_064
-_cpu_int_mm_ok: bool | None = None
-
-
-def _cpu_int_mm_available() -> bool:
-    global _cpu_int_mm_ok
-    if _cpu_int_mm_ok is None:
-        try:
-            a = torch.ones((1, 8), dtype=torch.int8)
-            _cpu_int_mm_ok = bool(torch._int_mm(a, torch.ones((8, 8), dtype=torch.int8)).sum() == 64)
-        except Exception:  # pragma: no cover - depends on the torch build
-            _cpu_int_mm_ok = False
-            log.info("torch._int_mm unavailable on CPU; using float64 exact fallback")
-    return _cpu_int_mm_ok
-
-
 def _digits_needed(value_bits: int) -> int:
     """Fewest balanced base-256 digits that represent every ``|v| <= 2^(value_bits-1) - 1`` exactly."""
     vmax = (1 << (value_bits - 1)) - 1
@@ -162,15 +148,17 @@ def exact_int_matmul(xq: torch.Tensor, w8t: torch.Tensor, value_bits: int) -> to
     """Exact ``xq @ w8t`` for int64 ``xq (T, n)`` with ``|xq| < 2^(value_bits-1)`` and int8 ``w8t (n, m)``.
 
     Uses int8 GEMMs (``torch._int_mm``, int32 accumulation) on balanced base-256 digits of ``xq``,
-    so the result is an exact int64 regardless of BLAS summation order. Falls back to float64 GEMMs
-    (exact while partial sums stay below 2^53) when int8 GEMMs are unavailable.
+    so the result is an exact int64 regardless of BLAS summation order. The digit GEMM and the CPU
+    exactness probe are the shared ones in :mod:`pgw.core.ringmm` (:func:`int8_digit_gemm`,
+    :func:`cpu_int8_available`). Falls back to float64 GEMMs (exact while partial sums stay below
+    2^53) when CPU int8 GEMMs are unavailable or inexact.
     """
     t, n = xq.shape
     m = w8t.shape[1]
     if t == 0:
         return torch.zeros((0, m), dtype=torch.int64, device=xq.device)
     dev = xq.device
-    use_int = (dev.type == "cpu" and _cpu_int_mm_available()) or dev.type == "cuda"
+    use_int = (dev.type == "cpu" and cpu_int8_available()) or dev.type == "cuda"
     if not use_int:
         bound = (1 << (value_bits - 1)) * 128 * n
         if bound >= 1 << 53:  # pragma: no cover - only for exotic rings
@@ -182,38 +170,52 @@ def exact_int_matmul(xq: torch.Tensor, w8t: torch.Tensor, value_bits: int) -> to
     pad_rows = dev.type == "cuda"
     for i, d in enumerate(digits):
         d8 = d.to(torch.int8)
-        y = torch.zeros((t, m), dtype=torch.int64, device=dev)
-        for c0 in range(0, n, _INT_MM_MAX_N):
-            c1 = min(n, c0 + _INT_MM_MAX_N)
-            a = d8[:, c0:c1].contiguous()
-            b = w8t[c0:c1]
-            if pad_rows:  # pragma: no cover - GPU only
-                y += _cuda_int_mm_padded(a, b)
-            else:
-                y += torch._int_mm(a, b).to(torch.int64)
+        if pad_rows:  # pragma: no cover - GPU only
+            y = torch.zeros((t, m), dtype=torch.int64, device=dev)
+            for c0 in range(0, n, INT_MM_MAX_INNER):
+                c1 = min(n, c0 + INT_MM_MAX_INNER)
+                y += _cuda_int_mm_padded(d8[:, c0:c1].contiguous(), w8t[c0:c1])
+        else:
+            y = int8_digit_gemm(d8, w8t.t())
         acc += y << (8 * i)
     return acc
 
 
 def _cuda_int_mm_padded(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:  # pragma: no cover - GPU only
+    """Exact ``a (t, n) @ b (n, m)`` on CUDA, padded to shapes ``torch._int_mm`` accepts.
+
+    ``mat2`` is passed column-major (the transpose of a row-major ``(m, n)`` buffer): cuBLASLt int8
+    GEMMs on Turing (T4) with recent CUDA reject a row-major ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+    When ``b`` is already such a view with aligned shapes, no copy of the weight is made.
+    """
     t, n = a.shape
     m = b.shape[1]
-    tp, np_, mp = max(32, -(-t // 8) * 8), -(-n // 8) * 8, -(-m // 8) * 8
-    ap = torch.zeros((tp, np_), dtype=torch.int8, device=a.device)
-    ap[:t, :n] = a
-    bp = torch.zeros((np_, mp), dtype=torch.int8, device=a.device)
-    bp[:n, :m] = b
-    return torch._int_mm(ap, bp)[:t, :m].to(torch.int64)
+    # rows: > 16 and a multiple of 8; inner and output dims: multiples of 32 (cuBLASLt on T4 / CUDA 13)
+    tp, np_, mp = max(32, -(-t // 8) * 8), -(-n // 32) * 32, -(-m // 32) * 32
+    if tp == t and np_ == n and a.is_contiguous():
+        ap = a
+    else:
+        ap = torch.zeros((tp, np_), dtype=torch.int8, device=a.device)
+        ap[:t, :n] = a
+    if np_ == n and mp == m and b.stride() == (1, n):
+        bt = b  # already the column-major view of a contiguous (m, n) buffer
+    else:
+        bcm = torch.zeros((mp, np_), dtype=torch.int8, device=a.device)
+        bcm[:m, :n] = b.t()
+        bt = bcm.t()
+    return torch._int_mm(ap, bt)[:t, :m].to(torch.int64)
 
 
 # ---- weight access ---------------------------------------------------------------------------------
 class _WeightCache:
     """Lazily loads linear weights from a pack and keeps a backend-specific form resident."""
 
-    def __init__(self, pack: Any, device: torch.device, convert: Any):
+    def __init__(self, pack: Any, device: torch.device, convert: Any, *, loader: Any = None):
         self.pack = pack
         self.device = device
         self.convert = convert
+        #: ``fn(lid) -> record`` handed to ``convert``; defaults to ``pack.load_linear`` (full weights).
+        self.loader = loader if loader is not None else (lambda lid: pack.load_linear(lid, device="cpu"))
         self._cache: dict[str, Any] = {}
         self._lock = threading.Lock()
 
@@ -225,8 +227,7 @@ class _WeightCache:
         with self._lock:
             hit = self._cache.get(key)
             if hit is None:
-                lw = self.pack.load_linear(lid, device="cpu")
-                hit = self.convert(lw, self.device)
+                hit = self.convert(self.loader(lid), self.device)
                 self._cache[key] = hit
         return hit
 
@@ -237,7 +238,7 @@ class _WeightCache:
 
 @dataclass(frozen=True)
 class _IntWeight:
-    w8t: torch.Tensor  # int8 (n, m)
+    w8t: torch.Tensor  # int8 (n, m); on CUDA the transposed view of a contiguous (m, n) weight
     scale: torch.Tensor  # float32 (m,)
     bias: torch.Tensor | None
     in_features: int
@@ -248,8 +249,11 @@ def _to_int_weight(lw: Any, device: torch.device) -> _IntWeight:
     w8 = lw.w8
     if w8.dtype != torch.int8 or w8.ndim != 2:
         raise ShapeError(f"{lw.id}: weight must be 2-D int8")
+    # CUDA: keep W8 row-major and use its transposed view, the (column-major) layout cuBLASLt int8
+    # GEMMs accept on every GPU; CPU: a contiguous (n, m) copy (fastest for the CPU kernels).
+    w8t = w8.contiguous().to(device).t() if device.type == "cuda" else w8.t().contiguous().to(device)
     return _IntWeight(
-        w8.t().contiguous().to(device),
+        w8t,
         lw.scale.to(torch.float32).to(device),
         None if lw.bias is None else lw.bias.to(torch.float32).to(device),
         int(w8.shape[1]),
@@ -435,6 +439,9 @@ class MaskedBackend(LinearBackend):
         max_rows_per_item: Split items above this many rows (SPEC 6.5 default 8192).
         deadline_ms: Optional per-request deadline sent to the service.
         on_integrity_failure: Callback ``fn(error)`` (e.g. trip the gateway circuit breaker).
+        min_soundness_bits: Refuse (before any mask row is taken) segments whose Freivalds vectors
+            give fewer bits of soundness for a linear (:func:`pgw.core.freivalds.soundness_bits`).
+            The gateway passes its ``min_soundness_bits`` setting (default 20); 0 disables.
 
     Raises (from forward):
         MaskExhaustedError, IntegrityError, FingerprintMismatchError, ServiceUnavailableError.
@@ -453,6 +460,7 @@ class MaskedBackend(LinearBackend):
         max_rows_per_item: int = 8192,
         deadline_ms: int | None = None,
         on_integrity_failure: Any = None,
+        min_soundness_bits: float = 0.0,
     ):
         if not 0.0 <= freivalds_rate <= 1.0:
             raise ConfigError("freivalds_rate must be in [0, 1]")
@@ -476,10 +484,13 @@ class MaskedBackend(LinearBackend):
         self.max_rows_per_item = max_rows_per_item
         self.deadline_ms = deadline_ms
         self.on_integrity_failure = on_integrity_failure
+        if min_soundness_bits < 0:
+            raise ConfigError("min_soundness_bits must be >= 0")
+        self.min_soundness_bits = float(min_soundness_bits)
         self.stats = BackendStats()
 
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
-            n, m = int(lw.w8.shape[1]), int(lw.w8.shape[0])
+            n, m = int(lw.in_features), int(lw.out_features)
             ring.check_in_features(n)
             return _MaskedMeta(
                 lw.scale.to(torch.float32).clone(),
@@ -488,7 +499,10 @@ class MaskedBackend(LinearBackend):
                 m,
             )
 
-        self._meta = _WeightCache(pack, torch.device("cpu"), conv)
+        # Only scales, bias and shapes: never read the int8 weights the gateway does not need.
+        load_meta = getattr(pack, "load_linear_meta", None)
+        loader = load_meta if callable(load_meta) else None
+        self._meta = _WeightCache(pack, torch.device("cpu"), conv, loader=loader)
 
     # ---- helpers -------------------------------------------------------------------------------
     def _reservation(self, call: LinearCall) -> Any:
@@ -507,6 +521,22 @@ class MaskedBackend(LinearBackend):
                 details={"reservation": res_fp[:12], "backend": self.fingerprint[:12]},
             )
         return res
+
+    def _check_soundness(self, lid: Any, n: int, u: torch.Tensor | None) -> None:
+        """Raise if the current extent's check vectors give less than ``min_soundness_bits``."""
+        if self.min_soundness_bits <= 0:
+            return
+        from pgw.core.freivalds import soundness_bits
+
+        checks = 0 if u is None else int(u.shape[0])
+        bits = soundness_bits(self.ring, n, checks)
+        if bits < self.min_soundness_bits:
+            raise MaskStoreError(
+                f"{lid}: mask segment has {checks} Freivalds vector(s) = {bits:.0f} bits of soundness for "
+                f"n={n} at {self.ring.name}; at least {self.min_soundness_bits:.0f} are required "
+                "(regenerate masks with more checks)",
+                details={"linear": str(lid), "checks": checks, "min_soundness_bits": self.min_soundness_bits},
+            )
 
     def _should_check(self) -> bool:
         if self.freivalds_rate >= 1.0:
@@ -533,6 +563,18 @@ class MaskedBackend(LinearBackend):
         for c, res in zip(calls, reservations, strict=True):
             key = (id(res), c.id.key)
             need[key] = need.get(key, 0) + int(c.x.shape[0])
+        # Growing reservations (gateway windows) extend here, before any row of the batch is taken.
+        seen: set[tuple[int, str]] = set()
+        for c, res in zip(calls, reservations, strict=True):
+            key = (id(res), c.id.key)
+            ensure = getattr(res, "ensure", None)
+            if ensure is not None and key not in seen:
+                seen.add(key)
+                ensure(c.id, need[key])
+        if self.min_soundness_bits > 0:
+            for c, res, meta in zip(calls, reservations, metas, strict=True):
+                if int(res.rows_until_boundary(c.id)) > 0:
+                    self._check_soundness(c.id, meta.in_features, res.checks(c.id)[0])
         for c, res in zip(calls, reservations, strict=True):
             left = int(res.remaining(c.id))
             if left < need[(id(res), c.id.key)]:
@@ -567,8 +609,12 @@ class MaskedBackend(LinearBackend):
                     rows = min(t - row, boundary, self.max_rows_per_item)
                     check = self._should_check()
                     u = uw = None
-                    if check:  # vectors of the extent the next rows come from: read before take()
+                    if check or self.min_soundness_bits > 0:
+                        # vectors of the extent the next rows come from: read before take()
                         u, uw = res.checks(call.id)
+                        self._check_soundness(call.id, meta.in_features, u)
+                        if not check:
+                            u = uw = None
                     r, wr = res.take(call.id, rows)
                     try:
                         if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):

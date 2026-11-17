@@ -41,7 +41,8 @@ async def test_qwen05b_masked_equals_plain(q05_pack_dir: Path, tmp_path: Path) -
     req: dict[str, Any] = {"model": "q05", "messages": [{"role": "user", "content": "What is 2+2?"}],
                            "temperature": 0, "max_tokens": 4, "logprobs": True}
     masked = GatewaySettings(
-        models=[GatewayModelConfig(name="q05", pack_path=q05_pack_dir, service_url=SERVICE_URL)],
+        models=[GatewayModelConfig(name="q05", pack_path=q05_pack_dir, service_url=SERVICE_URL,
+                                   fingerprint=pack.fingerprint)],
         admin_token=ADMIN_TOKEN, default_max_tokens=4,
     )
     async with gateway(create_app(masked, mask_store=store, transports={"q05": svc.transport}, key_store=keys)) as c:

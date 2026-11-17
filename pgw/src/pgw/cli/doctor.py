@@ -354,13 +354,29 @@ def _check_key_file(key_file: Path) -> tuple[Status, str, dict[str, Any]]:
 
 def _check_maskstore(root: Path, key_file: Path | None) -> tuple[Status, str, dict[str, Any]]:
     from pgw.maskstore.admin import store_status
+    from pgw.maskstore.config import MaskStoreSettings
 
     overrides: dict[str, Any] = {"root": root}
     if key_file is not None:
         overrides.update(key_file=key_file, key_provider="file")
-    status = store_status(**overrides)
+    settings = MaskStoreSettings(**overrides)
+    status = store_status(settings)
     usage = shutil.disk_usage(root)
     data = {"status": status, "disk_free": usage.free, "disk_total": usage.total}
+    rb = status.get("rollback_protection") or {}
+    if rb.get("counter", "none") == "none" and not settings.allow_no_external_counter:
+        return "fail", (
+            "no external monotonic counter (PGW_MASKSTORE_COUNTER): gateways refuse to hand out masks, since a "
+            "whole-volume snapshot restore would go undetected and re-serve consumed masks"
+        ), data
+    dev = [
+        name for name in (
+            "allow_no_external_counter", "allow_unsigned_partner_segments", "allow_unbound_partner_segments",
+            "allow_network_filesystem", "allow_no_rollback_witness",
+        ) if getattr(settings, name)
+    ]
+    if dev:
+        return "warn", "store opened and verified, but DEV-ONLY settings are enabled: " + ", ".join(dev), data
     if usage.free < MIN_FREE_DISK_BYTES:
         return "warn", f"store opened and verified, but only {usage.free / 2**30:.2f} GiB free", data
     return "ok", f"store opened and verified; {usage.free / 2**30:.1f} GiB free", data

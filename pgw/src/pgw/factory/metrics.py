@@ -63,6 +63,31 @@ class FactoryMetrics:
         if g is not None:
             g.labels(**labels).set(slots_per_second)
 
+    def run_ok(self, ts: float) -> None:
+        """A scheduler plan/run completed (heartbeat)."""
+        g = self._get("pgw_factory_last_success_timestamp")
+        if g is not None:
+            try:
+                g.set(ts)
+            except Exception as exc:  # monitoring never breaks production
+                log.debug("cannot set last-success gauge: %r", exc)
+
+    def run_failed(self) -> None:
+        """A scheduler run failed."""
+        c = self._get("pgw_factory_errors_total")
+        if c is not None:
+            try:
+                c.inc()
+            except Exception as exc:  # monitoring never breaks production
+                log.debug("cannot count factory error: %r", exc)
+
+    def render(self) -> tuple[bytes, str]:
+        """Prometheus exposition of the registry these metrics live on."""
+        render = getattr(self._m, "render", None)
+        if render is None:
+            return b"", "text/plain; version=0.0.4; charset=utf-8"
+        return render()  # type: ignore[no-any-return]
+
     def inventory(self, fingerprint: str, ring: str, available: int, low_water: bool) -> None:
         """Mirror the inventory the scheduler observed (useful for partner factories)."""
         labels = {"fingerprint": short_fingerprint(fingerprint), "ring": ring}

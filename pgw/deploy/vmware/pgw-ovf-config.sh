@@ -36,6 +36,10 @@ MODEL=$(prop pgw.model_name)
 PACK_DIR=$(prop pgw.pack_dir)
 FINGERPRINT=$(prop pgw.fingerprint)
 RING=$(prop pgw.ring)
+COUNTER=$(prop pgw.counter)
+COUNTER=${COUNTER:-file}
+COUNTER_DIR=/var/lib/pgw-counter
+TPM_NV_INDEX=0x1500016
 
 # Validate every value that is written into YAML or an nftables rule: a stray quote, newline or
 # brace would otherwise change the generated configuration (or the firewall) silently.
@@ -60,6 +64,33 @@ if [ -n "$SERVICE_CIDR" ]; then
 else
     echo "pgw-ovf-config: WARNING pgw.service_cidr not set: no egress firewall is installed" >&2
 fi
+
+# External monotonic counter (rollback protection): without one the gateway refuses to hand out
+# masks, because reverting a VM snapshot would re-serve consumed masks.
+case "$COUNTER" in
+    file)
+        command -v mountpoint >/dev/null 2>&1 && mountpoint -q "$COUNTER_DIR" \
+            || fail "pgw.counter=file needs $COUNTER_DIR mounted from a separate virtual disk in independent-persistent mode (excluded from VM snapshots); or set pgw.counter=tpm"
+        install -d -m 0700 -o pgw -g pgw "$COUNTER_DIR"
+        COUNTER_ENV="PGW_MASKSTORE_COUNTER=file
+PGW_MASKSTORE_COUNTER_FILE=$COUNTER_DIR/generation.counter"
+        ;;
+    tpm)
+        [ -c /dev/tpmrm0 ] || fail "pgw.counter=tpm needs a vTPM (/dev/tpmrm0)"
+        if ! tpm2_nvreadpublic "$TPM_NV_INDEX" >/dev/null 2>&1; then
+            tpm2_nvdefine "$TPM_NV_INDEX" -C o -s 8 -a "ownerread|ownerwrite|nt=counter" >/dev/null
+            tpm2_nvincrement -C o "$TPM_NV_INDEX" >/dev/null
+        fi
+        COUNTER_ENV="PGW_MASKSTORE_COUNTER=tpm
+PGW_MASKSTORE_TPM_NV_INDEX=$((TPM_NV_INDEX))
+PGW_MASKSTORE_TPM_TCTI=device:/dev/tpmrm0"
+        echo "pgw-ovf-config: WARNING the vTPM state is part of VM snapshots; never revert a snapshot of this VM" >&2
+        ;;
+    *) fail "pgw.counter must be 'file' or 'tpm'" ;;
+esac
+touch /etc/pgw/gateway.env
+sed -i '/^PGW_MASKSTORE_COUNTER\|^PGW_MASKSTORE_TPM_/d' /etc/pgw/gateway.env
+printf '%s\n' "$COUNTER_ENV" >> /etc/pgw/gateway.env
 
 install -d -m 0750 -o root -g root /etc/pgw/secrets
 prop pgw.service_token > /etc/pgw/secrets/service-token

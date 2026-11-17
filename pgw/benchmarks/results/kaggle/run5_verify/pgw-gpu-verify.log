@@ -1,0 +1,269 @@
+[{"stream_name":"stdout","time":6.833550364,"data":"[   0.1m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869284 kB', 'MemFree:        26836592 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  7.1T  967G  89% /\\noverlay         8.0T  7.1T  967G  89% /\\n/dev/loop2       20G  2.1M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":6.966935008,"data":"[   0.1m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":19.055057997,"data":"[   0.3m] DONE pip_install rc 0 12s\n"}
+,{"stream_name":"stdout","time":19.055103688,"data":"\n"}
+,{"stream_name":"stdout","time":19.055110987,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":19.05511341,"data":"\n"}
+,{"stream_name":"stdout","time":19.055115725,"data":"[   0.3m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":20.020852654,"data":"[   0.3m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":20.02087774,"data":"0.0.8\n"}
+,{"stream_name":"stdout","time":20.020881088,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":20.020883964,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":20.020886607,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":20.020889098,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":20.020891614,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":20.020894361,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":20.020896914,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":20.020899377,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":20.020901879,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":20.020904424,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":20.020906967,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":20.020909474,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":20.020911999,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":20.020914497,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":20.020917047,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":20.020919541,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":20.020922051,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":20.020924556,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":20.020927127,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":20.020929645,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":20.020932255,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":20.020934717,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":20.020937171,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":20.020939629,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":20.020942074,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":20.020944569,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":20.020947034,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":20.020949562,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":20.020952029,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":20.020954484,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":20.020957001,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":20.020959515,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":20.020969397000002,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":20.020972132,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":20.020974617,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":20.020977105,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":20.020979574,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":20.020982044,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":20.020984525,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":20.020987007,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":20.020989475,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":20.020991936,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":20.020994549,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":20.020997009,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":20.020999474,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":20.021001937,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":20.02100441,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":20.021006879,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":20.021009344,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":20.021011891,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":20.021014457,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":20.021016936,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":20.021019464,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":20.021021974,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":20.021024556,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":20.021027458,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":20.021029979,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":20.021032441,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":20.021034978,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":20.021037427,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":20.021039913,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":20.021042377,"data":"texttable==1.7.2\n"}
+,{"stream_name":"stdout","time":20.021044908,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":20.021047369,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":20.021049824,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":20.021052304,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":20.021054894,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":20.021057378,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":20.021059842,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":20.021062433,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":20.021064958,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":20.021067419,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":20.021069892,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":20.021072327,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":20.021074779,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":20.021077238,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":20.021079715,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":20.021082897,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":20.021089462,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":20.021092257,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":20.021094893,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":20.021097451,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":20.021099924,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":20.021102392,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":20.02110485,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":20.021107364,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":20.021109829,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":20.021112298,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":20.021114775,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":20.021117244,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":20.021119715,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":20.021122239,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":20.02112469,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":20.021127149,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":20.021129644,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":20.021132137,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":20.021134603,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":20.021137046,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":20.021139503,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":20.021141973,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":20.021144495,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":20.021146949,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":20.02114948,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":20.021151997,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":20.021154632,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":20.021157983,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":20.021160564,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":20.021163086,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":20.021165579,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":20.021168065,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":20.021170637,"data":"ujson==6.0.0\n"}
+,{"stream_name":"stdout","time":20.021173123,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":20.021175617,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":20.021178093,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":20.021180659,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":20.021183172,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":20.021185659,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":20.021188165,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":20.021190645,"data":"urwid==5.0.1\n"}
+,{"stream_name":"stdout","time":20.021193179,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":20.021195953,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":20.021198491,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":20.021200957,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":20.021203435,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":20.021208043,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":20.021210662,"data":"vtk==9.7.1\n"}
+,{"stream_name":"stdout","time":20.021213142,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":20.021215612,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":20.021218137,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":20.021220595,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":20.021223044,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":20.021225534,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":20.021228103,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":20.021230567,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":20.021233019,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":20.021235474,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":20.021238054,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":20.021240569,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":20.021243108,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":20.021245604,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":20.021248082,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":20.021250548,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":20.021253067,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":20.021255547,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":20.02125802,"data":"wrapt==1.17.3\n"}
+,{"stream_name":"stdout","time":20.021260511,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":20.021262992,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":20.021265472,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":20.021267968,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":20.021270432,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":20.021272889,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":20.0212754,"data":"xvfbwrapper==0.2.37\n"}
+,{"stream_name":"stdout","time":20.021277894,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":20.021280369,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":20.021282866,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":20.021285333,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":20.02128786,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":20.021290319,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":20.021292766,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":20.021295287,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":20.021297758,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":20.02130022,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":20.021302689,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":20.021305174,"data":"\n"}
+,{"stream_name":"stdout","time":20.021307622,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":20.0213101,"data":"\n"}
+,{"stream_name":"stdout","time":20.021312653,"data":"[   0.3m] RUN pytest_gpu : /usr/bin/python3 -m pytest tests -m gpu -v -rs --timeout 900 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":290.174582275,"data":"[   4.8m] DONE pytest_gpu rc 0 270s\n"}
+,{"stream_name":"stdout","time":290.174614039,"data":"408 deselected / 35 selected\n"}
+,{"stream_name":"stdout","time":290.174619846,"data":"\n"}
+,{"stream_name":"stdout","time":290.174624492,"data":"tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p0] PASSED              [  2%]\n"}
+,{"stream_name":"stdout","time":290.174662219,"data":"tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p1] PASSED              [  5%]\n"}
+,{"stream_name":"stdout","time":290.174667169,"data":"tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p2] PASSED              [  8%]\n"}
+,{"stream_name":"stdout","time":290.174671552,"data":"tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p0] PASSED            [ 11%]\n"}
+,{"stream_name":"stdout","time":290.174675229,"data":"tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p1] PASSED            [ 14%]\n"}
+,{"stream_name":"stdout","time":290.174679071,"data":"tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p2] PASSED            [ 17%]\n"}
+,{"stream_name":"stdout","time":290.174682769,"data":"tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p0] PASSED           [ 20%]\n"}
+,{"stream_name":"stdout","time":290.174686577,"data":"tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p1] PASSED           [ 22%]\n"}
+,{"stream_name":"stdout","time":290.174690271,"data":"tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p2] PASSED           [ 25%]\n"}
+,{"stream_name":"stdout","time":290.174694083,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[1-64-48-8] PASSED [ 28%]\n"}
+,{"stream_name":"stdout","time":290.174697868,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[1-64-48-12] PASSED [ 31%]\n"}
+,{"stream_name":"stdout","time":290.174701621,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[1-64-48-20] PASSED [ 34%]\n"}
+,{"stream_name":"stdout","time":290.174705304,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[5-70-33-8] PASSED [ 37%]\n"}
+,{"stream_name":"stdout","time":290.174709075,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[5-70-33-12] PASSED [ 40%]\n"}
+,{"stream_name":"stdout","time":290.174712872,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[5-70-33-20] PASSED [ 42%]\n"}
+,{"stream_name":"stdout","time":290.174716502,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[40-3584-4608-8] PASSED [ 45%]\n"}
+,{"stream_name":"stdout","time":290.174720122,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[40-3584-4608-12] PASSED [ 48%]\n"}
+,{"stream_name":"stdout","time":290.174723607,"data":"tests/engine/test_backends.py::test_exact_int_matmul_cuda[40-3584-4608-20] PASSED [ 51%]\n"}
+,{"stream_name":"stdout","time":290.174727436,"data":"tests/engine/test_backends.py::test_plain_backend_cuda_matches_cpu[K32A8] PASSED [ 54%]\n"}
+,{"stream_name":"stdout","time":290.174731421,"data":"tests/engine/test_backends.py::test_plain_backend_cuda_matches_cpu[K40A12] PASSED [ 57%]\n"}
+,{"stream_name":"stdout","time":290.1747354,"data":"tests/engine/test_backends.py::test_plain_backend_cuda_matches_cpu[K48A20] PASSED [ 60%]\n"}
+,{"stream_name":"stdout","time":290.174739417,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K32A8] PASSED      [ 62%]\n"}
+,{"stream_name":"stdout","time":290.174743093,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K40A12] PASSED     [ 65%]\n"}
+,{"stream_name":"stdout","time":290.174747833,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K48A20] PASSED     [ 68%]\n"}
+,{"stream_name":"stdout","time":290.174751677,"data":"tests/modelpack/test_loader.py::test_load_to_cuda PASSED                 [ 71%]\n"}
+,{"stream_name":"stdout","time":290.174755256,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-1] PASSED      [ 74%]\n"}
+,{"stream_name":"stdout","time":290.174759075,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-17] PASSED     [ 77%]\n"}
+,{"stream_name":"stdout","time":290.174762906,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-33] PASSED     [ 80%]\n"}
+,{"stream_name":"stdout","time":290.174774519,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-1] PASSED     [ 82%]\n"}
+,{"stream_name":"stdout","time":290.17477848,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-17] PASSED    [ 85%]\n"}
+,{"stream_name":"stdout","time":290.174781828,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-33] PASSED    [ 88%]\n"}
+,{"stream_name":"stdout","time":290.174785414,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-1] PASSED     [ 91%]\n"}
+,{"stream_name":"stdout","time":290.174788883,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-17] PASSED    [ 94%]\n"}
+,{"stream_name":"stdout","time":290.174792462,"data":"tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-33] PASSED    [ 97%]\n"}
+,{"stream_name":"stdout","time":290.174795918,"data":"tests/service/test_registry.py::test_multi_gpu_placement PASSED          [100%]\n"}
+,{"stream_name":"stdout","time":290.174799399,"data":"\n"}
+,{"stream_name":"stdout","time":290.174802901,"data":"=============== 35 passed, 1408 deselected in 262.19s (0:04:22) ================\n"}
+,{"stream_name":"stdout","time":290.174806457,"data":"\n"}
+,{"stream_name":"stdout","time":290.174809725,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":290.174813277,"data":"\n"}
+,{"stream_name":"stdout","time":290.174816699,"data":"[   4.8m] RUN pytest_regressions : /usr/bin/python3 -m pytest tests/core/test_misc.py tests/factory/test_bench_cli.py tests/vectors -q -rs --timeout 900 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":303.891795077,"data":"[   5.1m] DONE pytest_regressions rc 0 14s\n"}
+,{"stream_name":"stdout","time":303.891840883,"data":"......................ss                                                 [100%]\n"}
+,{"stream_name":"stdout","time":303.891845869,"data":"=========================== short test summary info ============================\n"}
+,{"stream_name":"stdout","time":303.891849983,"data":"SKIPPED [1] tests/vectors/test_vectors.py:97: optional Rust extension not built (feature 'python')\n"}
+,{"stream_name":"stdout","time":303.891854165,"data":"SKIPPED [1] tests/vectors/test_vectors.py:118: set PGW_TEST_RUST=1 to run cargo test\n"}
+,{"stream_name":"stdout","time":303.891858575,"data":"22 passed, 2 skipped in 8.61s\n"}
+,{"stream_name":"stdout","time":303.891862543,"data":"\n"}
+,{"stream_name":"stdout","time":303.891866106,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":303.891869926,"data":"\n"}
+,{"stream_name":"stdout","time":303.89196716,"data":"[   5.1m] RUN pytest_e2e_gpu_service : /usr/bin/python3 -m pytest tests/e2e -v -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":565.982499449,"data":"[   9.4m] DONE pytest_e2e_gpu_service rc 0 262s\n"}
+,{"stream_name":"stdout","time":565.982554022,"data":"le:service serve] PASSED [ 25%]\n"}
+,{"stream_name":"stdout","time":565.982558813,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:pack X X] PASSED [ 28%]\n"}
+,{"stream_name":"stdout","time":565.982562281,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:inspect X --json] PASSED [ 31%]\n"}
+,{"stream_name":"stdout","time":565.982565591,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:maskstore init --root] PASSED [ 34%]\n"}
+,{"stream_name":"stdout","time":565.982568724,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:service token create] PASSED [ 37%]\n"}
+,{"stream_name":"stdout","time":565.982579493,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:gateway keys create] PASSED [ 40%]\n"}
+,{"stream_name":"stdout","time":565.982582312,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-factory.service:factory run] PASSED [ 43%]\n"}
+,{"stream_name":"stdout","time":565.982584975,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-gateway.service:config render /etc/pgw/models.tmpl.yaml] PASSED [ 46%]\n"}
+,{"stream_name":"stdout","time":565.982587565,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-gateway.service:doctor --role gateway] PASSED [ 50%]\n"}
+,{"stream_name":"stdout","time":565.982590118,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-ovf-config.sh:maskstore init --root] PASSED [ 53%]\n"}
+,{"stream_name":"stdout","time":565.982592703,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:pack X X] PASSED [ 56%]\n"}
+,{"stream_name":"stdout","time":565.982595331,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:inspect X --json] PASSED [ 59%]\n"}
+,{"stream_name":"stdout","time":565.982597889,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:maskstore init --root] PASSED [ 62%]\n"}
+,{"stream_name":"stdout","time":565.982600454,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:factory generate --pack] PASSED [ 65%]\n"}
+,{"stream_name":"stdout","time":565.982603025,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:service token create] PASSED [ 68%]\n"}
+,{"stream_name":"stdout","time":565.982606772,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:gateway keys create] PASSED [ 71%]\n"}
+,{"stream_name":"stdout","time":565.982609543,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:service serve] PASSED [ 75%]\n"}
+,{"stream_name":"stdout","time":565.982612219,"data":"tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:gateway serve] PASSED [ 78%]\n"}
+,{"stream_name":"stdout","time":565.982614775,"data":"tests/e2e/test_localhost_stack.py::test_nonstreaming_matches_quantplain_reference PASSED [ 81%]\n"}
+,{"stream_name":"stdout","time":565.982617324,"data":"tests/e2e/test_localhost_stack.py::test_streaming_matches_quantplain_reference PASSED [ 84%]\n"}
+,{"stream_name":"stdout","time":565.982619813,"data":"tests/e2e/test_localhost_stack.py::test_every_response_freivalds_checked PASSED [ 87%]\n"}
+,{"stream_name":"stdout","time":565.982622253,"data":"tests/e2e/test_localhost_stack.py::test_service_never_receives_plaintext PASSED [ 90%]\n"}
+,{"stream_name":"stdout","time":565.98262472,"data":"tests/e2e/test_localhost_stack.py::test_outbound_traffic_passes_uniformity_monitor PASSED [ 93%]\n"}
+,{"stream_name":"stdout","time":565.982627327,"data":"tests/e2e/test_localhost_stack.py::test_tampered_response_is_detected_and_fails_closed PASSED [ 96%]\n"}
+,{"stream_name":"stdout","time":565.98262984,"data":"tests/e2e/test_localhost_stack.py::test_masks_are_never_reused PASSED    [100%]\n"}
+,{"stream_name":"stdout","time":565.982632311,"data":"\n"}
+,{"stream_name":"stdout","time":565.982634618,"data":"======================== 32 passed in 256.86s (0:04:16) ========================\n"}
+,{"stream_name":"stdout","time":565.982666184,"data":"\n"}
+,{"stream_name":"stdout","time":565.982669703,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":565.982677163,"data":"\n"}
+,{"stream_name":"stdout","time":565.982870066,"data":"[   9.4m] ALL DONE\n"}
+,{"stream_name":"stderr","time":568.408445638,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":568.408471771,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":568.619725258,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":568.619752444,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":569.402562357,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":570.308378194,"data":"[NbConvertApp] Writing 1324521 bytes to __results__.html\n"}
+]

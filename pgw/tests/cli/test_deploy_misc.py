@@ -36,7 +36,7 @@ def workflow() -> dict[str, object]:
 def test_workflow_jobs(workflow: dict[str, object]) -> None:
     jobs = workflow["jobs"]
     assert isinstance(jobs, dict)
-    assert {"lint", "typecheck", "test", "deploy-lint", "images"} <= set(jobs)
+    assert {"lint", "typecheck", "test", "deploy-lint", "audit", "images"} <= set(jobs)
     assert workflow["permissions"] == {"contents": "read"}
     steps = {name: " ".join(str(s.get("run", "")) for s in job["steps"]) for name, job in jobs.items()}
     assert "ruff check" in steps["lint"]
@@ -55,7 +55,15 @@ def test_workflow_actions_are_pinned(workflow: dict[str, object]) -> None:
     for job in workflow["jobs"].values():  # type: ignore[attr-defined]
         for step in job["steps"]:
             if "uses" in step:
-                assert re.search(r"@v\d+(\.\d+)*$|@[0-9a-f]{40}$", step["uses"]), step["uses"]
+                # security review: actions pinned by commit SHA, not by a movable tag
+                assert re.search(r"@[0-9a-f]{40}$", step["uses"]), step["uses"]
+
+
+def test_workflow_audits_dependencies(workflow: dict[str, object]) -> None:
+    jobs: Any = workflow["jobs"]
+    run = " ".join(str(s.get("run", "")) for s in jobs["audit"]["steps"])
+    assert "pip-audit" in run and "requirements/" in run and "cargo audit" in run
+    assert "audit" in jobs["images"]["needs"]
 
 
 def test_workflow_referenced_paths_exist() -> None:

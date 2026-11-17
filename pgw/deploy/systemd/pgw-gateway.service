@@ -59,7 +59,7 @@ SystemCallFilter=~@privileged @resources
 # A filtered call fails with EPERM instead of killing the process (BLAS/OpenMP probe affinity).
 SystemCallErrorNumber=EPERM
 UMask=0077
-ReadWritePaths=/var/lib/pgw
+ReadWritePaths=/var/lib/pgw -/var/lib/pgw-counter
 
 [Install]
 WantedBy=multi-user.target

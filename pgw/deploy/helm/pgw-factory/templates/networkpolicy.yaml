@@ -1,5 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
-# The factory accepts no connections and, by default, opens none (deny-all egress).
+# The factory accepts only metrics scrapes (if enabled) and, by default, opens no connection.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,7 +13,16 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+  {{- if and .Values.metrics.enabled .Values.metrics.from }}
+  ingress:
+    - from:
+        {{- toYaml .Values.metrics.from | nindent 8 }}
+      ports:
+        - port: metrics
+          protocol: TCP
+  {{- else }}
   ingress: []
+  {{- end }}
   {{- if not (or .Values.networkPolicy.egress.dns.enabled .Values.networkPolicy.egress.extraRules) }}
   egress: []
   {{- else }}

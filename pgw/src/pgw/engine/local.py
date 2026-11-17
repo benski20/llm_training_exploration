@@ -292,6 +292,17 @@ class LocalMaskReservation:
         self.close()
 
 
+def _auto_checks(pack: Any, ring: RingParams, min_bits: float = 20.0) -> int:
+    """Smallest ``checks`` in ``[2, 8]`` giving ``min_bits`` of soundness for every linear (else 8)."""
+    from pgw.core.freivalds import soundness_bits
+
+    ns = {s.in_features for s in pack.linear_specs()}
+    for c in range(2, 9):
+        if all(soundness_bits(ring, n, c) >= min_bits for n in ns):
+            return c
+    return 8
+
+
 class LocalMaskSource:
     """Creates :class:`LocalMaskReservation` objects with the ``MaskStore.reserve`` signature.
 
@@ -299,8 +310,9 @@ class LocalMaskSource:
     ``W8`` is prepared once and shared between reservations.
     """
 
-    def __init__(self, pack: Any, *, checks: int = 2, backend: str = "auto"):
+    def __init__(self, pack: Any, *, checks: int | None = None, backend: str = "auto"):
         self.pack = pack
+        #: ``None`` = per ring, the smallest number of vectors giving 20 bits of soundness (max 8).
         self.checks = checks
         self.backend = backend
         self._weights: dict[str, PreparedWeight] = {}
@@ -311,6 +323,7 @@ class LocalMaskSource:
         if fingerprint != self.pack.fingerprint:
             raise FingerprintMismatchError("mask source serves a different model fingerprint")
         self.reserved_slots += slots
+        checks = self.checks if self.checks is not None else _auto_checks(self.pack, ring)
         return LocalMaskReservation(
-            self.pack, ring, slots, checks=self.checks, weights=self._weights, backend=self.backend
+            self.pack, ring, slots, checks=checks, weights=self._weights, backend=self.backend
         )

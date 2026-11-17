@@ -2,6 +2,7 @@
 # Only what the image needs: never ship packs, mask stores, keys, caches or tests.
 *
 !pyproject.toml
+!requirements/service-cpu.txt
 !README.md
 !src/
 !deploy/docker/entrypoint.sh

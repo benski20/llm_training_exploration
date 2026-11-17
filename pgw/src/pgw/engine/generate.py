@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 import torch
 
@@ -138,6 +139,8 @@ class Generator:
         self._task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._rr = 0
+        #: Reservation closes running in worker threads (never on the event loop; see _arelease).
+        self._closing: set[asyncio.Future[None]] = set()
 
     # ---- state management ---------------------------------------------------------------------
     def _new_state(
@@ -201,12 +204,42 @@ class Generator:
 
     @staticmethod
     def _release(st: _SeqState) -> None:
+        """Synchronous release (blocking API only: closes an owned session on this thread)."""
         if st.t_end is None:
             st.t_end = time.perf_counter()
         if st.own_session and st.session is not None:
             st.own_session = False
             Generator._close_session(st.session)
         st.cache.clear()
+
+    def _arelease(self, st: _SeqState) -> None:
+        """Release from async code without blocking the event loop.
+
+        Closing a mask reservation takes the store's inter-process lock, commits a durable SQLite
+        transaction and may erase a fully consumed segment file; that must never run on the event
+        loop (it would stall every stream and the health probes). The close is handed to the default
+        executor; :meth:`aclose` (and :meth:`wait_closed`) wait for outstanding closes.
+        """
+        if st.t_end is None:
+            st.t_end = time.perf_counter()
+        session = st.session if st.own_session else None
+        st.own_session = False
+        st.cache.clear()
+        if session is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - not inside a loop: plain synchronous close
+            self._close_session(session)
+            return
+        fut = loop.run_in_executor(None, self._close_session, session)
+        self._closing.add(fut)
+        fut.add_done_callback(self._closing.discard)
+
+    async def wait_closed(self) -> None:
+        """Wait until every reservation close handed to a worker thread has finished."""
+        while self._closing:
+            await asyncio.gather(*list(self._closing), return_exceptions=True)
 
     # ---- text / stop handling ---------------------------------------------------------------
     def _scan_stop(self, st: _SeqState, final: bool) -> tuple[str, bool]:
@@ -417,11 +450,11 @@ class Generator:
                 while not st.done:
                     logits = await self.model.aforward(st.pending, st.cache, session=st.session)
                     st.masks += len(st.pending)
-                    yield self._consume(st, logits)
+                    yield await self._run_plain(self._consume, st, logits)
             finally:
                 if st.finish is None:
                     st.finish = FinishReason.CANCELLED
-                self._release(st)
+                self._arelease(st)
             return
         st.queue = asyncio.Queue()
         self._enqueue(st)
@@ -438,7 +471,7 @@ class Generator:
                 st.cancelled = True
                 st.finish = FinishReason.CANCELLED
             if st not in self._active:
-                self._release(st)
+                self._arelease(st)
 
     def _enqueue(self, st: _SeqState) -> None:
         loop = asyncio.get_running_loop()
@@ -462,11 +495,24 @@ class Generator:
     async def _run_step(self, batch: list[_SeqState]) -> None:
         inputs = [SequenceInput(st.pending, st.cache, st.session) for st in batch]
         logits = await self.model.aforward_batch(inputs)
-        for st, lg in zip(batch, logits, strict=True):
-            st.masks += len(st.pending)
-            ev = self._consume(st, lg)
+        events = await self._run_plain(self._consume_batch, batch, logits)
+        for st, ev in zip(batch, events, strict=True):
             if st.queue is not None and not st.cancelled:
                 st.queue.put_nowait(ev)
+
+    def _consume_batch(self, batch: Sequence[_SeqState], logits: Sequence[torch.Tensor]) -> list[TokenEvent]:
+        events = []
+        for st, lg in zip(batch, logits, strict=True):
+            st.masks += len(st.pending)
+            events.append(self._consume(st, lg))
+        return events
+
+    async def _run_plain(self, fn: Callable[..., TokenEvent | list[TokenEvent]], *args: Any) -> Any:
+        """Sampling/detokenization off the event loop (on the model's plaintext thread when it has one)."""
+        run = getattr(self.model, "run_plain", None)
+        if run is None:
+            return fn(*args)
+        return await run(fn, *args)
 
     def _fail(self, st: _SeqState, exc: BaseException) -> None:
         st.finish = FinishReason.ERROR
@@ -479,7 +525,7 @@ class Generator:
             while True:
                 for st in [s for s in self._active if s.cancelled or s.done]:
                     self._active.remove(st)
-                    self._release(st)
+                    self._arelease(st)
                 if not self._active:
                     return
                 batch = self._pick_batch()
@@ -512,14 +558,14 @@ class Generator:
         except asyncio.CancelledError:
             for st in self._active:
                 self._fail(st, PGWError("generation loop cancelled"))
-                self._release(st)
+                self._arelease(st)
             self._active.clear()
             raise
         except BaseException as exc:  # pragma: no cover - defensive: never leave streams hanging
             log.exception("engine batching loop crashed")
             for st in self._active:
                 self._fail(st, exc if isinstance(exc, PGWError) else PGWError("generation loop failed"))
-                self._release(st)
+                self._arelease(st)
             self._active.clear()
             raise
         finally:
@@ -534,3 +580,4 @@ class Generator:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._task = None
+        await self.wait_closed()

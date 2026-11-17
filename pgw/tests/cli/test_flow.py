@@ -112,6 +112,8 @@ def running(flow: dict[str, object]) -> Iterator[dict[str, object]]:
             "PGW_GATEWAY_MODELS_FILE": str(d / "run" / "models.json"),
             "PGW_GATEWAY_MASKSTORE_ROOT": str(d / "masks"),
             "PGW_MASKSTORE_KEY_FILE": str(d / "kek"),
+            "PGW_MASKSTORE_COUNTER": "file",  # production setting: rollback witness outside the store
+            "PGW_MASKSTORE_COUNTER_FILE": str(d / "counter-volume" / "generation.counter"),
             "PGW_GATEWAY_API_KEYS_FILE": str(d / "keys.json"),
             "PGW_GATEWAY_ALLOW_DEV_MODES": "true",  # only for the plaintext comparison model
         })
@@ -152,7 +154,8 @@ def test_doctor_against_running_service(running: dict[str, object]) -> None:
     rep = json.loads(r.stdout)
     by = {c["name"]: c for c in rep["checks"]}
     assert by["service"]["status"] == "ok" and by["service"]["data"]["models"][0]["fp"] == running["fp"]
-    assert by["maskstore"]["status"] == "ok"
+    # opened and verified; warns because the demo store has no monotonic counter (rollback witness)
+    assert by["maskstore"]["status"] == "warn" and "counter" in by["maskstore"]["detail"]
     inv = by["maskstore"]["data"]["status"]["inventory"][0]
     assert inv["slots_available"] < 128  # the chat consumed masks (single use)
     # wrong ring is detected

@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -32,9 +34,11 @@ from pgw.core.errors import (
     ConfigError,
     ErrorCode,
     IntegrityError,
+    MaskExhaustedError,
     ModelNotFoundError,
     PGWError,
     ServiceUnavailableError,
+    ShapeError,
 )
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.ring import RingParams
@@ -51,6 +55,7 @@ from pgw.engine import (
 )
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, origin_of
 from pgw.gateway.egress import EgressGuardTransport
+from pgw.gateway.masks import WindowedReservation
 from pgw.gateway.metrics import GatewayMetrics
 from pgw.gateway.safety import AdmissionController, CircuitBreaker
 
@@ -93,6 +98,7 @@ class _InstrumentedClient:
     def __init__(self, inner: Any, metrics: GatewayMetrics, model: str, breaker: CircuitBreaker | None = None):
         self.inner = inner
         self._hist = metrics.get("pgw_gateway_round_trip_seconds")
+        self._failures = metrics.get("pgw_gateway_round_trip_failures_total")
         self._model = model
         self._breaker = breaker
         self.round_trips = 0
@@ -109,6 +115,11 @@ class _InstrumentedClient:
             resp = await self.inner.compute(request)
         except PGWError as exc:
             self.last_error = str(exc.code)
+            self._failures.labels(model=self._model, code=str(exc.code)).inc()
+            raise
+        except Exception as exc:
+            self.last_error = type(exc).__name__
+            self._failures.labels(model=self._model, code="transport").inc()
             raise
         self.round_trips += 1
         self._hist.labels(model=self._model, linear_kind=kind).observe(time.perf_counter() - t0)
@@ -248,9 +259,19 @@ class ActiveSession:
                     except Exception:
                         log.exception("closing mask reservation failed", extra={"request_id": self.request_id})
         finally:
+            if self.reservation is not None:
+                self.masks_reserved = int(getattr(self.reservation, "slots", self.masks_reserved) or 0)
+                burned = max(0, self.masks_reserved - self.masks_consumed)
+                if burned:
+                    self.runtime._burned.labels(model=self.runtime.name).inc(burned)
             self.runtime._sessions.discard(self)
             self.runtime._active_gauge.labels(model=self.runtime.name).set(len(self.runtime._sessions))
             await self.runtime.admission.release()
+
+    @property
+    def masks_burned(self) -> int:
+        """Reserved mask slots this request never used (destroyed on close)."""
+        return max(0, self.masks_reserved - self.masks_consumed) if self.reservation is not None else 0
 
 
 class ModelRuntime:
@@ -287,7 +308,9 @@ class ModelRuntime:
         self._client_factory = client_factory
         self._transport = transport
         self.admission = AdmissionController(config.max_concurrent_sessions, config.max_queue, config.queue_timeout_s)
-        self.breaker = CircuitBreaker(config.name, settings.integrity_cooldown_s)
+        self.breaker = CircuitBreaker(
+            config.name, settings.integrity_cooldown_s, max_auto_resets=settings.integrity_max_auto_resets
+        )
         self.pack: Any = None
         self.tokenizer: ChatTokenizer | None = None
         self.model: TransformerModel | None = None
@@ -296,6 +319,8 @@ class ModelRuntime:
         self.client: Any = None
         self.noise_monitor: Any = None
         self.noise_monitor_state = "disabled"
+        #: ``fn(event, model, reason)`` called on safety events (integrity failure, noise alarm).
+        self.safety_listeners: list[Callable[[str, str, str], object]] = []
         self.fingerprint: str = ""
         self.max_context = 0
         self.started = False
@@ -309,13 +334,41 @@ class ModelRuntime:
         self._ttft = self.metrics.get("pgw_gateway_ttft_seconds")
         self._tpot = self.metrics.get("pgw_gateway_tpot_seconds")
         self._tokens = self.metrics.get("pgw_gateway_tokens_total")
+        self._burned = self.metrics.get("pgw_gateway_masks_burned_total")
+        self._ready_gauge = self.metrics.get("pgw_gateway_model_ready")
+        self._attempts = self.metrics.get("pgw_gateway_service_attempts_total")
+        self._retries = self.metrics.get("pgw_gateway_service_retries_total")
+        adm_active = self.metrics.get("pgw_gateway_admission_active")
+        adm_waiting = self.metrics.get("pgw_gateway_admission_waiting")
+        adm_rejected = self.metrics.get("pgw_gateway_admission_rejected_total")
+        adm_wait = self.metrics.get("pgw_gateway_queue_wait_seconds")
+        name = config.name
+
+        def _adm_change(active: int, waiting: int) -> None:
+            adm_active.labels(model=name).set(active)
+            adm_waiting.labels(model=name).set(waiting)
+
+        self.admission.on_change = _adm_change
+        self.admission.on_reject = lambda reason: adm_rejected.labels(model=name, reason=reason).inc()
+        self.admission.on_wait = lambda waited: adm_wait.labels(model=name).observe(waited)
+        #: Life-cycle: "stopped", "connecting" (service not reachable yet; retried in the
+        #: background), "ready" (started), "failed" (permanent misconfiguration).
+        self.state = "stopped"
+        self.last_error: str | None = None
+        self.connect_attempts = 0
+        self._connect_task: asyncio.Task[None] | None = None
+        self._retries_seen = 0
+        self._prepared: tuple[Any, ChatTokenizer] | None = None
 
     # ---- lifecycle ----------------------------------------------------------------------------
     def _open_pack(self) -> Any:
         from pgw.modelpack import ModelPack
 
+        # "full": hash plain tensors, tokenizer files and every linear (incl. scales/biases) against
+        # the manifest, and the manifest against the pinned fingerprint. Packs may come from images
+        # the compute operator publishes; a swapped tokenizer/template must not go unnoticed.
         return ModelPack.open(
-            self.config.pack_path, verify="fingerprint", expected_fingerprint=self.config.fingerprint
+            self.config.pack_path, verify=self.settings.pack_verify, expected_fingerprint=self.config.fingerprint
         )
 
     def _build_noise_monitor(self) -> Any:
@@ -329,14 +382,28 @@ class ModelRuntime:
                 self.ring, sample_rate=self.settings.noise_sample_rate,
                 fail_closed=self.settings.noise_monitor_fail_closed,
             )
-        except (NotImplementedError, ImportError) as exc:
-            if self.settings.noise_monitor_required:
+        except ImportError as exc:
+            if self.settings.noise_monitor_is_required:
                 raise ConfigError("outbound-noise monitor is required but unavailable") from exc
             log.warning("outbound-noise monitor unavailable (%s); running without it", type(exc).__name__)
             self.noise_monitor_state = "unavailable"
             return None
         self.noise_monitor_state = "active"
+        if hasattr(mon, "add_alarm_listener"):
+            mon.add_alarm_listener(self._on_noise_alarm)
         return mon
+
+    def _notify_safety(self, event: str, reason: str) -> None:
+        for fn in list(self.safety_listeners):
+            try:
+                fn(event, self.name, reason)
+            except Exception:  # a listener must never break the data path
+                log.exception("safety listener failed for %s", event)
+
+    def _on_noise_alarm(self, report: Any) -> None:
+        reasons = list(getattr(report, "reasons", []) or [])
+        # reasons are test names and p-values only (no payload values, SPEC 11.2)
+        self._notify_safety("safety.noise_alarm", "; ".join(str(r) for r in reasons[-2:]) or "alarm")
 
     def _build_client(self) -> Any:
         if self._client_factory is not None:
@@ -372,20 +439,53 @@ class ModelRuntime:
         if origin_of(c.service_url) not in allowed:  # pragma: no cover - egress_origins includes it
             raise ConfigError("service URL is not on the egress allowlist")
         guard = EgressGuardTransport(inner, allowed)
-        return ComputeClient(cc, transport=guard)
+        return ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt)
+
+    def _on_service_attempt(self, path: str, status: int | None, seconds: float, code: str | None) -> None:
+        """``ComputeClient`` hook: every HTTP attempt (incl. retries) by outcome."""
+        self._attempts.labels(model=self.name, code="ok" if code is None else code).inc()
+
+    def refresh_metrics(self) -> None:
+        """Scrape-time gauges: readiness and the client's retry counter."""
+        ok, _ = self.ready()
+        self._ready_gauge.labels(model=self.name).set(1.0 if ok else 0.0)
+        st = getattr(self.client, "stats", None)
+        retries = int(getattr(st, "retries", 0) or 0)
+        if retries > self._retries_seen:
+            self._retries.labels(model=self.name).inc(retries - self._retries_seen)
+        self._retries_seen = retries
 
     def _on_integrity_failure(self, exc: BaseException) -> None:
         check = "freivalds" if "Freivalds" in str(getattr(exc, "message", "")) else "range"
         self._integrity.labels(model=self.name, check=check).inc()
         self.breaker.trip(exc)
+        self._notify_safety("safety.integrity_failure", check)
+
+    @staticmethod
+    def _transient(exc: BaseException) -> bool:
+        """Connection problems worth retrying (vs. permanent misconfiguration)."""
+        if isinstance(exc, PGWError):
+            return bool(exc.retryable) and not isinstance(exc, ConfigError)
+        return isinstance(exc, OSError | httpx.TransportError | TimeoutError)
 
     async def start(self) -> None:
-        """Open pack (verify fingerprint), connect to the service (fingerprint/ring check), check masks."""
+        """Open pack (verify fingerprint), connect to the service (fingerprint/ring check), check masks.
+
+        If the compute service is not reachable yet (e.g. it is being rolled out), the model goes
+        to state ``connecting``: it reports not ready, requests fail fast with 503 + Retry-After,
+        and the connection is retried in the background with exponential back-off. Permanent
+        problems (fingerprint/ring/version mismatch, bad configuration) raise.
+        """
         async with self._lock:
-            if self.started:
+            if self.started or (self._connect_task is not None and not self._connect_task.done()):
                 return
             t0 = time.perf_counter()
-            pack = await asyncio.to_thread(self._open_pack)
+            self.state = "starting"
+            try:
+                pack = await asyncio.to_thread(self._open_pack)
+            except BaseException as exc:
+                self._fail(exc)
+                raise
             try:
                 if hasattr(pack, "check_ring"):
                     pack.check_ring(self.ring)
@@ -396,68 +496,200 @@ class ModelRuntime:
                 if self.mode == "masked":
                     if self.mask_store is None:
                         raise ConfigError(f"model {self.name!r}: masked mode needs a mask store")
-                    client = self._build_client()
                     try:
-                        models = await client.connect(self.fingerprint, self.ring.name)
-                    except PGWError:
-                        await _aclose(client)
-                        raise
-                    except Exception as exc:
-                        await _aclose(client)
-                        raise ServiceUnavailableError(
-                            f"cannot reach the compute service: {type(exc).__name__}"
-                        ) from exc
-                    info = getattr(client, "model", None)
-                    max_rows = int(getattr(info, "max_rows_per_item", 8192) or 8192)
-                    self.service_info = {
-                        "server": getattr(models, "server", ""),
-                        "origin": "{}://{}:{}".format(*origin_of(self.config.service_url or "")),
-                        "max_rows_per_item": max_rows,
-                    }
-                    self.noise_monitor = self._build_noise_monitor()
-                    self.client = _InstrumentedClient(client, self.metrics, self.name, self.breaker)
-                    self.backend = MaskedBackend(
-                        pack, None, self.client, self.ring, self.fingerprint,
-                        freivalds_rate=self.config.freivalds_rate,
-                        noise_monitor=self.noise_monitor,
-                        max_rows_per_item=max_rows,
-                        deadline_ms=self.config.service_deadline_ms,
-                        on_integrity_failure=self._on_integrity_failure,
-                    )
-                    avail = await asyncio.to_thread(self._available_slots)
-                    if avail == 0:
-                        log.warning("no mask slots available for model %s (%s %s)",
-                                    self.name, short_fingerprint(self.fingerprint), self.ring.name)
-                elif self.mode == "plain":
-                    log.warning("model %s runs in DEV mode 'plain' (local compute, no compute service)", self.name)
-                    self.backend = PlainBackend(pack, self.ring, device=self.config.device)
+                        client, models = await self._connect()
+                    except BaseException as exc:
+                        if not self._transient(exc):
+                            raise
+                        self._prepared = (pack, tokenizer)
+                        self.state = "connecting"
+                        self.last_error = getattr(exc, "message", None) or type(exc).__name__
+                        log.warning(
+                            "model %s: compute service not reachable yet (%s); retrying in the background",
+                            self.name, self.last_error,
+                        )
+                        self._connect_task = asyncio.get_running_loop().create_task(
+                            self._connect_loop(), name=f"pgw-connect-{self.name}"
+                        )
+                        return
+                    await self._finish_masked(pack, tokenizer, client, models)
                 else:
-                    log.warning("model %s runs in DEV mode 'float' (local float compute)", self.name)
-                    self.backend = FloatBackend(pack, self.ring, device=self.config.device)
-                self.model = TransformerModel(pack, self.backend, device=self.config.device)
-                self.generator = Generator(
-                    self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
-                )
-                self.tokenizer = tokenizer
-                self.pack = pack
-            except BaseException:
+                    self._finish_local(pack, tokenizer)
+            except BaseException as exc:
                 close = getattr(pack, "close", None)
                 if close is not None:
                     close()
+                self._fail(exc)
                 raise
-            self.admission.reopen()
-            self.started = True
-            self.started_at = time.time()
-            log.info(
-                "model runtime started",
-                extra={"model": self.name, "mode": self.mode, "fp": short_fingerprint(self.fingerprint),
-                       "ring": self.ring.name, "ms": round((time.perf_counter() - t0) * 1e3, 1)},
+            self._mark_started(t0)
+
+    def _fail(self, exc: BaseException) -> None:
+        self.state = "failed"
+        self.last_error = getattr(exc, "message", None) or type(exc).__name__
+
+    def _mark_started(self, t0: float) -> None:
+        self.admission.reopen()
+        self.started = True
+        self.state = "ready"
+        self.last_error = None
+        self.started_at = time.time()
+        log.info(
+            "model runtime started",
+            extra={"model": self.name, "mode": self.mode, "fp": short_fingerprint(self.fingerprint),
+                   "ring": self.ring.name, "ms": round((time.perf_counter() - t0) * 1e3, 1)},
+        )
+
+    async def _connect(self) -> tuple[Any, Any]:
+        client = self._build_client()
+        self.connect_attempts += 1
+        try:
+            models = await client.connect(self.fingerprint, self.ring.name)
+        except PGWError:
+            await _aclose(client)
+            raise
+        except Exception as exc:
+            await _aclose(client)
+            raise ServiceUnavailableError(f"cannot reach the compute service: {type(exc).__name__}") from exc
+        return client, models
+
+    async def _connect_loop(self) -> None:
+        """Background reconnect with exponential back-off until connected or permanently failed."""
+        delay = 1.0
+        while True:
+            await asyncio.sleep(delay * random.uniform(0.8, 1.2))  # noqa: S311 - jitter only
+            delay = min(delay * 2, self.settings.connect_retry_max_s)
+            prepared = self._prepared
+            if prepared is None:
+                return
+            t0 = time.perf_counter()
+            try:
+                client, models = await self._connect()
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                if self._transient(exc):
+                    self.last_error = getattr(exc, "message", None) or type(exc).__name__
+                    log.info("model %s: compute service still unreachable (%s)", self.name, self.last_error)
+                    continue
+                log.error("model %s: permanent start-up failure: %s", self.name,
+                          getattr(exc, "message", type(exc).__name__))
+                self._prepared = None
+                self._close_pack(prepared[0])
+                self._fail(exc)
+                return
+            async with self._lock:
+                if self._prepared is not prepared:  # stopped meanwhile
+                    await _aclose(client)
+                    return
+                self._prepared = None
+                try:
+                    await self._finish_masked(prepared[0], prepared[1], client, models)
+                except BaseException as exc:
+                    self._close_pack(prepared[0])
+                    self._fail(exc)
+                    log.error("model %s: start-up failed after connecting: %s", self.name, self.last_error)
+                    return
+                self._mark_started(t0)
+                log.info("model %s connected after %d attempts", self.name, self.connect_attempts)
+                return
+
+    @staticmethod
+    def _close_pack(pack: Any) -> None:
+        close = getattr(pack, "close", None)
+        if close is not None:
+            with contextlib.suppress(Exception):
+                close()
+
+    async def _finish_masked(self, pack: Any, tokenizer: ChatTokenizer, client: Any, models: Any) -> None:
+        try:
+            info = getattr(client, "model", None)
+            max_rows = int(getattr(info, "max_rows_per_item", 8192) or 8192)
+            self.service_info = {
+                "server": getattr(models, "server", ""),
+                "origin": "{}://{}:{}".format(*origin_of(self.config.service_url or "")),
+                "max_rows_per_item": max_rows,
+            }
+            self.noise_monitor = self._build_noise_monitor()
+            self.client = _InstrumentedClient(client, self.metrics, self.name, self.breaker)
+            self._retries_seen = 0
+            self.backend = MaskedBackend(
+                pack, None, self.client, self.ring, self.fingerprint,
+                freivalds_rate=self.config.freivalds_rate,
+                noise_monitor=self.noise_monitor,
+                max_rows_per_item=max_rows,
+                deadline_ms=self.config.service_deadline_ms,
+                on_integrity_failure=self._on_integrity_failure,
+                min_soundness_bits=self.settings.min_soundness_bits,
+            )
+            avail = await asyncio.to_thread(self._available_slots)
+            if avail == 0:
+                log.warning("no mask slots available for model %s (%s %s)",
+                            self.name, short_fingerprint(self.fingerprint), self.ring.name)
+            await asyncio.to_thread(self._check_mask_cache_budget)
+            self._finish_engine(pack, tokenizer)
+        except BaseException:
+            if self.client is not None:
+                await _aclose(self.client)
+                self.client = None
+            else:
+                await _aclose(client)
+            raise
+
+    def _finish_local(self, pack: Any, tokenizer: ChatTokenizer) -> None:
+        if self.mode == "plain":
+            log.warning("model %s runs in DEV mode 'plain' (local compute, no compute service)", self.name)
+            self.backend = PlainBackend(pack, self.ring, device=self.config.device)
+        else:
+            log.warning("model %s runs in DEV mode 'float' (local float compute)", self.name)
+            self.backend = FloatBackend(pack, self.ring, device=self.config.device)
+        self._finish_engine(pack, tokenizer)
+
+    def _finish_engine(self, pack: Any, tokenizer: ChatTokenizer) -> None:
+        self.model = TransformerModel(pack, self.backend, device=self.config.device)
+        self.generator = Generator(
+            self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
+        )
+        self.tokenizer = tokenizer
+        self.pack = pack
+
+    def mask_cache_estimate(self) -> int:
+        """Worst-case decrypted mask bytes cached by ``max_concurrent_sessions`` sessions (0 if unknown)."""
+        est = getattr(self.mask_store, "reservation_cache_bytes", None)
+        if est is None:
+            return 0
+        try:
+            per_session = int(est(self.fingerprint, self.ring))
+        except PGWError:
+            return 0
+        return per_session * self.config.max_concurrent_sessions
+
+    def _check_mask_cache_budget(self) -> None:
+        budget = self.settings.mask_cache_budget_bytes
+        if budget <= 0:
+            return
+        total = self.mask_cache_estimate()
+        if total > budget:
+            log.warning(
+                "model %s: %d concurrent sessions may cache %.2f GB of decrypted masks (segment chunk size), "
+                "above mask_cache_budget_bytes=%.2f GB; regenerate segments with the default (byte-sized) "
+                "chunks or lower max_concurrent_sessions",
+                self.name, self.config.max_concurrent_sessions, total / 1e9, budget / 1e9,
             )
 
     async def stop(self) -> None:
         """Drain sessions and close connections."""
+        task, self._connect_task = self._connect_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         async with self._lock:
+            prepared, self._prepared = self._prepared, None
+            if prepared is not None:
+                self._close_pack(prepared[0])
             if not self.started:
+                if self.state != "failed":
+                    self.state = "stopped"
                 return
             idle = await self.admission.drain(self.settings.drain_timeout_s)
             if not idle:
@@ -467,12 +699,17 @@ class ModelRuntime:
                 await self.generator.aclose()
             for s in list(self._sessions):
                 await s.close()
+            if self.generator is not None:
+                await self.generator.wait_closed()
+            if self.model is not None:
+                await asyncio.to_thread(self.model.close)
             if self.client is not None:
                 await _aclose(self.client)
                 self.client = None
             if self.pack is not None and hasattr(self.pack, "close"):
                 self.pack.close()
             self.started = False
+            self.state = "stopped"
             log.info("model runtime stopped", extra={"model": self.name})
 
     # ---- requests ---------------------------------------------------------------------------------
@@ -500,6 +737,11 @@ class ModelRuntime:
     def check_available(self) -> None:
         """Raise if the model cannot take masked traffic now (fail closed)."""
         if not self.started:
+            if self.state == "connecting":
+                raise ServiceUnavailableError(
+                    f"model {self.name!r} is waiting for the compute service",
+                    details={"retry_after_s": 5.0, "model": self.name},
+                )
             raise ServiceUnavailableError(f"model {self.name!r} is not running", details={"retry_after_s": 5.0})
         if self.mode != "masked":
             return
@@ -512,7 +754,9 @@ class ModelRuntime:
 
     def encode_chat(self, messages: Sequence[dict[str, Any]]) -> list[int]:
         """Chat messages -> prompt ids with the model's chat template."""
-        assert self.tokenizer is not None
+        if self.tokenizer is None:
+            self.check_available()
+            raise ServiceUnavailableError(f"model {self.name!r} is not running", details={"retry_after_s": 5.0})
         try:
             return self.tokenizer.apply_chat_template(messages, add_generation_prompt=True)
         except ConfigError as exc:
@@ -520,21 +764,61 @@ class ModelRuntime:
 
     def encode_text(self, text: str) -> list[int]:
         """Completion prompt -> ids."""
-        assert self.tokenizer is not None
+        if self.tokenizer is None:
+            self.check_available()
+            raise ServiceUnavailableError(f"model {self.name!r} is not running", details={"retry_after_s": 5.0})
         return self.tokenizer.encode(text, add_special_tokens=True)
 
+    def check_token_ids(self, ids: Sequence[int]) -> list[int]:
+        """Validate a token-id prompt against the model vocabulary (``/v1/completions`` token arrays)."""
+        vocab = self.vocab_size
+        out = [int(t) for t in ids]
+        if not out:
+            raise InvalidRequestError("prompt is empty")
+        bad = next((t for t in out if t < 0 or (vocab is not None and t >= vocab)), None)
+        if bad is not None:
+            raise InvalidRequestError(
+                f"token id {bad} is outside the vocabulary [0, {vocab})", details={"token_id": bad}
+            )
+        return out
+
+    @property
+    def vocab_size(self) -> int | None:
+        """Embedding rows of the model (``None`` while the model is not loaded)."""
+        if self.model is not None:
+            v = getattr(self.model.arch, "vocab_size", None)
+            if v:
+                return int(v)
+        if self.tokenizer is not None:
+            return len(self.tokenizer)
+        return None
+
+    def decode_ids(self, ids: Sequence[int]) -> str:
+        """Token ids -> text (``echo`` of token-id prompts)."""
+        if self.tokenizer is None:
+            self.check_available()
+            raise ServiceUnavailableError(f"model {self.name!r} is not running", details={"retry_after_s": 5.0})
+        return self.tokenizer.decode(list(ids), skip_special_tokens=False)
+
     def clamp_max_tokens(self, prompt_len: int, requested: int | None) -> int:
-        """Validate the prompt length and return the effective ``max_tokens``."""
+        """Validate the prompt length and return the effective ``max_tokens``.
+
+        Raises:
+            ShapeError: (``bad_shape``) the prompt is longer than ``max_prompt_tokens`` or leaves
+                no room in the model context.
+            InvalidRequestError: (``protocol``) empty prompt, or ``max_tokens`` above
+                ``max_tokens_limit``. A valid ``max_tokens`` is clamped to the context left.
+        """
         if prompt_len <= 0:
             raise InvalidRequestError("prompt is empty")
         if prompt_len > self.settings.max_prompt_tokens:
-            raise InvalidRequestError(
+            raise ShapeError(
                 f"prompt has {prompt_len} tokens; the limit is {self.settings.max_prompt_tokens}",
                 details={"prompt_tokens": prompt_len},
             )
         room = self.max_context - prompt_len
         if room < 1:
-            raise InvalidRequestError(
+            raise ShapeError(
                 f"prompt of {prompt_len} tokens leaves no room in the {self.max_context}-token context",
                 details={"prompt_tokens": prompt_len, "max_context": self.max_context},
             )
@@ -550,26 +834,68 @@ class ModelRuntime:
         self, prompt_ids: Sequence[int], params: SamplingParams, *, request_id: str | None = None
     ) -> ActiveSession:
         """Admit a request and reserve its masks (fails fast with ``mask_exhausted`` before compute)."""
+        return (await self.open_sessions([prompt_ids], params, request_id=request_id))[0]
+
+    async def open_sessions(
+        self, prompts: Sequence[Sequence[int]], params: SamplingParams, *, request_id: str | None = None
+    ) -> list[ActiveSession]:
+        """Admit ``len(prompts)`` sequences atomically, then reserve their masks.
+
+        All admission slots are taken in one step (no hold-and-wait between concurrent
+        multi-prompt requests) and masks are reserved only once every slot is held, so a request
+        that times out in the queue never burns masks. Each returned session owns one slot.
+        """
         rid = request_id or uuid.uuid4().hex
         self.check_available()
-        ids = [int(t) for t in prompt_ids]
-        queue_s = await self.admission.acquire()
-        reservation = None
-        slots = 0
+        ids_list = [[int(t) for t in p] for p in prompts]
+        n = len(ids_list)
+        if n == 0:
+            raise InvalidRequestError("no prompts")
+        queue_s = await self.admission.acquire(n)
+        sessions: list[ActiveSession] = []
+        released = 0
         try:
             self.check_available()  # state may have changed while queued
-            if self.mode == "masked":
-                slots = len(ids) + params.max_tokens
-                reservation = await _reserve_shielded(
-                    self.mask_store, self.fingerprint, self.ring, slots, rid
-                )
+            for i, ids in enumerate(ids_list):
+                srid = rid if i == 0 else f"{rid}-{i}"
+                reservation, slots = (None, 0)
+                if self.mode == "masked":
+                    reservation, slots = await self._reserve_for(ids, params, srid)
+                sess = ActiveSession(self, srid, ids, params, reservation, slots, queue_s)
+                sessions.append(sess)
+                released += 1  # from now on the session releases its own slot
+                self._sessions.add(sess)
         except BaseException:
-            await self.admission.release()
+            for sess in sessions:
+                await sess.close()
+            if n - released:
+                await self.admission.release(n - released)
             raise
-        sess = ActiveSession(self, rid, ids, params, reservation, slots, queue_s)
-        self._sessions.add(sess)
         self._active_gauge.labels(model=self.name).set(len(self._sessions))
-        return sess
+        return sessions
+
+    async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str) -> tuple[Any, int]:
+        """Reserve the prompt plus a first window (or everything when windows are disabled)."""
+        cap = len(ids) + params.max_tokens
+        window = int(self.settings.mask_window_tokens)
+        first = cap if window <= 0 else min(cap, len(ids) + window)
+        if first < cap:
+            # Fail fast (before any compute) when the store could not serve the whole request.
+            avail = await asyncio.to_thread(self._available_slots)
+            if avail < cap:
+                raise MaskExhaustedError(
+                    "not enough mask slots for this request",
+                    details={"needed": cap, "available": avail, "model": self.name},
+                )
+        res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)
+        if first >= cap:
+            return res, first
+        store, fp, ring = self.mask_store, self.fingerprint, self.ring
+
+        def extend(slots: int) -> Any:  # runs in the backend's worker thread
+            return store.reserve(fp, ring, slots, session_id=rid)
+
+        return WindowedReservation(res, extend, cap=cap, window=window), first
 
     async def generate(self, prompt_ids: Sequence[int], params: SamplingParams) -> GenerationResult:
         """Admit, run and close (convenience)."""
@@ -614,23 +940,32 @@ class ModelRuntime:
     def ready(self) -> tuple[bool, str]:
         """Readiness and a short reason."""
         if not self.started:
+            if self.state == "connecting":
+                return False, "waiting for the compute service"
+            if self.state == "failed":
+                return False, f"failed: {self.last_error}"
             return False, "not started"
         if self.mode == "masked":
             if self.breaker.is_open:
                 return False, "integrity breaker open"
             if self.noise_alarm() and self.settings.noise_monitor_fail_closed:
                 return False, "noise alarm"
+            if self.noise_monitor_state == "unavailable" and self.settings.noise_monitor_is_required:
+                return False, "noise monitor unavailable"
             if self._available_slots() <= 0:
                 return False, "no mask slots"
         return True, "ok"
 
     def status(self) -> dict[str, Any]:
         """Admin status: fingerprint, ring, mask inventory, sessions, service health."""
-        ok, reason = self.ready() if self.started else (False, "not started")
+        ok, reason = self.ready()
         out: dict[str, Any] = {
             "name": self.name,
             "mode": self.mode,
             "started": self.started,
+            "state": self.state,
+            "last_error": self.last_error,
+            "connect_attempts": self.connect_attempts,
             "ready": ok,
             "reason": reason,
             "fingerprint": self.fingerprint,
@@ -728,6 +1063,15 @@ class InferenceRuntime:
 
             mask_store = open_store(MaskStoreSettings(root=settings.maskstore_root))
             self._own_store = True
+            # Fail at start-up, not on the first request (which would otherwise get a 500 `config`):
+            # reserve() refuses to hand out masks without an external monotonic counter (SPEC 7.6).
+            require_counter = getattr(mask_store, "_require_external_counter", None)
+            if require_counter is not None:
+                try:
+                    require_counter()
+                except Exception:
+                    mask_store.close()
+                    raise
         self.mask_store = mask_store
         transports = transports or {}
         self.runtimes: dict[str, ModelRuntime] = {
@@ -739,6 +1083,36 @@ class InferenceRuntime:
         }
         if mask_store is not None and hasattr(mask_store, "metrics"):
             self.metrics.add_collect_hook(lambda: self.metrics.update_masks(mask_store.metrics()))
+        self.metrics.add_collect_hook(self._refresh_model_metrics)
+        self._gc_thread: threading.Thread | None = None
+        self._gc_stop = threading.Event()
+        self.gc_runs = 0
+        self._started = False
+        self._draining = False
+
+    def _refresh_model_metrics(self) -> None:
+        for rt in self.runtimes.values():
+            rt.refresh_metrics()
+
+    def ready(self) -> bool:
+        """Process-level readiness (``/readyz``): start-up finished and the process can answer.
+
+        Per-model readiness (mask exhaustion, breaker, service reachability) is deliberately *not*
+        part of it: requests for an unavailable model fail fast with typed errors instead of the
+        whole gateway leaving the load balancer.
+        """
+        return self._started and not self._draining
+
+    def begin_drain(self) -> None:
+        """Mark the process as shutting down: ``/readyz`` fails, admission refuses new work."""
+        self._draining = True
+        for rt in self.runtimes.values():
+            rt.admission.stop_accepting()
+
+    def add_safety_listener(self, fn: Callable[[str, str, str], object]) -> None:
+        """Call ``fn(event, model, reason)`` on every safety event of any model (audit, paging)."""
+        for rt in self.runtimes.values():
+            rt.safety_listeners.append(fn)
 
     def get(self, model: str) -> ModelRuntime:
         """Runtime by name; raises :class:`pgw.core.ModelNotFoundError`."""
@@ -752,9 +1126,74 @@ class InferenceRuntime:
         return list(self.runtimes)
 
     async def start(self) -> None:
-        """Start all model runtimes (fails if any cannot start: fail closed)."""
+        """Start all model runtimes independently.
+
+        A model whose compute service is unreachable keeps retrying in the background (state
+        ``connecting``); a model with a permanent problem (fingerprint/ring mismatch, bad pack) is
+        marked ``failed`` and refuses its requests, without blocking the other models. Only when
+        *every* model failed permanently does start-up fail (the process has nothing to serve).
+        """
+        errors: list[BaseException] = []
         for rt in self.runtimes.values():
-            await rt.start()
+            try:
+                await rt.start()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error("model %s failed to start: %s", rt.name, getattr(exc, "message", type(exc).__name__))
+                errors.append(exc)
+        if errors and len(errors) == len(self.runtimes):
+            raise errors[0]
+        self._start_housekeeping()
+        self._started = True
+
+    # ---- mask store housekeeping ------------------------------------------------------------------
+    def _start_housekeeping(self) -> None:
+        store = self.mask_store
+        if store is None or not hasattr(store, "gc"):
+            return
+        claim = getattr(store, "claim_owner", None)
+        if callable(claim):
+            try:
+                claim("gateway")
+            except PGWError as exc:
+                log.warning("cannot claim mask store ownership: %s", exc.message)
+        interval = float(self.settings.maskstore_gc_interval_s)
+        if interval <= 0 or self._gc_thread is not None:
+            return
+        self._gc_stop.clear()
+        self._gc_thread = threading.Thread(
+            target=self._gc_loop, args=(interval,), name="pgw-maskstore-gc", daemon=True
+        )
+        self._gc_thread.start()
+
+    def _gc_loop(self, interval: float) -> None:
+        """Periodic ``MaskStore.gc()`` (first run right after start-up) in a background thread."""
+        while not self._gc_stop.is_set():
+            self.run_gc()
+            self._gc_stop.wait(interval)
+
+    def run_gc(self) -> int:
+        """One GC pass: close dead leases, shred consumed segments, prune old audit rows."""
+        try:
+            freed = int(self.mask_store.gc())
+        except PGWError as exc:
+            log.warning("mask store gc failed: %s", exc.message)
+            return 0
+        except Exception:  # pragma: no cover - never kill the thread
+            log.exception("mask store gc failed")
+            return 0
+        self.gc_runs += 1
+        if freed:
+            log.info("mask store gc freed %.1f MB", freed / 1e6)
+        return freed
+
+    def _stop_housekeeping(self) -> None:
+        self._gc_stop.set()
+        t, self._gc_thread = self._gc_thread, None
+        if t is not None:
+            t.join(timeout=max(5.0, float(getattr(self.mask_store.settings, "lock_timeout_s", 60.0))
+                               if hasattr(self.mask_store, "settings") else 5.0))
 
     async def stop(self) -> None:
         """Stop all model runtimes."""
@@ -763,8 +1202,9 @@ class InferenceRuntime:
                 await rt.stop()
             except Exception:
                 log.exception("stopping model %s failed", rt.name)
+        await asyncio.to_thread(self._stop_housekeeping)
         if self._own_store and self.mask_store is not None:
-            self.mask_store.close()
+            await asyncio.to_thread(self.mask_store.close)
 
     async def reload(self, model: str) -> ModelRuntime:
         """Stop and restart one model (re-verifies pack and service)."""

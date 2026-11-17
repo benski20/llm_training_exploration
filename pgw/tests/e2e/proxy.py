@@ -72,7 +72,7 @@ class RecordingProxy:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
+            def log_message(self, format: str, *args: Any) -> None:
                 return
 
             def _forward(self) -> None:

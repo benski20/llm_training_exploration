@@ -127,9 +127,11 @@ def test_resolve_backend_and_device_errors() -> None:
 
 @pytest.mark.skipif(not cpu_int8_available(), reason="CPU torch._int_mm unavailable")
 def test_int8_ring_matmul_long_inner_dimension_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pgw.service.kernels as kmod
+    import sys
 
-    monkeypatch.setattr(kmod, "_INT_MM_MAX_INNER", 16)  # force chunking on a small problem
+    kmod = sys.modules["pgw.core.ringmm"]  # the package attribute is the ringmm() function
+
+    monkeypatch.setattr(kmod, "INT_MM_MAX_INNER_CPU", 16)  # force chunking on a small problem
     ring = RingParams(48, 20)
     w = torch.randint(-128, 128, (6, 50), dtype=torch.int8)
     x = rand_x(3, 50, ring)

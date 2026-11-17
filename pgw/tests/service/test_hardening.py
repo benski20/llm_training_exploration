@@ -65,7 +65,9 @@ def test_token_bucket_validation() -> None:
 # ---- CPU int8 chunking -----------------------------------------------------------------------
 @pytest.mark.skipif(not cpu_int8_available(), reason="CPU torch._int_mm unavailable")
 def test_cpu_int8_uses_cpu_chunk_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pgw.service.kernels as kmod
+    import sys
+
+    kmod = sys.modules["pgw.core.ringmm"]  # the package attribute is the ringmm() function
 
     calls: list[int] = []
     real = torch._int_mm
@@ -74,7 +76,7 @@ def test_cpu_int8_uses_cpu_chunk_limit(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append(int(a.shape[1]))
         return real(a, b)
 
-    monkeypatch.setattr(kmod, "_INT_MM_MAX_INNER_CPU", 24)
+    monkeypatch.setattr(kmod, "INT_MM_MAX_INNER_CPU", 24)
     monkeypatch.setattr(torch, "_int_mm", spy)
     ring = RingParams(48, 20)
     w = torch.full((5, 60), -128, dtype=torch.int8)

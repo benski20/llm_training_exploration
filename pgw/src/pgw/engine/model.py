@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
+import threading
+from collections.abc import Callable, Sequence
 from collections.abc import Generator as PyGenerator
-from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 import torch
 import torch.nn.functional as F
@@ -21,6 +25,8 @@ from pgw.engine.rope import RotaryEmbedding, apply_rope
 __all__ = ["SequenceInput", "TransformerModel", "rms_norm"]
 
 log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 #: A step of the forward coroutine: the backend calls to evaluate next (results are sent back).
 _Steps = PyGenerator[list[LinearCall], list[torch.Tensor], list[torch.Tensor]]
@@ -106,6 +112,9 @@ class TransformerModel:
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
         self.rope = RotaryEmbedding(a.head_dim, a.rope_theta, a.rope_scaling, a.max_position_embeddings, self.device)
         self.scale = a.head_dim**-0.5
+        #: Single worker thread for the plaintext parts of async forward passes (see run_plain).
+        self._plain_pool: ThreadPoolExecutor | None = None
+        self._plain_lock = threading.Lock()
         log.info(
             "engine model ready: arch=%s layers=%d hidden=%d heads=%d/%d vocab=%d backend=%s",
             a.arch, a.num_layers, a.hidden_size, a.num_heads, a.num_kv_heads, a.vocab_size, type(backend).__name__,
@@ -240,16 +249,66 @@ class TransformerModel:
         finally:
             gen.close()  # drop references to activations promptly on failure
 
+    # ---- off-loop execution ----------------------------------------------------------------------
+    def _plain_executor(self) -> ThreadPoolExecutor:
+        with self._plain_lock:
+            if self._plain_pool is None:
+                self._plain_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-engine-plain")
+            return self._plain_pool
+
+    async def run_plain(self, fn: Callable[..., _T], *args: Any) -> _T:
+        """Run ``fn(*args)`` on this model's dedicated plaintext worker thread.
+
+        Embedding, norms, RoPE, attention over the KV cache, the LM head GEMM and sampling are
+        CPU/GPU-heavy (the LM head alone is ``hidden x vocab`` per sequence); running them on the
+        event loop would stall every stream and the health probes. torch releases the GIL, so the
+        loop stays responsive. One thread per model serializes access to that model's KV caches.
+
+        If the awaiting task is cancelled, the call still waits for the running function to finish
+        (it mutates KV caches and sequence state that the canceller may release next).
+        """
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(self._plain_executor(), functools.partial(fn, *args))
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            if not fut.done():
+                try:
+                    await asyncio.wait({fut})
+                finally:
+                    if fut.done() and not fut.cancelled():
+                        fut.exception()  # mark retrieved
+            raise
+
+    def close(self) -> None:
+        """Stop the plaintext worker thread (idempotent; it is recreated on next use)."""
+        with self._plain_lock:
+            pool, self._plain_pool = self._plain_pool, None
+        if pool is not None:
+            pool.shutdown(wait=True)
+
+    @staticmethod
+    def _advance(gen: _Steps, value: list[torch.Tensor] | None) -> tuple[bool, Any]:
+        """One step of the forward coroutine; ``(finished, calls_or_logits)`` (no StopIteration leaks)."""
+        try:
+            return False, (next(gen) if value is None else gen.send(value))
+        except StopIteration as stop:
+            return True, stop.value
+
     async def aforward_batch(self, seqs: Sequence[SequenceInput]) -> list[torch.Tensor]:
-        """Async :meth:`forward_batch` using :meth:`LinearBackend.aforward_many`."""
+        """Async :meth:`forward_batch` using :meth:`LinearBackend.aforward_many`.
+
+        The plaintext segments between backend calls run on :meth:`run_plain`'s worker thread, so
+        the event loop only awaits I/O and never executes model math.
+        """
         gen = self._steps(seqs)
         try:
-            calls = next(gen)
-            while True:
+            finished, out = await self.run_plain(self._advance, gen, None)
+            while not finished:
+                calls = out
                 res = self._check_results(calls, await self.backend.aforward_many(calls))
-                calls = gen.send(res)
-        except StopIteration as stop:
-            return stop.value  # type: ignore[no-any-return]
+                finished, out = await self.run_plain(self._advance, gen, res)
+            return out  # type: ignore[no-any-return]
         finally:
             gen.close()  # drop references to activations promptly on failure
 

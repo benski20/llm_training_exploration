@@ -22,11 +22,16 @@ from .deploy_utils import unknown_env_names
 
 DOCKER = DEPLOY / "docker"
 IMAGES: dict[str, dict[str, Any]] = {
-    "gateway": {"extras": {"gateway"}, "cmd": ["pgw", "gateway", "serve"], "health": True, "gpu": False},
-    "factory": {"extras": {"factory"}, "cmd": ["pgw", "factory", "run"], "health": False, "gpu": False},
-    "factory-cuda": {"extras": {"factory", "gpu"}, "cmd": ["pgw", "factory", "run"], "health": False, "gpu": True},
-    "service-cuda": {"extras": {"service", "gpu"}, "cmd": ["pgw", "service", "serve"], "health": True, "gpu": True},
-    "service-cpu": {"extras": {"service"}, "cmd": ["pgw", "service", "serve"], "health": True, "gpu": False},
+    "gateway": {"extras": {"gateway"}, "cmd": ["pgw", "gateway", "serve"], "health": True, "gpu": False,
+                "lock": "gateway"},
+    "factory": {"extras": {"factory"}, "cmd": ["pgw", "factory", "run"], "health": False, "gpu": False,
+                "lock": "factory-cpu"},
+    "factory-cuda": {"extras": {"factory", "gpu"}, "cmd": ["pgw", "factory", "run"], "health": False, "gpu": True,
+                     "lock": "factory-cuda"},
+    "service-cuda": {"extras": {"service", "gpu"}, "cmd": ["pgw", "service", "serve"], "health": True, "gpu": True,
+                     "lock": "service-cuda"},
+    "service-cpu": {"extras": {"service"}, "cmd": ["pgw", "service", "serve"], "health": True, "gpu": False,
+                    "lock": "service-cpu"},
 }
 
 
@@ -77,17 +82,29 @@ def test_dockerfile_lint(image: str) -> None:
     instrs = _instructions(path)
     args = {a.split("=")[0]: a.split("=", 1)[1] for k, a in instrs if k == "ARG" and "=" in a}
     assert args["PYTHON_IMAGE"].startswith("python:3.12-") and ":latest" not in args["PYTHON_IMAGE"]
+    assert re.search(r"@sha256:[0-9a-f]{64}$", args["PYTHON_IMAGE"]), "base image pinned by digest"
     assert re.fullmatch(r"\d+\.\d+\.\d+", args["TORCH_VERSION"])
     stages = _stages(instrs)
     assert len(stages) == 2, "multi-stage build: build + runtime"
     build, runtime = stages
-    # torch comes from the right index
-    torch_install = next(a for k, a in build if k == "RUN" and "torch==" in a)
-    assert ("TORCH_CUDA" in torch_install) == spec["gpu"]
+    # all dependencies (torch included) come from the role's hashed lock, from the right torch index
+    lock = PGW_ROOT / "requirements" / f"{spec['lock']}.txt"
+    assert ("COPY", f"requirements/{spec['lock']}.txt /tmp/requirements.txt") in build
+    dep_install = next(a for k, a in build if k == "RUN" and "-r /tmp/requirements.txt" in a)
+    assert "--require-hashes" in dep_install and "--no-deps" in dep_install
+    assert ("TORCH_CUDA" in dep_install) == spec["gpu"]
+    lock_text = lock.read_text()
+    torch_pin = re.search(r"^torch==(\S+) \\$", lock_text, re.M)
+    assert torch_pin is not None and torch_pin.group(1).startswith(args["TORCH_VERSION"] + "+")
+    assert torch_pin.group(1).endswith("+" + (args.get("TORCH_CUDA", "") if spec["gpu"] else "cpu"))
+    for block in re.split(r"\n(?=[a-z0-9])", lock_text.split("\n", 2)[2]):
+        if re.match(r"[a-z0-9][a-z0-9._-]*==", block):
+            assert "--hash=sha256:" in block, block.splitlines()[0]
     # the package is installed with the role's extras, which exist in pyproject
     pyproject = tomllib.loads((PGW_ROOT / "pyproject.toml").read_text())
     extras_available = set(pyproject["project"]["optional-dependencies"])
-    install = next(a for k, a in build if k == "RUN" and 'pip install ".[' in a)
+    install = next(a for k, a in build if k == "RUN" and '".[' in a and "pip install" in a)
+    assert "--no-deps" in install and "pip check" in install
     extras = set(re.search(r'"\.\[([a-z,]+)\]"', install).group(1).split(","))  # type: ignore[union-attr]
     assert spec["extras"] <= extras and extras <= extras_available | {"pack"}
     # runtime: non-root, entrypoint, command, no build tools, no secrets

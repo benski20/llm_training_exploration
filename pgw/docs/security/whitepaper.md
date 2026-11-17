@@ -42,7 +42,9 @@ KV cache, activation functions, the LM head and sampling.
   guarantee is therefore computational, at the strength of that stream cipher (section 4.4).
 * **Integrity.** Every response passes a range check and `c` Freivalds checks over `Z_{2^K}` with
   secret vectors. A wrong response is accepted with probability at most `2^(−c·h)`, where `h` depends
-  on the ring and layer width (Theorem 3; for example `2^−16` for K40A12 at width 4096 with `c = 2`).
+  on the ring and layer width (Theorem 3; for example `2^−24` for K40A12 at width 4096 with `c = 3`). By default the factory
+  picks the smallest `c` giving at least 20 bits for the widest linear of the pack, and gateways and
+  stores refuse segments below `min_soundness_bits` (default 20).
   The first detected failure aborts the request and trips a circuit breaker.
 * **Correctness.** The integer arithmetic is exact. Masked inference yields bit-identical logits to
   the same quantized model run locally (*measured*: max logit difference 0.0 on Qwen2.5-0.5B).
@@ -258,7 +260,9 @@ u_i · ŷ ≡ (u_iᵀ W8) · x̂   (mod 2^K)        and        |centered(ŷ − 
 
 `u_iᵀW8` was precomputed by the factory, so the check costs `O(m + n)` per row instead of the `O(mn)`
 of recomputing the product. Production configuration requires `freivalds_rate = 1.0` (every response
-is checked) and the default `c = 2` (`PGW_FACTORY_CHECKS`, up to 8).
+is checked). By default the factory picks, per ring and model, the smallest `c ≥ 2` (up to 8) that gives
+at least 20 bits of soundness for every linear (`PGW_FACTORY_CHECKS` overrides it), and gateways and
+stores refuse segments below `min_soundness_bits` (default 20 bits per call).
 
 ### 5.2 The bound
 
@@ -303,8 +307,10 @@ each check with probability 1/2. The range check is what forces `e` to low valua
 | K32A8 | 14336 | Llama-3-8B `down` | 2 | 4 | 8 | 16 |
 
 K48A20 has the same `h` as K40A12 because the eight extra ring bits go to activation precision.
-**Recommendation:** with K32A8, or when a single undetected wrong product is costly, set
-`checks = 4` or more. The check costs `c` dot products of length `m + n` per row, which is negligible
+**Default:** the factory picks `c` automatically (smallest `c` in [2, 8] reaching
+`min_soundness_bits` = 20 for the pack's widest linear: `c = 3` at width 4096, `c = 4` for 8B-class
+`down`), and gateways and stores refuse weaker segments. K32A8 on wide layers cannot reach the floor
+even with `c = 8`; use K40A12 or K48A20 there. The check costs `c` dot products of length `m + n` per row, which is negligible
 next to the round trip.
 
 ### 5.4 Adaptive attackers, probing and selective failure
@@ -314,8 +320,9 @@ request). Until the first rejection, all the adversary has observed is "accepted
 errors is effectively fixed in advance. The first cheat is accepted with probability at most
 `2^(−c·h)`. On rejection the gateway fails the request with `integrity_check_failed`, increments
 `pgw_gateway_integrity_failures_total`, writes an audit event and opens the circuit breaker for that
-model. The breaker reopens after `integrity_cooldown_s` (default 900 s), or only after an admin reset
-if the cooldown is unset. Each rejection tells the adversary only that `u·e ≢ 0`, which rules out at most
+model. By default (`integrity_cooldown_s` unset) only an admin reset reopens it. If a cooldown is
+configured the breaker reopens by itself at most `integrity_max_auto_resets` times (default 2) and then
+latches until an admin reset. Each rejection tells the adversary only that `u·e ≢ 0`, which rules out at most
 a `2^(−c·h)` fraction of the vectors. After `N` detected probes, the chance that some cheat was accepted
 is approximately `(N+1)·2^(−c·h)` for `N ≪ 2^(c·h)`. Freivalds vectors are per segment, so they are
 refreshed every `segment_slots` tokens (default 4096).
@@ -461,7 +468,8 @@ exactness and near-plaintext server cost.
 * The security argument has not had external review. A formal write-up and an independent audit are
   planned (SPEC 16).
 * Metadata (lengths, timing) is not hidden in v1.0. Padding and dummy-round mitigations are planned.
-* Integrity bounds are weak for K32A8 at default `c = 2` (section 5.3). Use K40A12 or raise `checks`.
+* Integrity bounds are weak for K32A8 (section 5.3): even `c = 8` gives fewer than 20 bits for large
+  `n`, so the default `min_soundness_bits` floor refuses such segments. Use K40A12.
 * Availability depends on the service and is not cryptographically protected.
 * The guarantee is computational at the PRG level (section 4.4), not unconditional.
 * Model weights must be public. Fine-tuned private weights would need a different scheme, because the

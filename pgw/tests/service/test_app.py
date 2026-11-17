@@ -145,7 +145,7 @@ async def test_errors_on_the_wire(tiny_pack_dir: Path, pack_fp: str) -> None:
 
 
 async def test_auth_tokens(tiny_pack_dir: Path, pack_fp: str, tokens_file: Path) -> None:
-    s = _settings(tiny_pack_dir, allow_unauthenticated=False, tokens_file=tokens_file)
+    s = _settings(tiny_pack_dir, allow_unauthenticated=False, tokens_file=tokens_file, metrics_on_main_port=True)
     async with running_app(s) as app:
         ring = RING_K40_A12
         req = make_req(pack_fp, ring, [("0.o", rand_x(2, 64, ring))])
@@ -186,7 +186,7 @@ async def test_trusted_client_cert_header(tiny_pack_dir: Path, pack_fp: str, tmp
     m = tmp_path / "mtls.txt"
     m.write_text("tenant-x:gw-x\n")
     s = _settings(tiny_pack_dir, allow_unauthenticated=False, mtls_tenants_file=m,
-                  trusted_client_cert_header="X-Client-Cert-Subject")
+                  trusted_client_cert_header="X-Client-Cert-Subject", metrics_on_main_port=True)
     async with running_app(s) as app:
         h = http_client(app)
         ring = RING_K40_A12
@@ -323,6 +323,15 @@ async def test_no_payload_bytes_in_logs(tiny_pack_dir: Path, pack_fp: str, caplo
             assert n not in msg, f"payload leaked into log record {rec.name}"
 
 
+async def test_metrics_not_on_main_port_by_default(tiny_pack_dir: Path) -> None:
+    # Per-tenant series must not be readable by any network client on the public listener.
+    assert ServiceSettings().metrics_on_main_port is False
+    async with running_app(_settings(tiny_pack_dir)) as app:
+        h = http_client(app)
+        assert (await h.get("/metrics")).status_code == 404
+        await h.aclose()
+
+
 async def test_metrics_disabled_and_not_on_main_port(tiny_pack_dir: Path) -> None:
     async with running_app(_settings(tiny_pack_dir, metrics_enabled=False)) as app:
         h = http_client(app)
@@ -340,6 +349,12 @@ async def test_metrics_disabled_and_not_on_main_port(tiny_pack_dir: Path) -> Non
         r = await mh.get("/metrics")
         assert r.status_code == 200 and "pgw_service_inflight" in r.text
         assert (await mh.get("/other")).status_code == 404
+        # probes work on the internal listener too (main port may require client certificates)
+        assert (await mh.get("/healthz")).text == "ok"
+        rr = await mh.get("/readyz")
+        assert rr.status_code == 200 and rr.json()["ready"] is True
+        app.state.pgw.begin_drain()
+        assert (await mh.get("/readyz")).status_code == 503
         await mh.aclose()
 
 

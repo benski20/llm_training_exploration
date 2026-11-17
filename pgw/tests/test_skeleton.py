@@ -89,7 +89,7 @@ def test_settings_classes_construct(tmp_path, monkeypatch):
     assert ServiceSettings().port == 9999
     assert GatewaySettings().port == 8080
     assert MaskStoreSettings(root=tmp_path).low_water_slots == 4096
-    assert FactorySettings(pack_path=tmp_path).checks == 2
+    assert FactorySettings(pack_path=tmp_path).checks is None  # auto: >= 20 bits of soundness
 
 
 def test_wire_messages_and_metric_names():

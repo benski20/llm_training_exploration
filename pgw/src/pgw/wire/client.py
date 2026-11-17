@@ -48,6 +48,7 @@ from pgw.wire.codec import (
 from pgw.wire.messages import (
     ATTEMPT_HEADER,
     COMPUTE_PATH,
+    DEADLINE_HEADER,
     MODELS_PATH,
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
@@ -116,6 +117,11 @@ class ClientConfig(BaseModel):
     backoff_base_s: float = Field(0.05, ge=0)
     backoff_max_s: float = Field(2.0, ge=0)
     max_retry_after_s: float = Field(10.0, ge=0, description="Cap on honoured Retry-After")
+    retry_budget_ratio: float = Field(
+        0.2, ge=0, description="Shared retry budget: each request deposits this many retry tokens (0.2 = retries "
+        "limited to about 20% of requests), so an outage does not multiply the load on the service",
+    )
+    retry_budget_burst: float = Field(10.0, ge=0, description="Retry tokens available at start / at most banked")
     max_request_bytes: int = Field(256 << 20, gt=4096)
     max_response_bytes: int = Field(1 << 30, gt=4096)
     max_items: int = Field(256, gt=0)
@@ -175,6 +181,7 @@ class ClientStats:
     requests: int = 0
     attempts: int = 0
     retries: int = 0
+    retries_denied: int = 0
     failures: int = 0
     splits: int = 0
     bytes_sent: int = 0
@@ -265,6 +272,8 @@ class ComputeClient:
             weakref.WeakKeyDictionary()
         )
         self._clients_lock = threading.Lock()
+        self._retry_tokens = float(config.retry_budget_burst)
+        self._retry_lock = threading.Lock()
         self._model: ModelInfo | None = None
         self._models: ModelsResponse | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -322,6 +331,18 @@ class ComputeClient:
             max_rows = min(max_rows, self._model.max_rows_per_item)
         return max_bytes, cfg.max_items, max_rows
 
+    def _deposit_retry_token(self) -> None:
+        with self._retry_lock:
+            self._retry_tokens = min(float(self.config.retry_budget_burst),
+                                     self._retry_tokens + float(self.config.retry_budget_ratio))
+
+    def _take_retry_token(self) -> bool:
+        with self._retry_lock:
+            if self._retry_tokens >= 1.0:
+                self._retry_tokens -= 1.0
+                return True
+            return False
+
     def _backoff(self, attempt: int, retry_after: float | None) -> float:
         cfg = self.config
         delay = random.uniform(0.0, min(cfg.backoff_max_s, cfg.backoff_base_s * (2 ** (attempt - 1))))  # noqa: S311
@@ -378,6 +399,7 @@ class ComputeClient:
         """
         cfg = self.config
         http = self._http()
+        self._deposit_retry_token()
         attempt = 0
         while True:
             attempt += 1
@@ -388,7 +410,10 @@ class ComputeClient:
                     code=ErrorCode.DEADLINE_EXCEEDED,
                     details={"request_id": request_id, "attempts": attempt - 1},
                 )
-            headers = {REQUEST_ID_HEADER: request_id, ATTEMPT_HEADER: str(attempt)}
+            # The body (and its deadline_ms) stays byte-identical across retries; the server uses
+            # what is left of *this* attempt's budget, so an abandoned attempt stops early.
+            headers = {REQUEST_ID_HEADER: request_id, ATTEMPT_HEADER: str(attempt),
+                       DEADLINE_HEADER: str(max(1, int(remaining * 1000)))}
             if body is not None:
                 headers["Content-Type"] = CONTENT_TYPE
             timeout = httpx.Timeout(
@@ -437,7 +462,10 @@ class ComputeClient:
             ra = float(retry_after) if isinstance(retry_after, int | float) else None
             if exc.retryable and attempt <= cfg.max_retries:
                 delay = self._backoff(attempt, ra)
-                if time.monotonic() + delay < deadline:
+                if time.monotonic() + delay < deadline and not self._take_retry_token():
+                    self.stats.retries_denied += 1
+                    exc.details.setdefault("retry_budget_exhausted", True)
+                elif time.monotonic() + delay < deadline:
                     self.stats.retries += 1
                     log.info(
                         "pgw wire retry",

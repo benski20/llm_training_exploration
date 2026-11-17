@@ -14,6 +14,7 @@ import torch
 
 from pgw.core import RING_K40_A12, ConfigError, MaskExhaustedError, MaskStoreError
 from pgw.maskstore import (
+    FileKeyProvider,
     KeyProvider,
     MaskStore,
     PartnerSigningKey,
@@ -47,11 +48,13 @@ class _WrapOnly(KeyProvider):
         raise MaskStoreError("wrap-only")
 
 
-def _partner_segments(tmp_path: Path, model: ToyModel, rec: RecipientKeyPair, n: int = 1, slots: int = 4) -> list[Path]:
-    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(rec.public_bytes()), low_water_slots=0)
+def _partner_segments(tmp_path: Path, model: ToyModel, rec: RecipientKeyPair, n: int = 1, slots: int = 4,
+                      destination: str | None = None, checks: int = 2) -> list[Path]:
+    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(rec.public_bytes()), low_water_slots=0,
+                              allow_no_rollback_witness=True)
     out = []
     for _ in range(n):
-        sid = write_segment(partner, model, slots, chunk_slots=4)
+        sid = write_segment(partner, model, slots, chunk_slots=4, destination=destination, checks=checks)
         out.append(partner.export_segment(sid, tmp_path / "outbox"))
     partner.close()
     return out
@@ -71,12 +74,12 @@ def signer(tmp_path: Path) -> PartnerSigningKey:
 def test_signed_partner_segment_imports_with_trusted_key(
     tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair, signer: PartnerSigningKey
 ) -> None:
-    (seg,) = _partner_segments(tmp_path, model, rec)
+    store = open_store(trusted_partner_keys=(signer.public_bytes().hex(),), recipient=rec)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id)
     sig_path = sign_segment(seg, signer)
     assert sig_path.name.endswith(SIGNATURE_SUFFIX)
     parsed = read_signature(seg)
     assert parsed is not None and parsed.key_id == signer.key_id
-    store = open_store(trusted_partner_keys=(signer.public_bytes().hex(),), recipient=rec)
     assert store.trusted_partners.key_ids == (signer.key_id,)
     sid = store.import_segment(seg)
     with store.reserve(FP, RING_K40_A12, 4) as res:
@@ -88,8 +91,8 @@ def test_signed_partner_segment_imports_with_trusted_key(
 def test_unsigned_or_untrusted_partner_segments_are_refused(
     tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair, signer: PartnerSigningKey
 ) -> None:
-    a, b, c = _partner_segments(tmp_path, model, rec, n=3)
     store = open_store(trusted_partner_keys=(base64.b64encode(signer.public_bytes()).decode(),), recipient=rec)
+    a, b, c = _partner_segments(tmp_path, model, rec, n=3, destination=store.store_id)
     with pytest.raises(MaskStoreError, match="not signed"):
         store.import_segment(a)
     # signed by somebody else (e.g. whoever only knows the public recipient key)
@@ -120,22 +123,78 @@ def test_unsigned_or_untrusted_partner_segments_are_refused(
     assert store.available_slots(FP, RING_K40_A12) == 4
 
 
-def test_require_signature_without_keys_is_a_config_error(
+def test_unsigned_partner_segment_is_refused_by_default(
+    tmp_path: Path, store: MaskStore, model: ToyModel, rec: RecipientKeyPair
+) -> None:
+    """Security review: without trusted partner keys an HPKE segment must NOT import (fail closed)."""
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id)
+    assert not store.settings.allow_unsigned_partner_segments
+    with pytest.raises(MaskStoreError, match="no trusted partner keys"):
+        store.import_segment(seg, recipient=rec)
+    # a signature by a key the store does not trust does not help either
+    sign_segment(seg, PartnerSigningKey.generate(tmp_path / "anyone.key"))
+    with pytest.raises(MaskStoreError, match="no trusted partner keys"):
+        store.import_segment(seg, recipient=rec)
+    assert store.inventory() == []
+
+
+def test_require_signature_without_keys_is_refused(
     tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair
 ) -> None:
-    (seg,) = _partner_segments(tmp_path, model, rec)
-    store = open_store(require_partner_signature=True, recipient=rec)
-    with pytest.raises(ConfigError, match="trusted_partner_keys"):
+    store = open_store(require_partner_signature=True, allow_unsigned_partner_segments=True, recipient=rec)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id)
+    with pytest.raises(MaskStoreError, match="trusted partner keys"):
         store.import_segment(seg)
 
 
-def test_unsigned_import_without_policy_warns(
-    tmp_path: Path, store: MaskStore, model: ToyModel, rec: RecipientKeyPair, caplog: pytest.LogCaptureFixture
+def test_unsigned_import_dev_flag_warns(
+    tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair, caplog: pytest.LogCaptureFixture
 ) -> None:
-    (seg,) = _partner_segments(tmp_path, model, rec)
+    store = open_store(allow_unsigned_partner_segments=True)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id)
     with caplog.at_level(logging.WARNING, logger="pgw.maskstore.store"):
         store.import_segment(seg, recipient=rec)
     assert any("WITHOUT sender authentication" in r.getMessage() for r in caplog.records)
+
+
+def test_partner_segment_is_bound_to_one_store(
+    tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair, signer: PartnerSigningKey
+) -> None:
+    """Security review: the same signed file (one recipient key) must not import into a second store."""
+    trusted = (signer.public_bytes().hex(),)
+    a = open_store(root=tmp_path / "a", trusted_partner_keys=trusted, recipient=rec)
+    b = open_store(root=tmp_path / "b", trusted_partner_keys=trusted, recipient=rec)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=a.store_id)
+    sign_segment(seg, signer)
+    with pytest.raises(MaskStoreError, match="different mask store"):
+        b.import_segment(seg)
+    a.import_segment(seg)
+    assert b.inventory() == [] and a.available_slots(FP, RING_K40_A12) == 4
+    # a segment without any destination is refused unless the dev flag is set
+    (unbound,) = _partner_segments(tmp_path / "u", model, rec)
+    sign_segment(unbound, signer)
+    with pytest.raises(MaskStoreError, match="destination"):
+        b.import_segment(unbound)
+    c = open_store(root=tmp_path / "c", trusted_partner_keys=trusted, recipient=rec,
+                   allow_unbound_partner_segments=True)
+    c.import_segment(unbound)
+
+
+def test_destination_must_be_a_store_id(store: MaskStore, model: ToyModel) -> None:
+    with pytest.raises(ValueError, match="destination"):
+        store.writer(FP, RING_K40_A12, model.specs, slots=1, destination="not-a-store-id")
+
+
+def test_weak_segments_are_refused_on_import(
+    tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair, signer: PartnerSigningKey
+) -> None:
+    """Security review: checks=1 (or too few for the ring/n) must not import."""
+    store = open_store(trusted_partner_keys=(signer.public_bytes().hex(),), recipient=rec, min_soundness_bits=40)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id, checks=1)
+    sign_segment(seg, signer)
+    with pytest.raises(MaskStoreError, match="soundness"):
+        store.import_segment(seg)
+    assert store.inventory() == []
 
 
 def test_trusted_partners_parsing() -> None:
@@ -162,10 +221,11 @@ def test_local_kek_segments_need_no_partner_signature(
 
 # ---- import cleanup ------------------------------------------------------------------------------
 def test_failed_import_never_deletes_a_file_it_did_not_publish(
-    tmp_path: Path, store: MaskStore, model: ToyModel, rec: RecipientKeyPair
+    tmp_path: Path, open_store: Any, model: ToyModel, rec: RecipientKeyPair
 ) -> None:
     """A concurrent importer may own the destination file; a losing import must leave it alone."""
-    (seg,) = _partner_segments(tmp_path, model, rec)
+    store = open_store(allow_unsigned_partner_segments=True)
+    (seg,) = _partner_segments(tmp_path, model, rec, destination=store.store_id)
     with SegmentFile(seg) as sf:
         h = sf.header
     final = store.root / h.fingerprint / h.ring / "segments" / seg.name
@@ -211,3 +271,16 @@ def test_failed_reserve_drops_in_process_lease(store: MaskStore, model: ToyModel
     assert open_rows == 0
     with pytest.raises(MaskExhaustedError):
         store.reserve(FP, RING_K40_A12, 1)  # the 2 slots stay consumed (lost, never reused)
+
+
+def test_store_without_rollback_witness_is_refused(tmp_path: Path) -> None:
+    """No MAC journal and no counter: refuse to open unless explicitly allowed (dev/staging)."""
+    from pgw.maskstore import RecipientKeyPair
+
+    rec = RecipientKeyPair.generate(tmp_path / "rec.key")
+    with pytest.raises(ConfigError, match="rollback witness"):
+        MaskStore.open(tmp_path / "s1", _WrapOnly(rec.public_bytes()), low_water_slots=0)
+    kp = FileKeyProvider(tmp_path / "kek", create=True)
+    with pytest.raises(ConfigError, match="rollback witness"):
+        MaskStore.open(tmp_path / "s2", kp, journal=False)
+    MaskStore.open(tmp_path / "s3", kp, journal=False, allow_no_rollback_witness=True).close()

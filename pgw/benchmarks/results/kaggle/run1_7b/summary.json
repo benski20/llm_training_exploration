@@ -1,0 +1,67 @@
+{
+ "job": {
+  "steps": [
+   {
+    "kind": "validate",
+    "label": "qwen7b",
+    "args": [
+     "--model",
+     "Qwen/Qwen2.5-7B-Instruct",
+     "--label",
+     "qwen7b",
+     "--device",
+     "cuda",
+     "--ref-device",
+     "cuda",
+     "--plain-dtype",
+     "float16",
+     "--delete-hf",
+     "--max-tokens",
+     "32",
+     "--concurrent",
+     "4",
+     "--loadtest-sessions",
+     "1",
+     "8",
+     "32",
+     "--loadtest-tokens",
+     "2",
+     "--factory-bench-slots",
+     "256"
+    ],
+    "timeout": 6600
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 12.9,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.0.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.0.1\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.1\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==1.17.3\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.37\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "validate_qwen7b": {
+   "rc": 1,
+   "seconds": 379.3,
+   "tail": "e \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 486, in main\n    run(args)\n    ~~~^^^^^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 216, in run\n    subprocess.run([sys.executable, __file__, \"--phase\", \"reference\", \"--pack\", str(pack), \"--fingerprint\", fp,  # noqa: S603\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                    \"--ring\", args.ring, \"--ref-device\", args.ref_device, \"--max-tokens\", str(args.max_tokens),\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n                    \"--prompt\", args.prompt, \"--ref-out\", str(ref_out)], env=env, check=True, timeout=7200)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/subprocess.py\", line 578, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K40A12', '--ref-device', 'cuda', '--max-tokens', '32', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        26814696 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  7.1T  967G  89% /\noverlay         8.0T  7.1T  967G  89% /\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 6.7
+}

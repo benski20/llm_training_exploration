@@ -59,9 +59,9 @@ vectors prove it).
 
 | function | Rust | Python (`pgw.core` / `pgw.maskstore`) |
 |---|---|---|
-| `mask_activations` | rejects non-canonical `r` and `\|xq\| > qmax` (`ring_overflow`) | masks whatever it is given |
-| `quantize_weight_rows` | rejects non-finite weights (`ring_overflow`) | produces a meaningless row |
-| `freivalds_check` / `verify` | `c == 0` is a `config` error | `c == 0` accepts every row |
+| `mask_activations` | rejects non-canonical `r` and `\|xq\| > qmax` (`ring_overflow`) | rejects `\|xq\| > qmax` (`ring_overflow`) since the integration review; `r` is not range-checked |
+| `quantize_weight_rows` | rejects non-finite weights (`ring_overflow`) | same (adopted in the integration review) |
+| `freivalds_check` / `verify` | `c == 0` is a `config` error | same (adopted in the integration review); the mask store also refuses to hand out checks for `checks=0` segments |
 | `SeedExpander::stream_bytes` | refuses a stream that *ends* past the 2^32-block counter | checks the start only |
 | `ReservationCursor` | not `Clone`; refuses overlapping extents (`mask_reuse`); `take` after `close` is `mask_reuse` for any linear | n/a |
 | `Ledger::write_off(Exported)` | only an unused active segment (`mask_reuse` otherwise), as `export_segments` | same |

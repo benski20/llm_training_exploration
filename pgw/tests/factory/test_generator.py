@@ -121,7 +121,8 @@ def test_ring_headroom_rejected() -> None:
 
 def test_generate_into_store_commits_and_zeroizes(fake_pack: FakePack, fake_store: FakeMaskStore) -> None:
     gen = MaskGenerator(fake_pack, RING_K40_A12)
-    seg_id = gen.generate_into_store(fake_store, 10, checks=2, chunk_slots=4, factory_id="t", seed=SEED)
+    seg_id = gen.generate_into_store(fake_store, 10, checks=2, chunk_slots=4, factory_id="t", seed=SEED,
+                                     store_chunk_slots=4)
     seg = fake_store.segments[seg_id]
     assert seg.seed == SEED and seg.factory_id == "t" and seg.slots == 10 and seg.chunk_slots == 4
     assert seg.fingerprint == fake_pack.fingerprint and seg.ring == RING_K40_A12

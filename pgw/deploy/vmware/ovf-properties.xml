@@ -33,4 +33,10 @@
   <Property ovf:key="pgw.ring" ovf:type="string" ovf:userConfigurable="true" ovf:value="K40A12">
     <Label>Ring preset</Label>
   </Property>
+  <Property ovf:key="pgw.counter" ovf:type="string" ovf:userConfigurable="true" ovf:value="file">
+    <Label>Rollback counter: file (independent-persistent disk at /var/lib/pgw-counter) or tpm (vTPM)</Label>
+    <Description>The mask store refuses to serve without an external monotonic counter. VM snapshots
+      must not capture it: use a second virtual disk in independent-persistent mode mounted at
+      /var/lib/pgw-counter (default), or the vTPM (note: the vTPM state is part of VM snapshots).</Description>
+  </Property>
 </ProductSection>

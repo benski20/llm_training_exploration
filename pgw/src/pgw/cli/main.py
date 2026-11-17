@@ -118,9 +118,11 @@ def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: 
 @click.option("--license", "license_", default=None, help="License identifier recorded in the manifest")
 @click.option("--overwrite", is_flag=True, help="Replace an existing pack directory")
 @click.option("--quiet", "-q", is_flag=True, help="No progress output")
+@click.option("--allow-unsupported-rope", is_flag=True,
+              help="Pack even if the RoPE scaling type is not implemented by the PGW engine (not servable)")
 @handle_errors
 def pack(source: str, out_dir: Path, name: str | None, revision: str | None, plain_dtype: str, shard_gib: float,
-         license_: str | None, overwrite: bool, quiet: bool) -> None:
+         license_: str | None, overwrite: bool, quiet: bool, allow_unsupported_rope: bool) -> None:
     """Build a model pack from an HF checkpoint (hub repo id or local directory)."""
     from pgw.modelpack import pack_checkpoint
 
@@ -128,7 +130,8 @@ def pack(source: str, out_dir: Path, name: str | None, revision: str | None, pla
         raise ConfigError("--shard-gib must be positive")
     progress = None if quiet else (lambda msg: click.echo(f"  {msg}", err=True))
     m = pack_checkpoint(source, out_dir, name=name, revision=revision, plain_dtype=plain_dtype,  # type: ignore[arg-type]
-                        shard_bytes=int(shard_gib * 2**30), overwrite=overwrite, license=license_, progress=progress)
+                        shard_bytes=int(shard_gib * 2**30), overwrite=overwrite, license=license_, progress=progress,
+                        allow_unsupported_rope=allow_unsupported_rope)
     click.echo(f"packed {m.name} fingerprint {m.fingerprint}")
 
 
@@ -263,14 +266,24 @@ def _print_store_status(status: dict[str, Any]) -> None:
 @maskstore.command("import")
 @_root_opt
 @_key_opt
-@click.option("--delete-source", is_flag=True, help="Delete each file after a successful import")
+@click.option("--keep-source", is_flag=True,
+              help="Keep each file (and its .sig) after a successful import (default: remove them, so a copy "
+              "can never be imported into a second store)")
+@click.option("--delete-source", is_flag=True, hidden=True, help="Deprecated: deleting is the default now")
 @click.argument("files", nargs=-1, required=True, type=click.Path(path_type=Path, exists=True, dir_okay=False))
 @handle_errors
-def maskstore_import(root: Path | None, key_file: Path | None, delete_source: bool, files: tuple[Path, ...]) -> None:
-    """Import segment files from a partner factory (verifies every chunk, re-wraps the key)."""
+def maskstore_import(root: Path | None, key_file: Path | None, keep_source: bool, delete_source: bool,
+                     files: tuple[Path, ...]) -> None:
+    """Import segment files from a partner factory (verifies every chunk, re-wraps the key).
+
+    Partner segments must be signed by a key in PGW_MASKSTORE_TRUSTED_PARTNER_KEYS and name this
+    store (see 'pgw maskstore status' store_id) as their destination.
+    """
     from pgw.maskstore.admin import import_files
 
-    results = import_files(files, delete_source=delete_source, **_store_overrides(root, key_file))
+    if keep_source and delete_source:
+        raise click.UsageError("--keep-source and --delete-source are mutually exclusive")
+    results = import_files(files, delete_source=not keep_source, **_store_overrides(root, key_file))
     echo_json(results)
     failed = [r for r in results if not r.get("ok")]
     if failed:
@@ -343,6 +356,47 @@ def maskstore_recipient_key_show(private_key_file: Path) -> None:
 
     kp = RecipientKeyPair(private_key_file)
     echo_json({"key_id": kp.key_id, "kek_id": kp.kek_id, "public_key_hex": kp.public_bytes().hex()})
+
+
+@maskstore.group("partner-key")
+def maskstore_partner_key() -> None:
+    """Ed25519 signing key of a partner mask factory (segment signatures, SPEC 7.7)."""
+
+
+@maskstore_partner_key.command("create")
+@click.argument("private_key_file", type=click.Path(path_type=Path, dir_okay=False))
+@click.option("--public-out", type=click.Path(path_type=Path, dir_okay=False), default=None,
+              help="Also write the public key as hex (give this file to the customer)")
+@handle_errors
+def maskstore_partner_key_create(private_key_file: Path, public_out: Path | None) -> None:
+    """Generate the partner's signing key (mode 0600) and print the public key and its id.
+
+    The partner factory signs every exported segment with it (PGW_FACTORY_PARTNER_SIGNING_KEY_FILE or
+    'pgw factory ... --partner-key'). The customer adds the public key to PGW_MASKSTORE_TRUSTED_PARTNER_KEYS
+    after confirming the key id over an authenticated channel.
+    """
+    from pgw.maskstore import PartnerSigningKey
+
+    if private_key_file.exists():
+        raise ConfigError(f"{private_key_file} already exists; refusing to overwrite a partner signing key")
+    private_key_file.parent.mkdir(parents=True, exist_ok=True)
+    key = PartnerSigningKey.generate(private_key_file)
+    pub_hex = key.public_bytes().hex()
+    if public_out is not None:
+        public_out.parent.mkdir(parents=True, exist_ok=True)
+        public_out.write_text(pub_hex + "\n", encoding="utf-8")
+    echo_json({"key_id": key.key_id, "public_key_hex": pub_hex})
+
+
+@maskstore_partner_key.command("show")
+@click.argument("private_key_file", type=click.Path(path_type=Path, exists=True, dir_okay=False))
+@handle_errors
+def maskstore_partner_key_show(private_key_file: Path) -> None:
+    """Print the public key and key id of an existing partner signing key."""
+    from pgw.maskstore import PartnerSigningKey
+
+    key = PartnerSigningKey(private_key_file)
+    echo_json({"key_id": key.key_id, "public_key_hex": key.public_bytes().hex()})
 
 
 # ---- compute service ---------------------------------------------------------------------------

@@ -275,7 +275,8 @@ class Pkcs11KeyProvider(KeyProvider):
     If the token holds an HMAC key labelled ``<key_label>-mac`` it is used for :meth:`mac`, and a
     counter object can be wired via :class:`pgw.maskstore.counters.MonotonicCounter`.
 
-    Status: stub-quality. It is exercised against SoftHSM2 in the release pipeline, not in unit tests.
+    Status: stub-quality. Only the construction and error paths are unit-tested (with an injected
+    ``lib``); wrap/unwrap/mac have not yet been run against a real token or SoftHSM2 (see STATUS.md).
     """
 
     def __init__(

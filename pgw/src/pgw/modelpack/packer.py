@@ -521,6 +521,7 @@ def pack_checkpoint(
     overwrite: bool = False,
     license: str | None = None,
     progress: Callable[[str], None] | None = None,
+    allow_unsupported_rope: bool = False,
 ) -> Manifest:
     """Quantize an HF checkpoint (hub repo id or local directory) into a PGW model pack.
 
@@ -541,6 +542,8 @@ def pack_checkpoint(
         overwrite: Replace an existing ``out_dir``.
         license: Optional license identifier recorded in the manifest.
         progress: Optional callback called with each linear id after it is written.
+        allow_unsupported_rope: Pack a checkpoint whose RoPE scaling type the PGW engine does not
+            implement (the gateway would refuse to serve it); off by default.
 
     Returns:
         The written manifest (with fingerprint).
@@ -557,7 +560,8 @@ def pack_checkpoint(
     cfg = _read_json(ckpt / "config.json")
     if cfg is None:
         raise ConfigError(f"checkpoint {ckpt.name} has no config.json")
-    arch = arch_config_from_hf(cfg, _read_json(ckpt / "generation_config.json"))
+    arch = arch_config_from_hf(cfg, _read_json(ckpt / "generation_config.json"),
+                               allow_unsupported_rope=allow_unsupported_rope)
     model_name = name or _default_name(info.repo)
     log.info("packing %s (%s, %d layers) -> %s", info.repo, arch.arch.value, arch.num_layers, Path(out_dir).name)
     with CheckpointReader(ckpt) as reader:

@@ -165,9 +165,13 @@ services:
       PGW_MASKSTORE_ROOT: /var/lib/pgw/masks
       PGW_MASKSTORE_KEY_FILE: /var/lib/pgw/kek/kek
       PGW_MASKSTORE_LOW_WATER_SLOTS: "256"
+      # Rollback witness on its own volume (never back it up / restore it together with `masks`).
+      PGW_MASKSTORE_COUNTER: file
+      PGW_MASKSTORE_COUNTER_FILE: /var/lib/pgw/counter/generation.counter
     volumes:
       - packs:/var/lib/pgw/packs:ro
       - masks:/var/lib/pgw/masks
+      - counter:/var/lib/pgw/counter
       - kek:/var/lib/pgw/kek:ro
       - gw-secrets:/var/lib/pgw/secrets:ro
       - gw-state:/var/lib/pgw/state
@@ -197,6 +201,7 @@ networks:
 volumes:
   packs: {}
   masks: {}
+  counter: {}
   kek: {}
   gw-secrets: {}
   gw-state: {}

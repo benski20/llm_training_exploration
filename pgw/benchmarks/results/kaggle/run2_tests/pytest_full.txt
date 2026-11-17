@@ -1,0 +1,1205 @@
+..............................................................s......... [  4%]
+...............................................................sss...... [  9%]
+........................................................................ [ 14%]
+F....................................................................... [ 19%]
+.......................FFFFFF........................................... [ 24%]
+....ssssssssssssssssss.................................................. [ 29%]
+.......................................................FFF.............. [ 34%]
+........................................................................ [ 39%]
+........................F............................................... [ 44%]
+........................................FFF............................. [ 49%]
+........................................................................ [ 54%]
+........................................................................ [ 59%]
+........................................................................ [ 64%]
+........................................................................ [ 69%]
+........................................................................ [ 74%]
+........................................................................ [ 79%]
+.......................................................................F [ 84%]
+FFFFFFFF..................................................F..ss......... [ 89%]
+........................................................................ [ 94%]
+........................................................................ [ 99%]
+...                                                                      [100%]
+=================================== FAILURES ===================================
+________________________________ test_selftest _________________________________
+
+    def test_selftest():
+>       res = run_selftest(m=24, n=40, tokens=3)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_misc.py:98: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/selftest.py:45: in run_selftest
+    y_hat = pw.matmul(x_hat.to(dev), p).cpu()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[-109,  -18,  118,  -11,  117,   14,  -15,  -82,   52,   16,   59, -114,
+           89,    3...6,   48]], dtype=torch.int8), device=device(type='cuda'), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 698903459,  407300225, 1994460378,  292637691, 2443089748,   37907899,
+         1833348780,   24295923, 1061...275820, 4133117686,  812651139, 2029883900,
+         1547292896, 3762140582,  289921675,  730047086]], device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 24 n 32 k 40 mat1_ld 40 mat2_ld 40 result_ld 24 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+__________________________ test_cuda_exact[1-8-8-p0] ___________________________
+
+p = RingParams(k=32, a=8), b = 1, m = 8, n = 8
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67],
+        [ -52,   48, -106,  -79,   52,    ...,   68,  -63]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 293375679, 2854952027,  833720247, 3978355020,  451723847,  969428760,
+         3849754204, 3548421885]], device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 8 mat1_ld 8 mat2_ld 8 result_ld 8 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+__________________________ test_cuda_exact[1-8-8-p1] ___________________________
+
+p = RingParams(k=40, a=12), b = 1, m = 8, n = 8
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67],
+        [ -52,   48, -106,  -79,   52,    ...,   68,  -63]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[657423371967, 346452335707, 348726071223,  59812929868, 691941458503,
+         353156747032, 472001189468, 759462665981]], device='cuda:0')
+k = 40
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 8 mat1_ld 8 mat2_ld 8 result_ld 8 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+__________________________ test_cuda_exact[1-8-8-p2] ___________________________
+
+p = RingParams(k=48, a=20), b = 1, m = 8, n = 8
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67],
+        [ -52,   48, -106,  -79,   52,    ...,   68,  -63]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 43538376855231,  92705429068891, 137787679543223,  75926115246412,
+         130434313536071, 267534482296600, 169796791866972, 108511602188029]],
+       device='cuda:0')
+k = 48
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 8 mat1_ld 8 mat2_ld 8 result_ld 8 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_________________________ test_cuda_exact[3-17-29-p0] __________________________
+
+p = RingParams(k=32, a=8), b = 3, m = 17, n = 29
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67,  -52,   48, -106,  -79,
+           52,    5...,   38,  -96]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 293375679, 2854952027,  833720247, 3978355020,  451723847,  969428760,
+         3849754204, 3548421885,  398... 1672005884, 1839615613,
+         2357872597, 1699489802, 1758084017, 3968692085, 3180062251]],
+       device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 24 n 32 k 32 mat1_ld 32 mat2_ld 32 result_ld 24 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_________________________ test_cuda_exact[3-17-29-p1] __________________________
+
+p = RingParams(k=40, a=12), b = 3, m = 17, n = 29
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67,  -52,   48, -106,  -79,
+           52,    5...,   38,  -96]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 657423371967,  346452335707,  348726071223,   59812929868,
+          691941458503,  353156747032,  472001189...794301,
+          479099242453,  925117458442,  276635990961,  897321889653,
+          926598030891]], device='cuda:0')
+k = 40
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 24 n 32 k 32 mat1_ld 32 mat2_ld 32 result_ld 24 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_________________________ test_cuda_exact[3-17-29-p2] __________________________
+
+p = RingParams(k=48, a=20), b = 3, m = 17, n = 29
+
+    @GPU
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("p", RINGS)
+    @pytest.mark.parametrize("b,m,n", [(1, 8, 8), (3, 17, 29), (40, 64, 96)])
+    def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
+        x = _rand((b, n), 0, p.modulus, 11)
+        w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
+>       out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_ringmm.py:129: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -53,   27,    6,  125,  113,    2, -125,   67,  -52,   48, -106,  -79,
+           52,    5...,   38,  -96]], dtype=torch.int8), device=device(type='cuda'), backend='auto', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 43538376855231,  92705429068891, 137787679543223,  75926115246412,
+         130434313536071, 267534482296600...       130221471320021, 148259675580426,  53053194124209, 132838717222773,
+          62499249186347]], device='cuda:0')
+k = 48
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 24 n 32 k 32 mat1_ld 32 mat2_ld 32 result_ld 24 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+____________________ test_exact_int_matmul_cuda[5-70-33-8] _____________________
+
+bits = 8, t = 5, n = 70, m = 33
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("bits", [8, 12, 20])
+    @pytest.mark.parametrize("t,n,m", [(1, 64, 48), (5, 70, 33), (40, 3584, 4608)])
+    def test_exact_int_matmul_cuda(bits: int, t: int, n: int, m: int) -> None:  # pragma: no cover - GPU only
+        """CUDA path, both weight layouts: row-major (n, m) and the column-major view PlainBackend keeps.
+    
+        Regression: T4 + CUDA 13 cuBLASLt rejects a row-major int8 ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        """
+        g = torch.Generator().manual_seed(bits + t)
+        qmax = (1 << (bits - 1)) - 1
+        xq = torch.randint(-qmax, qmax + 1, (t, n), generator=g, dtype=torch.int64)
+        xq[0, :] = qmax
+        w = torch.randint(-128, 128, (n, m), generator=g, dtype=torch.int64)
+        ref = torch.tensor((xq.numpy().astype(object) @ w.numpy().astype(object)).astype("int64"))
+        w8 = w.to(torch.int8)
+        for wt in (w8.cuda(), w8.t().contiguous().cuda().t()):
+>           assert torch.equal(exact_int_matmul(xq.cuda(), wt, bits).cpu(), ref)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/engine/test_backends.py:80: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/engine/backends.py:191: in exact_int_matmul
+    y += _cuda_int_mm_padded(a, b)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = tensor([[ 127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,  127,
+          127,  127,  127,  127,  127...  -21,
+            0, -117,   -5,   -7,   81,  -59,   17, -122,  116,  -27]],
+       device='cuda:0', dtype=torch.int8)
+b = tensor([[-102, -103,  -73,  ..., -114,   20,   39],
+        [ -72,  -92, -100,  ...,    0,    3,   94],
+        [  -1,... ...,   28,  -82,  -92],
+        [ 125,  -37,   60,  ...,   21,  -59,    8]], device='cuda:0',
+       dtype=torch.int8)
+
+    def _cuda_int_mm_padded(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:  # pragma: no cover - GPU only
+        """Exact ``a (t, n) @ b (n, m)`` on CUDA, padded to shapes ``torch._int_mm`` accepts.
+    
+        ``mat2`` is passed column-major (the transpose of a row-major ``(m, n)`` buffer): cuBLASLt int8
+        GEMMs on Turing (T4) with recent CUDA reject a row-major ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        When ``b`` is already such a view with aligned shapes, no copy of the weight is made.
+        """
+        t, n = a.shape
+        m = b.shape[1]
+        tp, np_, mp = max(32, -(-t // 8) * 8), -(-n // 8) * 8, -(-m // 8) * 8
+        if tp == t and np_ == n and a.is_contiguous():
+            ap = a
+        else:
+            ap = torch.zeros((tp, np_), dtype=torch.int8, device=a.device)
+            ap[:t, :n] = a
+        if np_ == n and mp == m and b.stride() == (1, n):
+            bt = b  # already the column-major view of a contiguous (m, n) buffer
+        else:
+            bcm = torch.zeros((mp, np_), dtype=torch.int8, device=a.device)
+            bcm[:m, :n] = b.t()
+            bt = bcm.t()
+>       return torch._int_mm(ap, bt)[:t, :m].to(torch.int64)
+               ^^^^^^^^^^^^^^^^^^^^^
+E       RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/engine/backends.py:219: RuntimeError
+____________________ test_exact_int_matmul_cuda[5-70-33-12] ____________________
+
+bits = 12, t = 5, n = 70, m = 33
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("bits", [8, 12, 20])
+    @pytest.mark.parametrize("t,n,m", [(1, 64, 48), (5, 70, 33), (40, 3584, 4608)])
+    def test_exact_int_matmul_cuda(bits: int, t: int, n: int, m: int) -> None:  # pragma: no cover - GPU only
+        """CUDA path, both weight layouts: row-major (n, m) and the column-major view PlainBackend keeps.
+    
+        Regression: T4 + CUDA 13 cuBLASLt rejects a row-major int8 ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        """
+        g = torch.Generator().manual_seed(bits + t)
+        qmax = (1 << (bits - 1)) - 1
+        xq = torch.randint(-qmax, qmax + 1, (t, n), generator=g, dtype=torch.int64)
+        xq[0, :] = qmax
+        w = torch.randint(-128, 128, (n, m), generator=g, dtype=torch.int64)
+        ref = torch.tensor((xq.numpy().astype(object) @ w.numpy().astype(object)).astype("int64"))
+        w8 = w.to(torch.int8)
+        for wt in (w8.cuda(), w8.t().contiguous().cuda().t()):
+>           assert torch.equal(exact_int_matmul(xq.cuda(), wt, bits).cpu(), ref)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/engine/test_backends.py:80: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/engine/backends.py:191: in exact_int_matmul
+    y += _cuda_int_mm_padded(a, b)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = tensor([[  -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+           -1,   -1,   -1,   -1,   -1... -103,
+           46,  -83,   10,   91,   30,   74,   27,  -25,  108,   -9]],
+       device='cuda:0', dtype=torch.int8)
+b = tensor([[ -26,   37,   -8,  ...,  -63,   89,   44],
+        [ 126,    0,    9,  ...,  -10,  103,  -14],
+        [  65,... ...,  -25,   70,  -29],
+        [ -11,  -48,  122,  ...,   66,  -69,   92]], device='cuda:0',
+       dtype=torch.int8)
+
+    def _cuda_int_mm_padded(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:  # pragma: no cover - GPU only
+        """Exact ``a (t, n) @ b (n, m)`` on CUDA, padded to shapes ``torch._int_mm`` accepts.
+    
+        ``mat2`` is passed column-major (the transpose of a row-major ``(m, n)`` buffer): cuBLASLt int8
+        GEMMs on Turing (T4) with recent CUDA reject a row-major ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        When ``b`` is already such a view with aligned shapes, no copy of the weight is made.
+        """
+        t, n = a.shape
+        m = b.shape[1]
+        tp, np_, mp = max(32, -(-t // 8) * 8), -(-n // 8) * 8, -(-m // 8) * 8
+        if tp == t and np_ == n and a.is_contiguous():
+            ap = a
+        else:
+            ap = torch.zeros((tp, np_), dtype=torch.int8, device=a.device)
+            ap[:t, :n] = a
+        if np_ == n and mp == m and b.stride() == (1, n):
+            bt = b  # already the column-major view of a contiguous (m, n) buffer
+        else:
+            bcm = torch.zeros((mp, np_), dtype=torch.int8, device=a.device)
+            bcm[:m, :n] = b.t()
+            bt = bcm.t()
+>       return torch._int_mm(ap, bt)[:t, :m].to(torch.int64)
+               ^^^^^^^^^^^^^^^^^^^^^
+E       RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/engine/backends.py:219: RuntimeError
+____________________ test_exact_int_matmul_cuda[5-70-33-20] ____________________
+
+bits = 20, t = 5, n = 70, m = 33
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("bits", [8, 12, 20])
+    @pytest.mark.parametrize("t,n,m", [(1, 64, 48), (5, 70, 33), (40, 3584, 4608)])
+    def test_exact_int_matmul_cuda(bits: int, t: int, n: int, m: int) -> None:  # pragma: no cover - GPU only
+        """CUDA path, both weight layouts: row-major (n, m) and the column-major view PlainBackend keeps.
+    
+        Regression: T4 + CUDA 13 cuBLASLt rejects a row-major int8 ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        """
+        g = torch.Generator().manual_seed(bits + t)
+        qmax = (1 << (bits - 1)) - 1
+        xq = torch.randint(-qmax, qmax + 1, (t, n), generator=g, dtype=torch.int64)
+        xq[0, :] = qmax
+        w = torch.randint(-128, 128, (n, m), generator=g, dtype=torch.int64)
+        ref = torch.tensor((xq.numpy().astype(object) @ w.numpy().astype(object)).astype("int64"))
+        w8 = w.to(torch.int8)
+        for wt in (w8.cuda(), w8.t().contiguous().cuda().t()):
+>           assert torch.equal(exact_int_matmul(xq.cuda(), wt, bits).cpu(), ref)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/engine/test_backends.py:80: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/engine/backends.py:191: in exact_int_matmul
+    y += _cuda_int_mm_padded(a, b)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = tensor([[  -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,
+           -1,   -1,   -1,   -1,   -1...   58,
+          -82,   34,   41,  -56,  -36,  121, -118,   12,  -68,  -21]],
+       device='cuda:0', dtype=torch.int8)
+b = tensor([[ -62,   94,   88,  ...,   69,    2,  -71],
+        [ -84,  127,   92,  ...,  -97,  127,  -48],
+        [ 116,... ...,  -47,   13,  -12],
+        [ 110, -113,  -58,  ...,   83,   72,   63]], device='cuda:0',
+       dtype=torch.int8)
+
+    def _cuda_int_mm_padded(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:  # pragma: no cover - GPU only
+        """Exact ``a (t, n) @ b (n, m)`` on CUDA, padded to shapes ``torch._int_mm`` accepts.
+    
+        ``mat2`` is passed column-major (the transpose of a row-major ``(m, n)`` buffer): cuBLASLt int8
+        GEMMs on Turing (T4) with recent CUDA reject a row-major ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+        When ``b`` is already such a view with aligned shapes, no copy of the weight is made.
+        """
+        t, n = a.shape
+        m = b.shape[1]
+        tp, np_, mp = max(32, -(-t // 8) * 8), -(-n // 8) * 8, -(-m // 8) * 8
+        if tp == t and np_ == n and a.is_contiguous():
+            ap = a
+        else:
+            ap = torch.zeros((tp, np_), dtype=torch.int8, device=a.device)
+            ap[:t, :n] = a
+        if np_ == n and mp == m and b.stride() == (1, n):
+            bt = b  # already the column-major view of a contiguous (m, n) buffer
+        else:
+            bcm = torch.zeros((mp, np_), dtype=torch.int8, device=a.device)
+            bcm[:m, :n] = b.t()
+            bt = bcm.t()
+>       return torch._int_mm(ap, bt)[:t, :m].to(torch.int64)
+               ^^^^^^^^^^^^^^^^^^^^^
+E       RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/engine/backends.py:219: RuntimeError
+________________________ test_benchmark_pack_with_store ________________________
+
+fake_store = <tests.factory.conftest.FakeMaskStore object at 0x796a1f7f8980>
+
+    def test_benchmark_pack_with_store(fake_store: FakeMaskStore) -> None:
+>       r = benchmark_pack(FakePack(), slots=8, chunk_slots=4, store=fake_store, price_per_hour=0.5)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/factory/test_bench_cli.py:50: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/factory/bench.py:243: in benchmark_pack
+    seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, store, warmup)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/bench.py:180: in _time_generation
+    for _ in gen.generate(new_seed(), min(slots, chunk_slots), checks=checks, chunk_slots=chunk_slots):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/generator.py:306: in generate
+    wr = kern.matmul(r, self.ring)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/kernels.py:253: in matmul
+    return int8_ring_mm(xp, self._w, params.k)[:b, : self.out_features]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/kernels.py:96: in int8_ring_mm
+    y = _int8_digit_gemm(d.to(torch.int8), w)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+d8 = tensor([[ 109, -112,   50,  -47,   26,    8,   47,   41, -126,   31,  -93,  113,
+           14,  -73,  -91,   17,   99...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+w = tensor([[-128,  -81,  -11,   64,  -61,  123,   67,  -25, -119,   83, -107,  114,
+          -92,  -41,  -58,   88,  -40...     115,   -3,   10,  -16,   90,   27,   56,  127,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+
+    def _int8_digit_gemm(d8: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """Exact ``d8 @ w^T`` as int64 for int8 ``d8 (p, n)`` and ``w (m, n)`` with inner chunking."""
+        n = d8.shape[1]
+        if n <= INT_MM_MAX_INNER:
+>           return torch._int_mm(d8, w.t()).to(torch.int64)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+E           RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 24 mat1_ld 24 mat2_ld 24 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/factory/kernels.py:73: RuntimeError
+________________________ test_cuda_kernel_exact[K32A8] _________________________
+
+ring = RingParams(k=32, a=8)
+
+    @pytest.mark.gpu
+    def test_cuda_kernel_exact(ring: RingParams) -> None:  # pragma: no cover - GPU only
+        x = _rand((5, 21), ring.k, 9)
+        w = _w(13, 21, 9)
+>       got = RingKernel(w.cuda(), "cuda_int8").matmul(x, ring).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/factory/test_kernels.py:175: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/factory/kernels.py:253: in matmul
+    return int8_ring_mm(xp, self._w, params.k)[:b, : self.out_features]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/kernels.py:96: in int8_ring_mm
+    y = _int8_digit_gemm(d.to(torch.int8), w)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+d8 = tensor([[  92,  -11,   56, -106,   65,  -76,   40,  -15,  117,  -95,  -36,  -68,
+          -69,  -54,  -35,  -22,  120...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+w = tensor([[-128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128,
+         -128, -128, -128, -128, -128...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+
+    def _int8_digit_gemm(d8: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """Exact ``d8 @ w^T`` as int64 for int8 ``d8 (p, n)`` and ``w (m, n)`` with inner chunking."""
+        n = d8.shape[1]
+        if n <= INT_MM_MAX_INNER:
+>           return torch._int_mm(d8, w.t()).to(torch.int64)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+E           RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 16 n 32 k 24 mat1_ld 24 mat2_ld 24 result_ld 16 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/factory/kernels.py:73: RuntimeError
+________________________ test_cuda_kernel_exact[K40A12] ________________________
+
+ring = RingParams(k=40, a=12)
+
+    @pytest.mark.gpu
+    def test_cuda_kernel_exact(ring: RingParams) -> None:  # pragma: no cover - GPU only
+        x = _rand((5, 21), ring.k, 9)
+        w = _w(13, 21, 9)
+>       got = RingKernel(w.cuda(), "cuda_int8").matmul(x, ring).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/factory/test_kernels.py:175: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/factory/kernels.py:253: in matmul
+    return int8_ring_mm(xp, self._w, params.k)[:b, : self.out_features]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/kernels.py:96: in int8_ring_mm
+    y = _int8_digit_gemm(d.to(torch.int8), w)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+d8 = tensor([[  92,  -11,   56, -106,   65,  -76,   40,  -15,  117,  -95,  -36,  -68,
+          -69,  -54,  -35,  -22,  120...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+w = tensor([[-128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128,
+         -128, -128, -128, -128, -128...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+
+    def _int8_digit_gemm(d8: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """Exact ``d8 @ w^T`` as int64 for int8 ``d8 (p, n)`` and ``w (m, n)`` with inner chunking."""
+        n = d8.shape[1]
+        if n <= INT_MM_MAX_INNER:
+>           return torch._int_mm(d8, w.t()).to(torch.int64)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+E           RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 16 n 32 k 24 mat1_ld 24 mat2_ld 24 result_ld 16 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/factory/kernels.py:73: RuntimeError
+________________________ test_cuda_kernel_exact[K48A20] ________________________
+
+ring = RingParams(k=48, a=20)
+
+    @pytest.mark.gpu
+    def test_cuda_kernel_exact(ring: RingParams) -> None:  # pragma: no cover - GPU only
+        x = _rand((5, 21), ring.k, 9)
+        w = _w(13, 21, 9)
+>       got = RingKernel(w.cuda(), "cuda_int8").matmul(x, ring).cpu()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/factory/test_kernels.py:175: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/factory/kernels.py:253: in matmul
+    return int8_ring_mm(xp, self._w, params.k)[:b, : self.out_features]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/factory/kernels.py:96: in int8_ring_mm
+    y = _int8_digit_gemm(d.to(torch.int8), w)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+d8 = tensor([[  92,  -11,   56, -106,   65,  -76,   40,  -15,  117,  -95,  -36,  -68,
+          -69,  -54,  -35,  -22,  120...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+w = tensor([[-128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128, -128,
+         -128, -128, -128, -128, -128...       0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0]],
+       device='cuda:0', dtype=torch.int8)
+
+    def _int8_digit_gemm(d8: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+        """Exact ``d8 @ w^T`` as int64 for int8 ``d8 (p, n)`` and ``w (m, n)`` with inner chunking."""
+        n = d8.shape[1]
+        if n <= INT_MM_MAX_INNER:
+>           return torch._int_mm(d8, w.t()).to(torch.int64)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^
+E           RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 16 n 32 k 24 mat1_ld 24 mat2_ld 24 result_ld 16 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/factory/kernels.py:73: RuntimeError
+________________________ test_cuda_int8_exact[K32A8-1] _________________________
+
+rows = 1, ring = RingParams(k=32, a=8)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -38, -108, -105,  ...,   21,  -52,   14],
+        [ 108,   52,  -63,  ...,   49,  -83,   4...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[3653403231, 2735729615, 2195314465, 1158725112, 1322117304,  175979945,
+          323153949,   70985654,  752...  580235070,
+         2486371349, 3098768825, 3631311419, 2256379633, 1612402200, 1332478709]],
+       device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+________________________ test_cuda_int8_exact[K32A8-17] ________________________
+
+rows = 17, ring = RingParams(k=32, a=8)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ 111,  -26,  121,  ...,   92,  -94,   90],
+        [  97,  -76,    4,  ...,   95, -122,   1...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[3653403231, 2735729615, 2195314465,  ..., 2256379633, 1612402200,
+         1332478709],
+        [1816595736, ...99],
+        [1881757635, 3980880893, 4284331843,  ..., 1807658985, 2847369492,
+         1625084114]], device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+________________________ test_cuda_int8_exact[K32A8-33] ________________________
+
+rows = 33, ring = RingParams(k=32, a=8)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -13,  -89,  -56,  ...,   21,  -59,  -13],
+        [ 124,  -88,   85,  ...,   92,   25,   2...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[3653403231, 2735729615, 2195314465,  ..., 2256379633, 1612402200,
+         1332478709],
+        [1816595736, ...03],
+        [3925670573, 2348637569, 2226998613,  ..., 3822501910, 2547518059,
+         1437656801]], device='cuda:0')
+k = 32
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 40 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+________________________ test_cuda_int8_exact[K40A12-1] ________________________
+
+rows = 1, ring = RingParams(k=40, a=12)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[  40,    8,  103,  ...,   47,   68,  -67],
+        [ 124, -109,  102,  ...,   -5,   53,   2...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 700346781657,  296633628802,   45050865998,   18172327443,
+          894200084524, 1003585370534,  667003089...69550563, 1035864319682,
+          401442875404,  115993286562,  691711727746, 1019417211843]],
+       device='cuda:0')
+k = 40
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_______________________ test_cuda_int8_exact[K40A12-17] ________________________
+
+rows = 17, ring = RingParams(k=40, a=12)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[-105,  119,  -59,  ...,  -28, -109,   15],
+        [ -83,   75,   -9,  ..., -104,  -48,   4...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 700346781657,  296633628802,   45050865998,  ...,
+          115993286562,  691711727746, 1019417211843],
+   ...251217897,  406778334596,  666147866250,  ...,
+          335449079672,  706654300497,  296437773917]], device='cuda:0')
+k = 40
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_______________________ test_cuda_int8_exact[K40A12-33] ________________________
+
+rows = 33, ring = RingParams(k=40, a=12)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[  16,   36,  -26,  ...,  -12,  104,   60],
+        [  89,  -26,   96,  ...,  124,  109,  -7...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[ 700346781657,  296633628802,   45050865998,  ...,
+          115993286562,  691711727746, 1019417211843],
+   ...777449930, 1099024817894,  733342400553,  ...,
+          463539310664,  197190701374,  969104463356]], device='cuda:0')
+k = 40
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 40 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+________________________ test_cuda_int8_exact[K48A20-1] ________________________
+
+rows = 1, ring = RingParams(k=48, a=20)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[ -18,  -33,  -90,  ...,  -64, -117,  -40],
+        [  13,  -33, -114,  ...,   53,  -55,  -8...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[179288776104386,  75938208973529,  11533021695693,   4652115825474,
+         228915221638366, 256917854856768...265181265838620,
+         102769376103536,  29694281360114, 177078202303123, 260970806231956]],
+       device='cuda:0')
+k = 48
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_______________________ test_cuda_int8_exact[K48A20-17] ________________________
+
+rows = 17, ring = RingParams(k=48, a=20)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[  88, -122,   53,  ...,  -97, -123,   39],
+        [ -27,  -13,  -43,  ...,   89,  112,  11...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[179288776104386,  75938208973529,  11533021695693,  ...,
+          29694281360114, 177078202303123, 260970806... 104135253656765, 170533853760217,  ...,
+          85874964396042, 180903500927307,  75888070122840]], device='cuda:0')
+k = 48
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 32 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_______________________ test_cuda_int8_exact[K48A20-33] ________________________
+
+rows = 33, ring = RingParams(k=48, a=20)
+
+    @pytest.mark.gpu
+    @pytest.mark.parametrize("rows", [1, 17, 33])
+    def test_cuda_int8_exact(rows: int, ring: RingParams) -> None:  # pragma: no cover - GPU only
+        w = torch.randint(-127, 128, (40, 72), dtype=torch.int8)
+        x = rand_x(rows, 72, ring)
+        k = ComputeKernel(_spec(40, 72), w, device="cuda", backend="cuda_int8")
+        assert k.backend == "cuda_int8"
+>       y = k.run(x, ring)
+            ^^^^^^^^^^^^^^
+
+tests/service/test_kernels.py:146: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/service/kernels.py:287: in run
+    out = self._pw.matmul(xin, ring)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/ringmm.py:170: in matmul
+    out = self._mm_cuda(xin, k)
+          ^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PreparedWeight(w8=tensor([[-125,  -41,   41,  ...,  -41,   33,  -60],
+        [ -20,  101,  -46,  ...,   -6,   99,  11...  dtype=torch.int8), device=device(type='cuda', index=0), backend='cuda_int8', cache_float=True, _resolved='cuda_int8')
+x = tensor([[179288776104386,  75938208973529,  11533021695693,  ...,
+          29694281360114, 177078202303123, 260970806... 281350353380942, 187735654541812,  ...,
+         118666063530198,  50480819551994, 248090742619259]], device='cuda:0')
+k = 48
+
+    def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._w_dev is not None
+        b, n = x.shape
+        m = self.out_features
+        mp, np_ = self._w_dev.shape
+        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
+        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
+        xp[:b, :n] = x
+        mask = (1 << k) - 1
+        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for i, d in enumerate(balanced_digits(xp, k, 8)):
+            d8 = d.to(torch.int8)
+            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+            for c0 in range(0, np_, _INT_MM_MAX_N):
+                c1 = min(np_, c0 + _INT_MM_MAX_N)
+>               y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 40 n 40 k 72 mat1_ld 72 mat2_ld 72 result_ld 40 abType 3 cType 10 computeType 72 scaleType 10
+
+src/pgw/core/ringmm.py:195: RuntimeError
+_____________________ test_vector_file_matches_python_core _____________________
+
+    def test_vector_file_matches_python_core() -> None:
+>       gen = _load_generator()
+              ^^^^^^^^^^^^^^^^^
+
+tests/vectors/test_vectors.py:57: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/vectors/test_vectors.py:35: in _load_generator
+    spec.loader.exec_module(mod)
+<frozen importlib._bootstrap_external>:1023: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1160: in get_code
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <_frozen_importlib_external.SourceFileLoader object at 0x7969dcabab10>
+path = '/tmp/pgwsrc/pgw/rust/tools/gen_vectors.py'
+
+>   ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pgwsrc/pgw/rust/tools/gen_vectors.py'
+
+<frozen importlib._bootstrap_external>:1218: FileNotFoundError
+=========================== short test summary info ============================
+SKIPPED [1] tests/cli/test_deploy_compose.py:107: docker CLI not installed
+SKIPPED [3] tests/cli/test_deploy_helm.py:384: helm not installed
+SKIPPED [18] tests/docs/test_numbers.py:105: research logs not present in this checkout
+SKIPPED [1] tests/vectors/test_vectors.py:97: optional Rust extension not built (feature 'python')
+SKIPPED [1] tests/vectors/test_vectors.py:118: set PGW_TEST_RUST=1 to run cargo test
+24 failed, 1395 passed, 24 skipped in 838.23s (0:13:58)
+
+---stderr---

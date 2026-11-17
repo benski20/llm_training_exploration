@@ -168,17 +168,19 @@ def test_security_relevant_defaults_match_the_docs(docs: dict[str, str]) -> None
     assert g["allow_dev_modes"].default is False and g["allow_anonymous"].default is False
     assert g["require_service_tls"].default is True
     assert g["noise_monitor"].default is True and g["noise_monitor_fail_closed"].default is True
-    assert g["integrity_cooldown_s"].default == 900.0
+    assert g["integrity_cooldown_s"].default is None  # admin reset only (security review)
+    assert g["min_soundness_bits"].default == 20.0 and g["pack_verify"].default == "full"
     assert g["default_max_tokens"].default == 512
     f = FactorySettings.model_fields
-    assert f["checks"].default == 2 and f["segment_slots"].default == 4096
+    assert f["checks"].default is None and f["segment_slots"].default == 4096  # None = auto (>= 20 bits)
     assert f["checks"].metadata and any(getattr(m, "le", None) == 8 for m in f["checks"].metadata)
     m = MaskStoreSettings.model_fields
     assert m["shred_consumed"].default is True and m["fsync"].default is True
+    assert m["min_soundness_bits"].default == 20.0 and m["allow_unsigned_partner_segments"].default is False
     s = ServiceSettings.model_fields
     assert s["batch_window_ms"].default == 2.0
     wp = docs["security/whitepaper.md"]
-    assert "default 900 s" in wp and "default 4096" in wp and "default `c = 2`" in wp and "up to 8" in wp
+    assert "only an admin reset" in wp and "default 4096" in wp and "at least 20 bits" in wp and "up to 8" in wp
 
 
 # ------------------------------------------------------------------------------------- error codes
@@ -300,10 +302,11 @@ def test_freivalds_table_matches_soundness_bits(docs: dict[str, str]) -> None:
         assert soundness_bits(p, n_i, 1) == int(h), f"{ring} n={n}: h"
         for c, v in ((2, c2), (4, c4), (8, c8)):
             assert soundness_bits(p, n_i, c) == int(v), f"{ring} n={n} c={c}"
-    # the headline claim
-    assert soundness_bits(RingParams.from_name("K40A12"), 4096, 2) == 16
-    minus16 = "2^\u221216"  # typographic minus as used in the docs
-    assert minus16 in docs["security/whitepaper.md"] and minus16 in docs["README.md"]
+    # the headline claim: auto default c = 3 at width 4096 gives 24 bits (floor 20)
+    k40 = RingParams.from_name("K40A12")
+    assert soundness_bits(k40, 4096, 2) < 20 <= soundness_bits(k40, 4096, 3) == 24
+    minus24 = "2^\u221224"  # typographic minus as used in the docs
+    assert minus24 in docs["security/whitepaper.md"] and minus24 in docs["README.md"]
 
 
 def test_one_time_pad_lemma_numerically() -> None:
@@ -366,18 +369,28 @@ def test_mask_derivation_claims() -> None:
 
 
 def test_recipient_key_snippet_runs(docs: dict[str, str], tmp_path: Path) -> None:
+    """The guide's key commands (recipient + partner keys) run as documented."""
     text = docs["operations/air-gapped-factory.md"]
-    block = next(b for b in code_blocks(text, ("bash",)) if "RecipientKeyPair.generate" in b)
-    py = block.split("<<'EOF'\n", 1)[1].rsplit("EOF", 1)[0]
-    py = py.replace("/etc/pgw/secrets/recipient.key", str(tmp_path / "recipient.key"))
-    py = py.replace("/etc/pgw/recipient.pub.hex", str(tmp_path / "recipient.pub.hex"))
-    r = subprocess.run([sys.executable, "-c", py], capture_output=True, text=True, timeout=60)  # noqa: S603
+    blocks = code_blocks(text, ("bash",))
+    rec = next(b for b in blocks if "recipient-key create" in b)
+    part = next(b for b in blocks if "partner-key create" in b)
+    assert "--partner-key" in part and "PGW_MASKSTORE_TRUSTED_PARTNER_KEYS" in text
+    rec_line = next(line for line in rec.splitlines() if line.startswith("pgw maskstore recipient-key create"))
+    args = rec_line.split()[1:]
+    args = [a.replace("/etc/pgw/secrets/recipient.key", str(tmp_path / "recipient.key"))
+            .replace("/etc/pgw/recipient.pub.hex", str(tmp_path / "recipient.pub.hex")) for a in args]
+    r = subprocess.run([sys.executable, "-m", "pgw.cli", *args], capture_output=True, text=True, timeout=60)  # noqa: S603
     assert r.returncode == 0, r.stderr
-    assert "recipient key id: hpke:" in r.stdout
+    assert '"kek_id": "hpke:' in r.stdout
     assert (tmp_path / "recipient.key").stat().st_mode & 0o077 == 0
     from pgw.factory.sinks import load_recipient_public_key
 
     assert len(load_recipient_public_key(tmp_path / "recipient.pub.hex")) == 32
+    part_line = next(line for line in part.splitlines() if line.startswith("pgw maskstore partner-key create"))
+    args = [a.replace("/keys/", str(tmp_path) + "/") for a in part_line.split("#")[0].split()[1:]]
+    r = subprocess.run([sys.executable, "-m", "pgw.cli", *args], capture_output=True, text=True, timeout=60)  # noqa: S603
+    assert r.returncode == 0, r.stderr
+    assert len(bytes.fromhex((tmp_path / "partner.pub.hex").read_text().strip())) == 32
 
 
 def test_models_json_example_validates(docs: dict[str, str], tmp_path: Path) -> None:

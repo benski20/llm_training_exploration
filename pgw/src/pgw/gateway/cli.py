@@ -28,9 +28,6 @@ def _errors(fn: F) -> F:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
-        except NotImplementedError as exc:
-            click.echo(f"error: not implemented yet: {exc}", err=True)
-            sys.exit(3)
         except PGWError as exc:
             click.echo(f"error [{exc.code}]: {exc.message}", err=True)
             sys.exit(1)
@@ -68,7 +65,6 @@ def serve(host: str | None, port: int | None) -> None:
     configure_logging(common.log_level, json_lines=common.log_json)
     settings = GatewaySettings()
     app = create_app(settings)
-    import uvicorn
 
     bind = host or settings.host
     if not settings.tls.enabled and bind not in ("127.0.0.1", "::1", "localhost"):
@@ -87,8 +83,51 @@ def serve(host: str | None, port: int | None) -> None:
             tls["ssl_ca_certs"] = str(settings.tls.ca_file)
             if settings.tls.require_client_cert:
                 tls["ssl_cert_reqs"] = ssl.CERT_REQUIRED
-    uvicorn.run(app, host=bind, port=port or settings.port, log_config=None,
-                server_header=False, date_header=False, **tls)
+    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+
+
+def run_gateway_servers(app: Any, settings: Any, host: str, port: int, tls: dict[str, Any]) -> None:
+    """Run the API server (and the optional ops listener) with a graceful SIGTERM drain.
+
+    On SIGTERM/SIGINT the runtime first stops admitting work and ``/readyz`` turns 503 (so the
+    load balancer stops routing here), then uvicorn waits up to ``drain_timeout_s`` for open
+    requests and SSE streams before closing them, and only then the lifespan shutdown burns
+    leftover reservations, flushes quotas and closes the audit log. Kubernetes'
+    ``terminationGracePeriodSeconds`` must exceed ``drain_timeout_s`` plus store close time.
+    """
+    import asyncio
+
+    import uvicorn
+
+    state = getattr(app.state, "pgw", None)
+
+    class _DrainingServer(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: Any) -> None:
+            if state is not None:
+                state.runtime.begin_drain()
+            super().handle_exit(sig, frame)
+
+    grace = float(settings.drain_timeout_s)
+    cfg = uvicorn.Config(app, host=host, port=port, log_config=None, server_header=False, date_header=False,
+                         timeout_graceful_shutdown=int(grace + 0.999) if grace > 0 else None, **tls)
+    servers = [_DrainingServer(cfg)]
+    ops_app = getattr(app.state, "ops_app", None)
+    if settings.ops_port is not None and ops_app is not None:
+        ops_cfg = uvicorn.Config(ops_app, host=settings.ops_host, port=settings.ops_port, log_config=None,
+                                 server_header=False, date_header=False, lifespan="off",
+                                 timeout_graceful_shutdown=1)
+        servers.append(_DrainingServer(ops_cfg))
+
+    async def _main() -> None:
+        tasks = [asyncio.create_task(s.serve()) for s in servers]
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for s in servers:  # one stopped (signal or failure): stop the other as well
+            s.should_exit = True
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for t in done:
+            t.result()
+
+    asyncio.run(_main())
 
 
 @gateway_group.group("keys")

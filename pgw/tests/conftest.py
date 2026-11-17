@@ -31,6 +31,10 @@ from typing import Any
 import pytest
 import torch
 
+# Dev/staging escape hatch for the whole test suite: most fixtures open throw-away stores without an
+# external monotonic counter. Tests of the production default (refusal) pass the setting explicitly.
+os.environ.setdefault("PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER", "true")
+
 from pgw.core import (
     RING_K32_A8,
     RING_K40_A12,

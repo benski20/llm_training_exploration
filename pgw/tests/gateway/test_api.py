@@ -129,9 +129,9 @@ async def test_max_tokens_clamped_to_context_and_limits(tiny_pack_dir: Path, tmp
         assert u["prompt_tokens"] + u["completion_tokens"] <= 40 and r.json()["choices"][0]["finish_reason"] == "length"
         long = {**CHAT, "messages": [{"role": "user", "content": "x" * 45}]}
         r = await c.post("/v1/chat/completions", json=long, headers=auth(key))
-        assert r.status_code == 400 and r.json()["error"]["code"] == "protocol"
+        assert r.status_code == 400 and r.json()["error"]["code"] == "bad_shape"  # docs/api section 6
         r = await c.post("/v1/chat/completions", json={**CHAT, "max_tokens": 100_000}, headers=auth(key))
-        assert r.status_code == 400
+        assert r.status_code == 400 and r.json()["error"]["code"] == "protocol"  # rejected, not clamped
 
 
 # ---- completions --------------------------------------------------------------------------------------

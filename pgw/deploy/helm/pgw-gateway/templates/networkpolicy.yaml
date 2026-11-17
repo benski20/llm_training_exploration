@@ -34,6 +34,8 @@ spec:
       ports:
         - port: http
           protocol: TCP
+        - port: ops
+          protocol: TCP
     {{- end }}
   egress:
     {{- if .Values.networkPolicy.egress.dns.enabled }}

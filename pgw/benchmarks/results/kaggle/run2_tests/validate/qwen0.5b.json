@@ -1,0 +1,310 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "label": "qwen0.5b",
+ "device": "cuda",
+ "ring": "K40A12",
+ "max_tokens": 32,
+ "prompt": "Explain in three sentences why the sky is blue.",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "cpu_count": 4,
+ "download_s": 7.9,
+ "pack_s": 19.1,
+ "fingerprint": "ee67bbbb7a52eaba81a96657c63d259ce0be962c0b5d3a15fc170eaa66f36b59",
+ "pack_bytes": 915469644,
+ "pack_info": {
+  "arch": "qwen2",
+  "fingerprint": "ee67bbbb7a52eaba81a96657c63d259ce0be962c0b5d3a15fc170eaa66f36b59",
+  "hidden_size": 896,
+  "layers": 24,
+  "max_in_features": 4864,
+  "name": "qwen0.5b",
+  "per_token": {
+   "K32A8": {
+    "download_bytes": 1216512,
+    "mask_bytes": 1216512,
+    "round_trips": 96,
+    "upload_bytes": 724992
+   },
+   "K40A12": {
+    "download_bytes": 1520640,
+    "mask_bytes": 1520640,
+    "round_trips": 96,
+    "upload_bytes": 906240
+   },
+   "K48A20": {
+    "download_bytes": 1824768,
+    "mask_bytes": 1824768,
+    "round_trips": 96,
+    "upload_bytes": 1087488
+   }
+  },
+  "supported_rings": [
+   "K32A8",
+   "K40A12",
+   "K48A20"
+  ],
+  "verified": "fingerprint",
+  "vocab_size": 151936
+ },
+ "reference": {
+  "text": "The sky is blue because of the scattering of sunlight by tiny particles in the Earth's atmosphere. These particles, primarily nitrogen and oxygen, scatter the blue light from",
+  "prompt_tokens": 40,
+  "seconds": 74.58,
+  "device": "cpu",
+  "wall_s": 83.3
+ },
+ "factory_generate": {
+  "slots": 736,
+  "wall_s": 19.0,
+  "tokens_per_hour_wall_incl_startup": 139439,
+  "store_bytes": 1121013803,
+  "store_MB_per_token": 1.523,
+  "output": "ee67bbbb7a52 K40A12 segment 1/1: 896086db9f2b4e339e462ddbab77a8cd (736 slots, 48.0 slots/s)\n"
+ },
+ "factory_bench": {
+  "model": "qwen0.5b",
+  "mode": "pack",
+  "ring": "K40A12",
+  "device": "cuda",
+  "backend": "cuda_int8",
+  "slots_measured": 1024,
+  "seconds": 3.1491619590000255,
+  "slots_per_second": 387.8186615532013,
+  "tokens_per_hour": 1396147.1815915247,
+  "seconds_per_token": 0.0025785247053224103,
+  "gemm_fraction": 0.7002566916881573,
+  "bytes_per_token": 1520640,
+  "price_per_hour": 0.2,
+  "usd_per_million_tokens": 0.1432513725179117,
+  "storage_tb_per_million_tokens": 1.52064,
+  "layers_measured": 1,
+  "layers_total": 1,
+  "gpu_name": "Tesla T4"
+ },
+ "service_startup_s": 4.1,
+ "gpu_mem_MB_service_loaded": [
+  967,
+  3
+ ],
+ "gateway_startup_s": 8.3,
+ "chat": {
+  "text": "The sky is blue because of the scattering of sunlight by tiny particles in the Earth's atmosphere. These particles, primarily nitrogen and oxygen, scatter the blue light from",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 32,
+   "total_tokens": 72
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 30.21,
+  "backend_delta": {
+   "calls": 3072,
+   "rows": 6816,
+   "round_trips": 3072,
+   "bytes_up": 64343040,
+   "bytes_down": 107965440,
+   "freivalds_checked": 3072,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 21.14014630299812,
+   "local_seconds": 5.525856095996687
+  },
+  "gateway_cpu_s": 41.77,
+  "service_cpu_s": 10.96,
+  "slots_used": 72,
+  "wire_bytes_per_token": 2393173,
+  "wire_up_bytes_per_token": 893653,
+  "wire_down_bytes_per_token": 1499520,
+  "round_trips_per_token_decode": null,
+  "gateway_cpu_s_per_token": 0.5801,
+  "status_after": {
+   "name": "qwen0.5b",
+   "mode": "masked",
+   "started": true,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "ee67bbbb7a52eaba81a96657c63d259ce0be962c0b5d3a15fc170eaa66f36b59",
+   "fingerprint_short": "ee67bbbb7a52",
+   "ring": "K40A12",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 8,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": 900.0,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:48983",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 664,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 1261184,
+    "windows": 16,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 3072,
+    "attempts": 3073,
+    "retries": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 64872640,
+    "bytes_received": 108448143,
+    "last_rtt_s": 0.0064536169999200865
+   }
+  }
+ },
+ "stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 2.878,
+  "prefill_s_per_prompt_token": 0.072,
+  "decode_s_per_token": 0.8599,
+  "decode_tokens_per_s": 1.163,
+  "wall_s": 29.99,
+  "gateway_cpu_s": 41.16,
+  "backend_delta": {
+   "calls": 3072,
+   "rows": 6816,
+   "round_trips": 3072,
+   "bytes_up": 64343040,
+   "bytes_down": 107965440,
+   "freivalds_checked": 3072,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 21.08953320299986,
+   "local_seconds": 5.4129520220002405
+  },
+  "gateway_local_engine_s_per_token": 0.0752,
+  "remote_s_per_token": 0.2929
+ },
+ "concurrent": {
+  "requests": 8,
+  "ok": 8,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 83.76,
+  "generated_tokens_per_s": 3.056,
+  "all_tokens_per_s": 6.877,
+  "gateway_cpu_s_per_token": 0.1171,
+  "backend_delta": {
+   "calls": 24576,
+   "rows": 54528,
+   "round_trips": 3168,
+   "bytes_up": 514744320,
+   "bytes_down": 863723520,
+   "freivalds_checked": 24576,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 31.521454289000758,
+   "local_seconds": 37.07241679400602
+  }
+ },
+ "service_loadtest": {
+  "1": {
+   "bytes_down": 12165120,
+   "bytes_up": 7249920,
+   "calls": 768,
+   "calls_per_s": 152.57916497708328,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 6.315905999940696,
+   "latency_ms_p95": 6.956754000043475,
+   "latency_ms_p99": 7.845308000014484,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 152.57916497708328,
+   "seconds": 5.033452635000003,
+   "server_batch_rows_max": 1,
+   "server_batch_rows_mean": 1.0,
+   "server_compute_ms_mean": 1.6057955729166666,
+   "server_queue_ms_mean": 2.1529908854166666,
+   "sessions": 1,
+   "tokens_per_s": 1.5893663018446174,
+   "tokens_per_session": 8,
+   "s_per_token_per_session": 0.6292,
+   "s_per_token_amortized": 0.62918
+  },
+  "8": {
+   "bytes_down": 97320960,
+   "bytes_up": 57999360,
+   "calls": 6144,
+   "calls_per_s": 389.008309385209,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 20.281844000010096,
+   "latency_ms_p95": 22.959813000056783,
+   "latency_ms_p99": 25.513129999922057,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 389.008309385209,
+   "seconds": 15.794007099000055,
+   "server_batch_rows_max": 7,
+   "server_batch_rows_mean": 2.7783203125,
+   "server_compute_ms_mean": 4.357988118489583,
+   "server_queue_ms_mean": 8.313763020833333,
+   "sessions": 8,
+   "tokens_per_s": 4.05216988942926,
+   "tokens_per_session": 8,
+   "s_per_token_per_session": 1.9743,
+   "s_per_token_amortized": 0.24678
+  },
+  "32": {
+   "bytes_down": 389283840,
+   "bytes_up": 231997440,
+   "calls": 24576,
+   "calls_per_s": 333.7148905633995,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 83.17666200002805,
+   "latency_ms_p95": 137.71787199993923,
+   "latency_ms_p99": 215.0900650000267,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 333.7148905633995,
+   "seconds": 73.64370213900008,
+   "server_batch_rows_max": 31,
+   "server_batch_rows_mean": 17.48388671875,
+   "server_compute_ms_mean": 8.371600830078124,
+   "server_queue_ms_mean": 10.502907307942708,
+   "sessions": 32,
+   "tokens_per_s": 3.4761967767020776,
+   "tokens_per_session": 8,
+   "s_per_token_per_session": 9.2055,
+   "s_per_token_amortized": 0.28767
+  }
+ },
+ "gpu_mem_MB_end": [
+  1101,
+  3
+ ],
+ "ok": true
+}

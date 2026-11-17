@@ -24,7 +24,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     import os
 
     for k in list(os.environ):
-        if k.startswith("PGW_") and k != "PGW_OFFLINE":
+        # keep the suite-wide dev escape hatch for throw-away stores (see tests/conftest.py)
+        if k.startswith("PGW_") and k not in ("PGW_OFFLINE", "PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER"):
             monkeypatch.delenv(k, raising=False)
     return monkeypatch
 

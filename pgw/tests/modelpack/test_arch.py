@@ -61,11 +61,22 @@ def test_legacy_rope_scaling_type_key_and_default_theta():
     assert a.rope_theta == 10000.0 and a.rope_scaling == {"rope_type": "linear", "factor": 2.0}
 
 
-def test_unknown_rope_type_is_recorded_with_warning(caplog):
-    cfg = dict(QWEN25_05B, rope_scaling={"rope_type": "dynamic", "factor": 4.0})
-    a = arch_config_from_hf(cfg)
-    assert a.rope_scaling == {"rope_type": "dynamic", "factor": 4.0}
-    assert "dynamic" in caplog.text
+@pytest.mark.parametrize("rtype", ["dynamic", "longrope"])
+def test_unsupported_rope_type_is_rejected(rtype, caplog):
+    cfg = dict(QWEN25_05B, rope_scaling={"rope_type": rtype, "factor": 4.0})
+    with pytest.raises(ConfigError, match=rtype):
+        arch_config_from_hf(cfg)
+    # explicit escape hatch: recorded with a warning
+    a = arch_config_from_hf(cfg, allow_unsupported_rope=True)
+    assert a.rope_scaling == {"rope_type": rtype, "factor": 4.0}
+    assert rtype in caplog.text
+
+
+def test_known_rope_types_match_the_engine():
+    from pgw.engine.rope import SUPPORTED_ROPE_TYPES
+    from pgw.modelpack.arch import KNOWN_ROPE_TYPES
+
+    assert set(SUPPORTED_ROPE_TYPES) == KNOWN_ROPE_TYPES | {"default"}
 
 
 def test_explicit_head_dim_and_kv_default():
@@ -143,3 +154,19 @@ def test_arch_config_is_frozen():
     assert isinstance(a, ArchConfig)
     with pytest.raises(Exception):
         a.hidden_size = 1  # type: ignore[misc]
+
+
+def test_pack_refuses_unservable_rope_before_writing(tiny_hf_dir, tmp_path):
+    import json
+    import shutil
+
+    from pgw.modelpack import pack_checkpoint
+
+    src = tmp_path / "ckpt"
+    shutil.copytree(tiny_hf_dir, src)
+    cfg = json.loads((src / "config.json").read_text())
+    cfg["rope_scaling"] = {"rope_type": "dynamic", "factor": 2.0}
+    (src / "config.json").write_text(json.dumps(cfg))
+    with pytest.raises(ConfigError, match="dynamic"):
+        pack_checkpoint(src, tmp_path / "pack")
+    assert not (tmp_path / "pack").exists()

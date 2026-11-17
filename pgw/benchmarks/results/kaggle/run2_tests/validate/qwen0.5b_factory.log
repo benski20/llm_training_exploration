@@ -1,0 +1,14 @@
+ee67bbbb7a52 K40A12 segment 1/1: 896086db9f2b4e339e462ddbab77a8cd (736 slots, 48.0 slots/s)
+
+---stderr---
+2026-11-17 05:54:02,533 WARNING pgw.maskstore.store: rollback protection: HMAC journal only (PGW_MASKSTORE_COUNTER=none). The journal lives at /tmp/pgw_bench/qwen0.5b/masks/generation.journal; restoring a snapshot of the whole volume (database + journal) is not detectable. Configure a counter on separate storage for production
+2026-11-17 05:54:02,534 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen0.5b/masks (store 54b529db, generation 0)
+2026-11-17 05:54:03,573 INFO pgw.modelpack.loader: verified 1 file(s) of model pack qwen0.5b (linears)
+2026-11-17 05:54:03,573 INFO pgw.modelpack.loader: opened model pack qwen0.5b fp=ee67bbbb7a52 components=linears verify=full
+2026-11-17 05:54:03,574 INFO pgw.factory.runtime: factory loaded pack qwen0.5b (ee67bbbb7a52) from pack
+2026-11-17 05:54:03,854 INFO pgw.factory.streaming: weight streamer: 96/96 linears resident (341.2 MiB of 341.2 MiB) on cuda
+2026-11-17 05:54:03,854 INFO pgw.factory.generator: mask generator for qwen0.5b (ee67bbbb7a52) ring K40A12 on cuda/cuda_int8, 96 linears, 1.52 MB/slot
+2026-11-17 05:54:03,854 WARNING pgw.factory.generator: weak integrity margin: K40A12 with checks=2 gives only 14 bits of Freivalds soundness for 0.down (n=4864); use checks>=3
+2026-11-17 05:54:19,181 INFO pgw.maskstore.store: committed segment 896086db9f2b4e339e462ddbab77a8cd: ee67bbbb7a52 K40A12, 736 slots, 1121.0 MB
+2026-11-17 05:54:19,181 WARNING pgw.maskstore.store: mask inventory low: ee67bbbb7a52 K40A12 has 736 slots (< 4096)
+2026-11-17 05:54:19,181 INFO pgw.factory.generator: segment 896086db9f2b4e339e462ddbab77a8cd: ee67bbbb7a52 K40A12, 736 slots in 15.33s (48.0 slots/s; gemm 5.44s, rng 3.74s, write 13.40s, throttle 0.00s)

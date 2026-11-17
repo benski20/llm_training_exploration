@@ -1,0 +1,58 @@
+[gpu_validate 04:46:18] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (272.7s)
+[gpu_validate 04:46:20] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (2.5s)
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  5.70it/s]
+Fetching 11 files:  55%|█████▍    | 6/11 [00:00<00:00, 20.41it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 20.41it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [00:50<00:25,  8.47s/it]
+Fetching 11 files:  82%|████████▏ | 9/11 [01:01<00:17,  8.87s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  7.48s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  6.48s/it]
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 497, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 483, in main
+    reference_main(args)
+    ~~~~~~~~~~~~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 110, in reference_main
+    events = list(gen.stream(ids, params))
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 320, in stream
+    yield self._step_sync([st])[0]
+          ~~~~~~~~~~~~~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 298, in _step_sync
+    logits = self.model.forward_batch(inputs)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/model.py", line 236, in forward_batch
+    res = self._check_results(calls, self.backend.forward_many(calls))
+                                     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 307, in forward_many
+    return [self.forward(c) for c in calls]
+            ~~~~~~~~~~~~^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 299, in forward
+    yq = exact_int_matmul(xq, w.w8t, self.ring.a)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 191, in exact_int_matmul
+    y += _cuda_int_mm_padded(a, b)
+         ~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 206, in _cuda_int_mm_padded
+    return torch._int_mm(ap, bp)[:t, :m].to(torch.int64)
+           ~~~~~~~~~~~~~^^^^^^^^
+RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 0 transpose_mat2 0 m 4608 n 40 k 3584 mat1_ld 4608 mat2_ld 3584 result_ld 4608 abType 3 cType 10 computeType 72 scaleType 10
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 486, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 216, in run
+    subprocess.run([sys.executable, __file__, "--phase", "reference", "--pack", str(pack), "--fingerprint", fp,  # noqa: S603
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    "--ring", args.ring, "--ref-device", args.ref_device, "--max-tokens", str(args.max_tokens),
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    "--prompt", args.prompt, "--ref-out", str(ref_out)], env=env, check=True, timeout=7200)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K40A12', '--ref-device', 'cuda', '--max-tokens', '32', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.

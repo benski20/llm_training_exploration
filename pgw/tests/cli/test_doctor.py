@@ -133,7 +133,8 @@ def test_role_service_settings(clean_env: pytest.MonkeyPatch, tmp_path: Path, ti
 
 
 def test_role_gateway_settings(clean_env: pytest.MonkeyPatch, tmp_path: Path, tiny_pack_dir: Path) -> None:
-    models = [{"name": "m", "pack_path": str(tiny_pack_dir), "service_url": "http://compute.example:8443"}]
+    models = [{"name": "m", "pack_path": str(tiny_pack_dir), "service_url": "http://compute.example:8443",
+               "fingerprint": "ab" * 32}]
     clean_env.setenv("PGW_GATEWAY_MODELS", json.dumps(models))
     c = run_doctor(role="gateway").get("settings.gateway")
     assert c is not None and c.status == "fail" and "https" in c.detail  # policy: TLS to remote services
@@ -171,3 +172,24 @@ def test_role_extras_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PGW_SERVICE_ALLOW_UNAUTHENTICATED", "true")
     c = run_doctor(role="service").get("extras")
     assert c is not None and c.status == "fail"
+
+
+def test_maskstore_without_counter_fails_and_dev_flags_warn(tmp_path: Path, clean_env: pytest.MonkeyPatch) -> None:
+    """Security review: no external counter = gateways refuse to serve, so doctor reports 'fail'."""
+    from pgw.maskstore.admin import init_store
+
+    kf = tmp_path / "kek"
+    init_store(tmp_path / "store", kf)
+    clean_env.delenv("PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER", raising=False)
+    c = run_doctor(maskstore_root=tmp_path / "store", key_file=kf).get("maskstore")
+    assert c is not None and c.status == "fail" and "counter" in c.detail
+    clean_env.setenv("PGW_MASKSTORE_COUNTER", "file")
+    clean_env.setenv("PGW_MASKSTORE_COUNTER_FILE", str(tmp_path / "other-volume" / "counter"))
+    c = run_doctor(maskstore_root=tmp_path / "store", key_file=kf).get("maskstore")
+    assert c is not None and c.status == "ok", c
+    clean_env.setenv("PGW_MASKSTORE_ALLOW_UNSIGNED_PARTNER_SEGMENTS", "true")
+    rep = run_doctor(maskstore_root=tmp_path / "store", key_file=kf)
+    c = rep.get("maskstore")
+    assert c is not None and c.status == "warn" and "allow_unsigned_partner_segments" in c.detail
+    rep.strict = True
+    assert not rep.ok

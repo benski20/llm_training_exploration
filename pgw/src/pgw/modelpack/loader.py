@@ -34,7 +34,7 @@ from pgw.core.types import LinearId, LinearKind, LinearSpec
 from pgw.modelpack.manifest import MANIFEST_FILE, TOKENIZER_DIR, ArchConfig, LinearEntry, Manifest, TensorEntry
 from pgw.modelpack.st_io import hash_tensor_ranges, read_safetensors_header, tensor_sha256, torch_dtype
 
-__all__ = ["COMPONENTS", "Component", "LinearWeights", "ModelPack", "VerifyMode"]
+__all__ = ["COMPONENTS", "Component", "LinearMeta", "LinearWeights", "ModelPack", "VerifyMode"]
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,25 @@ class LinearWeights:
     def dequantize(self, dtype: torch.dtype = torch.float32) -> torch.Tensor:
         """Float weight ``w8 * scale[:, None]`` (quality baselines / debugging)."""
         return (self.w8.to(torch.float64) * self.scale.to(torch.float64)[:, None]).to(dtype)
+
+
+@dataclass(frozen=True)
+class LinearMeta:
+    """Everything about one linear group except its int8 weight (what a masked gateway needs).
+
+    Attributes:
+        id: Linear id.
+        scale: float32 ``(m,)`` per-row scale ``sw``.
+        bias: float32 ``(m,)`` or ``None``.
+        out_features: ``m``.
+        in_features: ``n``.
+    """
+
+    id: LinearId
+    scale: torch.Tensor
+    bias: torch.Tensor | None
+    out_features: int
+    in_features: int
 
 
 def _check_scale_bias(lid: str, scale: torch.Tensor, bias: torch.Tensor | None) -> None:
@@ -354,6 +373,21 @@ class ModelPack:
         if check_hash and bool((w8 == -128).any()):
             raise ConfigError(f"linear {e.id}: int8 weight contains -128 (packs use [-127, 127])")
         return LinearWeights(e.linear_id, w8, sw, b)
+
+    def load_linear_meta(self, lid: LinearId | str, *, check_hash: bool = False) -> LinearMeta:
+        """Scale, bias and shape of one linear group without reading its int8 weight.
+
+        The masked gateway never needs ``W8``; this keeps it from reading (and holding) every weight
+        matrix of the pack just to learn the scales. Scale and bias are validated as in
+        :meth:`load_linear`.
+        """
+        e = self.linear_entry(lid)
+        sw = self.load_tensor(e.scale, check_hash=check_hash)
+        b = self.load_tensor(e.bias, check_hash=check_hash) if e.bias is not None else None
+        _check_scale_bias(e.id, sw, b)
+        if tuple(sw.shape) != (e.out_features,):
+            raise ShapeError(f"linear {e.id}: scale has shape {tuple(sw.shape)}, expected ({e.out_features},)")
+        return LinearMeta(e.linear_id, sw, b, int(e.out_features), int(e.in_features))
 
     def iter_linears(
         self,

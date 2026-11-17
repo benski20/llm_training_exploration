@@ -6,12 +6,14 @@ The CLI (``pgw.cli``) calls these; they hold no state of their own.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from pgw.core.errors import ConfigError, PGWError
 from pgw.maskstore.config import MaskStoreSettings
+from pgw.maskstore.counters import fsync_dir
 from pgw.maskstore.keys import (
     EnvKeyProvider,
     FileKeyProvider,
@@ -73,14 +75,36 @@ def store_status(settings: MaskStoreSettings | None = None, **overrides: Any) ->
         return store.status()
 
 
+def _retire_source(p: Path) -> None:
+    """Remove an imported segment file and its signature so it cannot be imported anywhere else.
+
+    The segment is first renamed atomically to ``<name>.imported`` (a crash afterwards leaves no file
+    that any importer picks up as a segment), then the signature and the renamed file are deleted
+    and the directory is fsynced.
+    """
+    sig = p.with_name(p.name + SIGNATURE_SUFFIX)
+    tomb = p.with_name(p.name + ".imported")
+    try:
+        os.replace(p, tomb)
+    except FileNotFoundError:
+        tomb = p
+    sig.unlink(missing_ok=True)
+    tomb.unlink(missing_ok=True)
+    fsync_dir(p.parent)
+
+
 def import_files(
     files: Iterable[str | Path],
     settings: MaskStoreSettings | None = None,
     *,
-    delete_source: bool = False,
+    delete_source: bool = True,
     **overrides: Any,
 ) -> list[dict[str, Any]]:
-    """``pgw maskstore import``: import partner segments; one result entry per file."""
+    """``pgw maskstore import``: import partner segments; one result entry per file.
+
+    By default each successfully imported file and its ``.sig`` are removed (a lingering copy could
+    be imported into another store, i.e. mask reuse). ``delete_source=False`` keeps them.
+    """
     results: list[dict[str, Any]] = []
     with open_store(settings, **overrides) as store:
         for f in files:
@@ -92,8 +116,14 @@ def import_files(
                 results.append({"file": str(p), "ok": False, "code": str(exc.code), "error": exc.message})
                 continue
             if delete_source:
-                p.unlink(missing_ok=True)
-                p.with_name(p.name + SIGNATURE_SUFFIX).unlink(missing_ok=True)
+                try:
+                    _retire_source(p)
+                except OSError as exc:
+                    log.error("imported %s but could not remove the source file: %s; delete it (and its "
+                              ".sig) now so it is never imported into another store", p.name, exc.strerror)
+                    results.append({"file": str(p), "ok": True, "segment_id": seg_id,
+                                    "warning": "source file not removed"})
+                    continue
             results.append({"file": str(p), "ok": True, "segment_id": seg_id})
     return results
 

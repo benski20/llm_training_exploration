@@ -176,6 +176,16 @@ class ServiceHandler:
         tenant = ident.tenant_id if ident is not None else _UNKNOWN_TENANT
         self.metrics.request_done(tenant, code or "ok", time.monotonic() - ctx.received_at)
 
+    def precheck(self) -> None:
+        """Cheap admission run by the wire router *before* the request body is read."""
+        s = self.settings
+        if self.draining:
+            raise ServiceUnavailableError("service is draining", details={"retry_after_s": s.retry_after_s})
+        if self.inflight >= s.max_inflight_requests:
+            raise ServiceUnavailableError(
+                "too many in-flight requests", details={"retry_after_s": s.retry_after_s}
+            )
+
     # ---- internals -----------------------------------------------------------------------
     def _admit(self, tenant: str, rows: int) -> None:
         s = self.settings

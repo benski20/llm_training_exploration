@@ -57,7 +57,8 @@ VARIANTS: dict[str, list[dict[str, Any]]] = {
     "pgw-service": [
         {},
         {"tls": {"enabled": False}},
-        {"tls": {"requireClientCert": False}, "autoscaling": {"enabled": True},
+        {"tls": {"requireClientCert": False},
+         "autoscaling": {"enabled": True, "customMetric": {"name": "pgw_service_inflight"}},
          "metrics": {"serviceMonitor": {"enabled": True}}},
         {"gpu": {"enabled": False}, "modelPacks": {"existingClaim": "", "image": {"repository": "reg/packs"}}},
         {"tenants": {"mtlsTenantsKey": "mtls-tenants"}, "config": {"tenantMaxInflight": 8,
@@ -185,7 +186,7 @@ def test_render_valid_and_hardened(chart: str, values: dict[str, Any]) -> None:
             assert m["name"] in vols, m
     ports = {p["name"] for p in main.get("ports", [])}
     for probe in ("startupProbe", "livenessProbe", "readinessProbe"):
-        if chart == "pgw-factory":  # a batch worker: no listener, no probes
+        if chart == "pgw-factory" and probe == "readinessProbe":  # a batch worker: liveness only
             assert probe not in main
             continue
         p = main[probe]
@@ -295,16 +296,38 @@ def test_gateway_network_policy_restricts_egress_to_compute_service() -> None:
     assert "cannot reach" in notes
 
 
-def test_gateway_mtls_listener_uses_tcp_probes() -> None:
-    vals = deep_merge(MINIMAL["pgw-gateway"], {"tls": {"enabled": True, "existingSecret": "t",
-                                                       "requireClientCert": True}})
-    main = _pod_spec(_objects("pgw-gateway", vals))["containers"][0]
-    assert "tcpSocket" in main["readinessProbe"]
-    env = _env(main)
-    assert env["PGW_GATEWAY_TLS__REQUIRE_CLIENT_CERT"] == "true"
-    vals = deep_merge(MINIMAL["pgw-gateway"], {"tls": {"enabled": True, "existingSecret": "t"}})
-    main = _pod_spec(_objects("pgw-gateway", vals))["containers"][0]
-    assert main["readinessProbe"]["httpGet"]["scheme"] == "HTTPS"
+def test_gateway_probes_use_internal_ops_listener_in_every_tls_mode() -> None:
+    """With mTLS on the API port, readiness must still be checked (reliability review)."""
+    for tls in ({"enabled": True, "existingSecret": "t", "requireClientCert": True},
+                {"enabled": True, "existingSecret": "t"}, {"enabled": False}):
+        vals = deep_merge(MINIMAL["pgw-gateway"], {"tls": tls})
+        objs = _objects("pgw-gateway", vals)
+        main = _pod_spec(objs)["containers"][0]
+        for probe in ("startupProbe", "livenessProbe", "readinessProbe"):
+            assert main[probe]["httpGet"]["port"] == "ops" and "tcpSocket" not in main[probe]
+        assert main["readinessProbe"]["httpGet"]["path"] == "/readyz"
+        env = _env(main)
+        assert env["PGW_GATEWAY_OPS_PORT"] == "9091"
+        if tls.get("requireClientCert"):
+            assert env["PGW_GATEWAY_TLS__REQUIRE_CLIENT_CERT"] == "true"
+
+
+def test_gateway_graceful_shutdown_budget() -> None:
+    main_spec = _pod_spec(_objects("pgw-gateway", MINIMAL["pgw-gateway"]))
+    env = _env(main_spec["containers"][0])
+    drain = int(env["PGW_GATEWAY_DRAIN_TIMEOUT_S"])
+    pre = main_spec["containers"][0]["lifecycle"]["preStop"]["exec"]["command"]
+    assert pre[0] == "sleep" and main_spec["terminationGracePeriodSeconds"] > drain + int(pre[1])
+    with pytest.raises(RenderError, match="terminationGracePeriodSeconds"):
+        _objects("pgw-gateway", deep_merge(MINIMAL["pgw-gateway"], {"terminationGracePeriodSeconds": 30}))
+
+
+def test_gateway_volume_must_hold_target_slots() -> None:
+    _objects("pgw-gateway", MINIMAL["pgw-gateway"])  # defaults are consistent
+    with pytest.raises(RenderError, match="cannot hold"):
+        _objects("pgw-gateway", deep_merge(MINIMAL["pgw-gateway"], {"maskstore": {"targetSlots": 65536}}))
+    _objects("pgw-gateway", deep_merge(MINIMAL["pgw-gateway"], {"maskstore": {"targetSlots": 65536},
+                                                               "state": {"persistence": {"size": "1Ti"}}}))
 
 
 # ---- service specifics -----------------------------------------------------------------------------
@@ -341,6 +364,13 @@ def test_service_gpu_and_scaling() -> None:
     assert spec["terminationGracePeriodSeconds"] > int(env["PGW_SERVICE_DRAIN_TIMEOUT_S"])
     dep = next(o for o in objs if o["kind"] == "Deployment")
     assert dep["spec"]["replicas"] == 2 and dep["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"] == 0
+    # GPU deployments must not autoscale on CPU (it stays low while the GPU saturates)
+    with pytest.raises(RenderError, match="customMetric"):
+        _objects("pgw-service", deep_merge(MINIMAL["pgw-service"], {"autoscaling": {"enabled": True}}))
+    hpa = next(o for o in _objects("pgw-service", deep_merge(MINIMAL["pgw-service"], {
+        "autoscaling": {"enabled": True, "customMetric": {"name": "pgw_service_inflight"}}}))
+        if o["kind"] == "HorizontalPodAutoscaler")
+    assert hpa["spec"]["metrics"][0]["pods"]["metric"]["name"] == "pgw_service_inflight"
     objs = _objects("pgw-service", deep_merge(MINIMAL["pgw-service"], {"autoscaling": {"enabled": True},
                                                                        "gpu": {"enabled": False}}))
     dep = next(o for o in objs if o["kind"] == "Deployment")
@@ -355,11 +385,14 @@ def test_service_gpu_and_scaling() -> None:
 def test_factory_has_no_network_and_colocates() -> None:
     objs = _objects("pgw-factory", MINIMAL["pgw-factory"])
     np = next(o for o in objs if o["kind"] == "NetworkPolicy")
-    assert np["spec"]["ingress"] == [] and np["spec"]["egress"] == []
+    # only Prometheus may reach the metrics/health port; no egress at all
+    assert [{p["port"] for p in r["ports"]} for r in np["spec"]["ingress"]] == [{"metrics"}]
+    assert np["spec"]["egress"] == []
     spec = _pod_spec(objs)
     aff = spec["affinity"]["podAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]
     assert aff["labelSelector"]["matchLabels"]["app.kubernetes.io/name"] == "pgw-gateway"
-    assert "ports" not in spec["containers"][0]
+    assert [p["name"] for p in spec["containers"][0]["ports"]] == ["metrics"]
+    assert spec["containers"][0]["livenessProbe"]["httpGet"]["path"] == "/healthz"
     env = _env(spec["containers"][0])
     assert env["PGW_MASKSTORE_ROOT"] == "/var/lib/pgw/state/masks"
     assert "secretKeyRef" in env["PGW_MASKSTORE_KEK"]
@@ -416,3 +449,36 @@ def test_service_network_policy_empty_compute_from_fails_closed() -> None:
     vals = deep_merge(MINIMAL["pgw-service"], {"networkPolicy": {"computeFrom": []}})
     with pytest.raises(RenderError, match="computeFrom must list"):
         render_chart(HELM / "pgw-service", vals)
+
+
+# ---- security review regressions -------------------------------------------------------------------
+def test_gateway_ships_external_counter_on_separate_volume() -> None:
+    """Rollback witness must not live on (and be restored with) the state volume."""
+    objs = _objects("pgw-gateway", MINIMAL["pgw-gateway"])
+    spec = _pod_spec(objs)
+    env = _env(spec["containers"][0])
+    assert env["PGW_MASKSTORE_COUNTER"] == "file"
+    assert env["PGW_MASKSTORE_COUNTER_FILE"].startswith("/var/lib/pgw/counter/")
+    assert "PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER" not in env
+    vols = {v["name"]: v for v in spec["volumes"]}
+    assert vols["counter"]["persistentVolumeClaim"]["claimName"] == "gw-pgw-gateway-counter"
+    assert vols["state"]["persistentVolumeClaim"]["claimName"] != vols["counter"]["persistentVolumeClaim"]["claimName"]
+    pvcs = {o["metadata"]["name"]: o for o in objs if o["kind"] == "PersistentVolumeClaim"}
+    assert pvcs["gw-pgw-gateway-counter"]["metadata"]["labels"]["velero.io/exclude-from-backup"] == "true"
+    with pytest.raises(RenderError, match="allowNoExternalCounter"):
+        _objects("pgw-gateway", deep_merge(MINIMAL["pgw-gateway"], {"maskstore": {"counter": "none"}}))
+    dev = _env(_pod_spec(_objects("pgw-gateway", deep_merge(
+        MINIMAL["pgw-gateway"], {"maskstore": {"counter": "none", "allowNoExternalCounter": True}})))["containers"][0])
+    assert dev["PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER"] == "true" and "PGW_MASKSTORE_COUNTER" not in dev
+
+
+def test_gateway_requires_fingerprint_and_no_shared_store() -> None:
+    vals = yaml.safe_load((HELM / "pgw-gateway" / "values.yaml").read_text())
+    assert "ReadWriteMany" not in json.dumps(vals["state"]["persistence"]["accessModes"])
+    bad = deep_merge(MINIMAL["pgw-gateway"], {})
+    bad["models"] = [{**MINIMAL["pgw-gateway"]["models"][0], "fingerprint": ""}]
+    with pytest.raises(RenderError, match="fingerprint"):
+        _objects("pgw-gateway", bad)
+    fac = deep_merge(MINIMAL["pgw-factory"], {"output": "store", "store": {"colocateWithGateway": {"enabled": False}}})
+    with pytest.raises(RenderError, match="never be shared across nodes"):
+        _objects("pgw-factory", fac)

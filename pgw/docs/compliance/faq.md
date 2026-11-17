@@ -140,7 +140,7 @@ exit plans.
 
 - [ ] DPA describing the categories received (masked payloads, metadata, account data)
 - [ ] BAA template for US healthcare customers
-- [ ] Partner factory agreement: independence, non-collusion, deletion and audit rights (see [air-gapped-factory.md](../operations/air-gapped-factory.md#42-partner-generate-and-export))
+- [ ] Partner factory agreement: independence, non-collusion, deletion and audit rights (see [air-gapped-factory.md](../operations/air-gapped-factory.md#42-partner-signing-key-generate-and-export))
 - [ ] Sub-processor list (cloud providers hosting the compute service)
 - [ ] Statement on metadata use: billing and capacity only; retention periods
 - [ ] Incident notification terms covering integrity alerts reported by customer gateways

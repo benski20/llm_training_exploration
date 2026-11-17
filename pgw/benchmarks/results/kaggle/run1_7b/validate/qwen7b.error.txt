@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 486, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 216, in run
+    subprocess.run([sys.executable, __file__, "--phase", "reference", "--pack", str(pack), "--fingerprint", fp,  # noqa: S603
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    "--ring", args.ring, "--ref-device", args.ref_device, "--max-tokens", str(args.max_tokens),
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                    "--prompt", args.prompt, "--ref-out", str(ref_out)], env=env, check=True, timeout=7200)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K40A12', '--ref-device', 'cuda', '--max-tokens', '32', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.

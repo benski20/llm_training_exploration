@@ -36,8 +36,15 @@ helm install factory deploy/helm/pgw-factory \
   the store's masks are unusable (but never reusable: losing masks is safe, reusing them is not).
 * The state PVC is annotated `helm.sh/resource-policy: keep`. **Never restore it from a snapshot**:
   an old store would allow mask reuse; the store's rollback protection refuses to serve.
-* With a ReadWriteOnce state volume the factory is scheduled onto the gateway's node
-  (`store.colocateWithGateway`); with ReadWriteMany storage it can run anywhere.
+* The factory (output=store) is always scheduled onto the gateway's node
+  (`store.colocateWithGateway`). Never share a store across nodes with ReadWriteMany/NFS storage
+  (SQLite WAL and flock are unreliable there; the store refuses to open on a network filesystem).
+  A factory elsewhere uses output=export, and the gateway imports with `pgw maskstore import`.
+* Rollback protection: `maskstore.counter=file` (default) keeps the monotonic counter on a separate
+  `<release>-counter` PVC labelled `velero.io/exclude-from-backup`. Do not snapshot or back it up
+  with the state volume. If the state volume is ever restored, burn every ACTIVE segment and rebind
+  witnesses before serving again. `counter=provider` (KMS/HSM) or `tpm` are alternatives; `none` is
+  refused unless `maskstore.allowNoExternalCounter=true` (dev only).
 * Model packs: a PVC with pack directories (`pgw pack` output, verified with `pgw doctor --pack`), or
   an OCI image with the packs under `/packs` (`modelPacks.image`), copied by an init container.
 * The gateway renders `/run/pgw/models.json` (tmpfs, 0600) from the ConfigMap template at start-up;

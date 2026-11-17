@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Build Kaggle GPU validation kernels with the current pgw source embedded as a base64 tarball.
+
+Usage::
+
+    python benchmarks/kaggle/build.py <out_root> [--owner KAGGLE_USER]
+
+creates ``<out_root>/<kernel>/{run.py,kernel-metadata.json}`` for each job in ``JOBS``; push them with
+``kaggle kernels push -p <out_root>/<kernel>``. The tarball leaves out rust/ (build artifacts), caches and
+benchmark results.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import io
+import json
+import tarfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+PGW = HERE.parents[1]
+EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results"}
+
+QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
+QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
+QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
+
+JOBS: dict[str, dict] = {
+    # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
+    "pgw-gpu-tests": {"steps": [
+        {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
+        {"kind": "doctor"},
+        {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-v", "-rs", "--timeout", "900"],
+         "timeout": 1800},
+        {"kind": "validate", "label": "qwen0.5b", "args": [
+            "--model", QWEN05, "--label", "qwen0.5b", "--device", "cuda", "--ref-device", "cpu",
+            "--max-tokens", "32", "--concurrent", "8", "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128",
+            "--loadtest-tokens", "8", "--factory-bench-slots", "1024"], "timeout": 3600},
+        {"kind": "ring", "shapes": ["llama3-8b.qkv", "llama3-8b.gate_up", "llama3-8b.down",
+                                    "qwen2.5-0.5b.gate_up"], "rings": ["K40A12", "K48A20", "K32A8"]},
+        {"kind": "pytest", "name": "pytest_full", "args": ["tests", "-q", "-rs", "--timeout", "1200"],
+         "env": {"PGW_E2E_SERVICE_DEVICE": "cuda"}, "timeout": 3600},
+    ]},
+    # (b) 7B end to end on one T4
+    "pgw-gpu-7b": {"steps": [
+        {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
+        {"kind": "doctor"},
+        {"kind": "validate", "label": "qwen7b", "args": [
+            "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda",
+            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2", "--factory-bench-slots", "256"],
+         "timeout": 6600},
+    ]},
+    # re-run after fixes: GPU tests, the tests that failed in the full suite, e2e with the service on CUDA
+    "pgw-gpu-verify": {"steps": [
+        {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-v", "-rs", "--timeout", "900"],
+         "timeout": 1800},
+        {"kind": "pytest", "name": "pytest_regressions", "args": [
+            "tests/core/test_misc.py", "tests/factory/test_bench_cli.py", "tests/vectors", "-q", "-rs",
+            "--timeout", "900"], "timeout": 1800},
+        {"kind": "pytest", "name": "pytest_e2e_gpu_service", "args": ["tests/e2e", "-v", "-rs", "--timeout", "1800"],
+         "env": {"PGW_E2E_SERVICE_DEVICE": "cuda"}, "timeout": 2400},
+    ]},
+    # fallback if 7B does not fit / is too slow
+    "pgw-gpu-3b": {"steps": [
+        {"kind": "validate", "label": "qwen3b", "args": [
+            "--model", QWEN3, "--label", "qwen3b", "--device", "cuda", "--ref-device", "cuda",
+            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2", "--factory-bench-slots", "256"],
+         "timeout": 6600},
+    ]},
+}
+
+
+def source_tarball() -> bytes:
+    buf = io.BytesIO()
+
+    def filt(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        parts = Path(ti.name).parts
+        if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts):
+            return None
+        return ti
+
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        tf.add(PGW, arcname="pgw", filter=filt)
+    return buf.getvalue()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("out_root")
+    ap.add_argument("--owner", default="bensliv")
+    ap.add_argument("--only", nargs="*")
+    args = ap.parse_args()
+    tgz = base64.b64encode(source_tarball()).decode()
+    template = (HERE / "kernel_template.py").read_text()
+    for slug, job in JOBS.items():
+        if args.only and slug not in args.only:
+            continue
+        d = Path(args.out_root) / slug
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "run.py").write_text(template.replace("__JOB__", json.dumps(job)).replace("__PGW_TGZ_B64__", tgz))
+        meta = {"id": f"{args.owner}/{slug}", "title": slug, "code_file": "run.py", "language": "python",
+                "kernel_type": "script", "is_private": True, "enable_gpu": True, "machine_shape": "NvidiaTeslaP100",
+                "enable_internet": True, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
+                "model_sources": []}
+        (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))
+        print(d, f"{(d / 'run.py').stat().st_size / 1e6:.2f} MB")
+
+
+if __name__ == "__main__":
+    main()

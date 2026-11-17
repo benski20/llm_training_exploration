@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 import torch
 
-from pgw.core import FingerprintMismatchError, RingParams
+from pgw.core import RING_K40_A12, FingerprintMismatchError, RingParams
 from pgw.gateway import ApiKeyStore, EgressGuardTransport, create_app
 from pgw.gateway.runtime import InferenceRuntime
 from tests.gateway.conftest import (
@@ -142,12 +142,15 @@ async def test_integrity_failure_fails_closed_and_trips_breaker(tiny_pack_dir: P
         n_req, before = svc.handler.requests, available(store, gw_pack)
         r = await c.post("/v1/chat/completions", json=CHAT, headers=auth(key))
         assert r.status_code == 503 and r.json()["error"]["code"] == "unavailable"
-        assert "integrity" in r.json()["error"]["message"] and "Retry-After" in r.headers
+        # default: admin reset only (no cool-down), so no Retry-After hint
+        assert "integrity" in r.json()["error"]["message"] and "Retry-After" not in r.headers
         assert svc.handler.requests == n_req and available(store, gw_pack) == before
         rs = await c.post("/v1/chat/completions", json={**CHAT, "stream": True}, headers=auth(key))
         assert rs.status_code == 503
-        ready = await c.get("/readyz")
+        ready = await c.get("/readyz?models=all")
         assert ready.status_code == 503 and ready.json()["models"][MODEL]["reason"] == "integrity breaker open"
+        # the process stays in the load balancer: other models / typed errors keep flowing
+        assert (await c.get("/readyz")).status_code == 200
         m = (await c.get("/metrics")).text
         assert 'pgw_gateway_integrity_failures_total{check="freivalds",model="tiny"} 1.0' in m
         st = (await c.get("/admin/status", headers=ADMIN)).json()["models"][0]
@@ -175,7 +178,7 @@ async def test_integrity_failure_mid_stream(tiny_pack_dir: Path, tmp_path: Path,
         r = await c.post("/v1/chat/completions", json={**CHAT, "stream": True, "max_tokens": 20}, headers=auth(key))
         ev = parse_sse(r.text)
         assert ev[-1] == "[DONE]" and ev[-2]["error"]["code"] == "integrity_check_failed"
-        assert (await c.get("/readyz")).status_code == 503
+        assert (await c.get("/readyz?models=all")).status_code == 503
 
 
 async def test_mask_exhausted_fails_fast(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any, make_store: Any,
@@ -198,8 +201,11 @@ async def test_readyz_reports_empty_store(tiny_pack_dir: Path, tmp_path: Path, g
     store = make_store(0)
     svc = InProcessService(gw_pack)
     async with gateway(masked_app(tiny_pack_dir, tmp_path, store, svc, keys)) as c:
-        r = await c.get("/readyz")
+        r = await c.get("/readyz?models=all")
         assert r.status_code == 503 and r.json()["models"][MODEL]["reason"] == "no mask slots"
+        r = await c.get("/readyz")
+        assert r.status_code == 200 and r.json()["all_models_ready"] is False
+        assert 'pgw_gateway_model_ready{model="tiny"} 0.0' in (await c.get("/metrics")).text
 
 
 async def test_startup_refuses_wrong_fingerprint_or_ring(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
@@ -220,18 +226,50 @@ async def test_startup_refuses_wrong_fingerprint_or_ring(tiny_pack_dir: Path, tm
             pass
 
 
-async def test_unreachable_service_aborts_startup(tiny_pack_dir: Path, tmp_path: Path, make_store: Any,
-                                                  keys: ApiKeyStore) -> None:
+async def test_unreachable_service_starts_degraded_and_reconnects(tiny_pack_dir: Path, tmp_path: Path,
+                                                                    gw_pack: Any, make_store: Any,
+                                                                    keys: ApiKeyStore, key: str,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """A compute-service outage at start-up must not crash-loop the gateway (reliability review)."""
     import httpx
 
-    def down(req: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("refused")
+    from pgw.gateway import runtime as runtime_mod
 
+    svc = InProcessService(gw_pack)
+    up = {"v": False}
+
+    class Flaky(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, req: httpx.Request) -> httpx.Response:
+            if not up["v"]:
+                raise httpx.ConnectError("refused")
+            return await svc.transport.handle_async_request(req)
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(runtime_mod.asyncio, "sleep", lambda d: real_sleep(min(d, 0.02)))
     app = create_app(masked_settings(tiny_pack_dir, tmp_path, model_kw={"service_max_retries": 0}),
-                     mask_store=make_store(0), transports={MODEL: httpx.MockTransport(down)}, key_store=keys)
-    from pgw.core import PGWError
+                     mask_store=make_store(200), transports={MODEL: Flaky()}, key_store=keys)
+    async with gateway(app) as c:
+        r = await c.get("/readyz")
+        assert r.status_code == 200 and r.json()["models"][MODEL]["state"] == "connecting"
+        r = await c.post("/v1/chat/completions", json=CHAT, headers=auth(key))
+        assert r.status_code == 503 and r.json()["error"]["code"] == "unavailable"
+        assert "Retry-After" in r.headers
+        up["v"] = True
+        for _ in range(200):
+            if (await c.get("/readyz?models=all")).status_code == 200:
+                break
+            await real_sleep(0.02)
+        assert (await c.get("/readyz?models=all")).status_code == 200
+        r = await c.post("/v1/chat/completions", json=CHAT, headers=auth(key))
+        assert r.status_code == 200, r.text
 
-    with pytest.raises(PGWError):
+
+async def test_permanent_startup_failure_still_aborts(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                      make_store: Any, keys: ApiKeyStore) -> None:
+    svc = InProcessService(gw_pack, fingerprint="ab" * 32)
+    app = create_app(masked_settings(tiny_pack_dir, tmp_path), mask_store=make_store(0),
+                     transports={MODEL: svc.transport}, key_store=keys)
+    with pytest.raises(FingerprintMismatchError):
         async with gateway(app):
             pass
 
@@ -370,7 +408,7 @@ def test_noise_monitor_required_but_unavailable(tiny_pack_dir: Path, tmp_path: P
 
     class Broken:
         def __init__(self, *a: Any, **k: Any) -> None:
-            raise NotImplementedError
+            raise ImportError("numpy backend missing")  # an optional dependency is unavailable
 
     monkeypatch.setattr(noise, "OutboundNoiseMonitor", Broken)
     svc = InProcessService(gw_pack)
@@ -396,3 +434,76 @@ async def test_masked_reload_and_streaming(tiny_pack_dir: Path, tmp_path: Path, 
         ev = parse_sse(rs.text)
         text = "".join(e["choices"][0]["delta"].get("content", "") for e in ev[:-1] if e["choices"])
         assert text == full["choices"][0]["message"]["content"]
+
+
+# ---- security review regressions ------------------------------------------------------------------
+def test_noise_monitor_required_by_default(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                           make_store: Any, keys: ApiKeyStore,
+                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without allow_dev_modes, an unavailable noise monitor aborts start-up (no silent fallback)."""
+    import pgw.observability.noise as noise
+    from pgw.core import ConfigError
+
+    class Broken:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            raise ImportError("scipy missing")
+
+    monkeypatch.setattr(noise, "OutboundNoiseMonitor", Broken)
+    app = masked_app(tiny_pack_dir, tmp_path, make_store(0), InProcessService(gw_pack), keys)
+
+    async def run() -> None:
+        async with gateway(app):
+            pass
+
+    with pytest.raises(ConfigError, match="noise monitor"):
+        asyncio.run(run())
+
+
+async def test_weak_segments_refused_before_any_mask_is_used(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                             make_store: Any, keys: ApiKeyStore, key: str) -> None:
+    """Segments below min_soundness_bits are refused before x_hat is sent or a mask row is taken."""
+    from pgw.factory import MaskGenerator
+
+    store = make_store(0)
+    MaskGenerator(gw_pack, RING_K40_A12).generate_into_store(store, 64, checks=1, chunk_slots=16, factory_id="weak")
+    svc = InProcessService(gw_pack)
+    app = masked_app(tiny_pack_dir, tmp_path, store, svc, keys, min_soundness_bits=40)
+    async with gateway(app) as c:
+        r = await c.post("/v1/chat/completions", json=CHAT, headers=auth(key))
+        assert r.status_code >= 500 and "soundness" in r.text
+        assert svc.handler.requests == 0
+
+
+def test_breaker_latches_after_auto_resets() -> None:
+    from pgw.gateway.safety import CircuitBreaker
+
+    now = [0.0]
+    b = CircuitBreaker("m", 10.0, max_auto_resets=1, clock=lambda: now[0])
+    b.trip()
+    now[0] = 11.0
+    assert not b.is_open  # first cool-down re-opens traffic
+    b.trip()
+    now[0] = 100.0
+    assert b.is_open  # latched: admin reset only
+    assert b.reset() and not b.is_open
+    default = CircuitBreaker("m", None)
+    default.trip()
+    assert default.is_open
+
+
+async def test_swapped_tokenizer_file_refused_at_startup(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                         make_store: Any, keys: ApiKeyStore) -> None:
+    """Security review: the gateway hashes plain tensors and tokenizer files (pack_verify='full')."""
+    import shutil
+
+    from pgw.core import PGWError
+
+    pack = tmp_path / "pack-copy"
+    shutil.copytree(tiny_pack_dir, pack)
+    tok = sorted(p for p in (pack / "tokenizer").iterdir() if p.is_file())[0]
+    tok.write_bytes(tok.read_bytes() + b" ")
+    app = masked_app(pack, tmp_path, make_store(0), InProcessService(gw_pack), keys,
+                     model_kw={"fingerprint": gw_pack.fingerprint})
+    with pytest.raises(PGWError):
+        async with gateway(app):
+            pass

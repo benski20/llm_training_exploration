@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
@@ -216,7 +217,8 @@ def create_app(
     limits = WireLimits(
         max_request_bytes=s.max_request_bytes, max_items=s.max_items, max_rows_per_item=s.max_rows_per_item
     )
-    app.include_router(create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s))
+    app.include_router(create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
+                                     max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes)))
 
     async def healthz(request: Request) -> Response:
         return PlainTextResponse("ok")
@@ -263,7 +265,12 @@ async def shutdown(state: ServiceState) -> None:
 
 
 def create_metrics_app(state: ServiceState) -> Any:
-    """Minimal ASGI app serving only ``/metrics`` (for a separate, non-public port)."""
+    """Minimal ASGI app for a separate, non-public port: ``/metrics``, ``/healthz`` and ``/readyz``.
+
+    ``/healthz`` and ``/readyz`` have the same semantics as on the main listener. They exist here so
+    that orchestrator probes work when the main port requires client certificates (kubelet probes
+    cannot present one).
+    """
     from prometheus_client import CONTENT_TYPE_LATEST
 
     async def app(scope: Scope, receive: Callable[[], Awaitable[Any]], send: Callable[[Any], Awaitable[None]]) -> None:
@@ -277,9 +284,16 @@ def create_metrics_app(state: ServiceState) -> Any:
                     return
         if scope["type"] != "http":
             return
-        if scope.get("path") == "/metrics" and scope.get("method") == "GET":
+        path, method = scope.get("path"), scope.get("method")
+        if path == "/metrics" and method == "GET":
             body, ctype = state.metrics.render()
             status = 200
+        elif path == "/healthz" and method == "GET":
+            body, ctype, status = b"ok", "text/plain; charset=utf-8", 200
+        elif path == "/readyz" and method == "GET":
+            ready, details = await state.readiness()
+            body = json.dumps({"ready": ready, **details}, default=str).encode()
+            ctype, status = "application/json", 200 if ready else 503
         else:
             body, ctype, status = b"not found\n", "text/plain; charset=utf-8", 404
         ctype = ctype or CONTENT_TYPE_LATEST

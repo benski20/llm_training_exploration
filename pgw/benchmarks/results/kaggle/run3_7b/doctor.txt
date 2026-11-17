@@ -1,0 +1,132 @@
+{
+ "checks": [
+  {
+   "data": {
+    "implementation": "CPython",
+    "version": "3.13.16"
+   },
+   "detail": "Python 3.13.16",
+   "ms": 0.4,
+   "name": "python",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "click": "8.5.0",
+    "cryptography": "50.0.2",
+    "msgpack": "1.2.3",
+    "numpy": "2.1.3",
+    "pydantic": "2.14.1",
+    "pydantic_settings": "2.16.3",
+    "safetensors": "0.8.0",
+    "torch": "2.11.0+cu130"
+   },
+   "detail": "torch 2.11.0+cu130, numpy 2.1.3, cryptography 50.0.2",
+   "ms": 377.8,
+   "name": "packages",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "factory": "ok",
+    "gateway": "ok",
+    "pack": "ok",
+    "service": "ok"
+   },
+   "detail": "all extras for gateway, service, factory, pack",
+   "ms": 22428.2,
+   "name": "extras",
+   "status": "ok"
+  },
+  {
+   "data": {},
+   "detail": "os.urandom and ChaCha20 seed expansion OK",
+   "ms": 93.2,
+   "name": "entropy",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "backends": [
+     "cpu_f32",
+     "cpu_f64",
+     "cuda_int8"
+    ],
+    "failures": [],
+    "timings_ms": {
+     "K32A8/cpu_f32": 40.02,
+     "K32A8/cpu_f64": 76.38,
+     "K32A8/cuda_int8": 175.43,
+     "K40A12/cpu_f32": 2.13,
+     "K40A12/cpu_f64": 1.87,
+     "K40A12/cuda_int8": 3.65,
+     "K48A20/cpu_f32": 2.48,
+     "K48A20/cpu_f64": 1.31,
+     "K48A20/cuda_int8": 4.32
+    }
+   },
+   "detail": "27 checks exact on cpu_f32, cpu_f64, cuda_int8",
+   "ms": 675.4,
+   "name": "selftest",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "available": true
+   },
+   "detail": "exact torch._int_mm on CPU available (fast CPU path)",
+   "ms": 110.8,
+   "name": "cpu_int8",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "available": true,
+    "cuda_int8": true,
+    "devices": [
+     {
+      "capability": "7.5",
+      "index": 0,
+      "memory_gib": 14.6,
+      "name": "Tesla T4"
+     },
+     {
+      "capability": "7.5",
+      "index": 1,
+      "memory_gib": 14.6,
+      "name": "Tesla T4"
+     }
+    ],
+    "torch_cuda": "13.0"
+   },
+   "detail": "2 CUDA device(s): Tesla T4, Tesla T4",
+   "ms": 0.5,
+   "name": "cuda",
+   "status": "ok"
+  },
+  {
+   "data": {
+    "cpus": 4,
+    "mem_available": 31604494336,
+    "mem_total": 33658146816,
+    "torch_threads": 2
+   },
+   "detail": "4 CPUs, 29.4 GiB RAM available",
+   "ms": 0.2,
+   "name": "memory",
+   "status": "ok"
+  }
+ ],
+ "ok": true,
+ "pgw": "0.1.0",
+ "python": "3.13.16",
+ "strict": false,
+ "summary": {
+  "fail": 0,
+  "ok": 8,
+  "skip": 0,
+  "warn": 0
+ }
+}
+
+---stderr---

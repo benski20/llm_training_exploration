@@ -38,6 +38,22 @@ __all__ = ["ModelRegistry", "RegisteredModel", "place_layers"]
 log = logging.getLogger(__name__)
 
 
+def _device_check_operands() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """``(w8, x, expected)`` for the readiness product: a 64x64 weight (shapes like real linears;
+    cuBLASLt int8 GEMMs on some GPUs reject tiny ones), extreme digits, exact Python-int reference."""
+    i = torch.arange(64).view(-1, 1)
+    j = torch.arange(64).view(1, -1)
+    w = (((i * 31 + j * 17) % 255) - 127).to(torch.int8)
+    w[0, :8] = torch.tensor([1, -2, 3, -128, 127, 0, 5, 7], dtype=torch.int8)
+    x = ((i[:2] * 1_000_003 + j * 7_919_000_017) % (1 << 40)).to(torch.int64)
+    x[0, :8] = torch.tensor([(1 << 39) + 3, 2, 1, 1, 1, 9, 0, 1])
+    x[0, 8:] = 0
+    xa = [[int(v) for v in row] for row in x.tolist()]
+    wa = [[int(v) for v in row] for row in w.tolist()]
+    exp = [[sum(a * b for a, b in zip(xr, wr, strict=True)) % (1 << 40) for wr in wa] for xr in xa]
+    return w, x, torch.tensor(exp, dtype=torch.int64)
+
+
 @dataclass
 class RegisteredModel:
     """A loaded pack: name, fingerprint, linear specs and a :class:`ComputeKernel` per linear.
@@ -325,17 +341,17 @@ class ModelRegistry:
     def check_devices(self) -> dict[str, bool]:
         """Run a tiny exact product on every device; ``{device: ok}`` (used by ``/readyz``)."""
         out: dict[str, bool] = {}
-        w = torch.tensor([[1, -2, 3, -128, 127, 0, 5, 7]], dtype=torch.int8)
-        x = torch.tensor([[(1 << 39) + 3, 2, 1, 1, 1, 9, 0, 1]], dtype=torch.int64)
-        expected = (((1 << 39) + 3) - 4 + 3 - 128 + 127 + 0 + 0 + 7) % (1 << 40)
+        w, x, expected = _device_check_operands()
         ring = RingParams(40, 12)
-        spec = LinearSpec(LinearId(0, LinearKind.O), 1, 8)
+        spec = LinearSpec(LinearId(0, LinearKind.O), int(w.shape[0]), int(w.shape[1]))
         for d in self.devices:
             try:
                 k = ComputeKernel(spec, w, device=d, backend=self.backend, cache_float=False)
-                out[str(d)] = int(k.run(x, ring)[0, 0]) == expected
+                out[str(d)] = bool(torch.equal(k.run(x, ring), expected))
+                if not out[str(d)]:
+                    log.error("device check on %s: wrong ring product", d)
             except Exception as exc:  # report, never raise from a health check
-                log.warning("device check failed on %s: %s", d, type(exc).__name__)
+                log.warning("device check failed on %s: %s: %s", d, type(exc).__name__, str(exc)[:300])
                 out[str(d)] = False
         return out
 

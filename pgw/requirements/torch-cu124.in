@@ -1,0 +1,2 @@
+# torch build for CUDA images (download.pytorch.org/whl/cu124)
+torch==2.5.1+cu124

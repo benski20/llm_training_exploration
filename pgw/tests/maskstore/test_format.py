@@ -127,9 +127,11 @@ class _WrapOnly(KeyProvider):
         raise MaskStoreError("wrap-only")
 
 
-def _partner_segment(tmp_path: Path, model: ToyModel, recipient: RecipientKeyPair, slots: int = 6) -> Path:
-    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(recipient.public_bytes()), low_water_slots=0)
-    sid = write_segment(partner, model, slots, chunk_slots=4)
+def _partner_segment(tmp_path: Path, model: ToyModel, recipient: RecipientKeyPair, slots: int = 6,
+                     destination: str | None = None) -> Path:
+    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(recipient.public_bytes()), low_water_slots=0,
+                              allow_no_rollback_witness=True)
+    sid = write_segment(partner, model, slots, chunk_slots=4, destination=destination)
     out = partner.export_segment(sid, tmp_path / "outbox")
     with pytest.raises(MaskReuseError):
         partner.export_segment(sid, tmp_path / "outbox")  # never twice
@@ -137,9 +139,11 @@ def _partner_segment(tmp_path: Path, model: ToyModel, recipient: RecipientKeyPai
     return out
 
 
-def test_partner_import_hpke(tmp_path: Path, store: MaskStore, model: ToyModel) -> None:
+def test_partner_import_hpke(tmp_path: Path, open_store: Any, model: ToyModel) -> None:
+    # format/crypto test: partner authentication policy is covered in test_hardening.py
+    store = open_store(allow_unsigned_partner_segments=True)
     rec = RecipientKeyPair.generate(tmp_path / "rec.key")
-    seg_path = _partner_segment(tmp_path, model, rec)
+    seg_path = _partner_segment(tmp_path, model, rec, destination=store.store_id)
     with SegmentFile(seg_path) as seg:
         assert seg.header.kek_id == rec.kek_id
         nonce_before = seg.header.nonce_prefix
@@ -160,15 +164,17 @@ def test_partner_import_hpke(tmp_path: Path, store: MaskStore, model: ToyModel) 
 
 def test_import_with_store_recipient_and_copied_seed(tmp_path: Path, open_store: Any, model: ToyModel) -> None:
     rec = RecipientKeyPair.generate(tmp_path / "rec.key")
-    store = open_store(recipient_key_file=tmp_path / "rec.key")
+    store = open_store(recipient_key_file=tmp_path / "rec.key", allow_unsigned_partner_segments=True)
     seed = os.urandom(32)
-    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(rec.public_bytes()), low_water_slots=0)
-    a = write_segment(partner, model, 3, seed=seed)
+    partner = MaskStore.open(tmp_path / "partner", _WrapOnly(rec.public_bytes()), low_water_slots=0,
+                              allow_no_rollback_witness=True)
+    a = write_segment(partner, model, 3, seed=seed, destination=store.store_id)
     pa = partner.export_segment(a, tmp_path / "outbox")
     store.import_segment(pa)
     # a different partner store that (wrongly) reuses the same seed: refused by seed hash
-    partner2 = MaskStore.open(tmp_path / "partner2", _WrapOnly(rec.public_bytes()), low_water_slots=0)
-    b = write_segment(partner2, model, 3, seed=seed)
+    partner2 = MaskStore.open(tmp_path / "partner2", _WrapOnly(rec.public_bytes()), low_water_slots=0,
+                              allow_no_rollback_witness=True)
+    b = write_segment(partner2, model, 3, seed=seed, destination=store.store_id)
     pb = partner2.export_segment(b, tmp_path / "outbox2")
     with pytest.raises(MaskReuseError, match="seed"):
         store.import_segment(pb)
@@ -177,9 +183,10 @@ def test_import_with_store_recipient_and_copied_seed(tmp_path: Path, open_store:
     partner2.close()
 
 
-def test_import_rejects_tampered_and_leaves_nothing(tmp_path: Path, store: MaskStore, model: ToyModel) -> None:
+def test_import_rejects_tampered_and_leaves_nothing(tmp_path: Path, open_store: Any, model: ToyModel) -> None:
+    store = open_store(allow_unsigned_partner_segments=True)
     rec = RecipientKeyPair.generate(tmp_path / "rec.key")
-    seg_path = _partner_segment(tmp_path, model, rec, slots=8)
+    seg_path = _partner_segment(tmp_path, model, rec, slots=8, destination=store.store_id)
     raw = bytearray(seg_path.read_bytes())
     raw[-5] ^= 0x80  # last chunk
     seg_path.write_bytes(bytes(raw))

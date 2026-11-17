@@ -27,7 +27,12 @@ def recipient(tmp_path: Path) -> Any:
 
 def test_export_import_round_trip(tmp_path: Path, recipient: Any) -> None:
     pack = FakePack()
-    sink = ExportSink(tmp_path / "partner", recipient.public_bytes())
+    kp = maskstore.FileKeyProvider(tmp_path / "customer" / "kek", create=True)
+    signer = maskstore.PartnerSigningKey.generate(tmp_path / "partner-sign.key")
+    store = maskstore.MaskStore.open(tmp_path / "customer" / "store", kp, recipient=recipient,
+                                     trusted_partner_keys=[signer.public_bytes().hex()])
+    sink = ExportSink(tmp_path / "partner", recipient.public_bytes(), signing_key=signer,
+                      destination_store_id=store.store_id)
     assert sink.kek_id == recipient.kek_id
     gen = MaskGenerator(pack, RING_K40_A12)
     seg = gen.generate_into_store(sink, 6, checks=2, chunk_slots=4, factory_id="partner-1")
@@ -38,8 +43,6 @@ def test_export_import_round_trip(tmp_path: Path, recipient: Any) -> None:
     # nothing remains readable in staging
     assert not list(sink.staging_root.rglob("*.pgwm"))
 
-    kp = maskstore.FileKeyProvider(tmp_path / "customer" / "kek", create=True)
-    store = maskstore.MaskStore.open(tmp_path / "customer" / "store", kp, recipient=recipient)
     try:
         store.import_segment(files[0].path)
         with store.reserve(pack.fingerprint, RING_K40_A12, 6) as res:

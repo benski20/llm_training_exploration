@@ -10,6 +10,7 @@ from pydantic_settings import SettingsConfigDict
 
 from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings
+from pgw.maskstore.format import DEFAULT_CHUNK_BYTES, MAX_CHUNK_BYTES
 
 __all__ = ["FactorySettings"]
 
@@ -38,14 +39,45 @@ class FactorySettings(PGWSettings):
     device: str = Field("auto", description="'auto', 'cpu', 'cuda', 'cuda:1'")
     backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"
     segment_slots: int = Field(4096, gt=0, description="Token positions per segment")
-    chunk_slots: int = Field(256, gt=0, description="Rows per GEMM batch / encrypted chunk")
-    checks: int = Field(2, ge=0, le=8, description="Freivalds vectors per linear per segment")
+    chunk_slots: int = Field(
+        256, gt=0, description="Rows per GEMM batch (factory throughput; not the stored chunk size)"
+    )
+    segment_chunk_slots: int | None = Field(
+        None, gt=0,
+        description="Slots per encrypted W r chunk in the segment file. Unset = sized so that the widest "
+        "linear's chunk is about segment_chunk_bytes. Every open gateway session caches one decrypted chunk "
+        "per linear, so large chunks multiply gateway memory by max_concurrent_sessions",
+    )
+    segment_chunk_bytes: int = Field(
+        DEFAULT_CHUNK_BYTES, gt=0, le=MAX_CHUNK_BYTES,
+        description="Target plaintext bytes per encrypted chunk of the widest linear (auto chunk sizing)",
+    )
+    min_free_bytes: int = Field(
+        2 << 30, ge=0,
+        description="Stop producing when a further segment would leave less than this free on the target volume",
+    )
+    max_store_bytes: int = Field(
+        0, ge=0, description="Cap on bytes of segment files held in the store / outbox (0 = only the free-space guard)"
+    )
+    checks: int | None = Field(
+        None, ge=0, le=8,
+        description="Freivalds vectors per linear per segment; unset = smallest number meeting 20 bits of "
+        "soundness for the ring and model (gateways and stores refuse weaker segments by default)",
+    )
     gpu_memory_fraction: float = Field(0.85, gt=0, le=1, description="Above this, stream weights from host RAM")
     factory_id: str = Field("local", description="Recorded in segment headers")
     output: Literal["store", "export"] = Field("store", description="Write into a local MaskStore or export files")
     export_dir: Path | None = None
     recipient_public_key_file: Path | None = Field(
         None, description="export: customer's raw 32-byte X25519 public key (or hex/base64 text) for HPKE wrapping"
+    )
+    destination_store_id: str | None = Field(
+        None,
+        description="export: store id of the customer mask store the segments are for ('pgw maskstore status'); "
+        "recorded in the signed header so one file can never be imported into two stores",
+    )
+    partner_signing_key_file: Path | None = Field(
+        None, description="export: partner Ed25519 signing key; each exported segment gets a .sig sidecar (SPEC 7.7)"
     )
     poll_interval_s: float = Field(30.0, gt=0, description="Scheduler inventory poll period")
     max_segments_per_run: int = Field(0, ge=0, description="0 = unlimited")
@@ -63,6 +95,18 @@ class FactorySettings(PGWSettings):
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
     error_backoff_s: float = Field(10.0, gt=0, description="Initial back-off after a failed run (doubles to 600 s)")
+    # ---- observability ----------------------------------------------------------------------
+    metrics_port: int | None = Field(
+        None, ge=1, le=65535, description="Serve /metrics and /healthz on this internal port (unset = off)"
+    )
+    metrics_host: str = Field("0.0.0.0", description="Bind address of the metrics/health listener")  # noqa: S104
+    health_max_stale_s: float = Field(
+        3600.0, gt=0,
+        description="/healthz fails when no scheduler plan/segment completed for this long (hung GPU, lock wait)",
+    )
+    health_max_consecutive_errors: int = Field(
+        5, ge=1, description="/healthz fails after this many consecutive failed runs"
+    )
 
     @field_validator("ring")
     @classmethod

@@ -38,7 +38,11 @@ class ServiceSettings(PGWSettings):
         None, ge=0, le=65535, description="Serve /metrics on a separate plain-HTTP port (recommended)"
     )
     metrics_host: str = "127.0.0.1"
-    metrics_on_main_port: bool = Field(True, description="Also expose /metrics on the main listener")
+    metrics_on_main_port: bool = Field(
+        False,
+        description="Also expose /metrics on the main listener. Off by default: the metrics carry per-tenant "
+        "series (request counts, rows, bytes, latency) that other tenants must not read",
+    )
     workers_keep_alive_s: float = Field(75.0, gt=0, description="HTTP keep-alive timeout")
     tls: TLSConfig = TLSConfig()
 
@@ -74,6 +78,11 @@ class ServiceSettings(PGWSettings):
     max_items: int = Field(256, gt=0)
     max_rows_per_item: int = Field(8192, gt=0)
     max_inflight_requests: int = Field(256, gt=0, description="Above this, reply 'unavailable'")
+    max_inflight_bytes: int = Field(
+        1 << 30, gt=0,
+        description="Request-body bytes buffered at once across all connections; checked against Content-Length "
+        "before a body is read (a refused request gets 'unavailable' + Retry-After, nothing is buffered)",
+    )
     max_deadline_s: float | None = Field(120.0, gt=0, description="Server-side cap on compute time per request")
     tenant_max_inflight: int | None = Field(None, gt=0, description="Per-tenant concurrent request cap")
     tenant_rows_per_s: float | None = Field(None, gt=0, description="Per-tenant row rate (token bucket)")
@@ -116,6 +125,15 @@ class ServiceSettings(PGWSettings):
     def _check(self) -> Self:
         if self.tls.require_client_cert and (not self.tls.enabled or self.tls.ca_file is None):
             raise ValueError("tls.require_client_cert needs tls.cert_file, tls.key_file and tls.ca_file")
+        if (
+            self.mtls_tenants_file is not None
+            and not self.trusted_client_cert_header
+            and (not self.tls.enabled or self.tls.ca_file is None)
+        ):
+            raise ValueError(
+                "mtls_tenants_file needs verified client certificates: set tls.cert_file, tls.key_file and "
+                "tls.ca_file (native mTLS) or trusted_client_cert_header (TLS-terminating proxy)"
+            )
         if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
             raise ValueError("metrics_port must differ from port")
         return self

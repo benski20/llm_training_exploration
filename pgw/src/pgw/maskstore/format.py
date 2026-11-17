@@ -33,6 +33,7 @@ import json
 import os
 import re
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -48,8 +49,10 @@ from pgw.core.ring import RingParams
 from pgw.core.types import LinearId
 
 __all__ = [
+    "DEFAULT_CHUNK_BYTES",
     "DEK_BYTES",
     "GCM_TAG_BYTES",
+    "MAX_CHUNK_BYTES",
     "MAX_HEADER_BYTES",
     "NONCE_PREFIX_BYTES",
     "SEGMENT_MAGIC",
@@ -60,7 +63,9 @@ __all__ = [
     "SegmentHeader",
     "SegmentLayout",
     "SegmentLinear",
+    "auto_chunk_slots",
     "chunk_aad",
+    "chunk_cache_bytes",
     "chunk_nonce",
     "encode_header",
     "read_header",
@@ -73,6 +78,25 @@ SEGMENT_SUFFIX = ".pgwm"
 GCM_TAG_BYTES = 16
 DEK_BYTES = 32
 NONCE_PREFIX_BYTES = 4
+#: Default plaintext size of one encrypted ``W r`` chunk of the widest linear. A reader decrypts
+#: whole chunks and keeps one per linear cached per reservation, so this bounds gateway memory per
+#: session at about ``DEFAULT_CHUNK_BYTES x (sum of out_features / max out_features)``.
+DEFAULT_CHUNK_BYTES = 1 << 20
+#: Writers refuse chunks whose widest linear exceeds this many plaintext bytes.
+MAX_CHUNK_BYTES = 16 << 20
+
+
+def auto_chunk_slots(out_features: Sequence[int], ring: RingParams, target_bytes: int = DEFAULT_CHUNK_BYTES) -> int:
+    """Slots per encrypted chunk so that the widest linear's chunk is at most ``target_bytes``."""
+    if target_bytes <= 0:
+        raise ConfigError("target_bytes must be positive")
+    widest = max((int(m) for m in out_features), default=1)
+    return max(1, target_bytes // (widest * ring.bytes_per_element))
+
+
+def chunk_cache_bytes(chunk_slots: int, out_features: Sequence[int], ring: RingParams) -> int:
+    """Plaintext ``W r`` bytes a reservation caches when it holds one chunk of every linear."""
+    return int(chunk_slots) * sum(int(m) for m in out_features) * ring.bytes_per_element
 #: Upper bound on header size (a 200-layer model header is a few tens of KB).
 MAX_HEADER_BYTES = 16 << 20
 _PREAMBLE = len(SEGMENT_MAGIC) + 4
@@ -114,6 +138,11 @@ class SegmentHeader(BaseModel):
     nonce_prefix: str = Field(description="hex, 4 bytes")
     factory_id: str = Field(description="Identifier of the producing factory (no secrets)")
     created_at: str
+    destination: str | None = Field(
+        None,
+        description="Store id of the only customer store allowed to import this segment (partner exports). "
+        "Omitted from the JSON when unset, so older headers keep their exact bytes",
+    )
 
     @field_validator("version")
     @classmethod
@@ -144,6 +173,13 @@ class SegmentHeader(BaseModel):
             return RingParams.from_name(v).name
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
+
+    @field_validator("destination")
+    @classmethod
+    def _destination(cls, v: str | None) -> str | None:
+        if v is not None and not _SEG_ID_RE.match(v):
+            raise ValueError("destination must be a store id (32 lowercase hex chars)")
+        return v
 
     @field_validator("nonce_prefix")
     @classmethod
@@ -187,7 +223,10 @@ class SegmentHeader(BaseModel):
 
 def encode_header(header: SegmentHeader) -> bytes:
     """Canonical JSON bytes of a header (what is stored and authenticated)."""
-    return canonical_json(header.model_dump(mode="json"))
+    data = header.model_dump(mode="json")
+    if data.get("destination") is None:
+        data.pop("destination", None)
+    return canonical_json(data)
 
 
 def chunk_nonce(nonce_prefix: bytes, index: int) -> bytes:

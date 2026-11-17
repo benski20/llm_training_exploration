@@ -22,3 +22,27 @@ spec:
     requests:
       storage: {{ .Values.state.persistence.size | quote }}
 {{- end }}
+{{- if and (eq .Values.maskstore.counter "file") (not .Values.counterVolume.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pgw-gateway.counterClaim" . }}
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+    # The rollback witness must survive a restore of the state volume: never back it up with it.
+    velero.io/exclude-from-backup: "true"
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .Values.counterVolume.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- if .Values.counterVolume.storageClass }}
+  storageClassName: {{ .Values.counterVolume.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.counterVolume.size | quote }}
+{{- end }}

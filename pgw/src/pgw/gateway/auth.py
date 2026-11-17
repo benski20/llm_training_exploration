@@ -376,8 +376,11 @@ class QuotaTracker:
 
     Args:
         default_daily_tokens: Quota for keys without :attr:`ApiKey.daily_token_quota` (``None`` = unlimited).
-        state_file: Where usage is persisted (atomic rewrite on every update); ``None`` = memory only.
+        state_file: Where usage is persisted (atomic rewrite); ``None`` = memory only.
         today: Injectable ``() -> "YYYY-MM-DD"`` (tests).
+        deferred: Do not write the file in :meth:`settle`; only mark it dirty. The owner calls
+            :meth:`flush` periodically from a worker thread and at shutdown (the gateway does), so
+            request completion never waits for an fsync. Bounded loss window: one flush period.
     """
 
     def __init__(
@@ -386,7 +389,11 @@ class QuotaTracker:
         state_file: Path | None = None,
         *,
         today: Callable[[], str] | None = None,
+        deferred: bool = False,
     ):
+        self.deferred = deferred
+        self._dirty = False
+        self._flush_lock = threading.Lock()
         self.default_daily_tokens = default_daily_tokens
         self.state_file = Path(state_file) if state_file is not None else None
         self._today = today or (lambda: datetime.now(UTC).strftime("%Y-%m-%d"))
@@ -435,12 +442,28 @@ class QuotaTracker:
             else:
                 self._reserved.pop(key.key_id, None)
             self._used[key.key_id] = self._used.get(key.key_id, 0) + int(actual)
-            snapshot = {"day": self._day, "used": dict(self._used)}
-        if self.state_file is not None:
+            self._dirty = True
+        if self.state_file is not None and not self.deferred:
+            self.flush()
+
+    def flush(self) -> bool:
+        """Persist usage if it changed since the last flush; True if a write happened (blocking I/O)."""
+        if self.state_file is None:
+            return False
+        with self._flush_lock:
+            with self._lock:
+                if not self._dirty:
+                    return False
+                snapshot = {"day": self._day, "used": dict(self._used)}
+                self._dirty = False
             try:
                 _atomic_write_json(self.state_file, snapshot)
             except OSError as exc:
+                with self._lock:
+                    self._dirty = True
                 log.error("cannot persist quota state: %s", type(exc).__name__)
+                return False
+            return True
 
     def usage(self, key_ids: Iterable[str] | None = None) -> dict[str, int]:
         """Today's recorded usage per key."""

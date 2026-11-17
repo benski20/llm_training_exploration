@@ -41,6 +41,12 @@ install -d -m 0750 -o root -g pgw /etc/pgw
 install -d -m 0750 -o root -g root /etc/pgw/secrets
 install -d -m 0700 -o pgw -g pgw /var/lib/pgw /var/lib/pgw/masks
 install -d -m 0755 -o pgw -g pgw /var/lib/pgw/packs
+# Rollback-counter directory: mount a separate volume here (not snapshotted with /var/lib/pgw).
+install -d -m 0700 -o pgw -g pgw /var/lib/pgw-counter
+if command -v mountpoint >/dev/null 2>&1 && ! mountpoint -q /var/lib/pgw-counter; then
+    echo "install.sh: WARNING /var/lib/pgw-counter is not a separate mount; a restore of the disk holding"
+    echo "            /var/lib/pgw would also roll back the counter (see gateway.env.example)" >&2
+fi
 
 if [ ! -x "$PREFIX/bin/python" ]; then
     "$PYTHON" -m venv "$PREFIX"

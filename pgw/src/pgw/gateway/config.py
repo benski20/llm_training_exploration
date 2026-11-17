@@ -6,7 +6,11 @@ Production defaults are fail-closed:
   for development and tests) are refused unless ``allow_dev_modes`` is set;
 * Freivalds checks run on every compute response (``freivalds_rate = 1.0``);
 * the gateway only talks to the configured compute-service endpoints (egress allowlist);
-* anonymous access is refused unless ``allow_dev_modes`` is set.
+* anonymous access is refused unless ``allow_dev_modes`` is set;
+* masked models must pin their pack fingerprint, and the pack is fully hashed at start-up;
+* an integrity failure keeps the circuit breaker open until an admin reset;
+* the outbound-noise monitor is required for masked models;
+* mask segments must give at least ``min_soundness_bits`` of Freivalds soundness.
 """
 
 from __future__ import annotations
@@ -188,8 +192,10 @@ class GatewaySettings(PGWSettings):
     tls: TLSConfig = TLSConfig()
     noise_monitor: bool = Field(True, description="Statistically check outbound payloads look uniform")
     noise_monitor_fail_closed: bool = Field(True, description="Block traffic if the monitor alarms")
-    noise_monitor_required: bool = Field(
-        False, description="Refuse to start masked models when the noise monitor cannot be constructed"
+    noise_monitor_required: bool | None = Field(
+        None,
+        description="Refuse to start masked models when the noise monitor cannot be constructed "
+        "(unset: required unless allow_dev_modes)",
     )
     noise_sample_rate: float = Field(0.05, gt=0.0, le=1.0)
     egress_allowlist: list[str] = Field(
@@ -200,10 +206,60 @@ class GatewaySettings(PGWSettings):
         True, description="Refuse plain-http service URLs except loopback (e.g. a local TLS sidecar)"
     )
     integrity_cooldown_s: float | None = Field(
-        900.0, gt=0, description="Circuit-breaker cool-down after an integrity failure (None: admin reset only)"
+        None,
+        gt=0,
+        description="Circuit-breaker cool-down after an integrity failure. Default None: only an admin reset "
+        "re-opens traffic (SPEC 3.2: an adaptive attacker is cut off)",
+    )
+    integrity_max_auto_resets: int = Field(
+        2, ge=0, description="With a cool-down: after this many automatic re-opens the breaker stays open"
+    )
+    min_soundness_bits: float = Field(
+        20.0, ge=0, description="Refuse mask segments giving fewer bits of Freivalds soundness for any linear"
+    )
+    pack_verify: Literal["full", "fingerprint"] = Field(
+        "full",
+        description="Pack verification at start-up: 'full' hashes plain tensors, tokenizer and linears "
+        "(scales/biases); 'fingerprint' (manifest only) needs allow_dev_modes",
     )
     audit_log_file: Path | None = Field(None, description="Append-only JSON-lines audit log (no content)")
-    drain_timeout_s: float = Field(30.0, ge=0)
+    drain_timeout_s: float = Field(
+        30.0, ge=0, description="On SIGTERM: max wait for open requests/streams before connections are closed"
+    )
+    ops_port: int | None = Field(
+        None, ge=1, le=65535,
+        description="Internal plain-HTTP listener serving only /healthz, /readyz and /metrics (for probes and "
+        "scraping when the API port requires client certificates). Bind it to a pod-internal interface",
+    )
+    ops_host: str = Field("0.0.0.0", description="Bind address of the ops listener")  # noqa: S104
+    mask_window_tokens: int = Field(
+        64,
+        ge=0,
+        description="Reserve masks for the prompt plus this many generated tokens, then extend in windows of "
+        "the same size while generating, so an early stop or disconnect burns at most one window instead of "
+        "max_tokens slots. 0 = reserve prompt + max_tokens up front",
+    )
+    mask_burn_weight: float = Field(
+        1.0,
+        ge=0,
+        description="Rate limits and quotas charge max(tokens, burn_weight x mask slots reserved) per request, "
+        "so a key cannot drain the shared mask store with huge max_tokens and early stops",
+    )
+    mask_cache_budget_bytes: int = Field(
+        4 << 30,
+        ge=0,
+        description="Start-up check: warn when max_concurrent_sessions x the decrypted mask chunks a session "
+        "caches exceeds this (0 = no check)",
+    )
+    maskstore_gc_interval_s: float = Field(
+        600.0, ge=0, description="Run mask store GC (dead leases, consumed segments, old audit rows); 0 = never"
+    )
+    quota_flush_interval_s: float = Field(
+        5.0, gt=0, description="Persist quota usage at most this often (off the event loop) and on shutdown"
+    )
+    connect_retry_max_s: float = Field(
+        60.0, gt=0, description="Max back-off between compute-service connection attempts of a model not yet ready"
+    )
     metrics_require_admin: bool = Field(False, description="Protect /metrics with the admin token")
     cors_origins: list[str] = Field(default_factory=list)
     dashboard_enabled: bool = True
@@ -247,6 +303,12 @@ class GatewaySettings(PGWSettings):
                     details={"model": m.name, "mode": m.mode},
                 )
             if m.mode == "masked":
+                if m.fingerprint is None and not self.allow_dev_modes:
+                    raise ConfigError(
+                        f"model {m.name!r}: pin the pack fingerprint (fingerprint: <64 hex from 'pgw inspect'); "
+                        "an unpinned pack could be swapped together with its manifest",
+                        details={"model": m.name},
+                    )
                 if m.freivalds_rate < 1.0 and not self.allow_dev_modes:
                     raise ConfigError(
                         f"model {m.name!r}: freivalds_rate must be 1.0 in production (every response is checked)"
@@ -264,8 +326,19 @@ class GatewaySettings(PGWSettings):
                         "only safe when the network layer (service mesh mTLS) encrypts and authenticates it",
                         m.name,
                     )
+        if self.pack_verify != "full" and not self.allow_dev_modes:
+            raise ConfigError("pack_verify must be 'full' in production (set allow_dev_modes for 'fingerprint')")
+        if self.noise_monitor_required is False and not self.allow_dev_modes:
+            raise ConfigError("noise_monitor_required=false needs allow_dev_modes")
         if self.allow_dev_modes:
             log.warning("gateway running with allow_dev_modes=true: NOT a production configuration")
+
+    @property
+    def noise_monitor_is_required(self) -> bool:
+        """Effective ``noise_monitor_required`` (default: required outside dev mode)."""
+        if self.noise_monitor_required is None:
+            return not self.allow_dev_modes
+        return self.noise_monitor_required
 
     def egress_origins(self, models: list[GatewayModelConfig] | None = None) -> frozenset[tuple[str, str, int]]:
         """Allowed outbound origins: configured service URLs plus ``egress_allowlist``."""

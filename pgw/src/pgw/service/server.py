@@ -7,6 +7,9 @@
   (``drain_timeout_s``), then the app's lifespan drains the batch scheduler.
 * ``metrics_port`` serves ``/metrics`` on a separate plain-HTTP listener (bind it to an internal
   interface) in the same event loop.
+* Verified client certificates are published to the app as
+  ``scope["extensions"]["tls"]["client_cert_name"]`` (see :mod:`pgw.service.tls_peer`; hypercorn
+  itself does not), so the mTLS tenant map and the token-vs-certificate cross-check work natively.
 * Access logs are off: request paths are harmless, but the service keeps its logs minimal and
   never logs payloads anyway.
 
@@ -20,7 +23,7 @@ import contextlib
 import logging
 import signal
 import ssl
-from typing import Any
+from typing import Any, cast
 
 from pgw.core.errors import ConfigError
 from pgw.service.config import ServiceSettings
@@ -95,9 +98,19 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
     from hypercorn.config import Config
 
     from pgw.service.app import create_app, create_metrics_app
+    from pgw.service.tls_peer import PeerCertMiddleware, peer_cert_supported
 
     app = app if app is not None else create_app(settings)
     state = app.state.pgw
+    if settings.tls.enabled and settings.tls.ca_file is not None and not settings.trusted_client_cert_header:
+        if not peer_cert_supported():
+            # Fail closed: without the peer certificate the tenant map rejects everything and the
+            # token-vs-certificate tenant cross-check would silently never run.
+            raise ConfigError(
+                "this hypercorn version does not expose verified client certificates to the app; "
+                "terminate TLS in a proxy and set trusted_client_cert_header, or pin a supported hypercorn"
+            )
+        app = cast(Any, PeerCertMiddleware(app))
     stop = shutdown_event or asyncio.Event()
     loop = asyncio.get_running_loop()
     installed: list[int] = []

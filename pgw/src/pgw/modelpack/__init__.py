@@ -17,7 +17,7 @@ from pgw.modelpack.arch import (
     hf_linear_parts,
     hf_plain_tensor_names,
 )
-from pgw.modelpack.loader import COMPONENTS, Component, LinearWeights, ModelPack, VerifyMode
+from pgw.modelpack.loader import COMPONENTS, Component, LinearMeta, LinearWeights, ModelPack, VerifyMode
 from pgw.modelpack.manifest import (
     MANIFEST_FILE,
     PACK_FORMAT,
@@ -38,7 +38,8 @@ from pgw.modelpack.packer import TOKENIZER_FILES, CheckpointReader, pack_checkpo
 __all__ = [
     "COMPONENTS", "HF_LINEAR_PARTS", "HF_PLAIN_TENSORS", "MANIFEST_FILE", "PACK_FORMAT", "PACK_VERSION",
     "PLAIN_FILE", "TOKENIZER_DIR", "TOKENIZER_FILES",
-    "ArchConfig", "CheckpointReader", "Component", "LinearEntry", "LinearPart", "LinearWeights", "Manifest",
+    "ArchConfig", "CheckpointReader", "Component", "LinearEntry", "LinearMeta", "LinearPart", "LinearWeights",
+    "Manifest",
     "ModelPack", "QuantConfig", "SourceInfo", "TensorEntry", "TokenizerFile", "VerifyMode",
     "arch_config_from_hf", "expected_linear_shape", "hf_linear_parts", "hf_plain_tensor_names",
     "pack_checkpoint", "pack_state_dict",

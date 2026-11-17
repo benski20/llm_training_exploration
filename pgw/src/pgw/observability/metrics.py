@@ -57,6 +57,19 @@ METRIC_NAMES: dict[str, tuple[str, tuple[str, ...], str]] = {
     "pgw_gateway_integrity_failures_total": ("counter", ("model", "check"), "Freivalds/range check failures"),
     "pgw_gateway_active_sessions": ("gauge", ("model",), "Active generation sessions"),
     "pgw_gateway_noise_alarm": ("gauge", ("model",), "1 if the outbound-noise monitor alarms"),
+    "pgw_gateway_model_ready": ("gauge", ("model",), "1 if the model can take requests now"),
+    "pgw_gateway_service_attempts_total": (
+        "counter", ("model", "code"), "Compute-service HTTP attempts by result code (ok, error code)"
+    ),
+    "pgw_gateway_service_retries_total": ("counter", ("model",), "Compute-service attempts that were retried"),
+    "pgw_gateway_round_trip_failures_total": ("counter", ("model", "code"), "Failed masked round trips"),
+    "pgw_gateway_admission_active": ("gauge", ("model",), "Admitted sessions"),
+    "pgw_gateway_admission_waiting": ("gauge", ("model",), "Requests waiting in the admission queue"),
+    "pgw_gateway_admission_rejected_total": ("counter", ("model", "reason"), "Requests refused by admission"),
+    "pgw_gateway_queue_wait_seconds": ("histogram", ("model",), "Time spent in the admission queue"),
+    "pgw_gateway_masks_burned_total": ("counter", ("model",), "Mask slots reserved by requests but never used"),
+    "pgw_masks_open_reservations": ("gauge", (), "Open mask reservations in the store"),
+    "pgw_masks_unshredded_bytes": ("gauge", (), "Bytes of fully consumed segment files not yet shredded"),
     # mask store / factory
     "pgw_masks_available_slots": ("gauge", ("fingerprint", "ring"), "Unconsumed mask slots"),
     "pgw_masks_consumed_slots_total": ("counter", ("fingerprint", "ring"), "Consumed (incl. burned) slots"),
@@ -64,6 +77,8 @@ METRIC_NAMES: dict[str, tuple[str, tuple[str, ...], str]] = {
     "pgw_masks_low_water": ("gauge", ("fingerprint", "ring"), "1 if below low water"),
     "pgw_factory_slots_generated_total": ("counter", ("fingerprint", "ring", "device"), "Slots generated"),
     "pgw_factory_slots_per_second": ("gauge", ("fingerprint", "ring", "device"), "Generation throughput"),
+    "pgw_factory_last_success_timestamp": ("gauge", (), "Unix time of the last successful scheduler plan/run"),
+    "pgw_factory_errors_total": ("counter", (), "Failed factory runs"),
 }
 
 #: Buckets for ``*_seconds`` histograms (sub-millisecond kernels up to multi-minute requests).

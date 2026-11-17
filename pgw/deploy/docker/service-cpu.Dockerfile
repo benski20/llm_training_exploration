@@ -4,7 +4,9 @@
 #
 #   docker build -f deploy/docker/service-cpu.Dockerfile -t pgw-service-cpu:dev .
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# Reproducible builds: the base image is pinned by digest and every Python dependency (torch included)
+# by version and sha256 in requirements/service-cpu.txt (refresh both with scripts/lock-requirements.sh).
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 FROM ${PYTHON_IMAGE} AS build
 ARG TORCH_VERSION=2.5.1
@@ -14,11 +16,14 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
 RUN python -m venv /opt/pgw
 ENV PATH=/opt/pgw/bin:$PATH
-RUN pip install --index-url "${TORCH_INDEX_URL}" "torch==${TORCH_VERSION}"
+COPY requirements/service-cpu.txt /tmp/requirements.txt
+# torch==${TORCH_VERSION}+cpu and all other dependencies, hash-checked (no resolver, no "latest")
+RUN pip install --require-hashes --no-deps --extra-index-url "${TORCH_INDEX_URL}" -r /tmp/requirements.txt
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install ".[service]" \
+RUN pip install --no-deps --no-build-isolation ".[service]" \
+    && pip check \
     && pgw service --help > /dev/null
 
 FROM ${PYTHON_IMAGE} AS runtime

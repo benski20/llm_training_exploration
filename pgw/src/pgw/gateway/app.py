@@ -1,7 +1,8 @@
 """ASGI application of the gateway (OpenAI-compatible API, admin and ops endpoints).
 
 Public (API key, scope ``inference``): ``POST /v1/chat/completions``, ``POST /v1/completions``
-(``stream=true`` gives SSE ``data:`` chunks ending with ``data: [DONE]``), ``GET /v1/models``.
+(``stream=true`` gives SSE ``data:`` chunks ending with ``data: [DONE]``), ``GET /v1/models``,
+``GET /v1/models/{name}``.
 Admin (admin token, or an API key with scope ``admin``): ``GET /admin/status``,
 ``GET /admin/masks``, ``GET /admin/keys``, ``POST /admin/keys``, ``DELETE /admin/keys/{key_id}``,
 ``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``.
@@ -92,11 +93,19 @@ class _KeyLease:
     reserved: int
     done: bool = False
 
-    def finish(self, actual_tokens: int) -> None:
+    def finish(self, actual_tokens: int, masks_reserved: int = 0) -> None:
+        """Settle rate limit and quota.
+
+        The charge is ``max(tokens, burn_weight x mask slots reserved)``: reserved slots are
+        destroyed whether used or not, so a key that asks for huge ``max_tokens`` and stops early
+        pays for the masks it burned (the store is shared by every tenant).
+        """
         if self.done:
             return
         self.done = True
         st = self.state
+        weight = float(st.settings.mask_burn_weight)
+        actual_tokens = max(int(actual_tokens), round(weight * int(masks_reserved)))
         st.rate_limiter.record_tokens(self.key, actual_tokens, reserved=self.reserved)
         st.quotas.settle(self.key, self.reserved, actual_tokens)
         n = st.key_inflight.get(self.key.key_id, 1) - 1
@@ -186,14 +195,30 @@ def _chat_messages(req: ChatCompletionRequest) -> list[dict[str, Any]]:
 
 
 class _TokenText:
-    """Token-id -> display string for logprobs (cached per runtime)."""
+    """Token id -> (display string, raw bytes) for logprobs (cached per request).
+
+    ``bytes`` are the token's raw bytes, which can be part of a multi-byte UTF-8 character (OpenAI
+    semantics: clients join them to rebuild split characters). The display string is those bytes
+    decoded with replacement characters.
+    """
 
     def __init__(self, rt: ModelRuntime):
         self.rt = rt
+        self._cache: dict[int, tuple[str, bytes]] = {}
+
+    def entry(self, tid: int) -> tuple[str, bytes]:
+        """``(token, raw_bytes)`` of one token id."""
+        hit = self._cache.get(tid)
+        if hit is None:
+            tok = self.rt.tokenizer
+            assert tok is not None
+            raw = tok.token_bytes(tid)
+            hit = (raw.decode("utf-8", "replace"), raw)
+            self._cache[tid] = hit
+        return hit
 
     def __call__(self, tid: int) -> str:
-        assert self.rt.tokenizer is not None
-        return self.rt.tokenizer.decode([tid], skip_special_tokens=False)
+        return self.entry(tid)[0]
 
 
 @dataclass
@@ -222,16 +247,12 @@ def _visible(ev: TokenEvent, stop_ids: frozenset[int]) -> bool:
 def _chat_logprobs(events: list[TokenEvent], tt: _TokenText) -> dict[str, Any]:
     content = []
     for ev in events:
-        tok = tt(ev.token_id)
-        content.append({
-            "token": tok,
-            "logprob": ev.logprob,
-            "bytes": list(tok.encode("utf-8")),
-            "top_logprobs": [
-                {"token": tt(i), "logprob": lp, "bytes": list(tt(i).encode("utf-8"))}
-                for i, lp in (ev.top_logprobs or [])
-            ],
-        })
+        tok, raw = tt.entry(ev.token_id)
+        tops = []
+        for i, lp in ev.top_logprobs or []:
+            ttok, traw = tt.entry(i)
+            tops.append({"token": ttok, "logprob": lp, "bytes": list(traw)})
+        content.append({"token": tok, "logprob": ev.logprob, "bytes": list(raw), "top_logprobs": tops})
     return {"content": content}
 
 
@@ -341,7 +362,8 @@ def _dashboard_html() -> str:
         from pgw.observability.dashboard import dashboard_html
 
         return dashboard_html("PGW gateway")
-    except (NotImplementedError, ImportError):
+    except ImportError as exc:  # pragma: no cover - observability is part of the package
+        log.warning("dashboard unavailable (%s); serving the minimal fallback page", exc)
         return _FALLBACK_DASHBOARD
 
 
@@ -363,9 +385,11 @@ def create_app(
 ) -> Any:
     """Build the FastAPI app.
 
-    Public (API key): ``POST /v1/chat/completions``, ``POST /v1/completions``, ``GET /v1/models``.
-    Admin (admin token): ``GET /admin/status``, ``GET /admin/masks``, ``POST /admin/keys``,
-    ``DELETE /admin/keys/{key_id}``, ``POST /admin/models/{name}/reload``.
+    Public (API key): ``POST /v1/chat/completions``, ``POST /v1/completions``, ``GET /v1/models``,
+    ``GET /v1/models/{name}``.
+    Admin (admin token or ``admin`` scope): ``GET /admin/status``, ``GET /admin/masks``,
+    ``GET /admin/keys``, ``POST /admin/keys``, ``DELETE /admin/keys/{key_id}``,
+    ``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``.
     Ops: ``/healthz``, ``/readyz``, ``/metrics``, ``/dashboard``.
     Errors use the OpenAI error shape with ``code`` = :class:`pgw.core.ErrorCode` value.
 
@@ -387,11 +411,19 @@ def create_app(
         runtime=runtime,
         keys=key_store if key_store is not None else ApiKeyStore(settings.api_keys_file),
         rate_limiter=rate_limiter or RateLimiter(settings.requests_per_minute, settings.tokens_per_minute),
-        quotas=quotas or QuotaTracker(settings.daily_token_quota, settings.quota_state_file),
+        quotas=quotas or QuotaTracker(settings.daily_token_quota, settings.quota_state_file, deferred=True),
         audit=audit or AuditLog(settings.audit_log_file),
         metrics=metrics,
     )
     req_counter = metrics.get("pgw_gateway_requests_total")
+    runtime.add_safety_listener(
+        lambda event, model, reason: state.audit.event(event, action="safety", model=model, reason=reason)
+    )
+
+    async def _quota_flusher() -> None:
+        while True:
+            await asyncio.sleep(settings.quota_flush_interval_s)
+            await asyncio.to_thread(state.quotas.flush)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Any) -> AsyncIterator[None]:
@@ -401,12 +433,20 @@ def create_app(
         except BaseException:
             await runtime.stop()
             raise
+        flusher = asyncio.get_running_loop().create_task(_quota_flusher(), name="pgw-quota-flush")
         try:
             yield
         finally:
-            await runtime.stop()
-            state.audit.event("gateway.stop", action="stop")
-            state.audit.close()
+            runtime.begin_drain()
+            flusher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await flusher
+            try:
+                await runtime.stop()
+            finally:
+                await asyncio.to_thread(state.quotas.flush)
+                state.audit.event("gateway.stop", action="stop")
+                state.audit.close()
 
     dev = settings.allow_dev_modes
     app = FastAPI(
@@ -528,13 +568,10 @@ def create_app(
         est = sum(len(p) + params.max_tokens for p in prompts)
         rt.check_available()
         lease = state.lease(key, est)
-        sessions: list[ActiveSession] = []
         try:
-            for i, p in enumerate(prompts):
-                sessions.append(await rt.open_session(p, params, request_id=rid if i == 0 else f"{rid}-{i}"))
+            # all admission slots at once (no hold-and-wait); masks are reserved only afterwards
+            sessions = await rt.open_sessions(prompts, params, request_id=rid)
         except BaseException:
-            for s in sessions:
-                await s.close()
             lease.finish(0)
             raise
         return lease, sessions
@@ -565,6 +602,7 @@ def create_app(
             completion_tokens=sum(s.completion_tokens for s in sessions),
             masks_reserved=sum(s.masks_reserved for s in sessions),
             masks_consumed=sum(s.masks_consumed for s in sessions),
+            masks_burned=sum(s.masks_burned for s in sessions),
             queue_ms=round(max((s.queue_s for s in sessions), default=0.0) * 1e3, 1),
             ttft_ms=round(sessions[0].ttft_s * 1e3, 1) if sessions and sessions[0].ttft_s is not None else None,
             finish_reason=",".join(s.finish_reason or "" for s in sessions) if sessions else None,
@@ -636,7 +674,7 @@ def create_app(
                     await s.close()
                 raise
             finally:
-                the_lease.finish(_usage()["total_tokens"])
+                the_lease.finish(_usage()["total_tokens"], sum(s.masks_reserved for s in sessions))
                 _audit_request(endpoint, rid, key, model_rt, status, code, t0, sessions, False)
 
         sess = sessions[0]
@@ -661,7 +699,7 @@ def create_app(
 
         async def on_close() -> None:
             await sess.close()
-            the_lease.finish(_usage()["total_tokens"])
+            the_lease.finish(_usage()["total_tokens"], sess.masks_reserved)
             _audit_request(endpoint, rid, key, model_rt, int(outcome["status"]), outcome["code"], t0, sessions, True)
 
         return _managed_stream(body(), on_close, {"x-request-id": rid, "Cache-Control": "no-cache",
@@ -753,14 +791,21 @@ def create_app(
     @app.post("/v1/completions")
     async def completions(req: CompletionRequest, request: Request) -> Any:
         async def prompts(rt: ModelRuntime) -> tuple[list[list[int]], list[str]]:
-            texts = [req.prompt] if isinstance(req.prompt, str) else list(req.prompt)
-            if len(texts) > settings.max_prompts_per_request:
+            items = req.prompt_items()
+            if len(items) > settings.max_prompts_per_request:
                 raise InvalidRequestError(f"at most {settings.max_prompts_per_request} prompts per request")
             if req.suffix:
                 raise InvalidRequestError("suffix is not supported")
-            ids = [await asyncio.to_thread(rt.encode_text, t) for t in texts]
-            echo = texts if req.echo else [""] * len(texts)
-            return ids, echo
+            ids: list[list[int]] = []
+            echo: list[str] = []
+            for item in items:
+                if isinstance(item, str):
+                    ids.append(await asyncio.to_thread(rt.encode_text, item))
+                    echo.append(item)
+                else:
+                    ids.append(rt.check_token_ids(item))
+                    echo.append(await asyncio.to_thread(rt.decode_ids, item) if req.echo else "")
+            return ids, (echo if req.echo else [""] * len(items))
 
         return await _handle(request, "completions", req, prompts, req.logprobs, _render_completion,
                              _stream_completion)
@@ -894,21 +939,44 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/readyz")
-    async def readyz() -> Any:
+    async def readyz(models: str | None = None) -> Any:
+        """Process readiness (Kubernetes): 200 once started and not draining.
+
+        Per-model readiness (masks exhausted, breaker open, service unreachable) is reported in the
+        body and in ``pgw_gateway_model_ready`` but does not fail the probe: a single unhealthy
+        model must not take the whole gateway out of the load balancer (requests for it fail fast
+        with typed errors). ``?models=all`` restores the strict check (503 unless every model is
+        ready), e.g. for an external monitor.
+        """
         details = {}
-        all_ok = bool(runtime.runtimes)
+        all_models_ok = bool(runtime.runtimes)
         for rt in runtime.runtimes.values():
             ok, reason = await asyncio.to_thread(rt.ready)
-            details[rt.name] = {"ready": ok, "reason": reason}
-            all_ok = all_ok and ok
-        return JSONResponse({"ready": all_ok, "models": details}, status_code=200 if all_ok else 503)
+            details[rt.name] = {"ready": ok, "reason": reason, "state": rt.state}
+            all_models_ok = all_models_ok and ok
+        process_ok = runtime.ready()
+        ok = process_ok and (all_models_ok if models == "all" else True)
+        return JSONResponse(
+            {"ready": ok, "process_ready": process_ok, "all_models_ready": all_models_ok, "models": details},
+            status_code=200 if ok else 503,
+        )
+
+    async def _metrics_body() -> Any:
+        body, ctype = await asyncio.to_thread(metrics.render)
+        return Response(body, media_type=ctype)
 
     @app.get("/metrics")
     async def metrics_route(request: Request) -> Any:
         if settings.metrics_require_admin:
             require_admin(request, "metrics")
-        body, ctype = await asyncio.to_thread(metrics.render)
-        return Response(body, media_type=ctype)
+        return await _metrics_body()
+
+    # Internal plain-HTTP ops listener (probes and scraping when the API requires client certs).
+    ops_app = FastAPI(title="PGW gateway ops", docs_url=None, redoc_url=None, openapi_url=None)
+    ops_app.add_api_route("/healthz", healthz, methods=["GET"])
+    ops_app.add_api_route("/readyz", readyz, methods=["GET"])
+    ops_app.add_api_route("/metrics", _metrics_body, methods=["GET"])
+    app.state.ops_app = ops_app
 
     if settings.dashboard_enabled:
         html = _dashboard_html()

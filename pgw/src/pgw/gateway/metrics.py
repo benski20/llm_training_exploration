@@ -99,7 +99,11 @@ class GatewayMetrics:
             if name not in self._collectors:
                 continue
             c = self._collectors[name]
-            for (fp, ring), v in series.items():
+            for key, v in series.items():
+                if not key:  # store-wide series without labels
+                    c.set(v)
+                    continue
+                fp, ring = key
                 child = c.labels(fingerprint=fp[:12], ring=ring)
                 if name.endswith("_total"):
                     # Counters mirror durable store counters: advance to the store's value.

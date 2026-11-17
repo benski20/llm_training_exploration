@@ -53,7 +53,15 @@ from pgw.core.ring import (
     ring_sub,
     to_ring,
 )
-from pgw.core.ringmm import PreparedWeight, cuda_int8_available, ringmm, ringmm_reference, select_backend
+from pgw.core.ringmm import (
+    PreparedWeight,
+    cpu_int8_available,
+    cuda_int8_available,
+    int8_ring_matmul,
+    ringmm,
+    ringmm_reference,
+    select_backend,
+)
 from pgw.core.types import LINEAR_ORDER, LinearId, LinearKind, LinearSpec, ModelArch, linear_ids
 
 __all__ = [
@@ -64,8 +72,8 @@ __all__ = [
     "PreparedWeight", "ProtocolError", "RateLimitedError", "RingOverflowError", "RingParams",
     "SeedExpander", "ServiceUnavailableError", "ShapeError", "VersionMismatchError",
     "balanced_digits", "canonical_json", "center", "check_output_range", "compute_fingerprint",
-    "cuda_int8_available", "dequantize_outputs", "error_from_code", "freivalds_check",
-    "freivalds_precompute", "freivalds_verify", "linear_ids", "mask_activations", "new_seed",
+    "cpu_int8_available", "cuda_int8_available", "dequantize_outputs", "error_from_code", "freivalds_check",
+    "freivalds_precompute", "freivalds_verify", "int8_ring_matmul", "linear_ids", "mask_activations", "new_seed",
     "pack_ring", "packed_size", "quantize_activations", "quantize_weight_rows",
     "require_same_fingerprint", "ring_add", "ring_sub", "ringmm", "ringmm_reference",
     "select_backend", "sha256_file", "short_fingerprint", "soundness_bits", "to_ring",

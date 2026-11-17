@@ -24,7 +24,16 @@ priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
-terminationGracePeriodSeconds: 60
+# Shutdown sequence on SIGTERM: preStop sleep (endpoints are removed from the Service), then the
+# gateway turns /readyz 503, refuses new work and waits up to config.drainTimeoutSeconds for open
+# requests and streams, then burns leftover reservations and closes the store. Must exceed
+# preStopSleepSeconds + config.drainTimeoutSeconds + ~15 s (the chart refuses smaller values).
+terminationGracePeriodSeconds: 75
+preStopSleepSeconds: 5
+
+# Internal plain-HTTP listener for probes and Prometheus (/healthz, /readyz, /metrics only). Probes
+# use it in every TLS mode, so readiness is checked even when the API requires client certificates.
+opsPort: 9091
 
 podSecurityContext:
   runAsNonRoot: true
@@ -73,9 +82,13 @@ config:
   maxTokensLimit: 8192
   noiseMonitor: true
   noiseMonitorFailClosed: true
-  integrityCooldownSeconds: ""   # empty = circuit breaker reset by admin only
+  integrityCooldownSeconds: ""   # empty (recommended) = circuit breaker reset by admin only
   metricsRequireAdmin: false     # NetworkPolicy limits /metrics to the monitoring namespace
   dashboardEnabled: true
+  drainTimeoutSeconds: 30
+  # Masks are reserved for the prompt plus this many tokens and extended while generating, so an
+  # early stop or disconnect burns at most one window (0 = reserve prompt + max_tokens up front).
+  maskWindowTokens: 64
   # Additional PGW_* environment variables (non-secret).
   extraEnv: {}
 
@@ -84,7 +97,7 @@ config:
 models:
   - name: llama3-8b
     packDir: llama3-8b                  # directory under modelPacks.mountPath
-    fingerprint: ""                     # pin the 64-hex pack fingerprint (recommended)
+    fingerprint: ""                     # REQUIRED: the 64-hex pack fingerprint (`pgw inspect`)
     ring: K40A12
     serviceUrl: https://compute.pgw.example.net:8443
     maxConcurrentSessions: 32
@@ -107,8 +120,14 @@ state:
     enabled: true
     existingClaim: ""
     storageClass: ""
-    accessModes: [ReadWriteOnce]  # ReadWriteMany if a pgw-factory release shares it from other nodes
-    size: 200Gi                   # 6.9 MB per token slot for 8B at K40
+    # ReadWriteOnce only. Never put the mask store on NFS/CephFS/RWX storage shared between nodes:
+    # SQLite WAL and flock are unreliable there and a lost cursor update re-serves masks (the store
+    # refuses to open on a network filesystem). A pgw-factory on another node uses output=export and
+    # its segments are imported with `pgw maskstore import`.
+    accessModes: [ReadWriteOnce]
+    # Must hold maskstore.targetSlots x maskstore.bytesPerSlot plus maskstore.minFreeBytes headroom
+    # (the chart fails otherwise): 16384 slots x 6.9 MB (8B at K40) = 113 GB.
+    size: 200Gi
     annotations: {}
 
 maskstore:
@@ -116,8 +135,40 @@ maskstore:
   keyProvider: env
   kmsKeyUri: ""                       # keyProvider=kms, e.g. aws-kms://arn:aws:kms:...
   lowWaterSlots: 4096
-  targetSlots: 65536
+  targetSlots: 16384
+  # Stored W r bytes per token slot of the served model (`pgw factory status` prints it):
+  # 8B at K40 ~ 6.9 MB, 0.5B ~ 1.5 MB. Used to check that targetSlots fits the state volume.
+  bytesPerSlot: 6900000
+  # Segments are refused (factory stops) unless this much stays free on the state volume; the
+  # gateway's state.sqlite, journal, quota and audit files live there too.
+  minFreeBytes: 10737418240
+  # Mask store GC (dead leases of crashed pods, consumed segments, old audit rows), seconds.
+  gcIntervalSeconds: 600
+  # External monotonic counter (rollback protection, SPEC 7.6). The gateway refuses to hand out
+  # masks without one: restoring a snapshot of the state volume (VolumeSnapshot, Velero, disk image)
+  # would otherwise re-serve consumed masks.
+  #   file     - counter file on its OWN volume (counterVolume below), excluded from backups
+  #   provider - the KMS/HSM key provider's counter
+  #   tpm      - TPM NV counter (counterTpmNvIndex; node must expose /dev/tpmrm0)
+  #   none     - DEV ONLY, needs allowNoExternalCounter: true
+  counter: file
+  counterTpmNvIndex: ""
+  allowNoExternalCounter: false
+  # Partner factories: Ed25519 public keys whose signed segments may be imported (required for
+  # `pgw maskstore import` of partner segments; unsigned segments are refused).
+  trustedPartnerKeys: []
   extraEnv: {}
+
+# Volume of the file counter (maskstore.counter=file). Separate from the state volume on purpose:
+# a restore of the state volume must not roll it back. Exclude it from snapshots and backups
+# (the PVC carries velero.io/exclude-from-backup). If you ever restore the state volume, burn every
+# ACTIVE segment and rebind witnesses (`pgw maskstore` runbook) before serving again.
+counterVolume:
+  mountPath: /var/lib/pgw/counter
+  existingClaim: ""
+  storageClass: ""
+  size: 1Gi
+  annotations: {}
 
 # Existing Secret (create it with kubectl / External Secrets / Vault; never in values).
 secrets:

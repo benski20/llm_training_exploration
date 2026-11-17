@@ -1,0 +1,28 @@
+[gpu_validate 04:55:06] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (269.5s)
+[gpu_validate 04:55:08] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (2.5s)
+[gpu_validate 04:56:13] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller"
+[gpu_validate 04:56:15] pgw maskstore init --root ... ok (2.5s)
+[gpu_validate 04:57:13] pgw factory generate --pack ... ok (57.4s)
+[gpu_validate 04:57:44] pgw bench factory --pack ... ok (31.3s)
+[gpu_validate 04:57:46] pgw service token create ... ok (2.4s)
+[gpu_validate 04:57:49] pgw gateway keys create ... ok (2.9s)
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  6.81it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 17.28it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 17.28it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:12<00:34, 11.55s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:12<00:00,  6.61s/it]
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 486, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 274, in run
+    R["service_startup_s"] = round(stack.wait_ready(f"http://127.0.0.1:{svc_port}/readyz", svc, "service"), 1)
+                                   ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 153, in wait_ready
+    raise RuntimeError(f"{name} not ready at {url}")
+RuntimeError: service not ready at http://127.0.0.1:54647/readyz

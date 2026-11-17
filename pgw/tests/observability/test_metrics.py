@@ -26,6 +26,7 @@ ALLOWED_LABELS = {
     "fingerprint",
     "ring",
     "device",
+    "reason",  # admission rejection reason: a small fixed enum (queue_full, timeout, draining, too_large)
 }
 
 

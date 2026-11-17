@@ -14,11 +14,11 @@ from pgw.core import (
     freivalds_precompute,
     ringmm_reference,
 )
+from pgw.core.ringmm import int8_ring_matmul as int8_ring_mm
 from pgw.factory import kernels
 from pgw.factory.kernels import (
     RingKernel,
     cpu_int8_available,
-    int8_ring_mm,
     resolve_backend,
     resolve_device,
     ring_vecmat,
@@ -87,7 +87,11 @@ def test_ring_kernel_empty_and_shape_errors() -> None:
 
 @pytest.mark.skipif(not cpu_int8_available(), reason="CPU torch._int_mm not exact here")
 def test_int8_inner_dimension_chunking(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(kernels, "INT_MM_MAX_INNER", 16)
+    import sys
+
+    core_ringmm = sys.modules["pgw.core.ringmm"]  # the package attribute is the ringmm() function
+
+    monkeypatch.setattr(core_ringmm, "INT_MM_MAX_INNER_CPU", 16)
     x = _rand((5, 50), 40, 3)
     w = _w(7, 50, 3)
     assert int8_ring_mm(x, w, 40).tolist() == ringmm_reference(x, w, 40).tolist()

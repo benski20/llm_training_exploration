@@ -61,6 +61,14 @@ app.kubernetes.io/part-of: pgw
 {{- end -}}
 {{- end -}}
 
+{{- define "pgw-gateway.counterClaim" -}}
+{{- if .Values.counterVolume.existingClaim -}}
+{{- .Values.counterVolume.existingClaim -}}
+{{- else -}}
+{{- printf "%s-counter" (include "pgw-gateway.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{/* URL scheme of the gateway listener. */}}
 {{- define "pgw-gateway.scheme" -}}
 {{- if .Values.tls.enabled -}}HTTPS{{- else -}}HTTP{{- end -}}

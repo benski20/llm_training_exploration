@@ -92,6 +92,18 @@ spec:
               value: {{ default .Release.Name .Values.config.factoryId | quote }}
             - name: PGW_FACTORY_OUTPUT
               value: {{ .Values.output | quote }}
+            - name: PGW_FACTORY_SEGMENT_CHUNK_BYTES
+              value: {{ .Values.config.segmentChunkBytes | int64 | quote }}
+            - name: PGW_FACTORY_MIN_FREE_BYTES
+              value: {{ .Values.config.minFreeBytes | int64 | quote }}
+            - name: PGW_FACTORY_MAX_STORE_BYTES
+              value: {{ .Values.config.maxStoreBytes | int64 | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: PGW_FACTORY_METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            - name: PGW_FACTORY_HEALTH_MAX_STALE_S
+              value: {{ .Values.metrics.healthMaxStaleSeconds | quote }}
+            {{- end }}
             {{- if eq .Values.output "store" }}
             - name: PGW_MASKSTORE_ROOT
               value: {{ printf "%s/masks" .Values.store.mountPath | quote }}
@@ -125,6 +137,25 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+          {{- if .Values.metrics.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- end }}
           resources:
             {{- $res := deepCopy .Values.resources }}
             {{- if .Values.gpu.enabled }}
@@ -176,7 +207,9 @@ spec:
       {{- if .Values.affinity }}
       affinity:
         {{- toYaml .Values.affinity | nindent 8 }}
-      {{- else if and (eq .Values.output "store") .Values.store.colocateWithGateway.enabled }}
+      {{- else if and (eq .Values.output "store") (not .Values.store.colocateWithGateway.enabled) }}
+      {{- fail "output=store needs store.colocateWithGateway.enabled: a mask store must never be shared across nodes (use output=export + pgw maskstore import)" }}
+      {{- else if eq .Values.output "store" }}
       affinity:
         podAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

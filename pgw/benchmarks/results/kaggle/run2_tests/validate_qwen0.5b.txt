@@ -1,0 +1,23 @@
+[gpu_validate 05:52:32] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen0.5b/pack ... ok (19.1s)
+[gpu_validate 05:52:35] pgw inspect /tmp/pgw_bench/qwen0.5b/pack --json ... ok (2.1s)
+[gpu_validate 05:53:58] reference: "The sky is blue because of the scattering of sunlight by tiny particles in the Earth's atmosphere. These particles, primarily nitrogen and oxygen, scatter the blue light from"
+[gpu_validate 05:54:00] pgw maskstore init --root ... ok (2.3s)
+[gpu_validate 05:54:19] pgw factory generate --pack ... ok (19.0s)
+[gpu_validate 05:54:27] pgw bench factory --pack ... ok (7.3s)
+[gpu_validate 05:54:29] pgw service token create ... ok (2.3s)
+[gpu_validate 05:54:31] pgw gateway keys create ... ok (2.5s)
+[gpu_validate 05:55:14] chat: "The sky is blue because of the scattering of sunlight by tiny particles in the Earth's atmosphere. These particles, primarily nitrogen and oxygen, scatter the blue light from" identical: True True
+[gpu_validate 05:55:44] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 2.878, 'prefill_s_per_prompt_token': 0.072, 'decode_s_per_token': 0.8599, 'decode_tokens_per_s': 1.163, 'wall_s': 29.99, 'gateway_cpu_s': 41.16, 'backend_delta': {'calls': 3072, 'rows': 6816, 'round_trips': 3072, 'bytes_up': 64343040, 'bytes_down': 107965440, 'freivalds_checked': 3072, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 21.08953320299986, 'local_seconds': 5.4129520220002405}, 'gateway_local_engine_s_per_token': 0.0752, 'remote_s_per_token': 0.2929}
+[gpu_validate 05:57:08] concurrent: {'requests': 8, 'ok': 8, 'tokens_identical': [True, True, True, True, True, True, True, True], 'errors': [], 'wall_s': 83.76, 'generated_tokens_per_s': 3.056, 'all_tokens_per_s': 6.877, 'gateway_cpu_s_per_token': 0.1171}
+[gpu_validate 05:57:15] loadtest sessions=1: 1.5893663018446174 tok/s
+[gpu_validate 05:57:33] loadtest sessions=8: 4.05216988942926 tok/s
+[gpu_validate 05:58:49] loadtest sessions=32: 3.4761967767020776 tok/s
+
+---stderr---
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 7 files:  14%|█▍        | 1/7 [00:00<00:00,  9.05it/s]
+Fetching 7 files:  29%|██▊       | 2/7 [00:00<00:00,  8.94it/s]
+Fetching 7 files:  86%|████████▌ | 6/7 [00:00<00:00, 17.34it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:07<00:00,  1.08s/it]

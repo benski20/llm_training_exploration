@@ -16,6 +16,7 @@ from pgw.core.errors import ErrorCode, PGWError, error_from_code
 __all__ = [
     "ATTEMPT_HEADER",
     "COMPUTE_PATH",
+    "DEADLINE_HEADER",
     "MODELS_PATH",
     "PROTOCOL_HEADER",
     "PROTOCOL_VERSION",
@@ -41,8 +42,11 @@ PROTOCOL_HEADER = "PGW-Protocol"
 REQUEST_ID_HEADER = "PGW-Request-Id"
 #: 1-based attempt counter sent by :class:`pgw.wire.ComputeClient` (diagnostics only).
 ATTEMPT_HEADER = "PGW-Attempt"
+#: Remaining client budget in ms, recomputed per attempt (overrides the body's ``deadline_ms``,
+#: which stays byte-identical across retries).
+DEADLINE_HEADER = "PGW-Deadline-Remaining-Ms"
 #: Header names used by the protocol (informational).
-WIRE_HEADERS: tuple[str, ...] = (PROTOCOL_HEADER, REQUEST_ID_HEADER, ATTEMPT_HEADER)
+WIRE_HEADERS: tuple[str, ...] = (PROTOCOL_HEADER, REQUEST_ID_HEADER, ATTEMPT_HEADER, DEADLINE_HEADER)
 #: HTTP paths (SPEC 6.2).
 COMPUTE_PATH = "/pgw/v1/compute"
 MODELS_PATH = "/pgw/v1/models"

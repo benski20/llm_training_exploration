@@ -137,20 +137,29 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           {{- if and .Values.tls.enabled .Values.tls.requireClientCert }}
-          # kubelet probes cannot present client certificates: probe the TCP listener.
+          # kubelet probes cannot present client certificates: probe /healthz and /readyz on the
+          # internal plain-HTTP metrics listener (same semantics as on the compute port).
           startupProbe:
-            tcpSocket:
-              port: compute
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: HTTP
             periodSeconds: 5
             failureThreshold: 180
           livenessProbe:
-            tcpSocket:
-              port: compute
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: HTTP
             periodSeconds: 15
+            timeoutSeconds: 5
           readinessProbe:
-            tcpSocket:
-              port: compute
+            httpGet:
+              path: /readyz
+              port: metrics
+              scheme: HTTP
             periodSeconds: 5
+            timeoutSeconds: 5
           {{- else }}
           startupProbe:
             httpGet:

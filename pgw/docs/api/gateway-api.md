@@ -37,7 +37,7 @@ and is refused under the production policy.
 | POST | `/admin/models/{name}/reload` | admin | reload a model (pack, service check) |
 | POST | `/admin/models/{name}/reset` | admin | reset the integrity circuit breaker and/or the noise alarm |
 | GET | `/healthz` | none | process alive: `{"status":"ok"}` |
-| GET | `/readyz` | none | 200 when every model is ready, else 503 with reasons |
+| GET | `/readyz` | none | 200 once the process is started and not draining (per-model state in the body); `?models=all`: 503 unless every model is ready |
 | GET | `/metrics` | none or admin | Prometheus text (`metrics_require_admin`) |
 | GET | `/dashboard` | none (page) / admin (data) | self-contained status page |
 
@@ -51,7 +51,7 @@ Every inference response carries an `x-request-id` header. The same id appears i
 |---|---|---|---|
 | `model` | string | required | a name from `/v1/models` |
 | `messages` | array | required | roles `system`, `developer`, `user`, `assistant`, `tool`; `content` is a string or a list of `{"type":"text","text":...}` parts. Other part types (images) are rejected |
-| `max_completion_tokens` / `max_tokens` | int ≥ 1 | `PGW_GATEWAY_DEFAULT_MAX_TOKENS` (512) | clamped to `max_tokens_limit` (8192) and to the context left |
+| `max_completion_tokens` / `max_tokens` | int ≥ 1 | `PGW_GATEWAY_DEFAULT_MAX_TOKENS` (512) | rejected (400 `protocol`) above `max_tokens_limit` (8192); clamped to the context left |
 | `temperature` | 0–2 | 1.0 | 0 means greedy |
 | `top_p` | (0, 1] | 1.0 | |
 | `stop` | string or list of up to 16 strings | none | |
@@ -64,8 +64,10 @@ Every inference response carries an `x-request-id` header. The same id appears i
 | `user` | string | none | accepted and ignored (not logged) |
 | `top_k`, `min_p`, `repetition_penalty`, `ignore_eos`, `stop_token_ids` | | | vLLM-style extensions |
 
-Unknown fields are ignored. Tools and function calling, response formats and multimodal inputs are
-not supported in v1.
+Unknown fields are ignored. Optional fields sent as JSON `null` take their defaults, as with the
+OpenAI API. Tools and function calling, structured output (`response_format`) and multimodal inputs
+are not supported in v1 and are rejected with 400 `protocol` (`param` names the field), never
+silently dropped; see section 10.
 
 Each request reserves `prompt_tokens + max_tokens` mask slots before any compute. If the store has
 fewer, the request fails immediately with `mask_exhausted` (503). Unused slots are burned when the
@@ -93,8 +95,8 @@ curl -s https://pgw.internal:8080/v1/chat/completions \
 ```
 
 `system_fingerprint` is the first 12 hex characters of the model pack's SHA-256 fingerprint. Use it
-to prove which exact weights produced an answer. `finish_reason` is `stop`, `length`, `error` or
-`cancelled`.
+to prove which exact weights produced an answer. `finish_reason` is `stop` or `length`. Failures are
+returned as an error body (or an SSE error event), never as a `finish_reason`.
 
 Python (official OpenAI SDK):
 
@@ -130,8 +132,8 @@ Same sampling fields as chat, plus:
 
 | field | type | notes |
 |---|---|---|
-| `prompt` | string or list of strings | up to `max_prompts_per_request` (16); streaming needs a single prompt |
-| `echo` | bool | prepend the prompt to `text` |
+| `prompt` | string, list of strings, token-id array, or list of token-id arrays | up to `max_prompts_per_request` (16); token ids must be in `[0, vocab_size)`; streaming needs a single prompt |
+| `echo` | bool | prepend the prompt to `text` (token-id prompts are decoded) |
 | `logprobs` | int 0–5 | legacy completions format |
 | `suffix` | string | not supported (error) |
 
@@ -153,7 +155,7 @@ OpenAI conventions.
 | code | HTTP | `type` | when | client action |
 |---|---|---|---|---|
 | `protocol` | 400 | `invalid_request_error` | malformed JSON or invalid field (`param` names it) | fix the request |
-| `bad_shape` | 400 | `invalid_request_error` | prompt too long for the context | shorten the prompt or `max_tokens` |
+| `bad_shape` | 400 | `invalid_request_error` | prompt longer than `max_prompt_tokens` or leaves no room in the model context | shorten the prompt |
 | `ring_overflow` | 400 | `invalid_request_error` | value not representable (should not occur with valid packs) | report |
 | `unauthenticated` | 401 | `authentication_error` | missing, malformed, unknown or revoked key | check the key |
 | `permission_denied` | 403 | `permission_error` | key lacks the scope | use a key with the right scope |
@@ -235,6 +237,17 @@ Labels never contain prompt data. Gateway series:
 | `pgw_gateway_active_sessions` | gauge | generating sequences |
 | `pgw_gateway_integrity_failures_total` | counter | Freivalds or range-check failures (**alert on any**) |
 | `pgw_gateway_noise_alarm` | gauge | 1 when the outbound-noise monitor alarms (**alert**) |
+| `pgw_gateway_model_ready` | gauge | 1 when the model can take requests (per-model readiness; `/readyz` only covers the process) |
+| `pgw_gateway_service_attempts_total` | counter | compute-service HTTP attempts by result code (`ok` or error code) |
+| `pgw_gateway_service_retries_total` | counter | compute-service attempts that were retried (**alert on rate**) |
+| `pgw_gateway_round_trip_failures_total` | counter | failed masked round trips by error code |
+| `pgw_gateway_admission_active` | gauge | admitted sessions |
+| `pgw_gateway_admission_waiting` | gauge | requests waiting in the admission queue |
+| `pgw_gateway_admission_rejected_total` | counter | requests refused by admission (`queue_full`, `timeout`, `draining`, `too_large`) |
+| `pgw_gateway_queue_wait_seconds` | histogram | time spent in the admission queue |
+| `pgw_gateway_masks_burned_total` | counter | mask slots reserved by requests but never used |
+| `pgw_masks_open_reservations` | gauge | open mask reservations in the store |
+| `pgw_masks_unshredded_bytes` | gauge | bytes of fully consumed segment files awaiting shredding |
 | `pgw_masks_available_slots` | gauge | slots in the store per model and ring |
 | `pgw_masks_low_water` | gauge | 1 below low water (**alert**) |
 | `pgw_masks_consumed_slots_total` | counter | slots used |
@@ -242,8 +255,13 @@ Labels never contain prompt data. Gateway series:
 
 ## 10. Compatibility notes
 
-* `n > 1`, `best_of`, tools and function calling, `response_format`, audio and images: not supported
-  (400 `protocol`, or the field is ignored where OpenAI treats it as optional).
+* Not supported, rejected with 400 `protocol` and `param` set: `n > 1`; non-empty `tools` or
+  `functions`; `tool_choice` / `function_call` other than `"none"`; `response_format` other than
+  `{"type": "text"}`; assistant messages carrying `tool_calls` or `function_call`; image and audio
+  content parts. `best_of` and `parallel_tool_calls` are ignored.
+* Explicit `null` for any optional field means "use the default".
+* `logprobs` report each token's raw `bytes` (which may be part of a multi-byte UTF-8 character);
+  `token` is those bytes decoded with replacement characters.
 * Embeddings and fine-tuning endpoints are not provided.
 * Token counts use the model's own tokenizer, from the model pack.
 * Rate-limit headers in the `x-ratelimit-*` style are not sent. Use `Retry-After`.

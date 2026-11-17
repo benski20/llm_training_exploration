@@ -91,7 +91,7 @@ class FakeWriter:
         else:
             assert self._order[self._cur] == key
         assert wr.dtype == torch.int64 and wr.shape[1] == spec.out_features
-        assert wr.shape[0] <= self.seg.chunk_slots
+        assert wr.shape[0] >= 1  # any row count: the real SegmentWriter re-chunks to header.chunk_slots
         assert uw.shape == (self.seg.checks, spec.in_features)
         if key in self.seg.uw:
             assert torch.equal(self.seg.uw[key], uw), "uW changed between chunks"

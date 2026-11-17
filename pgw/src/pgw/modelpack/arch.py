@@ -92,8 +92,12 @@ def _eos_list(v: Any) -> list[int]:
     raise ConfigError(f"bad eos_token_id {v!r}")
 
 
-def _rope(cfg: Mapping[str, Any]) -> tuple[float, dict[str, Any] | None]:
-    """``(rope_theta, rope_scaling)`` from either the classic or the transformers-5 config layout."""
+def _rope(cfg: Mapping[str, Any], allow_unsupported: bool = False) -> tuple[float, dict[str, Any] | None]:
+    """``(rope_theta, rope_scaling)`` from either the classic or the transformers-5 config layout.
+
+    Raises:
+        ConfigError: a RoPE scaling type the engine does not implement (unless ``allow_unsupported``).
+    """
     params = dict(cfg.get("rope_parameters") or {})
     theta = cfg.get("rope_theta", params.pop("rope_theta", None))
     params.pop("rope_theta", None)
@@ -107,11 +111,24 @@ def _rope(cfg: Mapping[str, Any]) -> tuple[float, dict[str, Any] | None]:
         if rtype == "default":
             scaling = None
         elif rtype not in KNOWN_ROPE_TYPES:
-            log.warning("rope scaling type %r is recorded in the pack but may not be supported by the engine", rtype)
+            if not allow_unsupported:
+                raise ConfigError(
+                    f"rope scaling type {rtype!r} is not supported by the PGW engine "
+                    f"(supported: default, {', '.join(sorted(KNOWN_ROPE_TYPES))}); a pack built from it could "
+                    "not be served. Use --allow-unsupported-rope only for packs served by another engine",
+                    details={"rope_type": rtype},
+                )
+            log.warning("rope scaling type %r is not supported by the PGW engine; recorded anyway "
+                        "(allow_unsupported_rope)", rtype)
     return float(theta if theta is not None else 10000.0), scaling
 
 
-def arch_config_from_hf(config: Mapping[str, Any], generation_config: Mapping[str, Any] | None = None) -> ArchConfig:
+def arch_config_from_hf(
+    config: Mapping[str, Any],
+    generation_config: Mapping[str, Any] | None = None,
+    *,
+    allow_unsupported_rope: bool = False,
+) -> ArchConfig:
     """Build an :class:`~pgw.modelpack.manifest.ArchConfig` from an HF ``config.json`` dict.
 
     Only dense decoder-only ``qwen2`` and ``llama`` models with SiLU MLPs are supported. EOS ids
@@ -119,7 +136,8 @@ def arch_config_from_hf(config: Mapping[str, Any], generation_config: Mapping[st
 
     Raises:
         ConfigError: unsupported architecture or feature (sliding window, attention/MLP biases on
-            Llama, non-SiLU activation, inconsistent head dimensions).
+            Llama, non-SiLU activation, inconsistent head dimensions, a RoPE scaling type outside
+            :data:`KNOWN_ROPE_TYPES` unless ``allow_unsupported_rope``).
     """
     from pgw.modelpack.manifest import ArchConfig
 
@@ -154,7 +172,7 @@ def arch_config_from_hf(config: Mapping[str, Any], generation_config: Mapping[st
         raise ConfigError(f"num_attention_heads={heads} is not a multiple of num_key_value_heads={kv}")
     if config.get("head_dim") is None and hidden % heads:
         raise ConfigError(f"hidden_size={hidden} is not divisible by num_attention_heads={heads}")
-    theta, scaling = _rope(config)
+    theta, scaling = _rope(config, allow_unsupported_rope)
     eos: list[int] = []
     for v in _eos_list(config.get("eos_token_id")) + _eos_list((generation_config or {}).get("eos_token_id")):
         if v not in eos:

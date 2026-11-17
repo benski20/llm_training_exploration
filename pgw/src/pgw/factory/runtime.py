@@ -87,7 +87,13 @@ def build_sink(settings: FactorySettings, store: Any = None) -> Any:
         if settings.recipient_public_key_file is None:
             raise ConfigError("output='export' needs PGW_FACTORY_RECIPIENT_PUBLIC_KEY_FILE")
         assert settings.export_dir is not None
-        return ExportSink(settings.export_dir, load_recipient_public_key(settings.recipient_public_key_file))
+        signing_key = None
+        if settings.partner_signing_key_file is not None:
+            from pgw.maskstore.partner import PartnerSigningKey
+
+            signing_key = PartnerSigningKey(settings.partner_signing_key_file)
+        return ExportSink(settings.export_dir, load_recipient_public_key(settings.recipient_public_key_file),
+                          signing_key=signing_key, destination_store_id=settings.destination_store_id)
     return StoreSink(store if store is not None else open_store())
 
 

@@ -98,7 +98,7 @@ Partner masks: follow the partner section of [air-gapped-factory.md](air-gapped-
 then import:
 
 ```bash
-pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek --delete-source /srv/incoming/*.pgwm
+pgw maskstore import --root /var/lib/pgw/masks --key-file /etc/pgw/secrets/kek /srv/incoming/*.pgwm
 ```
 
 ## 6. Gateway configuration

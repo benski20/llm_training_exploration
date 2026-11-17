@@ -31,12 +31,25 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 
 from pgw.core.errors import ConfigError
 
-__all__ = ["SEED_BYTES", "Label", "SeedExpander", "encode_labels", "new_seed"]
+__all__ = ["MAX_STREAM_BYTES", "SEED_BYTES", "Label", "SeedExpander", "encode_labels", "max_stream_rows", "new_seed"]
 
 SEED_BYTES = 32
 Label = str | int | bytes
 _DOMAIN = b"pgw/v1/prng"
 _ZERO_NONCE = bytes(16)
+#: Bytes addressable in one labelled stream (ChaCha20's 32-bit block counter x 64-byte blocks).
+MAX_STREAM_BYTES = (1 << 32) * 64
+
+
+def max_stream_rows(cols: int) -> int:
+    """Largest ``row_start + row_count`` that :meth:`SeedExpander.ring_uniform_rows` supports for ``cols``.
+
+    A segment's ``r`` stream of a linear with ``in_features = cols`` therefore holds at most this
+    many slots (about 2.4M for an 8B down projection, 1.2M for a 70B one).
+    """
+    if cols <= 0:
+        raise ConfigError("cols must be positive")
+    return MAX_STREAM_BYTES // (8 * cols)
 
 
 def new_seed() -> bytes:

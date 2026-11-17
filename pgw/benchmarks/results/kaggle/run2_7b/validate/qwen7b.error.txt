@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 486, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 274, in run
+    R["service_startup_s"] = round(stack.wait_ready(f"http://127.0.0.1:{svc_port}/readyz", svc, "service"), 1)
+                                   ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 153, in wait_ready
+    raise RuntimeError(f"{name} not ready at {url}")
+RuntimeError: service not ready at http://127.0.0.1:54647/readyz

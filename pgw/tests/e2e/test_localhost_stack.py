@@ -115,7 +115,8 @@ def test_every_response_freivalds_checked(e2e_stack: E2EStack) -> None:
     model = next(m for m in st.json()["models"] if m["name"] == MODEL)
     be = model["backend"]
     assert be["round_trips"] > 0
-    assert be["freivalds_checked"] == be["round_trips"]
+    # every item of every response is checked (an item splits where a reservation crosses segments)
+    assert be["freivalds_checked"] >= be["round_trips"]
     assert be["freivalds_skipped"] == 0 and be["integrity_failures"] == 0
     assert model["noise_monitor"]["state"] == "active" and not model["noise_monitor"]["alarm"]
 
@@ -202,14 +203,17 @@ def test_tampered_response_is_detected_and_fails_closed(e2e_stack: E2EStack, ref
     r = e2e_stack.chat(CHAT)
     assert r.status_code == 503 and r.json()["error"]["code"] == "unavailable", r.text
     assert len(proxy.items) == n_items and e2e_stack.available_slots() == avail
-    ready = e2e_stack.admin("GET", "/readyz")
+    # the process stays ready (typed errors keep flowing); the strict per-model check fails
+    assert e2e_stack.admin("GET", "/readyz").status_code == 200
+    ready = e2e_stack.admin("GET", "/readyz?models=all")
     assert ready.status_code == 503
     st = e2e_stack.admin("GET", "/admin/status").json()
     be = next(m for m in st["models"] if m["name"] == MODEL)["backend"]
     assert be["integrity_failures"] >= 1
     audit = [json.loads(line) for line in (e2e_stack.root / "state" / "audit.jsonl").read_text().splitlines()]
-    assert any(a.get("event") == "inference" and a.get("status") == 502 for a in audit) or any(
-        "integrity" in json.dumps(a) for a in audit)
+    assert any(a["event"] == "safety.integrity_failure" and a.get("model") == MODEL for a in audit)
+    assert any(a.get("status") == 502 and a.get("code") == "integrity_check_failed" for a in audit)
+    assert all(MESSAGES[0]["content"] not in json.dumps(a) for a in audit)  # no content in the audit log
     # admin reset after investigation; the stack serves exact answers again
     rr = e2e_stack.admin("POST", f"/admin/models/{MODEL}/reset", json={"breaker": True, "noise": False})
     assert rr.status_code == 200, rr.text

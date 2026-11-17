@@ -21,7 +21,7 @@ import math
 import numpy as np
 import torch
 
-from pgw.core.errors import IntegrityError, ShapeError
+from pgw.core.errors import ConfigError, IntegrityError, ShapeError
 from pgw.core.ring import RingParams
 from pgw.core.ringmm import PreparedWeight
 
@@ -63,6 +63,9 @@ def freivalds_check(
         raise ShapeError(f"bad shapes x_hat {tuple(x_hat.shape)} y_hat {tuple(y_hat.shape)}")
     if u.shape[1] != y_hat.shape[1] or uw.shape[1] != x_hat.shape[1] or u.shape[0] != uw.shape[0]:
         raise ShapeError("check vector shapes do not match the linear")
+    if u.shape[0] < 1:
+        # With no check vectors every row would "pass": refuse instead of silently disabling integrity.
+        raise ConfigError("Freivalds check needs at least one check vector (checks=0)")
     lhs = _ring_dot(y_hat, u, params)  # (T, c)
     rhs = _ring_dot(x_hat, uw, params)  # (T, c)
     return torch.from_numpy((lhs == rhs).all(axis=1))

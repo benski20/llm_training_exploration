@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import torch
 
-from pgw.core.errors import IntegrityError, ShapeError
+from pgw.core.errors import IntegrityError, RingOverflowError, ShapeError
 from pgw.core.ring import RingParams, center
 
 __all__ = ["check_output_range", "mask_activations", "unmask_outputs"]
@@ -32,6 +32,11 @@ def mask_activations(xq: torch.Tensor, r: torch.Tensor, params: RingParams) -> t
         raise ShapeError(f"activation shape {tuple(xq.shape)} != mask shape {tuple(r.shape)}")
     if xq.dtype != torch.int64 or r.dtype != torch.int64:
         raise ShapeError("xq and r must be int64")
+    if xq.numel():
+        lo, hi = torch.aminmax(xq)
+        if int(lo) < -params.qmax or int(hi) > params.qmax:
+            # Outside the A-bit range the ring headroom (and so exact unmasking) is not guaranteed.
+            raise RingOverflowError(f"quantized activations exceed |xq| <= qmax={params.qmax}")
     return (xq + r) & params.mask
 
 

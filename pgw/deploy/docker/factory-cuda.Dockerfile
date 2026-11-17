@@ -9,7 +9,9 @@
 # The torch CUDA wheels bundle the CUDA runtime; the host needs only the NVIDIA driver and the
 # NVIDIA container toolkit. TORCH_CUDA selects the wheel index (cu121, cu124).
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+# Reproducible builds: the base image is pinned by digest and every Python dependency (torch included)
+# by version and sha256 in requirements/factory-cuda.txt (refresh both with scripts/lock-requirements.sh).
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 FROM ${PYTHON_IMAGE} AS build
 ARG TORCH_VERSION=2.5.1
@@ -19,11 +21,15 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
 RUN python -m venv /opt/pgw
 ENV PATH=/opt/pgw/bin:$PATH
-RUN pip install --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}" "torch==${TORCH_VERSION}"
+COPY requirements/factory-cuda.txt /tmp/requirements.txt
+# torch==${TORCH_VERSION}+${TORCH_CUDA} and all other dependencies, hash-checked (no resolver, no "latest")
+RUN pip install --require-hashes --no-deps --extra-index-url "https://download.pytorch.org/whl/${TORCH_CUDA}" \
+        -r /tmp/requirements.txt
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install ".[factory,gpu]" \
+RUN pip install --no-deps --no-build-isolation ".[factory,gpu]" \
+    && pip check \
     && pgw factory --help > /dev/null
 
 FROM ${PYTHON_IMAGE} AS runtime

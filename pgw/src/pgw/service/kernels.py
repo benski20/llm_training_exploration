@@ -10,7 +10,9 @@ Backends (all exact modulo ``2^K``; see SPEC.md section 5):
 ``cpu_int8``
     The same digit algorithm on CPU via ``torch._int_mm`` (oneDNN/fbgemm, VNNI/AMX where present).
     Selected only after an exactness probe with adversarial operands passes
-    (:func:`cpu_int8_available`), because some int8 CPU kernels saturate int16 intermediates.
+    (:func:`pgw.core.ringmm.cpu_int8_available`), because some int8 CPU kernels saturate int16
+    intermediates. The digit GEMM is :func:`pgw.core.ringmm.int8_ring_matmul` (shared with the
+    engine and the factory; CPU inner chunks of ``INT_MM_MAX_INNER_CPU``).
 ``cpu_f64`` / ``cpu_f32``
     Float GEMMs on wide balanced digits (:class:`pgw.core.PreparedWeight`). Always exact.
 ``auto``
@@ -22,7 +24,6 @@ Future: fused CUDA/Triton kernel doing digit split + K/8 GEMMs + shift-accumulat
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from typing import Literal
@@ -30,8 +31,8 @@ from typing import Literal
 import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
-from pgw.core.ring import RingParams, balanced_digits
-from pgw.core.ringmm import PreparedWeight, cuda_int8_available
+from pgw.core.ring import RingParams
+from pgw.core.ringmm import PreparedWeight, cpu_int8_available, cuda_int8_available, int8_ring_matmul
 from pgw.core.types import LinearSpec
 
 __all__ = [
@@ -48,88 +49,6 @@ log = logging.getLogger(__name__)
 
 ServiceBackend = Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"]
 SERVICE_BACKENDS: tuple[str, ...] = ("auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32")
-
-#: ``128 * 128 * n < 2^31`` => ``n <= 131071``; rounded down to a multiple of 8.
-_INT_MM_MAX_INNER = 131_064
-#: CPU int8 GEMMs (oneDNN/fbgemm) usually compute u8 x s8 with a ``+128`` compensation term, whose
-#: int32 intermediates reach ``255 * 128 * n``; ``n <= 65536`` keeps those below ``2^31`` too.
-#: :func:`cpu_int8_available` probes exactly this chunk length with extreme operands.
-_INT_MM_MAX_INNER_CPU = 65_536
-
-
-def _shift_mod(y: torch.Tensor, shift: int, k: int) -> torch.Tensor:
-    """``(y << shift) mod 2^k`` without signed int64 overflow."""
-    if shift >= k:
-        return torch.zeros_like(y)
-    return (y & ((1 << (k - shift)) - 1)) << shift
-
-
-def int8_ring_matmul(x: torch.Tensor, w8: torch.Tensor, k: int) -> torch.Tensor:
-    """``x @ w8^T mod 2^k`` via ``k/8`` ``torch._int_mm`` GEMMs on balanced base-256 digits.
-
-    Args:
-        x: int64 ``(B, n)`` (interpreted mod ``2^k``) on the same device as ``w8``.
-        w8: int8 ``(m, n)``, contiguous.
-        k: Ring width in bits (multiple of 8).
-
-    Returns:
-        int64 ``(B, m)`` in ``[0, 2^k)``. No padding is applied (CPU accepts any shape).
-    """
-    if k % 8 != 0 or not 8 <= k <= 56:
-        raise ConfigError(f"ring width must be a multiple of 8 in [8, 56], got {k}")
-    mask = (1 << k) - 1
-    n = x.shape[1]
-    wt = w8.t()
-    chunk = _INT_MM_MAX_INNER if x.device.type == "cuda" else min(_INT_MM_MAX_INNER, _INT_MM_MAX_INNER_CPU)
-    acc: torch.Tensor | None = None
-    for i, d in enumerate(balanced_digits(x & mask, k, 8)):
-        d8 = d.to(torch.int8)
-        if n <= chunk:
-            y = torch._int_mm(d8, wt).to(torch.int64)
-        else:
-            y = torch.zeros((x.shape[0], w8.shape[0]), dtype=torch.int64, device=x.device)
-            for c0 in range(0, n, chunk):
-                c1 = min(n, c0 + chunk)
-                y += torch._int_mm(d8[:, c0:c1].contiguous(), w8[:, c0:c1].t()).to(torch.int64)
-        term = _shift_mod(y, 8 * i, k)
-        acc = term if acc is None else (acc + term) & mask
-    assert acc is not None
-    return acc & mask
-
-
-@functools.cache
-def cpu_int8_available() -> bool:
-    """True if CPU ``torch._int_mm`` exists and is bit-exact, including on extreme operands.
-
-    The probe multiplies all-(-128)/all-127 operands over the full CPU chunk length
-    (``_INT_MM_MAX_INNER_CPU``; overflows int16 or saturating int32 intermediates in some kernels),
-    for a single row (GEMV paths) and several rows, then checks a random ring product with odd
-    shapes against Python integers. The result is cached per process.
-    """
-    try:
-        n_probe = _INT_MM_MAX_INNER_CPU
-        for rows in (1, 5):
-            for av, bv in ((-128, -128), (-128, 127), (127, 127), (127, -128)):
-                a = torch.full((rows, n_probe), av, dtype=torch.int8)
-                b = torch.full((9, n_probe), bv, dtype=torch.int8)
-                got = torch._int_mm(a, b.t())
-                if got.dtype != torch.int32 or not bool((got.to(torch.int64) == av * bv * n_probe).all()):
-                    log.warning("CPU torch._int_mm is inexact on extreme inputs; cpu_int8 disabled")
-                    return False
-        gen = torch.Generator().manual_seed(4321)
-        x = torch.randint(0, 1 << 48, (7, 77), dtype=torch.int64, generator=gen)
-        w = torch.randint(-128, 128, (13, 77), dtype=torch.int8, generator=gen)
-        got = int8_ring_matmul(x, w.contiguous(), 48)
-        xs, ws = x.tolist(), w.tolist()
-        ref = [[sum(a * b for a, b in zip(xr, wr, strict=True)) % (1 << 48) for wr in ws] for xr in xs]
-        if got.tolist() != ref:
-            log.warning("CPU torch._int_mm ring product mismatch; cpu_int8 disabled")
-            return False
-        return True
-    except Exception as exc:  # torch build without CPU _int_mm
-        log.info("CPU torch._int_mm unavailable (%s); cpu_int8 disabled", type(exc).__name__)
-        return False
-
 
 def resolve_device(device: str | torch.device) -> torch.device:
     """``"auto"`` -> ``cuda`` (device 0) when available, else ``cpu``. Validates explicit devices.

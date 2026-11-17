@@ -58,7 +58,7 @@ Entry format:
 - What (all): `PlainBackend` is also exported as `QuantPlainBackend`. `MaskedBackend(..., on_integrity_failure=fn)`
   hook for the gateway circuit breaker; `max_rows_per_item` (default 8192) splits items.
   `pgw.engine.LocalComputeClient` / `LocalMaskSource` / `InMemoryPack` are in-process stand-ins for dev/tests.
-- Impact: additive, backwards compatible. Status: open
+- Impact: additive, backwards compatible. Status: [done] folded into SPEC 17 (Engine).
 
 ## 2026-11-17 factory -> cli: mount the factory command group
 - What: in `src/pgw/cli/main.py` replace the stub `factory` group (`generate`, `run`) with
@@ -68,7 +68,7 @@ Entry format:
   SIGINT/SIGTERM handlers for `run`. Also runnable today as `python -m pgw.factory ...`.
 - Why: brief requires `pgw factory run|status|benchmark`; cli is outside the factory scope.
 - Impact: cli only; backwards compatible (`generate` keeps `--pack/--store/--slots/--ring/--device/--segments`).
-- Status: open
+- Status: [done] (cli-deploy wiring; SPEC 12)
 
 ## 2026-11-17 factory -> maskstore: SegmentWriter usage contract the factory relies on
 - What (as implemented by `pgw.factory.MaskGenerator.generate_into_store`, tested with an in-memory fake):
@@ -87,7 +87,7 @@ Entry format:
   - `MaskStore.cleanup_partials()`: delete stale temp files after a crash (called once on scheduler start).
   - `KeyProvider` is used as a wrap-only provider by `pgw.factory.RecipientWrapProvider` (`kek_id = "hpke:<16 hex>"`,
     `wrap()` -> `hpke_wrap_for_recipient`, `unwrap()` raises) so a partner's staging store writes HPKE-sealed segments.
-- Impact: none if the store follows SPEC 7.2/7.5. Status: open
+- Impact: none if the store follows SPEC 7.2/7.5. Status: [done] (implemented by maskstore; SPEC 17)
 
 ## 2026-11-17 factory -> core: exact CPU int8 ring GEMM backend (`cpu_int8`)
 - What: `pgw.factory.kernels` implements `cpu_int8`: the `cuda_int8` limb algorithm on CPU via `torch._int_mm`
@@ -95,7 +95,7 @@ Entry format:
   (`cpu_int8_available()`). Measured on this 4-core box: ~1.0 TOPS int8 vs 0.11 TFLOPS f64 -> ~4x faster ring matmuls
   than `cpu_f64` at K40 (5 limb GEMMs vs 2). Suggest adopting it in `pgw.core.ringmm` (`select_backend("cpu")` -> `cpu_int8`
   when the probe passes); the service's CPU path and `freivalds_precompute` would benefit.
-- Impact: additive. Status: open
+- Impact: additive. Status: [deferred] service and factory already use `cpu_int8` behind their probes; `pgw.core.ringmm` stays the exact reference (SPEC 17).
 
 ## 2026-11-17 maskstore -> cli, factory, gateway, engine: maskstore implemented; CLI wiring request
 - What (cli): replace the `pgw maskstore init|status|import|gc` stubs with the helpers in `pgw.maskstore.admin`:
@@ -115,7 +115,7 @@ Entry format:
   `add_low_water_listener(fn(Inventory))` fires once per downward crossing of `low_water_slots`.
 - New: `MaskStore.rotate_kek(new_provider, reencrypt=True)` (re-MACs state + journal; resumable; crash-safe via a
   staged `generation.journal.next`).
-- Impact: additive. Status: open (cli wiring)
+- Impact: additive. Status: [done] (cli wiring by cli-deploy; SPEC 17)
 
 ## 2026-11-17 service -> cli, lead architect: compute service implemented; CLI hook and additions
 - What (cli): replace the stub body of `pgw service serve` with
@@ -140,7 +140,7 @@ Entry format:
   the certificate gates the connection and the bearer token names the tenant. Certificate->tenant mapping works when
   the ASGI server provides the TLS extension or a TLS-terminating proxy sets `trusted_client_cert_header`.
 - pyproject: `service` extra gained `h2` and `httpx[http2]` (pgw.wire imports httpx at package import).
-- Impact: additive. Status: open (cli wiring)
+- Impact: additive. Status: [done] (cli wiring by cli-deploy; SPEC 17)
 
 ## 2026-11-17 gateway -> cli, lead architect, observability, engine, packaging: gateway implemented
 - What (cli): replace the stub `gateway` group in `src/pgw/cli/main.py` with
@@ -171,7 +171,7 @@ Entry format:
 - What (engine, request): the gateway reserves masks itself (fail fast) and hands the reservation to the engine via
   `Generator(session_factory=...)` + a ContextVar so that the engine closes it at a safe point (never during an
   in-flight batched step). A public `astream(..., session=res, own_session=True)` would make this explicit.
-- Impact: additive. Status: open (cli wiring, pyyaml, SPEC fold-in)
+- Impact: additive. Status: [done] cli wiring (cli-deploy), `pyyaml>=6` in the gateway extra, SPEC 17; engine request answered by `own_session`.
 
 ## observability: PGWMetrics, OutboundNoiseMonitor and dashboard implemented (observability team)
 - What (metrics): `PGWMetrics(registry=None, *, enabled=True, prefixes=None)`; `registry=None` uses a process-wide
@@ -231,7 +231,7 @@ Entry format:
   4. SPEC 3.4 names `pad_rows_to` and dummy rounds as mitigations; neither is implemented. Docs mark them "planned".
 - Requests (optional): `pgw maskstore recipient-key create OUT` CLI (docs use a Python one-liner around
   `RecipientKeyPair.generate`); link `docs/README.md` from the top-level README.
-- Impact: none on code. Status: open (findings 1-4 for SPEC).
+- Impact: none on code. Status: [done] findings 1-4 folded into SPEC 1, 3.2, 3.4; finding 2 also implemented as a factory warning (< 16 bits soundness); recipient-key CLI done; top-level README links docs.
 
 ## 2026-11-17 cli-deploy -> all: CLI wiring done (factory, gateway, maskstore, service requests)
 - What (done, in `src/pgw/cli`): `pgw factory ...` and `pgw gateway ...` are the component groups
@@ -252,25 +252,25 @@ Entry format:
 - What: `GatewayModelConfig.service_token_file: Path | None` (read at start-up, mutually exclusive with `service_token`).
 - Why: Kubernetes/systemd deliver the tenant token as a file; today deployments render the models file with
   `pgw config render` to inline it (works, but the token then sits in a second file on tmpfs).
-- Impact: additive; the charts would drop the render step. Status: open
+- Impact: additive; the charts would drop the render step. Status: [done] `GatewayModelConfig.service_token_file` (exclusive with `service_token`, read at start-up). The charts keep the render step for now (still works).
 
 ## 2026-11-17 cli-deploy -> service: health endpoints on the metrics listener
 - What: serve `GET /healthz` and `/readyz` on `metrics_port` too (plain HTTP, internal), same semantics as the main port.
 - Why: with `tls.require_client_cert` kubelet probes cannot present client certificates, so the `pgw-service` chart
   falls back to TCP probes and readiness cannot wait for pack loading/warm-up.
-- Impact: additive. Status: open
+- Impact: additive. Status: [done] `create_metrics_app` serves `/healthz` + `/readyz`; the chart's mTLS branch probes them on the `metrics` port.
 
 ## 2026-11-17 cli-deploy -> lead architect (packaging): pyproject and repo-level CI
 - What: (1) add `pyyaml>=6` to the `gateway` extra (also requested by gateway) and `types-PyYAML` to `dev`; the deploy tests
   and the gateway image use YAML (the images currently pip-install `pyyaml>=6` explicitly). (2) GitHub only reads
   workflows from the repository root: copy `pgw/.github/workflows/ci.yml` to `.github/workflows/pgw-ci.yml` (it already
   uses `PGW_DIR=pgw`). (3) SPEC 12/13: reference `deploy/` (docker, compose, helm, systemd, vmware, marketplace).
-- Impact: none at runtime. Status: open
+- Impact: none at runtime. Status: [done] (1) pyyaml/types-PyYAML in pyproject (the gateway image no longer installs it separately), (3) SPEC 13 references deploy/. (2) [deferred] the repository root is outside the pgw/ tree; copy the workflow when the repo owner agrees.
 
 ## 2026-11-17 cli-deploy -> gateway (marketplace, later): optional AWS Marketplace metering hook
 - What: an optional `PGW_GATEWAY_MARKETPLACE__*` integration calling AWS `RegisterUsage` at start-up (container listing).
 - Why: AWS container listings with hourly pricing require it (see deploy/marketplace/aws/README.md).
-- Impact: additive, off by default. Status: open
+- Impact: additive, off by default. Status: [deferred] (SPEC 17)
 
 ## 2026-11-17 cli-deploy -> docs: `pgw maskstore recipient-key create|show` implemented
 - What: `pgw maskstore recipient-key create PRIVATE_KEY_FILE [--public-out PUB.hex]` (private key 0600, refuses to
@@ -306,7 +306,7 @@ Entry format:
   path including cancellation, and sends no request when every call has zero rows (outputs are `(0, m)`).
 - What (behaviour): the async batching loop now isolates any exception (not only `PGWError`) raised by one session
   while it isolates a mask-exhaustion failure, so other streams cannot hang.
-- Impact: additive. Status: open (SPEC fold-in)
+- Impact: additive. Status: [done] SPEC 17 (Engine).
 
 ## 2026-11-17 maskstore (hardening review) -> factory, cli, docs: partner segment signatures (SPEC 7.7)
 - Why: HPKE base mode does not authenticate the sender. Anyone who knows the customer's recipient *public* key
@@ -328,7 +328,7 @@ Entry format:
 - Also (behaviour): reservation ownership now records `hostname|pid-namespace`, and live reservations are tracked
   process-wide, so a second `MaskStore` object in the same process, or a sidecar container sharing the hostname,
   can no longer close/shred a segment another one is still reading.
-- Status: maskstore part done; factory/cli/docs parts open.
+- Status: [done] maskstore; factory (`ExportSink(signing_key=)`, `PGW_FACTORY_PARTNER_SIGNING_KEY_FILE`, `--partner-key`; sidecar placed in the outbox before the segment; `recover()` signs unsigned outbox segments); cli (`pgw maskstore partner-key create|show`); SPEC 7.7. Docs: see integration entry below.
 
 ## 2026-11-17 factory (hardening review) -> lead architect, maskstore, cli: factory additions
 - What (additive, factory-internal; for SPEC 7.4):
@@ -345,7 +345,7 @@ Entry format:
   - `Throttle.max_slots_per_hour` no longer accumulates credit while idle (no burst after a full-inventory pause).
 - maskstore: the `export_segment`/`cleanup_partials` requests above are implemented and now covered by
   `tests/factory/test_export_e2e.py` (real MaskStore + real HPKE + customer `import_segment`). Status: done.
-- Impact: additive, backwards compatible. Status: open (fold into SPEC 7.4)
+- Impact: additive, backwards compatible. Status: [done] SPEC 17 (Factory).
 
 ## gateway hardening review (2026-11-17)
 - Resolved: the gateway now hands its mask reservation to the engine with
@@ -379,3 +379,126 @@ Entry format:
   rollback witness at all; refuse to open unless an explicit `allow_no_rollback_witness` dev flag is set;
   (3) consider defaulting `journal_file` / `counter_file` to a path the operator must set off the
   mask volume. Docs (whitepaper 3.4, threat model T-22, both install guides, audit M-06) now state this.
+
+## 2026-11-17 integration lead -> all: resolution of open notes, end-to-end test
+- Every entry above now carries a final status ([done] / [deferred]); accepted changes are folded into SPEC.md
+  (sections 1, 3.2, 3.4, 7.6, 7.7, 12, 13, 15 and the new section 17).
+- rust-core hardening review: adopted in Python: `pgw.core.mask_activations` rejects `|xq| > qmax`,
+  `quantize_weight_rows` rejects non-finite weights, `freivalds_check/verify` refuse `c == 0` (ConfigError).
+  The store already refuses `checks()` on `checks=0` segments; the format keeps `checks >= 0` because the
+  factory's private self-check vectors cover `checks=0` segments, which are never usable by a gateway. [done]
+- docs rollback-witness review: (1) `counter == "none"` now logs a WARNING on open and `pgw doctor` reports
+  `warn` for the mask store; (2) a store with neither a MAC journal nor a counter refuses to open unless
+  `PGW_MASKSTORE_ALLOW_NO_ROLLBACK_WITNESS=true` (the partner's wrap-only staging store sets it); (3) defaults for
+  `journal_file`/`counter_file` are unchanged (operators must place a counter off the mask volume; docs say so). [done]
+- gateway: safety events (`safety.integrity_failure`, `safety.noise_alarm`) go to the audit log immediately via
+  `InferenceRuntime.add_safety_listener` (observability suggestion). [done]
+- cli: `python -m pgw.cli` works (new `pgw/cli/__main__.py`). [done]
+- New: `tests/e2e/` (real processes on localhost, Qwen2.5-0.5B-Instruct or the tiny model) and
+  `scripts/e2e_demo.sh` (the same pipeline by hand). Docs (air-gapped guide): partner key exchange and
+  `PGW_MASKSTORE_TRUSTED_PARTNER_KEYS` are described there by the integration lead.
+
+## GPU validation on Kaggle T4 (2026-11-17) - see benchmarks/RESULTS.md
+
+- core/engine/service/factory (all CUDA paths): cuBLASLt int8 GEMMs on T4 + CUDA 13 (torch 2.11) reject a
+  row-major `mat2` and output/inner dims that are not multiples of 32. Fixed in place: the engine passes the
+  column-major view of a row-major `(m, n)` weight; `PreparedWeight`, the factory `RingKernel` and
+  `_cuda_int_mm_padded` pad m and n to multiples of 32 (`_CUDA_ALIGN`); inner chunks are 131040 (was 131064;
+  SPEC 3.x updated; the Rust core's chunk size is CPU-only and unaffected). `cuda_int8_available()` now
+  probes the layout actually used. Rule for new CUDA code: pass `w.t()` of a contiguous `(m, n)` int8 weight,
+  pad m and n to 32, rows to >= 32. [done]
+- service: `/readyz` device check uses a 64x64 product (the 1x8 one never passed on T4, so the service was
+  never ready on that GPU) and logs the exception text. [done]
+- tests/e2e: `PGW_E2E_SERVICE_DEVICE=cuda` runs the e2e service on a GPU (default cpu). [done]
+
+## Security review fixes (fail-closed defaults)
+
+Behaviour changes other components and operators must know about:
+
+- **Partner segments** (`MaskStore.import_segment`, kek_id `hpke:*`): refused unless signed by a key in
+  `PGW_MASKSTORE_TRUSTED_PARTNER_KEYS` (dev flag `allow_unsigned_partner_segments`), and unless the
+  signed header's new optional `destination` field equals the importing store's `store_id`
+  (dev flag `allow_unbound_partner_segments`). `SegmentHeader.destination` is omitted from the JSON
+  when unset, so existing headers keep their bytes. Producers: `MaskStore.writer(..., destination=)`,
+  `ExportSink(destination_store_id=)`, `PGW_FACTORY_DESTINATION_STORE_ID`, `pgw factory --destination-store`.
+- `pgw maskstore import` / `admin.import_files` delete the source and `.sig` by default (`--keep-source`).
+- **External counter**: `MaskStore.reserve()` raises `ConfigError` when `counter == "none"` unless
+  `PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER=true`. The test suite sets that variable in `tests/conftest.py`;
+  subprocess-based tests that strip `PGW_*` configure `PGW_MASKSTORE_COUNTER=file` instead.
+  `pgw doctor` reports `fail` for a store without a counter.
+- **Network filesystems**: `MaskStore` refuses NFS/CIFS/Ceph/Gluster/FUSE roots (`allow_network_filesystem`).
+  The pgw-factory chart refuses `output=store` without `store.colocateWithGateway.enabled`.
+- **Soundness floor**: `MaskStoreSettings.min_soundness_bits` / `GatewaySettings.min_soundness_bits`
+  (default 20). `MaskedBackend(min_soundness_bits=)` refuses weaker segments before any row is used.
+  `FactorySettings.checks` and `MaskGenerator.generate_into_store(checks=)` default to `None` = auto
+  (`MaskGenerator.checks_for()`); `LocalMaskSource(checks=None)` likewise.
+- **Gateway**: `integrity_cooldown_s` defaults to None (admin reset only); with a cool-down the breaker
+  latches after `integrity_max_auto_resets` (2). `pack_verify="full"` and a pinned `fingerprint` are
+  required for masked models outside `allow_dev_modes`. `noise_monitor_required` defaults to required
+  outside dev mode; `/readyz` reports "noise monitor unavailable".
+- **Service**: verified client certificates now reach the app natively under hypercorn
+  (`pgw.service.tls_peer`, hooks `hypercorn.asyncio.tcp_server.TCPServer.run`; hypercorn pinned `<0.19`).
+  `mtls_tenants_file` requires `tls.ca_file` or `trusted_client_cert_header`. `metrics_on_main_port`
+  defaults to False.
+- **Builds**: hashed locks in `requirements/*.txt` (`scripts/lock-requirements.sh`), base images pinned by
+  digest, CI actions pinned by SHA, `audit` CI job (pip-audit, cargo audit).
+
+## Reliability review fixes (interface changes)
+
+- `pgw.maskstore`: consumed segments are crypto-erased (random key header + fsync) and renamed to
+  `.<id>.shred` under the store lock; the bulk zero pass + unlink runs in a background thread
+  (`MaskStoreSettings.shred_zero_fill`, `MaskStore.wait_for_wipes()`). `gc()` finishes interrupted wipes.
+- `MaskStore.writer(chunk_slots=None)` now auto-sizes chunks to ~1 MiB for the widest linear
+  (`pgw.maskstore.format.auto_chunk_slots`) and refuses chunks > 16 MiB and segments beyond the
+  PRNG stream range (`check_segment_slots`, `pgw.core.prng.max_stream_rows`). New:
+  `min_free_bytes` setting + `free_bytes()`, `reservation_cache_bytes(fp, ring)`, `claim_owner(role)`.
+  `MaskStore.metrics()` adds store-wide series keyed by `()` (`pgw_masks_open_reservations`,
+  `pgw_masks_unshredded_bytes`).
+- Factory: `chunk_slots` is now only the GEMM batch; the stored chunk is `segment_chunk_slots` /
+  `segment_chunk_bytes`. New disk guards `min_free_bytes`, `max_store_bytes`; `metrics_port`
+  serves `/metrics` + `/healthz` (`pgw.factory.health.FactoryHealthServer`).
+- Engine: `TransformerModel.run_plain()` / `close()` (plaintext math on a per-model worker thread);
+  `Generator.wait_closed()`; owned reservations are closed in an executor, never on the loop.
+  `MaskedBackend` calls `session.ensure(lid, rows)` (if present) before taking rows.
+- Gateway: `WindowedReservation` (`mask_window_tokens`), charging `max(tokens, mask_burn_weight x
+  reserved)`, `ModelRuntime.open_sessions()` (atomic `AdmissionController.acquire(n)`), background
+  connect with state `connecting`, `/readyz` is process-level (`?models=all` for the strict check),
+  `ops_port` listener, graceful SIGTERM drain, deferred quota flush, periodic mask store GC.
+- Wire: `PGW-Deadline-Remaining-Ms` header (per attempt), client retry budget
+  (`retry_budget_ratio`/`retry_budget_burst`), router `max_inflight_bytes` + handler `precheck()`
+  run before the body is read; service setting `max_inflight_bytes`.
+
+## Quality review fixes (interface changes)
+
+- `pgw.core.ringmm` is now the single home of the int8 digit GEMM: `int8_ring_matmul(x, w8, k)`,
+  `int8_digit_gemm(d8, w)`, `int_mm_max_inner(device)`, constants `INT_MM_MAX_INNER` (131040, CUDA)
+  and `INT_MM_MAX_INNER_CPU` (65536), and the cached `cpu_int8_available()` probe (extreme
+  operands at the CPU chunk length, rows 1/2/5/33, both operand layouts). `pgw.service.kernels`
+  and `pgw.factory.kernels` re-export `cpu_int8_available` / `int8_ring_matmul`; their private
+  copies (`_INT_MM_MAX_INNER*`, `INT_MM_MAX_INNER`, `int8_ring_mm`) are gone. The engine's
+  `exact_int_matmul` (PlainBackend) uses the shared probe and chunking. Note: `pgw.core.ringmm` as a
+  package attribute is the `ringmm()` function; tests that monkeypatch module constants must use
+  `sys.modules["pgw.core.ringmm"]`.
+- `ModelPack.load_linear_meta(lid) -> LinearMeta(id, scale, bias, out_features, in_features)`;
+  `MaskedBackend` uses it (when the pack provides it) and never reads int8 weights.
+- `ChatTokenizer.token_bytes(token_id) -> bytes` (raw bytes of one token; byte-level BPE and
+  SentencePiece byte fallback). Gateway logprob `bytes` use it.
+- `arch_config_from_hf(..., allow_unsupported_rope=False)` and `pack_checkpoint(...,
+  allow_unsupported_rope=False)` raise `ConfigError` for RoPE types the engine does not implement;
+  CLI `pgw pack --allow-unsupported-rope`.
+- Gateway API: optional fields sent as `null` take defaults; `tools`/`functions`, `tool_choice`/
+  `function_call` other than "none", `response_format` other than text and assistant `tool_calls`
+  are 400 `protocol` with `param`; `/v1/completions` accepts token-id prompts (`list[int]`,
+  `list[list[int]]`). Over-long prompts are `bad_shape` (was `protocol`); `max_tokens` above
+  `max_tokens_limit` stays 400 `protocol`. `ModelRuntime.check_token_ids()`, `decode_ids()`,
+  `vocab_size`. Unused response schemas (`ChatCompletionResponse`, `Usage`, ...) were removed from
+  `pgw.gateway.openai_schemas`; `FINISH_REASONS = ("stop", "length")`.
+
+## Release manager (v0.1.0 release pass, 2026-11-17)
+- Gateway: `InferenceRuntime` now refuses to start (ConfigError) when it opens its own mask store and that
+  store has no external monotonic counter (and `PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER` is unset), instead
+  of starting ready and returning 500 `config` on every request. Impact: fail-fast only. Status: [done]
+- `scripts/e2e_demo.sh` configures `PGW_MASKSTORE_COUNTER=file` outside the mask dir (it was broken by the
+  counter requirement). Status: [done]
+- pyproject: new optional extras `hsm`, `kms-aws`, `kms-gcp`, `kms-azure` for key-provider SDKs. Status: [done]
+- SPEC 13: Terraform for topology B marked planned (not shipped). STATUS.md added. Status: [done]

@@ -22,7 +22,7 @@ from pgw.maskstore.format import (
     encode_header,
 )
 
-__all__ = ["RawSegmentWriter", "shred_file"]
+__all__ = ["RawSegmentWriter", "crypto_erase", "shred_file", "wipe_and_unlink"]
 
 log = logging.getLogger(__name__)
 
@@ -131,22 +131,17 @@ class RawSegmentWriter:
             log.warning("could not remove partial segment %s: %s", self.tmp_path.name, exc.strerror)
 
 
-def shred_file(path: Path, *, header_bytes: int = 64 << 10, fsync: bool = True) -> int:
-    """Securely delete a segment file; return the bytes freed.
+def crypto_erase(path: Path, *, header_bytes: int = 64 << 10, fsync: bool = True) -> int:
+    """Cryptographically erase a segment file in place; return its size (0 if it is gone).
 
-    The header region (which holds the wrapped DEK) is overwritten with random bytes first and
-    synced, so the segment is cryptographically erased as soon as that write reaches the disk; the
-    rest of the file is then overwritten with zeros, the file truncated and unlinked.
-
-    Note: on copy-on-write filesystems and SSDs with wear levelling an overwrite does not guarantee
-    the old blocks are gone. Complete erasure there relies on retiring the KEK (key rotation) and on
-    full-disk encryption; see the operations guide.
+    The header region holds the wrapped DEK. Overwriting it with random bytes and syncing makes
+    every chunk of the file undecryptable, so this is the security-relevant part of shredding and
+    it is cheap (one 64 KiB write) regardless of the segment size.
     """
     try:
         size = path.stat().st_size
     except FileNotFoundError:
         return 0
-    block = 1 << 20
     try:
         fd = os.open(path, os.O_WRONLY)
     except OSError as exc:
@@ -156,20 +151,67 @@ def shred_file(path: Path, *, header_bytes: int = 64 << 10, fsync: bool = True) 
         os.pwrite(fd, os.urandom(head), 0)
         if fsync:
             os.fsync(fd)
-        zeros = bytes(block)
-        off = head
-        while off < size:
-            n = min(block, size - off)
-            os.pwrite(fd, zeros[:n], off)
-            off += n
-        if fsync:
-            os.fsync(fd)
-        os.ftruncate(fd, 0)
     except OSError as exc:
         raise MaskStoreError(f"shredding {path.name} failed: {exc.strerror}") from exc
+    finally:
+        os.close(fd)
+    return size
+
+
+def wipe_and_unlink(path: Path, *, header_bytes: int = 64 << 10, zero_fill: bool = True, fsync: bool = True) -> int:
+    """Bulk part of shredding (after :func:`crypto_erase`): zero the body, truncate, unlink.
+
+    This can take minutes for multi-GB segments, so callers run it outside the store lock and off
+    any latency-sensitive thread. ``zero_fill=False`` skips the overwrite (truncate + unlink only),
+    which is all that is useful on SSDs and copy-on-write filesystems. Returns the bytes freed.
+    """
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return 0
+    try:
+        fd = os.open(path, os.O_WRONLY)
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        raise MaskStoreError(f"cannot open {path.name} for wiping: {exc.strerror}") from exc
+    block = 1 << 20
+    try:
+        if zero_fill:
+            zeros = bytes(block)
+            off = min(size, header_bytes)
+            while off < size:
+                n = min(block, size - off)
+                os.pwrite(fd, zeros[:n], off)
+                off += n
+            if fsync:
+                os.fsync(fd)
+        os.ftruncate(fd, 0)
+    except OSError as exc:
+        raise MaskStoreError(f"wiping {path.name} failed: {exc.strerror}") from exc
     finally:
         os.close(fd)
     path.unlink(missing_ok=True)
     if fsync:
         fsync_dir(path.parent)
+    return size
+
+
+def shred_file(path: Path, *, header_bytes: int = 64 << 10, fsync: bool = True, zero_fill: bool = True) -> int:
+    """Securely delete a segment file; return the bytes freed.
+
+    The header region (which holds the wrapped DEK) is overwritten with random bytes first and
+    synced, so the segment is cryptographically erased as soon as that write reaches the disk; the
+    rest of the file is then overwritten with zeros (unless ``zero_fill=False``), the file
+    truncated and unlinked. :class:`pgw.maskstore.MaskStore` runs the two halves separately
+    (:func:`crypto_erase` under its lock, :func:`wipe_and_unlink` in a background thread).
+
+    Note: on copy-on-write filesystems and SSDs with wear levelling an overwrite does not guarantee
+    the old blocks are gone. Complete erasure there relies on retiring the KEK (key rotation) and on
+    full-disk encryption; see the operations guide.
+    """
+    size = crypto_erase(path, header_bytes=header_bytes, fsync=fsync)
+    if size == 0 and not path.exists():
+        return 0
+    wipe_and_unlink(path, header_bytes=header_bytes, zero_fill=zero_fill, fsync=fsync)
     return size

@@ -30,13 +30,14 @@ import torch
 
 from pgw.core.errors import ConfigError, IntegrityError, PGWError
 from pgw.core.fingerprint import short_fingerprint
-from pgw.core.prng import SEED_BYTES, SeedExpander, new_seed
+from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows, new_seed
 from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
 from pgw.factory.governor import Throttle
 from pgw.factory.kernels import RingKernel, resolve_backend, resolve_device, ring_vecmat
 from pgw.factory.streaming import WeightStreamer, auto_resident_bytes
+from pgw.maskstore.format import DEFAULT_CHUNK_BYTES, auto_chunk_slots
 
 __all__ = ["GeneratedLinear", "GenerationStats", "MaskGenerator", "slot_bytes"]
 
@@ -151,6 +152,7 @@ class MaskGenerator:
         if hasattr(pack, "check_ring"):
             pack.check_ring(self.ring)
         self.specs: list[LinearSpec] = list(pack.linear_specs())
+        self._weak_warned: set[int] = set()
         if not self.specs:
             raise ConfigError("model pack has no linear groups")
         for s in self.specs:
@@ -190,6 +192,18 @@ class MaskGenerator:
         """Stored ``W r`` bytes per slot."""
         return slot_bytes(self.specs, self.ring)
 
+    def store_chunk_slots(self, target_bytes: int = DEFAULT_CHUNK_BYTES) -> int:
+        """Encrypted-chunk size (slots) giving about ``target_bytes`` for the widest linear."""
+        return auto_chunk_slots([s.out_features for s in self.specs], self.ring, target_bytes)
+
+    def max_segment_slots(self) -> int:
+        """Largest segment the PRNG stream range allows for this model (see ``max_stream_rows``)."""
+        return min(max_stream_rows(s.in_features) for s in self.specs)
+
+    def segment_bytes(self, slots: int) -> int:
+        """Approximate on-disk size of a segment of ``slots`` slots (W r rows dominate)."""
+        return int(slots) * self.bytes_per_slot + (1 << 20)
+
     def tokens_per_second(self) -> float:
         """Measured throughput of the last run (slots/s)."""
         return self.last_stats.slots_per_second
@@ -205,6 +219,40 @@ class MaskGenerator:
             raise ConfigError(f"checks must be in [0, 8], got {checks}")
         if chunk_slots <= 0:
             raise ConfigError(f"chunk_slots must be positive, got {chunk_slots}")
+
+    #: Target bits of Freivalds soundness per call (range check + check vectors). ``checks=None``
+    #: picks the smallest number of vectors that reaches it; below it a warning is logged. Gateways
+    #: and stores refuse segments under their own floor (default 20, ``min_soundness_bits``).
+    MIN_SOUNDNESS_BITS = 20
+
+    def checks_for(self, min_bits: float | None = None) -> int:
+        """Smallest ``checks`` in ``[2, 8]`` giving ``min_bits`` of soundness for every linear (else 8)."""
+        from pgw.core.freivalds import soundness_bits
+
+        target = self.MIN_SOUNDNESS_BITS if min_bits is None else min_bits
+        for c in range(2, 9):
+            if all(soundness_bits(self.ring, sp.in_features, c) >= target for sp in self.specs):
+                return c
+        return 8
+
+    def _warn_weak_integrity(self, checks: int) -> None:
+        """Warn once per ``checks`` value when the integrity margin is weak for some linear (docs finding 2)."""
+        if checks == 0 or checks in self._weak_warned:
+            return
+        self._weak_warned.add(checks)
+        from pgw.core.freivalds import soundness_bits
+
+        worst = min(self.specs, key=lambda sp: soundness_bits(self.ring, sp.in_features, checks))
+        bits = soundness_bits(self.ring, worst.in_features, checks)
+        if bits < self.MIN_SOUNDNESS_BITS:
+            need = next((c for c in range(checks + 1, 9)
+                         if soundness_bits(self.ring, worst.in_features, c) >= self.MIN_SOUNDNESS_BITS), None)
+            log.warning(
+                "weak integrity margin: %s with checks=%d gives only %.0f bits of Freivalds soundness for %s "
+                "(n=%d); %s",
+                self.ring.name, checks, bits, worst.id.key, worst.in_features,
+                f"use checks>={need}" if need else "use a wider ring (K40A12 or K48A20)",
+            )
 
     def generate(
         self, seed: bytes, slots: int, *, checks: int = 2, chunk_slots: int = 256, throttle: Throttle | None = None
@@ -354,11 +402,13 @@ class MaskGenerator:
         store: Any,
         slots: int,
         *,
-        checks: int = 2,
+        checks: int | None = None,
         chunk_slots: int = 256,
         factory_id: str = "local",
         seed: bytes | None = None,
         throttle: Throttle | None = None,
+        store_chunk_slots: int | None = None,
+        store_chunk_bytes: int = DEFAULT_CHUNK_BYTES,
     ) -> str:
         """Generate a fresh-seeded segment straight into a :class:`pgw.maskstore.MaskStore`; return its id.
 
@@ -366,15 +416,31 @@ class MaskGenerator:
         error or stop the partial segment is aborted, never committed.
 
         Args:
+            checks: Freivalds vectors per linear; ``None`` (default) = :meth:`checks_for` (meets
+                :attr:`MIN_SOUNDNESS_BITS` for this ring and model where possible).
             seed: For tests only; production always uses a fresh ``os.urandom`` seed per segment.
+            chunk_slots: Rows per GEMM batch (throughput only).
+            store_chunk_slots: Slots per encrypted chunk in the segment file; default sized by
+                ``store_chunk_bytes`` (bounds the decrypted masks a gateway caches per session).
         """
+        if checks is None:
+            checks = self.checks_for()
         seg_seed = bytes(seed) if seed is not None else new_seed()
         self._validate(seg_seed, slots, checks, chunk_slots)
+        if slots > self.max_segment_slots():
+            raise ConfigError(
+                f"segment_slots={slots} exceeds the PRNG stream range of this model "
+                f"(max {self.max_segment_slots()} slots per segment)",
+                details={"slots": slots, "max_slots": self.max_segment_slots()},
+            )
+        self._warn_weak_integrity(checks)
         with self._lock:
             t0 = time.perf_counter()
             writer = store.writer(
                 self.fingerprint, self.ring, self.specs, slots=slots, seed=seg_seed, checks=checks,
-                chunk_slots=chunk_slots, factory_id=factory_id,
+                chunk_slots=self.store_chunk_slots(store_chunk_bytes) if store_chunk_slots is None
+                else store_chunk_slots,
+                factory_id=factory_id,
             )
             write_time = [0.0]
             try:

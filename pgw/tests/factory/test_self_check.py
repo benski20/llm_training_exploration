@@ -74,3 +74,27 @@ def test_settings_wire_self_check(tmp_path: object) -> None:
     s = FactorySettings(pack_path=tmp_path, self_check_rows=-1)  # type: ignore[arg-type]
     gens = build_generators(s, [FakePack()])
     assert [g.self_check_rows for g in gens.values()] == [-1]
+
+
+def test_weak_integrity_margin_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """Docs finding 2: K32A8 with few check vectors on wide layers gets a warning (once per checks value)."""
+    import logging
+
+    from pgw.core import RING_K32_A8, RING_K48_A20
+    from pgw.core.freivalds import soundness_bits
+    from pgw.factory import MaskGenerator
+
+    from .conftest import FakePack
+
+    pack = FakePack()
+    gen = MaskGenerator(pack, RING_K32_A8)
+    worst = min(soundness_bits(RING_K32_A8, s.in_features, 1) for s in gen.specs)
+    with caplog.at_level(logging.WARNING, logger="pgw.factory.generator"):
+        gen._warn_weak_integrity(1)
+        gen._warn_weak_integrity(1)
+    msgs = [r.getMessage() for r in caplog.records if "weak integrity" in r.getMessage()]
+    assert len(msgs) == (1 if worst < 16 else 0)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="pgw.factory.generator"):
+        MaskGenerator(pack, RING_K48_A20)._warn_weak_integrity(2)
+    assert not [r for r in caplog.records if "weak integrity" in r.getMessage()]

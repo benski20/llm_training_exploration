@@ -61,6 +61,33 @@ def test_exact_int_matmul(bits: int) -> None:
     assert exact_int_matmul(xq[:0], w.to(torch.int8), bits).shape == (0, 33)
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize("bits", [8, 12, 20])
+@pytest.mark.parametrize("t,n,m", [(1, 64, 48), (5, 70, 33), (40, 3584, 4608)])
+def test_exact_int_matmul_cuda(bits: int, t: int, n: int, m: int) -> None:  # pragma: no cover - GPU only
+    """CUDA path, both weight layouts: row-major (n, m) and the column-major view PlainBackend keeps.
+
+    Regression: T4 + CUDA 13 cuBLASLt rejects a row-major int8 ``mat2`` (CUBLAS_STATUS_NOT_SUPPORTED).
+    """
+    g = torch.Generator().manual_seed(bits + t)
+    qmax = (1 << (bits - 1)) - 1
+    xq = torch.randint(-qmax, qmax + 1, (t, n), generator=g, dtype=torch.int64)
+    xq[0, :] = qmax
+    w = torch.randint(-128, 128, (n, m), generator=g, dtype=torch.int64)
+    ref = torch.tensor((xq.numpy().astype(object) @ w.numpy().astype(object)).astype("int64"))
+    w8 = w.to(torch.int8)
+    for wt in (w8.cuda(), w8.t().contiguous().cuda().t()):
+        assert torch.equal(exact_int_matmul(xq.cuda(), wt, bits).cpu(), ref)
+
+
+@pytest.mark.gpu
+def test_plain_backend_cuda_matches_cpu(qwen_pack: InMemoryPack, ring: RingParams) -> None:  # pragma: no cover
+    x = _x(7, qwen_pack.load_linear(QKV0).w8.shape[1])
+    cpu = PlainBackend(qwen_pack, ring).forward(LinearCall(QKV0, x))
+    gpu = PlainBackend(qwen_pack, ring, device="cuda").forward(LinearCall(QKV0, x))
+    assert torch.equal(cpu, gpu)
+
+
 def test_plain_backend_matches_reference(qwen_pack: InMemoryPack, ring: RingParams) -> None:
     be = PlainBackend(qwen_pack, ring)
     lw = qwen_pack.load_linear(QKV0)
@@ -378,3 +405,80 @@ async def test_local_client_models(qwen_pack: InMemoryPack) -> None:
     with pytest.raises(ConfigError):
         await c.connect(None, "K56A40")
     await c.aclose()
+
+
+def test_exact_int_matmul_uses_shared_extreme_operand_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CPU int8 kernel that is exact on small all-ones inputs but saturates on extreme operands must
+    not be used by the plain (reference) backend: the shared probe rejects it and the float64 path
+    keeps results exact."""
+    import sys
+
+    core_ringmm = sys.modules["pgw.core.ringmm"]  # pgw.core.ringmm the attribute is the function
+
+    real = torch._int_mm
+
+    def saturating(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        return real(a, b).clamp(-(1 << 20), 1 << 20)
+
+    core_ringmm.cpu_int8_available.cache_clear()
+    monkeypatch.setattr(torch, "_int_mm", saturating)
+    try:
+        assert core_ringmm.cpu_int8_available() is False
+        gen = torch.Generator().manual_seed(9)
+        xq = torch.full((3, 4096), -2047, dtype=torch.int64)
+        w = torch.full((4096, 5), -128, dtype=torch.int8)
+        got = exact_int_matmul(xq, w, 12)
+        assert torch.equal(got, torch.full((3, 5), 2047 * 128 * 4096, dtype=torch.int64))
+        xr = torch.randint(-2047, 2048, (4, 300), dtype=torch.int64, generator=gen)
+        wr = torch.randint(-127, 128, (300, 7), dtype=torch.int8, generator=gen)
+        assert torch.equal(exact_int_matmul(xr, wr, 12), xr @ wr.to(torch.int64))
+    finally:
+        monkeypatch.setattr(torch, "_int_mm", real)
+        core_ringmm.cpu_int8_available.cache_clear()
+
+
+def test_one_digit_gemm_implementation_everywhere() -> None:
+    import sys
+
+    core_ringmm = sys.modules["pgw.core.ringmm"]  # pgw.core.ringmm the attribute is the function
+    from pgw.factory import kernels as fk
+    from pgw.service import kernels as sk
+
+    assert sk.int8_ring_matmul is core_ringmm.int8_ring_matmul is fk.int8_ring_matmul
+    assert sk.cpu_int8_available is core_ringmm.cpu_int8_available is fk.cpu_int8_available
+    assert core_ringmm.int_mm_max_inner("cpu") == 65_536
+    for mod in (sk, fk):
+        assert not hasattr(mod, "_INT_MM_MAX_INNER") and not hasattr(mod, "INT_MM_MAX_INNER")
+
+
+def test_masked_backend_never_loads_int8_weights(tiny_pack: Any) -> None:
+    """The masked gateway reads only scales/bias/shapes (``load_linear_meta``), never ``W8``."""
+    ring = RingParams(40, 12)
+    lid = LinearId.parse("0.qkv")
+    meta = tiny_pack.load_linear_meta(lid)
+    full = tiny_pack.load_linear(lid)
+    assert torch.equal(meta.scale, full.scale) and (meta.out_features, meta.in_features) == tuple(full.w8.shape)
+
+    class GatewayView:
+        """The gateway's view of the pack: loading a full weight is a test failure."""
+
+        def __init__(self, pack: Any) -> None:
+            self._pack = pack
+            self.meta_calls: list[str] = []
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._pack, name)
+
+        def load_linear(self, *a: Any, **k: Any) -> Any:
+            raise AssertionError("gateway loaded a full int8 weight")
+
+        def load_linear_meta(self, lid: Any, **k: Any) -> Any:
+            self.meta_calls.append(str(lid))
+            return self._pack.load_linear_meta(lid, **k)
+
+    view = GatewayView(tiny_pack)
+    x = _x(3, meta.in_features, 2)
+    be = MaskedBackend(view, None, LocalComputeClient(tiny_pack), ring, tiny_pack.fingerprint)
+    y = be.forward(LinearCall(lid, x, session=LocalMaskReservation(tiny_pack, ring, 8)))
+    assert torch.equal(y, PlainBackend(tiny_pack, ring).forward(LinearCall(lid, x)))
+    assert view.meta_calls == ["0.qkv"]

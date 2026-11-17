@@ -9,6 +9,21 @@ spec:
   {{- if gt (int .Values.replicaCount) 1 }}
   {{- fail "replicaCount must be 1: a mask store has exactly one gateway writer (single-use masks)" }}
   {{- end }}
+  {{- $drain := int .Values.config.drainTimeoutSeconds }}
+  {{- if le (int .Values.terminationGracePeriodSeconds) (add $drain (int .Values.preStopSleepSeconds) 10) }}
+  {{- fail "terminationGracePeriodSeconds must exceed preStopSleepSeconds + config.drainTimeoutSeconds + 10 (time to close the mask store after draining)" }}
+  {{- end }}
+  {{- if and .Values.state.persistence.enabled (not .Values.state.persistence.existingClaim) }}
+  {{- $size := toString .Values.state.persistence.size }}
+  {{- $bytes := 0 }}
+  {{- if hasSuffix "Ti" $size }}{{ $bytes = mul (int (trimSuffix "Ti" $size)) 1099511627776 }}
+  {{- else if hasSuffix "Gi" $size }}{{ $bytes = mul (int (trimSuffix "Gi" $size)) 1073741824 }}
+  {{- end }}
+  {{- $need := add (mul (int64 .Values.maskstore.targetSlots) (int64 .Values.maskstore.bytesPerSlot)) (int64 .Values.maskstore.minFreeBytes) }}
+  {{- if and (gt (int64 $bytes) 0) (lt (int64 $bytes) $need) }}
+  {{- fail (printf "state.persistence.size %s cannot hold maskstore.targetSlots (%v) x bytesPerSlot (%v) + minFreeBytes: lower targetSlots or enlarge the volume" $size .Values.maskstore.targetSlots .Values.maskstore.bytesPerSlot) }}
+  {{- end }}
+  {{- end }}
   replicas: {{ .Values.replicaCount }}
   strategy:
     type: Recreate    # never two pods on one single-use mask store
@@ -64,6 +79,13 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            - name: ops
+              containerPort: {{ .Values.opsPort }}
+              protocol: TCP
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
           env:
             - name: PGW_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
@@ -103,6 +125,16 @@ spec:
               value: {{ .Values.config.metricsRequireAdmin | quote }}
             - name: PGW_GATEWAY_DASHBOARD_ENABLED
               value: {{ .Values.config.dashboardEnabled | quote }}
+            - name: PGW_GATEWAY_OPS_PORT
+              value: {{ .Values.opsPort | quote }}
+            - name: PGW_GATEWAY_DRAIN_TIMEOUT_S
+              value: {{ .Values.config.drainTimeoutSeconds | quote }}
+            - name: PGW_GATEWAY_MASK_WINDOW_TOKENS
+              value: {{ .Values.config.maskWindowTokens | quote }}
+            - name: PGW_GATEWAY_MASKSTORE_GC_INTERVAL_S
+              value: {{ .Values.maskstore.gcIntervalSeconds | quote }}
+            - name: PGW_MASKSTORE_MIN_FREE_BYTES
+              value: {{ .Values.maskstore.minFreeBytes | int64 | quote }}
             {{- if .Values.config.integrityCooldownSeconds }}
             - name: PGW_GATEWAY_INTEGRITY_COOLDOWN_S
               value: {{ .Values.config.integrityCooldownSeconds | quote }}
@@ -120,6 +152,28 @@ spec:
               value: {{ .Values.maskstore.lowWaterSlots | quote }}
             - name: PGW_MASKSTORE_TARGET_SLOTS
               value: {{ .Values.maskstore.targetSlots | quote }}
+            {{- if eq .Values.maskstore.counter "none" }}
+            {{- if not .Values.maskstore.allowNoExternalCounter }}
+            {{- fail "maskstore.counter=none needs maskstore.allowNoExternalCounter=true (DEV ONLY): without an external counter a snapshot restore re-serves consumed masks" }}
+            {{- end }}
+            - name: PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER
+              value: "true"
+            {{- else }}
+            - name: PGW_MASKSTORE_COUNTER
+              value: {{ .Values.maskstore.counter | quote }}
+            {{- if eq .Values.maskstore.counter "file" }}
+            - name: PGW_MASKSTORE_COUNTER_FILE
+              value: {{ printf "%s/generation.counter" .Values.counterVolume.mountPath | quote }}
+            {{- end }}
+            {{- if eq .Values.maskstore.counter "tpm" }}
+            - name: PGW_MASKSTORE_TPM_NV_INDEX
+              value: {{ required "maskstore.counterTpmNvIndex is required for counter=tpm" .Values.maskstore.counterTpmNvIndex | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.maskstore.trustedPartnerKeys }}
+            - name: PGW_MASKSTORE_TRUSTED_PARTNER_KEYS
+              value: {{ toJson .Values.maskstore.trustedPartnerKeys | quote }}
+            {{- end }}
             {{- if eq .Values.maskstore.keyProvider "env" }}
             - name: PGW_MASKSTORE_KEK
               valueFrom:
@@ -158,43 +212,25 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
-          {{- if and .Values.tls.enabled .Values.tls.requireClientCert }}
-          startupProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 5
-            failureThreshold: 120
-          livenessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 15
-          readinessProbe:
-            tcpSocket:
-              port: http
-            periodSeconds: 10
-          {{- else }}
+          # Probes hit the internal plain-HTTP ops listener in every TLS mode (also with mTLS).
           startupProbe:
             httpGet:
               path: /healthz
-              port: http
-              scheme: {{ include "pgw-gateway.scheme" . }}
+              port: ops
             periodSeconds: 5
             failureThreshold: 120
           livenessProbe:
             httpGet:
               path: /healthz
-              port: http
-              scheme: {{ include "pgw-gateway.scheme" . }}
+              port: ops
             periodSeconds: 15
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /readyz
-              port: http
-              scheme: {{ include "pgw-gateway.scheme" . }}
+              port: ops
             periodSeconds: 10
             timeoutSeconds: 5
-          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
@@ -203,6 +239,10 @@ spec:
               readOnly: true
             - name: state
               mountPath: {{ .Values.state.mountPath }}
+            {{- if eq .Values.maskstore.counter "file" }}
+            - name: counter
+              mountPath: {{ .Values.counterVolume.mountPath }}
+            {{- end }}
             - name: models
               mountPath: /etc/pgw/models
               readOnly: true
@@ -241,6 +281,11 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if eq .Values.maskstore.counter "file" }}
+        - name: counter
+          persistentVolumeClaim:
+            claimName: {{ include "pgw-gateway.counterClaim" . }}
+        {{- end }}
         - name: models
           configMap:
             name: {{ include "pgw-gateway.fullname" . }}-models

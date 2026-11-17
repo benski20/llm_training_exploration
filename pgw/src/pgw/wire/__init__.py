@@ -21,6 +21,7 @@ from pgw.wire.codec import (
 from pgw.wire.messages import (
     ATTEMPT_HEADER,
     COMPUTE_PATH,
+    DEADLINE_HEADER,
     MODELS_PATH,
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
@@ -54,6 +55,7 @@ __all__ = [
     "ATTEMPT_HEADER",
     "COMPUTE_PATH",
     "CONTENT_TYPE",
+    "DEADLINE_HEADER",
     "JSON_CONTENT_TYPE",
     "MODELS_PATH",
     "PROTOCOL_HEADER",

@@ -1,0 +1,47 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /tmp/pgwsrc/pgw
+configfile: pyproject.toml
+plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 32 items
+
+tests/e2e/test_deploy_cli_consistency.py::test_found_the_expected_invocations PASSED [  3%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[compose:factory:factory generate --pack] PASSED [  6%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[compose:factory-refill:factory run] PASSED [  9%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[factory-cuda.Dockerfile:factory run] PASSED [ 12%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[factory.Dockerfile:factory run] PASSED [ 15%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[gateway.Dockerfile:gateway serve] PASSED [ 18%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[service-cpu.Dockerfile:service serve] PASSED [ 21%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[service-cuda.Dockerfile:service serve] PASSED [ 25%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:pack X X] PASSED [ 28%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:inspect X --json] PASSED [ 31%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:maskstore init --root] PASSED [ 34%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:service token create] PASSED [ 37%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[demo-init.sh:gateway keys create] PASSED [ 40%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-factory.service:factory run] PASSED [ 43%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-gateway.service:config render /etc/pgw/models.tmpl.yaml] PASSED [ 46%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-gateway.service:doctor --role gateway] PASSED [ 50%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[pgw-ovf-config.sh:maskstore init --root] PASSED [ 53%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:pack X X] PASSED [ 56%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:inspect X --json] PASSED [ 59%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:maskstore init --root] PASSED [ 62%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:factory generate --pack] PASSED [ 65%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:service token create] PASSED [ 68%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:gateway keys create] PASSED [ 71%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:service serve] PASSED [ 75%]
+tests/e2e/test_deploy_cli_consistency.py::test_invocation_parses_with_the_real_cli[e2e_demo.sh:gateway serve] PASSED [ 78%]
+tests/e2e/test_localhost_stack.py::test_nonstreaming_matches_quantplain_reference PASSED [ 81%]
+tests/e2e/test_localhost_stack.py::test_streaming_matches_quantplain_reference PASSED [ 84%]
+tests/e2e/test_localhost_stack.py::test_every_response_freivalds_checked PASSED [ 87%]
+tests/e2e/test_localhost_stack.py::test_service_never_receives_plaintext PASSED [ 90%]
+tests/e2e/test_localhost_stack.py::test_outbound_traffic_passes_uniformity_monitor PASSED [ 93%]
+tests/e2e/test_localhost_stack.py::test_tampered_response_is_detected_and_fails_closed PASSED [ 96%]
+tests/e2e/test_localhost_stack.py::test_masks_are_never_reused PASSED    [100%]
+
+======================== 32 passed in 256.86s (0:04:16) ========================
+
+---stderr---

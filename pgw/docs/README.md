@@ -48,4 +48,4 @@ Tools and data:
 | Mask generation, 8B, K48A20, T4 | 0.0066 s/slot (550k slots/h) | measured |
 | CPU int8 GEMM, 4 vCPU (fbgemm) | 0.30 TOPS | measured |
 | Round trips per token | 128 round trips for 8B, 320 round trips for 70B | analytic |
-| Integrity, K40A12, width 4096, c = 2 | false accept ≤ 2^−16 per call | analytic |
+| Integrity, K40A12, width 4096, c = 3 (auto default) | false accept ≤ 2^−24 per call (floor: 2^−20) | analytic |

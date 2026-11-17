@@ -26,7 +26,7 @@ AUDIT_FIELDS: frozenset[str] = frozenset({
     "request_id", "key_id", "key_name", "model", "endpoint", "status", "code", "stream",
     "prompt_tokens", "completion_tokens", "masks_reserved", "masks_consumed", "duration_ms", "ttft_ms",
     "finish_reason", "client", "fingerprint", "ring", "mode", "action", "target", "scopes", "reason",
-    "queue_ms", "prompts", "retry_after_s",
+    "queue_ms", "prompts", "retry_after_s", "masks_burned",
 })
 
 

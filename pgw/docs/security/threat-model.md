@@ -58,7 +58,7 @@ Severity is the product of impact and likelihood after controls: **H**igh, **M**
 |---|---|---|---|---|
 | T-01 | I | Service operator reads customer data from payloads | one-time masks: the view is uniform and independent of the data (whitepaper Theorem 2); scales never sent | **L** (PRG assumption, whitepaper 4.4) |
 | T-02 | I | Service keeps payloads and analyses them later, including with future compute | same as T-01; the stored data is uniform noise; seeds never leave TB1 | L |
-| T-03 | T | Service returns wrong products to corrupt outputs | range check plus `c` Freivalds checks on every response; accepted with probability ≤ `2^(−c·h)`; circuit breaker | L (K40A12); **M** for K32A8 with `c = 2` |
+| T-03 | T | Service returns wrong products to corrupt outputs | range check plus `c` Freivalds checks on every response; accepted with probability ≤ `2^(−c·h)`; circuit breaker | L (K40A12/K48A20 with the auto `c`, floor 20 bits); K32A8 wide layers cannot reach the floor and are refused |
 | T-04 | I | Selective-failure probing via crafted errors | Freivalds rejection independent of the plaintext; advantage ≤ `2^(−c·h)` per probe; breaker cuts off | L |
 | T-05 | I | Metadata: prompt and generation lengths, timing, volume | accepted (SPEC 3.4); batching; padding and dummy rounds **planned** | **M** (accepted, disclosed) |
 | T-06 | S | Service impersonated by a third party (DNS hijack, rogue endpoint) | TLS with pinned CA (`service_ca_file`), `require_service_tls`, egress allowlist; even an impersonator sees only masked data, and wrong answers fail Freivalds | L |

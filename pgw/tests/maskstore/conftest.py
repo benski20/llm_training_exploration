@@ -57,12 +57,14 @@ def write_segment(
     seed: bytes | None = None,
     write_rows: int = 3,
     order: str = "linear",
+    destination: str | None = None,
 ) -> str:
     """Generate a correct segment with the normative derivation and write it into ``store``."""
     seed = seed if seed is not None else os.urandom(32)
     exp = SeedExpander(seed)
     w = store.writer(model.fingerprint, ring, model.specs, slots=slots, seed=seed, checks=checks,
-                     chunk_slots=chunk_slots, factory_id="test")
+                     chunk_slots=chunk_slots, factory_id="test",
+                     **({"destination": destination} if destination is not None else {}))
     uws = {}
     for s in model.specs:
         if checks:

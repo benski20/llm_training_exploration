@@ -11,7 +11,9 @@ apps ── OpenAI API ──▶ gateway (your side) ──x+r──▶ compute 
                        mask store ◀── mask factory (you, or an independent partner)
 ```
 
-See **[SPEC.md](SPEC.md)** for the architecture, threat model, wire protocol, formats and targets.
+See **[SPEC.md](SPEC.md)** for the architecture, threat model, wire protocol, formats and targets,
+**[STATUS.md](STATUS.md)** for the release status, test and GPU results and pilot blockers,
+and **[docs/README.md](docs/README.md)** for the whitepaper, threat model, operator guides and sizing.
 
 ## Install
 
@@ -30,12 +32,22 @@ pgw doctor          # verifies exact ring arithmetic on every available backend
 pytest              # unit tests (CPU only, a few minutes)
 ```
 
-## Workflow (target CLI)
+## End-to-end demo
+
+```bash
+scripts/e2e_demo.sh                      # pack -> factory -> service -> gateway on localhost, then chat
+PGW_E2E_MODEL=tiny scripts/e2e_demo.sh   # same with a tiny random model (no download)
+pytest tests/e2e                         # the same pipeline as an automated test (about 4 min)
+```
+
+`deploy/compose` runs the same pipeline with Docker (`docker compose up --build`).
+
+## Workflow (CLI)
 
 ```bash
 pgw pack Qwen/Qwen2.5-0.5B-Instruct packs/qwen0.5b                 # int8 pack + fingerprint
 pgw maskstore init --root /var/lib/pgw/masks --key-file /etc/pgw/kek
-pgw factory generate --pack packs/qwen0.5b --store /var/lib/pgw/masks --slots 4096
+pgw factory generate --pack packs/qwen0.5b --store /var/lib/pgw/masks --key-file /etc/pgw/kek --slots 4096
 PGW_SERVICE_PACKS='["packs/qwen0.5b"]' pgw service serve           # our side
 PGW_GATEWAY_MODELS_FILE=models.json pgw gateway serve              # your side
 curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...}'
@@ -45,7 +57,7 @@ curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...
 
 | path | contents |
 |---|---|
-| `src/pgw/core` | ring arithmetic, exact ring matmul (CPU/GPU), masks, Freivalds, CSPRNG, errors (**implemented**) |
+| `src/pgw/core` | ring arithmetic, exact ring matmul (CPU/GPU, the one shared int8 digit GEMM), masks, Freivalds, CSPRNG, errors |
 | `src/pgw/modelpack` | HF checkpoint → int8 model pack + manifest/fingerprint |
 | `src/pgw/engine` | plaintext transformer runtime with pluggable linear backends |
 | `src/pgw/factory` | offline mask generation |
@@ -55,13 +67,18 @@ curl localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" -d '{...
 | `src/pgw/gateway` | OpenAI-compatible gateway |
 | `src/pgw/observability` | metrics, outbound-noise monitor, dashboard |
 | `src/pgw/cli` | `pgw` command |
+| `rust/` | `pgw-core-rs`: Rust port of the ring/PRNG/Freivalds core, cross-checked against the Python test vectors (`cargo test`) |
 | `tests/` | per-subpackage tests; shared fixtures in `tests/conftest.py` |
 | `INTERFACE_NOTES.md` | log of requested interface changes between teams |
 
 ## Status
 
-v0.1: `pgw.core` is complete and tested. The other subpackages are interface stubs (signatures,
-docstrings and data models) under construction by the component teams.
+v0.1: every subpackage (core, modelpack, engine, factory, maskstore, wire, service, gateway,
+observability, cli) is implemented and covered by CPU tests, including an end-to-end test that
+runs pack -> factory -> service -> gateway as real processes (`tests/e2e`). GPU paths
+(`cuda_int8`) are validated on Kaggle T4 (`benchmarks/`) and skipped in CPU-only test runs.
+Not in v0.1: tools/function calling, structured output, `n > 1`, multimodal inputs (rejected
+with 400, see `docs/api/gateway-api.md`).
 
 ## Measured basis (Kaggle T4 prototype)
 

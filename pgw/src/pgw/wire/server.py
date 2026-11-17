@@ -31,6 +31,7 @@ from pgw.core.errors import (
     PayloadTooLargeError,
     PGWError,
     ProtocolError,
+    ServiceUnavailableError,
     ShapeError,
     VersionMismatchError,
 )
@@ -45,6 +46,7 @@ from pgw.wire.codec import (
 )
 from pgw.wire.messages import (
     COMPUTE_PATH,
+    DEADLINE_HEADER,
     MODELS_PATH,
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
@@ -60,6 +62,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from fastapi import APIRouter
 
 __all__ = [
+    "ByteBudget",
     "ComputeHandler",
     "LinearDims",
     "RequestContext",
@@ -339,22 +342,73 @@ async def _maybe_await(v: Any) -> Any:
     return v
 
 
-async def _read_body(request: Any, limit: int) -> bytes:
+class ByteBudget:
+    """Bytes of request bodies the server buffers at once (fail-fast admission, no queueing).
+
+    Request bodies are read into memory before decoding, then expanded ``8/(K/8)`` times into
+    int64. Without a global cap a burst of large requests (long prefills, many connections and
+    HTTP/2 streams) buffers tens of GB before any per-request admission runs.
+    """
+
+    def __init__(self, total: int):
+        if total <= 0:
+            raise ValueError("ByteBudget total must be positive")
+        self.total = int(total)
+        self.used = 0
+
+    def try_acquire(self, n: int) -> bool:
+        if self.used + n > self.total:
+            return False
+        self.used += n
+        return True
+
+    def release(self, n: int) -> None:
+        self.used = max(0, self.used - n)
+
+
+def _budget_exhausted(budget: ByteBudget, want: int) -> PGWError:
+    return ServiceUnavailableError(
+        "server is buffering too many request bytes; retry shortly",
+        details={
+            "retry_after_s": 1.0, "bytes": want,
+            "inflight_bytes": budget.used, "max_inflight_bytes": budget.total,
+        },
+    )
+
+
+async def _read_body(request: Any, limit: int, budget: ByteBudget | None = None,
+                     held: list[int] | None = None) -> bytearray:
+    """Read the body up to ``limit`` bytes, reserving it against ``budget`` *before* buffering.
+
+    With ``Content-Length`` the whole length is reserved up front; without it the reservation
+    grows with each chunk. ``held[0]`` accumulates what was reserved (the caller releases it).
+    """
     cl = request.headers.get("content-length")
+    held = held if held is not None else [0]
     if cl is not None:
         try:
             n = int(cl)
         except ValueError as exc:
             raise ProtocolError("invalid Content-Length") from exc
+        if n < 0:
+            raise ProtocolError("invalid Content-Length")
         if n > limit:
             raise PayloadTooLargeError(
                 f"request body of {n} bytes exceeds the limit of {limit}", details={"bytes": n, "max_bytes": limit}
             )
+        if budget is not None:
+            if not budget.try_acquire(n):
+                raise _budget_exhausted(budget, n)
+            held[0] += n
     from starlette.requests import ClientDisconnect
 
     buf = bytearray()
     try:
         async for chunk in request.stream():
+            if cl is None and budget is not None and chunk:
+                if not budget.try_acquire(len(chunk)):
+                    raise _budget_exhausted(budget, len(buf) + len(chunk))
+                held[0] += len(chunk)
             buf += chunk
             if len(buf) > limit:
                 raise PayloadTooLargeError(
@@ -362,7 +416,20 @@ async def _read_body(request: Any, limit: int) -> bytes:
                 )
     except ClientDisconnect as exc:
         raise ProtocolError("client disconnected before sending the full request body") from exc
-    return bytes(buf)
+    return buf
+
+
+def _header_deadline_s(value: str | None) -> float | None:
+    """Budget from :data:`DEADLINE_HEADER` (``None`` if absent or malformed)."""
+    if value is None:
+        return None
+    try:
+        ms = float(value)
+    except ValueError:
+        return None
+    if ms != ms or ms < 0:  # NaN / negative
+        return None
+    return ms / 1000.0
 
 
 def create_router(
@@ -371,6 +438,7 @@ def create_router(
     limits: WireLimits | None = None,
     validate_responses: bool = True,
     max_deadline_s: float | None = None,
+    max_inflight_bytes: int | None = None,
 ) -> APIRouter:
     """FastAPI router for ``POST /pgw/v1/compute`` and ``GET /pgw/v1/models``.
 
@@ -380,6 +448,12 @@ def create_router(
         validate_responses: Self-check every response against the request before replying.
         max_deadline_s: Server-side cap on compute time per request (``None``: only the client's
             ``deadline_ms`` applies).
+        max_inflight_bytes: Global cap on request-body bytes buffered at once (``None``: no cap).
+            Checked against ``Content-Length`` *before* the body is read.
+
+    Handlers may implement ``precheck()`` (sync): called after authentication and before the body
+    is read, it raises to refuse (draining, too many in-flight requests), so refused requests
+    never get buffered.
 
     Returns:
         An ``APIRouter`` to mount with ``app.include_router(...)``.
@@ -397,6 +471,8 @@ def create_router(
             "client that can reach the service (rely on mTLS at the TLS layer, or add authentication)"
         )
     done_hook: Callable[..., Any] | None = getattr(handler, "on_request_done", None)
+    precheck: Callable[[], Any] | None = getattr(handler, "precheck", None)
+    body_budget = ByteBudget(max_inflight_bytes) if max_inflight_bytes else None
 
     def _err_response(exc: BaseException, rid: str | None, accept: str | None) -> Response:
         status, body = error_response_bytes(exc, rid, json_body=_wants_json(accept))
@@ -424,6 +500,7 @@ def create_router(
         status = 499
         code: str | None = "cancelled"
         ctx: RequestContext | None = None
+        held = [0]
         try:
             check_protocol_header(request.headers.get(PROTOCOL_HEADER))
             check_content_type(request.headers.get("content-type"))
@@ -434,7 +511,9 @@ def create_router(
                         request.headers.get("authorization"), _client_cert_subject(request.scope)
                     )
                 )
-            body = await _read_body(request, lim.max_request_bytes)
+            if callable(precheck):
+                await _maybe_await(precheck())
+            body = await _read_body(request, lim.max_request_bytes, body_budget, held)
             req = decode_compute_request(body, lim, handler.linear_dims)
             rid = req.request_id
             try:
@@ -444,6 +523,9 @@ def create_router(
             budget: float | None = None
             if req.deadline_ms is not None:
                 budget = req.deadline_ms / 1000.0
+            hdr = _header_deadline_s(request.headers.get(DEADLINE_HEADER))
+            if hdr is not None:  # what is left of the client's budget for *this* attempt
+                budget = hdr if budget is None else min(budget, hdr)
             if max_deadline_s is not None:
                 budget = max_deadline_s if budget is None else min(budget, max_deadline_s)
             ctx = RequestContext(
@@ -497,6 +579,8 @@ def create_router(
             code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
             return r
         finally:
+            if body_budget is not None and held[0]:
+                body_budget.release(held[0])
             if done_hook is not None:
                 try:
                     await _maybe_await(

@@ -5,14 +5,16 @@ The factory computes ``W8 r mod 2^K`` for huge numbers of mask rows ``r``, so it
 
 ``cuda_int8``
     ``K/8`` int8 tensor-core GEMMs (``torch._int_mm``) on balanced base-256 digits of ``r``, int32
-    accumulation, inner dimension chunked at 131064 so no partial sum can overflow. Inputs are
+    accumulation, inner dimension chunked so no partial sum can overflow
+    (:func:`pgw.core.ringmm.int8_ring_matmul`, shared with the service and the engine). Inputs are
     zero-padded to the shapes cuBLASLt needs (rows >= 32 and multiples of 8).
 ``cpu_int8``
     The same algorithm on CPU. Recent PyTorch builds implement ``torch._int_mm`` on CPU via
     oneDNN/fbgemm (VNNI / AMX where present): measured ~1 TOPS on 4 cores versus ~0.1 TFLOPS for
     float64, i.e. ~4x faster than ``cpu_f64`` for K40 despite needing 5 instead of 2 GEMMs. Because
     some int8 CPU kernels saturate intermediate int16 sums on older ISAs, the backend is only
-    selected after an exactness probe with adversarial (extreme-value) inputs passes.
+    selected after an exactness probe with adversarial (extreme-value) inputs passes
+    (:func:`pgw.core.ringmm.cpu_int8_available`).
 ``cpu_f64`` / ``cpu_f32``
     Fallbacks from :mod:`pgw.core.ringmm` (always exact, slower).
 
@@ -25,7 +27,6 @@ transposed or float copy of the whole weight.
 
 from __future__ import annotations
 
-import functools
 import logging
 import math
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams, balanced_digits
-from pgw.core.ringmm import PreparedWeight, ringmm_reference
+from pgw.core.ringmm import PreparedWeight, _shift_mod, cpu_int8_available, int8_ring_matmul
 
 __all__ = [
     "FACTORY_BACKENDS",
@@ -52,90 +53,11 @@ log = logging.getLogger(__name__)
 FactoryBackend = Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"]
 FACTORY_BACKENDS: tuple[str, ...] = ("auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32")
 
-#: 128 * 128 * n < 2^31  =>  n <= 131071; rounded down to a multiple of 8.
-INT_MM_MAX_INNER = 131_064
 _CUDA_MIN_ROWS = 32
+#: Output/inner padding on CUDA (cuBLASLt int8 on T4 + CUDA 13 rejects dims that are not multiples of 32).
+_CUDA_ALIGN = 32
 #: Elements of a float64 weight chunk materialised at once by :func:`ring_vecmat` (128 MiB).
 _VECMAT_CHUNK_ELEMS = 1 << 24
-
-
-def _shift_mod(y: torch.Tensor, shift: int, k: int) -> torch.Tensor:
-    """``(y << shift) mod 2^k`` without signed int64 overflow."""
-    if shift >= k:
-        return torch.zeros_like(y)
-    return (y & ((1 << (k - shift)) - 1)) << shift
-
-
-def _int8_digit_gemm(d8: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
-    """Exact ``d8 @ w^T`` as int64 for int8 ``d8 (p, n)`` and ``w (m, n)`` with inner chunking."""
-    n = d8.shape[1]
-    if n <= INT_MM_MAX_INNER:
-        return torch._int_mm(d8, w.t()).to(torch.int64)
-    y: torch.Tensor | None = None
-    for c0 in range(0, n, INT_MM_MAX_INNER):
-        c1 = min(n, c0 + INT_MM_MAX_INNER)
-        part = torch._int_mm(d8[:, c0:c1].contiguous(), w[:, c0:c1].t()).to(torch.int64)
-        y = part if y is None else y + part
-    assert y is not None
-    return y
-
-
-def int8_ring_mm(x: torch.Tensor, w: torch.Tensor, k: int) -> torch.Tensor:
-    """``x @ w^T mod 2^k`` via ``k/8`` int8 GEMMs on balanced base-256 digits (``torch._int_mm``).
-
-    Args:
-        x: int64 ``(B, n)`` ring elements (any int64 values; interpreted mod ``2^k``).
-        w: int8 ``(m, n)`` on the same device as ``x``.
-        k: Ring bit width (multiple of 8).
-
-    No padding is done here; callers on CUDA must pass shapes ``_int_mm`` accepts.
-    """
-    mask = (1 << k) - 1
-    acc: torch.Tensor | None = None
-    for i, d in enumerate(balanced_digits(x & mask, k, 8)):
-        y = _int8_digit_gemm(d.to(torch.int8), w)
-        term = _shift_mod(y, 8 * i, k)
-        acc = term if acc is None else (acc + term) & mask
-    assert acc is not None
-    return acc & mask
-
-
-@functools.cache
-def cpu_int8_available() -> bool:
-    """True if ``torch._int_mm`` exists on CPU and is bit-exact, including on extreme values.
-
-    The probe covers what the factory actually runs: all-(-128)/all-127 operands (which overflow
-    int16 intermediates in some non-VNNI kernels), row counts from 1 (``u W8`` with one check
-    vector) to above 32 (GEMM paths), odd inner sizes, both layouts of the second operand
-    (transposed view for ``r W8^T``, row-major for ``u W8``) and random ring products checked
-    against Python integers. oneDNN picks kernels by shape, so a single shape is not enough.
-    """
-    try:
-        for rows in (1, 2, 5, 33):
-            for av, bv in ((-128, -128), (-128, 127), (127, 127), (127, -128)):
-                a = torch.full((rows, 4100), av, dtype=torch.int8)
-                b = torch.full((9, 4100), bv, dtype=torch.int8)
-                expect = av * bv * 4100
-                for got in (torch._int_mm(a, b.t()), torch._int_mm(a, b.t().contiguous())):
-                    if got.dtype != torch.int32 or not bool((got.to(torch.int64) == expect).all()):
-                        log.warning("CPU torch._int_mm is not exact on extreme inputs; using float fallback")
-                        return False
-        gen = torch.Generator().manual_seed(1234)
-        for rows in (1, 2, 7, 40):
-            x = torch.randint(0, 1 << 40, (rows, 77), dtype=torch.int64, generator=gen)
-            w = torch.randint(-128, 128, (13, 77), dtype=torch.int8, generator=gen)
-            if int8_ring_mm(x, w, 40).tolist() != ringmm_reference(x, w, 40).tolist():
-                log.warning("CPU torch._int_mm ring product mismatch; using float fallback")
-                return False
-            # u @ W8 (second operand row-major), the layout ring_vecmat uses
-            u = x[:, :13]
-            if int8_ring_mm(u, w.t(), 40).tolist() != ringmm_reference(u, w.t().contiguous(), 40).tolist():
-                log.warning("CPU torch._int_mm ring product mismatch (row-major layout); using float fallback")
-                return False
-        return True
-    except Exception as exc:  # torch build without CPU _int_mm
-        log.info("CPU torch._int_mm unavailable (%s); using float fallback", type(exc).__name__)
-        return False
 
 
 def resolve_device(device: str | torch.device) -> torch.device:
@@ -197,7 +119,7 @@ class RingKernel:
             raise ShapeError(f"weight must be 2-D int8, got {self.w8.dtype} {tuple(self.w8.shape)}")
         m, n = self.w8.shape
         if self.backend == "cuda_int8":
-            mp, np_ = -(-m // 8) * 8, -(-n // 8) * 8
+            mp, np_ = -(-m // _CUDA_ALIGN) * _CUDA_ALIGN, -(-n // _CUDA_ALIGN) * _CUDA_ALIGN
             if (mp, np_) == (m, n) and self.w8.is_contiguous():
                 self._w = self.w8
             else:
@@ -240,7 +162,7 @@ class RingKernel:
         assert self._w is not None
         dev = self._w.device
         if self.backend == "cpu_int8":
-            return int8_ring_mm(r.to(dev), self._w, params.k)
+            return int8_ring_matmul(r.to(dev), self._w, params.k)
         # cuda_int8: pad rows and inner dimension
         n = self.in_features
         p = max(_CUDA_MIN_ROWS, -(-b // 8) * 8)
@@ -250,7 +172,7 @@ class RingKernel:
         else:
             xp = torch.zeros((p, np_), dtype=torch.int64, device=dev)
             xp[:b, :n] = r.to(dev, non_blocking=True)
-        return int8_ring_mm(xp, self._w, params.k)[:b, : self.out_features]
+        return int8_ring_matmul(xp, self._w, params.k)[:b, : self.out_features]
 
     __call__ = matmul
 
@@ -297,7 +219,7 @@ def ring_vecmat(
         raise BackendUnavailableError("int8 vecmat needs a CPU with an exact torch._int_mm")
     if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_available()):
         # u @ W8 == int8 digit GEMMs against the transposed view (no copy): ~4x faster than float64
-        return int8_ring_mm(u.to(torch.int64), w8.t(), k)
+        return int8_ring_matmul(u.to(torch.int64), w8.t(), k)
     rows = max(1, min(m, _VECMAT_CHUNK_ELEMS // max(1, n)))
     bits = _vecmat_digit_bits(rows, k)
     digits = [d.to(dev, torch.float64) for d in balanced_digits(u.to(torch.int64) & mask, k, bits)]

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import hashlib
 import json
 import logging
@@ -46,6 +47,7 @@ log = logging.getLogger(__name__)
 
 _MAGIC = b"PGWMASK1"
 _SUFFIX = ".pgwm"
+_SIG_SUFFIX = ".sig"  # pgw.maskstore.partner.SIGNATURE_SUFFIX
 _MAX_HEADER = 16 << 20
 
 
@@ -70,6 +72,7 @@ class SegmentSink(Protocol):
         checks: int = 2,
         chunk_slots: int = 256,
         factory_id: str = "local",
+        destination: str | None = None,
     ) -> Any:
         """A :class:`pgw.maskstore.SegmentWriter`-compatible writer for a new segment."""
         ...
@@ -165,6 +168,10 @@ class StoreSink:
         if st is None or not hasattr(st, "low_water_slots"):
             return None
         return int(st.low_water_slots), int(st.target_slots)
+
+    def stored_bytes(self) -> int:
+        """Bytes of segment files the store currently holds (active + awaiting shredding)."""
+        return sum(int(i.bytes_on_disk or 0) for i in self.store.inventory())
 
     def state_dir(self) -> Path | None:
         """The store root (factory state lives next to the store)."""
@@ -310,6 +317,12 @@ class ExportSink:
         export_dir: Output directory.
         recipient_public: Customer X25519 public key (32 bytes).
         store_factory: ``(root, key_provider) -> MaskStore``; default ``MaskStore.open``.
+        signing_key: Partner Ed25519 key (:class:`pgw.maskstore.PartnerSigningKey`). When set, every
+            exported segment gets a ``<file>.pgwm.sig`` sidecar (SPEC 7.7) so the customer can enforce
+            ``PGW_MASKSTORE_TRUSTED_PARTNER_KEYS``. The sidecar is placed in the outbox *before* the
+            segment, so a delivered segment always has its signature next to it; deliver both files.
+        destination_store_id: Store id of the customer store the segments are for. Recorded in each
+            (signed) header; customer stores refuse segments without it or meant for another store.
     """
 
     kind = "export"
@@ -320,8 +333,22 @@ class ExportSink:
         recipient_public: bytes,
         *,
         store_factory: Callable[[Path, Any], Any] | None = None,
+        signing_key: Any = None,
+        destination_store_id: str | None = None,
     ):
         self.export_dir = Path(export_dir)
+        self.signing_key = signing_key
+        self.destination_store_id = destination_store_id
+        if destination_store_id is None:
+            log.warning(
+                "partner export without a destination store id: customer stores refuse such segments by default "
+                "(set PGW_FACTORY_DESTINATION_STORE_ID to the customer's 'pgw maskstore status' store_id)"
+            )
+        if signing_key is None:
+            log.warning(
+                "partner export without a signing key: customers cannot verify which factory produced the "
+                "segments (set PGW_FACTORY_PARTNER_SIGNING_KEY_FILE)"
+            )
         self.outbox = self.export_dir / "outbox"
         self.staging_root = self.export_dir / ".staging"
         self.outbox.mkdir(parents=True, exist_ok=True)
@@ -332,7 +359,9 @@ class ExportSink:
 
             def store_factory(root: Path, kp: Any) -> Any:
                 # staging only holds segments between commit and export: no low-water alerts
-                return MaskStore.open(root, kp, low_water_slots=0)
+                # Wrap-only HPKE provider: no MAC journal is possible, and nothing in staging is ever
+                # reservable (segments only pass through to the outbox), so no rollback witness is needed.
+                return MaskStore.open(root, kp, low_water_slots=0, allow_no_rollback_witness=True)
 
         self._staging = store_factory(self.staging_root, self.provider)
 
@@ -357,9 +386,48 @@ class ExportSink:
 
     def writer(self, fingerprint: str, ring: RingParams, specs: Sequence[LinearSpec], **kw: Any) -> _ExportWriter:
         """Writer whose commit publishes into the outbox."""
+        if self.destination_store_id is not None:
+            kw.setdefault("destination", self.destination_store_id)
         return _ExportWriter(self, self._staging.writer(fingerprint, ring, specs, **kw))
 
+    def _sign_into_outbox(self, seg_id: str) -> Path | None:
+        """Sign the staged segment and move the sidecar into the outbox (before the segment itself)."""
+        if self.signing_key is None:
+            return None
+        from pgw.maskstore.partner import sign_segment
+
+        hits = list(self.staging_root.rglob(f"{seg_id}{_SUFFIX}"))
+        if len(hits) != 1:
+            raise MaskStoreError(f"exported segment {seg_id} not found in staging", details={"hits": len(hits)})
+        sig = sign_segment(hits[0], self.signing_key)
+        out = self.outbox / sig.name
+        os.replace(sig, out)
+        _fsync_dir(self.outbox)
+        return out
+
     def _publish(self, seg_id: str) -> Path:
+        sig = self._sign_into_outbox(seg_id)
+        try:
+            dest = self._move_to_outbox(seg_id)
+        except BaseException:
+            if sig is not None:
+                sig.unlink(missing_ok=True)
+            raise
+        if sig is not None and sig.name != dest.name + _SIG_SUFFIX:
+            os.replace(sig, dest.with_name(dest.name + _SIG_SUFFIX))
+            _fsync_dir(self.outbox)
+        return dest
+
+    def _sign_published(self, dest: Path) -> None:
+        """Recovery: sign an outbox segment that has no sidecar yet (e.g. key added after a crash)."""
+        if self.signing_key is None or dest.with_name(dest.name + _SIG_SUFFIX).exists():
+            return
+        from pgw.maskstore.partner import sign_segment
+
+        sign_segment(dest, self.signing_key)
+        log.warning("signed outbox segment %s that had no signature", dest.name)
+
+    def _move_to_outbox(self, seg_id: str) -> Path:
         exporter = getattr(self._staging, "export_segment", None)
         if exporter is not None:  # preferred if the store offers it (see INTERFACE_NOTES)
             dest = Path(exporter(seg_id, self.outbox))
@@ -373,6 +441,7 @@ class ExportSink:
         info = _segment_info(dest)
         if info.kek_id != self.kek_id:
             dest.unlink(missing_ok=True)
+            dest.with_name(dest.name + _SIG_SUFFIX).unlink(missing_ok=True)
             raise MaskStoreError(
                 f"exported segment {seg_id} is not sealed to the recipient key",
                 details={"kek_id": info.kek_id, "expected": self.kek_id},
@@ -404,11 +473,25 @@ class ExportSink:
             published.append(seg_id)
         if published:
             log.warning("published %d segment(s) stranded in staging by an interrupted run", len(published))
+        for p in sorted(self.outbox.rglob(f"*{_SUFFIX}")):
+            try:
+                self._sign_published(p)
+            except MaskStoreError as exc:
+                log.warning("cannot sign outbox segment %s: %s", p.name, exc.message)
         return published
 
     def default_levels(self) -> tuple[int, int] | None:
         """No store-provided levels; the factory settings decide."""
         return None
+
+    def stored_bytes(self) -> int:
+        """Bytes of segment files in the outbox and staging area (awaiting delivery)."""
+        total = 0
+        for p in self.export_dir.rglob(f"*{_SUFFIX}*"):
+            with contextlib.suppress(OSError):
+                if p.is_file():
+                    total += p.stat().st_size
+        return total
 
     def state_dir(self) -> Path:
         """Factory state lives in the export directory."""

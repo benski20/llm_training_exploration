@@ -34,6 +34,13 @@ an empty machine-id, and a locked build account.
   mask store would allow mask reuse; the store detects this (generation journal) and refuses to
   serve. Back up packs and API keys, not masks. Exclude the data disk from VM snapshots
   (independent-persistent disk mode).
+* Counter disk (`/var/lib/pgw-counter`, 1 GB, **independent-persistent**): holds the external
+  monotonic counter (`pgw.counter=file`, the default). The HMAC journal on the data disk alone cannot
+  detect a revert of the whole data disk; a counter that VM snapshots never capture can, and the
+  gateway refuses to hand out masks without one. First boot fails if this disk is not mounted.
+  Alternative: `pgw.counter=tpm` (vTPM NV counter); note that vSphere keeps the vTPM state with VM
+  snapshots, so with `tpm` the VM must never be reverted. If the data disk is ever restored anyway,
+  burn every ACTIVE segment and rebind the witnesses before serving again.
 
 ## First boot
 

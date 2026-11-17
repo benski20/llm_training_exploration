@@ -37,9 +37,6 @@ def _handle_errors(fn: F) -> F:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
-        except NotImplementedError as exc:
-            click.echo(f"error: not implemented yet: {exc}", err=True)
-            sys.exit(3)
         except FactoryStopped:
             click.echo("stopped; the partial segment was discarded", err=True)
             sys.exit(130)
@@ -108,6 +105,10 @@ _common = [
     click.option("--export-dir", type=click.Path(path_type=Path), default=None, help="Partner mode: export directory"),
     click.option("--recipient-key", type=click.Path(path_type=Path), default=None,
                  help="Partner mode: customer X25519 public key file"),
+    click.option("--partner-key", type=click.Path(path_type=Path), default=None,
+                 help="Partner mode: Ed25519 key ('pgw maskstore partner-key create') signing each segment"),
+    click.option("--destination-store", "destination_store", default=None,
+                 help="Partner mode: store_id of the customer mask store the segments are for"),
 ]
 
 
@@ -118,7 +119,8 @@ def _with_common(fn: F) -> F:
 
 
 def _common_overrides(rings: tuple[str, ...], device: str | None, backend: str | None, chunk_slots: int | None,
-                      checks: int | None, export_dir: Path | None, recipient_key: Path | None) -> dict[str, Any]:
+                      checks: int | None, export_dir: Path | None, recipient_key: Path | None,
+                      partner_key: Path | None = None, destination_store: str | None = None) -> dict[str, Any]:
     o: dict[str, Any] = {"device": device, "backend": backend, "chunk_slots": chunk_slots, "checks": checks}
     if rings:
         o["rings"] = tuple(rings)
@@ -127,6 +129,12 @@ def _common_overrides(rings: tuple[str, ...], device: str | None, backend: str |
         o["output"] = "export"
         o["export_dir"] = export_dir
         o["recipient_public_key_file"] = recipient_key
+        if partner_key is not None:
+            o["partner_signing_key_file"] = partner_key
+        if destination_store is not None:
+            o["destination_store_id"] = destination_store
+    elif partner_key is not None or destination_store is not None:
+        raise click.UsageError("--partner-key / --destination-store only apply to partner mode (--export-dir)")
     return o
 
 
@@ -138,7 +146,8 @@ def _common_overrides(rings: tuple[str, ...], device: str | None, backend: str |
 @_handle_errors
 def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, rings: tuple[str, ...], device: str | None,
                  backend: str | None, chunk_slots: int | None, checks: int | None, store_root: Path | None,
-                 key_file: Path | None, export_dir: Path | None, recipient_key: Path | None) -> None:
+                 key_file: Path | None, export_dir: Path | None, recipient_key: Path | None,
+                 partner_key: Path | None, destination_store: str | None) -> None:
     """Generate SEGMENTS fresh segments per pack and ring, then exit."""
     from pgw.factory.runtime import build_generators, build_sink, open_packs, open_store
 
@@ -146,7 +155,8 @@ def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, ring
         raise ConfigError("--segments must be positive")
     s = _factory_settings(
         pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None, segment_slots=slots,
-        **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key),
+        **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
+                                destination_store),
     )
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sink = build_sink(s, store)
@@ -178,7 +188,8 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
             max_slots_per_hour: float | None, duty_cycle: float | None, nice: int | None, cpu_threads: int | None,
             poll_interval_s: float | None, rings: tuple[str, ...], device: str | None, backend: str | None,
             chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
-            export_dir: Path | None, recipient_key: Path | None) -> None:
+            export_dir: Path | None, recipient_key: Path | None,
+                 partner_key: Path | None, destination_store: str | None) -> None:
     """Keep inventories between low water and target (settings from PGW_FACTORY_* / PGW_MASKSTORE_*)."""
     from pgw.factory.governor import apply_process_priority
     from pgw.factory.runtime import build_scheduler, open_store
@@ -188,12 +199,20 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
         segment_slots=segment_slots, low_water_slots=low_water, target_slots=target,
         max_slots_per_hour=max_slots_per_hour, duty_cycle=duty_cycle, nice=nice, cpu_threads=cpu_threads,
         poll_interval_s=poll_interval_s,
-        **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key),
+        **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
+                                destination_store),
     )
     apply_process_priority(s.nice, s.cpu_threads)
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sched = build_scheduler(s, store)
-    with _signal_handlers(sched.stop):
+    health = None
+    if s.metrics_port is not None and not once:
+        from pgw.factory.health import FactoryHealthServer
+
+        health = FactoryHealthServer(sched, s.metrics_host, s.metrics_port).start()
+    with _signal_handlers(sched.stop), contextlib.ExitStack() as stack:
+        if health is not None:
+            stack.callback(health.stop)
         if once:
             with sched:
                 ids = sched.run_once()  # FactoryStopped -> exit 130 via _handle_errors
@@ -215,7 +234,8 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
 def status_cmd(packs: tuple[Path, ...], as_json: bool, low_water: int | None, target: int | None,
                segment_slots: int | None, rings: tuple[str, ...], device: str | None, backend: str | None,
                chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
-               export_dir: Path | None, recipient_key: Path | None) -> None:
+               export_dir: Path | None, recipient_key: Path | None,
+                 partner_key: Path | None, destination_store: str | None) -> None:
     """Inventory, refill plan and lifetime totals (does not generate anything)."""
     from pgw.core.ring import RingParams
     from pgw.factory.config import FactorySettings
@@ -224,7 +244,8 @@ def status_cmd(packs: tuple[Path, ...], as_json: bool, low_water: int | None, ta
     from pgw.factory.scheduler import FactoryScheduler
     from pgw.modelpack import ModelPack
 
-    overrides = _common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key)
+    overrides = _common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
+                                destination_store)
     pack_paths = list(packs)
     try:
         s = _factory_settings(pack_path=pack_paths[0] if pack_paths else None,

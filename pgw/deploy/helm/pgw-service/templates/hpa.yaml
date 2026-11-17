@@ -1,4 +1,8 @@
 {{- if .Values.autoscaling.enabled }}
+{{- $custom := .Values.autoscaling.customMetric.name }}
+{{- if and .Values.gpu.enabled (not $custom) }}
+{{- fail "autoscaling.enabled with gpu.enabled needs autoscaling.customMetric.name (e.g. pgw_service_inflight via prometheus-adapter): CPU utilization stays low while the GPU queue saturates" }}
+{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -13,10 +17,21 @@ spec:
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
+    {{- if $custom }}
+    - type: Pods
+      pods:
+        metric:
+          name: {{ $custom }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.customMetric.targetAverageValue | quote }}
+    {{- else }}
+    # CPU-image deployments only (gpu.enabled=false)
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
 {{- end }}

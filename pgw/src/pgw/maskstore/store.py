@@ -28,12 +28,15 @@ import fcntl
 import hmac
 import logging
 import os
+import shutil
 import socket
 import sqlite3
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,7 +48,7 @@ import torch
 from pgw.core.errors import ConfigError, MaskExhaustedError, MaskReuseError, MaskStoreError, PGWError, ShapeError
 from pgw.core.fingerprint import short_fingerprint, validate_fingerprint
 from pgw.core.packing import pack_ring, unpack_ring
-from pgw.core.prng import SEED_BYTES, SeedExpander
+from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows
 from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
@@ -60,16 +63,21 @@ from pgw.maskstore.counters import (
 )
 from pgw.maskstore.format import (
     DEK_BYTES,
+    MAX_CHUNK_BYTES,
     NONCE_PREFIX_BYTES,
     SEGMENT_SUFFIX,
     SegmentFile,
     SegmentHeader,
+    SegmentLayout,
     SegmentLinear,
+    auto_chunk_slots,
+    chunk_cache_bytes,
+    encode_header,
     seed_hash,
 )
 from pgw.maskstore.keys import KeyProvider, RecipientKeyPair, WrappedKey
 from pgw.maskstore.partner import TrustedPartners, read_signature
-from pgw.maskstore.segment_io import RawSegmentWriter, shred_file
+from pgw.maskstore.segment_io import RawSegmentWriter, crypto_erase, wipe_and_unlink
 from pgw.maskstore.state import (
     ON_DISK,
     SCHEMA_VERSION,
@@ -113,6 +121,26 @@ def _owner_host() -> str:
 _HOST = _owner_host()
 _PART_MAX_AGE_S = 3600.0
 _MAX_SLOTS_PER_SEGMENT = 1 << 24
+
+
+def check_segment_slots(slots: int, in_features: Sequence[int]) -> None:
+    """Refuse segment sizes whose ``r`` streams exceed the PRNG's addressable range.
+
+    ``r`` rows of a linear are read from one ChaCha20 stream by seeking (``ring_uniform_rows``),
+    which addresses at most :data:`pgw.core.prng.MAX_STREAM_BYTES`; a larger segment would fail
+    only deep into generation (or when a partner segment is consumed).
+    """
+    limit = min((max_stream_rows(int(n)) for n in in_features), default=_MAX_SLOTS_PER_SEGMENT)
+    if slots > limit:
+        raise ConfigError(
+            f"segment of {slots} slots exceeds the PRNG stream range for in_features={max(in_features)} "
+            f"(max {limit} slots per segment)",
+            details={"slots": slots, "max_slots": limit},
+        )
+
+
+#: Name suffix of crypto-erased segment files awaiting their background wipe.
+_SHRED_SUFFIX = ".shred"
 
 
 #: Ids of reservations that are open in *this process*, across every :class:`MaskStore` instance.
@@ -651,6 +679,43 @@ def _zero_prefix(buf: bytearray, n: int) -> None:
 # =================================================================================================
 # Store
 # =================================================================================================
+#: Filesystem types on which SQLite WAL (shared-memory ``-shm`` file) and ``flock`` are not reliable
+#: across hosts. A lost or torn cursor update there re-serves masks (SPEC 3.3).
+NETWORK_FS_TYPES = frozenset({
+    "nfs", "nfs4", "cifs", "smb3", "smbfs", "ceph", "glusterfs", "lustre", "gpfs", "9p", "afs", "ocfs2", "gfs2",
+    "beegfs", "virtiofs",
+})
+
+
+def _mount_fstype(path: Path, mountinfo: str = "/proc/self/mountinfo") -> str | None:
+    """Filesystem type of the mount containing ``path`` (longest mount-point prefix), or ``None``."""
+    try:
+        text = Path(mountinfo).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    target = os.path.realpath(path)
+    best_len, best_type = -1, None
+    for line in text.splitlines():
+        left, sep, right = line.partition(" - ")
+        if not sep:
+            continue
+        fields, rfields = left.split(), right.split()
+        if len(fields) < 5 or not rfields:
+            continue
+        mnt = fields[4].replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
+        if target == mnt or target.startswith(mnt.rstrip("/") + "/") or mnt == "/":
+            if len(mnt) > best_len:
+                best_len, best_type = len(mnt), rfields[0]
+    return best_type
+
+
+def is_network_filesystem(fstype: str | None) -> bool:
+    """Whether ``fstype`` (from mountinfo) is a network/cluster/FUSE filesystem."""
+    if not fstype:
+        return False
+    return fstype in NETWORK_FS_TYPES or fstype.startswith("fuse") or fstype.startswith("nfs")
+
+
 class _ProcessLock:
     """Re-entrant (per thread) lock that also holds an exclusive ``flock`` across processes."""
 
@@ -753,6 +818,17 @@ class MaskStore:
         )
         self._pid = os.getpid()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fstype = _mount_fstype(self.root)
+        if is_network_filesystem(fstype):
+            if not settings.allow_network_filesystem:
+                raise ConfigError(
+                    f"mask store root {self.root} is on a network filesystem ({fstype}): SQLite WAL and flock "
+                    "are not reliable there and a lost cursor write would re-serve masks. Use a local disk or a "
+                    "ReadWriteOnce volume, never share a store between hosts (deliver partner segments with "
+                    "'pgw maskstore import'), or set allow_network_filesystem if this filesystem is known safe",
+                    details={"root": str(self.root), "fstype": fstype},
+                )
+            log.warning("mask store %s is on a network filesystem (%s) (allow_network_filesystem)", self.root, fstype)
         self._lock = _ProcessLock(self.root / ".lock", settings.lock_timeout_s)
         self._conn: sqlite3.Connection | None = connect(
             self.root / "state.sqlite", timeout=settings.lock_timeout_s, fsync=settings.fsync
@@ -769,6 +845,12 @@ class MaskStore:
         self._verified = False
         #: Test hook: called with a point name ("after_commit", "after_witness").
         self._fault_hook: Callable[[str], None] | None = None
+        #: fd of the role owner lock (claim_owner), None when not held.
+        self._owner_fd: int | None = None
+        #: Background wiping of crypto-erased segment files (never under the store lock).
+        self._wipe_pool: ThreadPoolExecutor | None = None
+        self._wipe_futures: set[Future[int]] = set()
+        self._wipe_lock = threading.Lock()
         with self._lock.hold():
             meta = self._init_meta()
         if settings.journal and self._mac_ok:
@@ -786,8 +868,22 @@ class MaskStore:
                 "rollback detection relies on the monotonic counter (%s)",
                 type(key_provider).__name__, self.counter.kind if self.counter else "none",
             )
-        if self.counter is None and self._journal is not None and not getattr(self.counter, "hardware", False):
-            log.info("rollback protection: HMAC journal only (no hardware counter configured)")
+        if self.counter is None and self._journal is None:
+            if not settings.allow_no_rollback_witness:
+                self.close()
+                raise ConfigError(
+                    "mask store has no rollback witness (no MAC journal and no monotonic counter): a restored "
+                    "database would re-serve consumed masks. Configure a MAC-capable key provider or "
+                    "PGW_MASKSTORE_COUNTER, or set allow_no_rollback_witness for development/staging only"
+                )
+            log.warning("mask store %s runs WITHOUT rollback protection (allow_no_rollback_witness)", self.root)
+        elif self.counter is None:
+            log.warning(
+                "rollback protection: HMAC journal only (PGW_MASKSTORE_COUNTER=none). The journal lives at %s; "
+                "restoring a snapshot of the whole volume (database + journal) is not detectable. Configure a "
+                "counter on separate storage for production",
+                settings.journal_file or (self.root / "generation.journal"),
+            )
         if settings.verify_on_open:
             self.verify_integrity()
         log.info(
@@ -1149,6 +1245,37 @@ class MaskStore:
                 log.warning("segment file %s is not registered in the state database; it will never be used", rel)
         return out
 
+    # ---- single-owner leases -------------------------------------------------------------------
+    def claim_owner(self, role: str = "gateway") -> bool:
+        """Take the exclusive, non-blocking ``role`` owner lock of this store; True on success.
+
+        Hostnames are not stable in Kubernetes (a restarted gateway pod gets a new one, a restarted
+        container a new PID namespace), so reservations left open by a crashed gateway would look
+        "foreign" and block shredding for ``lease_timeout_s``. The single gateway that holds the
+        owner lock knows that every open reservation made under another host identity belongs to
+        a dead predecessor and closes it immediately (``gc``/``verify_integrity``). The lock is a
+        ``flock`` and disappears with the process.
+        """
+        if self._owner_fd is not None:
+            return True
+        path = self.root / f".owner-{role}.lock"
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            os.close(fd)
+            if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                log.warning("mask store %s owner lock is held by another process; stale leases of other "
+                            "hosts expire only after lease_timeout_s", role)
+                return False
+            raise MaskStoreError(f"cannot take the {role} owner lock: {exc.strerror}") from exc
+        self._owner_fd = fd
+        log.info("holding the mask store %s owner lock (reservations of previous instances are dead)", role)
+        return True
+
+    def _owner_says_dead(self, host: str) -> bool:
+        return self._owner_fd is not None and host != _HOST
+
     def _close_stale_reservations(self, conn: sqlite3.Connection) -> int:
         now = time.time()
         stale = 0
@@ -1157,7 +1284,9 @@ class MaskStore:
         ).fetchall():
             if rid in self._open_reservations or _is_live(rid):
                 continue
-            dead = host == _HOST and (int(pid) == self._pid or not _pid_alive(int(pid)))
+            dead = self._owner_says_dead(host) or (
+                host == _HOST and (int(pid) == self._pid or not _pid_alive(int(pid)))
+            )
             if dead or now - float(created) > self.settings.lease_timeout_s:
                 conn.execute("UPDATE reservations SET closed_at=?, burned=-1 WHERE id=?", (now, rid))
                 stale += 1
@@ -1219,8 +1348,9 @@ class MaskStore:
         slots: int,
         seed: bytes | None = None,
         checks: int = 2,
-        chunk_slots: int = 256,
+        chunk_slots: int | None = None,
         factory_id: str = "local",
+        destination: str | None = None,
     ) -> SegmentWriter:
         """Start writing a new segment.
 
@@ -1231,8 +1361,13 @@ class MaskStore:
             slots: Token positions.
             seed: 32-byte segment seed (default: fresh ``os.urandom``). Must be unique forever.
             checks: Freivalds vectors per linear.
-            chunk_slots: Slots per encrypted ``W r`` chunk (smaller = less to decrypt per decode step).
+            chunk_slots: Slots per encrypted ``W r`` chunk (smaller = less to decrypt and cache per
+                decode step). Default: :func:`pgw.maskstore.format.auto_chunk_slots` (about 1 MiB
+                for the widest linear). Chunks above ``MAX_CHUNK_BYTES`` are refused because every
+                open reservation caches one decrypted chunk per linear.
             factory_id: Producer id recorded in the header.
+            destination: Store id of the *one* customer store this segment is meant for (partner
+                exports, SPEC 7.7); recorded in the signed header and enforced by ``import_segment``.
         """
         validate_fingerprint(fingerprint)
         rp = ring_from_setting(ring)
@@ -1240,8 +1375,20 @@ class MaskStore:
             raise ConfigError("a segment needs at least one linear")
         if not 0 < slots <= _MAX_SLOTS_PER_SEGMENT:
             raise ConfigError(f"slots must be in [1, {_MAX_SLOTS_PER_SEGMENT}]")
+        check_segment_slots(slots, [s.in_features for s in specs])
+        outs = [s.out_features for s in specs]
+        if chunk_slots is None:
+            chunk_slots = auto_chunk_slots(outs, rp)
         if chunk_slots <= 0:
             raise ConfigError("chunk_slots must be positive")
+        widest = max(outs) * rp.bytes_per_element
+        if min(chunk_slots, slots) * widest > MAX_CHUNK_BYTES:
+            raise ConfigError(
+                f"chunk_slots={chunk_slots} gives {min(chunk_slots, slots) * widest / 2**20:.1f} MiB chunks for the "
+                f"widest linear (limit {MAX_CHUNK_BYTES >> 20} MiB): every open reservation caches one decrypted "
+                f"chunk per linear; use chunk_slots <= {max(1, MAX_CHUNK_BYTES // widest)} (default: auto)",
+                details={"chunk_slots": chunk_slots, "row_bytes": widest},
+            )
         if not 0 <= checks <= 8:
             raise ConfigError("checks must be in [0, 8]")
         if seed is None:
@@ -1271,12 +1418,34 @@ class MaskStore:
             nonce_prefix=os.urandom(NONCE_PREFIX_BYTES).hex(),
             factory_id=factory_id,
             created_at=_now_iso(),
+            destination=destination,
         )
         path = self._segment_dir(fingerprint, rp.name) / f"{segment_id}{SEGMENT_SUFFIX}"
         try:
+            self._check_free_space(SegmentLayout(header, len(encode_header(header))).total_size)
             return SegmentWriter(self, header, path, dek, bytes(seed))
         finally:
             del dek
+
+    def free_bytes(self) -> int:
+        """Free bytes on the store volume (``statvfs``)."""
+        return int(shutil.disk_usage(self.root).free)
+
+    def _check_free_space(self, segment_bytes: int) -> None:
+        """Refuse a new segment that would leave less than ``min_free_bytes`` free on the volume.
+
+        Running the volume full would make the next ``reserve()`` commit fail (no masked
+        inference at all) and leave a partial file behind.
+        """
+        need = int(segment_bytes) + int(self.settings.min_free_bytes)
+        free = self.free_bytes()
+        if free < need:
+            raise MaskStoreError(
+                f"not enough free space for a {segment_bytes / 1e9:.2f} GB segment: {free / 1e9:.2f} GB free, "
+                f"min_free_bytes={self.settings.min_free_bytes / 1e9:.2f} GB must remain",
+                details={"free_bytes": free, "segment_bytes": int(segment_bytes),
+                         "min_free_bytes": int(self.settings.min_free_bytes)},
+            )
 
     def _register_segment(self, header: SegmentHeader, shash: str, path: Path, size: int) -> None:
         rel = str(path.relative_to(self.root))
@@ -1316,10 +1485,11 @@ class MaskStore:
         place; delete it after a successful import. Importing the same segment (or any segment with
         the same seed) twice raises :class:`MaskReuseError`.
 
-        Partner (HPKE-sealed) segments must carry a valid ``<file>.sig`` from a trusted partner key
-        when ``trusted_partner_keys`` is configured or ``require_partner_signature`` is set (see
+        Partner (HPKE-sealed) segments must carry a valid ``<file>.sig`` from one of
+        ``trusted_partner_keys`` and name this store as ``destination`` in their signed header (see
         :mod:`pgw.maskstore.partner`: HPKE base mode does not authenticate the sender, so without a
         signature anyone holding the public recipient key could inject masks whose seed they know).
+        Segments below ``min_soundness_bits`` of Freivalds soundness are refused.
 
         Raises:
             MaskReuseError: segment id or seed already known to this store.
@@ -1339,6 +1509,8 @@ class MaskStore:
                     "segment was already imported (duplicate segment = mask reuse)",
                     details={"segment_id": h.segment_id},
                 )
+            self._check_soundness(h)
+            self._check_import_geometry(h)
             signer = self._check_partner_signature(src_path, src, h)
             wrapped = WrappedKey(h.kek_id, h.wrapped_dek_bytes)
             if h.kek_id.startswith("hpke:"):
@@ -1391,21 +1563,85 @@ class MaskStore:
         return h.segment_id
 
     def _check_partner_signature(self, src_path: Path, src: SegmentFile, h: SegmentHeader) -> str | None:
-        """Enforce the partner-signature policy for HPKE segments; return the signer key id."""
+        """Enforce the partner policy for HPKE segments; return the signer key id.
+
+        Fail closed: an HPKE segment needs a valid signature by one of ``trusted_partner_keys``
+        (HPKE base mode does not authenticate the sender, so anyone with the public recipient key,
+        including the compute operator, could otherwise inject masks whose seed it knows), and its
+        signed header must name this store as ``destination`` (so one file can never be imported
+        into two stores). Both checks have dev-only escape hatches.
+        """
         if not h.kek_id.startswith("hpke:"):
             return None  # wrapped under our own KEK: only a holder of the KEK can have produced it
-        required = bool(self.trusted_partners) or self.settings.require_partner_signature
+        s = self.settings
+        signer: str | None = None
+        required = bool(self.trusted_partners) or s.require_partner_signature or not s.allow_unsigned_partner_segments
         sig = read_signature(src_path)
         if required:
             if not self.trusted_partners:
-                raise ConfigError("require_partner_signature is set but no trusted_partner_keys are configured")
-            return self.trusted_partners.verify(src.header_raw, h.segment_id, sig)
-        log.warning(
-            "importing partner segment %s WITHOUT sender authentication (%s); configure "
-            "trusted_partner_keys so only segments signed by your partner factory are accepted",
-            h.segment_id, "signature present but no trusted keys" if sig is not None else "unsigned",
-        )
-        return None
+                raise MaskStoreError(
+                    "refusing partner segment: no trusted partner keys are configured, so its sender cannot be "
+                    "authenticated (set PGW_MASKSTORE_TRUSTED_PARTNER_KEYS to your partner factory's public key)",
+                    details={"segment_id": h.segment_id},
+                )
+            signer = self.trusted_partners.verify(src.header_raw, h.segment_id, sig)
+        else:
+            log.warning(
+                "importing partner segment %s WITHOUT sender authentication (%s; allow_unsigned_partner_segments "
+                "is a DEV-ONLY setting)",
+                h.segment_id, "signature present but no trusted keys" if sig is not None else "unsigned",
+            )
+        store_id = self.store_id
+        if h.destination is None:
+            if not s.allow_unbound_partner_segments:
+                raise MaskStoreError(
+                    "refusing partner segment without a destination store: the partner factory must set the "
+                    "destination store id (pgw factory --destination-store / PGW_FACTORY_DESTINATION_STORE_ID) "
+                    "so the file cannot be imported into a second store",
+                    details={"segment_id": h.segment_id, "store_id": store_id},
+                )
+            log.warning("importing partner segment %s that is not bound to a destination store (dev only)",
+                        h.segment_id)
+        elif h.destination != store_id:
+            raise MaskStoreError(
+                "partner segment was produced for a different mask store (importing it here would let two "
+                "gateways use the same masks)",
+                details={"segment_id": h.segment_id, "destination": h.destination, "store_id": store_id},
+            )
+        return signer
+
+    def _check_import_geometry(self, h: SegmentHeader) -> None:
+        """Refuse imported segments that could only fail later (PRNG range); warn about huge chunks."""
+        try:
+            check_segment_slots(h.slots, [lin.in_features for lin in h.linears])
+        except ConfigError as exc:
+            raise MaskStoreError(exc.message, details={"segment_id": h.segment_id, **exc.details}) from exc
+        rp = h.ring_params
+        outs = [lin.out_features for lin in h.linears]
+        widest = min(h.chunk_slots, h.slots) * max(outs) * rp.bytes_per_element
+        if widest > MAX_CHUNK_BYTES:
+            log.warning(
+                "imported segment %s uses %.1f MiB chunks (each open reservation caches %.0f MiB of decrypted "
+                "masks); ask the partner to use the default chunk size",
+                h.segment_id, widest / 2**20, chunk_cache_bytes(h.chunk_slots, outs, rp) / 2**20,
+            )
+
+    def _check_soundness(self, h: SegmentHeader) -> None:
+        """Refuse segments whose Freivalds checks fall below ``min_soundness_bits`` for some linear."""
+        floor = self.settings.min_soundness_bits
+        if floor <= 0:
+            return
+        from pgw.core.freivalds import soundness_bits
+
+        rp = h.ring_params
+        weakest = min(h.linears, key=lambda lin: soundness_bits(rp, lin.in_features, h.checks))
+        bits = soundness_bits(rp, weakest.in_features, h.checks)
+        if bits < floor:
+            raise MaskStoreError(
+                f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
+                f"(n={weakest.in_features}, {h.ring}, checks={h.checks}); the store requires {floor:.0f}",
+                details={"segment_id": h.segment_id, "checks": h.checks, "min_soundness_bits": floor},
+            )
 
     def _reencrypt(
         self,
@@ -1499,6 +1735,7 @@ class MaskStore:
         """
         if not isinstance(slots, int) or isinstance(slots, bool) or slots <= 0:
             raise ConfigError(f"slots must be a positive int, got {slots!r}")
+        self._require_external_counter()
         rname = _ring_name(ring)
         rp = RingParams.from_name(rname)
         rid = uuid.uuid4().hex
@@ -1613,6 +1850,22 @@ class MaskStore:
         self._after_inventory_change(fingerprint, rname)
         return res
 
+    def _require_external_counter(self) -> None:
+        """Refuse to hand out masks without an external monotonic counter (finding: snapshot restore).
+
+        The HMAC journal sits on the same volume as the database by default, so restoring a
+        snapshot of the whole volume rolls both back consistently and consumed slots would be
+        reserved again (mask reuse). Only a counter on separate storage (file on another volume,
+        TPM NV, HSM/KMS) detects that.
+        """
+        if self.counter is None and not self.settings.allow_no_external_counter:
+            raise ConfigError(
+                "refusing to hand out masks without an external monotonic counter: restoring a snapshot of the "
+                "mask volume would re-serve consumed masks. Set PGW_MASKSTORE_COUNTER (file on a separate "
+                "volume, tpm or provider), or PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER=true for dev/staging only",
+                details={"root": str(self.root)},
+            )
+
     def _fault(self, point: str) -> None:
         if self._fault_hook is not None:
             self._fault_hook(point)
@@ -1714,12 +1967,12 @@ class MaskStore:
             except Exception:
                 log.exception("low-water listener failed")
 
-    def metrics(self) -> dict[str, dict[tuple[str, str], float]]:
+    def metrics(self) -> dict[str, dict[tuple[str, ...], float]]:
         """Values for the ``pgw_masks_*`` metrics (SPEC 11.1), keyed by ``(fingerprint, ring)``.
 
         The gateway exports them; this package does not depend on ``pgw.observability``.
         """
-        out: dict[str, dict[tuple[str, str], float]] = {
+        out: dict[str, dict[tuple[str, ...], float]] = {
             "pgw_masks_available_slots": {}, "pgw_masks_consumed_slots_total": {},
             "pgw_masks_burned_slots_total": {}, "pgw_masks_low_water": {},
         }
@@ -1733,7 +1986,39 @@ class MaskStore:
             out["pgw_masks_available_slots"][(inv.fingerprint, inv.ring)] = float(inv.slots_available)
         for key, avail in out["pgw_masks_available_slots"].items():
             out["pgw_masks_low_water"][key] = 1.0 if avail < self.settings.low_water_slots else 0.0
+        with self._lock.hold():
+            (open_res,) = self.conn.execute("SELECT COUNT(*) FROM reservations WHERE closed_at IS NULL").fetchone()
+            (unshredded,) = self.conn.execute(
+                "SELECT COALESCE(SUM(bytes), 0) FROM segments WHERE status=?", (SegmentStatus.CONSUMED.value,)
+            ).fetchone()
+        # store-wide series (no labels)
+        out["pgw_masks_open_reservations"] = {(): float(open_res)}
+        out["pgw_masks_unshredded_bytes"] = {(): float(unshredded)}
         return out
+
+    def reservation_cache_bytes(self, fingerprint: str, ring: RingParams | str) -> int:
+        """Worst-case decrypted ``W r`` bytes one reservation caches for ``(fingerprint, ring)``.
+
+        A reservation keeps one decrypted chunk per linear, so this is the largest
+        ``chunk_slots x sum(out_features) x bytes_per_element`` over the active segments (read from
+        their plaintext headers; no decryption).
+        """
+        rname = _ring_name(ring)
+        with self._lock.hold():
+            rows = [SegmentRow.from_row(t) for t in self.conn.execute(
+                SELECT_SEGMENTS + " WHERE status=? AND fingerprint=? AND ring=?",
+                (SegmentStatus.ACTIVE.value, fingerprint, rname),
+            )]
+        worst = 0
+        for r in rows:
+            try:
+                with SegmentFile(self.root / r.relpath) as seg:
+                    h = seg.header
+            except MaskStoreError:
+                continue
+            worst = max(worst, chunk_cache_bytes(min(h.chunk_slots, h.slots),
+                                                 [lin.out_features for lin in h.linears], h.ring_params))
+        return worst
 
     def status(self) -> dict[str, Any]:
         """Non-secret status summary (CLI ``pgw maskstore status``, gateway ``/admin/masks``)."""
@@ -1773,6 +2058,8 @@ class MaskStore:
                 continue
             if now - float(created) > self.settings.lease_timeout_s:
                 continue
+            if rid not in self._open_reservations and not _is_live(rid) and self._owner_says_dead(host):
+                continue  # written by a previous gateway instance (we hold the owner lock)
             if host == _HOST and rid not in self._open_reservations and not _is_live(rid) and not (
                 int(pid) != self._pid and _pid_alive(int(pid))
             ):
@@ -1780,8 +2067,18 @@ class MaskStore:
             leased.add(seg_id)
         return leased
 
-    def _gc_segments(self, segment_ids: set[str] | None) -> int:
+    def _gc_segments(self, segment_ids: set[str] | None, *, wait: bool = False) -> int:
+        """Shred CONSUMED, unleased segments; return the bytes released.
+
+        Under the store lock and inside the state transaction only the cheap, security-relevant part
+        runs: the key header of each file is overwritten with random bytes and synced
+        (crypto-erase: the file can never be decrypted again), the file is renamed to a hidden
+        ``.<id>.shred`` name and its row marked SHREDDED. The bulk zero pass, truncate and unlink of
+        possibly tens of GB then run in a background thread (or inline with ``wait=True``) without
+        holding the lock, so concurrent ``reserve()`` calls never wait for disk I/O of a whole segment.
+        """
         freed = 0
+        detached: list[Path] = []
         with self._lock.hold():
             with self._txn() as conn:
                 m = self._load_meta(conn)
@@ -1797,19 +2094,72 @@ class MaskStore:
                     if r.segment_id in leased:
                         continue
                     self._check_row(m.store_id, r)
-                    freed += shred_file(self.root / r.relpath, fsync=self.settings.fsync)
+                    path = self.root / r.relpath
+                    size = crypto_erase(path, fsync=self.settings.fsync)
+                    if path.exists():
+                        dead = path.with_name(f".{r.segment_id}{_SHRED_SUFFIX}")
+                        try:
+                            os.replace(path, dead)
+                        except OSError as exc:
+                            raise MaskStoreError(f"cannot detach erased segment {path.name}: {exc.strerror}") from exc
+                        detached.append(dead)
+                    freed += size
                     self._update_row(
                         conn, m.store_id, r, next_slot=r.slots, status=SegmentStatus.SHREDDED, gen=r.updated_gen
                     )
                     self._dek_cache.pop(r.segment_id, None)
                     done.append(r)
             for r in done:
-                log.info("shredded consumed segment %s (%.1f MB)", r.segment_id, r.bytes / 1e6)
-                with contextlib.suppress(OSError):
-                    d = (self.root / r.relpath).parent
-                    if not any(d.iterdir()):
-                        d.rmdir()
+                log.info("crypto-erased consumed segment %s (%.1f MB)", r.segment_id, r.bytes / 1e6)
+        if detached:
+            self._wipe_detached(detached, wait=wait)
         return freed
+
+    def _wipe_one(self, path: Path) -> int:
+        try:
+            n = wipe_and_unlink(path, zero_fill=self.settings.shred_zero_fill, fsync=self.settings.fsync)
+        except MaskStoreError as exc:
+            log.warning("background wipe of %s failed (already crypto-erased): %s", path.name, exc.message)
+            return 0
+        with contextlib.suppress(OSError):
+            d = path.parent
+            if not any(d.iterdir()):
+                d.rmdir()
+        return n
+
+    def _wipe_detached(self, paths: Sequence[Path], *, wait: bool) -> None:
+        if wait:
+            for p in paths:
+                self._wipe_one(p)
+            return
+        with self._wipe_lock:
+            if self._wipe_pool is None:
+                self._wipe_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-maskstore-wipe")
+            for p in paths:
+                fut = self._wipe_pool.submit(self._wipe_one, p)
+                self._wipe_futures.add(fut)
+                fut.add_done_callback(self._wipe_futures.discard)
+
+    def wait_for_wipes(self, timeout: float | None = None) -> bool:
+        """Wait for background segment wipes; return True when none is pending."""
+        with self._wipe_lock:
+            pending = list(self._wipe_futures)
+        if not pending:
+            return True
+        _, not_done = futures_wait(pending, timeout=timeout)
+        return not not_done
+
+    def _remove_shred_leftovers(self) -> list[str]:
+        """Unlink crypto-erased files whose background wipe was interrupted (crash, shutdown)."""
+        removed: list[str] = []
+        with self._wipe_lock:
+            busy = bool(self._wipe_futures)
+        if busy:
+            return removed
+        for p in self.root.glob(f"*/*/segments/.*{_SHRED_SUFFIX}"):
+            if self._wipe_one(p) or not p.exists():
+                removed.append(p.name)
+        return removed
 
     def gc(self) -> int:
         """Shred fully consumed segments; return bytes freed.
@@ -1824,8 +2174,11 @@ class MaskStore:
                 old = [r for (r,) in conn.execute("SELECT id FROM reservations WHERE closed_at < ?", (cutoff,))]
                 conn.executemany("DELETE FROM reservation_extents WHERE reservation_id=?", [(r,) for r in old])
                 conn.executemany("DELETE FROM reservations WHERE id=?", [(r,) for r in old])
-            freed = self._gc_segments(None)
             self._remove_partials(_PART_MAX_AGE_S)
+        # Outside the outer lock: _gc_segments takes it only for the crypto-erase transaction and
+        # wipes the detached files without holding it.
+        freed = self._gc_segments(None, wait=True)
+        self._remove_shred_leftovers()
         return freed
 
     def _remove_partials(self, max_age_s: float) -> list[str]:
@@ -1954,10 +2307,22 @@ class MaskStore:
         return summary
 
     def close(self) -> None:
-        """Close the state database; open reservations of this process are closed (burned) first."""
+        """Close the state database; open reservations of this process are closed (burned) first.
+
+        Waits for background wipes of crypto-erased segments (they are already undecryptable; an
+        interrupted wipe is finished by the next :meth:`gc`).
+        """
         for res in list(self._open_reservations.values()):
             if res is not None:
                 res.close()
+        with self._wipe_lock:
+            pool, self._wipe_pool = self._wipe_pool, None
+        if pool is not None:
+            pool.shutdown(wait=True)
+        if self._owner_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._owner_fd)
+            self._owner_fd = None
         with self._lock.hold():
             for k in list(self._dek_cache):
                 self._dek_cache.pop(k)

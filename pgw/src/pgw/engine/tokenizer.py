@@ -15,6 +15,36 @@ __all__ = ["ChatTokenizer", "IncrementalDecoder"]
 log = logging.getLogger(__name__)
 
 
+def _byte_decoder() -> dict[str, int]:
+    """Inverse of GPT-2's ``bytes_to_unicode`` (byte-level BPE token characters -> raw bytes)."""
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("\xa1"), ord("\xac") + 1)) + list(
+        range(ord("\xae"), ord("\xff") + 1)
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs, strict=True)}
+
+
+_BYTE_DECODER = _byte_decoder()
+
+
+def _is_byte_level(tokenizer: Any) -> bool:
+    """Whether ``tokenizer`` is a byte-level BPE (GPT-2 / Llama-3 / Qwen style) fast tokenizer."""
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    if backend is None:
+        return False
+    try:
+        spec = json.loads(backend.to_str())
+    except Exception:
+        return False
+    return "ByteLevel" in json.dumps(spec.get("decoder")) or "ByteLevel" in json.dumps(spec.get("pre_tokenizer"))
+
+
 def _ids_of(value: Any) -> list[int]:
     if value is None:
         return []
@@ -68,6 +98,7 @@ class ChatTokenizer:
         eos += [int(e) for e in extra_eos_token_ids]
         self._eos = tuple(dict.fromkeys(eos))
         self._special = frozenset(int(i) for i in getattr(tokenizer, "all_special_ids", []) or [])
+        self._byte_level: bool | None = None
 
     @classmethod
     def from_pack(cls, pack: Any) -> ChatTokenizer:
@@ -102,6 +133,30 @@ class ChatTokenizer:
     def decode(self, ids: Sequence[int], skip_special_tokens: bool = True) -> str:
         """Ids -> text."""
         return str(self._tok.decode(list(ids), skip_special_tokens=skip_special_tokens))
+
+    def token_bytes(self, token_id: int) -> bytes:
+        """Raw bytes of one token (may be part of a multi-byte UTF-8 character).
+
+        Byte-level BPE vocabularies map through GPT-2's byte alphabet, SentencePiece byte-fallback
+        tokens (``<0xNN>``) give their byte and ``▁`` a space. Special/added tokens and other
+        vocabularies use the token's decoded text.
+        """
+        tid = int(token_id)
+        convert = getattr(self._tok, "convert_ids_to_tokens", None)
+        piece = convert(tid) if convert is not None and tid not in self._special else None
+        if isinstance(piece, str) and piece:
+            if self._byte_level is None:
+                self._byte_level = _is_byte_level(self._tok)
+            if self._byte_level and all(ch in _BYTE_DECODER for ch in piece):
+                return bytes(_BYTE_DECODER[ch] for ch in piece)
+            if len(piece) == 6 and piece.startswith("<0x") and piece.endswith(">"):
+                try:
+                    return bytes([int(piece[3:5], 16)])
+                except ValueError:
+                    pass
+            if not self._byte_level and "▁" in piece:
+                return piece.replace("▁", " ").encode("utf-8")
+        return self.decode([tid], skip_special_tokens=False).encode("utf-8")
 
     def render_chat(self, messages: Sequence[dict[str, Any]], add_generation_prompt: bool = True, **kwargs: Any) -> str:
         """Chat template as text."""

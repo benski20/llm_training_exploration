@@ -1,0 +1,26 @@
+{
+ "32x8x8 col_major": "RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 8 ",
+ "32x8x8 row_major": "exact",
+ "32x8x32 col_major": "exact",
+ "32x8x32 row_major": "exact",
+ "32x16x16 col_major": "exact",
+ "32x16x16 row_major": "exact",
+ "32x32x32 col_major": "exact",
+ "32x32x32 row_major": "exact",
+ "32x64x64 col_major": "exact",
+ "32x64x64 row_major": "exact",
+ "32x64x8 col_major": "RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 64",
+ "32x64x8 row_major": "exact",
+ "32x8x64 col_major": "exact",
+ "32x8x64 row_major": "exact",
+ "17x64x64 col_major": "exact",
+ "17x64x64 row_major": "RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 0 transpose_mat2 0 m 64 n 17 k 6",
+ "24x64x64 col_major": "exact",
+ "24x64x64 row_major": "RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 0 transpose_mat2 0 m 64 n 24 k 6",
+ "32x896x1152 col_major": "exact",
+ "32x896x1152 row_major": "exact",
+ "32x3584x4608 col_major": "exact",
+ "32x3584x4608 row_major": "exact"
+}
+
+---stderr---

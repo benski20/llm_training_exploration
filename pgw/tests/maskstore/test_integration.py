@@ -105,19 +105,21 @@ def test_factory_scheduler_refills_on_low_water(tmp_path: Path, tiny_pack: Any) 
 
 def test_partner_export_sink_to_customer_import(tmp_path: Path, tiny_pack: Any) -> None:
     from pgw.factory import ExportSink, MaskGenerator
+    from pgw.maskstore import PartnerSigningKey
 
     rec = RecipientKeyPair.generate(tmp_path / "recipient.key")
-    sink = ExportSink(tmp_path / "partner", rec.public_bytes())
+    signer = PartnerSigningKey.generate(tmp_path / "partner-sign.key")
+    kf = tmp_path / "kek"
+    store_id = init_store(tmp_path / "customer", kf, recipient_key_file=tmp_path / "recipient.key")["store_id"]
+    sink = ExportSink(tmp_path / "partner", rec.public_bytes(), signing_key=signer, destination_store_id=store_id)
     gen = MaskGenerator(tiny_pack, RING_K40_A12, pipeline=False)
     gen.generate_into_store(sink, 6, chunk_slots=4)
     files = sorted((tmp_path / "partner" / "outbox").glob("*.pgwm"))
     assert len(files) == 1
-    kf = tmp_path / "kek"
-    init_store(tmp_path / "customer", kf, recipient_key_file=tmp_path / "recipient.key")
     s = MaskStoreSettings(root=tmp_path / "customer", key_file=kf, recipient_key_file=tmp_path / "recipient.key",
-                          low_water_slots=0)
-    out = import_files(files, s, delete_source=True)
-    assert out[0]["ok"] and not files[0].exists()
+                          low_water_slots=0, trusted_partner_keys=(signer.public_bytes().hex(),))
+    out = import_files(files, s)  # source and signature are removed by default after a successful import
+    assert out[0]["ok"] and not files[0].exists() and not files[0].with_name(files[0].name + ".sig").exists()
     again = import_files([tmp_path / "missing.pgwm"], s)
     assert not again[0]["ok"] and again[0]["code"] == "mask_store"
     st = store_status(s)
