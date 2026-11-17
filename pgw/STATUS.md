@@ -82,10 +82,10 @@ Full details are in `benchmarks/RESULTS.md`. Raw outputs are in `benchmarks/resu
 
 | metric (7B) | measured | SPEC 14 target | status |
 |---|---|---|---|
-| service GPU compute, batch 1 | 0.45 s/token | ≤ 0.5 s | met |
+| service GPU compute, batch 1 | 0.16 s/token (was 0.45) | ≤ 0.5 s | met |
 | service GPU compute, 32 rows | 0.018 s/token (0.012 at 128 rows) | ≤ 0.015 at batch 32 | roughly met |
-| end-to-end decode, 1 request | 1.48 s/token | (implied ≤ 0.5) | **missed**: limited by round trips and CPU |
-| gateway CPU per token | 1.32 CPU-s (0.39 at 8 concurrent) | ≤ 10 ms crypto + ≤ 20 ms plaintext | **missed by about 40x** |
+| end-to-end decode, 1 request | 0.86 s/token (was 1.48) | (implied ≤ 0.5) | **missed**: limited by 112 sequential round trips and per-call gateway CPU |
+| gateway CPU per token | 0.38 CPU-s (was 1.32; 0.27 at 8 concurrent) | ≤ 10 ms crypto + ≤ 20 ms plaintext | **missed by about 40x** |
 | factory, T4 | 169k tokens/h (7B, K40) | ≥ 500k slots/h (8B, K48) | **missed by about 3x** (GEMMs are only 36% of the time) |
 | mask storage | 6.95 MB/token | 6.9 MB | met |
 | wire | 10.96 MB/token | 11.2 MB | met |

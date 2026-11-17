@@ -61,6 +61,31 @@ What the numbers say:
 * The factory on a T4 produces masks for about 169 k 7B tokens per hour; only 36% of that time is
   GEMMs (the rest is CSPRNG, digit arithmetic and serialization).
 
+### Speed pass (run 7, same T4, Qwen2.5-7B, K40A12)
+
+Changes: digit planes stacked into one GEMM (the weight is streamed once per call, not K/8 times), no
+idle batch window on the service, passive OpenMP threads, zero-copy uint64 Freivalds/unmask on the
+gateway, one worker-thread hop per round trip. Output is still bit-identical to the reference (text
+and logprobs); all 35 GPU tests pass. Raw output: `results/kaggle/run7_speed/`.
+
+| metric (7B) | before (run 4) | after (run 7) | change |
+|---|---|---|---|
+| **end-to-end decode, 1 request** | 1.48 s/token | **0.86 s/token** (1.16 tok/s) | 1.7x faster |
+| time to first token (40-token prompt) | 12.0 s | 8.4 s | 1.4x |
+| service GPU compute per call, batch 1 | 4.0 ms (0.45 s/token) | **1.4 ms (0.16 s/token)** | 2.8x |
+| service queue wait per call, batch 1 | 2.2 ms | 0.05 ms | batch window removed |
+| `remote_seconds` per token (stream) | 0.52 s | 0.27 s | 1.9x |
+| **gateway CPU, one stream** | 91.3 CPU-s (1.32/token) | **26.0 CPU-s (0.38/token)** | 3.5x less |
+| gateway CPU per token, 8 concurrent | 0.39 | 0.27 | 1.4x less |
+| 8 concurrent requests | 0.98 generated tok/s | 1.45 generated tok/s | 1.5x |
+| service over HTTP, 1x1 load test | 1.08 s/token | 0.57 s/token | 1.9x |
+| service over HTTP, 4 sessions x 32 rows | 13.3 token-rows/s | 14.1 token-rows/s | unchanged (CPU-bound) |
+
+Remaining decode time per token is roughly 0.27 s remote (112 round trips at about 2.4 ms, of which
+1.4 ms is GPU) plus about 0.59 s on the gateway (plaintext engine about 0.14 s, the rest is per-call
+Python overhead, the fp32 LM head and event-loop scheduling). Further large single-stream gains need
+fewer sequential round trips per token (speculative decoding), not faster calls.
+
 ### Ring matmul kernel (`pgw bench ring`, T4, ms per call, all results exact)
 
 | shape (out x in) | ring | 1 row | 32 rows | 256 rows | CPU int8 (4 vCPU), 1 row |
