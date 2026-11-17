@@ -475,7 +475,7 @@ def main() -> int:
                          "batching N sessions sends N rows per call)")
     ap.add_argument("--loadtest-tokens", type=int, default=4)
     ap.add_argument("--factory-bench-slots", type=int, default=256)
-    ap.add_argument("--batch-window-ms", type=float, default=2.0)
+    ap.add_argument("--batch-window-ms", type=float, default=0.0)
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")
     ap.add_argument("--out", default="results")

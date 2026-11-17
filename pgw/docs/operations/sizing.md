@@ -79,7 +79,8 @@ latency per generated token ≈ 4·L × (RTT + service time per round) + gateway
 
 Batching is the main lever. Concurrent sessions on one gateway share each round trip
 (`max_concurrent_sessions`, default 32), and the service coalesces rows across gateways
-(`batch_window_ms`). Per-token latency then approaches the RTT floor while throughput scales with
+while a batch waits for its device worker (no fixed wait: `batch_window_ms` defaults to 0, so an idle
+service answers at once). Per-token latency then approaches the RTT floor while throughput scales with
 the batch.
 
 ## 4. Mask storage

@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import torch
 
 from pgw.core.errors import (
@@ -31,15 +32,16 @@ from pgw.core.errors import (
     FingerprintMismatchError,
     IntegrityError,
     MaskExhaustedError,
+    MaskReuseError,
     MaskStoreError,
     PGWError,
     ProtocolError,
     ServiceUnavailableError,
     ShapeError,
 )
-from pgw.core.freivalds import freivalds_check
-from pgw.core.masking import mask_activations, unmask_outputs
-from pgw.core.packing import pack_ring, unpack_ring
+from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
+from pgw.core.masking import mask_activations, unmask_outputs_u64
+from pgw.core.packing import pack_ring, unpack_ring_u64
 from pgw.core.ring import RingParams, balanced_digits, dequantize_outputs, quantize_activations
 from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_available, int8_digit_gemm
 from pgw.core.types import LinearId
@@ -393,8 +395,8 @@ class _Chunk:
     lid: LinearId
     x_hat: torch.Tensor
     wr: torch.Tensor
-    u: torch.Tensor | None
-    uw: torch.Tensor | None
+    u: np.ndarray | None  # uint64 (c, m) read-only view, or None when this chunk is not checked
+    uw: np.ndarray | None  # uint64 (c, n)
 
 
 @dataclass
@@ -487,6 +489,7 @@ class MaskedBackend(LinearBackend):
         if min_soundness_bits < 0:
             raise ConfigError("min_soundness_bits must be >= 0")
         self.min_soundness_bits = float(min_soundness_bits)
+        self._soundness_memo: dict[tuple[int, int], float] = {}
         self.stats = BackendStats()
 
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
@@ -522,14 +525,20 @@ class MaskedBackend(LinearBackend):
             )
         return res
 
-    def _check_soundness(self, lid: Any, n: int, u: torch.Tensor | None) -> None:
+    def _checks_u64(self, res: Any, lid: Any) -> tuple[np.ndarray, np.ndarray]:
+        """The current extent's check vectors as uint64 arrays (zero-copy where supported)."""
+        fn = getattr(res, "checks_u64", None)
+        if fn is not None:
+            return fn(lid)  # type: ignore[no-any-return]
+        u, uw = res.checks(lid)
+        return checks_to_u64(u, uw, self.ring)
+
+    def _check_soundness(self, lid: Any, n: int, u: Any) -> None:
         """Raise if the current extent's check vectors give less than ``min_soundness_bits``."""
         if self.min_soundness_bits <= 0:
             return
-        from pgw.core.freivalds import soundness_bits
-
         checks = 0 if u is None else int(u.shape[0])
-        bits = soundness_bits(self.ring, n, checks)
+        bits = self._soundness_bits(n, checks)
         if bits < self.min_soundness_bits:
             raise MaskStoreError(
                 f"{lid}: mask segment has {checks} Freivalds vector(s) = {bits:.0f} bits of soundness for "
@@ -537,6 +546,15 @@ class MaskedBackend(LinearBackend):
                 "(regenerate masks with more checks)",
                 details={"linear": str(lid), "checks": checks, "min_soundness_bits": self.min_soundness_bits},
             )
+
+    def _soundness_bits(self, n: int, checks: int) -> float:
+        key = (n, checks)
+        hit = self._soundness_memo.get(key)
+        if hit is None:
+            from pgw.core.freivalds import soundness_bits
+
+            hit = self._soundness_memo[key] = float(soundness_bits(self.ring, n, checks))
+        return hit
 
     def _should_check(self) -> bool:
         if self.freivalds_rate >= 1.0:
@@ -574,7 +592,7 @@ class MaskedBackend(LinearBackend):
         if self.min_soundness_bits > 0:
             for c, res, meta in zip(calls, reservations, metas, strict=True):
                 if int(res.rows_until_boundary(c.id)) > 0:
-                    self._check_soundness(c.id, meta.in_features, res.checks(c.id)[0])
+                    self._check_soundness(c.id, meta.in_features, self._checks_u64(res, c.id)[0])
         for c, res in zip(calls, reservations, strict=True):
             left = int(res.remaining(c.id))
             if left < need[(id(res), c.id.key)]:
@@ -611,7 +629,7 @@ class MaskedBackend(LinearBackend):
                     u = uw = None
                     if check or self.min_soundness_bits > 0:
                         # vectors of the extent the next rows come from: read before take()
-                        u, uw = res.checks(call.id)
+                        u, uw = self._checks_u64(res, call.id)
                         self._check_soundness(call.id, meta.in_features, u)
                         if not check:
                             u = uw = None
@@ -676,9 +694,13 @@ class MaskedBackend(LinearBackend):
                         details={"expected": ch.lid.key, "got": str(res.linear)},
                     )
                 bytes_down += len(res.y_hat)
-                y_hat = unpack_ring(res.y_hat, (ch.rows, meta.out_features), self.ring)
+                y_hat = unpack_ring_u64(res.y_hat, (ch.rows, meta.out_features), self.ring)
                 if ch.u is not None and ch.uw is not None:
-                    ok = freivalds_check(ch.x_hat, y_hat, ch.u.to(torch.int64), ch.uw.to(torch.int64), self.ring)
+                    if not ch.u.any():
+                        # The reservation was closed (and its cached vectors wiped) while this call
+                        # was in flight: an all-zero u would make the check vacuous.
+                        raise MaskReuseError("mask reservation closed during a compute call")
+                    ok = freivalds_check_u64(ch.x_hat.numpy().view(np.uint64), y_hat, ch.u, ch.uw, self.ring)
                     if not bool(ok.all()):
                         raise IntegrityError(
                             "compute service result failed the Freivalds check",
@@ -687,7 +709,7 @@ class MaskedBackend(LinearBackend):
                     checked += 1
                 else:
                     skipped += 1
-                yq = unmask_outputs(y_hat, ch.wr.to(torch.int64), self.ring, meta.in_features)
+                yq = torch.from_numpy(unmask_outputs_u64(y_hat, ch.wr.numpy(), self.ring, meta.in_features))
                 ch.wr.zero_()
                 sx = prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows]
                 outs[ch.call_index].append(dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32))
@@ -767,8 +789,29 @@ class MaskedBackend(LinearBackend):
         if not calls:
             return []
         prep = await asyncio.to_thread(self._prepare, calls)
+        response, remote_s = await self.send_prepared(prep)
+        try:
+            return await asyncio.to_thread(self._finish, prep, response, remote_s)
+        except asyncio.CancelledError:
+            prep.wipe()
+            raise
+
+    # ---- split-hop interface (engine fuses finish + plaintext step + prepare in one thread hop) ----
+    #: The engine checks this flag and then drives :meth:`prepare_calls` / :meth:`send_prepared` /
+    #: :meth:`finish_prepared` itself, saving two thread hand-offs per round trip.
+    split_hop = True
+
+    def prepare_calls(self, calls: Sequence[LinearCall]) -> _Prepared:
+        """Synchronous local half of a round trip (quantize, mask, pack). Wipe with :meth:`discard`."""
+        return self._prepare(calls)
+
+    async def send_prepared(self, prep: _Prepared) -> tuple[Any, float]:
+        """Network half: send ``prep.request``; returns ``(response, remote_seconds)``.
+
+        On any failure (including cancellation) the prepared secrets are wiped.
+        """
         if prep.request is None:
-            return self._finish(prep, None, 0.0)
+            return None, 0.0
         t0 = time.perf_counter()
         try:
             compute = getattr(self.client, "compute", None)
@@ -781,11 +824,17 @@ class MaskedBackend(LinearBackend):
             if isinstance(exc, Exception):
                 raise self._wrap_transport(exc) from exc
             raise
-        try:
-            return await asyncio.to_thread(self._finish, prep, response, time.perf_counter() - t0)
-        except asyncio.CancelledError:
+        return response, time.perf_counter() - t0
+
+    def finish_prepared(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        """Synchronous local half after the response (verify, unmask, rescale); always wipes ``prep``."""
+        return self._finish(prep, response, remote_s)
+
+    @staticmethod
+    def discard(prep: _Prepared | None) -> None:
+        """Wipe a prepared request that will not be sent or finished."""
+        if prep is not None:
             prep.wipe()
-            raise
 
 
 def _run_coro_blocking(coro: Any) -> Any:

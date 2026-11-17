@@ -43,6 +43,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+import numpy as np
 import torch
 
 from pgw.core.errors import ConfigError, MaskExhaustedError, MaskReuseError, MaskStoreError, PGWError, ShapeError
@@ -448,6 +449,23 @@ class MaskReservation:
         segments, the engine must split calls at extent boundaries (``rows_until_boundary``)
         because ``u`` differs per segment.
         """
+        u, uw = self._checks_cached(lid)
+        return u.clone(), uw.clone()
+
+    def checks_u64(self, lid: LinearId | str) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`checks` as read-only uint64 numpy views of the cached vectors (no copy).
+
+        For the gateway's per-call hot path. The views are wiped (zeroed) when the reservation
+        closes; callers must not keep them beyond the call.
+        """
+        u, uw = self._checks_cached(lid)
+        u64 = u.numpy().view(np.uint64)
+        uw64 = uw.numpy().view(np.uint64)
+        u64.flags.writeable = False
+        uw64.flags.writeable = False
+        return u64, uw64
+
+    def _checks_cached(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
         key = self._key(lid)
         with self._lock:
             self._alive()
@@ -466,7 +484,7 @@ class MaskReservation:
                 uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
                 hit = (u, uw)
                 self._uw_cache[(ei, key)] = hit
-            return hit[0].clone(), hit[1].clone()
+            return hit
 
     # ---- lifecycle -------------------------------------------------------------------------------
     def close(self) -> None:

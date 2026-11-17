@@ -17,7 +17,9 @@ import traceback
 T0 = time.time()
 OUT = "/kaggle/working"
 JOB = json.loads(r'''__JOB__''')
-TGZ = "__PGW_TGZ_B64__"
+TGZ = """
+__PGW_TGZ_B64__
+"""
 SUMMARY = {"job": JOB, "steps": {}}
 
 
@@ -65,7 +67,7 @@ save()
 
 SRC = "/tmp/pgwsrc"
 os.makedirs(SRC, exist_ok=True)
-tarfile.open(fileobj=io.BytesIO(base64.b64decode(TGZ)), mode="r:gz").extractall(SRC, filter="data")
+tarfile.open(fileobj=io.BytesIO(base64.b64decode(TGZ)), mode="r:*").extractall(SRC, filter="data")
 ROOT = f"{SRC}/pgw"
 rc, _ = sh("pip_install", [sys.executable, "-m", "pip", "install", "-q", "-e", f"{ROOT}[dev]"], timeout=1800)
 if rc != 0:

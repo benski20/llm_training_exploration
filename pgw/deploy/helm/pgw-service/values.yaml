@@ -71,7 +71,7 @@ config:
   device: auto
   backend: auto
   verifyPacks: full
-  batchWindowMs: 2
+  batchWindowMs: 0
   maxBatchRows: 4096
   maxInflightRequests: 256
   maxRequestBytes: 268435456

@@ -128,12 +128,22 @@ def int8_ring_matmul(x: torch.Tensor, w8: torch.Tensor, k: int) -> torch.Tensor:
     if k % 8 != 0 or not 8 <= k <= 56:
         raise ConfigError(f"ring width must be a multiple of 8 in [8, 56], got {k}")
     mask = (1 << k) - 1
-    acc: torch.Tensor | None = None
-    for i, d in enumerate(balanced_digits(x & mask, k, 8)):
-        term = _shift_mod(int8_digit_gemm(d.to(torch.int8), w8), 8 * i, k)
-        acc = term if acc is None else (acc + term) & mask
-    assert acc is not None
-    return acc & mask
+    b = int(x.shape[0])
+    digits = balanced_digits(x & mask, k, 8)
+    # All digits stacked as rows of ONE GEMM: the weight is read once instead of k/8 times, which is
+    # what matters for small batches (decode), where the GEMM is memory-bound.
+    d8 = torch.cat(digits, dim=0).to(torch.int8)
+    y = int8_digit_gemm(d8, w8)
+    return _combine_digit_rows(y, b, len(digits), 8, k)
+
+
+def _combine_digit_rows(y: torch.Tensor, b: int, limbs: int, bits: int, k: int) -> torch.Tensor:
+    """``sum_i (y[i*b:(i+1)*b] << bits*i) mod 2^k`` for the stacked digit-row products ``y``."""
+    mask = (1 << k) - 1
+    acc = y[:b] & mask
+    for i in range(1, limbs):
+        acc = (acc + _shift_mod(y[i * b : (i + 1) * b], bits * i, k)) & mask
+    return acc
 
 
 @functools.cache
@@ -293,31 +303,27 @@ class PreparedWeight:
         b, n = x.shape
         m = self.out_features
         mp, np_ = self._w_dev.shape
-        p = max(_INT_MM_MIN_ROWS, -(-b // 8) * 8)
-        xp = torch.zeros((p, np_), dtype=torch.int64, device=x.device)
-        xp[:b, :n] = x
-        mask = (1 << k) - 1
-        acc = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
-        for i, d in enumerate(balanced_digits(xp, k, 8)):
-            d8 = d.to(torch.int8)
-            y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
-            for c0 in range(0, np_, INT_MM_MAX_INNER):
-                c1 = min(np_, c0 + INT_MM_MAX_INNER)
-                y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
-            acc = (acc + _shift_mod(y, 8 * i, k)) & mask
-        return acc[:b, :m]
+        digits = balanced_digits(x, k, 8)
+        limbs = len(digits)
+        # Stack the k/8 digit planes as rows of one GEMM so the weight is streamed once per call.
+        rows = limbs * b
+        p = max(_INT_MM_MIN_ROWS, -(-rows // 8) * 8)
+        d8 = torch.zeros((p, np_), dtype=torch.int8, device=x.device)
+        d8[:rows, :n] = torch.cat(digits, dim=0)
+        y = torch.zeros((p, mp), dtype=torch.int64, device=x.device)
+        for c0 in range(0, np_, INT_MM_MAX_INNER):
+            c1 = min(np_, c0 + INT_MM_MAX_INNER)
+            y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
+        return _combine_digit_rows(y, b, limbs, 8, k)[:, :m]
 
     def _mm_f64(self, x: torch.Tensor, k: int) -> torch.Tensor:
         wf = self._w_float if self._w_float is not None else self._float_weight()
         bits = _f64_digit_bits(self.in_features, k)
-        mask = (1 << k) - 1
-        acc: torch.Tensor | None = None
-        for i, d in enumerate(balanced_digits(x, k, bits)):
-            y = torch.round(d.to(torch.float64) @ wf).to(torch.int64)
-            term = _shift_mod(y, bits * i, k)
-            acc = term if acc is None else (acc + term) & mask
-        assert acc is not None
-        return acc & mask
+        b = int(x.shape[0])
+        digits = balanced_digits(x, k, bits)
+        # one GEMM over the stacked digit rows (weight streamed once)
+        y = torch.round(torch.cat(digits, dim=0).to(torch.float64) @ wf).to(torch.int64)
+        return _combine_digit_rows(y, b, len(digits), bits, k)
 
     def _mm_f32(self, x: torch.Tensor, k: int) -> torch.Tensor:
         wf = self._w_float if self._w_float is not None else self._float_weight()

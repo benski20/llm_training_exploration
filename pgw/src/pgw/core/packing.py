@@ -13,7 +13,7 @@ import torch
 from pgw.core.errors import ProtocolError, ShapeError
 from pgw.core.ring import RingParams
 
-__all__ = ["pack_ring", "packed_size", "unpack_ring"]
+__all__ = ["pack_ring", "packed_size", "unpack_ring", "unpack_ring_u64"]
 
 
 def _k(params: RingParams | int) -> int:
@@ -52,3 +52,23 @@ def unpack_ring(data: bytes | bytearray | memoryview, shape: tuple[int, ...], pa
     full[:, :nb] = raw
     vals = full.view("<u8").reshape(shape).astype(np.int64)
     return torch.from_numpy(vals)
+
+
+def unpack_ring_u64(
+    data: bytes | bytearray | memoryview, shape: tuple[int, ...], params: RingParams | int
+) -> np.ndarray:
+    """Like :func:`unpack_ring` but returns a uint64 ``np.ndarray`` (no torch tensor, one copy less).
+
+    Used on the gateway's per-call hot path, where results stay in numpy until dequantization.
+    """
+    k = _k(params)
+    nb = k // 8
+    expected = packed_size(shape, k)
+    if len(data) != expected:
+        raise ProtocolError(f"ring payload has {len(data)} bytes, expected {expected} for shape {shape} K={k}")
+    raw = np.frombuffer(data, dtype=np.uint8)
+    if nb == 8:
+        return raw.view("<u8").reshape(shape).copy()
+    full = np.zeros((raw.size // nb, 8), dtype=np.uint8)
+    full[:, :nb] = raw.reshape(-1, nb)
+    return full.view("<u8").reshape(shape)

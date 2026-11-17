@@ -114,7 +114,7 @@ class BatchScheduler:
         self,
         registry: object,
         *,
-        batch_window_ms: float = 2.0,
+        batch_window_ms: float = 0.0,
         max_batch_rows: int = 4096,
         cpu_workers: int = 2,
         gpu_workers_per_device: int = 1,

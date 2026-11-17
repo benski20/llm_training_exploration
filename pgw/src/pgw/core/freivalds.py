@@ -25,7 +25,14 @@ from pgw.core.errors import ConfigError, IntegrityError, ShapeError
 from pgw.core.ring import RingParams
 from pgw.core.ringmm import PreparedWeight
 
-__all__ = ["freivalds_check", "freivalds_precompute", "freivalds_verify", "soundness_bits"]
+__all__ = [
+    "checks_to_u64",
+    "freivalds_check",
+    "freivalds_check_u64",
+    "freivalds_precompute",
+    "freivalds_verify",
+    "soundness_bits",
+]
 
 
 def freivalds_precompute(u: torch.Tensor, w8: torch.Tensor, params: RingParams) -> torch.Tensor:
@@ -69,6 +76,40 @@ def freivalds_check(
     lhs = _ring_dot(y_hat, u, params)  # (T, c)
     rhs = _ring_dot(x_hat, uw, params)  # (T, c)
     return torch.from_numpy((lhs == rhs).all(axis=1))
+
+
+def checks_to_u64(u: torch.Tensor, uw: torch.Tensor, params: RingParams) -> tuple[np.ndarray, np.ndarray]:
+    """Read-only uint64 copies of check vectors ``(u, uW)`` for :func:`freivalds_check_u64`."""
+    u64 = (u.detach().cpu().numpy() & params.mask).astype(np.uint64)
+    uw64 = (uw.detach().cpu().numpy() & params.mask).astype(np.uint64)
+    u64.flags.writeable = False
+    uw64.flags.writeable = False
+    return u64, uw64
+
+
+def freivalds_check_u64(
+    x_hat: np.ndarray,
+    y_hat: np.ndarray,
+    u64: np.ndarray,
+    uw64: np.ndarray,
+    params: RingParams,
+) -> np.ndarray:
+    """:func:`freivalds_check` on uint64 arrays already reduced mod ``2^K`` (gateway hot path).
+
+    ``x_hat`` ``(T, n)``, ``y_hat`` ``(T, m)``, ``u64`` ``(c, m)``, ``uw64`` ``(c, n)``; returns bool ``(T,)``.
+    uint64 products wrap mod ``2^64`` (defined behaviour), and ``2^K`` divides ``2^64``.
+    """
+    if x_hat.ndim != 2 or y_hat.ndim != 2 or x_hat.shape[0] != y_hat.shape[0]:
+        raise ShapeError(f"bad shapes x_hat {x_hat.shape} y_hat {y_hat.shape}")
+    if u64.shape[1] != y_hat.shape[1] or uw64.shape[1] != x_hat.shape[1] or u64.shape[0] != uw64.shape[0]:
+        raise ShapeError("check vector shapes do not match the linear")
+    if u64.shape[0] < 1:
+        raise ConfigError("Freivalds check needs at least one check vector (checks=0)")
+    m = np.uint64(params.mask)
+    lhs = (y_hat @ u64.T) & m
+    rhs = (x_hat @ uw64.T) & m
+    out: np.ndarray = (lhs == rhs).all(axis=1)
+    return out
 
 
 def freivalds_verify(

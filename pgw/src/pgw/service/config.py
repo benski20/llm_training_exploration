@@ -64,7 +64,12 @@ class ServiceSettings(PGWSettings):
     warmup: bool = Field(True, description="Run one dummy product per linear at startup")
 
     # ---- batching / scheduling -----------------------------------------------------------
-    batch_window_ms: float = Field(2.0, ge=0, description="Max wait to coalesce rows for one linear")
+    batch_window_ms: float = Field(
+        0.0, ge=0,
+        description="Extra wait to coalesce rows for one linear. 0 (default) = no idle wait: a batch is sent to its "
+        "device queue at once and keeps accepting rows until a worker picks it up, so batching still happens "
+        "under load without adding latency to every round trip.",
+    )
     max_batch_rows: int = Field(4096, gt=0)
     cpu_workers: int = Field(2, gt=0, description="Concurrent kernel executions on the CPU device")
     gpu_workers_per_device: int = Field(1, gt=0, description="Concurrent kernel executions per GPU")

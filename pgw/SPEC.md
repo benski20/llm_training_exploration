@@ -208,7 +208,7 @@ so retries are safe, and a retry resends the identical `x_hat` without consuming
 - Client side: the engine batches all prompt tokens per group (prefill) and concurrent sessions at
   the same group (`forward_many`) into one request.
 - Server side: `BatchScheduler` coalesces rows across requests and tenants for the same
-  `(fp, ring, linear)` within `batch_window_ms` (default 2 ms), up to `max_batch_rows`. Mixing
+  `(fp, ring, linear)` while the batch waits for a device worker (plus an optional `batch_window_ms`, default 0: no idle wait), up to `max_batch_rows`. Mixing
   tenants is safe because every row is uniform noise.
 - Defaults: `max_request_bytes` 256 MiB, `max_items` 256, `max_rows_per_item` 8192. The client
   splits larger requests by rows.

@@ -21,7 +21,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PGW = HERE.parents[1]
-EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results"}
+EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
+#: Top-level folders the GPU jobs never use (Kaggle rejects scripts above about 1 MB).
+EXCLUDE_TOP = {"docs", "deploy", "rust", "requirements", ".github", "ci"}
 
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
@@ -63,6 +65,18 @@ JOBS: dict[str, dict] = {
         {"kind": "pytest", "name": "pytest_e2e_gpu_service", "args": ["tests/e2e", "-v", "-rs", "--timeout", "1800"],
          "env": {"PGW_E2E_SERVICE_DEVICE": "cuda"}, "timeout": 2400},
     ]},
+    # speed pass: GPU kernel exactness (stacked digit GEMM) + 7B end to end, compare with run4_7b
+    "pgw-speed-7b": {"steps": [
+        {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
+        {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-v", "-rs", "--timeout", "900"],
+         "timeout": 1800},
+        {"kind": "validate", "label": "qwen7b", "args": [
+            "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda",
+            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2",
+            "--factory-bench-slots", "256"],
+         "timeout": 6600},
+    ]},
     # fallback if 7B does not fit / is too slow
     "pgw-gpu-3b": {"steps": [
         {"kind": "validate", "label": "qwen3b", "args": [
@@ -79,11 +93,13 @@ def source_tarball() -> bytes:
 
     def filt(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
         parts = Path(ti.name).parts
-        if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts):
+        if len(parts) > 1 and parts[1] in EXCLUDE_TOP:
+            return None
+        if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts) or ti.name.endswith(".whl"):
             return None
         return ti
 
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+    with tarfile.open(fileobj=buf, mode="w:xz", preset=9) as tf:
         tf.add(PGW, arcname="pgw", filter=filt)
     return buf.getvalue()
 
@@ -94,7 +110,8 @@ def main() -> None:
     ap.add_argument("--owner", default="bensliv")
     ap.add_argument("--only", nargs="*")
     args = ap.parse_args()
-    tgz = base64.b64encode(source_tarball()).decode()
+    raw = base64.b64encode(source_tarball()).decode()
+    tgz = "\n".join(raw[i : i + 100] for i in range(0, len(raw), 100))  # short lines (Kaggle rejects huge ones)
     template = (HERE / "kernel_template.py").read_text()
     for slug, job in JOBS.items():
         if args.only and slug not in args.only:

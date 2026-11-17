@@ -25,6 +25,13 @@ from pgw.core.types import LinearId
 
 __all__ = ["WindowedReservation"]
 
+
+def _ring_of(part: Any) -> Any:
+    from pgw.core.ring import RingParams
+
+    r = part.ring
+    return RingParams.from_name(r if isinstance(r, str) else r.name)
+
 log = logging.getLogger(__name__)
 
 #: ``fn(slots) -> reservation`` (a :class:`pgw.maskstore.MaskReservation`-like object).
@@ -141,6 +148,18 @@ class WindowedReservation:
         with self._lock:
             part = self._current(lid)
         return part.checks(lid)  # type: ignore[no-any-return]
+
+    def checks_u64(self, lid: LinearId | str) -> Any:
+        """Read-only uint64 views of the current extent's check vectors (see ``MaskReservation``)."""
+        with self._lock:
+            part = self._current(lid)
+        fn = getattr(part, "checks_u64", None)
+        if fn is None:
+            from pgw.core.freivalds import checks_to_u64
+
+            u, uw = part.checks(lid)
+            return checks_to_u64(u, uw, part.ring if hasattr(part.ring, "mask") else _ring_of(part))
+        return fn(lid)
 
     # ---- lifecycle --------------------------------------------------------------------------------
     def close(self) -> None:

@@ -178,7 +178,7 @@ def test_security_relevant_defaults_match_the_docs(docs: dict[str, str]) -> None
     assert m["shred_consumed"].default is True and m["fsync"].default is True
     assert m["min_soundness_bits"].default == 20.0 and m["allow_unsigned_partner_segments"].default is False
     s = ServiceSettings.model_fields
-    assert s["batch_window_ms"].default == 2.0
+    assert s["batch_window_ms"].default == 0.0  # no idle wait; rows coalesce while a batch waits for its worker
     wp = docs["security/whitepaper.md"]
     assert "only an admin reset" in wp and "default 4096" in wp and "at least 20 bits" in wp and "up to 8" in wp
 

@@ -302,6 +302,12 @@ class TransformerModel:
         the event loop only awaits I/O and never executes model math.
         """
         gen = self._steps(seqs)
+        backend = self.backend
+        if getattr(backend, "split_hop", False):
+            try:
+                return await self._aforward_split(gen, backend)
+            finally:
+                gen.close()
         try:
             finished, out = await self.run_plain(self._advance, gen, None)
             while not finished:
@@ -311,6 +317,38 @@ class TransformerModel:
             return out  # type: ignore[no-any-return]
         finally:
             gen.close()  # drop references to activations promptly on failure
+
+    async def _aforward_split(self, gen: _Steps, backend: Any) -> list[torch.Tensor]:
+        """One plaintext-thread hop per round trip: finish(previous) + model step + prepare(next).
+
+        The plaintext segment between two linears only needs the previous results, so verifying and
+        unmasking them, running the step and masking the next calls happen in one worker call; the
+        event loop only awaits the network. Any prepared-but-unsent request is wiped on failure.
+        """
+        pending: list[Any] = [None]  # prepared request owned by this coroutine (wiped on failure)
+
+        def hop(prev: Any, response: Any, remote_s: float) -> tuple[bool, Any]:
+            res = None
+            if prev is not None:
+                pending[0] = None  # finish_prepared always wipes prev
+                calls = prev.calls
+                res = self._check_results(list(calls), backend.finish_prepared(prev, response, remote_s))
+            finished, out = self._advance(gen, res)
+            if finished:
+                return True, out
+            pending[0] = backend.prepare_calls(out)
+            return False, pending[0]
+
+        try:
+            finished, out = await self.run_plain(hop, None, None, 0.0)
+            while not finished:
+                prep = out
+                response, remote_s = await backend.send_prepared(prep)
+                finished, out = await self.run_plain(hop, prep, response, remote_s)
+            return out  # type: ignore[no-any-return]
+        finally:
+            backend.discard(pending[0])
+            pending[0] = None
 
     def forward(self, input_ids: torch.Tensor | Sequence[int], cache: KVCache, *, session: object | None = None,
                 all_logits: bool = False) -> torch.Tensor:

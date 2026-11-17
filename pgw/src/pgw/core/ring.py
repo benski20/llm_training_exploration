@@ -146,6 +146,11 @@ DEFAULT_RING = RING_K40_A12
 
 
 # ---- quantization ------------------------------------------------------------------------------
+
+#: Up to this many elements the CPU quantize/dequantize helpers use single-threaded numpy.
+_SMALL_NUMEL = 65_536
+
+
 def quantize_weight_rows(w: torch.Tensor | np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
     """Quantize a float weight matrix ``(m, n)`` to int8 per output row.
 
@@ -172,6 +177,18 @@ def quantize_activations(x: torch.Tensor, params: RingParams) -> tuple[torch.Ten
     """
     if x.ndim != 2:
         raise ShapeError(f"activations must be 2-D (tokens, features), got {tuple(x.shape)}")
+    if x.device.type == "cpu" and x.numel() <= _SMALL_NUMEL:
+        # Decode-sized inputs: single-threaded numpy avoids torch intra-op threading overhead.
+        # Same IEEE operations in the same order (float64 division, round-half-even), so the
+        # result is bit-identical to the torch path below.
+        xf_np = x.detach().numpy().astype(np.float64)
+        if not np.isfinite(xf_np).all():
+            raise RingOverflowError("non-finite activation values cannot be quantized")
+        amax_np = np.abs(xf_np).max(axis=1)
+        sx_np = np.where(amax_np > 0, amax_np / params.qmax, 1.0)
+        xq_np = np.rint(xf_np / sx_np[:, None])
+        np.clip(xq_np, -params.qmax, params.qmax, out=xq_np)
+        return torch.from_numpy(xq_np.astype(np.int64)), torch.from_numpy(sx_np)
     xf = x.detach().to(torch.float64)
     if not torch.isfinite(xf).all():
         raise RingOverflowError("non-finite activation values cannot be quantized")
@@ -189,6 +206,13 @@ def dequantize_outputs(
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
     """Rescale exact integer outputs ``(T, m)`` back to floats and add the bias."""
+    if yq.device.type == "cpu" and yq.numel() <= _SMALL_NUMEL and sx.device.type == "cpu" and sw.device.type == "cpu":
+        # Bit-identical numpy path for decode-sized outputs (same float64 ops in the same order).
+        y_np = yq.numpy().astype(np.float64) * sx.numpy().astype(np.float64)[:, None]
+        y_np = y_np * sw.numpy().astype(np.float64)[None, :]
+        if bias is not None:
+            y_np = y_np + bias.numpy().astype(np.float64)[None, :]
+        return torch.from_numpy(y_np).to(dtype)
     y = yq.to(torch.float64) * sx.to(torch.float64)[:, None] * sw.to(torch.float64)[None, :]
     if bias is not None:
         y = y + bias.to(torch.float64)[None, :]

@@ -12,12 +12,13 @@ Gateway side, per linear op ``y = W x`` (``x`` already quantized to ``xq``)::
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from pgw.core.errors import IntegrityError, RingOverflowError, ShapeError
 from pgw.core.ring import RingParams, center
 
-__all__ = ["check_output_range", "mask_activations", "unmask_outputs"]
+__all__ = ["check_output_range", "mask_activations", "unmask_outputs", "unmask_outputs_u64"]
 
 
 def mask_activations(xq: torch.Tensor, r: torch.Tensor, params: RingParams) -> torch.Tensor:
@@ -73,4 +74,30 @@ def unmask_outputs(
     yq = center(y_hat - wr, params)
     if in_features is not None:
         check_output_range(yq, params, in_features)
+    return yq
+
+
+def unmask_outputs_u64(
+    y_hat: np.ndarray,
+    wr: np.ndarray,
+    params: RingParams,
+    in_features: int | None = None,
+) -> np.ndarray:
+    """:func:`unmask_outputs` on uint64/int64 arrays; returns the centered int64 product ``yq``.
+
+    Same result and the same output range check as :func:`unmask_outputs` (gateway hot path).
+    """
+    if y_hat.shape != wr.shape:
+        raise ShapeError(f"result shape {y_hat.shape} != W r shape {wr.shape}")
+    mask = np.uint64(params.mask)
+    d = (y_hat.view(np.uint64) - wr.view(np.uint64)) & mask
+    yq = d.view(np.int64)
+    yq -= (d >= np.uint64(params.half)).astype(np.int64) * np.int64(params.modulus)
+    if in_features is not None and yq.size:
+        bound = params.output_bound(in_features)
+        if int(np.abs(yq).max()) > bound:
+            raise IntegrityError(
+                "decoded linear output outside the representable range (corrupt or tampered result)",
+                details={"bound": bound, "ring": params.name},
+            )
     return yq
