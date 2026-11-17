@@ -384,3 +384,58 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         ServiceSettings(tls={"require_client_cert": True})
     with pytest.raises(ValidationError):
         ServiceSettings(port=9000, metrics_port=9000)
+
+
+async def test_compute_fast_path_is_innermost_and_equivalent(tiny_pack_dir: Path, pack_fp: str,
+                                                             pack_weights: dict[str, torch.Tensor]) -> None:
+    """POST /v1/compute bypasses routing via ComputeFastPath; results and other routes are unchanged."""
+    import httpx
+
+    from pgw.wire.server import COMPUTE_PATH, ComputeFastPath
+
+    async with running_app(_settings(tiny_pack_dir)) as app:
+        assert any(m.cls is ComputeFastPath for m in app.user_middleware)
+        calls: list[str] = []
+        fast = next(m for m in app.user_middleware if m.cls is ComputeFastPath)
+        inner = ComputeFastPath(app=None, **fast.kwargs)
+        assert inner._endpoint is not None
+        orig = inner._endpoint
+
+        async def spy(request: Any) -> Any:
+            calls.append(request.url.path)
+            return await orig(request)
+
+        # The registered middleware instance found the router's compute endpoint.
+        ring = RING_K40_A12
+        lid, w = next(iter(pack_weights.items()))
+        x = rand_x(3, w.shape[1], ring, seed=5)
+        c = asgi_client(app)
+        await c.connect(pack_fp, "K40A12")
+        resp = await c.compute(make_req(pack_fp, ring, [(lid, x)]))
+        assert torch.equal(unpack_ring(resp.items[0].y_hat, (3, w.shape[0]), ring), expected(x, w, ring))
+        await c.aclose()
+        # Non-compute paths and other methods still reach the app.
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as h:
+            assert (await h.get("/healthz")).status_code == 200
+            assert (await h.get(COMPUTE_PATH)).status_code == 405
+        inner._endpoint = spy
+        sent: list[Any] = []
+
+        async def fallback(scope: Any, receive: Any, send: Any) -> None:  # must not be reached for compute
+            raise AssertionError("compute request fell through to the router")
+
+        inner.app = fallback
+        body = encode_message(make_req(pack_fp, ring, [(lid, x)]))
+        scope = {"type": "http", "method": "POST", "path": COMPUTE_PATH, "headers": [
+            (b"content-type", CONTENT_TYPE.encode()), (PROTOCOL_HEADER.lower().encode(), b"1")],
+            "query_string": b"", "root_path": "", "scheme": "http", "server": ("svc", 80), "app": app}
+        msgs = [{"type": "http.request", "body": body, "more_body": False}]
+
+        async def receive() -> Any:
+            return msgs.pop(0) if msgs else {"type": "http.disconnect"}
+
+        async def send(m: Any) -> None:
+            sent.append(m)
+
+        await inner(scope, receive, send)
+        assert calls == [COMPUTE_PATH] and sent[0]["status"] == 200

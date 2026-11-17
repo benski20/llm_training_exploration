@@ -217,8 +217,14 @@ def create_app(
     limits = WireLimits(
         max_request_bytes=s.max_request_bytes, max_items=s.max_items, max_rows_per_item=s.max_rows_per_item
     )
-    app.include_router(create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
-                                     max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes)))
+    wire_router = create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
+                                max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes))
+    app.include_router(wire_router)
+    from pgw.wire.server import ComputeFastPath
+
+    # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any
+    # middleware added below (e.g. the trusted client-cert header) still runs first.
+    app.add_middleware(ComputeFastPath, endpoint=getattr(wire_router, "pgw_compute_endpoint", None))
 
     async def healthz(request: Request) -> Response:
         return PlainTextResponse("ok")

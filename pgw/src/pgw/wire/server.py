@@ -63,6 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = [
     "ByteBudget",
+    "ComputeFastPath",
     "ComputeHandler",
     "LinearDims",
     "RequestContext",
@@ -541,7 +542,9 @@ def create_router(
                 if remaining <= 0:
                     raise PGWError("deadline exceeded before compute", code=ErrorCode.DEADLINE_EXCEEDED)
                 try:
-                    resp = await asyncio.wait_for(handler.compute(req, ctx), timeout=remaining)
+                    # asyncio.timeout (not wait_for): no extra task per request on the hot path
+                    async with asyncio.timeout(remaining):
+                        resp = await handler.compute(req, ctx)
                 except TimeoutError as exc:
                     raise PGWError(
                         "deadline exceeded during compute",
@@ -609,7 +612,44 @@ def create_router(
     # schema generation is bypassed on purpose.
     router.add_route(COMPUTE_PATH, compute, methods=["POST"], include_in_schema=False)
     router.add_route(MODELS_PATH, models, methods=["GET"], include_in_schema=False)
+    router.pgw_compute_endpoint = compute  # type: ignore[attr-defined]  # for ComputeFastPath
     return router
+
+
+class ComputeFastPath:
+    """ASGI middleware sending ``POST`` :data:`COMPUTE_PATH` straight to the compute endpoint.
+
+    The endpoint built by :func:`create_router` already does everything a request needs (auth,
+    limits, decoding, error mapping to wire errors, metrics hook) and never raises, so routing and
+    the framework's exception/telemetry middleware add only per-request overhead (about a third
+    of the service's non-kernel CPU per round trip, measured). Every other path, and compute
+    requests when no endpoint is known, go to the wrapped app unchanged.
+
+    Args:
+        app: The next ASGI app (set by Starlette's ``add_middleware``).
+        endpoint: The compute endpoint (``router.pgw_compute_endpoint`` of :func:`create_router`).
+        routes: Alternatively, routes to search for the ``POST`` :data:`COMPUTE_PATH` endpoint.
+    """
+
+    def __init__(self, app: Any, endpoint: Callable[[Any], Awaitable[Any]] | None = None, routes: Any = ()):
+        self.app = app
+        self._endpoint: Callable[[Any], Awaitable[Any]] | None = endpoint
+        for r in () if endpoint is not None else routes:
+            if getattr(r, "path", None) == COMPUTE_PATH and "POST" in (getattr(r, "methods", None) or ()):
+                self._endpoint = r.endpoint
+                break
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        ep = self._endpoint
+        if ep is not None and scope.get("type") == "http" and scope.get("path") == COMPUTE_PATH and (
+            scope.get("method") == "POST"
+        ):
+            from starlette.requests import Request as _Request
+
+            response = await ep(_Request(scope, receive))
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 #: Type of an awaitable compute function (for adapters).
