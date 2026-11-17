@@ -1,0 +1,101 @@
+{
+ "job": {
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "probe_int_mm",
+    "cmd": "python benchmarks/kaggle/probe_int_mm.py",
+    "timeout": 300
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_gpu",
+    "args": [
+     "tests",
+     "-m",
+     "gpu",
+     "-v",
+     "-rs",
+     "--timeout",
+     "900"
+    ],
+    "timeout": 1800
+   },
+   {
+    "kind": "validate",
+    "label": "qwen7b",
+    "args": [
+     "--model",
+     "Qwen/Qwen2.5-7B-Instruct",
+     "--label",
+     "qwen7b",
+     "--device",
+     "cuda",
+     "--ref-device",
+     "cuda",
+     "--plain-dtype",
+     "float16",
+     "--delete-hf",
+     "--max-tokens",
+     "32",
+     "--concurrent",
+     "8",
+     "--loadtest",
+     "1x1",
+     "8x1",
+     "32x1",
+     "1x8",
+     "1x32",
+     "4x32",
+     "1x128",
+     "--loadtest-tokens",
+     "2",
+     "--factory-bench-slots",
+     "256"
+    ],
+    "timeout": 6600
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 13.3,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.1,
+   "tail": "0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.0.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.0.1\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.1\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==1.17.3\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.37\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "probe_int_mm": {
+   "rc": 0,
+   "seconds": 8.5,
+   "tail": "{\n \"32x8x8 col_major\": \"RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 8 \",\n \"32x8x8 row_major\": \"exact\",\n \"32x8x32 col_major\": \"exact\",\n \"32x8x32 row_major\": \"exact\",\n \"32x16x16 col_major\": \"exact\",\n \"32x16x16 row_major\": \"exact\",\n \"32x32x32 col_major\": \"exact\",\n \"32x32x32 row_major\": \"exact\",\n \"32x64x64 col_major\": \"exact\",\n \"32x64x64 row_major\": \"exact\",\n \"32x64x8 col_major\": \"RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 1 transpose_mat2 0 m 8 n 32 k 64\",\n \"32x64x8 row_major\": \"exact\",\n \"32x8x64 col_major\": \"exact\",\n \"32x8x64 row_major\": \"exact\",\n \"17x64x64 col_major\": \"exact\",\n \"17x64x64 row_major\": \"RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 0 transpose_mat2 0 m 64 n 17 k 6\",\n \"24x64x64 col_major\": \"exact\",\n \"24x64x64 row_major\": \"RuntimeError: CUDA error: CUBLAS_STATUS_NOT_SUPPORTED when calling cublasLtMatmul with transpose_mat1 0 transpose_mat2 0 m 64 n 24 k 6\",\n \"32x896x1152 col_major\": \"exact\",\n \"32x896x1152 row_major\": \"exact\",\n \"32x3584x4608 col_major\": \"exact\",\n \"32x3584x4608 row_major\": \"exact\"\n}\n\n---stderr---\n"
+  },
+  "pytest_gpu": {
+   "rc": 2,
+   "seconds": 10.9,
+   "tail": "g, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pgwsrc/pgw/deploy/helm/pgw-gateway/ci/ci-values.yaml'\n__________ ERROR collecting tests/e2e/test_deploy_cli_consistency.py ___________\ntests/e2e/test_deploy_cli_consistency.py:89: in <module>\n    CALLS = _collect()\n            ^^^^^^^^^^\ntests/e2e/test_deploy_cli_consistency.py:71: in _collect\n    compose = yaml.safe_load((DEPLOY / \"compose\" / \"docker-compose.yml\").read_text())\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/lib/python3.13/pathlib/_local.py:546: in read_text\n    return PathBase.read_text(self, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/lib/python3.13/pathlib/_abc.py:632: in read_text\n    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n/usr/lib/python3.13/pathlib/_local.py:537: in open\n    return io.open(self, mode, buffering, encoding, errors, newline)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   FileNotFoundError: [Errno 2] No such file or directory: '/tmp/pgwsrc/pgw/deploy/compose/docker-compose.yml'\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!\n====================== 1404 deselected, 2 errors in 5.12s ======================\n\n---stderr---\n"
+  },
+  "validate_qwen7b": {
+   "rc": 1,
+   "seconds": 551.8,
+   "tail": "[00:56<00:34, 11.55s/it]\nFetching 11 files:  91%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588 | 10/11 [01:13<00:10, 10.40s/it]\nFetching 11 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 11/11 [01:13<00:00,  6.71s/it]\nTraceback (most recent call last):\n  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 491, in main\n    run(args)\n    ~~~^^^^^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 293, in run\n    R[\"gateway_startup_s\"] = round(stack.wait_ready(f\"http://127.0.0.1:{gw_port}/readyz\", gw, \"gateway\"), 1)\n                                   ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 146, in wait_ready\n    raise RuntimeError(f\"{name} exited {p.returncode}:\\n{tail}\")\nRuntimeError: gateway exited 1:\n2026-11-17 14:45:02,295 WARNING pgw.maskstore.store: rollback protection: HMAC journal only (PGW_MASKSTORE_COUNTER=none). The journal lives at /tmp/pgw_bench/qwen7b/masks/generation.journal; restoring a snapshot of the whole volume (database + journal) is not detectable. Configure a counter on separate storage for production\n2026-11-17 14:45:02,297 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 7bcef8f7, generation 0)\nerror [config]: refusing to hand out masks without an external monotonic counter: restoring a snapshot of the mask volume would re-serve consumed masks. Set PGW_MASKSTORE_COUNTER (file on a separate volume, tpm or provider), or PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER=true for dev/staging only\n\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869288 kB",
+   "MemFree:        26766880 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  7.1T  967G  89% /\noverlay         8.0T  7.1T  967G  89% /\n/dev/loop2       20G  1.5M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 10.0
+}

@@ -1,0 +1,85 @@
+{
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "label": "qwen7b",
+ "device": "cuda",
+ "ring": "K40A12",
+ "max_tokens": 32,
+ "prompt": "Explain in three sentences why the sky is blue.",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "cpu_count": 4,
+ "download_s": 74.1,
+ "pack_s": 267.0,
+ "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+ "pack_bytes": 8723796019,
+ "pack_info": {
+  "arch": "qwen2",
+  "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+  "hidden_size": 3584,
+  "layers": 28,
+  "max_in_features": 18944,
+  "name": "qwen7b",
+  "per_token": {
+   "K32A8": {
+    "download_bytes": 5562368,
+    "mask_bytes": 5562368,
+    "round_trips": 112,
+    "upload_bytes": 3325952
+   },
+   "K40A12": {
+    "download_bytes": 6952960,
+    "mask_bytes": 6952960,
+    "round_trips": 112,
+    "upload_bytes": 4157440
+   },
+   "K48A20": {
+    "download_bytes": 8343552,
+    "mask_bytes": 8343552,
+    "round_trips": 112,
+    "upload_bytes": 4988928
+   }
+  },
+  "supported_rings": [
+   "K32A8",
+   "K40A12",
+   "K48A20"
+  ],
+  "verified": "fingerprint",
+  "vocab_size": 152064
+ },
+ "reference": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller",
+  "prompt_tokens": 40,
+  "seconds": 36.67,
+  "device": "cuda",
+  "wall_s": 77.7
+ },
+ "factory_generate": {
+  "slots": 736,
+  "wall_s": 71.65,
+  "tokens_per_hour_wall_incl_startup": 36979,
+  "store_bytes": 5134280277,
+  "store_MB_per_token": 6.976,
+  "output": "41a5b3a483ae K40A12 segment 1/1: af8e65f6a03945a8acdbe230a8ef8367 (736 slots, 12.3 slots/s)\n"
+ },
+ "factory_bench": {
+  "model": "qwen7b",
+  "mode": "pack",
+  "ring": "K40A12",
+  "device": "cuda",
+  "backend": "cuda_int8",
+  "slots_measured": 256,
+  "seconds": 13.294639554000014,
+  "slots_per_second": 47.047037857789164,
+  "tokens_per_hour": 169369.336288041,
+  "seconds_per_token": 0.021255323300538864,
+  "gemm_fraction": 0.3581197181511797,
+  "bytes_per_token": 6952960,
+  "price_per_hour": 0.2,
+  "usd_per_million_tokens": 1.1808512944743814,
+  "storage_tb_per_million_tokens": 6.95296,
+  "layers_measured": 1,
+  "layers_total": 1,
+  "gpu_name": "Tesla T4"
+ }
+}

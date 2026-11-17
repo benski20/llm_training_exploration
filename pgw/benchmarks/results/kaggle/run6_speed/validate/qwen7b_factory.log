@@ -1,0 +1,13 @@
+41a5b3a483ae K40A12 segment 1/1: af8e65f6a03945a8acdbe230a8ef8367 (736 slots, 12.3 slots/s)
+
+---stderr---
+2026-11-17 14:43:00,683 WARNING pgw.maskstore.store: rollback protection: HMAC journal only (PGW_MASKSTORE_COUNTER=none). The journal lives at /tmp/pgw_bench/qwen7b/masks/generation.journal; restoring a snapshot of the whole volume (database + journal) is not detectable. Configure a counter on separate storage for production
+2026-11-17 14:43:00,685 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 7bcef8f7, generation 0)
+2026-11-17 14:43:09,589 INFO pgw.modelpack.loader: verified 4 file(s) of model pack qwen7b (linears)
+2026-11-17 14:43:09,589 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears verify=full
+2026-11-17 14:43:09,590 INFO pgw.factory.runtime: factory loaded pack qwen7b (41a5b3a483ae) from pack
+2026-11-17 14:43:09,869 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+2026-11-17 14:43:09,869 INFO pgw.factory.generator: mask generator for qwen7b (41a5b3a483ae) ring K40A12 on cuda/cuda_int8, 112 linears, 6.95 MB/slot
+2026-11-17 14:44:09,912 INFO pgw.maskstore.store: committed segment af8e65f6a03945a8acdbe230a8ef8367: 41a5b3a483ae K40A12, 736 slots, 5134.3 MB
+2026-11-17 14:44:09,912 WARNING pgw.maskstore.store: mask inventory low: 41a5b3a483ae K40A12 has 736 slots (< 4096)
+2026-11-17 14:44:09,917 INFO pgw.factory.generator: segment af8e65f6a03945a8acdbe230a8ef8367: 41a5b3a483ae K40A12, 736 slots in 60.05s (12.3 slots/s; gemm 26.43s, rng 13.91s, write 51.34s, throttle 0.00s)

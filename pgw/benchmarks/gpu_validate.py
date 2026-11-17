@@ -178,6 +178,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     work = Path(args.work) / args.label
     (work / "logs").mkdir(parents=True, exist_ok=True)
     env = base_env()
+    # External monotonic counter on a separate directory (gateways refuse masks without one).
+    (work / "counter").mkdir(parents=True, exist_ok=True)
+    env["PGW_MASKSTORE_COUNTER"] = "file"
+    env["PGW_MASKSTORE_COUNTER_FILE"] = str(work / "counter" / "maskstore.ctr")
     try:
         import torch
 

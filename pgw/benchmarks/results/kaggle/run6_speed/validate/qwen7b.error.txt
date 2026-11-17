@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 491, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 293, in run
+    R["gateway_startup_s"] = round(stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, "gateway"), 1)
+                                   ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 146, in wait_ready
+    raise RuntimeError(f"{name} exited {p.returncode}:\n{tail}")
+RuntimeError: gateway exited 1:
+2026-11-17 14:45:02,295 WARNING pgw.maskstore.store: rollback protection: HMAC journal only (PGW_MASKSTORE_COUNTER=none). The journal lives at /tmp/pgw_bench/qwen7b/masks/generation.journal; restoring a snapshot of the whole volume (database + journal) is not detectable. Configure a counter on separate storage for production
+2026-11-17 14:45:02,297 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 7bcef8f7, generation 0)
+error [config]: refusing to hand out masks without an external monotonic counter: restoring a snapshot of the mask volume would re-serve consumed masks. Set PGW_MASKSTORE_COUNTER (file on a separate volume, tpm or provider), or PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER=true for dev/staging only
+

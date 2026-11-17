@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 PGW = HERE.parents[1]
 EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
 #: Top-level folders the GPU jobs never use (Kaggle rejects scripts above about 1 MB).
-EXCLUDE_TOP = {"docs", "deploy", "rust", "requirements", ".github", "ci"}
+EXCLUDE_TOP = {"docs", "rust", "requirements", ".github", "ci"}
 
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
