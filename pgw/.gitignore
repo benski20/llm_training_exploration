@@ -6,3 +6,6 @@ __pycache__/
 build/
 dist/
 *.pgwm
+rust/target/
+*.whl
+__pycache__/
