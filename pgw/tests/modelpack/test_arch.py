@@ -62,10 +62,10 @@ def test_legacy_rope_scaling_type_key_and_default_theta():
 
 
 def test_unknown_rope_type_is_recorded_with_warning(caplog):
-    cfg = dict(QWEN25_05B, rope_scaling={"rope_type": "yarn", "factor": 4.0})
+    cfg = dict(QWEN25_05B, rope_scaling={"rope_type": "dynamic", "factor": 4.0})
     a = arch_config_from_hf(cfg)
-    assert a.rope_scaling == {"rope_type": "yarn", "factor": 4.0}
-    assert "yarn" in caplog.text
+    assert a.rope_scaling == {"rope_type": "dynamic", "factor": 4.0}
+    assert "dynamic" in caplog.text
 
 
 def test_explicit_head_dim_and_kv_default():

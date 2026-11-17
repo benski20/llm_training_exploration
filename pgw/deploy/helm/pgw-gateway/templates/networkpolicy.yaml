@@ -1,0 +1,76 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $cs := .Values.networkPolicy.egress.computeService }}
+{{- if empty .Values.networkPolicy.ingressFrom }}
+{{- fail "networkPolicy.ingressFrom must list the allowed API clients (an empty list admits every source)" }}
+{{- end }}
+{{- if empty $cs.ports }}
+{{- fail "networkPolicy.egress.computeService.ports must not be empty (an empty list opens every port)" }}
+{{- end }}
+# Gateway egress is restricted to DNS and the PGW compute service (plus explicit extra rules).
+# The gateway also enforces this in-process (egress allowlist), this policy is defense in depth.
+# Ingress peers are required: an empty `from` list would admit every source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "pgw-gateway.fullname" . }}
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pgw-gateway.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- with .Values.networkPolicy.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- end }}
+  egress:
+    {{- if .Values.networkPolicy.egress.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.egress.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.egress.dns.podLabels | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+    {{- if or $cs.cidrs $cs.podSelector $cs.namespaceSelector }}
+    - to:
+        {{- range $cs.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- if or $cs.podSelector $cs.namespaceSelector }}
+        - podSelector:
+            {{- toYaml (default (dict) $cs.podSelector) | nindent 12 }}
+          {{- with $cs.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      ports:
+        {{- range $cs.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with .Values.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

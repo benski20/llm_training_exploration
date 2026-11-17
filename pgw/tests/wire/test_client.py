@@ -69,7 +69,9 @@ def test_config_validation(tmp_path):
     assert c.base_url == "https://svc:8443" and c.uses_tls
     assert "t0k" not in repr(c)
     with pytest.raises(ConfigError):  # unreadable mTLS material
-        ComputeClient(ClientConfig(base_url="https://x", client_cert_file=tmp_path / "a", client_key_file=tmp_path / "b"))
+        ComputeClient(
+            ClientConfig(base_url="https://x", client_cert_file=tmp_path / "a", client_key_file=tmp_path / "b")
+        )
     with pytest.raises(ConfigError):
         ComputeClient(ClientConfig(base_url="https://x", ca_file=tmp_path / "missing.pem"))
 
@@ -186,12 +188,14 @@ class Scripted:
 
 async def test_retries_on_retryable_errors_resend_identical_body():
     unavailable = ErrorResponse("unavailable", "busy", True)
-    script = Scripted([
-        (503, unavailable, {}),
-        httpx.ConnectError("refused"),
-        (429, ErrorResponse("rate_limited", "slow", True), {"Retry-After": "0"}),
-        (502, None, {}),
-    ])
+    script = Scripted(
+        [
+            (503, unavailable, {}),
+            httpx.ConnectError("refused"),
+            (429, ErrorResponse("rate_limited", "slow", True), {"Retry-After": "0"}),
+            (502, None, {}),
+        ]
+    )
     sleeps: list[float] = []
 
     async def fake_sleep(s: float) -> None:
@@ -212,10 +216,15 @@ async def test_retry_after_is_honoured_and_capped():
     async def fake_sleep(s: float) -> None:
         sleeps.append(s)
 
-    script = Scripted([(503, ErrorResponse("unavailable", "x", True), {"Retry-After": "3"}),
-                       (503, ErrorResponse("unavailable", "x", True), {"Retry-After": "999"})])
-    c = ComputeClient(_cfg(max_retry_after_s=5.0, request_timeout_s=60), transport=httpx.MockTransport(script),
-                      sleep=fake_sleep)
+    script = Scripted(
+        [
+            (503, ErrorResponse("unavailable", "x", True), {"Retry-After": "3"}),
+            (503, ErrorResponse("unavailable", "x", True), {"Retry-After": "999"}),
+        ]
+    )
+    c = ComputeClient(
+        _cfg(max_retry_after_s=5.0, request_timeout_s=60), transport=httpx.MockTransport(script), sleep=fake_sleep
+    )
     req, _ = make_request(RING_K40_A12, [("0.o", 1)])
     await c.compute(req)
     assert sleeps[0] >= 3.0 and sleeps[1] == 5.0
@@ -245,8 +254,11 @@ async def test_non_retryable_errors_fail_fast(status, err, exc_code):
 
 async def test_json_error_bodies_are_understood():
     def step(request):
-        return httpx.Response(429, content=encode_error_json(ErrorResponse("rate_limited", "x", True)),
-                              headers={"content-type": "application/json"})
+        return httpx.Response(
+            429,
+            content=encode_error_json(ErrorResponse("rate_limited", "x", True)),
+            headers={"content-type": "application/json"},
+        )
 
     script = Scripted([step])
     c = ComputeClient(_cfg(), transport=httpx.MockTransport(script))
@@ -279,8 +291,11 @@ async def test_deadline_ms_limits_retries():
     async def slow_sleep(s: float) -> None:
         await asyncio.sleep(0.03)
 
-    c = ComputeClient(_cfg(max_retries=100, backoff_base_s=0.03, backoff_max_s=0.03),
-                      transport=httpx.MockTransport(script), sleep=slow_sleep)
+    c = ComputeClient(
+        _cfg(max_retries=100, backoff_base_s=0.03, backoff_max_s=0.03),
+        transport=httpx.MockTransport(script),
+        sleep=slow_sleep,
+    )
     req, _ = make_request(RING_K40_A12, [("0.o", 1)], deadline_ms=100)
     with pytest.raises(PGWError) as ei:
         await c.compute(req)
@@ -371,8 +386,7 @@ async def test_split_failure_propagates_typed_error():
     c = asgi_client(h, lim, max_rows_per_item=2)
     h.fail_with = ServiceUnavailableError("down")
     req, _ = make_request(RING_K40_A12, [("0.o", 6)])
-    c2 = ComputeClient(_cfg(max_rows_per_item=2, max_retries=0),
-                       transport=httpx.ASGITransport(app=make_app(h, lim)))
+    c2 = ComputeClient(_cfg(max_rows_per_item=2, max_retries=0), transport=httpx.ASGITransport(app=make_app(h, lim)))
     with pytest.raises(ServiceUnavailableError):
         await c2.compute(req)
     await c.aclose()
@@ -416,7 +430,7 @@ async def test_async_context_manager_and_closed(handler):
 
 async def test_mixed_sync_and_async_use(handler):
     c = asgi_client(handler)
-    req, xs = make_request(RING_K40_A12, [("0.o", 1)])
+    req, _xs = make_request(RING_K40_A12, [("0.o", 1)])
     r1 = await asyncio.to_thread(c.compute_sync, req)
     r2 = await c.compute(req)
     assert r1 == r2
@@ -441,8 +455,9 @@ async def test_ready_endpoint():
 async def test_on_attempt_hook():
     events = []
     script = Scripted([(503, ErrorResponse("unavailable", "x", True), {})])
-    c = ComputeClient(_cfg(), transport=httpx.MockTransport(script),
-                      on_attempt=lambda p, s, t, code: events.append((p, s, code)))
+    c = ComputeClient(
+        _cfg(), transport=httpx.MockTransport(script), on_attempt=lambda p, s, t, code: events.append((p, s, code))
+    )
     req, _ = make_request(RING_K40_A12, [("0.o", 1)])
     await c.compute(req)
     assert events == [("/pgw/v1/compute", 503, "unavailable"), ("/pgw/v1/compute", 200, None)]
@@ -451,7 +466,8 @@ async def test_on_attempt_hook():
 async def test_engine_masked_backend_contract(handler):
     """The engine's MaskedBackend uses compute()/compute_sync() and expects request ids echoed."""
     c = asgi_client(handler)
-    req = ComputeRequest("0123456789abcdef0123456789abcdef", FP, "K40A12",
-                         (ComputeItem("0.o", 1, b"\x00" * 16 * 5),), deadline_ms=5000)
+    req = ComputeRequest(
+        "0123456789abcdef0123456789abcdef", FP, "K40A12", (ComputeItem("0.o", 1, b"\x00" * 16 * 5),), deadline_ms=5000
+    )
     resp = await c.compute(req)
     assert resp.request_id == req.request_id and resp.items[0].y_hat == b"\x00" * 16 * 5

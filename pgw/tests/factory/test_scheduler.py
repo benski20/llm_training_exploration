@@ -274,3 +274,27 @@ def test_metrics_emitted(tmp_path: Path, fake_store: FakeMaskStore, fake_pack: F
     assert {"pgw_factory_slots_generated_total", "pgw_factory_slots_per_second", "pgw_masks_available_slots"} <= names
     gen_total = [c for c in calls if c[0] == "pgw_factory_slots_generated_total"]
     assert gen_total[0][3] == 50 and len(gen_total[0][1]["fingerprint"]) == 12
+
+
+@pytest.mark.parametrize("content", ["[1, 2]", '{"totals": [1]}', '{"in_progress": "x"}'])
+def test_wrongly_typed_state_file_is_reset(tmp_path: Path, content: str) -> None:
+    p = tmp_path / STATE_FILE
+    p.write_text(content)
+    st = FactoryState.load(p)
+    assert st.totals == {} and st.in_progress is None and not p.exists()
+
+
+def test_crash_recovery_cleans_partials_once(tmp_path: Path, fake_store: FakeMaskStore, fake_pack: FakePack) -> None:
+    calls: list[int] = []
+    fake_store.cleanup_partials = lambda: calls.append(1) or ["x.part"]  # type: ignore[attr-defined]
+    sch = _sched(tmp_path, fake_store, [fake_pack], target_slots=50)
+    sch.run_once()
+    sch.close()
+    assert calls == []  # clean start: a shared store's temp files may belong to a live writer
+    FactoryState(in_progress={"fingerprint": fake_pack.fingerprint, "ring": "K40A12", "pid": 1}).save(
+        tmp_path / "state" / STATE_FILE)
+    sch = _sched(tmp_path, fake_store, [fake_pack], target_slots=50)
+    sch.run_once()
+    sch.run_once()
+    sch.close()
+    assert calls == [1]

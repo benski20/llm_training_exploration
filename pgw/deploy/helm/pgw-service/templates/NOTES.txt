@@ -1,0 +1,13 @@
+PGW compute service {{ include "pgw-service.fullname" . }} ({{ .Chart.AppVersion }}) installed.
+
+Serving packs: {{ join ", " .Values.modelPacks.packDirs }}
+Compute endpoint: {{ include "pgw-service.fullname" . }}:{{ .Values.service.port }} (TLS={{ .Values.tls.enabled }}, mTLS={{ .Values.tls.requireClientCert }})
+
+Issue a tenant token (store only the hash line in the tenants Secret, give the token to the customer):
+  pgw service token create --tenant <customer> --tokens-file tokens
+
+This service is stateless and must never receive masks, seeds or keys. Payloads are not logged.
+{{- if not .Values.tls.enabled }}
+
+WARNING: TLS is disabled. Terminate TLS in front of the service; never expose plain HTTP.
+{{- end }}

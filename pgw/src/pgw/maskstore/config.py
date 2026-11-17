@@ -34,6 +34,14 @@ class MaskStoreSettings(PGWSettings):
     recipient_key_file: Path | None = Field(
         None, description="X25519 private key (0600) for importing partner segments (SPEC 7.7)"
     )
+    trusted_partner_keys: tuple[str, ...] = Field(
+        (),
+        description="Ed25519 public keys (hex or base64) of partner factories whose signed segments may be imported",
+    )
+    require_partner_signature: bool = Field(
+        False,
+        description="Refuse HPKE partner segments without a valid trusted signature (implied by trusted_partner_keys)",
+    )
     low_water_slots: int = Field(4096, ge=0, description="Alert when available slots fall below this")
     target_slots: int = Field(65536, ge=0, description="Factory refill target")
     shred_consumed: bool = Field(True, description="Delete segment files once fully consumed")

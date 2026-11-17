@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pgw-service.fullname" . }}
+  labels:
+    {{- include "pgw-service.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "pgw-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: compute
+      port: {{ .Values.service.port }}
+      targetPort: compute
+      protocol: TCP
+---
+# Metrics on a separate, cluster-internal Service (never exposed with the compute endpoint).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pgw-service.fullname" . }}-metrics
+  labels:
+    {{- include "pgw-service.labels" . | nindent 4 }}
+    pgw.io/endpoint: metrics
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "pgw-service.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP

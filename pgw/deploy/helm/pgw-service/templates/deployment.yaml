@@ -1,0 +1,242 @@
+{{- $packs := list -}}
+{{- range required "modelPacks.packDirs needs at least one pack directory" .Values.modelPacks.packDirs -}}
+{{- $packs = append $packs (printf "%s/%s" $.Values.modelPacks.mountPath .) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgw-service.fullname" . }}
+  labels:
+    {{- include "pgw-service.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "pgw-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pgw-service.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "pgw-service.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and (not .Values.modelPacks.existingClaim) .Values.modelPacks.image.repository }}
+      initContainers:
+        - name: copy-packs
+          image: {{ printf "%s:%s" .Values.modelPacks.image.repository (default "latest" .Values.modelPacks.image.tag) }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "cp -a {{ .Values.modelPacks.image.path }}/. {{ .Values.modelPacks.mountPath }}/"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: packs
+              mountPath: {{ .Values.modelPacks.mountPath }}
+      {{- end }}
+      containers:
+        - name: service
+          image: {{ include "pgw-service.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["pgw", "service", "serve"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: compute
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          env:
+            - name: PGW_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: PGW_LOG_JSON
+              value: "true"
+            - name: PGW_SERVICE_HOST
+              value: "0.0.0.0"
+            - name: PGW_SERVICE_PORT
+              value: "8443"
+            - name: PGW_SERVICE_METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            - name: PGW_SERVICE_METRICS_HOST
+              value: "0.0.0.0"
+            - name: PGW_SERVICE_METRICS_ON_MAIN_PORT
+              value: "false"
+            - name: PGW_SERVICE_PACKS
+              value: {{ toJson $packs | quote }}
+            - name: PGW_SERVICE_RINGS
+              value: {{ toJson .Values.config.rings | quote }}
+            - name: PGW_SERVICE_DEVICE
+              value: {{ ternary .Values.config.device "cpu" .Values.gpu.enabled | quote }}
+            - name: PGW_SERVICE_BACKEND
+              value: {{ .Values.config.backend | quote }}
+            - name: PGW_SERVICE_VERIFY_PACKS
+              value: {{ .Values.config.verifyPacks | quote }}
+            - name: PGW_SERVICE_BATCH_WINDOW_MS
+              value: {{ .Values.config.batchWindowMs | quote }}
+            - name: PGW_SERVICE_MAX_BATCH_ROWS
+              value: {{ .Values.config.maxBatchRows | quote }}
+            - name: PGW_SERVICE_MAX_INFLIGHT_REQUESTS
+              value: {{ .Values.config.maxInflightRequests | quote }}
+            - name: PGW_SERVICE_MAX_REQUEST_BYTES
+              value: {{ .Values.config.maxRequestBytes | quote }}
+            - name: PGW_SERVICE_DRAIN_TIMEOUT_S
+              value: {{ .Values.config.drainTimeoutSeconds | quote }}
+            {{- if .Values.config.tenantMaxInflight }}
+            - name: PGW_SERVICE_TENANT_MAX_INFLIGHT
+              value: {{ .Values.config.tenantMaxInflight | quote }}
+            {{- end }}
+            {{- if .Values.config.tenantRowsPerSecond }}
+            - name: PGW_SERVICE_TENANT_ROWS_PER_S
+              value: {{ .Values.config.tenantRowsPerSecond | quote }}
+            {{- end }}
+            - name: PGW_SERVICE_TOKENS_FILE
+              value: {{ printf "/etc/pgw/tenants/%s" .Values.tenants.tokensKey | quote }}
+            {{- if .Values.tenants.mtlsTenantsKey }}
+            - name: PGW_SERVICE_MTLS_TENANTS_FILE
+              value: {{ printf "/etc/pgw/tenants/%s" .Values.tenants.mtlsTenantsKey | quote }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: PGW_SERVICE_TLS__CERT_FILE
+              value: /etc/pgw/tls/tls.crt
+            - name: PGW_SERVICE_TLS__KEY_FILE
+              value: /etc/pgw/tls/tls.key
+            {{- if .Values.tls.requireClientCert }}
+            - name: PGW_SERVICE_TLS__CA_FILE
+              value: /etc/pgw/tls/ca.crt
+            - name: PGW_SERVICE_TLS__REQUIRE_CLIENT_CERT
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- range $k, $v := .Values.config.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if and .Values.tls.enabled .Values.tls.requireClientCert }}
+          # kubelet probes cannot present client certificates: probe the TCP listener.
+          startupProbe:
+            tcpSocket:
+              port: compute
+            periodSeconds: 5
+            failureThreshold: 180
+          livenessProbe:
+            tcpSocket:
+              port: compute
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: compute
+            periodSeconds: 5
+          {{- else }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: compute
+              scheme: {{ include "pgw-service.scheme" . }}
+            periodSeconds: 5
+            failureThreshold: 180
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: compute
+              scheme: {{ include "pgw-service.scheme" . }}
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: compute
+              scheme: {{ include "pgw-service.scheme" . }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+          {{- end }}
+          resources:
+            {{- $res := deepCopy .Values.resources }}
+            {{- if .Values.gpu.enabled }}
+            {{- $limits := default (dict) $res.limits }}
+            {{- $_ := set $limits .Values.gpu.resourceName .Values.gpu.count }}
+            {{- $_ := set $res "limits" $limits }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
+          volumeMounts:
+            - name: packs
+              mountPath: {{ .Values.modelPacks.mountPath }}
+              readOnly: true
+            - name: tenants
+              mountPath: /etc/pgw/tenants
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/pgw/tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: packs
+          {{- if .Values.modelPacks.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.modelPacks.existingClaim }}
+            readOnly: true
+          {{- else if .Values.modelPacks.image.repository }}
+          emptyDir: {}
+          {{- else }}
+          {{- fail "modelPacks.existingClaim or modelPacks.image.repository is required" }}
+          {{- end }}
+        - name: tenants
+          secret:
+            secretName: {{ required "tenants.existingSecret is required (tenant token hashes)" .Values.tenants.existingSecret }}
+            defaultMode: 0440
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ required "tls.existingSecret is required when tls.enabled" .Values.tls.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $tol := .Values.tolerations }}
+      {{- if .Values.gpu.enabled }}
+      {{- $tol = append $tol (dict "key" .Values.gpu.resourceName "operator" "Exists" "effect" "NoSchedule") }}
+      {{- end }}
+      {{- with $tol }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

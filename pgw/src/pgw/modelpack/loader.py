@@ -79,6 +79,14 @@ class LinearWeights:
         return (self.w8.to(torch.float64) * self.scale.to(torch.float64)[:, None]).to(dtype)
 
 
+def _check_scale_bias(lid: str, scale: torch.Tensor, bias: torch.Tensor | None) -> None:
+    """Scales must be finite and > 0 (``sw = max|row|/127``, 1.0 for zero rows); biases finite."""
+    if not bool((torch.isfinite(scale) & (scale > 0)).all()):
+        raise ConfigError(f"linear {lid}: weight scales must be finite and positive", details={"linear": lid})
+    if bias is not None and not bool(torch.isfinite(bias).all()):
+        raise ConfigError(f"linear {lid}: bias contains NaN or Inf", details={"linear": lid})
+
+
 def _normalize_components(components: Iterable[str] | None) -> tuple[Component, ...]:
     if components is None:
         return COMPONENTS
@@ -328,11 +336,23 @@ class ModelPack:
     def load_linear(
         self, lid: LinearId | str, device: torch.device | str = "cpu", *, check_hash: bool = False
     ) -> LinearWeights:
-        """Load one linear group's int8 weight, scale and bias."""
+        """Load one linear group's int8 weight, scale and bias.
+
+        The (small) scale and bias vectors are always validated: scales must be finite and
+        positive and biases finite (SPEC section 5). With ``check_hash`` the weight is also checked
+        to contain no ``-128``.
+
+        Raises:
+            ConfigError: invalid scale/bias values or a ``-128`` weight (with ``check_hash``).
+            ShapeError / FingerprintMismatchError: see :meth:`load_tensor`.
+        """
         e = self.linear_entry(lid)
         w8 = self.load_tensor(e.weight, device=device, check_hash=check_hash)
         sw = self.load_tensor(e.scale, device=device, check_hash=check_hash)
         b = self.load_tensor(e.bias, device=device, check_hash=check_hash) if e.bias is not None else None
+        _check_scale_bias(e.id, sw, b)
+        if check_hash and bool((w8 == -128).any()):
+            raise ConfigError(f"linear {e.id}: int8 weight contains -128 (packs use [-127, 127])")
         return LinearWeights(e.linear_id, w8, sw, b)
 
     def iter_linears(
@@ -409,9 +429,11 @@ class ModelPack:
         comps = _normalize_components(components) if components is not None else self.components
         by_file: dict[str, list[str]] = {}
         wanted: set[str] = set()
+        weights: set[str] = set()
         if "linears" in comps:
             for e in self.manifest.linears:
                 wanted.update(t for t in (e.weight, e.scale, e.bias) if t is not None)
+                weights.add(e.weight)
         if "plain" in comps:
             wanted.update(self.manifest.plain_tensor_names())
         for name in sorted(wanted):
@@ -430,7 +452,9 @@ class ModelPack:
                     raise ConfigError(
                         f"{file}: {n} is {he.dtype}{list(he.shape)}, manifest says {me.dtype}{list(me.shape)}"
                     )
-            digests = hash_tensor_ranges(self.root / file, [entries[n] for n in by_file[file]])
+            digests = hash_tensor_ranges(
+                self.root / file, [entries[n] for n in by_file[file]], forbid_int8_min=weights
+            )
             return [n for n in by_file[file] if digests[n] != self.manifest.tensors[n].sha256]
 
         bad: list[str] = []
@@ -455,6 +479,11 @@ class ModelPack:
                 f"model pack {self.name}: {len(bad)} tensor(s)/file(s) do not match the manifest: {bad[:5]}",
                 details={"mismatched": bad[:50]},
             )
+        if "linears" in comps:  # value checks on the (now hash-verified) scale/bias vectors
+            for e in self.manifest.linears:
+                sw = self.load_tensor(e.scale)
+                b = self.load_tensor(e.bias) if e.bias is not None else None
+                _check_scale_bias(e.id, sw, b)
         log.info("verified %d file(s) of model pack %s (%s)", len(files), self.name, ",".join(comps))
 
     def size_bytes(self, part: Literal["linears", "plain", "all"] = "all") -> int:
@@ -477,31 +506,48 @@ class ModelPack:
 
         Typical use: ship only the linear shards to the compute service, or only plain tensors and
         tokenizer to a gateway that never runs the ``plain`` backend. Files are hard-linked when
-        possible (``link=True``), otherwise copied.
+        possible (``link=True``), otherwise copied. Hard links share bytes with this pack: never
+        edit files of either copy in place. The output is built in a temporary sibling directory
+        and renamed into place atomically, like :func:`~pgw.modelpack.pack_checkpoint`.
 
         Returns:
             The output directory.
+
+        Raises:
+            ConfigError: unknown/unavailable components, ``out_dir`` exists without ``overwrite``,
+                or ``out_dir`` overlaps this pack's directory.
         """
+        from pgw.modelpack.packer import _AtomicDir
+
         comps = _normalize_components(components)
         missing = [c for c in comps if c not in self.components]
         if missing:
             raise ConfigError(f"cannot export components {missing}: this pack was opened without them")
         out = Path(out_dir)
-        if out.exists():
-            if not overwrite and any(out.iterdir()):
-                raise ConfigError(f"output {out} already exists (use overwrite=True)")
-            shutil.rmtree(out)
-        out.mkdir(parents=True)
-        for f in [MANIFEST_FILE, *self._files_for(comps)]:
-            src, dst = self.root / f, out / f
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if link:
-                try:
-                    os.link(src, dst)
-                    continue
-                except OSError:
-                    pass
-            shutil.copyfile(src, dst)
+        ro, oo = self.root.resolve(), out.resolve()
+        if ro == oo or ro.is_relative_to(oo) or oo.is_relative_to(ro):
+            raise ConfigError(f"export target {out} overlaps the source pack directory {self.root}")
+        files = [MANIFEST_FILE, *self._files_for(comps)]
+
+        def build(tmp: Path) -> None:
+            for f in files:
+                src, dst = self.root / f, tmp / f
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if link:
+                    try:
+                        os.link(src, dst)
+                        continue
+                    except OSError:
+                        pass
+                shutil.copyfile(src, dst)
+
+        ad = _AtomicDir(out, overwrite)
+        try:
+            build(ad.tmp)
+            ad.commit()
+        except BaseException:
+            ad.abort()
+            raise
         log.info("exported %s components %s to %s", self.name, ",".join(comps), out.name)
         return out
 

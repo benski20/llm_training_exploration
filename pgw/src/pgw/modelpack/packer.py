@@ -114,8 +114,16 @@ class CheckpointReader:
         self.dir = Path(ckpt_dir)
         index = self.dir / "model.safetensors.index.json"
         if index.exists():
-            weight_map: dict[str, str] = json.loads(index.read_text())["weight_map"]
-            files = sorted(set(weight_map.values()))
+            try:
+                weight_map: dict[str, str] = json.loads(index.read_text(encoding="utf-8"))["weight_map"]
+                if not isinstance(weight_map, dict):
+                    raise TypeError("weight_map is not an object")
+                files = sorted({str(v) for v in weight_map.values()})
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise ConfigError(f"cannot parse {index.name}: {type(exc).__name__}: {exc}") from exc
+            bad = [f for f in files if "/" in f or "\\" in f or f in (".", "..") or not f.endswith(".safetensors")]
+            if bad:
+                raise ConfigError(f"{index.name} references shard files outside the checkpoint: {bad[:3]}")
         else:
             files = sorted(p.name for p in self.dir.glob("*.safetensors"))
             weight_map = {}
@@ -146,7 +154,11 @@ class CheckpointReader:
 
     def shape(self, name: str) -> tuple[int, ...]:
         """Shape from the header (no data read)."""
-        return tuple(self._handles[self._where[name]].get_slice(name).get_shape())
+        try:
+            fn = self._where[name]
+        except KeyError as exc:
+            raise ConfigError(f"checkpoint has no tensor {name!r}") from exc
+        return tuple(self._handles[fn].get_slice(name).get_shape())
 
     def get(self, name: str) -> torch.Tensor:
         """Load one tensor (memory-mapped, CPU)."""
@@ -224,6 +236,18 @@ def _plan_linears(src: TensorSource, arch: ArchConfig, shard_bytes: int) -> list
     return plans
 
 
+def _check_float(name: str, t: torch.Tensor) -> torch.Tensor:
+    """Reject non-floating or non-finite checkpoint tensors (NaN/Inf would quantize to garbage)."""
+    if not t.is_floating_point():
+        raise ConfigError(
+            f"{name}: dtype {t.dtype} is not a float type (quantized checkpoints such as GPTQ/AWQ are not supported)",
+            details={"tensor": name},
+        )
+    if not bool(torch.isfinite(t).all()):
+        raise ConfigError(f"{name}: contains NaN or Inf values", details={"tensor": name})
+    return t
+
+
 def _shard_name(i: int, total: int) -> str:
     return f"linears-{i:05d}-of-{total:05d}.safetensors"
 
@@ -239,6 +263,7 @@ def _copy_tokenizer(tok_src: Path | None, out: Path) -> tuple[TokenizerFile, ...
         if sp.is_file():
             dst.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(sp, dst / fn)  # follows HF-cache symlinks
+            _fsync_path(dst / fn)
             entries.append(TokenizerFile(file=fn, sha256=sha256_file(dst / fn)))
     if not any(e.file in ("tokenizer.json", "tokenizer.model", "vocab.json") for e in entries):
         log.warning("no tokenizer files found in %s; the gateway will need a tokenizer from elsewhere", tok_src.name)
@@ -273,13 +298,15 @@ def _write_pack(
         tplans = [tp for p in shard_plans for tp in p.tensor_plans()]
         with SafetensorsStreamWriter(out / fn, tplans, metadata=meta) as w:
             for p in shard_plans:
-                ws = [src.get(wn) for _, wn, _, _ in p.parts]
+                ws = [_check_float(wn, src.get(wn)) for _, wn, _, _ in p.parts]
                 w_full = torch.cat([x.to(torch.float64) for x in ws], dim=0) if len(ws) > 1 else ws[0]
                 del ws
                 w8, sw = quantize_weight_rows(w_full)
                 del w_full
                 bias = (
-                    torch.cat([src.get(bn).to(torch.float32) for _, _, bn, _ in p.parts if bn is not None])
+                    torch.cat(
+                        [_check_float(bn, src.get(bn)).to(torch.float32) for _, _, bn, _ in p.parts if bn is not None]
+                    )
                     if p.has_bias
                     else None
                 )
@@ -319,10 +346,16 @@ def _write_pack(
         if hf not in keys:
             raise ConfigError(f"checkpoint is missing {hf}", details={"tensor": hf})
         dt = plain_dtype if pname in _PLAIN_FLOAT_NAMES else "float32"
-        pplans.append(TensorPlan(pname, dt, src.shape(hf)))
+        want = (arch.vocab_size, arch.hidden_size) if pname in _PLAIN_FLOAT_NAMES else (arch.hidden_size,)
+        if src.shape(hf) != want:
+            raise ShapeError(f"{hf}: shape {list(src.shape(hf))} != expected {list(want)} from config.json")
+        pplans.append(TensorPlan(pname, dt, want))
     with SafetensorsStreamWriter(out / PLAIN_FILE, pplans, metadata=meta) as w:
         for tp in pplans:
-            t = src.get(hf_plain[tp.name]).to(_torch_dtype(tp.dtype))
+            hf = hf_plain[tp.name]
+            t = _check_float(hf, src.get(hf)).to(_torch_dtype(tp.dtype))
+            if not bool(torch.isfinite(t).all()):  # e.g. float32 values beyond the float16 range
+                raise ConfigError(f"{hf}: values overflow plain_dtype {tp.dtype}", details={"tensor": hf})
             digest = w.write(tp.name, t)
             tensors[tp.name] = TensorEntry(file=PLAIN_FILE, dtype=tp.dtype, shape=tuple(t.shape), sha256=digest)
 
@@ -342,6 +375,9 @@ def _write_pack(
     mp = out / MANIFEST_FILE
     mp.write_text(manifest.to_json() + "\n", encoding="utf-8")
     _fsync_path(mp)
+    if (out / TOKENIZER_DIR).is_dir():
+        _fsync_path(out / TOKENIZER_DIR)
+    _fsync_path(out)
     log.info(
         "packed %s: %d layers, %d linear shards, fingerprint %s (%.1fs)",
         name, arch.num_layers, n_shards, (manifest.fingerprint or "")[:12], time.monotonic() - t0,
@@ -368,7 +404,13 @@ def _fsync_path(p: Path) -> None:
 
 
 class _AtomicDir:
-    """Create ``out`` atomically: build in a temp sibling, then rename into place."""
+    """Create ``out`` atomically: build in a temp sibling, then rename into place.
+
+    With ``overwrite=True`` an existing ``out`` is first renamed aside and removed after the new
+    directory is in place; a crash in that short window leaves the old pack under
+    ``.<name>.old-*`` (never a partial one under ``out``). With ``overwrite=False`` the existence
+    check is repeated at commit time, so a concurrent writer that finished first is not clobbered.
+    """
 
     def __init__(self, out: Path, overwrite: bool):
         self.out = out
@@ -383,7 +425,12 @@ class _AtomicDir:
 
     def commit(self) -> None:
         old: Path | None = None
-        if self.out.exists():
+        if self.out.is_symlink() or self.out.exists():
+            empty_dir = self.out.is_dir() and not self.out.is_symlink() and not any(self.out.iterdir())
+            if not self.overwrite and not empty_dir:
+                raise ConfigError(
+                    f"output {self.out} appeared while packing (use overwrite=True)", details={"path": str(self.out)}
+                )
             old = self.out.parent / f".{self.out.name}.old-{os.getpid()}-{time.monotonic_ns()}"
             os.replace(self.out, old)
         os.replace(self.tmp, self.out)
@@ -393,7 +440,10 @@ class _AtomicDir:
         finally:
             os.close(dfd)
         if old is not None:
-            shutil.rmtree(old, ignore_errors=True)
+            if old.is_dir() and not old.is_symlink():
+                shutil.rmtree(old, ignore_errors=True)
+            else:
+                old.unlink(missing_ok=True)
 
     def abort(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

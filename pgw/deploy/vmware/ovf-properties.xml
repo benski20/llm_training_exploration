@@ -1,0 +1,36 @@
+<!-- vApp / OVF properties of the PGW gateway OVA (add to the exported .ovf, then re-sign the OVA).
+     Values are delivered to the VM via VMware Tools (guestinfo.ovfEnv) and applied once by
+     /usr/local/sbin/pgw-ovf-config. Password-typed properties are masked in the vSphere UI. -->
+<ProductSection ovf:required="false">
+  <Info>PGW private gateway configuration</Info>
+  <Product>PGW gateway</Product>
+  <Vendor>PGW</Vendor>
+  <Version>0.1.0</Version>
+  <Category>Compute service</Category>
+  <Property ovf:key="pgw.service_url" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+    <Label>Compute service URL</Label>
+    <Description>https://host:port of the PGW compute service</Description>
+  </Property>
+  <Property ovf:key="pgw.service_cidr" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+    <Label>Compute service address range</Label>
+    <Description>CIDR the appliance may connect to (egress firewall); everything else except DNS/NTP is blocked</Description>
+  </Property>
+  <Property ovf:key="pgw.service_token" ovf:type="string" ovf:password="true" ovf:userConfigurable="true" ovf:value="">
+    <Label>Compute service tenant token</Label>
+  </Property>
+  <Property ovf:key="pgw.admin_token" ovf:type="string" ovf:password="true" ovf:userConfigurable="true" ovf:value="">
+    <Label>Gateway admin token</Label>
+  </Property>
+  <Property ovf:key="pgw.model_name" ovf:type="string" ovf:userConfigurable="true" ovf:value="llama3-8b">
+    <Label>Served model name</Label>
+  </Property>
+  <Property ovf:key="pgw.pack_dir" ovf:type="string" ovf:userConfigurable="true" ovf:value="llama3-8b">
+    <Label>Model pack directory under /var/lib/pgw/packs</Label>
+  </Property>
+  <Property ovf:key="pgw.fingerprint" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
+    <Label>Model pack fingerprint (64 hex)</Label>
+  </Property>
+  <Property ovf:key="pgw.ring" ovf:type="string" ovf:userConfigurable="true" ovf:value="K40A12">
+    <Label>Ring preset</Label>
+  </Property>
+</ProductSection>

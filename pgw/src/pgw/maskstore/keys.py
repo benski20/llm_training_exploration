@@ -126,8 +126,9 @@ class KeyProvider(abc.ABC):
 class _LocalAesProvider(KeyProvider):
     """Shared implementation for providers that hold raw KEK bytes in memory.
 
-    Supports key rotation: ``previous`` KEKs can still unwrap (and verify MACs created under them is
-    *not* supported: MACs always use the current KEK, the store re-MACs on rotation).
+    Supports key rotation: ``previous`` KEKs can still unwrap. MACs always use the current KEK, so
+    rotation goes through :meth:`pgw.maskstore.MaskStore.rotate_kek`, which re-MACs the state and
+    the generation journal (and by default re-encrypts the segments under the new KEK).
     """
 
     def __init__(self, kek: bytes, previous: Sequence[bytes] = ()):

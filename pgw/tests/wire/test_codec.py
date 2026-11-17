@@ -44,8 +44,14 @@ def _raw(d: dict) -> bytes:
 
 
 def _req_dict(**over) -> dict:
-    d = {"v": 1, "type": "compute", "id": "abc", "fp": FP, "ring": "K40A12",
-         "items": [{"linear": "0.qkv", "rows": 2, "x_hat": b"\x01" * 160}]}
+    d = {
+        "v": 1,
+        "type": "compute",
+        "id": "abc",
+        "fp": FP,
+        "ring": "K40A12",
+        "items": [{"linear": "0.qkv", "rows": 2, "x_hat": b"\x01" * 160}],
+    }
     d.update(over)
     return d
 
@@ -84,14 +90,18 @@ def test_wire_keys_match_spec():
 
 
 def test_compute_response_round_trip():
-    resp = ComputeResponse("req-9", (ComputeResult("1.down", 2, b"\xff" * 10), ComputeResult("1.o", 1, b"\x00")),
-                           ServerTiming(0.25, 3.0, 64))
+    resp = ComputeResponse(
+        "req-9",
+        (ComputeResult("1.down", 2, b"\xff" * 10), ComputeResult("1.o", 1, b"\x00")),
+        ServerTiming(0.25, 3.0, 64),
+    )
     assert decode_message(encode_message(resp), ComputeResponse) == resp
 
 
 def test_models_round_trip_and_helpers():
-    m = ModelInfo("qwen", FP, ("K40A12", "K48A20"),
-                  (LinearInfo("0.qkv", 1152, 896), LinearInfo("0.o", 896, 896)), 8192, 256 << 20)
+    m = ModelInfo(
+        "qwen", FP, ("K40A12", "K48A20"), (LinearInfo("0.qkv", 1152, 896), LinearInfo("0.o", 896, 896)), 8192, 256 << 20
+    )
     resp = ModelsResponse((m,), server="pgw-service/1")
     back = decode_message(encode_message(resp), ModelsResponse)
     assert back == resp

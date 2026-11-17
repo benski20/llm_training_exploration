@@ -140,50 +140,72 @@ class Generator:
         self._rr = 0
 
     # ---- state management ---------------------------------------------------------------------
-    def _new_state(self, prompt_ids: Sequence[int], params: SamplingParams, session: object | None) -> _SeqState:
-        prompt = [int(t) for t in prompt_ids]
-        if not prompt:
-            raise ConfigError("prompt must contain at least one token")
-        if params.stop and self.tokenizer is None:
-            raise ConfigError("stop strings need a tokenizer")
-        ctx = self.model.arch.max_position_embeddings
-        if len(prompt) >= ctx:
-            raise ContextOverflowError(
-                f"prompt of {len(prompt)} tokens leaves no room in the {ctx}-token context",
-                details={"prompt_tokens": len(prompt), "max_len": ctx},
+    def _new_state(
+        self,
+        prompt_ids: Sequence[int],
+        params: SamplingParams,
+        session: object | None,
+        own_session: bool = False,
+    ) -> _SeqState:
+        """Validate a request and build its state.
+
+        Args:
+            own_session: The generator takes ownership of ``session`` and closes it (burning unused
+                mask slots) when the request ends. Sessions made by ``session_factory`` are always owned.
+                On a validation error an owned session is closed before the error propagates.
+        """
+        own = bool(own_session and session is not None)
+        try:
+            prompt = [int(t) for t in prompt_ids]
+            if not prompt:
+                raise ConfigError("prompt must contain at least one token")
+            if params.stop and self.tokenizer is None:
+                raise ConfigError("stop strings need a tokenizer")
+            ctx = self.model.arch.max_position_embeddings
+            if len(prompt) >= ctx:
+                raise ContextOverflowError(
+                    f"prompt of {len(prompt)} tokens leaves no room in the {ctx}-token context",
+                    details={"prompt_tokens": len(prompt), "max_len": ctx},
+                )
+            cap = min(len(prompt) + params.max_tokens, ctx)
+            if session is None and self.session_factory is not None:
+                session = self.session_factory(len(prompt) + params.max_tokens)
+                own = session is not None
+            stop_ids = set(params.stop_token_ids)
+            if not params.ignore_eos:
+                stop_ids.update(self._eos)
+            return _SeqState(
+                prompt=prompt,
+                params=params,
+                session=session,
+                own_session=own,
+                cache=self.model.new_cache(cap),
+                sampler=Sampler(params, prompt),
+                decoder=self.tokenizer.incremental_decoder() if self.tokenizer is not None else None,
+                stop_ids=frozenset(stop_ids),
+                pending=list(prompt),
             )
-        cap = min(len(prompt) + params.max_tokens, ctx)
-        own = False
-        if session is None and self.session_factory is not None:
-            session = self.session_factory(len(prompt) + params.max_tokens)
-            own = True
-        stop_ids = set(params.stop_token_ids)
-        if not params.ignore_eos:
-            stop_ids.update(self._eos)
-        return _SeqState(
-            prompt=prompt,
-            params=params,
-            session=session,
-            own_session=own,
-            cache=self.model.new_cache(cap),
-            sampler=Sampler(params, prompt),
-            decoder=self.tokenizer.incremental_decoder() if self.tokenizer is not None else None,
-            stop_ids=frozenset(stop_ids),
-            pending=list(prompt),
-        )
+        except BaseException:
+            if own and session is not None:
+                self._close_session(session)
+            raise
+
+    @staticmethod
+    def _close_session(session: object) -> None:
+        close = getattr(session, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:  # pragma: no cover - defensive
+                log.exception("closing session reservation failed")
 
     @staticmethod
     def _release(st: _SeqState) -> None:
         if st.t_end is None:
             st.t_end = time.perf_counter()
         if st.own_session and st.session is not None:
-            close = getattr(st.session, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except Exception:  # pragma: no cover - defensive
-                    log.exception("closing session reservation failed")
             st.own_session = False
+            Generator._close_session(st.session)
         st.cache.clear()
 
     # ---- text / stop handling ---------------------------------------------------------------
@@ -281,10 +303,18 @@ class Generator:
         return events
 
     def stream(
-        self, prompt_ids: Sequence[int], params: SamplingParams, *, session: object | None = None
+        self,
+        prompt_ids: Sequence[int],
+        params: SamplingParams,
+        *,
+        session: object | None = None,
+        own_session: bool = False,
     ) -> Iterator[TokenEvent]:
-        """Blocking token stream. Closing the iterator early stops generation."""
-        st = self._new_state(prompt_ids, params, session)
+        """Blocking token stream. Closing the iterator early stops generation.
+
+        ``own_session=True`` hands ``session`` to the generator, which closes it at the end.
+        """
+        st = self._new_state(prompt_ids, params, session, own_session)
         try:
             while not st.done:
                 yield self._step_sync([st])[0]
@@ -294,10 +324,15 @@ class Generator:
             self._release(st)
 
     def generate(
-        self, prompt_ids: Sequence[int], params: SamplingParams, *, session: object | None = None
+        self,
+        prompt_ids: Sequence[int],
+        params: SamplingParams,
+        *,
+        session: object | None = None,
+        own_session: bool = False,
     ) -> GenerationResult:
-        """Blocking full generation."""
-        st = self._new_state(prompt_ids, params, session)
+        """Blocking full generation (``own_session``: close ``session`` when done)."""
+        st = self._new_state(prompt_ids, params, session, own_session)
         try:
             while not st.done:
                 self._step_sync([st])
@@ -338,10 +373,19 @@ class Generator:
 
     # ---- async API ---------------------------------------------------------------------------
     async def astream(
-        self, prompt_ids: Sequence[int], params: SamplingParams, *, session: object | None = None
+        self,
+        prompt_ids: Sequence[int],
+        params: SamplingParams,
+        *,
+        session: object | None = None,
+        own_session: bool = False,
     ) -> AsyncIterator[TokenEvent]:
-        """Async token stream (used by the gateway SSE endpoint); cancellation stops generation."""
-        st = self._new_state(prompt_ids, params, session)
+        """Async token stream (used by the gateway SSE endpoint); cancellation stops generation.
+
+        With ``own_session=True`` the generator closes ``session`` (burning unused slots) at a safe
+        point: never while a batched step that uses it is in flight.
+        """
+        st = self._new_state(prompt_ids, params, session, own_session)
         inner = self._astream_state(st)
         try:
             async for ev in inner:
@@ -350,10 +394,15 @@ class Generator:
             await inner.aclose()
 
     async def agenerate(
-        self, prompt_ids: Sequence[int], params: SamplingParams, *, session: object | None = None
+        self,
+        prompt_ids: Sequence[int],
+        params: SamplingParams,
+        *,
+        session: object | None = None,
+        own_session: bool = False,
     ) -> GenerationResult:
-        """Async full generation (batched with other concurrent requests)."""
-        st = self._new_state(prompt_ids, params, session)
+        """Async full generation (batched with other concurrent requests; see :meth:`astream`)."""
+        st = self._new_state(prompt_ids, params, session, own_session)
         inner = self._astream_state(st)
         try:
             async for _ in inner:
@@ -445,9 +494,13 @@ class Generator:
                         continue
                     # Nothing was consumed (the backend pre-checks); isolate the exhausted session.
                     for st in batch:
+                        if st.done or st.cancelled:
+                            continue
                         try:
                             await self._run_step([st])
-                        except PGWError as one:
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as one:
                             self._fail(st, one)
                 except asyncio.CancelledError:
                     raise
@@ -459,6 +512,13 @@ class Generator:
         except asyncio.CancelledError:
             for st in self._active:
                 self._fail(st, PGWError("generation loop cancelled"))
+                self._release(st)
+            self._active.clear()
+            raise
+        except BaseException as exc:  # pragma: no cover - defensive: never leave streams hanging
+            log.exception("engine batching loop crashed")
+            for st in self._active:
+                self._fail(st, exc if isinstance(exc, PGWError) else PGWError("generation loop failed"))
                 self._release(st)
             self._active.clear()
             raise

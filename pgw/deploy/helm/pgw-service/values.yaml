@@ -1,0 +1,133 @@
+# Default values for pgw-service. Secrets are NEVER put in values: reference existing Secrets.
+
+image:
+  repository: registry.example.com/pgw/pgw-service-cuda
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2               # stateless: any replica can serve any request
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+terminationGracePeriodSeconds: 60   # > config.drainTimeoutSeconds: in-flight work finishes on SIGTERM
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: "4"
+    memory: 24Gi
+  limits:
+    memory: 32Gi
+
+gpu:
+  enabled: true
+  count: 1
+  resourceName: nvidia.com/gpu
+
+# Non-secret service settings (PGW_SERVICE_*). See `pgw config show service`.
+config:
+  logLevel: INFO
+  rings: [K40A12, K48A20, K32A8]
+  device: auto
+  backend: auto
+  verifyPacks: full
+  batchWindowMs: 2
+  maxBatchRows: 4096
+  maxInflightRequests: 256
+  maxRequestBytes: 268435456
+  tenantMaxInflight: ""
+  tenantRowsPerSecond: ""
+  drainTimeoutSeconds: 30
+  extraEnv: {}
+
+# Model packs (only the linears shards are needed). Mounted read-only.
+modelPacks:
+  mountPath: /var/lib/pgw/packs
+  packDirs: [llama3-8b]
+  existingClaim: ""
+  # Alternative: an OCI image whose `path` contains the pack directories (copied by an init container).
+  image:
+    repository: ""
+    tag: ""
+    path: /packs
+
+# Tenant credentials: Secret with `tokens` (lines tenant:sha256(token), see `pgw service token create`)
+# and optionally `mtls-tenants` (lines tenant:<certificate subject or CN>).
+tenants:
+  existingSecret: ""          # REQUIRED
+  tokensKey: tokens
+  mtlsTenantsKey: ""
+
+# TLS (secret with tls.crt, tls.key and, for mTLS, ca.crt = CA of customer gateway client certs).
+tls:
+  enabled: true
+  existingSecret: ""          # REQUIRED when enabled
+  requireClientCert: true
+
+service:
+  type: ClusterIP              # LoadBalancer / PrivateLink endpoint service per cloud
+  port: 8443
+  annotations: {}
+
+metrics:
+  port: 9090
+  serviceMonitor:
+    enabled: false
+    interval: 15s
+    labels: {}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Who may call the compute endpoint. Restrict to customer gateway egress ranges / the LB.
+  computeFrom:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  # The service needs no outbound connections at all (stateless, packs are local): deny-all egress.
+  egress:
+    dns:
+      enabled: false
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+    extraRules: []

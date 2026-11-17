@@ -57,6 +57,9 @@ class FactorySettings(PGWSettings):
     nice: int = Field(0, ge=0, le=19, description="Process niceness increment (low CPU priority)")
     cpu_threads: int = Field(0, ge=0, description="torch intra-op threads; 0 = torch default")
     pipeline: bool = Field(True, description="Overlap r generation, GEMMs and encryption in threads")
+    self_check_rows: int = Field(
+        8, ge=-1, description="Rows per chunk whose W8.r output is verified before writing (-1 = all, 0 = off)"
+    )
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
     error_backoff_s: float = Field(10.0, gt=0, description="Initial back-off after a failed run (doubles to 600 s)")

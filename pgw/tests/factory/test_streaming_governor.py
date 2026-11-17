@@ -83,6 +83,17 @@ def test_throttle_rate_limit() -> None:
     assert th.active
 
 
+def test_throttle_no_burst_after_idle() -> None:
+    """Hours of idle time (inventory full) must not become credit for a burst above the rate."""
+    clk = FakeClock()
+    th = Throttle(max_slots_per_hour=3600, clock=clk, sleep=clk.sleep)  # 1 slot/s
+    th.account(0.0, 1)
+    clk.t += 7200.0  # idle for two hours
+    clk.t += 1.0
+    th.account(1.0, 10)  # 10 slots in 1 s -> still has to wait 9 s
+    assert clk.sleeps[-1] == pytest.approx(9.0)
+
+
 def test_throttle_duty_cycle() -> None:
     clk = FakeClock()
     th = Throttle(duty_cycle=0.25, clock=clk, sleep=clk.sleep)

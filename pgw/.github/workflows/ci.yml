@@ -1,0 +1,152 @@
+# PGW CI: lint, type-check, tests (CPU), deployment artifacts (Helm, compose, Dockerfiles), image builds.
+#
+# GitHub reads workflows only from the repository root's .github/workflows. While PGW lives in the
+# `pgw/` subdirectory of a larger repository, copy (or symlink) this file there; PGW_DIR points the
+# jobs at the project. When PGW becomes its own repository set PGW_DIR to ".".
+name: pgw-ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["pgw/**", ".github/workflows/pgw-ci.yml", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["pgw/**", ".github/workflows/pgw-ci.yml", ".github/workflows/ci.yml"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pgw-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PGW_DIR: pgw
+  TORCH_VERSION: "2.5.1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PGW_OFFLINE: "1"          # unit tests never download models; network tests run in a nightly job
+
+jobs:
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.4"
+      - name: ruff check
+        working-directory: ${{ env.PGW_DIR }}
+        run: ruff check src tests deploy
+
+  typecheck:
+    name: type-check (mypy --strict)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ${{ env.PGW_DIR }}/pyproject.toml
+      - name: install
+        working-directory: ${{ env.PGW_DIR }}
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          pip install -e ".[dev]" "pyyaml>=6" types-PyYAML
+      - name: mypy
+        working-directory: ${{ env.PGW_DIR }}
+        run: mypy src
+
+  test:
+    name: tests (py${{ matrix.python }}, CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ env.PGW_DIR }}/pyproject.toml
+      - name: install
+        working-directory: ${{ env.PGW_DIR }}
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
+          pip install -e ".[dev]" "pyyaml>=6"
+      - name: pgw doctor
+        working-directory: ${{ env.PGW_DIR }}
+        run: pgw doctor --no-gpu
+      - name: pytest
+        working-directory: ${{ env.PGW_DIR }}
+        run: pytest -q -m "not gpu" --timeout=900 --junitxml=pytest-${{ matrix.python }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-${{ matrix.python }}
+          path: ${{ env.PGW_DIR }}/pytest-${{ matrix.python }}.xml
+
+  deploy-lint:
+    name: deployment artifacts (helm, compose, dockerfiles, shell)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: helm lint + template (strict)
+        working-directory: ${{ env.PGW_DIR }}/deploy/helm
+        run: |
+          for chart in pgw-gateway pgw-factory pgw-service; do
+            helm lint --strict "$chart" -f "$chart/ci/ci-values.yaml"
+            helm template ci "$chart" -f "$chart/ci/ci-values.yaml" > "/tmp/$chart.yaml"
+          done
+      - name: kubeconform (Kubernetes schema validation)
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          ./kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /tmp/pgw-*.yaml
+      - name: docker compose config
+        working-directory: ${{ env.PGW_DIR }}/deploy/compose
+        run: docker compose config -q
+      - name: hadolint
+        run: |
+          curl -sSfL -o hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x hadolint
+          ./hadolint --ignore DL3008 --ignore DL3013 --ignore DL3042 ${PGW_DIR}/deploy/docker/*.Dockerfile
+      - name: shellcheck
+        run: |
+          shellcheck -s sh ${PGW_DIR}/deploy/docker/entrypoint.sh ${PGW_DIR}/deploy/compose/demo-init.sh \
+            ${PGW_DIR}/deploy/systemd/install.sh ${PGW_DIR}/deploy/vmware/pgw-ovf-config.sh ${PGW_DIR}/ci/check.sh
+
+  images:
+    name: image ${{ matrix.image }}
+    needs: [lint, test, deploy-lint]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gateway, factory, service-cpu, factory-cuda, service-cuda]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.PGW_DIR }}
+          file: ${{ env.PGW_DIR }}/deploy/docker/${{ matrix.image }}.Dockerfile
+          push: false
+          load: ${{ !endsWith(matrix.image, 'cuda') }}
+          tags: pgw-${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: smoke test
+        if: ${{ !endsWith(matrix.image, 'cuda') }}
+        run: |
+          docker run --rm --read-only --tmpfs /tmp pgw-${{ matrix.image }}:ci pgw version
+          docker run --rm --read-only --tmpfs /tmp pgw-${{ matrix.image }}:ci pgw doctor --no-gpu
+          test "$(docker run --rm pgw-${{ matrix.image }}:ci id -u)" = "10001"

@@ -73,7 +73,8 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
     for pack in packs:
         for ring in settings.ring_names:
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
-                              pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction)
+                              pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
+                              self_check_rows=settings.self_check_rows)
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g

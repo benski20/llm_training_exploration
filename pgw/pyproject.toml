@@ -46,6 +46,8 @@ gateway = [
 service = [
     "fastapi>=0.110",
     "hypercorn>=0.16",
+    "h2>=4.1",
+    "httpx[http2]>=0.27",
     "uvicorn[standard]>=0.29",
     "prometheus-client>=0.20",
 ]
@@ -83,6 +85,7 @@ markers = [
     "slow: tests that take more than a few seconds",
     "gpu: tests that need CUDA (skipped automatically when unavailable)",
     "network: tests that download from the HF hub (skipped when PGW_OFFLINE=1)",
+    "e2e: end-to-end tests that start real service and gateway processes on localhost",
 ]
 filterwarnings = ["ignore::DeprecationWarning:transformers.*"]
 

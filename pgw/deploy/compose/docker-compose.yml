@@ -1,0 +1,204 @@
+# PGW local demo: pack -> factory -> service -> gateway, all on one machine (CPU).
+#
+#   cd pgw/deploy/compose
+#   cp .env.example .env            # optional: choose the model, slots, ports
+#   docker compose up --build       # first run downloads the model and packs it
+#   docker compose logs init        # shows the demo API key (demo only)
+#   curl -s localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" \
+#        -H 'content-type: application/json' \
+#        -d '{"model":"demo","messages":[{"role":"user","content":"Hello"}],"max_tokens":32}'
+#
+# Trust boundaries are modelled with networks and volumes:
+#   * the compute service sees only the read-only model pack and its tenant token hashes; it never
+#     mounts the mask store, the KEK or any gateway secret, and it has no route to the internet;
+#   * the factory runs without any network;
+#   * the gateway reaches the service over an internal network (TLS with a demo CA) and is
+#     published on localhost only.
+# In production the service runs in our cloud (deploy/helm/pgw-service) and the gateway + factory
+# in the customer's environment (deploy/helm/pgw-gateway, deploy/helm/pgw-factory).
+
+name: pgw-demo
+
+x-common-env: &common-env
+  PGW_LOG_JSON: "true"
+  PGW_LOG_LEVEL: ${PGW_LOG_LEVEL:-INFO}
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - /tmp:size=256m
+    - /run/pgw:size=16m,mode=0700,uid=10001,gid=10001
+
+services:
+  # One-shot setup (idempotent): pack the model, create the mask store + KEK, demo TLS certificates,
+  # the tenant token for the service, an API key for the gateway and the gateway's models template.
+  init:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/gateway.Dockerfile
+    image: pgw-gateway:dev
+    user: "0:0"  # only to hand the fresh volumes to uid 10001; the long-running services are non-root
+    entrypoint: ["/bin/sh", "/demo/demo-init.sh"]
+    command: []
+    environment:
+      <<: *common-env
+      PGW_DEMO_MODEL: ${PGW_DEMO_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}
+      PGW_DEMO_RING: ${PGW_DEMO_RING:-K40A12}
+      HF_HOME: /var/lib/pgw/hf
+    volumes:
+      - ./demo-init.sh:/demo/demo-init.sh:ro
+      - ./demo_certs.py:/demo/demo_certs.py:ro
+      - packs:/var/lib/pgw/packs
+      - masks:/var/lib/pgw/masks
+      - kek:/var/lib/pgw/kek
+      - gw-secrets:/var/lib/pgw/secrets
+      - gw-state:/var/lib/pgw/state
+      - svc-secrets:/var/lib/pgw/svc-secrets
+      - hf-cache:/var/lib/pgw/hf
+    networks: [egress]
+    restart: "no"
+
+  # Offline mask generation into the encrypted single-use store (customer side, no network).
+  factory:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/factory.Dockerfile
+    image: pgw-factory:dev
+    <<: *hardening
+    command:
+      - pgw
+      - factory
+      - generate
+      - --pack
+      - /var/lib/pgw/packs/demo
+      - --store
+      - /var/lib/pgw/masks
+      - --key-file
+      - /var/lib/pgw/kek/kek
+      - --ring
+      - ${PGW_DEMO_RING:-K40A12}
+      - --slots
+      - ${PGW_DEMO_SLOTS:-2048}
+    environment:
+      <<: *common-env
+    volumes:
+      - packs:/var/lib/pgw/packs:ro
+      - masks:/var/lib/pgw/masks
+      - kek:/var/lib/pgw/kek:ro
+    network_mode: none
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # Optional continuous refill (docker compose --profile refill up): keeps the store topped up.
+  factory-refill:
+    image: pgw-factory:dev
+    profiles: [refill]
+    <<: *hardening
+    command: ["pgw", "factory", "run"]
+    environment:
+      <<: *common-env
+      PGW_FACTORY_PACK_PATH: /var/lib/pgw/packs/demo
+      PGW_FACTORY_RING: ${PGW_DEMO_RING:-K40A12}
+      PGW_FACTORY_SEGMENT_SLOTS: "1024"
+      PGW_FACTORY_LOW_WATER_SLOTS: "1024"
+      PGW_FACTORY_TARGET_SLOTS: "4096"
+      PGW_FACTORY_NICE: "10"
+      PGW_MASKSTORE_ROOT: /var/lib/pgw/masks
+      PGW_MASKSTORE_KEY_FILE: /var/lib/pgw/kek/kek
+    volumes:
+      - packs:/var/lib/pgw/packs:ro
+      - masks:/var/lib/pgw/masks
+      - kek:/var/lib/pgw/kek:ro
+    network_mode: none
+    depends_on:
+      factory:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Stateless masked compute (our side). Sees only uniform noise.
+  service:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/service-cpu.Dockerfile
+    image: pgw-service-cpu:dev
+    <<: *hardening
+    environment:
+      <<: *common-env
+      PGW_SERVICE_PACKS: '["/var/lib/pgw/packs/demo"]'
+      PGW_SERVICE_RINGS: '["${PGW_DEMO_RING:-K40A12}"]'
+      PGW_SERVICE_TOKENS_FILE: /etc/pgw/tenants/tokens
+      PGW_SERVICE_TLS__CERT_FILE: /etc/pgw/tenants/tls.crt
+      PGW_SERVICE_TLS__KEY_FILE: /etc/pgw/tenants/tls.key
+      PGW_SERVICE_VERIFY_PACKS: full
+    volumes:
+      - packs:/var/lib/pgw/packs:ro
+      - svc-secrets:/etc/pgw/tenants:ro
+    networks: [compute]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "pgw-healthcheck", "service"]
+      interval: 5s
+      timeout: 6s
+      retries: 60
+      start_period: 30s
+    stop_grace_period: 40s
+    restart: unless-stopped
+
+  # Customer gateway: OpenAI-compatible API, plaintext engine, masks, Freivalds checks.
+  gateway:
+    image: pgw-gateway:dev
+    <<: *hardening
+    environment:
+      <<: *common-env
+      PGW_RENDER: /var/lib/pgw/secrets/models.tmpl.json:/run/pgw/models.json
+      PGW_GATEWAY_MODELS_FILE: /run/pgw/models.json
+      PGW_GATEWAY_API_KEYS_FILE: /var/lib/pgw/state/api_keys.json
+      PGW_GATEWAY_QUOTA_STATE_FILE: /var/lib/pgw/state/quota.json
+      PGW_GATEWAY_AUDIT_LOG_FILE: /var/lib/pgw/state/audit.jsonl
+      PGW_GATEWAY_MASKSTORE_ROOT: /var/lib/pgw/masks
+      PGW_MASKSTORE_ROOT: /var/lib/pgw/masks
+      PGW_MASKSTORE_KEY_FILE: /var/lib/pgw/kek/kek
+      PGW_MASKSTORE_LOW_WATER_SLOTS: "256"
+    volumes:
+      - packs:/var/lib/pgw/packs:ro
+      - masks:/var/lib/pgw/masks
+      - kek:/var/lib/pgw/kek:ro
+      - gw-secrets:/var/lib/pgw/secrets:ro
+      - gw-state:/var/lib/pgw/state
+    networks: [compute, frontend]
+    ports:
+      - "127.0.0.1:${PGW_DEMO_PORT:-8080}:8080"
+    depends_on:
+      factory:
+        condition: service_completed_successfully
+      service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgw-healthcheck", "gateway"]
+      interval: 5s
+      timeout: 6s
+      retries: 60
+      start_period: 30s
+    stop_grace_period: 40s
+    restart: unless-stopped
+
+networks:
+  compute:
+    internal: true    # gateway <-> service only; no internet for the service
+  frontend: {}        # published gateway port
+  egress: {}          # init only: model download from the HF hub
+
+volumes:
+  packs: {}
+  masks: {}
+  kek: {}
+  gw-secrets: {}
+  gw-state: {}
+  svc-secrets: {}
+  hf-cache: {}

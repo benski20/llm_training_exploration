@@ -68,6 +68,7 @@ from pgw.maskstore.format import (
     seed_hash,
 )
 from pgw.maskstore.keys import KeyProvider, RecipientKeyPair, WrappedKey
+from pgw.maskstore.partner import TrustedPartners, read_signature
 from pgw.maskstore.segment_io import RawSegmentWriter, shred_file
 from pgw.maskstore.state import (
     ON_DISK,
@@ -92,9 +93,49 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-_HOST = socket.gethostname()
+
+
+def _owner_host() -> str:
+    """Identity of this host *and PID namespace* recorded with every reservation.
+
+    Liveness checks by pid are only meaningful inside one PID namespace: two containers of one
+    pod share the hostname but not their pids (both may be pid 1). Reservations made in another
+    namespace are therefore treated as foreign (they only expire by ``lease_timeout_s``).
+    """
+    host = socket.gethostname()
+    try:
+        ns = os.readlink("/proc/self/ns/pid")
+    except OSError:
+        return host
+    return f"{host}|{ns}"
+
+
+_HOST = _owner_host()
 _PART_MAX_AGE_S = 3600.0
 _MAX_SLOTS_PER_SEGMENT = 1 << 24
+
+
+#: Ids of reservations that are open in *this process*, across every :class:`MaskStore` instance.
+#: Stale-lease detection consults it, so a second store object on the same root (gateway and
+#: factory in one process, or a short-lived admin call) can never close or shred the segment of a
+#: reservation another object is still reading.
+_LIVE_RESERVATIONS: set[str] = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def _live_add(rid: str) -> None:
+    with _LIVE_LOCK:
+        _LIVE_RESERVATIONS.add(rid)
+
+
+def _live_discard(rid: str) -> None:
+    with _LIVE_LOCK:
+        _LIVE_RESERVATIONS.discard(rid)
+
+
+def _is_live(rid: str) -> bool:
+    with _LIVE_LOCK:
+        return rid in _LIVE_RESERVATIONS
 
 
 def _now_iso() -> str:
@@ -417,6 +458,7 @@ class MaskReservation:
                 e.wipe()
             used = max(self._cursor.values(), default=0)
             burned = self._slots - used
+        _live_discard(self.id)
         store, self._store = self._store, None
         if store is not None:
             store._on_reservation_closed(self, burned)
@@ -687,6 +729,8 @@ class MaskStore:
         key_provider: KEK provider (wraps segment DEKs; MACs state and journal when supported).
         recipient: X25519 key pair for importing partner segments (SPEC 7.7).
         counter: External monotonic counter; default built from ``settings.counter``.
+        trusted_partners: Ed25519 keys of partner factories allowed to deliver segments; default
+            built from ``settings.trusted_partner_keys``.
     """
 
     def __init__(
@@ -696,6 +740,7 @@ class MaskStore:
         *,
         recipient: RecipientKeyPair | None = None,
         counter: MonotonicCounter | None = None,
+        trusted_partners: TrustedPartners | None = None,
     ):
         self.settings = settings
         self.root = Path(settings.root)
@@ -703,6 +748,9 @@ class MaskStore:
         self.recipient = recipient
         if self.recipient is None and settings.recipient_key_file is not None:
             self.recipient = RecipientKeyPair(settings.recipient_key_file)
+        self.trusted_partners = (
+            trusted_partners if trusted_partners is not None else TrustedPartners(settings.trusted_partner_keys)
+        )
         self._pid = os.getpid()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._lock = _ProcessLock(self.root / ".lock", settings.lock_timeout_s)
@@ -730,6 +778,8 @@ class MaskStore:
                 self._mac,
                 fsync=settings.fsync,
             )
+            with self._lock.hold():
+                self._journal.recover_pending()
         elif settings.journal:
             log.warning(
                 "key provider %s cannot MAC: generation journal and row authentication disabled; "
@@ -750,17 +800,21 @@ class MaskStore:
         """Open (creating if needed) a store at ``root``.
 
         ``overrides`` are :class:`MaskStoreSettings` fields, plus ``recipient`` (a
-        :class:`RecipientKeyPair`) and ``counter``, which may be a settings value (``"file"``,
-        ``"tpm"``, ...) or a :class:`MonotonicCounter` instance.
+        :class:`RecipientKeyPair`), ``trusted_partners`` (a :class:`TrustedPartners`) and
+        ``counter``, which may be a settings value (``"file"``, ``"tpm"``, ...) or a
+        :class:`MonotonicCounter` instance.
         """
         recipient = overrides.pop("recipient", None)
+        trusted = overrides.pop("trusted_partners", None)
         counter = overrides.get("counter")
         if isinstance(counter, MonotonicCounter):
             overrides.pop("counter")
         else:
             counter = None
         settings = MaskStoreSettings(root=Path(root), **overrides)  # type: ignore[arg-type]
-        return cls(settings, key_provider, recipient=recipient, counter=counter)  # type: ignore[arg-type]
+        return cls(
+            settings, key_provider, recipient=recipient, counter=counter, trusted_partners=trusted  # type: ignore[arg-type]
+        )
 
     def _probe_mac(self) -> bool:
         fn = getattr(self.key_provider, "mac", None)
@@ -1101,9 +1155,9 @@ class MaskStore:
         for rid, pid, host, created in conn.execute(
             "SELECT id, pid, host, created_at FROM reservations WHERE closed_at IS NULL"
         ).fetchall():
-            if rid in self._open_reservations:
+            if rid in self._open_reservations or _is_live(rid):
                 continue
-            dead = host == _HOST and (pid == self._pid or not _pid_alive(int(pid)))
+            dead = host == _HOST and (int(pid) == self._pid or not _pid_alive(int(pid)))
             if dead or now - float(created) > self.settings.lease_timeout_s:
                 conn.execute("UPDATE reservations SET closed_at=?, burned=-1 WHERE id=?", (now, rid))
                 stale += 1
@@ -1261,11 +1315,22 @@ class MaskStore:
         local KEK (so the partner-held wrapping is not needed any more). The source file is left in
         place; delete it after a successful import. Importing the same segment (or any segment with
         the same seed) twice raises :class:`MaskReuseError`.
+
+        Partner (HPKE-sealed) segments must carry a valid ``<file>.sig`` from a trusted partner key
+        when ``trusted_partner_keys`` is configured or ``require_partner_signature`` is set (see
+        :mod:`pgw.maskstore.partner`: HPKE base mode does not authenticate the sender, so without a
+        signature anyone holding the public recipient key could inject masks whose seed they know).
+
+        Raises:
+            MaskReuseError: segment id or seed already known to this store.
+            MaskStoreError: bad file, failed authentication, missing/invalid partner signature.
         """
         src_path = Path(path)
         rec = recipient or self.recipient
         with SegmentFile(src_path) as src:
             h = src.header
+            for lin in h.linears:
+                h.ring_params.check_in_features(lin.in_features)
             with self._lock.hold():
                 self._ready()
                 row = self.conn.execute("SELECT 1 FROM segments WHERE segment_id=?", (h.segment_id,)).fetchone()
@@ -1274,6 +1339,7 @@ class MaskStore:
                     "segment was already imported (duplicate segment = mask reuse)",
                     details={"segment_id": h.segment_id},
                 )
+            signer = self._check_partner_signature(src_path, src, h)
             wrapped = WrappedKey(h.kek_id, h.wrapped_dek_bytes)
             if h.kek_id.startswith("hpke:"):
                 if rec is None:
@@ -1287,46 +1353,89 @@ class MaskStore:
             src.set_dek(src_dek)
             del src_dek
             secrets = bytearray(src.decrypt(src.layout.secrets_chunk()))
-            seed, _ = src.layout.secrets_split(secrets)
-            shash = seed_hash(seed)
-            del seed
-            with self._lock.hold():
-                self._check_new(h.segment_id, shash)
-            dek = os.urandom(DEK_BYTES)
-            new_wrapped = self.key_provider.wrap(dek)
-            new_header = h.model_copy(
-                update={
-                    "kek_id": new_wrapped.kek_id,
-                    "wrapped_dek": base64.b64encode(new_wrapped.wrapped).decode(),
-                    "nonce_prefix": os.urandom(NONCE_PREFIX_BYTES).hex(),
-                }
-            )
             final = self._segment_dir(h.fingerprint, h.ring) / f"{h.segment_id}{SEGMENT_SUFFIX}"
-            raw = RawSegmentWriter(final, new_header, dek, fsync=self.settings.fsync)
-            del dek
+            published = False
             try:
-                raw.write_chunk(raw.layout.secrets_chunk(), secrets)
-                _zero(secrets)
-                # the new header has a different length, so chunk offsets differ: pair chunks by index
-                for sref, dref in zip(src.iter_chunks()[1:], raw.layout.chunks()[1:], strict=True):
-                    plain = bytearray(src.decrypt(sref))
-                    raw.write_chunk(dref, plain)
-                    _zero(plain)
-                size = raw.publish()
+                seed, _ = src.layout.secrets_split(secrets)
+                shash = seed_hash(seed)
+                del seed
+                with self._lock.hold():
+                    self._check_new(h.segment_id, shash)
+                dek = os.urandom(DEK_BYTES)
+                new_wrapped = self.key_provider.wrap(dek)
+                new_header = h.model_copy(
+                    update={
+                        "kek_id": new_wrapped.kek_id,
+                        "wrapped_dek": base64.b64encode(new_wrapped.wrapped).decode(),
+                        "nonce_prefix": os.urandom(NONCE_PREFIX_BYTES).hex(),
+                    }
+                )
+                size = self._reencrypt(src, final, new_header, dek, secrets)
+                published = True
+                del dek
                 self._register_segment(new_header, shash, final, size)
             except BaseException:
-                raw.abort()
                 _zero(secrets)
-                if final.exists() and not self._knows_segment(h.segment_id):
+                # Only remove a file *this* call published: a concurrent import of the same segment
+                # may own the file at ``final`` (its registration then refuses ours as a duplicate).
+                if published and not self._knows_segment(h.segment_id):
                     with contextlib.suppress(OSError):
                         final.unlink()
                 raise
         log.info(
-            "imported segment %s (%s %s, %d slots) from %s (factory %s)",
+            "imported segment %s (%s %s, %d slots) from %s (factory %s%s)",
             h.segment_id, short_fingerprint(h.fingerprint), h.ring, h.slots, src_path.name, h.factory_id,
+            f", signed by partner key {signer}" if signer else "",
         )
         self._after_inventory_change(h.fingerprint, h.ring)
         return h.segment_id
+
+    def _check_partner_signature(self, src_path: Path, src: SegmentFile, h: SegmentHeader) -> str | None:
+        """Enforce the partner-signature policy for HPKE segments; return the signer key id."""
+        if not h.kek_id.startswith("hpke:"):
+            return None  # wrapped under our own KEK: only a holder of the KEK can have produced it
+        required = bool(self.trusted_partners) or self.settings.require_partner_signature
+        sig = read_signature(src_path)
+        if required:
+            if not self.trusted_partners:
+                raise ConfigError("require_partner_signature is set but no trusted_partner_keys are configured")
+            return self.trusted_partners.verify(src.header_raw, h.segment_id, sig)
+        log.warning(
+            "importing partner segment %s WITHOUT sender authentication (%s); configure "
+            "trusted_partner_keys so only segments signed by your partner factory are accepted",
+            h.segment_id, "signature present but no trusted keys" if sig is not None else "unsigned",
+        )
+        return None
+
+    def _reencrypt(
+        self,
+        src: SegmentFile,
+        final: Path,
+        new_header: SegmentHeader,
+        dek: bytes,
+        secrets: bytearray,
+        *,
+        replace: bool = False,
+    ) -> int:
+        """Re-encrypt every chunk of ``src`` (DEK installed) into ``final`` under ``dek``/``new_header``.
+
+        ``secrets`` is the decrypted chunk 0 (zeroised here). Returns the new file size. Every
+        source chunk is authenticated on the way; on any failure the partial file is removed.
+        """
+        raw = RawSegmentWriter(final, new_header, dek, fsync=self.settings.fsync)
+        try:
+            raw.write_chunk(raw.layout.secrets_chunk(), secrets)
+            _zero(secrets)
+            # the new header may have a different length, so offsets differ: pair chunks by index
+            for sref, dref in zip(src.iter_chunks()[1:], raw.layout.chunks()[1:], strict=True):
+                plain = bytearray(src.decrypt(sref))
+                raw.write_chunk(dref, plain)
+                _zero(plain)
+            return raw.publish(replace=replace)
+        except BaseException:
+            raw.abort()
+            _zero(secrets)
+            raise
 
     def export_segment(self, segment_id: str, dest_dir: str | Path) -> Path:
         """Move an untouched segment out of this store (partner staging store -> outbox).
@@ -1452,12 +1561,26 @@ class MaskStore:
                     )
                     # lease the segments in this process before anyone can see the commit
                     self._open_reservations[rid] = None
+                    _live_add(rid)
             except MaskExhaustedError as exc:
                 exhausted = exc
+            except BaseException:
+                # Commit failed or never happened: nothing was consumed, drop the in-process lease.
+                self._open_reservations.pop(rid, None)
+                _live_discard(rid)
+                raise
             else:
-                self._fault("after_commit")
-                self._advance_witnesses(m)
-                self._fault("after_witness")
+                try:
+                    self._fault("after_commit")
+                    self._advance_witnesses(m)
+                    self._fault("after_witness")
+                except BaseException:
+                    # The slots are durably consumed; they are simply lost (never reused). Witnesses
+                    # behind the DB are resynchronised by the next reserve/verify.
+                    self._open_reservations.pop(rid, None)
+                    _live_discard(rid)
+                    self._mark_closed(rid, slots)
+                    raise
         if exhausted is not None:
             self._after_inventory_change(fingerprint, rname)
             raise exhausted
@@ -1476,6 +1599,7 @@ class MaskStore:
                 seg.close()
             with self._lock.hold():
                 self._open_reservations.pop(rid, None)
+            _live_discard(rid)
             self._mark_closed(rid, slots)
             if isinstance(exc, PGWError):
                 exc.details.setdefault("reservation_lost_slots", slots)
@@ -1649,7 +1773,7 @@ class MaskStore:
                 continue
             if now - float(created) > self.settings.lease_timeout_s:
                 continue
-            if host == _HOST and rid not in self._open_reservations and not (
+            if host == _HOST and rid not in self._open_reservations and not _is_live(rid) and not (
                 int(pid) != self._pid and _pid_alive(int(pid))
             ):
                 continue  # owner is gone (crashed) or it is ours and already closed
@@ -1701,8 +1825,133 @@ class MaskStore:
                 conn.executemany("DELETE FROM reservation_extents WHERE reservation_id=?", [(r,) for r in old])
                 conn.executemany("DELETE FROM reservations WHERE id=?", [(r,) for r in old])
             freed = self._gc_segments(None)
-            self._find_orphans(set())  # removes stale .part files
+            self._remove_partials(_PART_MAX_AGE_S)
         return freed
+
+    def _remove_partials(self, max_age_s: float) -> list[str]:
+        removed: list[str] = []
+        now = time.time()
+        for p in self.root.glob(f"*/*/segments/.*{SEGMENT_SUFFIX}.part"):
+            with contextlib.suppress(OSError):
+                if now - p.stat().st_mtime >= max_age_s:
+                    p.unlink()
+                    removed.append(p.name)
+                    log.info("removed partial segment file %s", p.name)
+        return removed
+
+    def cleanup_partials(self, max_age_s: float = 0.0) -> list[str]:
+        """Delete temp files of segment writes interrupted by a crash; return their names.
+
+        Called by the factory scheduler at start-up. Partial files hold encrypted, never-registered
+        masks, so deleting them cannot cause reuse. With the default ``max_age_s=0`` every partial
+        file is removed: only call it when no writer of this store is running (factory start-up).
+        """
+        with self._lock.hold():
+            return self._remove_partials(max_age_s)
+
+    # ---- key rotation ------------------------------------------------------------------------
+    def rotate_kek(self, new_provider: KeyProvider, *, reencrypt: bool = True) -> dict[str, Any]:
+        """Switch the store to a new key-encryption key (offline operation).
+
+        Stop all gateway workers and factories of this store first: other processes still hold
+        the old key and would refuse the re-authenticated state afterwards (they must be restarted
+        with the new provider). The call fails if any reservation is open.
+
+        Steps, all under the store lock:
+
+        1. :meth:`verify_integrity` under the current provider.
+        2. With ``reencrypt`` (default), every segment still on disk that is wrapped under another
+           KEK is re-encrypted under a fresh DEK wrapped by ``new_provider`` (file replaced
+           atomically; the same slots stay consumed). Without it, ``new_provider`` must still be
+           able to unwrap the old DEKs (e.g. ``FileKeyProvider(new, previous=[old])``).
+        3. State rows and the meta record are re-MACed under ``new_provider`` and the generation
+           journal is replaced by a checkpoint under the new key. The journal is staged before the
+           DB commit and promoted after it; an interruption is resolved on the next open
+           (:meth:`GenerationJournal.recover_pending`).
+
+        Returns:
+            Summary ``{"old_kek_id", "new_kek_id", "segments_reencrypted", "bytes_reencrypted"}``.
+        """
+        if self._mac_ok and new_provider.mac(b"pgw/v1/probe") is None:
+            raise ConfigError("the new key provider cannot MAC; rotating would disable rollback detection")
+        if not new_provider.can_unwrap:
+            raise ConfigError("the new key provider is wrap-only")
+        old_kek = self.key_provider.kek_id
+        summary: dict[str, Any] = {
+            "old_kek_id": old_kek, "new_kek_id": new_provider.kek_id, "segments_reencrypted": 0,
+            "bytes_reencrypted": 0,
+        }
+        with self._lock.hold():
+            self.verify_integrity()
+            self._ready()
+            with self._txn() as conn:
+                self._close_stale_reservations(conn)
+                (open_res,) = conn.execute("SELECT COUNT(*) FROM reservations WHERE closed_at IS NULL").fetchone()
+            if open_res or self._open_reservations:
+                raise MaskStoreError(
+                    "cannot rotate the KEK while reservations are open; stop the gateways first",
+                    details={"open_reservations": int(open_res)},
+                )
+            rows = [SegmentRow.from_row(t) for t in self.conn.execute(SELECT_SEGMENTS)]
+            jhead = self._journal.verify() if self._journal is not None else None
+            # 1) re-encrypt segment files (no state change: same segment id, same slots). Resumable:
+            #    files already under the new KEK (an earlier, interrupted rotation) are skipped.
+            sizes: dict[str, int] = {}
+            for r in rows:
+                if not reencrypt or r.status not in ON_DISK or r.kek_id == new_provider.kek_id:
+                    continue
+                path = self.root / r.relpath
+                with SegmentFile(path) as src:
+                    if src.header.kek_id == new_provider.kek_id:
+                        sizes[r.segment_id] = src.layout.total_size
+                        continue
+                    src.set_dek(self.key_provider.unwrap(WrappedKey(src.header.kek_id, src.header.wrapped_dek_bytes)))
+                    secrets = bytearray(src.decrypt(src.layout.secrets_chunk()))
+                    dek = os.urandom(DEK_BYTES)
+                    wrapped = new_provider.wrap(dek)
+                    header = src.header.model_copy(
+                        update={
+                            "kek_id": wrapped.kek_id,
+                            "wrapped_dek": base64.b64encode(wrapped.wrapped).decode(),
+                            "nonce_prefix": os.urandom(NONCE_PREFIX_BYTES).hex(),
+                        }
+                    )
+                    sizes[r.segment_id] = self._reencrypt(src, path, header, dek, secrets, replace=True)
+                    del dek
+                summary["segments_reencrypted"] += 1
+                summary["bytes_reencrypted"] += sizes[r.segment_id]
+            # 2) switch keys and re-authenticate the state
+            old_provider, old_mac_ok = self.key_provider, self._mac_ok
+            self.key_provider = new_provider
+            self._mac_ok = self._probe_mac()
+            self._dek_cache.clear()
+            try:
+                with self._txn() as conn:
+                    m = self._read_meta(conn)
+                    for t in conn.execute(SELECT_SEGMENTS).fetchall():
+                        r = SegmentRow.from_row(t)
+                        kek = new_provider.kek_id if r.segment_id in sizes else r.kek_id
+                        size = sizes.get(r.segment_id, r.bytes)
+                        conn.execute(
+                            "UPDATE segments SET mac=?, kek_id=?, bytes=? WHERE segment_id=?",
+                            (self._mac_hex(self._row_mac_msg(m.store_id, r)), kek, size, r.segment_id),
+                        )
+                    self._write_meta(conn, m)
+                    if self._journal is not None:
+                        prev = jhead.mac if jhead is not None else bytes(32)
+                        self._journal.stage_checkpoint(m.generation, m.consumed, prev)
+            except BaseException:
+                self.key_provider, self._mac_ok = old_provider, old_mac_ok
+                if self._journal is not None:
+                    self._journal.pending_path.unlink(missing_ok=True)
+                raise
+            if self._journal is not None:
+                self._journal.promote_pending()
+        log.warning(
+            "rotated mask store KEK %s -> %s (%d segments re-encrypted)",
+            old_kek, new_provider.kek_id, summary["segments_reencrypted"],
+        )
+        return summary
 
     def close(self) -> None:
         """Close the state database; open reservations of this process are closed (burned) first."""

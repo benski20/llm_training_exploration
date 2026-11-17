@@ -16,14 +16,14 @@ import pytest
 pytest.importorskip("hypercorn")
 pytest.importorskip("h2")
 
-from cryptography import x509  # noqa: E402
-from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID  # noqa: E402
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from pgw.core import RING_K40_A12, PGWError  # noqa: E402
-from pgw.wire import ClientConfig, ComputeClient, build_ssl_context  # noqa: E402
-from tests.wire.conftest import FP, FakeHandler, expected_y, make_app, make_request  # noqa: E402
+from pgw.core import RING_K40_A12, PGWError
+from pgw.wire import ClientConfig, ComputeClient, build_ssl_context
+from tests.wire.conftest import FP, FakeHandler, expected_y, make_app, make_request
 
 
 def _name(cn: str) -> x509.Name:
@@ -79,9 +79,17 @@ def pki(tmp_path_factory) -> dict[str, Path]:
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
         .add_extension(
-            x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True, content_commitment=False,
-                          key_encipherment=False, data_encipherment=False, key_agreement=False,
-                          encipher_only=False, decipher_only=False),
+            x509.KeyUsage(
+                digital_signature=True,
+                key_cert_sign=True,
+                crl_sign=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
             critical=True,
         )
         .sign(ca_key, hashes.SHA256())
@@ -143,8 +151,13 @@ def server(pki):
 
 async def test_mtls_http2_end_to_end(pki, server):
     url, handler = server
-    cfg = ClientConfig(base_url=url, ca_file=pki["ca"], client_cert_file=pki["client"],
-                       client_key_file=pki["client_key"], request_timeout_s=20)
+    cfg = ClientConfig(
+        base_url=url,
+        ca_file=pki["ca"],
+        client_cert_file=pki["client"],
+        client_key_file=pki["client_key"],
+        request_timeout_s=20,
+    )
     # HTTP/2 is negotiated via ALPN with the client's SSL context
     async with httpx.AsyncClient(http2=True, verify=build_ssl_context(cfg), base_url=url) as raw:
         r = await raw.get("/pgw/v1/models")
@@ -182,16 +195,26 @@ async def test_client_rejects_untrusted_server(pki, server, tmp_path):
     other_ca_key = ec.generate_private_key(ec.SECP256R1())
     now = dt.datetime.now(dt.UTC)
     other = (
-        x509.CertificateBuilder().subject_name(_name("other")).issuer_name(_name("other"))
-        .public_key(other_ca_key.public_key()).serial_number(1)
-        .not_valid_before(now - dt.timedelta(minutes=1)).not_valid_after(now + dt.timedelta(days=1))
+        x509.CertificateBuilder()
+        .subject_name(_name("other"))
+        .issuer_name(_name("other"))
+        .public_key(other_ca_key.public_key())
+        .serial_number(1)
+        .not_valid_before(now - dt.timedelta(minutes=1))
+        .not_valid_after(now + dt.timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(other_ca_key, hashes.SHA256())
     )
     ca2 = tmp_path / "other.pem"
     ca2.write_bytes(other.public_bytes(serialization.Encoding.PEM))
-    cfg = ClientConfig(base_url=url, ca_file=ca2, client_cert_file=pki["client"], client_key_file=pki["client_key"],
-                       max_retries=0, request_timeout_s=5)
+    cfg = ClientConfig(
+        base_url=url,
+        ca_file=ca2,
+        client_cert_file=pki["client"],
+        client_key_file=pki["client_key"],
+        max_retries=0,
+        request_timeout_s=5,
+    )
     client = ComputeClient(cfg)
     with pytest.raises(PGWError):
         await client.models()

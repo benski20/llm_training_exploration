@@ -25,9 +25,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import torch
 
-from pgw.core.errors import ConfigError, PGWError
+from pgw.core.errors import ConfigError, IntegrityError, PGWError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.prng import SEED_BYTES, SeedExpander, new_seed
 from pgw.core.ring import RingParams
@@ -40,6 +41,9 @@ from pgw.factory.streaming import WeightStreamer, auto_resident_bytes
 __all__ = ["GeneratedLinear", "GenerationStats", "MaskGenerator", "slot_bytes"]
 
 log = logging.getLogger(__name__)
+
+#: Default rows per chunk verified by the output self-check (see :class:`MaskGenerator`).
+DEFAULT_SELF_CHECK_ROWS = 8
 
 
 @dataclass
@@ -72,6 +76,7 @@ class GenerationStats:
     write_seconds: float = 0.0
     throttle_seconds: float = 0.0
     wr_bytes: int = 0
+    self_checked_rows: int = 0
     backend: str = ""
     device: str = ""
     segment_id: str | None = None
@@ -86,6 +91,11 @@ class GenerationStats:
 def slot_bytes(specs: list[LinearSpec], ring: RingParams) -> int:
     """Stored ``W r`` bytes per slot: ``sum(m) * K/8``."""
     return sum(s.out_features for s in specs) * ring.bytes_per_element
+
+
+def _u64(t: torch.Tensor) -> np.ndarray:
+    """Canonical int64 ring elements as a uint64 array (values in ``[0, 2^K)`` are unchanged)."""
+    return t.detach().cpu().numpy().astype(np.uint64)
 
 
 class _Stop:
@@ -111,6 +121,16 @@ class MaskGenerator:
         throttle: Optional :class:`Throttle` (rate limit / duty cycle / stop).
         pipeline: Overlap ``r`` expansion, GEMMs and writing in threads.
         memory_fraction: Device memory fraction for resident weights (CUDA).
+        self_check_rows: Rows per chunk whose output is verified before it is written, using the
+            Freivalds identity ``u . (W8 r) == (u W8) . r (mod 2^K)`` with the segment's check
+            vectors (or two private ones when ``checks=0``). An error with 2-adic valuation ``v``
+            escapes one vector with probability ``2^-(K-v)``; errors in the top bits are also
+            caught later by the gateway's output range check. A wrong mask would not be caught
+            anywhere else: the gateway would silently produce garbage, because the service's
+            Freivalds check only covers ``W8 x_hat``. A kernel fault (e.g. a saturating int8 GEMM
+            or a GPU bit flip) affects many rows, so a sample suffices. ``0`` disables the
+            check, ``-1`` verifies every row (about 5% extra CPU time). A mismatch raises
+            :class:`pgw.core.IntegrityError` and the segment is aborted.
     """
 
     def __init__(
@@ -124,6 +144,7 @@ class MaskGenerator:
         throttle: Throttle | None = None,
         pipeline: bool = True,
         memory_fraction: float = 0.85,
+        self_check_rows: int = DEFAULT_SELF_CHECK_ROWS,
     ):
         self.pack = pack
         self.ring = ring_from_setting(ring)
@@ -147,6 +168,9 @@ class MaskGenerator:
         self.streamer = streamer
         self.throttle = throttle
         self.pipeline = pipeline
+        if self_check_rows < -1:
+            raise ConfigError(f"self_check_rows must be -1 (all), 0 (off) or positive, got {self_check_rows}")
+        self.self_check_rows = int(self_check_rows)
         self.last_stats = GenerationStats(backend=self.backend, device=str(self.device))
         self._lock = threading.Lock()  # one segment at a time per generator
         log.info(
@@ -211,7 +235,9 @@ class MaskGenerator:
             key = specs[i].id.key
             r = exp.ring_uniform_rows(specs[i].in_features, k, start, rows, "r", key)
             if cuda:  # pragma: no cover - GPU only
-                r = r.pin_memory()
+                pinned = r.pin_memory()
+                r.zero_()
+                r = pinned
             rng_time[0] += time.perf_counter() - t0
             return r
 
@@ -230,12 +256,20 @@ class MaskGenerator:
                     raise ConfigError(f"{lid}: weight shape {tuple(w.shape)} does not match manifest")
                 kern = RingKernel(w, self.backend)
                 t0 = time.perf_counter()
+                cu: np.ndarray | None = None
+                cw: np.ndarray | None = None
                 if checks:
                     u = exp.ring_uniform((checks, spec.out_features), k, "u", lid.key)
                     uw: torch.Tensor = ring_vecmat(u, w, self.ring)
+                    if self.self_check_rows:
+                        cu, cw = _u64(u.t()), _u64(uw.t())
                     u.zero_()
                 else:
                     uw = torch.zeros((0, spec.in_features), dtype=torch.int64)
+                    if self.self_check_rows:  # private check vector, never stored
+                        v = SeedExpander(new_seed()).ring_uniform((2, spec.out_features), k, "v")
+                        cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
+                        v.zero_()
                 stats.check_seconds += time.perf_counter() - t0
                 for start in range(0, slots, chunk_slots):
                     task = tasks[ti]
@@ -249,6 +283,15 @@ class MaskGenerator:
                     wr = kern.matmul(r, self.ring)
                     wr = wr.cpu() if cuda else wr
                     dt = time.perf_counter() - t0
+                    if cu is not None and cw is not None:
+                        t1 = time.perf_counter()
+                        try:
+                            stats.self_checked_rows += self._self_check(lid, r, wr, cu, cw)
+                        except BaseException:
+                            r.zero_()
+                            wr.zero_()
+                            raise
+                        stats.check_seconds += time.perf_counter() - t1
                     r.zero_()
                     del r
                     stats.gemm_seconds += dt
@@ -264,8 +307,47 @@ class MaskGenerator:
                 pending.cancel()
             if pool is not None:
                 pool.shutdown(wait=True, cancel_futures=True)
+            if pending is not None and pending.done() and not pending.cancelled() and pending.exception() is None:
+                pending.result().zero_()  # prefetched r of a chunk that was never used
             stats.rng_seconds = rng_time[0]
             stats.seconds = time.perf_counter() - t_start
+
+    def _self_check(self, lid: LinearId, r: torch.Tensor, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray) -> int:
+        """Verify ``wr[t] @ cu == r[t] @ cw (mod 2^K)`` on sampled rows; return the rows checked.
+
+        ``cu`` is ``(m, c)`` (check vectors as columns) and ``cw`` is ``(n, c)`` (``u W8`` transposed).
+
+        uint64 arithmetic wraps mod ``2^64``, which is exact mod ``2^K``. Row selection is not
+        secret (it only has to be unpredictable to a faulty kernel, not to an adversary).
+
+        Raises:
+            IntegrityError: the GEMM output (or ``u W8``) is wrong; the segment must be discarded.
+        """
+        rows = int(r.shape[0])
+        n_check = rows if self.self_check_rows < 0 else min(rows, self.self_check_rows)
+        if n_check <= 0:
+            return 0
+        if n_check < rows:
+            idx = torch.randperm(rows)[:n_check]
+            rs, ws = r.index_select(0, idx), wr.index_select(0, idx)
+        else:
+            rs, ws = r, wr
+        try:
+            lhs = (_u64(ws) @ cu) & np.uint64(self.ring.mask)
+            rhs = (_u64(rs) @ cw) & np.uint64(self.ring.mask)
+        finally:
+            if rs is not r:
+                rs.zero_()
+        if not np.array_equal(lhs, rhs):
+            bad = int((lhs != rhs).any(axis=1).sum())
+            log.error("factory self-check failed for %s on %s/%s: %d of %d sampled rows wrong",
+                      lid, self.device, self.backend, bad, n_check)
+            raise IntegrityError(
+                "mask factory output failed its self-check (ring GEMM is not exact on this device/backend)",
+                details={"linear": str(lid), "backend": self.backend, "device": str(self.device),
+                         "bad_rows": bad, "checked_rows": n_check},
+            )
+        return n_check
 
     def generate_into_store(
         self,
@@ -351,7 +433,9 @@ class MaskGenerator:
                 if item is _Stop:
                     return
                 if failure:
-                    continue  # drain after an error
+                    assert isinstance(item, GeneratedLinear)
+                    item.wr.zero_()  # drain after an error
+                    continue
                 try:
                     assert isinstance(item, GeneratedLinear)
                     write(item)

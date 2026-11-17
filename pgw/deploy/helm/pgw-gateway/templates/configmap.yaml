@@ -1,0 +1,31 @@
+{{- /*
+Models template. Secrets are referenced as ${file:...} and substituted at container start by
+`pgw config render` (pgw-entrypoint, PGW_RENDER) into a tmpfs file with mode 0600.
+*/ -}}
+{{- $models := list -}}
+{{- range .Values.models -}}
+{{- $m := dict "name" .name "pack_path" (printf "%s/%s" $.Values.modelPacks.mountPath (required "models[].packDir is required" .packDir)) "ring" (default "K40A12" .ring) "service_url" (required "models[].serviceUrl is required" .serviceUrl) "service_token" (printf "${file:/etc/pgw/secrets/%s}" $.Values.secrets.serviceTokenKey) "mode" "masked" -}}
+{{- if .fingerprint -}}
+{{- $_ := set $m "fingerprint" .fingerprint -}}
+{{- end -}}
+{{- if .maxConcurrentSessions -}}
+{{- $_ := set $m "max_concurrent_sessions" .maxConcurrentSessions -}}
+{{- end -}}
+{{- if .serviceTimeoutSeconds -}}
+{{- $_ := set $m "service_timeout_s" .serviceTimeoutSeconds -}}
+{{- end -}}
+{{- if $.Values.serviceClientTls.existingSecret -}}
+{{- $_ := set $m "service_ca_file" "/etc/pgw/service-tls/ca.crt" -}}
+{{- $_ := set $m "client_cert_file" "/etc/pgw/service-tls/tls.crt" -}}
+{{- $_ := set $m "client_key_file" "/etc/pgw/service-tls/tls.key" -}}
+{{- end -}}
+{{- $models = append $models $m -}}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pgw-gateway.fullname" . }}-models
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+data:
+  models.tmpl.json: {{ toJson $models | quote }}

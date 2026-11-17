@@ -32,6 +32,7 @@ from pgw.core.errors import (
     FingerprintMismatchError,
     PayloadTooLargeError,
     PGWError,
+    ProtocolError,
     ServiceUnavailableError,
     ShapeError,
     VersionMismatchError,
@@ -71,6 +72,22 @@ T = TypeVar("T")
 # msgpack framing overhead budget used when splitting requests by size.
 _REQUEST_OVERHEAD = 1024
 _ITEM_OVERHEAD = 96
+# Caps on non-compute response bodies.
+_MAX_ERROR_BODY = 1 << 20
+_MAX_MODELS_BODY = 16 << 20
+
+
+async def _read_capped(resp: httpx.Response, limit: int) -> bytes | None:
+    """Read a streamed body; ``None`` (and stop reading) once it exceeds ``limit`` bytes."""
+    cl = resp.headers.get("content-length")
+    if cl is not None and cl.strip().isdigit() and int(cl) > limit:
+        return None
+    buf = bytearray()
+    async for chunk in resp.aiter_bytes():
+        buf += chunk
+        if len(buf) > limit:
+            return None
+    return bytes(buf)
 
 
 class ClientConfig(BaseModel):
@@ -235,6 +252,15 @@ class ComputeClient:
         self._on_attempt = on_attempt
         self._sleep = sleep or asyncio.sleep
         self._ssl: ssl.SSLContext | None = build_ssl_context(config) if config.uses_tls else None
+        if not config.uses_tls and transport is None:
+            if config.token is not None:
+                log.warning(
+                    "bearer token configured for a plaintext http:// endpoint %s; the token is sent "
+                    "unencrypted (use https:// in production)",
+                    config.base_url,
+                )
+            else:
+                log.warning("compute service endpoint %s is plaintext http:// (development only)", config.base_url)
         self._clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = (
             weakref.WeakKeyDictionary()
         )
@@ -260,6 +286,8 @@ class ComputeClient:
                     "User-Agent": cfg.user_agent,
                     PROTOCOL_HEADER: str(PROTOCOL_VERSION),
                     "Accept": CONTENT_TYPE,
+                    # SPEC 6.2: no compression (uniform ring data does not compress).
+                    "Accept-Encoding": "identity",
                 }
                 if cfg.token is not None:
                     headers["Authorization"] = f"Bearer {cfg.token.get_secret_value()}"
@@ -302,14 +330,16 @@ class ComputeClient:
         return delay
 
     @staticmethod
-    def _error_from_http(resp: httpx.Response) -> PGWError:
+    def _error_from_http(resp: httpx.Response, content: bytes | None) -> PGWError:
+        """Typed error for a non-200 reply. ``content`` is ``None`` when the body was too large
+        to read (the error is then derived from the HTTP status alone)."""
         ctype = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         err: ErrorResponse | None = None
         try:
-            if ctype == CONTENT_TYPE:
-                err = decode_message(resp.content, ErrorResponse, max_bytes=1 << 20)
-            elif ctype == JSON_CONTENT_TYPE:
-                err = decode_error_json(resp.content)
+            if content and ctype == CONTENT_TYPE:
+                err = decode_message(content, ErrorResponse, max_bytes=_MAX_ERROR_BODY)
+            elif content and ctype == JSON_CONTENT_TYPE:
+                err = decode_error_json(content, max_bytes=_MAX_ERROR_BODY)
         except PGWError:
             err = None
         if err is not None:
@@ -339,8 +369,13 @@ class ComputeClient:
         request_id: str,
         deadline: float,
         decode: Callable[[bytes], T],
+        max_response_bytes: int,
     ) -> T:
-        """One logical call with retries until success, a non-retryable error or the deadline."""
+        """One logical call with retries until success, a non-retryable error or the deadline.
+
+        Response bodies are streamed and capped (``max_response_bytes`` for 200 replies,
+        ``_MAX_ERROR_BODY`` for errors), so a broken or hostile server cannot exhaust memory.
+        """
         cfg = self.config
         http = self._http()
         attempt = 0
@@ -366,17 +401,24 @@ class ComputeClient:
             try:
                 # asyncio.timeout also bounds transports that ignore httpx timeouts (e.g. in-process).
                 async with asyncio.timeout(remaining):
-                    resp = await http.request(method, path, content=body, headers=headers, timeout=timeout)
-                status = resp.status_code
+                    async with http.stream(method, path, content=body, headers=headers, timeout=timeout) as resp:
+                        status = resp.status_code
+                        limit = max_response_bytes if status == 200 else _MAX_ERROR_BODY
+                        content = await _read_capped(resp, limit)
                 if body is not None:
                     self.stats.bytes_sent += len(body)
-                self.stats.bytes_received += len(resp.content)
+                self.stats.bytes_received += len(content or b"")
                 self.stats.last_rtt_s = time.monotonic() - t0
                 if status == 200:
-                    result = decode(resp.content)
+                    if content is None:
+                        raise ProtocolError(
+                            f"compute service response exceeds the limit of {max_response_bytes} bytes",
+                            details={"request_id": request_id, "max_bytes": max_response_bytes},
+                        )
+                    result = decode(content)
                     self._hook(path, status, t0, None)
                     return result
-                exc = self._error_from_http(resp)
+                exc = self._error_from_http(resp, content)
             except (httpx.TimeoutException, TimeoutError) as e:
                 exc = PGWError(
                     f"compute service timed out ({type(e).__name__})",
@@ -467,7 +509,8 @@ class ComputeClient:
             body=None,
             request_id=uuid.uuid4().hex,
             deadline=deadline,
-            decode=lambda b: decode_message(b, ModelsResponse, max_bytes=16 << 20),
+            decode=lambda b: decode_message(b, ModelsResponse, max_bytes=_MAX_MODELS_BODY),
+            max_response_bytes=_MAX_MODELS_BODY,
         )
         self._models = res
         return res
@@ -531,7 +574,13 @@ class ComputeClient:
 
         t0 = time.monotonic()
         resp = await self._call(
-            "POST", COMPUTE_PATH, body=body, request_id=req.request_id, deadline=deadline, decode=decode
+            "POST",
+            COMPUTE_PATH,
+            body=body,
+            request_id=req.request_id,
+            deadline=deadline,
+            decode=decode,
+            max_response_bytes=self.config.max_response_bytes,
         )
         log.debug(
             "pgw compute",
@@ -626,12 +675,20 @@ class ComputeClient:
             return self._loop
 
     def _run_sync(self, coro: Coroutine[Any, Any, T]) -> T:
+        if self._closed:
+            coro.close()
+            raise ServiceUnavailableError("compute client is closed")
         loop = self._ensure_loop()
         if threading.current_thread() is self._loop_thread:
             coro.close()
             raise RuntimeError("compute_sync() called from the client's own event loop thread")
         fut: concurrent.futures.Future[T] = asyncio.run_coroutine_threadsafe(coro, loop)
-        return fut.result()
+        try:
+            return fut.result()
+        except BaseException:
+            # e.g. KeyboardInterrupt in the calling thread: do not leave the request running.
+            fut.cancel()
+            raise
 
     def compute_sync(self, request: ComputeRequest) -> ComputeResponse:
         """Blocking wrapper (runs on a private event loop thread)."""

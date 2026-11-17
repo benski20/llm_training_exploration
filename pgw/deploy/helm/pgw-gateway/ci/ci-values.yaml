@@ -1,0 +1,15 @@
+# Minimal values for `helm lint` / `helm template` / chart-testing in CI (no real secrets).
+secrets:
+  existingSecret: gw-secrets
+modelPacks:
+  existingClaim: pgw-packs
+networkPolicy:
+  egress:
+    computeService:
+      cidrs: [203.0.113.0/28]
+models:
+  - name: llama3-8b
+    packDir: llama3-8b
+    ring: K40A12
+    serviceUrl: https://compute.example.net:8443
+    fingerprint: abababababababababababababababababababababababababababababababab

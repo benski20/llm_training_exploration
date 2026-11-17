@@ -30,7 +30,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 #: RoPE scaling types the engine implements (others are recorded but logged as a warning).
-KNOWN_ROPE_TYPES: frozenset[str] = frozenset({"linear", "llama3"})
+KNOWN_ROPE_TYPES: frozenset[str] = frozenset({"linear", "llama3", "yarn"})
 
 #: (part name, HF suffix under ``model.layers.{i}.``) per linear kind; identical for Qwen2 and Llama.
 HF_LINEAR_PARTS: dict[LinearKind, tuple[tuple[str, str], ...]] = {

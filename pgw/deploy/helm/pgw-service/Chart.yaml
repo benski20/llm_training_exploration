@@ -1,0 +1,12 @@
+apiVersion: v2
+name: pgw-service
+description: >-
+  PGW compute service (operator side): stateless, horizontally scalable masked int8 GEMM server.
+  Holds only public weights and sees only uniformly random ring elements; never masks, seeds or keys.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords: [llm, privacy, gpu, inference]
+annotations:
+  pgw.io/protocol-version: "1"

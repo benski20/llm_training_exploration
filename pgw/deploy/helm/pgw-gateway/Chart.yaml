@@ -1,0 +1,13 @@
+apiVersion: v2
+name: pgw-gateway
+description: >-
+  PGW customer gateway: OpenAI-compatible API that runs LLM inference privately over public open
+  weights using one-time masks. Holds the encrypted single-use mask store; talks only to the PGW
+  compute service.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords: [llm, privacy, inference, openai]
+annotations:
+  pgw.io/protocol-version: "1"

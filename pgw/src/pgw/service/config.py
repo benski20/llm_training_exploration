@@ -1,13 +1,24 @@
-"""Compute service settings (env prefix ``PGW_SERVICE_``)."""
+"""Compute service settings (env prefix ``PGW_SERVICE_``).
+
+Examples::
+
+    PGW_SERVICE_PACKS='["/srv/packs/qwen2.5-7b"]'
+    PGW_SERVICE_DEVICES='["cuda:0","cuda:1"]'  PGW_SERVICE_PLACEMENT=by_layer
+    PGW_SERVICE_TOKENS_FILE=/etc/pgw/tenants.txt
+    PGW_SERVICE_TLS__CERT_FILE=/etc/pgw/tls/server.pem PGW_SERVICE_TLS__KEY_FILE=/etc/pgw/tls/server.key
+    PGW_SERVICE_TLS__CA_FILE=/etc/pgw/tls/clients-ca.pem PGW_SERVICE_TLS__REQUIRE_CLIENT_CERT=true
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
+from pgw.core.errors import PGWError
+from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings, TLSConfig
 
 __all__ = ["ServiceSettings"]
@@ -20,19 +31,101 @@ class ServiceSettings(PGWSettings):
         env_prefix="PGW_SERVICE_", env_nested_delimiter="__", extra="ignore", frozen=True
     )
 
+    # ---- listener ------------------------------------------------------------------------
     host: str = "0.0.0.0"  # noqa: S104 - service is meant to listen on all interfaces
-    port: int = 8443
+    port: int = Field(8443, ge=0, le=65535)
+    metrics_port: int | None = Field(
+        None, ge=0, le=65535, description="Serve /metrics on a separate plain-HTTP port (recommended)"
+    )
+    metrics_host: str = "127.0.0.1"
+    metrics_on_main_port: bool = Field(True, description="Also expose /metrics on the main listener")
+    workers_keep_alive_s: float = Field(75.0, gt=0, description="HTTP keep-alive timeout")
+    tls: TLSConfig = TLSConfig()
+
+    # ---- models and devices --------------------------------------------------------------
     packs: list[Path] = Field(default_factory=list, description="Model pack directories to serve")
+    verify_packs: Literal["full", "fingerprint"] = Field(
+        "full", description="Pack verification at startup ('full' hashes every linear shard)"
+    )
     rings: list[str] = Field(default_factory=lambda: ["K40A12", "K48A20", "K32A8"])
-    device: str = "auto"
-    backend: Literal["auto", "cuda_int8", "cpu_f64", "cpu_f32"] = "auto"
+    device: str = Field("auto", description="Single device: auto|cpu|cuda|cuda:i (used when devices is empty)")
+    devices: list[str] = Field(
+        default_factory=list, description="Devices for multi-GPU placement, e.g. ['cuda:0','cuda:1']"
+    )
+    placement: Literal["single", "by_layer"] = Field(
+        "by_layer", description="How linears are spread over `devices` (contiguous layer ranges by bytes)"
+    )
+    backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"
+    cache_float_weights: bool = Field(True, description="CPU float backends keep float weight copies")
+    warmup: bool = Field(True, description="Run one dummy product per linear at startup")
+
+    # ---- batching / scheduling -----------------------------------------------------------
     batch_window_ms: float = Field(2.0, ge=0, description="Max wait to coalesce rows for one linear")
     max_batch_rows: int = Field(4096, gt=0)
-    max_request_bytes: int = 256 << 20
-    max_rows_per_item: int = 8192
+    cpu_workers: int = Field(2, gt=0, description="Concurrent kernel executions on the CPU device")
+    gpu_workers_per_device: int = Field(1, gt=0, description="Concurrent kernel executions per GPU")
+    max_queued_rows: int = Field(1 << 20, gt=0, description="Above this many queued rows, reply 'unavailable'")
+    codec_offload_bytes: int = Field(
+        1 << 20, ge=0, description="Payloads above this size are (un)packed in a worker thread"
+    )
+
+    # ---- limits / admission --------------------------------------------------------------
+    max_request_bytes: int = Field(256 << 20, gt=4096)
+    max_items: int = Field(256, gt=0)
+    max_rows_per_item: int = Field(8192, gt=0)
     max_inflight_requests: int = Field(256, gt=0, description="Above this, reply 'unavailable'")
-    tls: TLSConfig = TLSConfig()
+    max_deadline_s: float | None = Field(120.0, gt=0, description="Server-side cap on compute time per request")
+    tenant_max_inflight: int | None = Field(None, gt=0, description="Per-tenant concurrent request cap")
+    tenant_rows_per_s: float | None = Field(None, gt=0, description="Per-tenant row rate (token bucket)")
+    tenant_burst_rows: int | None = Field(None, gt=0, description="Token bucket size (default: 2 s of rate)")
+    retry_after_s: float = Field(1.0, ge=0, description="Retry-After hint for 'unavailable' replies")
+
+    # ---- auth ----------------------------------------------------------------------------
     tokens_file: Path | None = Field(None, description="Tenant tokens: lines 'tenant_id:sha256(token)'")
+    mtls_tenants_file: Path | None = Field(
+        None, description="Client certificate subjects: lines 'tenant_id:<subject or CN>'"
+    )
+    trusted_client_cert_header: str | None = Field(
+        None,
+        description="Header carrying the verified client-cert subject from a TLS-terminating proxy. "
+        "Only set when every request passes through that proxy.",
+    )
     allow_unauthenticated: bool = Field(False, description="Dev only")
+
+    # ---- lifecycle / misc ----------------------------------------------------------------
+    drain_timeout_s: float = Field(30.0, ge=0, description="Max wait for in-flight work on shutdown")
     metrics_enabled: bool = True
     server_name: str = "pgw-service"
+
+    @field_validator("rings")
+    @classmethod
+    def _valid_rings(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for name in v:
+            try:
+                p = RingParams.from_name(name)
+            except PGWError as exc:
+                raise ValueError(exc.message) from exc
+            if p.name not in out:
+                out.append(p.name)
+        if not out:
+            raise ValueError("at least one ring must be served")
+        return out
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.tls.require_client_cert and (not self.tls.enabled or self.tls.ca_file is None):
+            raise ValueError("tls.require_client_cert needs tls.cert_file, tls.key_file and tls.ca_file")
+        if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
+            raise ValueError("metrics_port must differ from port")
+        return self
+
+    @property
+    def ring_params(self) -> list[RingParams]:
+        """Parsed served rings."""
+        return [RingParams.from_name(r) for r in self.rings]
+
+    @property
+    def device_list(self) -> list[str]:
+        """Devices used for placement (``devices`` or ``[device]``)."""
+        return list(self.devices) if self.devices else [self.device]

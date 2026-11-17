@@ -65,8 +65,15 @@ def expected_y(ring: RingParams, lid: str, x: torch.Tensor, weights: Mapping[str
 class FakeHandler:
     """In-memory ComputeHandler: exact ``W8 x_hat mod 2^K`` with the reference matmul."""
 
-    def __init__(self, *, rings=("K32A8", "K40A12", "K48A20"), delay_s: float = 0.0, max_rows: int = 8192,
-                 max_bytes: int = 256 << 20, tokens: Mapping[str, str] | None = None):
+    def __init__(
+        self,
+        *,
+        rings=("K32A8", "K40A12", "K48A20"),
+        delay_s: float = 0.0,
+        max_rows: int = 8192,
+        max_bytes: int = 256 << 20,
+        tokens: Mapping[str, str] | None = None,
+    ):
         self.weights = make_weights()
         self.rings = tuple(rings)
         self.delay_s = delay_s
@@ -96,7 +103,7 @@ class FakeHandler:
         ring = RingParams.from_name(request.ring)
         out = []
         for it in request.items:
-            m, n = DIMS[it.linear]
+            _m, n = DIMS[it.linear]
             x = unpack_ring(it.x_hat, (it.rows, n), ring)
             y = expected_y(ring, it.linear, x, self.weights)
             data = pack_ring(y, ring)

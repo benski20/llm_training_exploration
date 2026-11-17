@@ -1,35 +1,161 @@
-"""Gateway settings (env prefix ``PGW_GATEWAY_``; models usually from a YAML/JSON file)."""
+"""Gateway settings (env prefix ``PGW_GATEWAY_``; models usually from a JSON/YAML file).
+
+Production defaults are fail-closed:
+
+* every model runs in ``masked`` mode; the local ``plain``/``float`` modes (no compute service, used
+  for development and tests) are refused unless ``allow_dev_modes`` is set;
+* Freivalds checks run on every compute response (``freivalds_rate = 1.0``);
+* the gateway only talks to the configured compute-service endpoints (egress allowlist);
+* anonymous access is refused unless ``allow_dev_modes`` is set.
+"""
 
 from __future__ import annotations
 
+import ipaddress
+import json
+import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
+from pgw.core.errors import ConfigError
+from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings, TLSConfig
 
-__all__ = ["GatewayModelConfig", "GatewaySettings"]
+__all__ = ["GatewayModelConfig", "GatewaySettings", "load_models_file", "origin_of"]
+
+log = logging.getLogger(__name__)
+
+#: Modes that run without the compute service (no privacy protocol involved). Development only.
+DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
+
+#: Shortest accepted admin token (guessable tokens would expose /admin/*).
+_MIN_ADMIN_TOKEN_LEN = 16
+
+
+def origin_of(url: str) -> tuple[str, str, int]:
+    """``(scheme, host, port)`` of an ``http(s)`` URL (default ports filled in), lower-cased.
+
+    Raises:
+        ConfigError: not an absolute http(s) URL.
+    """
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https") or not parts.hostname:
+        raise ConfigError(f"not an absolute http(s) URL: {url!r}")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ConfigError(f"invalid port in URL {url!r}") from exc
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parts.hostname.lower(), int(port)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class GatewayModelConfig(BaseModel):
     """One served model."""
 
-    name: str = Field(description="Name clients use in 'model'")
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(description="Name clients use in 'model'", min_length=1, max_length=128)
     pack_path: Path
+    fingerprint: str | None = Field(None, description="Pin the expected pack fingerprint (64 hex)")
     mode: Literal["masked", "plain", "float"] = Field(
         "masked", description="'masked' = production; 'plain'/'float' = local dev/testing only (no service)"
     )
     ring: str = "K40A12"
     service_url: str | None = None
     service_token: SecretStr | None = None
+    service_token_file: Path | None = Field(
+        None, description="File holding the service bearer token (read at start-up; exclusive with service_token)"
+    )
     service_ca_file: Path | None = None
     client_cert_file: Path | None = None
     client_key_file: Path | None = None
+    service_timeout_s: float = Field(60.0, gt=0, description="Budget per compute round trip incl. retries")
+    service_max_retries: int = Field(3, ge=0)
+    service_deadline_ms: int | None = Field(None, gt=0, description="Deadline sent with each compute request")
     freivalds_rate: float = Field(1.0, ge=0.0, le=1.0)
-    max_context: int | None = None
-    max_concurrent_sessions: int = 32
+    max_context: int | None = Field(None, gt=1)
+    max_concurrent_sessions: int = Field(32, ge=1, description="Sequences generating at once (engine batch)")
+    max_queue: int = Field(256, ge=0, description="Requests waiting for a session slot before 503")
+    queue_timeout_s: float = Field(30.0, gt=0, description="Max wait in the request queue")
+    device: str = "cpu"
+
+    @field_validator("ring")
+    @classmethod
+    def _ring(cls, v: str) -> str:
+        try:
+            return RingParams.from_name(v).name
+        except ConfigError as exc:
+            raise ValueError(exc.message) from exc
+
+    @field_validator("fingerprint")
+    @classmethod
+    def _fp(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if len(v) != 64 or any(c not in "0123456789abcdef" for c in v):
+            raise ValueError("fingerprint must be 64 lowercase hex characters")
+        return v
+
+    @field_validator("service_url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().rstrip("/")
+        try:
+            origin_of(v)
+        except ConfigError as exc:
+            raise ValueError(exc.message) from exc
+        return v
+
+    @model_validator(mode="after")
+    def _masked_needs_service(self) -> GatewayModelConfig:
+        if self.mode == "masked" and not self.service_url:
+            raise ValueError(f"model {self.name!r}: masked mode needs service_url")
+        if (self.client_cert_file is None) != (self.client_key_file is None):
+            raise ValueError("client_cert_file and client_key_file must be set together")
+        if self.service_token is not None and self.service_token_file is not None:
+            raise ValueError("service_token and service_token_file are mutually exclusive")
+        return self
+
+    def resolved_service_token(self) -> SecretStr | None:
+        """The service bearer token: ``service_token`` or the stripped contents of ``service_token_file``.
+
+        Raises:
+            ConfigError: the token file cannot be read or is empty.
+        """
+        if self.service_token_file is None:
+            return self.service_token
+        try:
+            text = Path(self.service_token_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ConfigError(
+                f"model {self.name!r}: cannot read service_token_file ({exc.strerror or type(exc).__name__})"
+            ) from exc
+        if not text or any(c.isspace() for c in text):
+            raise ConfigError(f"model {self.name!r}: service_token_file must contain exactly one token")
+        return SecretStr(text)
+
+    @property
+    def ring_params(self) -> RingParams:
+        """Parsed ring."""
+        return RingParams.from_name(self.ring)
 
 
 class GatewaySettings(PGWSettings):
@@ -46,12 +172,144 @@ class GatewaySettings(PGWSettings):
     maskstore_root: Path = Path("/var/lib/pgw/masks")
     api_keys_file: Path | None = Field(None, description="Hashed API keys (managed with 'pgw gateway keys')")
     admin_token: SecretStr | None = None
-    allow_anonymous: bool = Field(False, description="Dev only")
-    requests_per_minute: int = 600
-    tokens_per_minute: int = 200_000
-    max_prompt_tokens: int = 32_768
+    allow_anonymous: bool = Field(False, description="Dev only (needs allow_dev_modes)")
+    allow_dev_modes: bool = Field(
+        False, description="Permit 'plain'/'float' models, sampled Freivalds and anonymous access. Never in production"
+    )
+    requests_per_minute: int = Field(600, ge=1, description="Default per-key request rate")
+    tokens_per_minute: int = Field(200_000, ge=1, description="Default per-key token rate (prompt + completion)")
+    daily_token_quota: int | None = Field(None, ge=1, description="Default per-key tokens per UTC day")
+    quota_state_file: Path | None = Field(None, description="Persist per-key daily usage here (JSON)")
+    max_prompt_tokens: int = Field(32_768, ge=1)
+    default_max_tokens: int = Field(512, ge=1, description="max_tokens when the request gives none")
+    max_tokens_limit: int = Field(8192, ge=1, description="Upper bound on a request's max_tokens")
+    max_prompts_per_request: int = Field(16, ge=1, description="Prompts in one /v1/completions list")
+    max_body_bytes: int = Field(4 << 20, ge=1024, description="Max API request body")
     tls: TLSConfig = TLSConfig()
     noise_monitor: bool = Field(True, description="Statistically check outbound payloads look uniform")
     noise_monitor_fail_closed: bool = Field(True, description="Block traffic if the monitor alarms")
+    noise_monitor_required: bool = Field(
+        False, description="Refuse to start masked models when the noise monitor cannot be constructed"
+    )
+    noise_sample_rate: float = Field(0.05, gt=0.0, le=1.0)
+    egress_allowlist: list[str] = Field(
+        default_factory=list,
+        description="Extra allowed outbound origins (scheme://host:port). Service URLs are always allowed",
+    )
+    require_service_tls: bool = Field(
+        True, description="Refuse plain-http service URLs except loopback (e.g. a local TLS sidecar)"
+    )
+    integrity_cooldown_s: float | None = Field(
+        900.0, gt=0, description="Circuit-breaker cool-down after an integrity failure (None: admin reset only)"
+    )
+    audit_log_file: Path | None = Field(None, description="Append-only JSON-lines audit log (no content)")
+    drain_timeout_s: float = Field(30.0, ge=0)
+    metrics_require_admin: bool = Field(False, description="Protect /metrics with the admin token")
     cors_origins: list[str] = Field(default_factory=list)
     dashboard_enabled: bool = True
+
+    @field_validator("admin_token")
+    @classmethod
+    def _admin_token(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is not None and len(v.get_secret_value().strip()) < _MIN_ADMIN_TOKEN_LEN:
+            raise ValueError(f"admin_token must have at least {_MIN_ADMIN_TOKEN_LEN} characters")
+        return v
+
+    @model_validator(mode="after")
+    def _policy(self) -> GatewaySettings:
+        for o in self.egress_allowlist:
+            try:
+                origin_of(o)
+            except ConfigError as exc:
+                raise ValueError(exc.message) from exc
+        return self
+
+    def all_models(self) -> list[GatewayModelConfig]:
+        """Models from ``models`` plus ``models_file`` (names must be unique)."""
+        out = list(self.models)
+        if self.models_file is not None:
+            out += load_models_file(self.models_file)
+        names = [m.name for m in out]
+        dup = {n for n in names if names.count(n) > 1}
+        if dup:
+            raise ConfigError(f"duplicate model names: {sorted(dup)}")
+        return out
+
+    def validate_policy(self, models: list[GatewayModelConfig] | None = None) -> None:
+        """Enforce the production policy (fail closed). Raises :class:`ConfigError`."""
+        models = self.all_models() if models is None else models
+        if self.allow_anonymous and not self.allow_dev_modes:
+            raise ConfigError("allow_anonymous requires allow_dev_modes (never in production)")
+        for m in models:
+            if m.mode in DEV_MODES and not self.allow_dev_modes:
+                raise ConfigError(
+                    f"model {m.name!r}: mode {m.mode!r} is for development only (set allow_dev_modes)",
+                    details={"model": m.name, "mode": m.mode},
+                )
+            if m.mode == "masked":
+                if m.freivalds_rate < 1.0 and not self.allow_dev_modes:
+                    raise ConfigError(
+                        f"model {m.name!r}: freivalds_rate must be 1.0 in production (every response is checked)"
+                    )
+                assert m.service_url is not None
+                scheme, host, _ = origin_of(m.service_url)
+                if scheme == "http" and not _is_loopback(host):
+                    if self.require_service_tls:
+                        raise ConfigError(
+                            f"model {m.name!r}: service_url must use https (plain http only to loopback)",
+                            details={"model": m.name},
+                        )
+                    log.warning(
+                        "model %s: plain-http compute service on a non-loopback host (require_service_tls=false); "
+                        "only safe when the network layer (service mesh mTLS) encrypts and authenticates it",
+                        m.name,
+                    )
+        if self.allow_dev_modes:
+            log.warning("gateway running with allow_dev_modes=true: NOT a production configuration")
+
+    def egress_origins(self, models: list[GatewayModelConfig] | None = None) -> frozenset[tuple[str, str, int]]:
+        """Allowed outbound origins: configured service URLs plus ``egress_allowlist``."""
+        models = self.all_models() if models is None else models
+        out = {origin_of(m.service_url) for m in models if m.service_url}
+        out |= {origin_of(o) for o in self.egress_allowlist}
+        return frozenset(out)
+
+
+def load_models_file(path: Path) -> list[GatewayModelConfig]:
+    """Parse a JSON or YAML list of :class:`GatewayModelConfig` (or ``{"models": [...]}``).
+
+    Relative ``pack_path`` values are resolved against the file's directory.
+    """
+    p = Path(path)
+    if not p.is_file():
+        raise ConfigError(f"models file {p} does not exist")
+    text = p.read_text(encoding="utf-8")
+    data: Any
+    try:
+        if p.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml
+            except ImportError as exc:  # pragma: no cover - dependency
+                raise ConfigError("PyYAML is required for YAML model files") from exc
+            data = yaml.safe_load(text)
+        else:
+            data = json.loads(text)
+    except (ValueError, OSError) as exc:
+        raise ConfigError(f"cannot parse models file {p.name}: {type(exc).__name__}") from exc
+    if isinstance(data, dict):
+        data = data.get("models")
+    if not isinstance(data, list):
+        raise ConfigError(f"models file {p.name} must contain a list of models")
+    out: list[GatewayModelConfig] = []
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ConfigError(f"models file entry {i} must be an object")
+        e = dict(entry)
+        pp = e.get("pack_path")
+        if isinstance(pp, str) and not Path(pp).is_absolute():
+            e["pack_path"] = str((p.parent / pp).resolve())
+        try:
+            out.append(GatewayModelConfig(**e))
+        except ValueError as exc:
+            raise ConfigError(f"invalid model entry {i} in {p.name}: {exc}") from exc
+    return out

@@ -237,6 +237,8 @@ class TransformerModel:
                 calls = gen.send(res)
         except StopIteration as stop:
             return stop.value  # type: ignore[no-any-return]
+        finally:
+            gen.close()  # drop references to activations promptly on failure
 
     async def aforward_batch(self, seqs: Sequence[SequenceInput]) -> list[torch.Tensor]:
         """Async :meth:`forward_batch` using :meth:`LinearBackend.aforward_many`."""
@@ -248,6 +250,8 @@ class TransformerModel:
                 calls = gen.send(res)
         except StopIteration as stop:
             return stop.value  # type: ignore[no-any-return]
+        finally:
+            gen.close()  # drop references to activations promptly on failure
 
     def forward(self, input_ids: torch.Tensor | Sequence[int], cache: KVCache, *, session: object | None = None,
                 all_logits: bool = False) -> torch.Tensor:

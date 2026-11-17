@@ -1,15 +1,366 @@
-"""ASGI application of the gateway."""
+"""ASGI application of the gateway (OpenAI-compatible API, admin and ops endpoints).
+
+Public (API key, scope ``inference``): ``POST /v1/chat/completions``, ``POST /v1/completions``
+(``stream=true`` gives SSE ``data:`` chunks ending with ``data: [DONE]``), ``GET /v1/models``.
+Admin (admin token, or an API key with scope ``admin``): ``GET /admin/status``,
+``GET /admin/masks``, ``GET /admin/keys``, ``POST /admin/keys``, ``DELETE /admin/keys/{key_id}``,
+``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``.
+Ops (no auth unless ``metrics_require_admin``): ``/healthz``, ``/readyz``, ``/metrics``, ``/dashboard``.
+
+Errors use the OpenAI shape ``{"error": {"message", "type", "code", "param"}}`` with ``code`` set
+to a :class:`pgw.core.ErrorCode` value. Nothing here logs prompts or completions; every request
+leaves one content-free audit record.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import hmac
+import json
+import logging
+import time
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any
 
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from pydantic import ValidationError
+from starlette.responses import StreamingResponse
+
+from pgw.core.errors import AuthError, ErrorCode, PGWError, RateLimitedError
+from pgw.engine import SamplingParams, TokenEvent
+from pgw.gateway.audit import AuditLog
+from pgw.gateway.auth import ANONYMOUS_KEY, ApiKey, ApiKeyStore, KeyNotFoundError, QuotaTracker, RateLimiter
 from pgw.gateway.config import GatewaySettings
+from pgw.gateway.egress import disable_library_telemetry
+from pgw.gateway.metrics import GatewayMetrics
+from pgw.gateway.openai_schemas import (
+    ChatCompletionRequest,
+    CompletionRequest,
+    ModelCard,
+    ModelList,
+    message_text,
+)
+from pgw.gateway.runtime import ActiveSession, InferenceRuntime, InvalidRequestError, ModelRuntime
 
-__all__ = ["create_app"]
+__all__ = ["GatewayState", "create_app", "error_body"]
+
+log = logging.getLogger(__name__)
+
+_OPENAI_TYPE: dict[int, str] = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    409: "invalid_request_error",
+    413: "invalid_request_error",
+    426: "invalid_request_error",
+    429: "rate_limit_error",
+}
 
 
-def create_app(settings: GatewaySettings | None = None) -> Any:
+def error_body(exc: PGWError, *, param: str | None = None) -> dict[str, Any]:
+    """OpenAI-shaped error body for a :class:`PGWError` (internal errors are not detailed)."""
+    status = exc.http_status
+    if exc.code == ErrorCode.INTERNAL:
+        msg = "internal error"
+    else:
+        msg = exc.message
+    etype = _OPENAI_TYPE.get(status, "server_error" if status >= 500 else "invalid_request_error")
+    if exc.code == ErrorCode.RATE_LIMITED and exc.details.get("limit") == "daily_tokens":
+        etype = "insufficient_quota"
+    return {"error": {"message": msg, "type": etype, "code": str(exc.code), "param": param}}
+
+
+def _retry_after(exc: PGWError) -> str | None:
+    v = exc.details.get("retry_after_s")
+    if isinstance(v, int | float) and v > 0:
+        return str(max(1, int(v + 0.999)))
+    return None
+
+
+@dataclass
+class _KeyLease:
+    """Per-key admission for one API request: concurrency, rate limit and quota reservation."""
+
+    state: GatewayState
+    key: ApiKey
+    reserved: int
+    done: bool = False
+
+    def finish(self, actual_tokens: int) -> None:
+        if self.done:
+            return
+        self.done = True
+        st = self.state
+        st.rate_limiter.record_tokens(self.key, actual_tokens, reserved=self.reserved)
+        st.quotas.settle(self.key, self.reserved, actual_tokens)
+        n = st.key_inflight.get(self.key.key_id, 1) - 1
+        if n > 0:
+            st.key_inflight[self.key.key_id] = n
+        else:
+            st.key_inflight.pop(self.key.key_id, None)
+
+
+@dataclass
+class GatewayState:
+    """Everything the routes share (``app.state.pgw``)."""
+
+    settings: GatewaySettings
+    runtime: InferenceRuntime
+    keys: ApiKeyStore
+    rate_limiter: RateLimiter
+    quotas: QuotaTracker
+    audit: AuditLog
+    metrics: GatewayMetrics
+    started_at: float = field(default_factory=time.time)
+    key_inflight: dict[str, int] = field(default_factory=dict)
+
+    def lease(self, key: ApiKey, est_tokens: int) -> _KeyLease:
+        """Admit a request for ``key`` (raises :class:`RateLimitedError`)."""
+        limit = key.max_concurrent_requests
+        if limit is not None and self.key_inflight.get(key.key_id, 0) >= limit:
+            raise RateLimitedError(
+                "too many concurrent requests for this API key",
+                details={"retry_after_s": 1.0, "limit": "concurrency"},
+            )
+        self.rate_limiter.check_request(key, est_tokens)
+        try:
+            self.quotas.reserve(key, est_tokens)
+        except PGWError:
+            self.rate_limiter.record_tokens(key, 0, reserved=est_tokens)
+            raise
+        self.key_inflight[key.key_id] = self.key_inflight.get(key.key_id, 0) + 1
+        return _KeyLease(self, key, est_tokens)
+
+
+# =================================================================================================
+# helpers
+# =================================================================================================
+def _sse(obj: Any) -> bytes:
+    return b"data: " + json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n\n"
+
+
+_SSE_DONE = b"data: [DONE]\n\n"
+
+
+def _sampling(req: ChatCompletionRequest | CompletionRequest, max_tokens: int, logprobs: int | None) -> SamplingParams:
+    try:
+        return SamplingParams(
+            max_tokens=max_tokens,
+            temperature=req.temperature,
+            top_p=req.top_p,
+            top_k=req.top_k,
+            min_p=req.min_p,
+            repetition_penalty=req.repetition_penalty,
+            presence_penalty=req.presence_penalty,
+            frequency_penalty=req.frequency_penalty,
+            stop=req.stop,
+            stop_token_ids=tuple(req.stop_token_ids or ()),
+            seed=req.seed,
+            logprobs=logprobs,
+            ignore_eos=req.ignore_eos,
+        )
+    except ValidationError as exc:
+        first = exc.errors()[0] if exc.errors() else {"msg": "invalid"}
+        raise InvalidRequestError(f"invalid sampling parameters: {first['msg']}") from exc
+
+
+def _chat_messages(req: ChatCompletionRequest) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for m in req.messages:
+        try:
+            text = message_text(m.content)
+        except ValueError as exc:
+            raise InvalidRequestError(str(exc)) from exc
+        role = "system" if m.role == "developer" else m.role
+        msg: dict[str, Any] = {"role": role, "content": text}
+        if m.name:
+            msg["name"] = m.name
+        out.append(msg)
+    return out
+
+
+class _TokenText:
+    """Token-id -> display string for logprobs (cached per runtime)."""
+
+    def __init__(self, rt: ModelRuntime):
+        self.rt = rt
+
+    def __call__(self, tid: int) -> str:
+        assert self.rt.tokenizer is not None
+        return self.rt.tokenizer.decode([tid], skip_special_tokens=False)
+
+
+@dataclass
+class _Collected:
+    text: str = ""
+    finish: str | None = None
+    tokens: int = 0
+    events: list[TokenEvent] = field(default_factory=list)
+
+
+def _stop_ids(rt: ModelRuntime, params: SamplingParams) -> frozenset[int]:
+    ids = set(params.stop_token_ids)
+    if not params.ignore_eos:
+        if rt.tokenizer is not None:
+            ids.update(rt.tokenizer.eos_token_ids)
+        if rt.model is not None:
+            ids.update(getattr(rt.model.arch, "eos_token_ids", ()) or ())
+    return frozenset(ids)
+
+
+def _visible(ev: TokenEvent, stop_ids: frozenset[int]) -> bool:
+    """Whether a token event belongs to the output (stop tokens are not part of it)."""
+    return not (ev.finish_reason == "stop" and ev.token_id in stop_ids)
+
+
+def _chat_logprobs(events: list[TokenEvent], tt: _TokenText) -> dict[str, Any]:
+    content = []
+    for ev in events:
+        tok = tt(ev.token_id)
+        content.append({
+            "token": tok,
+            "logprob": ev.logprob,
+            "bytes": list(tok.encode("utf-8")),
+            "top_logprobs": [
+                {"token": tt(i), "logprob": lp, "bytes": list(tt(i).encode("utf-8"))}
+                for i, lp in (ev.top_logprobs or [])
+            ],
+        })
+    return {"content": content}
+
+
+def _completion_logprobs(events: list[TokenEvent], tt: _TokenText, offset0: int) -> dict[str, Any]:
+    tokens, lps, tops, offs = [], [], [], []
+    off = offset0
+    for ev in events:
+        tok = tt(ev.token_id)
+        tokens.append(tok)
+        lps.append(ev.logprob)
+        tops.append({tt(i): lp for i, lp in (ev.top_logprobs or [])} if ev.top_logprobs is not None else None)
+        offs.append(off)
+        off += len(tok)
+    return {"tokens": tokens, "token_logprobs": lps, "top_logprobs": tops, "text_offset": offs}
+
+
+def _managed_stream(
+    body: AsyncIterator[bytes], on_close: Callable[[], Awaitable[None]], headers: dict[str, str]
+) -> Any:
+    """SSE ``StreamingResponse`` whose ``on_close`` runs on completion, error or client disconnect."""
+
+    class _ManagedStream(StreamingResponse):
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                with contextlib.suppress(Exception):
+                    await body.aclose()  # type: ignore[attr-defined]
+                await on_close()
+
+    return _ManagedStream(body, media_type="text/event-stream", headers=headers)
+
+
+class _BodyLimit:
+    """Pure-ASGI middleware rejecting request bodies above ``limit`` bytes (413)."""
+
+    def __init__(self, app: Any, limit: int):
+        self.app = app
+        self.limit = limit
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        for k, v in scope.get("headers", []):
+            if k == b"content-length":
+                try:
+                    if int(v) > self.limit:
+                        await self._reject(send)
+                        return
+                except ValueError:
+                    pass
+        seen = 0
+        limit = self.limit
+        state = {"too_large": False, "replaced": False}
+
+        async def guarded() -> Any:
+            nonlocal seen
+            msg = await receive()
+            if msg["type"] == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > limit:
+                    state["too_large"] = True
+                    raise _TooLargeError()
+            return msg
+
+        async def guarded_send(msg: Any) -> None:
+            # The framework may turn the receive error into its own 400; answer 413 instead.
+            if state["too_large"]:
+                if msg["type"] == "http.response.start" and not state["replaced"]:
+                    state["replaced"] = True
+                    await self._reject(send)
+                return
+            await send(msg)
+
+        try:
+            await self.app(scope, guarded, guarded_send)
+        except _TooLargeError:
+            if not state["replaced"]:
+                state["replaced"] = True
+                await self._reject(send)
+
+    async def _reject(self, send: Any) -> None:
+        body = json.dumps({"error": {"message": "request body too large", "type": "invalid_request_error",
+                                     "code": str(ErrorCode.PAYLOAD_TOO_LARGE), "param": None}}).encode()
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+class _TooLargeError(Exception):
+    pass
+
+
+_FALLBACK_DASHBOARD = """<!doctype html><html><head><meta charset="utf-8"><title>PGW gateway</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font:14px system-ui,sans-serif;margin:16px;background:#fff;color:#111}
+@media (prefers-color-scheme:dark){body{background:#111;color:#eee}}pre{white-space:pre-wrap}</style></head>
+<body><h1>PGW gateway</h1><p>Readiness (refreshes every 5 s):</p><pre id="r">loading...</pre>
+<script>async function f(){try{const r=await fetch('readyz');document.getElementById('r').textContent=
+JSON.stringify(await r.json(),null,2)}catch(e){document.getElementById('r').textContent='unreachable'}}
+f();setInterval(f,5000);</script></body></html>"""
+
+
+def _dashboard_html() -> str:
+    try:
+        from pgw.observability.dashboard import dashboard_html
+
+        return dashboard_html("PGW gateway")
+    except (NotImplementedError, ImportError):
+        return _FALLBACK_DASHBOARD
+
+
+# =================================================================================================
+# app
+# =================================================================================================
+def create_app(
+    settings: GatewaySettings | None = None,
+    *,
+    runtime: InferenceRuntime | None = None,
+    key_store: ApiKeyStore | None = None,
+    rate_limiter: RateLimiter | None = None,
+    quotas: QuotaTracker | None = None,
+    audit: AuditLog | None = None,
+    metrics: GatewayMetrics | None = None,
+    mask_store: Any = None,
+    transports: dict[str, Any] | None = None,
+    client_factory: Any = None,
+) -> Any:
     """Build the FastAPI app.
 
     Public (API key): ``POST /v1/chat/completions``, ``POST /v1/completions``, ``GET /v1/models``.
@@ -17,5 +368,553 @@ def create_app(settings: GatewaySettings | None = None) -> Any:
     ``DELETE /admin/keys/{key_id}``, ``POST /admin/models/{name}/reload``.
     Ops: ``/healthz``, ``/readyz``, ``/metrics``, ``/dashboard``.
     Errors use the OpenAI error shape with ``code`` = :class:`pgw.core.ErrorCode` value.
+
+    All keyword arguments are optional injection points (tests, embedding); by default everything
+    is built from ``settings`` (``PGW_GATEWAY_*`` env when ``None``). Model runtimes start in the
+    app lifespan; a model that cannot start (pack, fingerprint, service, policy) aborts startup.
     """
-    raise NotImplementedError("gateway team: create_app")
+    settings = settings or GatewaySettings()
+    disable_library_telemetry()
+    metrics = metrics or GatewayMetrics()
+    if runtime is None:
+        runtime = InferenceRuntime(
+            settings, mask_store=mask_store, metrics=metrics, client_factory=client_factory, transports=transports
+        )
+    else:
+        settings.validate_policy(list(rt.config for rt in runtime.runtimes.values()))
+    state = GatewayState(
+        settings=settings,
+        runtime=runtime,
+        keys=key_store if key_store is not None else ApiKeyStore(settings.api_keys_file),
+        rate_limiter=rate_limiter or RateLimiter(settings.requests_per_minute, settings.tokens_per_minute),
+        quotas=quotas or QuotaTracker(settings.daily_token_quota, settings.quota_state_file),
+        audit=audit or AuditLog(settings.audit_log_file),
+        metrics=metrics,
+    )
+    req_counter = metrics.get("pgw_gateway_requests_total")
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Any) -> AsyncIterator[None]:
+        state.audit.event("gateway.start", action="start")
+        try:
+            await runtime.start()
+        except BaseException:
+            await runtime.stop()
+            raise
+        try:
+            yield
+        finally:
+            await runtime.stop()
+            state.audit.event("gateway.stop", action="stop")
+            state.audit.close()
+
+    dev = settings.allow_dev_modes
+    app = FastAPI(
+        title="PGW gateway",
+        version="1",
+        lifespan=lifespan,
+        docs_url="/docs" if dev else None,
+        redoc_url=None,
+        openapi_url="/openapi.json" if dev else None,
+    )
+    app.state.pgw = state
+    if settings.cors_origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
+                           allow_headers=["Authorization", "Content-Type"])
+    app.add_middleware(_BodyLimit, limit=settings.max_body_bytes)
+
+    # ---- errors -----------------------------------------------------------------------------------
+    def _err(exc: PGWError, request_id: str | None = None) -> Any:
+        headers = {}
+        ra = _retry_after(exc)
+        if ra is not None and exc.http_status in (429, 503):
+            headers["Retry-After"] = ra
+        if request_id:
+            headers["x-request-id"] = request_id
+        return JSONResponse(error_body(exc), status_code=exc.http_status, headers=headers)
+
+    @app.exception_handler(PGWError)
+    async def _pgw_error(request: Request, exc: PGWError) -> Any:
+        if exc.code == ErrorCode.INTERNAL:
+            log.error("internal error on %s: %s", request.url.path, type(exc).__name__)
+        status = 404 if isinstance(exc, KeyNotFoundError) else exc.http_status
+        resp = _err(exc)
+        resp.status_code = status
+        return resp
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation(request: Request, exc: RequestValidationError) -> Any:
+        errs = exc.errors()
+        first = errs[0] if errs else {}
+        loc = ".".join(str(p) for p in first.get("loc", ()) if p != "body") or None
+        msg = f"invalid request: {first.get('msg', 'validation failed')}"
+        body = {"error": {"message": msg, "type": "invalid_request_error", "code": str(ErrorCode.PROTOCOL),
+                          "param": loc}}
+        return JSONResponse(body, status_code=400)
+
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception) -> Any:
+        log.error("unhandled error on %s: %s", request.url.path, type(exc).__name__)
+        return JSONResponse(error_body(PGWError("internal error")), status_code=500)
+
+    # ---- auth ---------------------------------------------------------------------------------------
+    def _bearer(request: Request) -> str | None:
+        h = request.headers.get("authorization")
+        if not h:
+            return None
+        scheme, _, tok = h.partition(" ")
+        if scheme.lower() != "bearer" or not tok.strip():
+            raise AuthError("Authorization header must be 'Bearer <key>'")
+        return tok.strip()
+
+    def _client(request: Request) -> str | None:
+        return request.client.host if request.client is not None else None
+
+    def _auth_failed(request: Request, exc: PGWError, endpoint: str) -> None:
+        state.audit.event(
+            "auth.failed", endpoint=endpoint, code=str(exc.code), client=_client(request),
+            key_id=str(exc.details.get("key_id")) if exc.details.get("key_id") else None,
+        )
+
+    def require_key(request: Request, endpoint: str) -> ApiKey:
+        try:
+            tok = _bearer(request)
+            if tok is None:
+                if settings.allow_anonymous and settings.allow_dev_modes:
+                    return ANONYMOUS_KEY
+                raise AuthError("missing API key (Authorization: Bearer <key>)")
+            key = state.keys.verify(tok)
+            if not key.has_scope("inference"):
+                raise PGWError("API key lacks the 'inference' scope", code=ErrorCode.PERMISSION_DENIED,
+                               details={"key_id": key.key_id})
+            return key
+        except PGWError as exc:
+            _auth_failed(request, exc, endpoint)
+            req_counter.labels(model="", endpoint=endpoint, status=str(exc.http_status)).inc()
+            raise
+
+    def require_admin(request: Request, endpoint: str) -> str:
+        """Returns the actor id for the audit log."""
+        try:
+            tok = _bearer(request)
+            if tok is None:
+                raise AuthError("missing admin credentials")
+            admin = settings.admin_token
+            if admin is not None and hmac.compare_digest(tok.encode(), admin.get_secret_value().encode()):
+                return "admin-token"
+            if tok.startswith("pgw-"):
+                key = state.keys.verify(tok)
+                if key.has_scope("admin"):
+                    return key.key_id
+                raise PGWError("API key lacks the 'admin' scope", code=ErrorCode.PERMISSION_DENIED,
+                               details={"key_id": key.key_id})
+            raise AuthError("invalid admin credentials")
+        except PGWError as exc:
+            _auth_failed(request, exc, endpoint)
+            raise
+
+    def _model_for_key(key: ApiKey, model: str) -> ModelRuntime:
+        if not key.allows_model(model):
+            raise PGWError(f"model {model!r} does not exist", code=ErrorCode.MODEL_NOT_FOUND,
+                           details={"model": model})
+        return runtime.get(model)
+
+    # ---- inference core -------------------------------------------------------------------------------
+    async def _admit(
+        rt: ModelRuntime, key: ApiKey, prompts: list[list[int]], params: SamplingParams, rid: str
+    ) -> tuple[_KeyLease, list[ActiveSession]]:
+        est = sum(len(p) + params.max_tokens for p in prompts)
+        rt.check_available()
+        lease = state.lease(key, est)
+        sessions: list[ActiveSession] = []
+        try:
+            for i, p in enumerate(prompts):
+                sessions.append(await rt.open_session(p, params, request_id=rid if i == 0 else f"{rid}-{i}"))
+        except BaseException:
+            for s in sessions:
+                await s.close()
+            lease.finish(0)
+            raise
+        return lease, sessions
+
+    async def _collect(sess: ActiveSession, stop_ids: frozenset[int]) -> _Collected:
+        out = _Collected()
+        parts: list[str] = []
+        async for ev in sess.stream():
+            out.tokens += 1
+            parts.append(ev.text)
+            if _visible(ev, stop_ids):
+                out.events.append(ev)
+            if ev.finish_reason is not None:
+                out.finish = str(ev.finish_reason)
+        out.text = "".join(parts)
+        return out
+
+    def _audit_request(
+        endpoint: str, rid: str, key: ApiKey, rt: ModelRuntime | None, status: int, code: str | None,
+        t0: float, sessions: list[ActiveSession], stream: bool,
+    ) -> None:
+        req_counter.labels(model=rt.name if rt else "", endpoint=endpoint, status=str(status)).inc()
+        state.audit.event(
+            "inference",
+            request_id=rid, key_id=key.key_id, model=rt.name if rt else None, endpoint=endpoint, status=status,
+            code=code, stream=stream,
+            prompt_tokens=sum(len(s.prompt_ids) for s in sessions),
+            completion_tokens=sum(s.completion_tokens for s in sessions),
+            masks_reserved=sum(s.masks_reserved for s in sessions),
+            masks_consumed=sum(s.masks_consumed for s in sessions),
+            queue_ms=round(max((s.queue_s for s in sessions), default=0.0) * 1e3, 1),
+            ttft_ms=round(sessions[0].ttft_s * 1e3, 1) if sessions and sessions[0].ttft_s is not None else None,
+            finish_reason=",".join(s.finish_reason or "" for s in sessions) if sessions else None,
+            duration_ms=round((time.perf_counter() - t0) * 1e3, 1),
+            mode=rt.mode if rt else None, ring=rt.ring.name if rt else None,
+            prompts=len(sessions) if len(sessions) > 1 else None,
+        )
+
+    async def _handle(
+        request: Request,
+        endpoint: str,
+        req: ChatCompletionRequest | CompletionRequest,
+        build_prompts: Callable[[ModelRuntime], Awaitable[tuple[list[list[int]], list[str]]]],
+        logprobs: int | None,
+        render: Callable[..., Any],
+        render_stream: Callable[..., AsyncIterator[bytes]],
+    ) -> Any:
+        t0 = time.perf_counter()
+        prefix = "chatcmpl-" if endpoint == "chat" else "cmpl-"
+        rid = prefix + uuid.uuid4().hex[:24]
+        key = require_key(request, endpoint)
+        rt: ModelRuntime | None = None
+        sessions: list[ActiveSession] = []
+        lease: _KeyLease | None = None
+        try:
+            rt = _model_for_key(key, req.model)
+            prompts, prompt_texts = await build_prompts(rt)
+            if req.stream and len(prompts) > 1:
+                raise InvalidRequestError("streaming supports a single prompt")
+            max_tokens = min(rt.clamp_max_tokens(len(p), req.requested_max_tokens) for p in prompts)
+            params = _sampling(req, max_tokens, logprobs)
+            lease, sessions = await _admit(rt, key, prompts, params, rid)
+        except PGWError as exc:
+            _audit_request(endpoint, rid, key, rt, exc.http_status, str(exc.code), t0, sessions, req.stream)
+            raise
+        assert rt is not None and lease is not None
+        stop_ids = _stop_ids(rt, params)
+        created = int(time.time())
+        fp_short = rt.fingerprint[:12] if rt.fingerprint else None
+        model_rt: ModelRuntime = rt
+        the_lease: _KeyLease = lease
+
+        def _usage() -> dict[str, int]:
+            p = sum(len(s.prompt_ids) for s in sessions)
+            c = sum(s.completion_tokens for s in sessions)
+            return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": p + c}
+
+        if not req.stream:
+            status, code = 200, None
+            try:
+                tasks = [asyncio.ensure_future(_collect(s, stop_ids)) for s in sessions]
+                try:
+                    results = await asyncio.gather(*tasks)
+                except BaseException:
+                    for t in tasks:
+                        t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
+                payload = render(rid, created, model_rt, fp_short, results, prompt_texts, _usage())
+                return JSONResponse(payload, headers={"x-request-id": rid})
+            except PGWError as exc:
+                status, code = exc.http_status, str(exc.code)
+                for s in sessions:
+                    await s.close()
+                return _err(exc, rid)
+            except BaseException:
+                status, code = 500, str(ErrorCode.INTERNAL)
+                for s in sessions:
+                    await s.close()
+                raise
+            finally:
+                the_lease.finish(_usage()["total_tokens"])
+                _audit_request(endpoint, rid, key, model_rt, status, code, t0, sessions, False)
+
+        sess = sessions[0]
+        outcome: dict[str, Any] = {"status": 200, "code": None}
+
+        async def body() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in render_stream(rid, created, model_rt, fp_short, sess, stop_ids,
+                                                 prompt_texts[0], req.include_usage, _usage):
+                    yield chunk
+            except PGWError as exc:
+                outcome["status"], outcome["code"] = exc.http_status, str(exc.code)
+                yield _sse(error_body(exc))
+            except asyncio.CancelledError:
+                outcome["code"] = "cancelled"
+                raise
+            except Exception as exc:
+                outcome["status"], outcome["code"] = 500, str(ErrorCode.INTERNAL)
+                log.error("stream failed: %s", type(exc).__name__, extra={"request_id": rid})
+                yield _sse(error_body(PGWError("internal error")))
+            yield _SSE_DONE
+
+        async def on_close() -> None:
+            await sess.close()
+            the_lease.finish(_usage()["total_tokens"])
+            _audit_request(endpoint, rid, key, model_rt, int(outcome["status"]), outcome["code"], t0, sessions, True)
+
+        return _managed_stream(body(), on_close, {"x-request-id": rid, "Cache-Control": "no-cache",
+                                                  "X-Accel-Buffering": "no"})
+
+    # ---- /v1/chat/completions ---------------------------------------------------------------------
+    def _render_chat(rid: str, created: int, rt: ModelRuntime, fp: str | None, results: list[_Collected],
+                     prompt_texts: list[str], usage: dict[str, int]) -> dict[str, Any]:
+        r = results[0]
+        choice: dict[str, Any] = {
+            "index": 0,
+            "message": {"role": "assistant", "content": r.text},
+            "logprobs": _chat_logprobs(r.events, _TokenText(rt)) if chat_logprobs_enabled(r) else None,
+            "finish_reason": r.finish,
+        }
+        return {"id": rid, "object": "chat.completion", "created": created, "model": rt.name,
+                "system_fingerprint": fp, "choices": [choice], "usage": usage}
+
+    def chat_logprobs_enabled(r: _Collected) -> bool:
+        return any(ev.logprob is not None for ev in r.events)
+
+    async def _stream_chat(rid: str, created: int, rt: ModelRuntime, fp: str | None, sess: ActiveSession,
+                           stop_ids: frozenset[int], prompt_text: str, include_usage: bool,
+                           usage: Callable[[], dict[str, int]]) -> AsyncIterator[bytes]:
+        base = {"id": rid, "object": "chat.completion.chunk", "created": created, "model": rt.name,
+                "system_fingerprint": fp}
+        extra = {"usage": None} if include_usage else {}
+        tt = _TokenText(rt)
+        yield _sse({**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""},
+                                         "logprobs": None, "finish_reason": None}], **extra})
+        async for ev in sess.stream():
+            vis = _visible(ev, stop_ids)
+            if not ev.text and ev.finish_reason is None:
+                if not (vis and ev.logprob is not None):
+                    continue
+            delta: dict[str, Any] = {"content": ev.text} if ev.text else {}
+            lp = _chat_logprobs([ev], tt) if (vis and ev.logprob is not None) else None
+            yield _sse({**base, "choices": [{"index": 0, "delta": delta, "logprobs": lp,
+                                             "finish_reason": str(ev.finish_reason) if ev.finish_reason else None}],
+                        **extra})
+        if include_usage:
+            yield _sse({**base, "choices": [], "usage": usage()})
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+        async def prompts(rt: ModelRuntime) -> tuple[list[list[int]], list[str]]:
+            msgs = _chat_messages(req)
+            ids = await asyncio.to_thread(rt.encode_chat, msgs)
+            return [ids], [""]
+
+        lp = (req.top_logprobs or 0) if req.logprobs else None
+        return await _handle(request, "chat", req, prompts, lp, _render_chat, _stream_chat)
+
+    # ---- /v1/completions -------------------------------------------------------------------------
+    def _render_completion(rid: str, created: int, rt: ModelRuntime, fp: str | None, results: list[_Collected],
+                           prompt_texts: list[str], usage: dict[str, int]) -> dict[str, Any]:
+        choices = []
+        tt = _TokenText(rt)
+        for i, (r, ptext) in enumerate(zip(results, prompt_texts, strict=True)):
+            text = (ptext + r.text) if ptext else r.text
+            lp = _completion_logprobs(r.events, tt, len(ptext)) if chat_logprobs_enabled(r) else None
+            choices.append({"index": i, "text": text, "logprobs": lp, "finish_reason": r.finish})
+        return {"id": rid, "object": "text_completion", "created": created, "model": rt.name,
+                "system_fingerprint": fp, "choices": choices, "usage": usage}
+
+    async def _stream_completion(rid: str, created: int, rt: ModelRuntime, fp: str | None, sess: ActiveSession,
+                                 stop_ids: frozenset[int], prompt_text: str, include_usage: bool,
+                                 usage: Callable[[], dict[str, int]]) -> AsyncIterator[bytes]:
+        base = {"id": rid, "object": "text_completion", "created": created, "model": rt.name,
+                "system_fingerprint": fp}
+        extra = {"usage": None} if include_usage else {}
+        tt = _TokenText(rt)
+        offset = len(prompt_text)
+        if prompt_text:
+            yield _sse({**base, "choices": [{"index": 0, "text": prompt_text, "logprobs": None,
+                                             "finish_reason": None}], **extra})
+        async for ev in sess.stream():
+            vis = _visible(ev, stop_ids)
+            if not ev.text and ev.finish_reason is None and not (vis and ev.logprob is not None):
+                continue
+            lp = _completion_logprobs([ev], tt, offset) if (vis and ev.logprob is not None) else None
+            offset += len(ev.text)
+            yield _sse({**base, "choices": [{"index": 0, "text": ev.text, "logprobs": lp,
+                                             "finish_reason": str(ev.finish_reason) if ev.finish_reason else None}],
+                        **extra})
+        if include_usage:
+            yield _sse({**base, "choices": [], "usage": usage()})
+
+    @app.post("/v1/completions")
+    async def completions(req: CompletionRequest, request: Request) -> Any:
+        async def prompts(rt: ModelRuntime) -> tuple[list[list[int]], list[str]]:
+            texts = [req.prompt] if isinstance(req.prompt, str) else list(req.prompt)
+            if len(texts) > settings.max_prompts_per_request:
+                raise InvalidRequestError(f"at most {settings.max_prompts_per_request} prompts per request")
+            if req.suffix:
+                raise InvalidRequestError("suffix is not supported")
+            ids = [await asyncio.to_thread(rt.encode_text, t) for t in texts]
+            echo = texts if req.echo else [""] * len(texts)
+            return ids, echo
+
+        return await _handle(request, "completions", req, prompts, req.logprobs, _render_completion,
+                             _stream_completion)
+
+    # ---- /v1/models -------------------------------------------------------------------------------
+    @app.get("/v1/models")
+    async def list_models(request: Request) -> Any:
+        key = require_key(request, "models")
+        created = int(state.started_at)
+        cards = [ModelCard(id=n, created=created) for n in runtime.names() if key.allows_model(n)]
+        return ModelList(data=cards).model_dump()
+
+    @app.get("/v1/models/{name}")
+    async def get_model(name: str, request: Request) -> Any:
+        key = require_key(request, "models")
+        _model_for_key(key, name)
+        return ModelCard(id=name, created=int(state.started_at)).model_dump()
+
+    # ---- admin ---------------------------------------------------------------------------------
+    @app.get("/admin/status")
+    async def admin_status(request: Request) -> Any:
+        require_admin(request, "admin.status")
+        statuses = await asyncio.to_thread(lambda: [rt.status() for rt in runtime.runtimes.values()])
+        return {
+            "version": 1,
+            "uptime_s": round(time.time() - state.started_at, 1),
+            "production_policy": not settings.allow_dev_modes,
+            "models": statuses,
+            "api_keys": len(state.keys.list()),
+            "egress_allowlist": sorted("{}://{}:{}".format(*o) for o in settings.egress_origins(
+                [rt.config for rt in runtime.runtimes.values()])),
+            "audit_log": str(settings.audit_log_file) if settings.audit_log_file else None,
+            "telemetry": "disabled",
+        }
+
+    @app.get("/admin/masks")
+    async def admin_masks(request: Request) -> Any:
+        require_admin(request, "admin.masks")
+        return await asyncio.to_thread(runtime.masks_status)
+
+    @app.get("/admin/keys")
+    async def admin_keys(request: Request) -> Any:
+        require_admin(request, "admin.keys")
+        keys = state.keys.list()
+        usage = state.quotas.usage([k.key_id for k in keys])
+        return {"keys": [{**k.public(), "tokens_today": usage.get(k.key_id, 0)} for k in keys]}
+
+    @app.post("/admin/keys", status_code=201)
+    async def admin_create_key(request: Request) -> Any:
+        actor = require_admin(request, "admin.keys")
+        try:
+            body = await request.json()
+        except ValueError as exc:
+            raise InvalidRequestError("body must be JSON") from exc
+        if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+            raise InvalidRequestError("body needs a string 'name'")
+
+        def _opt_int(name: str) -> int | None:
+            v = body.get(name)
+            if v is None:
+                return None
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise InvalidRequestError(f"{name} must be an integer")
+            return v
+
+        def _str_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+            v = body.get(name)
+            if v is None:
+                return default
+            if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v) or len(v) > 256:
+                raise InvalidRequestError(f"{name} must be a list of non-empty strings")
+            return tuple(v)
+
+        scopes = _str_list("scopes", ("inference",)) or ("inference",)
+        models = _str_list("models", ())
+        try:
+            rec, plaintext = state.keys.create(
+                body["name"],
+                scopes=scopes,
+                models=models,
+                requests_per_minute=_opt_int("requests_per_minute"),
+                tokens_per_minute=_opt_int("tokens_per_minute"),
+                daily_token_quota=_opt_int("daily_token_quota"),
+                max_concurrent_requests=_opt_int("max_concurrent_requests"),
+            )
+        except PGWError as exc:
+            raise InvalidRequestError(exc.message) from exc
+        state.audit.event("admin.key_created", action="key_create", target=rec.key_id, key_id=actor,
+                          scopes=",".join(rec.scopes))
+        return JSONResponse({"key": plaintext, "record": rec.public()}, status_code=201)
+
+    @app.delete("/admin/keys/{key_id}")
+    async def admin_revoke_key(key_id: str, request: Request) -> Any:
+        actor = require_admin(request, "admin.keys")
+        state.keys.revoke(key_id)
+        state.rate_limiter.forget(key_id)
+        state.audit.event("admin.key_revoked", action="key_revoke", target=key_id, key_id=actor)
+        return {"revoked": key_id}
+
+    @app.post("/admin/models/{name}/reload")
+    async def admin_reload(name: str, request: Request) -> Any:
+        actor = require_admin(request, "admin.models")
+        runtime.get(name)
+        state.audit.event("admin.model_reload", action="model_reload", target=name, key_id=actor)
+        rt = await runtime.reload(name)
+        return {"reloaded": name, "fingerprint": rt.fingerprint, "ready": rt.ready()[0]}
+
+    @app.post("/admin/models/{name}/reset")
+    async def admin_reset(name: str, request: Request) -> Any:
+        actor = require_admin(request, "admin.models")
+        rt = runtime.get(name)
+        body: Any = {}
+        if await request.body():
+            try:
+                body = await request.json()
+            except ValueError as exc:
+                raise InvalidRequestError("body must be JSON") from exc
+        if not isinstance(body, dict):
+            raise InvalidRequestError("body must be a JSON object")
+        flags = {k: body.get(k, True) for k in ("breaker", "noise")}
+        if not all(isinstance(v, bool) for v in flags.values()):
+            raise InvalidRequestError("'breaker' and 'noise' must be booleans")
+        out = rt.reset_safety(breaker=flags["breaker"], noise=flags["noise"])
+        state.audit.event("admin.safety_reset", action="safety_reset", target=name, key_id=actor,
+                          reason=json.dumps(out, sort_keys=True))
+        return {"model": name, **out}
+
+    # ---- ops -----------------------------------------------------------------------------------------
+    @app.get("/healthz")
+    async def healthz() -> Any:
+        return {"status": "ok"}
+
+    @app.get("/readyz")
+    async def readyz() -> Any:
+        details = {}
+        all_ok = bool(runtime.runtimes)
+        for rt in runtime.runtimes.values():
+            ok, reason = await asyncio.to_thread(rt.ready)
+            details[rt.name] = {"ready": ok, "reason": reason}
+            all_ok = all_ok and ok
+        return JSONResponse({"ready": all_ok, "models": details}, status_code=200 if all_ok else 503)
+
+    @app.get("/metrics")
+    async def metrics_route(request: Request) -> Any:
+        if settings.metrics_require_admin:
+            require_admin(request, "metrics")
+        body, ctype = await asyncio.to_thread(metrics.render)
+        return Response(body, media_type=ctype)
+
+    if settings.dashboard_enabled:
+        html = _dashboard_html()
+
+        @app.get("/dashboard")
+        async def dashboard() -> Any:
+            return HTMLResponse(html, headers={"Content-Security-Policy": "default-src 'self' 'unsafe-inline'"})
+
+    return app

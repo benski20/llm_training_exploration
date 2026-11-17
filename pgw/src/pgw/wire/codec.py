@@ -208,6 +208,11 @@ def _unpack(data: bytes | bytearray | memoryview) -> Any:
         raise ProtocolError(f"malformed msgpack body: {type(exc).__name__}") from exc
 
 
+def _reject_json_constant(name: str) -> Any:
+    """``json.loads`` hook: ``NaN`` / ``Infinity`` are not valid JSON and are rejected."""
+    raise ValueError(f"non-standard JSON constant {name}")
+
+
 def _check_depth(obj: Any, depth: int = 0) -> None:
     if depth > _MAX_DEPTH:
         raise ProtocolError("message nesting too deep")
@@ -386,17 +391,20 @@ def _parse_models(d: dict[str, Any], v: int) -> ModelsResponse:
     for i, raw in enumerate(_list(_req(d, "models", ""), "models")):
         ctx = f"models[{i}]"
         m = _map(raw, ctx)
-        linears = []
+        linears: list[LinearInfo] = []
+        seen_ids: set[str] = set()
         for j, lraw in enumerate(_list(_req(m, "linears", ctx), f"{ctx}.linears")):
             lctx = f"{ctx}.linears[{j}]"
             li = _map(lraw, lctx)
-            linears.append(
-                LinearInfo(
-                    id=_linear(_req(li, "id", lctx), f"{lctx}.id"),
-                    out_features=_int(_req(li, "m", lctx), f"{lctx}.m", lo=1),
-                    in_features=_int(_req(li, "n", lctx), f"{lctx}.n", lo=1),
-                )
+            info = LinearInfo(
+                id=_linear(_req(li, "id", lctx), f"{lctx}.id"),
+                out_features=_int(_req(li, "m", lctx), f"{lctx}.m", lo=1),
+                in_features=_int(_req(li, "n", lctx), f"{lctx}.n", lo=1),
             )
+            if info.id in seen_ids:
+                raise ProtocolError(f"{lctx}.id duplicates linear {info.id!r}")
+            seen_ids.add(info.id)
+            linears.append(info)
         rings = tuple(_ring(r, f"{ctx}.rings[]") for r in _list(_req(m, "rings", ctx), f"{ctx}.rings"))
         models.append(
             ModelInfo(
@@ -408,6 +416,9 @@ def _parse_models(d: dict[str, Any], v: int) -> ModelsResponse:
                 max_request_bytes=_int(_req(m, "max_request_bytes", ctx), f"{ctx}.max_request_bytes", lo=1),
             )
         )
+    fps = [m.fingerprint for m in models]
+    if len(set(fps)) != len(fps):
+        raise ProtocolError("models lists the same fingerprint more than once")
     versions = tuple(_int(x, "versions[]", lo=0) for x in _list(d.get("versions", [v]), "versions"))
     return ModelsResponse(
         models=tuple(models),
@@ -489,9 +500,10 @@ def decode_error_json(data: bytes | bytearray | memoryview, *, max_bytes: int = 
     """Parse a JSON :class:`ErrorResponse` (``{"v":1,"type":"error",...}``)."""
     _check_size(data, max_bytes)
     try:
-        obj = json.loads(bytes(data))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ProtocolError("malformed JSON error body") from exc
+        obj = json.loads(bytes(data), parse_constant=_reject_json_constant)
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        # RecursionError: deeply nested arrays/objects (hostile or broken peer).
+        raise ProtocolError(f"malformed JSON error body: {type(exc).__name__}") from exc
     mtype, v, d = _parse_top(obj)
     if mtype != "error":
         raise ProtocolError(f"expected an error message, got type {mtype!r}")

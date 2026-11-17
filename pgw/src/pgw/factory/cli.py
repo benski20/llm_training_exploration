@@ -8,13 +8,14 @@ line options override them. Exit codes: 0 ok, 1 :class:`pgw.core.PGWError`, 3 no
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import signal
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypeVar
@@ -24,6 +25,7 @@ from pydantic import ValidationError
 
 from pgw.core.errors import ConfigError, PGWError
 from pgw.core.fingerprint import short_fingerprint
+from pgw.factory.governor import FactoryStopped, Throttle
 
 __all__ = ["factory_group", "main"]
 
@@ -38,12 +40,19 @@ def _handle_errors(fn: F) -> F:
         except NotImplementedError as exc:
             click.echo(f"error: not implemented yet: {exc}", err=True)
             sys.exit(3)
+        except FactoryStopped:
+            click.echo("stopped; the partial segment was discarded", err=True)
+            sys.exit(130)
         except PGWError as exc:
             click.echo(f"error [{exc.code}]: {exc.message}", err=True)
             sys.exit(1)
         except ValidationError as exc:
             click.echo(f"error [config]: {exc}", err=True)
             sys.exit(1)
+        except KeyboardInterrupt:
+            # the partial segment (if any) was aborted by generate_into_store
+            click.echo("interrupted", err=True)
+            sys.exit(130)
 
     return wrapper  # type: ignore[return-value]
 
@@ -64,16 +73,23 @@ def _store_overrides(store_root: Path | None, key_file: Path | None) -> dict[str
     return out
 
 
-def _install_signal_handlers(stop: Callable[[], None]) -> None:
-    if threading.current_thread() is not threading.main_thread():  # pragma: no cover - e.g. CliRunner threads
+@contextlib.contextmanager
+def _signal_handlers(stop: Callable[[], None]) -> Iterator[None]:
+    """Route SIGINT/SIGTERM to ``stop`` (graceful abort of the current segment); restore on exit."""
+    if threading.current_thread() is not threading.main_thread():  # pragma: no cover - e.g. worker threads
+        yield
         return
 
     def handler(signum: int, frame: Any) -> None:
         click.echo(f"received signal {signum}; stopping after aborting the current segment", err=True)
         stop()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, handler)
+    previous = {sig: signal.signal(sig, handler) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for sig, h in previous.items():
+            signal.signal(sig, h)
 
 
 @click.group("factory", context_settings={"help_option_names": ["-h", "--help"]})
@@ -134,13 +150,15 @@ def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, ring
     )
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sink = build_sink(s, store)
-    gens = build_generators(s, open_packs(s))
-    for (fp, ring), gen in gens.items():
-        for i in range(segments):
-            seg = gen.generate_into_store(sink, s.segment_slots, checks=s.checks, chunk_slots=s.chunk_slots,
-                                          factory_id=s.factory_id)
-            click.echo(f"{short_fingerprint(fp)} {ring} segment {i + 1}/{segments}: {seg} "
-                       f"({s.segment_slots} slots, {gen.tokens_per_second():.1f} slots/s)")
+    throttle = Throttle()
+    gens = build_generators(s, open_packs(s), throttle)
+    with _signal_handlers(throttle.stop_event.set):
+        for (fp, ring), gen in gens.items():
+            for i in range(segments):
+                seg = gen.generate_into_store(sink, s.segment_slots, checks=s.checks, chunk_slots=s.chunk_slots,
+                                              factory_id=s.factory_id)
+                click.echo(f"{short_fingerprint(fp)} {ring} segment {i + 1}/{segments}: {seg} "
+                           f"({s.segment_slots} slots, {gen.tokens_per_second():.1f} slots/s)")
 
 
 @factory_group.command("run")
@@ -162,7 +180,7 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
             chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
             export_dir: Path | None, recipient_key: Path | None) -> None:
     """Keep inventories between low water and target (settings from PGW_FACTORY_* / PGW_MASKSTORE_*)."""
-    from pgw.factory.governor import FactoryStopped, apply_process_priority
+    from pgw.factory.governor import apply_process_priority
     from pgw.factory.runtime import build_scheduler, open_store
 
     s = _factory_settings(
@@ -175,19 +193,15 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
     apply_process_priority(s.nice, s.cpu_threads)
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sched = build_scheduler(s, store)
-    _install_signal_handlers(sched.stop)
-    if once:
-        try:
+    with _signal_handlers(sched.stop):
+        if once:
             with sched:
-                ids = sched.run_once()
-        except FactoryStopped:
-            click.echo("stopped", err=True)
-            sys.exit(130)
-        click.echo(f"produced {len(ids)} segment(s)")
-        for i in ids:
-            click.echo(f"  {i}")
-        return
-    sched.run_forever()
+                ids = sched.run_once()  # FactoryStopped -> exit 130 via _handle_errors
+            click.echo(f"produced {len(ids)} segment(s)")
+            for i in ids:
+                click.echo(f"  {i}")
+            return
+        sched.run_forever()
 
 
 @factory_group.command("status")

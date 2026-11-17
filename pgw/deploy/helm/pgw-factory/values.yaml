@@ -1,0 +1,112 @@
+# Default values for pgw-factory. Secrets are NEVER put in values: reference existing Secrets.
+
+image:
+  repository: registry.example.com/pgw/pgw-factory       # use .../pgw-factory-cuda with gpu.enabled
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 120   # the current segment is aborted cleanly on SIGTERM
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    memory: 16Gi
+
+gpu:
+  enabled: false
+  count: 1
+  resourceName: nvidia.com/gpu
+
+# store: write into a local encrypted mask store (customer-run factory)
+# export: write HPKE-sealed segment files for a customer (independent partner factory)
+output: store
+
+# Model packs (the factory needs only the linears shards). Mounted read-only.
+modelPacks:
+  mountPath: /var/lib/pgw/packs
+  existingClaim: ""            # REQUIRED
+  packDirs: [llama3-8b]        # first = PGW_FACTORY_PACK_PATH, the rest = extra packs kept topped up
+
+# Mask store (output=store): the gateway's state volume (pgw-gateway chart, `<release>-state`).
+store:
+  existingClaim: ""            # REQUIRED for output=store
+  mountPath: /var/lib/pgw/state
+  # With a ReadWriteOnce volume the factory must run on the gateway's node.
+  colocateWithGateway:
+    enabled: true
+    gatewayRelease: ""         # pgw-gateway release name (instance label); empty = any gateway
+  keyProvider: env             # env (secrets.kekKey) | kms | pkcs11
+  kmsKeyUri: ""
+
+# Export (output=export): partner mode.
+export:
+  existingClaim: ""            # REQUIRED for output=export
+  mountPath: /var/lib/pgw/export
+  # ConfigMap holding the customer's X25519 public key (not secret).
+  recipientPublicKey:
+    configMap: ""
+    key: recipient.pub
+
+config:
+  logLevel: INFO
+  rings: [K40A12]
+  segmentSlots: 4096
+  chunkSlots: 256
+  checks: 2
+  lowWaterSlots: 16384
+  targetSlots: 65536
+  maxSlotsPerHour: 0           # 0 = unlimited
+  dutyCycle: 1.0
+  nice: 10                     # low CPU priority next to the gateway
+  cpuThreads: 0
+  pollIntervalSeconds: 30
+  factoryId: ""                # recorded in segment headers; default = release name
+  extraEnv: {}
+
+secrets:
+  existingSecret: ""           # REQUIRED for output=store with keyProvider=env
+  kekKey: kek                  # the SAME KEK as the gateway's store
+  kmsMacKey: ""
+
+networkPolicy:
+  enabled: true
+  # The factory needs no network at all. Add rules only for a KMS / HSM endpoint.
+  egress:
+    dns:
+      enabled: false
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+    extraRules: []

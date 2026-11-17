@@ -1,0 +1,65 @@
+# PGW gateway on a VM / bare metal (customer side). Install with deploy/systemd/install.sh.
+# Configuration: /etc/pgw/gateway.env (non-secret PGW_* settings) and systemd credentials for
+# secrets. Egress is restricted to the compute service with IPAddressAllow in a drop-in
+# (/etc/systemd/system/pgw-gateway.service.d/egress.conf), see deploy/vmware/README.md.
+[Unit]
+Description=PGW private gateway (OpenAI-compatible API, one-time-mask inference)
+Documentation=file:///opt/pgw/share/SPEC.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=pgw
+Group=pgw
+EnvironmentFile=/etc/pgw/gateway.env
+# Secrets as systemd credentials (root-owned files, exposed only to this unit under
+# /run/credentials/pgw-gateway.service/; never in the environment of other processes).
+LoadCredential=service-token:/etc/pgw/secrets/service-token
+LoadCredential=admin-token:/etc/pgw/secrets/admin-token
+LoadCredential=kek:/etc/pgw/secrets/kek
+Environment=PGW_MASKSTORE_KEY_PROVIDER=file
+Environment=PGW_MASKSTORE_KEY_FILE=/run/credentials/pgw-gateway.service/kek
+Environment=PGW_GATEWAY_MODELS_FILE=/run/pgw/models.yaml
+RuntimeDirectory=pgw
+RuntimeDirectoryMode=0700
+StateDirectory=pgw
+StateDirectoryMode=0700
+ExecStartPre=/opt/pgw/bin/pgw config render /etc/pgw/models.tmpl.yaml /run/pgw/models.yaml
+ExecStartPre=/opt/pgw/bin/pgw doctor --role gateway --no-gpu
+ExecStart=/bin/sh -c 'PGW_GATEWAY_ADMIN_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/admin-token")" exec /opt/pgw/bin/pgw gateway serve'
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# A filtered call fails with EPERM instead of killing the process (BLAS/OpenMP probe affinity).
+SystemCallErrorNumber=EPERM
+UMask=0077
+ReadWritePaths=/var/lib/pgw
+
+[Install]
+WantedBy=multi-user.target

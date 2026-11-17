@@ -1,0 +1,55 @@
+{
+  "_comment": "Single source of truth for every number quoted in pgw/docs. kind: measured (observed in a run), analytic (computed exactly from model shapes and ring size), derived (arithmetic on measured numbers), estimate (assumption-based; must be labelled 'estimate' wherever it is quoted). 'display' is the exact text used in the documents; tests/docs checks that every entry is quoted and that estimates are labelled.",
+  "sources": {
+    "otp-masks": "Kaggle kernel kaggle/onprem_otp/run.py, log results/kaggle/onprem-otp-masks (Tesla T4, 4 vCPU), 2026-11-16",
+    "otp-cost": "Kaggle kernel kaggle/onprem_otp_cost/run.py, log results/kaggle/onprem-otp-cost (Tesla T4, 4 vCPU Xeon 2.0 GHz avx512f, no VNNI), 2026-11-16",
+    "factory-box": "pgw.factory cpu_int8 benchmark on the 4-core development container (INTERFACE_NOTES.md, 2026-11-17)",
+    "spec": "pgw/SPEC.md and the shapes of the public model configs",
+    "pricing": "Public cloud list prices used in otp-cost (AWS g4dn.xlarge on-demand, approximate T4 spot)"
+  },
+  "entries": [
+    {"id": "server_8b_t4_batch1", "value": 0.452, "unit": "s/token", "kind": "measured", "source": "otp-cost", "display": "0.45 s/token", "conditions": "Llama-3-8B shapes, K=48 (6 int8 limb GEMMs), T4, batch 1, 128 linear groups"},
+    {"id": "server_8b_t4_batch32", "value": 0.014, "unit": "s/token", "kind": "measured", "source": "otp-masks", "display": "0.014 s/token", "conditions": "same, 32 rows per GEMM, amortized per token"},
+    {"id": "plain_fp16_8b_t4_batch1", "value": 0.0585, "unit": "s/token", "kind": "measured", "source": "otp-masks", "display": "0.059 s/token", "conditions": "ordinary fp16 GEMMs, same shapes, batch 1 (reference)"},
+    {"id": "server_70b_t4_batch1", "value": 3.094, "unit": "s/token", "kind": "measured", "source": "otp-masks", "display": "3.1 s/token", "conditions": "Llama-3-70B shapes, K=48, per-layer timing on synthetic weights, T4"},
+    {"id": "server_70b_t4_batch32", "value": 0.0927, "unit": "s/token", "kind": "measured", "source": "otp-masks", "display": "0.093 s/token", "conditions": "same, batch 32 amortized"},
+    {"id": "server_8b_a100_batch32", "value": 0.002, "unit": "s/token", "kind": "estimate", "source": "spec", "display": "2 ms/token", "conditions": "A100/H100 batch 32 amortized, scaled by int8 TOPS ratio (SPEC 14 target)"},
+
+    {"id": "maskgen_8b_t4_k48", "value": 0.0066, "unit": "s/slot", "kind": "measured", "source": "otp-cost", "display": "0.0066 s/slot", "conditions": "Llama-3-8B, K=48, weights resident on GPU, batch 1024-4096"},
+    {"id": "maskgen_8b_t4_k48_per_hour", "value": 550000, "unit": "slots/h", "kind": "measured", "source": "otp-cost", "display": "550k slots/h", "conditions": "same"},
+    {"id": "maskgen_8b_t4_k32", "value": 0.0043, "unit": "s/slot", "kind": "measured", "source": "otp-cost", "display": "0.0043 s/slot", "conditions": "Llama-3-8B, K=32"},
+    {"id": "maskgen_70b_t4_k48", "value": 0.047, "unit": "s/slot", "kind": "measured", "source": "otp-cost", "display": "0.047 s/slot", "conditions": "Llama-3-70B, K=48, weights streamed from host RAM, batch >= 1024"},
+    {"id": "maskgen_70b_t4_k48_per_hour", "value": 77000, "unit": "slots/h", "kind": "measured", "source": "otp-cost", "display": "77k slots/h", "conditions": "same"},
+    {"id": "maskgen_70b_t4_k32", "value": 0.032, "unit": "s/slot", "kind": "measured", "source": "otp-cost", "display": "0.032 s/slot", "conditions": "Llama-3-70B, K=32, streamed"},
+    {"id": "maskgen_cost_8b_k48_spot", "value": 0.36, "unit": "USD per million slots", "kind": "derived", "source": "otp-cost", "display": "$0.36 per million", "conditions": "T4 spot price / measured rate"},
+    {"id": "maskgen_cost_8b_k48_ondemand", "value": 0.96, "unit": "USD per million slots", "kind": "derived", "source": "otp-cost", "display": "$0.96 per million", "conditions": "g4dn.xlarge on-demand / measured rate"},
+    {"id": "maskgen_cost_70b_k48_spot", "value": 2.60, "unit": "USD per million slots", "kind": "derived", "source": "otp-cost", "display": "$2.60 per million", "conditions": "T4 spot, streamed weights"},
+    {"id": "cpu_fbgemm_tops", "value": 0.30, "unit": "int8 TOPS", "kind": "measured", "source": "otp-cost", "display": "0.30 TOPS", "conditions": "fbgemm quantized linear, 4 vCPU Xeon 2.0 GHz avx512f (no VNNI), m=n=4096, 256 rows"},
+    {"id": "cpu_int8_box_tops", "value": 1.0, "unit": "int8 TOPS", "kind": "measured", "source": "factory-box", "display": "1.0 TOPS", "conditions": "torch._int_mm on CPU (oneDNN), 4-core container, pgw cpu_int8 backend"},
+    {"id": "cpu_maskgen_8b_k48", "value": 0.28, "unit": "s/slot", "kind": "derived", "source": "otp-cost", "display": "0.28 s/slot", "conditions": "2 x 6.98e9 params x 6 limbs / 0.30 TOPS (GEMM time only, 4 vCPU)"},
+    {"id": "cpu_maskgen_70b_k48", "value": 2.8, "unit": "s/slot", "kind": "derived", "source": "otp-cost", "display": "2.8 s/slot", "conditions": "same method, 70B"},
+    {"id": "npu_maskgen_8b_k48", "value": "0.003-0.007", "unit": "s/slot", "kind": "estimate", "source": "otp-cost", "display": "3-7 ms/slot", "conditions": "laptop NPU 40 TOPS at 30-60 % utilisation; untested"},
+
+    {"id": "mask_store_8b_k48", "value": 8.26, "unit": "MB/slot", "kind": "analytic", "source": "spec", "display": "8.3 MB", "conditions": "sum of output rows m x L x K/8 = 43008 x 32 x 6 bytes; confirmed by otp-masks"},
+    {"id": "mask_store_8b_k40", "value": 6.88, "unit": "MB/slot", "kind": "analytic", "source": "spec", "display": "6.9 MB", "conditions": "43008 x 32 x 5 bytes"},
+    {"id": "mask_store_05b_k40", "value": 1.52, "unit": "MB/slot", "kind": "analytic", "source": "spec", "display": "1.5 MB", "conditions": "Qwen2.5-0.5B: 12672 x 24 x 5 bytes"},
+    {"id": "mask_store_70b_k48", "value": 40.3, "unit": "MB/slot", "kind": "analytic", "source": "spec", "display": "40.3 MB", "conditions": "Llama-3-70B: 83968 x 80 x 6 bytes"},
+    {"id": "slots_per_tb_8b_k48", "value": 121000, "unit": "slots/TB", "kind": "analytic", "source": "spec", "display": "121k", "conditions": "1e12 / 8.26e6"},
+    {"id": "wire_up_8b_k48", "value": 5.11, "unit": "MB/token", "kind": "analytic", "source": "spec", "display": "5.1 MB", "conditions": "sum of input dims n x L x K/8 = 26624 x 32 x 6 bytes; confirmed by otp-masks"},
+    {"id": "wire_down_8b_k48", "value": 8.26, "unit": "MB/token", "kind": "analytic", "source": "spec", "display": "8.3 MB", "conditions": "same as mask storage"},
+    {"id": "wire_total_8b_k48", "value": 13.4, "unit": "MB/token", "kind": "analytic", "source": "spec", "display": "13.4 MB", "conditions": "5.11 up + 8.26 down, payload only (framing < 0.1 %)"},
+    {"id": "wire_total_8b_k40", "value": 11.1, "unit": "MB/token", "kind": "analytic", "source": "spec", "display": "11.1 MB", "conditions": "4.26 up + 6.88 down"},
+    {"id": "rounds_8b", "value": 128, "unit": "round trips/token", "kind": "analytic", "source": "spec", "display": "128 round trips", "conditions": "4 groups x 32 layers"},
+    {"id": "rounds_70b", "value": 320, "unit": "round trips/token", "kind": "analytic", "source": "spec", "display": "320 round trips", "conditions": "4 groups x 80 layers"},
+    {"id": "rtt_floor_privatelink", "value": 0.13, "unit": "s/token", "kind": "estimate", "source": "spec", "display": "0.13 s/token", "conditions": "128 rounds x ~1 ms RTT (same region, PrivateLink/PSC)"},
+    {"id": "rtt_floor_internet", "value": "1.3-4", "unit": "s/token", "kind": "estimate", "source": "spec", "display": "1.3-4 s/token", "conditions": "128 rounds x 10-30 ms RTT, batch 1"},
+
+    {"id": "exact_logit_diff_05b", "value": 0.0, "unit": "max |logit diff|", "kind": "measured", "source": "otp-masks", "display": "max logit difference 0.0", "conditions": "Qwen2.5-0.5B masked vs quantized plaintext, identical tokens"},
+    {"id": "server_view_chi2", "value": 241.4, "unit": "chi-square, 255 dof", "kind": "measured", "source": "otp-masks", "display": "241.4", "conditions": "top byte of 141,312 server-visible values (expected 255 +/- 22.6)"},
+    {"id": "server_view_corr", "value": -0.0006, "unit": "Pearson r", "kind": "measured", "source": "otp-masks", "display": "-0.0006", "conditions": "correlation of server-visible values with plaintext activations"},
+    {"id": "client_online_crypto_05b", "value": 0.183, "unit": "s for 23 tokens", "kind": "measured", "source": "otp-masks", "display": "0.18 s for 23 tokens", "conditions": "Qwen2.5-0.5B, regenerate r + subtract W r, unoptimised Python"},
+    {"id": "ppl_float", "value": 10.923, "unit": "perplexity", "kind": "measured", "source": "otp-cost", "display": "10.92", "conditions": "Qwen2.5-0.5B, 2048 wikitext-2 tokens, int8 weights, float activations"},
+    {"id": "ppl_a12", "value": 10.928, "unit": "perplexity", "kind": "measured", "source": "otp-cost", "display": "10.93", "conditions": "A12 activations (K40A12), top-1 agreement with float 97.4 %"},
+    {"id": "ppl_a8", "value": 11.092, "unit": "perplexity", "kind": "measured", "source": "otp-cost", "display": "11.09", "conditions": "A8 activations (K32A8), top-1 agreement 92.6 %"}
+  ]
+}

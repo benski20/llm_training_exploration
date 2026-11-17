@@ -1,0 +1,17 @@
+PGW gateway {{ include "pgw-gateway.fullname" . }} ({{ .Chart.AppVersion }}) installed.
+
+1. Create API keys (shown once):
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "pgw-gateway.fullname" . }} -- \
+       pgw gateway keys create --name my-app
+2. Fill the mask store: install the pgw-factory chart against claim
+   "{{ include "pgw-gateway.stateClaim" . }}" (or import partner segments with `pgw maskstore import`).
+3. Check the deployment:
+     kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "pgw-gateway.fullname" . }} -- pgw doctor --role gateway
+{{- if .Values.networkPolicy.enabled }}
+{{- $cs := .Values.networkPolicy.egress.computeService }}
+{{- if not (or $cs.cidrs $cs.podSelector $cs.namespaceSelector) }}
+
+WARNING: networkPolicy.egress.computeService has no cidrs or selectors, so the gateway cannot reach
+the compute service. Set networkPolicy.egress.computeService.cidrs to the service endpoint addresses.
+{{- end }}
+{{- end }}

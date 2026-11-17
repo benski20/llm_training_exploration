@@ -1,0 +1,257 @@
+"""The service's :class:`pgw.wire.ComputeHandler`: auth, admission control, quotas and compute.
+
+Request path (``POST /pgw/v1/compute``, after the wire router validated headers, size limits and
+payload lengths against :meth:`ServiceHandler.linear_dims`):
+
+1. admission: draining -> ``unavailable``; more than ``max_inflight_requests`` -> ``unavailable``
+   with ``Retry-After``; per-tenant concurrency and row-rate quotas -> ``rate_limited``;
+2. every item is unpacked to int64 ring elements and submitted to the :class:`BatchScheduler`
+   concurrently (items of one request may share a batch with other tenants' rows);
+3. results are packed and returned in request order with server timing.
+
+Nothing here logs or retains payload bytes; the service keeps no state between requests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import math
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from pgw.core.errors import (
+    ErrorCode,
+    PGWError,
+    RateLimitedError,
+    ServiceUnavailableError,
+)
+from pgw.core.packing import pack_ring, unpack_ring
+from pgw.core.ring import RingParams
+from pgw.service.auth import TenantAuthenticator, TenantIdentity
+from pgw.service.batcher import BatchScheduler, BatchTiming
+from pgw.service.config import ServiceSettings
+from pgw.service.metrics import ServiceMetrics
+from pgw.service.registry import ModelRegistry
+from pgw.wire.messages import (
+    ComputeRequest,
+    ComputeResponse,
+    ComputeResult,
+    LinearInfo,
+    ModelInfo,
+    ModelsResponse,
+    ServerTiming,
+)
+from pgw.wire.server import RequestContext
+
+__all__ = ["ServiceHandler", "TokenBucket"]
+
+log = logging.getLogger(__name__)
+
+_UNKNOWN_TENANT = "unknown"
+
+
+class TokenBucket:
+    """Classic token bucket (monotonic clock).
+
+    Args:
+        rate: Tokens per second.
+        burst: Bucket capacity.
+    """
+
+    def __init__(self, rate: float, burst: float, *, clock: Any = time.monotonic):
+        if rate <= 0 or burst <= 0:
+            raise ValueError("rate and burst must be positive")
+        self.rate = float(rate)
+        self.burst = float(burst)
+        self._clock = clock
+        self._tokens = float(burst)
+        self._t = clock()
+
+    def _refill(self) -> None:
+        now = self._clock()
+        self._tokens = min(self.burst, self._tokens + (now - self._t) * self.rate)
+        self._t = now
+
+    def take(self, n: float) -> float:
+        """Charge ``n`` tokens. Returns 0 on success, else seconds to wait before retrying.
+
+        A request larger than ``burst`` is admitted once the bucket is full and then charged in
+        full: the balance goes negative ("debt") and later requests wait until it is repaid. So
+        oversized requests cannot exceed the configured long-run rate (charging only ``burst``
+        would let a tenant send ``max_request`` rows per ``burst / rate`` seconds).
+        """
+        if n < 0:
+            raise ValueError("token count must be >= 0")
+        self._refill()
+        need = min(float(n), self.burst)  # balance required before admission
+        if self._tokens >= need:
+            self._tokens -= float(n)
+            return 0.0
+        return (need - self._tokens) / self.rate
+
+
+@dataclass
+class _TenantState:
+    inflight: int = 0
+    bucket: TokenBucket | None = None
+
+
+class ServiceHandler:
+    """Implements :class:`pgw.wire.ComputeHandler` on top of the registry and batch scheduler.
+
+    Args:
+        settings: Service settings (limits, quotas, offload threshold).
+        registry: Loaded models.
+        batcher: Started :class:`BatchScheduler`.
+        authenticator: Tenant authenticator, or ``None`` to skip authentication entirely
+            (only valid together with ``settings.allow_unauthenticated``).
+        metrics: Service metrics.
+    """
+
+    def __init__(
+        self,
+        settings: ServiceSettings,
+        registry: ModelRegistry,
+        batcher: BatchScheduler,
+        authenticator: TenantAuthenticator | None,
+        metrics: ServiceMetrics,
+    ):
+        self.settings = settings
+        self.registry = registry
+        self.batcher = batcher
+        self.authenticator = authenticator
+        self.metrics = metrics
+        self.draining = False
+        self.inflight = 0
+        self._tenants: dict[str, _TenantState] = {}
+        self._idle = asyncio.Event()
+        self._idle.set()
+
+    # ---- ComputeHandler protocol -------------------------------------------------------------
+    def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
+        """Delegate to :class:`TenantAuthenticator` (anonymous when auth is disabled)."""
+        if self.authenticator is None:
+            return TenantIdentity("anonymous", "anonymous")
+        return self.authenticator.authenticate(authorization, client_cert_subject)
+
+    def linear_dims(self, fingerprint: str, ring: str) -> Mapping[str, tuple[int, int]]:
+        """``{linear: (m, n)}`` of a served model/ring (see :meth:`ModelRegistry.linear_dims`)."""
+        return self.registry.linear_dims(fingerprint, ring)
+
+    async def models(self) -> ModelsResponse:
+        """Served models with their rings, linears and limits."""
+        s = self.settings
+        infos = []
+        for m in self.registry.models():
+            linears = tuple(LinearInfo(sp.id.key, sp.out_features, sp.in_features) for sp in m.specs)
+            infos.append(ModelInfo(m.name, m.fingerprint, tuple(m.rings), linears, s.max_rows_per_item,
+                                   s.max_request_bytes))
+        return ModelsResponse(tuple(infos), server=s.server_name)
+
+    async def compute(self, request: ComputeRequest, ctx: RequestContext) -> ComputeResponse:
+        """Evaluate every item exactly; results in request order."""
+        ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
+        tenant = ident.tenant_id if ident is not None else "anonymous"
+        self._admit(tenant, request.total_rows)
+        st = self._tenants.setdefault(tenant, _TenantState())
+        self.inflight += 1
+        st.inflight += 1
+        self._idle.clear()
+        self.metrics.inflight(self.inflight)
+        try:
+            return await self._compute(request, tenant)
+        finally:
+            self.inflight -= 1
+            st.inflight -= 1
+            self.metrics.inflight(self.inflight)
+            if self.inflight == 0:
+                self._idle.set()
+
+    def on_request_done(self, ctx: RequestContext, status: int, code: str | None) -> None:
+        """Metrics hook called by the wire router after every compute reply."""
+        ident = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
+        tenant = ident.tenant_id if ident is not None else _UNKNOWN_TENANT
+        self.metrics.request_done(tenant, code or "ok", time.monotonic() - ctx.received_at)
+
+    # ---- internals -----------------------------------------------------------------------
+    def _admit(self, tenant: str, rows: int) -> None:
+        s = self.settings
+        if self.draining:
+            raise ServiceUnavailableError("service is draining", details={"retry_after_s": s.retry_after_s})
+        if self.inflight >= s.max_inflight_requests:
+            raise ServiceUnavailableError(
+                "too many in-flight requests", details={"retry_after_s": s.retry_after_s}
+            )
+        st = self._tenants.get(tenant)
+        if s.tenant_max_inflight is not None and st is not None and st.inflight >= s.tenant_max_inflight:
+            raise RateLimitedError(
+                "tenant concurrency limit reached",
+                details={"retry_after_s": s.retry_after_s, "limit": s.tenant_max_inflight},
+            )
+        if s.tenant_rows_per_s is not None:
+            if st is None:
+                st = self._tenants.setdefault(tenant, _TenantState())
+            if st.bucket is None:
+                burst = s.tenant_burst_rows or max(1, math.ceil(2 * s.tenant_rows_per_s))
+                st.bucket = TokenBucket(s.tenant_rows_per_s, burst)
+            wait = st.bucket.take(rows)
+            if wait > 0:
+                raise RateLimitedError("tenant row rate limit exceeded", details={"retry_after_s": round(wait, 3)})
+
+    async def _compute(self, request: ComputeRequest, tenant: str) -> ComputeResponse:
+        ring = RingParams.from_name(request.ring)
+        model = self.registry.get(request.fingerprint)
+        dims = model.linear_dims
+        offload = self.settings.codec_offload_bytes
+        bytes_in = request.payload_bytes
+
+        async def one(i: int) -> tuple[ComputeResult, BatchTiming]:
+            it = request.items[i]
+            m, n = dims[it.linear]
+            rows = int(it.rows)
+            if len(it.x_hat) > offload:
+                x = await asyncio.to_thread(unpack_ring, it.x_hat, (rows, n), ring)
+            else:
+                x = unpack_ring(it.x_hat, (rows, n), ring)
+            y, timing = await self.batcher.submit_timed(request.fingerprint, ring, it.linear, x)
+            if y.shape != (rows, m):  # pragma: no cover - kernel contract
+                raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
+            if rows * m * ring.bytes_per_element > offload:
+                data = await asyncio.to_thread(pack_ring, y, ring)
+            else:
+                data = pack_ring(y, ring)
+            return ComputeResult(it.linear, rows, data), timing
+
+        tasks = [asyncio.ensure_future(one(i)) for i in range(len(request.items))]
+        try:
+            results = await asyncio.gather(*tasks)
+        except BaseException:
+            for t in tasks:
+                t.cancel()
+            raise
+        out = tuple(r[0] for r in results)
+        bytes_out = sum(len(r.y_hat) for r in out)
+        kinds: dict[str, int] = {}
+        for it in request.items:
+            kind = it.linear.split(".", 1)[1]
+            kinds[kind] = kinds.get(kind, 0) + int(it.rows)
+        for kind, rows in kinds.items():
+            self.metrics.rows(tenant, kind, rows)
+        self.metrics.bytes_io(tenant, bytes_in, bytes_out)
+        timing = ServerTiming(
+            queue_ms=round(max((r[1].queue_ms for r in results), default=0.0), 3),
+            compute_ms=round(sum(r[1].compute_ms for r in results), 3),
+            batch_rows=max((r[1].batch_rows for r in results), default=0),
+        )
+        return ComputeResponse(request.request_id, out, timing)
+
+    async def wait_idle(self, timeout: float | None) -> bool:
+        """Wait until no request is in flight; True if idle within ``timeout``."""
+        try:
+            await asyncio.wait_for(self._idle.wait(), timeout=timeout)
+            return True
+        except TimeoutError:
+            return False

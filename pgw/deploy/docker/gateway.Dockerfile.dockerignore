@@ -1,0 +1,11 @@
+# Build context allowlist (BuildKit reads <Dockerfile>.dockerignore next to the Dockerfile).
+# Only what the image needs: never ship packs, mask stores, keys, caches or tests.
+*
+!pyproject.toml
+!README.md
+!src/
+!deploy/docker/entrypoint.sh
+!deploy/docker/healthcheck.py
+**/__pycache__
+**/*.pyc
+**/*.egg-info

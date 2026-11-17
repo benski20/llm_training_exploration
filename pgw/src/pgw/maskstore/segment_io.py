@@ -83,8 +83,13 @@ class RawSegmentWriter:
             raise MaskStoreError("short write to segment file")
         self._written.add(ref.index)
 
-    def publish(self) -> int:
-        """fsync, rename into place, fsync the directory; return the file size."""
+    def publish(self, *, replace: bool = False) -> int:
+        """fsync, rename into place, fsync the directory; return the file size.
+
+        Args:
+            replace: Atomically replace an existing file at the final path (re-encryption during
+                KEK rotation). By default an existing file is an error.
+        """
         if self._fd is None:
             raise MaskStoreError("segment writer is closed")
         if len(self._written) != self._expected:
@@ -97,9 +102,9 @@ class RawSegmentWriter:
                 os.fsync(self._fd)
             os.close(self._fd)
             self._fd = None
-            if self.final_path.exists():
+            if self.final_path.exists() and not replace:
                 raise MaskStoreError(f"segment file {self.final_path.name} already exists")
-            os.rename(self.tmp_path, self.final_path)
+            os.replace(self.tmp_path, self.final_path)
             if self.fsync:
                 fsync_dir(self.final_path.parent)
         except OSError as exc:

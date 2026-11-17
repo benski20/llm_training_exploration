@@ -39,6 +39,7 @@ __all__ = [
     "StoreSink",
     "load_recipient_public_key",
     "read_segment_header",
+    "validate_recipient_public_key",
 ]
 
 log = logging.getLogger(__name__)
@@ -173,11 +174,40 @@ class StoreSink:
 
 
 # ---- partner export ------------------------------------------------------------------------------
+def validate_recipient_public_key(key: bytes) -> bytes:
+    """Check that ``key`` is a usable X25519 public key (32 bytes, not a small-order point).
+
+    Sealing a DEK to a small-order point yields an all-zero shared secret, i.e. a DEK anyone
+    could open, so such keys are rejected here instead of failing late (or silently) in HPKE.
+
+    Raises:
+        ConfigError: malformed or weak key.
+    """
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+
+    if len(key) != 32:
+        raise ConfigError("recipient public key must be 32 bytes (X25519)")
+    try:
+        pub = X25519PublicKey.from_public_bytes(bytes(key))
+        X25519PrivateKey.generate().exchange(pub)  # raises on small-order points (all-zero secret)
+    except ValueError as exc:
+        raise ConfigError("recipient public key is not a valid X25519 public key (small-order point?)") from exc
+    return bytes(key)
+
+
 def load_recipient_public_key(path: str | Path) -> bytes:
-    """Read a customer's X25519 public key: 32 raw bytes, or 64 hex chars, or base64 text."""
-    data = Path(path).read_bytes()
+    """Read a customer's X25519 public key: 32 raw bytes, or 64 hex chars, or base64 text.
+
+    Raises:
+        ConfigError: unreadable file, wrong encoding/length, or a weak (small-order) key.
+    """
+    p = Path(path)
+    try:
+        data = p.read_bytes()
+    except OSError as exc:
+        raise ConfigError(f"cannot read recipient public key {p.name}: {exc.strerror}") from exc
     if len(data) == 32:
-        return data
+        return validate_recipient_public_key(data)
     text = data.decode("ascii", errors="strict").strip() if data.isascii() else ""
     for decode in (bytes.fromhex, base64.b64decode):
         try:
@@ -185,8 +215,8 @@ def load_recipient_public_key(path: str | Path) -> bytes:
         except (ValueError, binascii.Error):
             continue
         if len(key) == 32:
-            return key
-    raise ConfigError(f"{Path(path).name}: expected a 32-byte X25519 public key (raw, hex or base64)")
+            return validate_recipient_public_key(key)
+    raise ConfigError(f"{p.name}: expected a 32-byte X25519 public key (raw, hex or base64)")
 
 
 def _key_provider_base() -> Any:
@@ -203,9 +233,7 @@ class RecipientWrapProvider:
     """
 
     def __init__(self, recipient_public: bytes):
-        if len(recipient_public) != 32:
-            raise ConfigError("recipient public key must be 32 bytes (X25519)")
-        self._pub = bytes(recipient_public)
+        self._pub = validate_recipient_public_key(bytes(recipient_public))
         self._key_id = hashlib.sha256(self._pub).hexdigest()[:16]
 
     @property
@@ -303,7 +331,8 @@ class ExportSink:
             from pgw.maskstore import MaskStore
 
             def store_factory(root: Path, kp: Any) -> Any:
-                return MaskStore.open(root, kp)
+                # staging only holds segments between commit and export: no low-water alerts
+                return MaskStore.open(root, kp, low_water_slots=0)
 
         self._staging = store_factory(self.staging_root, self.provider)
 
@@ -350,6 +379,32 @@ class ExportSink:
             )
         log.info("exported segment %s (%d slots, %.1f MB) to outbox", seg_id, info.slots, info.size / 1e6)
         return dest
+
+    def recover(self) -> list[str]:
+        """Crash recovery (call at factory start-up, under the factory lock); return published ids.
+
+        * Deletes partial staging files of interrupted writes (``cleanup_partials``).
+        * Publishes segments that were committed in staging but not moved to the outbox before a
+          crash. They are sealed to the recipient and were never used, so publishing is safe;
+          ``export_segment`` refuses anything already exported or touched (no duplicates).
+        """
+        cleanup = getattr(self._staging, "cleanup_partials", None)
+        if callable(cleanup):
+            removed = cleanup()
+            if removed:
+                log.warning("removed %d partial staging file(s) from an interrupted run", len(removed))
+        published: list[str] = []
+        for p in sorted(self.staging_root.rglob(f"*{_SUFFIX}")):
+            try:
+                seg_id = _segment_info(p).segment_id
+                self._publish(seg_id)
+            except MaskStoreError as exc:
+                log.warning("staging segment %s left in place: %s", p.name, exc.message)
+                continue
+            published.append(seg_id)
+        if published:
+            log.warning("published %d segment(s) stranded in staging by an interrupted run", len(published))
+        return published
 
     def default_levels(self) -> tuple[int, int] | None:
         """No store-provided levels; the factory settings decide."""

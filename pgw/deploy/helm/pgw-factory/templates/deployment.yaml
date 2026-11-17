@@ -1,0 +1,198 @@
+{{- $packs := required "modelPacks.packDirs needs at least one pack directory" .Values.modelPacks.packDirs -}}
+{{- $extra := list -}}
+{{- range $i, $p := $packs -}}
+{{- if $i -}}
+{{- $extra = append $extra (printf "%s/%s" $.Values.modelPacks.mountPath $p) -}}
+{{- end -}}
+{{- end -}}
+{{- if not (or (eq .Values.output "store") (eq .Values.output "export")) -}}
+{{- fail "output must be 'store' or 'export'" -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgw-factory.fullname" . }}
+  labels:
+    {{- include "pgw-factory.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate    # one writer per store / outbox
+  selector:
+    matchLabels:
+      {{- include "pgw-factory.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pgw-factory.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "pgw-factory.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: factory
+          image: {{ include "pgw-factory.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["pgw", "factory", "run"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: PGW_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: PGW_LOG_JSON
+              value: "true"
+            - name: PGW_FACTORY_PACK_PATH
+              value: {{ printf "%s/%s" .Values.modelPacks.mountPath (index $packs 0) | quote }}
+            - name: PGW_FACTORY_EXTRA_PACK_PATHS
+              value: {{ toJson $extra | quote }}
+            - name: PGW_FACTORY_RING
+              value: {{ index .Values.config.rings 0 | quote }}
+            - name: PGW_FACTORY_RINGS
+              value: {{ toJson .Values.config.rings | quote }}
+            - name: PGW_FACTORY_DEVICE
+              value: {{ ternary "cuda" "cpu" .Values.gpu.enabled | quote }}
+            - name: PGW_FACTORY_SEGMENT_SLOTS
+              value: {{ .Values.config.segmentSlots | quote }}
+            - name: PGW_FACTORY_CHUNK_SLOTS
+              value: {{ .Values.config.chunkSlots | quote }}
+            - name: PGW_FACTORY_CHECKS
+              value: {{ .Values.config.checks | quote }}
+            - name: PGW_FACTORY_LOW_WATER_SLOTS
+              value: {{ .Values.config.lowWaterSlots | quote }}
+            - name: PGW_FACTORY_TARGET_SLOTS
+              value: {{ .Values.config.targetSlots | quote }}
+            - name: PGW_FACTORY_MAX_SLOTS_PER_HOUR
+              value: {{ .Values.config.maxSlotsPerHour | quote }}
+            - name: PGW_FACTORY_DUTY_CYCLE
+              value: {{ .Values.config.dutyCycle | quote }}
+            - name: PGW_FACTORY_NICE
+              value: {{ .Values.config.nice | quote }}
+            - name: PGW_FACTORY_CPU_THREADS
+              value: {{ .Values.config.cpuThreads | quote }}
+            - name: PGW_FACTORY_POLL_INTERVAL_S
+              value: {{ .Values.config.pollIntervalSeconds | quote }}
+            - name: PGW_FACTORY_FACTORY_ID
+              value: {{ default .Release.Name .Values.config.factoryId | quote }}
+            - name: PGW_FACTORY_OUTPUT
+              value: {{ .Values.output | quote }}
+            {{- if eq .Values.output "store" }}
+            - name: PGW_MASKSTORE_ROOT
+              value: {{ printf "%s/masks" .Values.store.mountPath | quote }}
+            - name: PGW_MASKSTORE_KEY_PROVIDER
+              value: {{ .Values.store.keyProvider | quote }}
+            {{- if eq .Values.store.keyProvider "env" }}
+            - name: PGW_MASKSTORE_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "secrets.existingSecret is required (the store KEK)" .Values.secrets.existingSecret }}
+                  key: {{ .Values.secrets.kekKey }}
+            {{- end }}
+            {{- if eq .Values.store.keyProvider "kms" }}
+            - name: PGW_MASKSTORE_KMS_KEY_URI
+              value: {{ required "store.kmsKeyUri is required for keyProvider=kms" .Values.store.kmsKeyUri | quote }}
+            {{- if .Values.secrets.kmsMacKey }}
+            - name: PGW_MASKSTORE_KMS_MAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: {{ .Values.secrets.kmsMacKey }}
+            {{- end }}
+            {{- end }}
+            {{- else }}
+            - name: PGW_FACTORY_EXPORT_DIR
+              value: {{ .Values.export.mountPath | quote }}
+            - name: PGW_FACTORY_RECIPIENT_PUBLIC_KEY_FILE
+              value: {{ printf "/etc/pgw/recipient/%s" .Values.export.recipientPublicKey.key | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.config.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          resources:
+            {{- $res := deepCopy .Values.resources }}
+            {{- if .Values.gpu.enabled }}
+            {{- $limits := default (dict) $res.limits }}
+            {{- $_ := set $limits .Values.gpu.resourceName .Values.gpu.count }}
+            {{- $_ := set $res "limits" $limits }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
+          volumeMounts:
+            - name: packs
+              mountPath: {{ .Values.modelPacks.mountPath }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if eq .Values.output "store" }}
+            - name: store
+              mountPath: {{ .Values.store.mountPath }}
+            {{- else }}
+            - name: export
+              mountPath: {{ .Values.export.mountPath }}
+            - name: recipient
+              mountPath: /etc/pgw/recipient
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: packs
+          persistentVolumeClaim:
+            claimName: {{ required "modelPacks.existingClaim is required" .Values.modelPacks.existingClaim }}
+            readOnly: true
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if eq .Values.output "store" }}
+        - name: store
+          persistentVolumeClaim:
+            claimName: {{ required "store.existingClaim is required for output=store (the pgw-gateway state claim)" .Values.store.existingClaim }}
+        {{- else }}
+        - name: export
+          persistentVolumeClaim:
+            claimName: {{ required "export.existingClaim is required for output=export" .Values.export.existingClaim }}
+        - name: recipient
+          configMap:
+            name: {{ required "export.recipientPublicKey.configMap is required for output=export" .Values.export.recipientPublicKey.configMap }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if and (eq .Values.output "store") .Values.store.colocateWithGateway.enabled }}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: pgw-gateway
+                  {{- with .Values.store.colocateWithGateway.gatewayRelease }}
+                  app.kubernetes.io/instance: {{ . }}
+                  {{- end }}
+      {{- end }}
+      {{- $tol := .Values.tolerations }}
+      {{- if .Values.gpu.enabled }}
+      {{- $tol = append $tol (dict "key" .Values.gpu.resourceName "operator" "Exists" "effect" "NoSchedule") }}
+      {{- end }}
+      {{- with $tol }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

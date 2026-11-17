@@ -1,0 +1,11 @@
+PGW mask factory {{ include "pgw-factory.fullname" . }} ({{ .Chart.AppVersion }}), output={{ .Values.output }}.
+{{- if eq .Values.output "store" }}
+
+Masks are written into the store on claim "{{ .Values.store.existingClaim }}". Inventory:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "pgw-factory.fullname" . }} -- pgw factory status
+{{- else }}
+
+HPKE-sealed segments are written to claim "{{ .Values.export.existingClaim }}". Deliver them to the
+customer, who imports them with `pgw maskstore import`. This factory must be operated
+independently of the compute-service operator.
+{{- end }}

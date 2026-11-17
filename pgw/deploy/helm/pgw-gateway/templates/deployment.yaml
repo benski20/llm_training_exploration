@@ -1,0 +1,284 @@
+{{- $secret := include "pgw-gateway.secretName" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pgw-gateway.fullname" . }}
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+spec:
+  {{- if gt (int .Values.replicaCount) 1 }}
+  {{- fail "replicaCount must be 1: a mask store has exactly one gateway writer (single-use masks)" }}
+  {{- end }}
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate    # never two pods on one single-use mask store
+  selector:
+    matchLabels:
+      {{- include "pgw-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pgw-gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/models: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "pgw-gateway.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if and (not .Values.modelPacks.existingClaim) .Values.modelPacks.image.repository }}
+      initContainers:
+        - name: copy-packs
+          image: {{ printf "%s:%s" .Values.modelPacks.image.repository (default "latest" .Values.modelPacks.image.tag) }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "cp -a {{ .Values.modelPacks.image.path }}/. {{ .Values.modelPacks.mountPath }}/"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: packs
+              mountPath: {{ .Values.modelPacks.mountPath }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "pgw-gateway.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["pgw", "gateway", "serve"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PGW_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: PGW_LOG_JSON
+              value: "true"
+            - name: PGW_RENDER
+              value: /etc/pgw/models/models.tmpl.json:/run/pgw/models.json
+            - name: PGW_GATEWAY_HOST
+              value: "0.0.0.0"
+            - name: PGW_GATEWAY_PORT
+              value: "8080"
+            - name: PGW_GATEWAY_MODELS_FILE
+              value: /run/pgw/models.json
+            - name: PGW_GATEWAY_MASKSTORE_ROOT
+              value: {{ printf "%s/masks" .Values.state.mountPath | quote }}
+            - name: PGW_GATEWAY_API_KEYS_FILE
+              value: {{ printf "%s/api_keys.json" .Values.state.mountPath | quote }}
+            - name: PGW_GATEWAY_QUOTA_STATE_FILE
+              value: {{ printf "%s/quota.json" .Values.state.mountPath | quote }}
+            - name: PGW_GATEWAY_AUDIT_LOG_FILE
+              value: {{ printf "%s/audit.jsonl" .Values.state.mountPath | quote }}
+            - name: PGW_GATEWAY_REQUIRE_SERVICE_TLS
+              value: "true"
+            - name: PGW_GATEWAY_REQUESTS_PER_MINUTE
+              value: {{ .Values.config.requestsPerMinute | quote }}
+            - name: PGW_GATEWAY_TOKENS_PER_MINUTE
+              value: {{ .Values.config.tokensPerMinute | quote }}
+            - name: PGW_GATEWAY_DEFAULT_MAX_TOKENS
+              value: {{ .Values.config.defaultMaxTokens | quote }}
+            - name: PGW_GATEWAY_MAX_TOKENS_LIMIT
+              value: {{ .Values.config.maxTokensLimit | quote }}
+            - name: PGW_GATEWAY_NOISE_MONITOR
+              value: {{ .Values.config.noiseMonitor | quote }}
+            - name: PGW_GATEWAY_NOISE_MONITOR_FAIL_CLOSED
+              value: {{ .Values.config.noiseMonitorFailClosed | quote }}
+            - name: PGW_GATEWAY_METRICS_REQUIRE_ADMIN
+              value: {{ .Values.config.metricsRequireAdmin | quote }}
+            - name: PGW_GATEWAY_DASHBOARD_ENABLED
+              value: {{ .Values.config.dashboardEnabled | quote }}
+            {{- if .Values.config.integrityCooldownSeconds }}
+            - name: PGW_GATEWAY_INTEGRITY_COOLDOWN_S
+              value: {{ .Values.config.integrityCooldownSeconds | quote }}
+            {{- end }}
+            - name: PGW_GATEWAY_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.secrets.adminTokenKey }}
+            - name: PGW_MASKSTORE_ROOT
+              value: {{ printf "%s/masks" .Values.state.mountPath | quote }}
+            - name: PGW_MASKSTORE_KEY_PROVIDER
+              value: {{ .Values.maskstore.keyProvider | quote }}
+            - name: PGW_MASKSTORE_LOW_WATER_SLOTS
+              value: {{ .Values.maskstore.lowWaterSlots | quote }}
+            - name: PGW_MASKSTORE_TARGET_SLOTS
+              value: {{ .Values.maskstore.targetSlots | quote }}
+            {{- if eq .Values.maskstore.keyProvider "env" }}
+            - name: PGW_MASKSTORE_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.secrets.kekKey }}
+            {{- end }}
+            {{- if eq .Values.maskstore.keyProvider "kms" }}
+            - name: PGW_MASKSTORE_KMS_KEY_URI
+              value: {{ required "maskstore.kmsKeyUri is required for keyProvider=kms" .Values.maskstore.kmsKeyUri | quote }}
+            {{- if .Values.secrets.kmsMacKey }}
+            - name: PGW_MASKSTORE_KMS_MAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: {{ .Values.secrets.kmsMacKey }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: PGW_GATEWAY_TLS__CERT_FILE
+              value: /etc/pgw/tls/tls.crt
+            - name: PGW_GATEWAY_TLS__KEY_FILE
+              value: /etc/pgw/tls/tls.key
+            {{- if .Values.tls.requireClientCert }}
+            - name: PGW_GATEWAY_TLS__CA_FILE
+              value: /etc/pgw/tls/ca.crt
+            - name: PGW_GATEWAY_TLS__REQUIRE_CLIENT_CERT
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- range $k, $v := .Values.config.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.maskstore.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if and .Values.tls.enabled .Values.tls.requireClientCert }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          {{- else }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ include "pgw-gateway.scheme" . }}
+            periodSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ include "pgw-gateway.scheme" . }}
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              scheme: {{ include "pgw-gateway.scheme" . }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: packs
+              mountPath: {{ .Values.modelPacks.mountPath }}
+              readOnly: true
+            - name: state
+              mountPath: {{ .Values.state.mountPath }}
+            - name: models
+              mountPath: /etc/pgw/models
+              readOnly: true
+            - name: service-token
+              mountPath: /etc/pgw/secrets
+              readOnly: true
+            - name: run
+              mountPath: /run/pgw
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/pgw/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.serviceClientTls.existingSecret }}
+            - name: service-tls
+              mountPath: /etc/pgw/service-tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: packs
+          {{- if .Values.modelPacks.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.modelPacks.existingClaim }}
+            readOnly: true
+          {{- else if .Values.modelPacks.image.repository }}
+          emptyDir: {}
+          {{- else }}
+          {{- fail "modelPacks.existingClaim or modelPacks.image.repository is required" }}
+          {{- end }}
+        - name: state
+          {{- if .Values.state.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "pgw-gateway.stateClaim" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: models
+          configMap:
+            name: {{ include "pgw-gateway.fullname" . }}-models
+        - name: service-token
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secrets.serviceTokenKey }}
+                path: {{ .Values.secrets.serviceTokenKey }}
+        - name: run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ required "tls.existingSecret is required when tls.enabled" .Values.tls.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if .Values.serviceClientTls.existingSecret }}
+        - name: service-tls
+          secret:
+            secretName: {{ .Values.serviceClientTls.existingSecret }}
+            defaultMode: 0440
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

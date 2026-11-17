@@ -3,8 +3,8 @@
 The factory is throughput-oriented but often shares a GPU or CPU with other work. A
 :class:`Throttle` is consulted after every GEMM chunk:
 
-* ``max_slots_per_hour`` caps the average production rate (token bucket with no burst beyond the
-  current chunk),
+* ``max_slots_per_hour`` caps the production rate (no credit accumulates while idle, so there is
+  no burst beyond the current chunk),
 * ``duty_cycle`` idles ``work * (1 - d) / d`` seconds after ``work`` seconds of compute,
 * a ``stop_event`` aborts generation promptly (the partial segment is discarded by the writer).
 """
@@ -59,8 +59,7 @@ class Throttle:
         self.stop_event = stop_event or threading.Event()
         self._clock = clock
         self._sleep = sleep or self._wait
-        self._t0: float | None = None
-        self._slots = 0.0
+        self._next_free: float | None = None
         self.slept_s = 0.0
 
     def _wait(self, seconds: float) -> None:
@@ -77,18 +76,23 @@ class Throttle:
             raise FactoryStopped("factory stop requested")
 
     def account(self, work_seconds: float, slots: float) -> None:
-        """Record ``work_seconds`` of compute that produced ``slots`` slot-equivalents, then idle as needed."""
+        """Record ``work_seconds`` of compute that produced ``slots`` slot-equivalents, then idle as needed.
+
+        The rate limit is a budget with no carried-over credit: each chunk "costs"
+        ``slots * 3600 / max_slots_per_hour`` seconds starting when it began (or when the previous
+        chunk's budget ended, if later). Idle time (e.g. while inventories are full) therefore
+        never allows a burst above the configured rate afterwards.
+        """
         self.check()
         now = self._clock()
-        if self._t0 is None:
-            self._t0 = now - work_seconds
-        self._slots += slots
         delay = 0.0
         if self.duty_cycle < 1 and work_seconds > 0:
             delay = work_seconds * (1 - self.duty_cycle) / self.duty_cycle
         if self.max_slots_per_hour > 0:
-            earliest = self._t0 + self._slots * 3600.0 / self.max_slots_per_hour
-            delay = max(delay, earliest - now)
+            began = now - max(0.0, work_seconds)
+            start = began if self._next_free is None else max(self._next_free, began)
+            self._next_free = start + max(0.0, slots) * 3600.0 / self.max_slots_per_hour
+            delay = max(delay, self._next_free - now)
         if delay > 0:
             self.slept_s += delay
             self._sleep(delay)

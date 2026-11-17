@@ -1,0 +1,21 @@
+#cloud-config
+# Ubuntu autoinstall for the PGW appliance build. Render before `packer build`:
+#   BUILD_PASSWORD_HASH=$(openssl passwd -6 "$PKR_VAR_build_password") \
+#     envsubst < autoinstall/user-data.template > autoinstall/user-data
+# The build account is locked at the end of the Packer build.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard: {layout: us}
+  storage:
+    layout: {name: lvm, match: {size: smallest}}
+  identity:
+    hostname: pgw-gateway
+    username: pgw-build
+    password: "${BUILD_PASSWORD_HASH}"
+  ssh:
+    install-server: true
+    allow-pw: true
+  late-commands:
+    - echo 'pgw-build ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/pgw-build
+    - chmod 0440 /target/etc/sudoers.d/pgw-build

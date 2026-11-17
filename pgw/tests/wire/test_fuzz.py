@@ -99,7 +99,9 @@ def _rand_obj(rng: random.Random, depth: int = 0):
         return None
     if k == "list":
         return [_rand_obj(rng, depth + 1) for _ in range(rng.randint(0, 4))]
-    return {rng.choice(["v", "type", "id", "items", "fp", "x"]): _rand_obj(rng, depth + 1) for _ in range(rng.randint(0, 4))}
+    return {
+        rng.choice(["v", "type", "id", "items", "fp", "x"]): _rand_obj(rng, depth + 1) for _ in range(rng.randint(0, 4))
+    }
 
 
 @pytest.mark.parametrize("mtype", ["compute", "compute_result", "error", "models"])
@@ -139,8 +141,14 @@ def test_fuzz_item_lengths_vs_dims():
         length = good + rng.choice([0, 0, -1, 1, -6, 6, n])
         if length < 0:
             continue
-        d = {"v": 1, "type": "compute", "id": "f", "fp": "ab" * 32, "ring": RING_K48_A20.name,
-             "items": [{"linear": lid, "rows": rows, "x_hat": b"\x00" * length}]}
+        d = {
+            "v": 1,
+            "type": "compute",
+            "id": "f",
+            "fp": "ab" * 32,
+            "ring": RING_K48_A20.name,
+            "items": [{"linear": lid, "rows": rows, "x_hat": b"\x00" * length}],
+        }
         try:
             req = decode_compute_request(msgpack.packb(d, use_bin_type=True), lim, DIMS)
             assert length == good and rows <= 64

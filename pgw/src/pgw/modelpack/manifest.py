@@ -22,11 +22,11 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from pgw.core.errors import ConfigError
 from pgw.core.fingerprint import compute_fingerprint, require_same_fingerprint, validate_fingerprint
-from pgw.core.types import LinearId, LinearSpec, ModelArch, linear_ids
+from pgw.core.types import LinearId, LinearKind, LinearSpec, ModelArch, linear_ids
 
 __all__ = [
     "MANIFEST_FILE",
@@ -67,8 +67,15 @@ class TensorEntry(BaseModel):
     @field_validator("file")
     @classmethod
     def _no_traversal(cls, v: str) -> str:
-        if ".." in v.split("/") or "/" in v:
+        if "/" in v or v in (".", "..") or v == MANIFEST_FILE:
             raise ValueError(f"tensor file must be a plain file name in the pack root, got {v!r}")
+        return v
+
+    @field_validator("shape")
+    @classmethod
+    def _non_negative(cls, v: tuple[int, ...]) -> tuple[int, ...]:
+        if any(d < 0 for d in v):
+            raise ValueError(f"tensor dimensions must be non-negative, got {list(v)}")
         return v
 
     @property
@@ -89,9 +96,9 @@ class LinearPart(BaseModel):
     """One HF projection inside a concatenated group, e.g. ``k_proj`` rows 896..1023 of ``0.qkv``."""
 
     model_config = _STRICT
-    name: str
-    row_start: int
-    rows: int
+    name: str = Field(min_length=1)
+    row_start: int = Field(ge=0)
+    rows: int = Field(gt=0)
 
 
 class LinearEntry(BaseModel):
@@ -99,8 +106,8 @@ class LinearEntry(BaseModel):
 
     model_config = _STRICT
     id: str = Field(description="Canonical linear id, e.g. '3.qkv'")
-    out_features: int
-    in_features: int
+    out_features: int = Field(gt=0)
+    in_features: int = Field(gt=0)
     weight: str = Field(description="Tensor name of the int8 weight")
     scale: str = Field(description="Tensor name of the float32 per-row scale")
     bias: str | None = None
@@ -127,21 +134,31 @@ class ArchConfig(BaseModel):
 
     model_config = _STRICT
     arch: ModelArch
-    hidden_size: int
-    intermediate_size: int
-    num_layers: int
-    num_heads: int
-    num_kv_heads: int
-    head_dim: int
-    vocab_size: int
-    rms_norm_eps: float
-    rope_theta: float
+    hidden_size: int = Field(gt=0)
+    intermediate_size: int = Field(gt=0)
+    num_layers: int = Field(gt=0)
+    num_heads: int = Field(gt=0)
+    num_kv_heads: int = Field(gt=0)
+    head_dim: int = Field(gt=0)
+    vocab_size: int = Field(gt=0)
+    rms_norm_eps: float = Field(gt=0, allow_inf_nan=False)
+    rope_theta: float = Field(gt=0, allow_inf_nan=False)
     rope_scaling: dict[str, Any] | None = None
-    max_position_embeddings: int
+    max_position_embeddings: int = Field(gt=0)
     tie_word_embeddings: bool
-    bos_token_id: int | None = None
+    bos_token_id: int | None = Field(default=None, ge=0)
     eos_token_ids: tuple[int, ...] = ()
     hidden_act: Literal["silu"] = "silu"
+
+    @model_validator(mode="after")
+    def _check_heads(self) -> ArchConfig:
+        if self.num_heads % self.num_kv_heads:
+            raise ValueError(
+                f"num_heads={self.num_heads} is not a multiple of num_kv_heads={self.num_kv_heads}"
+            )
+        if any(e < 0 for e in self.eos_token_ids):
+            raise ValueError(f"eos_token_ids must be non-negative, got {list(self.eos_token_ids)}")
+        return self
 
 
 class QuantConfig(BaseModel):
@@ -183,7 +200,7 @@ class Manifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     format: Literal["pgw-modelpack"] = PACK_FORMAT
     version: Literal[1] = PACK_VERSION
-    name: str = Field(description="Served model name, e.g. 'qwen2.5-0.5b-instruct'")
+    name: str = Field(min_length=1, description="Served model name, e.g. 'qwen2.5-0.5b-instruct'")
     source: SourceInfo
     arch: ArchConfig
     quant: QuantConfig = QuantConfig()
@@ -254,7 +271,9 @@ class Manifest(BaseModel):
 
     def check_consistency(self) -> None:
         """Structural self-consistency: canonical linear order, shapes implied by ``arch``, dtypes,
-        part layout, presence of every referenced tensor and of all plain tensors.
+        part layout, canonical tensor names, biases as the architecture implies (SPEC 8.2: Qwen2
+        ``qkv`` only, Llama none), presence of every referenced tensor and of all plain tensors,
+        and no unreferenced tensors.
 
         Raises:
             ConfigError: describing the first problem found.
@@ -279,6 +298,15 @@ class Manifest(BaseModel):
 
         for e in self.linears:
             m, n, parts = expected_linear_shape(a, e.linear_id)
+            k = f"linears.{e.id}"
+            names = (e.weight, e.scale, e.bias)
+            if names != (f"{k}.weight", f"{k}.scale", f"{k}.bias" if e.bias is not None else None):
+                raise ConfigError(f"linear {e.id}: non-canonical tensor names {[x for x in names if x]}")
+            want_bias = a.arch == ModelArch.QWEN2 and e.linear_id.kind == LinearKind.QKV
+            if (e.bias is not None) != want_bias:
+                raise ConfigError(
+                    f"linear {e.id}: {'missing' if want_bias else 'unexpected'} bias for {a.arch.value}"
+                )
             if (e.out_features, e.in_features) != (m, n):
                 raise ConfigError(f"linear {e.id}: shape ({e.out_features},{e.in_features}) != expected ({m},{n})")
             got_parts = [(p.name, p.rows) for p in e.parts]
@@ -302,6 +330,12 @@ class Manifest(BaseModel):
         for i in range(a.num_layers):
             tensor(f"layers.{i}.input_norm", floats, (h,))
             tensor(f"layers.{i}.post_attn_norm", floats, (h,))
+        referenced = set(self.plain_tensor_names())
+        for e in self.linears:
+            referenced.update(t for t in (e.weight, e.scale, e.bias) if t is not None)
+        extra = sorted(set(self.tensors) - referenced)
+        if extra:
+            raise ConfigError(f"manifest lists {len(extra)} unreferenced tensor(s): {extra[:3]}")
         files = [f.file for f in self.tokenizer]
         if len(set(files)) != len(files):
             raise ConfigError("duplicate tokenizer file entries in manifest")

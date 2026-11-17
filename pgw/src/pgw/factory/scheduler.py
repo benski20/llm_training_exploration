@@ -97,8 +97,15 @@ class FactoryState:
             return cls()
         try:
             data = json.loads(path.read_text())
+            if not isinstance(data, dict):
+                raise ValueError("state is not a JSON object")
             known = {f for f in cls.__dataclass_fields__}
-            return cls(**{k: v for k, v in data.items() if k in known})
+            st = cls(**{k: v for k, v in data.items() if k in known})
+            if not isinstance(st.totals, dict) or not isinstance(st.throughput, dict) or not (
+                st.in_progress is None or isinstance(st.in_progress, dict)
+            ):
+                raise ValueError("state has fields of the wrong type")
+            return st
         except (OSError, ValueError, TypeError) as exc:
             bad = path.with_suffix(f".corrupt-{int(time.time())}")
             with contextlib.suppress(OSError):
@@ -118,6 +125,12 @@ class FactoryState:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+        with contextlib.suppress(OSError):  # make the rename durable (not supported everywhere)
+            dfd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
 
     def record_segment(self, fingerprint: str, ring: str, slots: int, seconds: float, segment_id: str) -> None:
         """Account a committed segment."""
@@ -247,8 +260,9 @@ class FactoryScheduler:
         self._resumed = True
         st = self.state
         st.factory_id = self.settings.factory_id
-        if st.in_progress:
-            ip = st.in_progress
+        crashed = bool(st.in_progress)
+        if crashed:
+            ip = st.in_progress or {}
             st.crash_recoveries += 1
             log.warning(
                 "previous factory run was interrupted while generating a segment for %s/%s (pid %s); "
@@ -257,10 +271,23 @@ class FactoryScheduler:
             )
             st.in_progress = None
             self._save_state()
+        # Export sinks own a private staging store: always safe to recover (we hold the factory lock).
+        recover = getattr(self.sink, "recover", None)
+        if callable(recover):
+            try:
+                recover()
+            except Exception as exc:  # never block production on cleanup
+                log.error("export staging recovery failed: %s", getattr(exc, "message", exc))
+        elif crashed:
+            # A shared customer store: only remove partial files after a crash of *this* factory.
             cleanup = getattr(getattr(self.sink, "store", self.sink), "cleanup_partials", None)
             if callable(cleanup):
-                with contextlib.suppress(Exception):
-                    cleanup()
+                try:
+                    removed = cleanup()
+                    if removed:
+                        log.warning("removed %d partial segment file(s) left by the crash", len(removed))
+                except Exception as exc:
+                    log.error("cleanup of partial segment files failed: %s", getattr(exc, "message", exc))
 
     def _save_state(self) -> None:
         try:

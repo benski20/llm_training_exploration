@@ -237,33 +237,56 @@ def read_safetensors_header(path: str | Path) -> tuple[dict[str, StHeaderEntry],
         raise ConfigError(f"{p.name}: malformed safetensors header")
     base = 8 + hlen
     meta_raw = hdr.pop("__metadata__", None) or {}
+    if not isinstance(meta_raw, dict):
+        raise ConfigError(f"{p.name}: malformed safetensors __metadata__")
     entries: dict[str, StHeaderEntry] = {}
     for name, e in hdr.items():
         try:
             dt = _ST_TO_PACK[e["dtype"]]
-            b, en = (int(x) for x in e["data_offsets"])
+            offs = [int(x) for x in e["data_offsets"]]
             shape = tuple(int(s) for s in e["shape"])
+            b, en = offs
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{p.name}: bad header entry for {name!r}: {e!r}") from exc
+        if b < 0 or any(d < 0 for d in shape):
+            raise ConfigError(f"{p.name}: tensor {name!r} has negative offsets or dimensions")
         ent = StHeaderEntry(name, dt, shape, base + b, base + en)
         if ent.end > size or ent.begin > ent.end or ent.nbytes != TensorPlan(name, dt, shape).nbytes:
             raise ConfigError(f"{p.name}: tensor {name!r} has inconsistent offsets (truncated file?)")
         entries[name] = ent
-    return entries, {str(k): str(v) for k, v in dict(meta_raw).items()}
+    return entries, {str(k): str(v) for k, v in meta_raw.items()}
 
 
-def hash_tensor_ranges(path: str | Path, entries: Iterable[StHeaderEntry]) -> dict[str, str]:
-    """Hex SHA-256 of each tensor's byte range in ``path`` (sequential reads, bounded memory)."""
+def hash_tensor_ranges(
+    path: str | Path, entries: Iterable[StHeaderEntry], *, forbid_int8_min: Iterable[str] = ()
+) -> dict[str, str]:
+    """Hex SHA-256 of each tensor's byte range in ``path`` (sequential reads, bounded memory).
+
+    Args:
+        forbid_int8_min: Names of int8 tensors that must not contain ``-128`` (byte ``0x80``).
+            SPEC section 5 fixes ``W8`` to ``[-127, 127]``; the output range check and ring
+            headroom rely on it. Scanning happens on the same buffers as hashing (memchr speed).
+
+    Raises:
+        ConfigError: short read, or a forbidden ``-128`` value was found.
+    """
     out: dict[str, str] = {}
+    forbid = set(forbid_int8_min)
     with open(path, "rb") as f:
         for e in sorted(entries, key=lambda x: x.begin):
             h = hashlib.sha256()
+            scan = e.name in forbid and e.dtype == "int8"
             f.seek(e.begin)
             remaining = e.nbytes
             while remaining > 0:
                 chunk = f.read(min(_HASH_BLOCK, remaining))
                 if not chunk:
                     raise ConfigError(f"{Path(path).name}: unexpected end of file in {e.name}")
+                if scan and b"\x80" in chunk:
+                    raise ConfigError(
+                        f"{Path(path).name}: int8 weight {e.name} contains -128 (packs use [-127, 127])",
+                        details={"tensor": e.name},
+                    )
                 h.update(chunk)
                 remaining -= len(chunk)
             out[e.name] = h.hexdigest()

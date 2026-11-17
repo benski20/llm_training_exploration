@@ -39,6 +39,7 @@ from pgw.maskstore.keys import (
     hpke_wrap_for_recipient,
     write_key_file,
 )
+from pgw.maskstore.partner import PartnerSigningKey, TrustedPartners, sign_segment
 from pgw.maskstore.store import (
     IntegrityReport,
     Inventory,
@@ -53,7 +54,7 @@ __all__ = [
     "SEGMENT_MAGIC", "SEGMENT_SUFFIX", "SEGMENT_VERSION", "EnvKeyProvider", "FileKeyProvider",
     "FileMonotonicCounter", "GenerationJournal", "IntegrityReport", "Inventory", "KeyProvider", "KmsClient",
     "KmsKeyProvider", "LowWaterListener", "MaskReservation", "MaskStore", "MaskStoreSettings", "MonotonicCounter",
-    "Pkcs11KeyProvider", "ProviderCounter", "RecipientKeyPair", "SegmentFile", "SegmentHeader", "SegmentLayout",
-    "SegmentLinear", "SegmentWriter", "SlotExtent", "StaticKeyProvider", "TpmNvCounter", "WrappedKey",
-    "hpke_wrap_for_recipient", "write_key_file",
+    "PartnerSigningKey", "Pkcs11KeyProvider", "ProviderCounter", "RecipientKeyPair", "SegmentFile", "SegmentHeader",
+    "SegmentLayout", "SegmentLinear", "SegmentWriter", "SlotExtent", "StaticKeyProvider", "TpmNvCounter",
+    "TrustedPartners", "WrappedKey", "hpke_wrap_for_recipient", "sign_segment", "write_key_file",
 ]

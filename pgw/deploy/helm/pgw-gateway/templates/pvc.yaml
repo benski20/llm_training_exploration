@@ -1,0 +1,24 @@
+{{- if and .Values.state.persistence.enabled (not .Values.state.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pgw-gateway.stateClaim" . }}
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+  annotations:
+    # Keep the mask store and API keys on `helm uninstall`. Never restore an old snapshot of this
+    # volume: the store's rollback protection will refuse to serve (masks must not be reused).
+    helm.sh/resource-policy: keep
+    {{- with .Values.state.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.state.persistence.accessModes | nindent 4 }}
+  {{- if .Values.state.persistence.storageClass }}
+  storageClassName: {{ .Values.state.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.state.persistence.size | quote }}
+{{- end }}

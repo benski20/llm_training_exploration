@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>__TITLE__</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--fg:#1b1f24;--muted:#5d6672;--line:#dfe3e8;--ok:#1a7f37;--ok-bg:#e6f4ea;
+--warn:#9a6700;--warn-bg:#fff4d6;--bad:#c62828;--bad-bg:#fde8e8;--accent:#2f5bd3;--spark:#2f5bd3}
+@media (prefers-color-scheme: dark){:root{--bg:#0f1216;--panel:#181c22;--fg:#e6e9ee;--muted:#98a2b0;--line:#2a3039;
+--ok:#4cc26b;--ok-bg:#12291a;--warn:#e0b341;--warn-bg:#2d2511;--bad:#ff6b6b;--bad-bg:#341617;--accent:#7aa2ff;--spark:#7aa2ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:17px;margin:0;font-weight:600}
+header .sp{flex:1}
+#updated{color:var(--muted);font-size:12px}
+main{padding:16px;max-width:1280px;margin:0 auto}
+.banner{border-radius:8px;padding:10px 14px;margin-bottom:14px;font-weight:600;border:1px solid var(--line)}
+.banner.ok{background:var(--ok-bg);color:var(--ok)}.banner.warn{background:var(--warn-bg);color:var(--warn)}
+.banner.bad{background:var(--bad-bg);color:var(--bad)}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:22px 0 8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0}
+.tile .k{color:var(--muted);font-size:12px}
+.tile .v{font-size:24px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.tile .s{color:var(--muted);font-size:12px;margin-top:2px;overflow-wrap:anywhere}
+.tile.bad .v{color:var(--bad)}.tile.warn .v{color:var(--warn)}.tile.ok .v{color:var(--ok)}
+svg.spark{width:100%;height:34px;margin-top:6px;display:block}
+svg.spark path{fill:none;stroke:var(--spark);stroke-width:1.5}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:top}
+th{color:var(--muted);font-weight:500}
+.tw{overflow-x:auto}
+input,button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 8px}
+button{cursor:pointer}
+.muted{color:var(--muted)}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.bad{background:var(--bad-bg);color:var(--bad)}.pill.warn{background:var(--warn-bg);color:var(--warn)}
+@media (max-width:520px){.tile .v{font-size:20px}header{padding:12px 16px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>__TITLE__</h1><span id="updated">connecting…</span><span class="sp"></span>
+  <form id="tokform" autocomplete="off"><input id="tok" type="password" placeholder="admin token (optional)" aria-label="admin token" size="22">
+  <button type="submit">Use</button></form>
+</header>
+<main>
+  <div id="banner" class="banner warn">Waiting for metrics…</div>
+  <div id="sections"></div>
+  <h2 id="statush" hidden>Models (admin status)</h2>
+  <div class="tw"><table id="status" hidden><thead><tr><th>model</th><th>mode</th><th>ready</th><th>breaker</th>
+  <th>masks available</th><th>noise monitor</th><th>noise details</th></tr></thead><tbody></tbody></table></div>
+  <p class="muted" id="foot"></p>
+</main>
+<script>
+__CORE__
+</script>
+<script>
+(function () {
+  "use strict";
+  const CFG = __CONFIG__;
+  const C = PGWCore;
+  const HIST = 120;
+  const hist = {};
+  let prev = null, prevT = 0;
+  function token() { try { return sessionStorage.getItem("pgw_admin_token") || ""; } catch (e) { return ""; } }
+  document.getElementById("tokform").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const v = document.getElementById("tok").value;
+    try { if (v) sessionStorage.setItem("pgw_admin_token", v); else sessionStorage.removeItem("pgw_admin_token"); } catch (e) {}
+    document.getElementById("tok").value = "";
+    tick();
+  });
+  function hdrs() { const t = token(); return t ? { "Authorization": "Bearer " + t } : {}; }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function push(key, v) { const a = hist[key] = hist[key] || []; a.push(v === null || !isFinite(v) ? null : v); if (a.length > HIST) a.shift(); return a; }
+  function spark(values) {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg"); svg.setAttribute("class", "spark");
+    svg.setAttribute("viewBox", "0 0 100 30"); svg.setAttribute("preserveAspectRatio", "none");
+    const pts = values.map(function (v, i) { return [i, v]; }).filter(function (p) { return p[1] !== null; });
+    if (pts.length > 1) {
+      let lo = Infinity, hi = -Infinity; for (const p of pts) { lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); }
+      if (hi === lo) { hi = lo + 1; lo = lo - 1; }
+      const n = Math.max(values.length - 1, 1);
+      let d = "";
+      pts.forEach(function (p, j) { d += (j ? "L" : "M") + (p[0] / n * 100).toFixed(2) + " " + (28 - (p[1] - lo) / (hi - lo) * 26).toFixed(2); });
+      const path = document.createElementNS(ns, "path"); path.setAttribute("d", d); svg.appendChild(path);
+    }
+    return svg;
+  }
+  function tile(label, value, sub, cls, series) {
+    const t = el("div", "tile" + (cls ? " " + cls : ""));
+    t.appendChild(el("div", "k", label)); t.appendChild(el("div", "v", value));
+    if (sub) t.appendChild(el("div", "s", sub));
+    if (series) t.appendChild(spark(series));
+    return t;
+  }
+  function section(title, tiles) {
+    const f = document.createDocumentFragment();
+    f.appendChild(el("h2", null, title));
+    const g = el("div", "grid"); tiles.forEach(function (x) { g.appendChild(x); }); f.appendChild(g);
+    return f;
+  }
+  function latTile(label, h, key) {
+    const mean = h ? h.mean : null;
+    const sub = h && h.count ? "p50 " + C.fmtSeconds(h.p50) + " · p95 " + C.fmtSeconds(h.p95) + (h.interval ? " (interval)" : " (since start)") : "no samples";
+    return tile(label, C.fmtSeconds(mean), sub, null, push(key, mean));
+  }
+  function render(s) {
+    const out = document.createDocumentFragment();
+    const g = s.gateway, mk = s.masks, it = s.integrity, nz = s.noise;
+    // banner
+    const banner = document.getElementById("banner");
+    const problems = [];
+    if (nz.alarm) problems.push("OUTBOUND-NOISE ALARM: masked traffic blocked (fail-closed) until an admin reset");
+    if (it.recent) problems.push(it.recent + " integrity failure(s) in the last interval");
+    if (mk.lowWater) problems.push("mask inventory below low water");
+    banner.className = "banner " + (nz.alarm || it.recent ? "bad" : (mk.lowWater ? "warn" : "ok"));
+    banner.textContent = problems.length ? problems.join(" · ") : "All checks nominal";
+    if (mk.available !== null || g.present) {
+      out.appendChild(section("Masks", [
+        tile("Masks remaining (slots)", C.fmtNum(mk.available), mk.lowWater ? "below low water" : "", mk.lowWater ? "warn" : null, push("masks", mk.available)),
+        tile("Burn rate", mk.burnRate === null ? "–" : C.fmtNum(mk.burnRate, 2) + "/s",
+             mk.slotsPerToken ? C.fmtNum(mk.slotsPerToken, 2) + " slots per completion token" : (mk.burnedRate ? "burned " + C.fmtNum(mk.burnedRate, 2) + "/s" : ""), null, push("burn", mk.burnRate)),
+        tile("Time to exhaustion", mk.secondsLeft === null ? "–" : C.fmtSeconds(mk.secondsLeft), "at the current burn rate",
+             mk.secondsLeft !== null && mk.secondsLeft < 3600 ? "warn" : null),
+        tile("Slots consumed (total)", C.fmtNum(mk.consumedTotal), ""),
+      ]));
+    }
+    if (g.present) {
+      out.appendChild(section("Throughput", [
+        tile("Completion tokens/s", C.fmtNum(g.completionTps, 2), "total " + C.fmtNum(g.completionTotal), null, push("tps", g.completionTps)),
+        tile("Prompt tokens/s", C.fmtNum(g.promptTps, 2), "", null, push("ptps", g.promptTps)),
+        tile("API requests/s", C.fmtNum(g.requestRate, 2), "errors " + C.fmtNum(g.errorsTotal) + " / " + C.fmtNum(g.requestsTotal), g.errorsTotal ? "warn" : null),
+        tile("Active sessions", C.fmtNum(g.activeSessions), ""),
+      ]));
+      out.appendChild(section("Latency", [
+        latTile("Time to first token", g.ttft, "ttft"),
+        latTile("Time per output token", g.tpot, "tpot"),
+        latTile("Masked round trip", g.roundTrip, "rt"),
+      ]));
+      const checks = Object.keys(it.byCheck).map(function (k) { return (k || "all") + ": " + C.fmtNum(it.byCheck[k]); }).join(" · ");
+      const nzModels = Object.keys(nz.byModel).map(function (k) { return (k || "default") + (nz.byModel[k] > 0 ? " ALARM" : " ok"); }).join(" · ");
+      out.appendChild(section("Integrity and privacy", [
+        tile("Freivalds / range failures", C.fmtNum(it.total === null ? 0 : it.total), it.recent ? it.recent + " new" : (checks || "none"), it.total ? "bad" : "ok"),
+        tile("Outbound-noise monitor", nz.known ? (nz.alarm ? "ALARM" : "OK") : "n/a", nzModels || "no masked models", nz.alarm ? "bad" : (nz.known ? "ok" : null)),
+      ]));
+    }
+    if (s.service.present) {
+      const sv = s.service;
+      out.appendChild(section("Compute service", [
+        tile("Requests/s", C.fmtNum(sv.requestRate, 2), "rows/s " + C.fmtNum(sv.rowRate, 1), null, push("svc_rps", sv.requestRate)),
+        latTile("Request latency", sv.latency, "svc_lat"),
+        tile("In flight", C.fmtNum(sv.inflight), "queue depth " + C.fmtNum(sv.queueDepth)),
+        tile("Ingress", sv.bytesInRate === null ? "–" : C.fmtNum(sv.bytesInRate) + "B/s", ""),
+      ]));
+    }
+    if (s.factory.present) {
+      out.appendChild(section("Mask factory", [
+        tile("Generation rate", C.fmtNum(s.factory.slotsPerSecond, 1) + " slots/s", "", null, push("fac", s.factory.slotsPerSecond)),
+        tile("Slots generated", C.fmtNum(s.factory.generatedTotal), ""),
+      ]));
+    }
+    const root = document.getElementById("sections");
+    root.replaceChildren(out);
+  }
+  function renderStatus(st) {
+    const table = document.getElementById("status"), head = document.getElementById("statush");
+    const body = table.querySelector("tbody");
+    const models = st && Array.isArray(st.models) ? st.models : [];
+    if (!models.length) { table.hidden = true; head.hidden = true; return; }
+    const rows = document.createDocumentFragment();
+    for (const m of models) {
+      if (!m || typeof m !== "object") continue;
+      const tr = el("tr");
+      tr.appendChild(el("td", null, String(m.name || "")));
+      tr.appendChild(el("td", null, String(m.mode || "")));
+      const rd = el("td"); rd.appendChild(el("span", "pill " + (m.ready ? "ok" : "bad"), m.ready ? "ready" : String(m.reason || "not ready"))); tr.appendChild(rd);
+      const br = m.breaker || {};
+      tr.appendChild(el("td", null, String(br.state || (br.open ? "open" : "closed"))));
+      tr.appendChild(el("td", null, m.masks_available === undefined || m.masks_available === null ? "–" : C.fmtNum(Number(m.masks_available))));
+      const nm = m.noise_monitor || {};
+      const nc = el("td");
+      const nstate = nm.alarm ? "ALARM" : String(nm.state || "n/a");
+      nc.appendChild(el("span", "pill " + (nm.alarm ? "bad" : (nm.state === "active" ? "ok" : "warn")), nstate)); tr.appendChild(nc);
+      const det = nm.state === "active" ? ("windows " + C.fmtNum(nm.windows || 0) + " · samples " + C.fmtNum(nm.samples || 0) +
+        " · duplicate rows " + C.fmtNum(nm.duplicate_rows || 0) + (nm.reasons && nm.reasons.length ? " · " + nm.reasons.slice(-3).join("; ") : "")) : "";
+      tr.appendChild(el("td", null, det));
+      rows.appendChild(tr);
+    }
+    body.replaceChildren(rows);
+    table.hidden = false; head.hidden = false;
+  }
+  let busy = false;
+  async function tick() {
+    if (busy) return; busy = true;
+    try {
+    try {
+      const r = await fetch(CFG.metricsUrl, { headers: hdrs(), cache: "no-store", credentials: "same-origin" });
+      if (!r.ok) throw new Error("metrics HTTP " + r.status + (r.status === 401 || r.status === 403 ? " (admin token needed)" : ""));
+      const cur = C.parse(await r.text());
+      const now = Date.now() / 1000;
+      render(C.summarize(prev, cur, prev ? now - prevT : 0));
+      prev = cur; prevT = now;
+      document.getElementById("updated").textContent = "updated " + new Date().toLocaleTimeString() + " · every " + CFG.refreshSeconds + " s";
+    } catch (e) {
+      const b = document.getElementById("banner"); b.className = "banner warn"; b.textContent = "Metrics unavailable: " + (e && e.message ? e.message : e);
+    }
+    if (CFG.statusUrl && token()) {
+      try {
+        const r = await fetch(CFG.statusUrl, { headers: hdrs(), cache: "no-store", credentials: "same-origin" });
+        if (r.ok) renderStatus(await r.json());
+        document.getElementById("foot").textContent = r.ok ? "" : "admin status: HTTP " + r.status;
+      } catch (e) { document.getElementById("foot").textContent = "admin status unavailable"; }
+    } else { renderStatus(null); }
+    } finally { busy = false; }
+  }
+  tick();
+  setInterval(tick, Math.max(1, CFG.refreshSeconds) * 1000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: pgw-factory
+description: >-
+  PGW mask factory: generates one-time masks (W8 r mod 2^K and Freivalds vectors) offline on CPU or
+  NVIDIA GPU. Runs at the customer (writing into the gateway's encrypted mask store) or at an
+  independent partner (exporting HPKE-sealed segments). Needs no network access.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+keywords: [llm, privacy, masks]
+annotations:
+  pgw.io/protocol-version: "1"

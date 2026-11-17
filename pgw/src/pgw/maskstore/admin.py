@@ -20,9 +20,13 @@ from pgw.maskstore.keys import (
     Pkcs11KeyProvider,
     write_key_file,
 )
+from pgw.maskstore.partner import SIGNATURE_SUFFIX
 from pgw.maskstore.store import MaskStore
 
-__all__ = ["gc_store", "import_files", "init_store", "key_provider_from_settings", "open_store", "store_status"]
+__all__ = [
+    "gc_store", "import_files", "init_store", "key_provider_from_settings", "open_store", "rotate_store_kek",
+    "store_status",
+]
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +93,7 @@ def import_files(
                 continue
             if delete_source:
                 p.unlink(missing_ok=True)
+                p.with_name(p.name + SIGNATURE_SUFFIX).unlink(missing_ok=True)
             results.append({"file": str(p), "ok": True, "segment_id": seg_id})
     return results
 
@@ -97,3 +102,27 @@ def gc_store(settings: MaskStoreSettings | None = None, **overrides: Any) -> int
     """``pgw maskstore gc``: shred consumed segments; return bytes freed."""
     with open_store(settings, **overrides) as store:
         return store.gc()
+
+
+def rotate_store_kek(
+    new_key_file: str | Path,
+    settings: MaskStoreSettings | None = None,
+    *,
+    reencrypt: bool = True,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """``pgw maskstore rotate-key``: move a file-provider store to a new KEK file (offline).
+
+    The store is opened with the currently configured provider; the new provider accepts the old
+    key file as a previous key so a half-finished rotation can be resumed. Afterwards point
+    ``PGW_MASKSTORE_KEY_FILE`` at ``new_key_file`` and restart all gateways and factories.
+    """
+    s = settings if settings is not None else MaskStoreSettings(**overrides)
+    if s.key_provider != "file" or s.key_file is None:
+        raise ConfigError("rotate_store_kek supports the 'file' key provider; use MaskStore.rotate_kek otherwise")
+    nk = Path(new_key_file)
+    if not nk.exists():
+        write_key_file(nk)
+    new = FileKeyProvider(nk, previous=(s.key_file, *s.key_previous_files))
+    with open_store(s) as store:
+        return store.rotate_kek(new, reencrypt=reencrypt)

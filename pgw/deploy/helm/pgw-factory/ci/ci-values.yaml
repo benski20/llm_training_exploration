@@ -1,0 +1,7 @@
+# Minimal values for `helm lint` / `helm template` / chart-testing in CI (no real secrets).
+modelPacks:
+  existingClaim: pgw-packs
+store:
+  existingClaim: gw-pgw-gateway-state
+secrets:
+  existingSecret: gw-secrets

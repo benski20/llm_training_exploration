@@ -271,14 +271,60 @@ class GenerationJournal:
         except ValueError as exc:
             raise MaskStoreError(f"generation journal is corrupt at line {lineno}") from exc
 
-    def verify(self) -> JournalRecord | None:
+    @property
+    def pending_path(self) -> Path:
+        """Staged journal written during KEK rotation (promoted once the state DB is re-MACed)."""
+        return self.path.with_name(self.path.name + ".next")
+
+    def stage_checkpoint(self, generation: int, consumed: int, prev: bytes) -> None:
+        """Write a single-checkpoint journal to :attr:`pending_path` under the *current* MAC key.
+
+        Used by KEK rotation: the staged journal is promoted with :meth:`promote_pending` after
+        the state database (re-MACed under the new key) has committed.
+        """
+        mac = self._compute(prev, generation, consumed)
+        line = f"c {generation} {consumed} {prev.hex()} {mac.hex()}\n".encode("ascii")
+        atomic_write(self.pending_path, line, fsync=self.fsync)
+
+    def promote_pending(self) -> None:
+        """Atomically replace the journal with the staged one."""
+        os.replace(self.pending_path, self.path)
+        if self.fsync:
+            fsync_dir(self.path.parent)
+
+    def recover_pending(self) -> None:
+        """Finish or discard a KEK rotation that was interrupted.
+
+        If the main journal verifies under the current key, a staged journal is stale (the rotation
+        never committed) and is deleted. Otherwise a staged journal that verifies is promoted (the
+        rotation committed but crashed before promotion).
+        """
+        if not self.pending_path.exists():
+            return
+        try:
+            self.verify()
+        except MaskStoreError:
+            try:
+                self.verify(self.pending_path)
+            except MaskStoreError:
+                return  # neither verifies: leave both for the operator; verify() will refuse
+            log.warning("completing an interrupted KEK rotation: promoting the staged generation journal")
+            self.promote_pending()
+            return
+        log.warning("discarding a staged generation journal from an interrupted KEK rotation")
+        self.pending_path.unlink(missing_ok=True)
+
+    def verify(self, path: Path | None = None) -> JournalRecord | None:
         """Verify the full chain; return the head record (``None`` if the journal is empty/missing).
+
+        Args:
+            path: Journal file to verify (default: :attr:`path`).
 
         Raises:
             MaskStoreError: broken chain, forged or reordered records.
         """
         try:
-            text = self.path.read_text("ascii")
+            text = (path or self.path).read_text("ascii")
         except FileNotFoundError:
             return None
         except (OSError, UnicodeDecodeError) as exc:

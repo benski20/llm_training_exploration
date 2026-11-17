@@ -35,7 +35,7 @@ import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams, balanced_digits
-from pgw.core.ringmm import PreparedWeight
+from pgw.core.ringmm import PreparedWeight, ringmm_reference
 
 __all__ = [
     "FACTORY_BACKENDS",
@@ -104,26 +104,34 @@ def int8_ring_mm(x: torch.Tensor, w: torch.Tensor, k: int) -> torch.Tensor:
 def cpu_int8_available() -> bool:
     """True if ``torch._int_mm`` exists on CPU and is bit-exact, including on extreme values.
 
-    The probe uses all-(-128)/all-127 operands (which overflow int16 intermediates in some
-    non-VNNI kernels), odd shapes, and a random ring product checked against Python integers.
+    The probe covers what the factory actually runs: all-(-128)/all-127 operands (which overflow
+    int16 intermediates in some non-VNNI kernels), row counts from 1 (``u W8`` with one check
+    vector) to above 32 (GEMM paths), odd inner sizes, both layouts of the second operand
+    (transposed view for ``r W8^T``, row-major for ``u W8``) and random ring products checked
+    against Python integers. oneDNN picks kernels by shape, so a single shape is not enough.
     """
     try:
-        for av, bv in ((-128, -128), (-128, 127), (127, 127), (127, -128)):
-            a = torch.full((5, 4100), av, dtype=torch.int8)
-            b = torch.full((9, 4100), bv, dtype=torch.int8)
-            got = torch._int_mm(a, b.t())
-            if got.dtype != torch.int32 or not bool((got.to(torch.int64) == av * bv * 4100).all()):
-                log.warning("CPU torch._int_mm is not exact on extreme inputs; using float fallback")
-                return False
+        for rows in (1, 2, 5, 33):
+            for av, bv in ((-128, -128), (-128, 127), (127, 127), (127, -128)):
+                a = torch.full((rows, 4100), av, dtype=torch.int8)
+                b = torch.full((9, 4100), bv, dtype=torch.int8)
+                expect = av * bv * 4100
+                for got in (torch._int_mm(a, b.t()), torch._int_mm(a, b.t().contiguous())):
+                    if got.dtype != torch.int32 or not bool((got.to(torch.int64) == expect).all()):
+                        log.warning("CPU torch._int_mm is not exact on extreme inputs; using float fallback")
+                        return False
         gen = torch.Generator().manual_seed(1234)
-        x = torch.randint(0, 1 << 40, (7, 77), dtype=torch.int64, generator=gen)
-        w = torch.randint(-128, 128, (13, 77), dtype=torch.int8, generator=gen)
-        got = int8_ring_mm(x, w, 40)
-        xs, ws = x.tolist(), w.tolist()
-        ref = [[sum(a * b for a, b in zip(xr, wr, strict=True)) % (1 << 40) for wr in ws] for xr in xs]
-        if got.tolist() != ref:
-            log.warning("CPU torch._int_mm ring product mismatch; using float fallback")
-            return False
+        for rows in (1, 2, 7, 40):
+            x = torch.randint(0, 1 << 40, (rows, 77), dtype=torch.int64, generator=gen)
+            w = torch.randint(-128, 128, (13, 77), dtype=torch.int8, generator=gen)
+            if int8_ring_mm(x, w, 40).tolist() != ringmm_reference(x, w, 40).tolist():
+                log.warning("CPU torch._int_mm ring product mismatch; using float fallback")
+                return False
+            # u @ W8 (second operand row-major), the layout ring_vecmat uses
+            u = x[:, :13]
+            if int8_ring_mm(u, w.t(), 40).tolist() != ringmm_reference(u, w.t().contiguous(), 40).tolist():
+                log.warning("CPU torch._int_mm ring product mismatch (row-major layout); using float fallback")
+                return False
         return True
     except Exception as exc:  # torch build without CPU _int_mm
         log.info("CPU torch._int_mm unavailable (%s); using float fallback", type(exc).__name__)

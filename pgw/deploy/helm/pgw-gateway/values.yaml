@@ -1,0 +1,174 @@
+# Default values for pgw-gateway. Secrets are NEVER put in values: reference existing Secrets.
+
+image:
+  repository: registry.example.com/pgw/pgw-gateway
+  tag: ""                 # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Each replica owns its mask store (masks are single use), so the gateway runs as a single
+# replica with a Recreate strategy. Scale out with one release (and one store) per replica.
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}         # e.g. IRSA / workload identity for the KMS key provider
+
+podAnnotations: {}
+podLabels: {}
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 60
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    memory: 8Gi
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: pgw.example.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Non-secret gateway settings (PGW_GATEWAY_*). See `pgw config show gateway`.
+config:
+  logLevel: INFO
+  requestsPerMinute: 600
+  tokensPerMinute: 200000
+  defaultMaxTokens: 512
+  maxTokensLimit: 8192
+  noiseMonitor: true
+  noiseMonitorFailClosed: true
+  integrityCooldownSeconds: ""   # empty = circuit breaker reset by admin only
+  metricsRequireAdmin: false     # NetworkPolicy limits /metrics to the monitoring namespace
+  dashboardEnabled: true
+  # Additional PGW_* environment variables (non-secret).
+  extraEnv: {}
+
+# Served models. The compute-service token is read from secrets.existingSecret at start-up and
+# substituted into the rendered models file (tmpfs, mode 0600); it never appears in a ConfigMap.
+models:
+  - name: llama3-8b
+    packDir: llama3-8b                  # directory under modelPacks.mountPath
+    fingerprint: ""                     # pin the 64-hex pack fingerprint (recommended)
+    ring: K40A12
+    serviceUrl: https://compute.pgw.example.net:8443
+    maxConcurrentSessions: 32
+    serviceTimeoutSeconds: 60
+
+# Model packs (gateway needs plain.safetensors + tokenizer). Mounted read-only.
+modelPacks:
+  mountPath: /var/lib/pgw/packs
+  existingClaim: ""                     # PVC with pack directories (populated with `pgw pack`)
+  # Alternative: an OCI image whose /packs directory contains the packs (copied by an init container).
+  image:
+    repository: ""
+    tag: ""
+    path: /packs
+
+# Encrypted single-use mask store + gateway state (API keys, quota state, audit log).
+state:
+  mountPath: /var/lib/pgw/state
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]  # ReadWriteMany if a pgw-factory release shares it from other nodes
+    size: 200Gi                   # 6.9 MB per token slot for 8B at K40
+    annotations: {}
+
+maskstore:
+  # env: KEK from secrets.existingSecret[kekKey] (base64, 32 bytes) | kms | pkcs11
+  keyProvider: env
+  kmsKeyUri: ""                       # keyProvider=kms, e.g. aws-kms://arn:aws:kms:...
+  lowWaterSlots: 4096
+  targetSlots: 65536
+  extraEnv: {}
+
+# Existing Secret (create it with kubectl / External Secrets / Vault; never in values).
+secrets:
+  existingSecret: ""                  # REQUIRED
+  adminTokenKey: admin-token          # PGW_GATEWAY_ADMIN_TOKEN
+  kekKey: kek                         # base64 KEK for maskstore.keyProvider=env
+  serviceTokenKey: service-token      # bearer token for the compute service (tenant credential)
+  kmsMacKey: ""                       # optional key name: base64 HMAC key for the journal with kms
+
+# TLS for the gateway's own listener (secret with tls.crt / tls.key, optional ca.crt for mTLS).
+tls:
+  enabled: false
+  existingSecret: ""
+  requireClientCert: false
+
+# Client TLS towards the compute service: CA to verify it and the gateway's mTLS client certificate
+# (secret with ca.crt, tls.crt, tls.key).
+serviceClientTls:
+  existingSecret: ""
+
+networkPolicy:
+  enabled: true
+  # Who may call the gateway API (NetworkPolicyPeer list). Default: pods in the same namespace.
+  ingressFrom:
+    - podSelector: {}
+  # Prometheus scraping (namespaceSelector labels of the monitoring namespace).
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+  egress:
+    # The ONLY destination the gateway may reach: the PGW compute service.
+    computeService:
+      cidrs: []                       # e.g. PrivateLink / PSC endpoint IPs, or the service's public range
+      ports: [443, 8443]
+      # In-cluster compute service (development clusters): selectors of its pods.
+      podSelector: {}
+      namespaceSelector: {}
+    dns:
+      enabled: true
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+    # Extra peers, e.g. the KMS endpoint for maskstore.keyProvider=kms (NetworkPolicyEgressRule list).
+    extraRules: []
+
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 0
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

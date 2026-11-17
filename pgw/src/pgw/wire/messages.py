@@ -140,8 +140,9 @@ class ErrorResponse:
     @classmethod
     def from_exception(cls, exc: BaseException, request_id: str | None = None) -> ErrorResponse:
         """Wire form of ``exc``. Non-:class:`PGWError` exceptions become a generic ``internal``
-        error whose message and details are *not* leaked."""
-        if isinstance(exc, PGWError):
+        error whose message and details are *not* leaked; the same holds for a :class:`PGWError`
+        whose code is ``internal`` (SPEC 6.6: "bug; details not leaked")."""
+        if isinstance(exc, PGWError) and exc.code != ErrorCode.INTERNAL:
             return cls(
                 code=str(exc.code),
                 message=exc.message,

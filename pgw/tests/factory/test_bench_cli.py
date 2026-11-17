@@ -137,10 +137,36 @@ def test_cli_config_errors(tmp_path: Path) -> None:
 
 def test_cli_export_status(tmp_path: Path) -> None:
     key = tmp_path / "pub"
-    key.write_bytes(bytes(32))
+    key.write_bytes(bytes(range(1, 33)))
     r = CliRunner().invoke(fcli.factory_group, ["status", "--export-dir", str(tmp_path / "exp"), "--recipient-key",
                                                 str(key), "--json"])
-    # the staging MaskStore may still be unimplemented: either a clean report or exit code 3
-    assert r.exit_code in (0, 3), r.output
-    if r.exit_code == 0:
-        assert json.loads(r.output)["sink"] == "export"
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["sink"] == "export"
+    # an all-zero (small-order) key would seal DEKs anyone can open: refused with a config error
+    key.write_bytes(bytes(32))
+    r = CliRunner().invoke(fcli.factory_group, ["status", "--export-dir", str(tmp_path / "exp"), "--recipient-key",
+                                                str(key)])
+    assert r.exit_code == 1 and "X25519" in r.output
+
+
+def test_cli_generate_sigterm_aborts_and_restores_handlers(tiny_pack_dir: Path, patched_store: FakeMaskStore,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    """SIGTERM during `generate` aborts the segment (exit 130) and the old handlers come back."""
+    import os
+    import signal
+
+    from pgw.factory import Throttle
+
+    before = signal.getsignal(signal.SIGTERM)
+    orig = Throttle.account
+
+    def account(self: Throttle, work_seconds: float, slots: float) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)  # delivered to the CLI's handler -> stop event
+        orig(self, work_seconds, slots)
+
+    monkeypatch.setattr(Throttle, "account", account)
+    r = CliRunner().invoke(fcli.factory_group, ["generate", "--pack", str(tiny_pack_dir), "--slots", "4",
+                                                "--chunk-slots", "4", "--device", "cpu"])
+    assert r.exit_code == 130, r.output
+    assert not patched_store.segments and patched_store.aborted == 1
+    assert signal.getsignal(signal.SIGTERM) is before

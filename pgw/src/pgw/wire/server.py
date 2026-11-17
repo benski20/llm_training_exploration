@@ -159,7 +159,9 @@ def decode_compute_request(
                 )
             mn = dims.get(it.linear)
             if mn is None:
-                raise ProtocolError(f"items[{i}]: unknown linear {it.linear!r}", details={"item": i, "linear": it.linear})
+                raise ProtocolError(
+                    f"items[{i}]: unknown linear {it.linear!r}", details={"item": i, "linear": it.linear}
+                )
             expected = it.rows * int(mn[1]) * nb
             if len(it.x_hat) != expected:
                 raise ShapeError(
@@ -348,11 +350,18 @@ async def _read_body(request: Any, limit: int) -> bytes:
             raise PayloadTooLargeError(
                 f"request body of {n} bytes exceeds the limit of {limit}", details={"bytes": n, "max_bytes": limit}
             )
+    from starlette.requests import ClientDisconnect
+
     buf = bytearray()
-    async for chunk in request.stream():
-        buf += chunk
-        if len(buf) > limit:
-            raise PayloadTooLargeError(f"request body exceeds the limit of {limit} bytes", details={"max_bytes": limit})
+    try:
+        async for chunk in request.stream():
+            buf += chunk
+            if len(buf) > limit:
+                raise PayloadTooLargeError(
+                    f"request body exceeds the limit of {limit} bytes", details={"max_bytes": limit}
+                )
+    except ClientDisconnect as exc:
+        raise ProtocolError("client disconnected before sending the full request body") from exc
     return bytes(buf)
 
 
@@ -382,6 +391,11 @@ def create_router(
     lim = limits or WireLimits()
     router = APIRouter()
     has_auth = callable(getattr(handler, "authenticate", None))
+    if not has_auth:
+        log.warning(
+            "pgw wire router created without an authenticate hook: requests are accepted from any "
+            "client that can reach the service (rely on mTLS at the TLS layer, or add authentication)"
+        )
     done_hook: Callable[..., Any] | None = getattr(handler, "on_request_done", None)
 
     def _err_response(exc: BaseException, rid: str | None, accept: str | None) -> Response:
@@ -405,8 +419,10 @@ def create_router(
         if header_rid is not None:
             rid = _safe_id(header_rid)
         accept = request.headers.get("accept")
-        status = 200
-        code: str | None = None
+        # 499 ("client closed request") is reported to on_request_done if the request task is
+        # cancelled (client went away) before a reply was produced.
+        status = 499
+        code: str | None = "cancelled"
         ctx: RequestContext | None = None
         try:
             check_protocol_header(request.headers.get(PROTOCOL_HEADER))
@@ -470,6 +486,7 @@ def create_router(
                     "ms": round((time.monotonic() - t0) * 1e3, 3),
                 },
             )
+            status, code = 200, None
             return Response(content=out, media_type=CONTENT_TYPE, headers=response_headers(rid))
         except Exception as exc:
             if rid is None and isinstance(exc, PGWError):

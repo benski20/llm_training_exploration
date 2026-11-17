@@ -1,0 +1,53 @@
+# PGW mask factory on a VM / bare metal (customer-run). Keeps the local mask store topped up.
+# It needs no network at all: PrivateNetwork=yes gives it only a loopback interface.
+[Unit]
+Description=PGW mask factory (offline one-time mask generation)
+After=local-fs.target
+
+[Service]
+Type=exec
+User=pgw
+Group=pgw
+EnvironmentFile=/etc/pgw/factory.env
+LoadCredential=kek:/etc/pgw/secrets/kek
+Environment=PGW_MASKSTORE_KEY_PROVIDER=file
+Environment=PGW_MASKSTORE_KEY_FILE=/run/credentials/pgw-factory.service/kek
+StateDirectory=pgw
+StateDirectoryMode=0700
+ExecStart=/opt/pgw/bin/pgw factory run
+KillSignal=SIGTERM
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=30
+Nice=10
+IOSchedulingClass=idle
+
+# Hardening
+PrivateNetwork=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+ReadWritePaths=/var/lib/pgw
+# GPU factories: comment out PrivateDevices so /dev/nvidia* is visible.
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

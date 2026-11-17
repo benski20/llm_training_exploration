@@ -1,0 +1,28 @@
+[package]
+name = "pgw-core-rs"
+version = "0.1.0"
+description = "Auditable reimplementation of the PGW security-critical core: ring arithmetic, one-time masking, Freivalds checks, CSPRNG mask derivation and single-use reservation accounting."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "pgw_core_rs"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+# Python bindings (build with maturin: `maturin develop -m rust/pgw-core-rs/Cargo.toml --features python`).
+# Not built by `cargo test`.
+python = ["dep:pyo3"]
+
+[dependencies]
+chacha20 = "0.9"
+hkdf = "0.12"
+sha2 = "0.10"
+zeroize = "1"
+pyo3 = { version = "0.23", optional = true, features = ["abi3-py312", "extension-module"] }
+
+[dev-dependencies]
+serde_json = "1"

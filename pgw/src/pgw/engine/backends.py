@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import inspect
 import logging
 import secrets
 import threading
@@ -27,6 +28,7 @@ import torch
 
 from pgw.core.errors import (
     ConfigError,
+    FingerprintMismatchError,
     IntegrityError,
     MaskExhaustedError,
     PGWError,
@@ -396,8 +398,14 @@ class _Prepared:
     calls: Sequence[LinearCall]
     chunks: list[_Chunk]
     sx: list[torch.Tensor]
-    request: Any
+    metas: list[_MaskedMeta]
+    request: Any  # ComputeRequest, or None when every call has zero rows
     t_prepare: float
+
+    def wipe(self) -> None:
+        """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
+        for ch in self.chunks:
+            ch.wr.zero_()
 
 
 class MaskedBackend(LinearBackend):
@@ -454,8 +462,6 @@ class MaskedBackend(LinearBackend):
             raise ConfigError("max_rows_per_item must be positive")
         pack_fp = getattr(pack, "fingerprint", None)
         if isinstance(pack_fp, str) and pack_fp != fingerprint:
-            from pgw.core.errors import FingerprintMismatchError
-
             raise FingerprintMismatchError(
                 "MaskedBackend fingerprint does not match the pack",
                 details={"pack": pack_fp[:12], "given": fingerprint[:12]},
@@ -494,6 +500,12 @@ class MaskedBackend(LinearBackend):
             name = res_ring if isinstance(res_ring, str) else getattr(res_ring, "name", None)
             if name is not None and name != self.ring.name:
                 raise ConfigError(f"mask reservation ring {name} != backend ring {self.ring.name}")
+        res_fp = getattr(res, "fingerprint", None)
+        if isinstance(res_fp, str) and res_fp != self.fingerprint:
+            raise FingerprintMismatchError(
+                "mask reservation belongs to a different model fingerprint",
+                details={"reservation": res_fp[:12], "backend": self.fingerprint[:12]},
+            )
         return res
 
     def _should_check(self) -> bool:
@@ -503,9 +515,20 @@ class MaskedBackend(LinearBackend):
             return False
         return secrets.randbelow(1 << 30) < int(self.freivalds_rate * (1 << 30))
 
-    def _precheck(self, calls: Sequence[LinearCall]) -> list[Any]:
-        """Resolve reservations and fail fast (before taking any row) if one would run out."""
+    def _precheck(self, calls: Sequence[LinearCall]) -> tuple[list[Any], list[_MaskedMeta]]:
+        """Resolve reservations, validate shapes and fail fast before any mask row is taken.
+
+        Raises :class:`MaskExhaustedError` if any reservation would run out, so one exhausted
+        session never consumes (wastes) rows of the other sessions in the same batch.
+        """
         reservations = [self._reservation(c) for c in calls]
+        metas: list[_MaskedMeta] = []
+        for c in calls:
+            meta: _MaskedMeta = self._meta.get(c.id)
+            x = c.x
+            if x.ndim != 2 or x.shape[1] != meta.in_features:
+                raise ShapeError(f"{c.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
+            metas.append(meta)
         need: dict[tuple[int, str], int] = {}
         for c, res in zip(calls, reservations, strict=True):
             key = (id(res), c.id.key)
@@ -517,67 +540,90 @@ class MaskedBackend(LinearBackend):
                     "session mask reservation exhausted",
                     details={"linear": c.id.key, "needed": need[(id(res), c.id.key)], "remaining": left},
                 )
-        return reservations
+        return reservations, metas
 
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
         from pgw.wire.messages import ComputeItem, ComputeRequest
 
         t0 = time.perf_counter()
-        reservations = self._precheck(calls)
-        chunks: list[_Chunk] = []
+        reservations, metas = self._precheck(calls)
+        # Quantize everything first: a non-finite activation in a later call must not consume
+        # mask rows of earlier calls.
+        quantized: list[torch.Tensor] = []
         sxs: list[torch.Tensor] = []
-        for ci, (call, res) in enumerate(zip(calls, reservations, strict=True)):
-            meta: _MaskedMeta = self._meta.get(call.id)
-            x = call.x
-            if x.ndim != 2 or x.shape[1] != meta.in_features:
-                raise ShapeError(f"{call.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
-            xq, sx = quantize_activations(x.detach().to("cpu"), self.ring)
+        for call in calls:
+            xq, sx = quantize_activations(call.x.detach().to("cpu"), self.ring)
+            quantized.append(xq)
             sxs.append(sx)
-            t = int(xq.shape[0])
-            row = 0
-            while row < t:
-                boundary = int(res.rows_until_boundary(call.id))
-                if boundary <= 0:
-                    raise MaskExhaustedError("mask reservation has no rows left", details={"linear": call.id.key})
-                rows = min(t - row, boundary, self.max_rows_per_item)
-                check = self._should_check()
-                u = uw = None
-                if check:  # vectors of the extent the next rows come from: read before take()
-                    u, uw = res.checks(call.id)
-                r, wr = res.take(call.id, rows)
-                if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
-                    raise ShapeError(f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match")
-                x_hat = mask_activations(xq[row : row + rows], r.to(torch.int64), self.ring)
-                r.zero_()  # one-time pad: never keep it around
-                if self.noise_monitor is not None:
-                    self.noise_monitor.guard(x_hat, xq[row : row + rows])  # type: ignore[attr-defined]
-                chunks.append(_Chunk(ci, row, rows, call.id, x_hat, wr, u, uw))
-                row += rows
-            xq.zero_()
-        items = tuple(ComputeItem(ch.lid.key, ch.rows, pack_ring(ch.x_hat, self.ring)) for ch in chunks)
-        request = ComputeRequest(
-            request_id=uuid.uuid4().hex,
-            fingerprint=self.fingerprint,
-            ring=self.ring.name,
-            items=items,
-            deadline_ms=self.deadline_ms,
-        )
-        return _Prepared(calls, chunks, sxs, request, time.perf_counter() - t0)
+        chunks: list[_Chunk] = []
+        try:
+            for ci, (call, res, meta, xq) in enumerate(zip(calls, reservations, metas, quantized, strict=True)):
+                t = int(xq.shape[0])
+                row = 0
+                while row < t:
+                    boundary = int(res.rows_until_boundary(call.id))
+                    if boundary <= 0:
+                        raise MaskExhaustedError("mask reservation has no rows left", details={"linear": call.id.key})
+                    rows = min(t - row, boundary, self.max_rows_per_item)
+                    check = self._should_check()
+                    u = uw = None
+                    if check:  # vectors of the extent the next rows come from: read before take()
+                        u, uw = res.checks(call.id)
+                    r, wr = res.take(call.id, rows)
+                    try:
+                        if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
+                            raise ShapeError(
+                                f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                            )
+                        x_hat = mask_activations(xq[row : row + rows], r.to(torch.int64), self.ring)
+                    except BaseException:
+                        wr.zero_()
+                        raise
+                    finally:
+                        r.zero_()  # one-time pad: never keep it around
+                    chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw)
+                    chunks.append(chunk)
+                    if self.noise_monitor is not None:
+                        self.noise_monitor.guard(x_hat, xq[row : row + rows])  # type: ignore[attr-defined]
+                    row += rows
+        except BaseException:
+            for ch in chunks:
+                ch.wr.zero_()
+            raise
+        finally:
+            for xq in quantized:
+                xq.zero_()
+        request = None
+        if chunks:
+            items = tuple(ComputeItem(ch.lid.key, ch.rows, pack_ring(ch.x_hat, self.ring)) for ch in chunks)
+            request = ComputeRequest(
+                request_id=uuid.uuid4().hex,
+                fingerprint=self.fingerprint,
+                ring=self.ring.name,
+                items=items,
+                deadline_ms=self.deadline_ms,
+            )
+        return _Prepared(calls, chunks, sxs, metas, request, time.perf_counter() - t0)
 
     def _finish(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
         t0 = time.perf_counter()
         req = prep.request
-        if getattr(response, "request_id", req.request_id) != req.request_id:
-            raise ProtocolError("compute response id does not match the request")
-        results = tuple(response.items)
-        if len(results) != len(prep.chunks):
-            raise ProtocolError(f"compute response has {len(results)} items, expected {len(prep.chunks)}")
         outs: list[list[torch.Tensor]] = [[] for _ in prep.calls]
         bytes_down = 0
         checked = skipped = 0
         try:
+            if req is not None:
+                if getattr(response, "request_id", None) != req.request_id:
+                    raise ProtocolError("compute response id does not match the request")
+                results = tuple(response.items)
+                if len(results) != len(prep.chunks):
+                    raise ProtocolError(
+                        f"compute response has {len(results)} items, expected {len(prep.chunks)}"
+                    )
+            else:
+                results = ()
             for ch, res in zip(prep.chunks, results, strict=True):
-                meta: _MaskedMeta = self._meta.get(ch.lid)
+                meta: _MaskedMeta = prep.metas[ch.call_index]
                 if res.linear != ch.lid.key or int(res.rows) != ch.rows:
                     raise ProtocolError(
                         "compute response item does not match the request",
@@ -601,7 +647,10 @@ class MaskedBackend(LinearBackend):
                 outs[ch.call_index].append(dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32))
         except IntegrityError as exc:
             self.stats.add(integrity_failures=1)
-            log.error("integrity check failed: request=%s code=%s details=%s", req.request_id, exc.code, exc.details)
+            log.error(
+                "integrity check failed: request=%s code=%s details=%s",
+                req.request_id if req is not None else "-", exc.code, exc.details,
+            )
             if self.on_integrity_failure is not None:
                 try:
                     self.on_integrity_failure(exc)
@@ -609,17 +658,16 @@ class MaskedBackend(LinearBackend):
                     log.exception("on_integrity_failure callback raised")
             raise
         finally:
-            for ch in prep.chunks:
-                ch.wr.zero_()
+            prep.wipe()
         result = []
-        for call, parts in zip(prep.calls, outs, strict=True):
-            y = torch.cat(parts, dim=0) if parts else torch.zeros((0, 0))
+        for call, meta, parts in zip(prep.calls, prep.metas, outs, strict=True):
+            y = torch.cat(parts, dim=0) if parts else torch.zeros((0, meta.out_features), dtype=torch.float32)
             result.append(y.to(call.x.device))
-        bytes_up = sum(len(it.x_hat) for it in req.items)
+        bytes_up = sum(len(it.x_hat) for it in req.items) if req is not None else 0
         self.stats.add(
             calls=len(prep.calls),
             rows=sum(ch.rows for ch in prep.chunks),
-            round_trips=1,
+            round_trips=1 if req is not None else 0,
             bytes_up=bytes_up,
             bytes_down=bytes_down,
             freivalds_checked=checked,
@@ -645,16 +693,19 @@ class MaskedBackend(LinearBackend):
         if not calls:
             return []
         prep = self._prepare(calls)
+        if prep.request is None:
+            return self._finish(prep, None, 0.0)
         t0 = time.perf_counter()
         try:
             if hasattr(self.client, "compute_sync"):
                 response = self.client.compute_sync(prep.request)
             else:
                 response = _run_coro_blocking(self.client.compute(prep.request))  # type: ignore[attr-defined]
-        except Exception as exc:
-            for ch in prep.chunks:
-                ch.wr.zero_()
-            raise self._wrap_transport(exc) from exc
+        except BaseException as exc:
+            prep.wipe()
+            if isinstance(exc, Exception):
+                raise self._wrap_transport(exc) from exc
+            raise
         return self._finish(prep, response, time.perf_counter() - t0)
 
     async def aforward(self, call: LinearCall) -> torch.Tensor:
@@ -662,22 +713,33 @@ class MaskedBackend(LinearBackend):
         return (await self.aforward_many([call]))[0]
 
     async def aforward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
-        """Async: local crypto in a worker thread, network on the event loop."""
+        """Async: local crypto in a worker thread, network on the event loop.
+
+        Cancellation (e.g. a client disconnect) wipes the secret-derived buffers of the request;
+        the mask rows it took stay consumed and are never reused.
+        """
         if not calls:
             return []
         prep = await asyncio.to_thread(self._prepare, calls)
+        if prep.request is None:
+            return self._finish(prep, None, 0.0)
         t0 = time.perf_counter()
         try:
             compute = getattr(self.client, "compute", None)
-            if compute is not None and asyncio.iscoroutinefunction(compute):
+            if compute is not None and inspect.iscoroutinefunction(compute):
                 response = await compute(prep.request)
             else:
                 response = await asyncio.to_thread(self.client.compute_sync, prep.request)  # type: ignore[attr-defined]
-        except Exception as exc:
-            for ch in prep.chunks:
-                ch.wr.zero_()
-            raise self._wrap_transport(exc) from exc
-        return await asyncio.to_thread(self._finish, prep, response, time.perf_counter() - t0)
+        except BaseException as exc:
+            prep.wipe()
+            if isinstance(exc, Exception):
+                raise self._wrap_transport(exc) from exc
+            raise
+        try:
+            return await asyncio.to_thread(self._finish, prep, response, time.perf_counter() - t0)
+        except asyncio.CancelledError:
+            prep.wipe()
+            raise
 
 
 def _run_coro_blocking(coro: Any) -> Any:
