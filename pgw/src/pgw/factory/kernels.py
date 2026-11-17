@@ -255,18 +255,22 @@ def _vecmat_digit_bits(inner: int, k: int) -> int:
     return -(-k // limbs)
 
 
-def ring_vecmat(u: torch.Tensor, w8: torch.Tensor, params: RingParams) -> torch.Tensor:
+def ring_vecmat(
+    u: torch.Tensor, w8: torch.Tensor, params: RingParams, *, method: Literal["auto", "int8", "f64"] = "auto"
+) -> torch.Tensor:
     """Freivalds precomputation ``u @ W8 mod 2^K`` on ``w8``'s device.
 
     Args:
         u: int64 ``(c, m)`` check vectors (any device; moved to ``w8``'s device).
         w8: int8 ``(m, n)`` weight.
         params: Ring parameters.
+        method: ``auto`` (int8 on CPUs where it is exact, else float64), ``int8`` or ``f64``.
 
     Returns:
         int64 ``(c, n)`` in ``[0, 2^K)`` on the CPU.
 
-    Works by splitting ``u`` into wide balanced digits and multiplying row chunks of ``W8`` in
+    On CPUs with an exact ``torch._int_mm`` this uses int8 digit GEMMs. Otherwise it splits ``u``
+    into wide balanced digits and multiplying row chunks of ``W8`` in
     float64 so every partial sum is an integer below ``2^53`` (exact on any BLAS); only one chunk
     (at most 128 MiB) of float weight exists at a time.
     """
@@ -279,6 +283,13 @@ def ring_vecmat(u: torch.Tensor, w8: torch.Tensor, params: RingParams) -> torch.
     dev = w8.device
     if c == 0:
         return torch.zeros((0, n), dtype=torch.int64)
+    if method not in ("auto", "int8", "f64"):
+        raise ConfigError(f"unknown vecmat method {method!r}")
+    if method == "int8" and not (dev.type == "cpu" and cpu_int8_available()):
+        raise BackendUnavailableError("int8 vecmat needs a CPU with an exact torch._int_mm")
+    if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_available()):
+        # u @ W8 == int8 digit GEMMs against the transposed view (no copy): ~4x faster than float64
+        return int8_ring_mm(u.to(torch.int64), w8.t(), k)
     rows = max(1, min(m, _VECMAT_CHUNK_ELEMS // max(1, n)))
     bits = _vecmat_digit_bits(rows, k)
     digits = [d.to(dev, torch.float64) for d in balanced_digits(u.to(torch.int64) & mask, k, bits)]

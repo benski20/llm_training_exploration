@@ -71,7 +71,7 @@ class TransformerModel:
         dtype: Compute dtype for plaintext ops (float32 default; logits always float32).
     """
 
-    def __init__(self, pack: object, backend: LinearBackend, device: str = "cpu", dtype: torch.dtype = torch.float32):
+    def __init__(self, pack: Any, backend: LinearBackend, device: str = "cpu", dtype: torch.dtype = torch.float32):
         self.pack: Any = pack
         self.backend = backend
         self.device = torch.device(device)
@@ -99,8 +99,9 @@ class TransformerModel:
             self.lm_head = self.embed_tokens if dtype == torch.float32 else load("lm_head", torch.float32, self.device)
         else:
             self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
-        self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in range(a.num_layers)]
-        self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in range(a.num_layers)]
+        layers = range(a.num_layers)
+        self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in layers]
+        self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
         if tuple(self.embed_tokens.shape) != (a.vocab_size, a.hidden_size):
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
         self.rope = RotaryEmbedding(a.head_dim, a.rope_theta, a.rope_scaling, a.max_position_embeddings, self.device)
@@ -185,12 +186,12 @@ class TransformerModel:
             lid = LinearId(layer, LinearKind.QKV)
             qkv = yield [LinearCall(lid, x, sess) for x, sess in zip(normed, sessions, strict=True)]
             attn_out = []
-            for si, y in enumerate(qkv):
-                y = y.to(self.dtype)
-                t = y.shape[0]
-                q = y[:, :nq].reshape(t, nh, hd)
-                k = y[:, nq : nq + nk].reshape(t, kvh, hd)
-                v = y[:, nq + nk :].reshape(t, kvh, hd)
+            for si, y_raw in enumerate(qkv):
+                y = y_raw.to(self.dtype)
+                rows = int(y.shape[0])
+                q = y[:, :nq].reshape(rows, nh, hd)
+                k = y[:, nq : nq + nk].reshape(rows, kvh, hd)
+                v = y[:, nq + nk :].reshape(rows, kvh, hd)
                 cos, sin = rope[si]
                 q = apply_rope(q, cos, sin)
                 k = apply_rope(k, cos, sin)
@@ -248,7 +249,7 @@ class TransformerModel:
         except StopIteration as stop:
             return stop.value  # type: ignore[no-any-return]
 
-    def forward(self, input_ids: torch.Tensor, cache: KVCache, *, session: object | None = None,
+    def forward(self, input_ids: torch.Tensor | Sequence[int], cache: KVCache, *, session: object | None = None,
                 all_logits: bool = False) -> torch.Tensor:
         """Run ``input_ids`` (1-D, new tokens only) through the model, appending to ``cache``.
 
@@ -257,7 +258,7 @@ class TransformerModel:
         """
         return self.forward_batch([SequenceInput(input_ids, cache, session, all_logits)])[0]
 
-    async def aforward(self, input_ids: torch.Tensor, cache: KVCache, *, session: object | None = None,
+    async def aforward(self, input_ids: torch.Tensor | Sequence[int], cache: KVCache, *, session: object | None = None,
                        all_logits: bool = False) -> torch.Tensor:
         """Async variant using :meth:`LinearBackend.aforward` (lets the gateway interleave sessions)."""
         return (await self.aforward_batch([SequenceInput(input_ids, cache, session, all_logits)]))[0]

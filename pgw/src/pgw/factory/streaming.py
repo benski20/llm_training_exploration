@@ -13,6 +13,7 @@ streams the rest from the memory-mapped pack on every pass:
 
 from __future__ import annotations
 
+import itertools
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -78,7 +79,7 @@ class WeightStreamer:
         self._pinned: list[torch.Tensor] = []
         self._slot_events: dict[int, Any] = {}
         if self.device.type == "cuda":  # pragma: no cover - GPU only
-            self._copy_stream = torch.cuda.Stream(device=self.device)
+            self._copy_stream = torch.cuda.Stream(device=self.device)  # type: ignore[no-untyped-call]
         log.info(
             "weight streamer: %d/%d linears resident (%.1f MiB of %.1f MiB) on %s",
             len(self.resident_ids), len(self.specs), used / 2**20, total / 2**20, self.device,
@@ -122,7 +123,7 @@ class WeightStreamer:
         staging.copy_(host)
         with torch.cuda.stream(self._copy_stream):
             dev = staging.to(self.device, non_blocking=True)
-            ev = torch.cuda.Event()
+            ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
             ev.record(self._copy_stream)
         self._slot_events[slot] = ev
         self.bytes_streamed += nbytes
@@ -144,7 +145,7 @@ class WeightStreamer:
     def _iter_cuda(self) -> Iterator[tuple[LinearId, torch.Tensor]]:  # pragma: no cover - GPU only
         pending: dict[int, tuple[torch.Tensor, Any]] = {}
         streamed = [i for i, s in enumerate(self.specs) if s.id.key not in self.resident_ids]
-        nxt = {a: b for a, b in zip(streamed, streamed[1:], strict=False)}
+        nxt = dict(itertools.pairwise(streamed))
         slot_of = {idx: j % 2 for j, idx in enumerate(streamed)}
         if streamed:
             pending[streamed[0]] = self._start_copy(self.specs[streamed[0]].id, slot_of[streamed[0]])

@@ -6,10 +6,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 
 import torch
 
@@ -363,7 +362,7 @@ class Generator:
             await inner.aclose()
         return self._result(st)
 
-    async def _astream_state(self, st: _SeqState) -> AsyncIterator[TokenEvent]:
+    async def _astream_state(self, st: _SeqState) -> AsyncGenerator[TokenEvent, None]:
         if not self.batching:
             try:
                 while not st.done:
@@ -391,9 +390,6 @@ class Generator:
                 st.finish = FinishReason.CANCELLED
             if st not in self._active:
                 self._release(st)
-
-    def _is_stop_token(self, tok: int, params: SamplingParams) -> bool:
-        return tok in params.stop_token_ids or (not params.ignore_eos and tok in self._eos)
 
     def _enqueue(self, st: _SeqState) -> None:
         loop = asyncio.get_running_loop()
@@ -455,7 +451,7 @@ class Generator:
                             self._fail(st, one)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:  # noqa: BLE001 - delivered to every affected stream
+                except Exception as exc:
                     log.error("batched step failed for %d sessions: %s", len(batch), type(exc).__name__)
                     for st in batch:
                         self._fail(st, exc)

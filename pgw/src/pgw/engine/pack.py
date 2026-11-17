@@ -90,14 +90,16 @@ def _eos_list(value: Any) -> tuple[int, ...]:
     return tuple(int(v) for v in value)
 
 
-def arch_config_from_hf(config: Mapping[str, Any] | Any, generation_config: Mapping[str, Any] | None = None) -> ArchConfig:
+def arch_config_from_hf(
+    config: Mapping[str, Any] | Any, generation_config: Mapping[str, Any] | None = None
+) -> ArchConfig:
     """Build an :class:`ArchConfig` from an HF config (dict or ``PretrainedConfig``).
 
     Handles both the transformers 4.x (``rope_theta`` + ``rope_scaling``) and 5.x
     (``rope_parameters``) layouts. ``rope_scaling`` is ``None`` for plain RoPE.
     """
     cfg: dict[str, Any] = dict(config.to_dict() if hasattr(config, "to_dict") else config)
-    arch_name = cfg.get("model_type")
+    arch_name = str(cfg.get("model_type"))
     try:
         arch = ModelArch(arch_name)
     except ValueError as exc:

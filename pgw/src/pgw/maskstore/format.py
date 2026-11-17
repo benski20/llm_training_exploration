@@ -26,14 +26,58 @@ Mask derivation (shared with the factory and gateway)::
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import struct
+from dataclasses import dataclass
+from pathlib import Path
+from typing import BinaryIO
 
-__all__ = ["GCM_TAG_BYTES", "SEGMENT_MAGIC", "SEGMENT_SUFFIX", "SEGMENT_VERSION", "SegmentHeader", "SegmentLinear"]
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from pgw.core.errors import ConfigError, MaskStoreError
+from pgw.core.fingerprint import canonical_json, validate_fingerprint
+from pgw.core.prng import SEED_BYTES
+from pgw.core.ring import RingParams
+from pgw.core.types import LinearId
+
+__all__ = [
+    "DEK_BYTES",
+    "GCM_TAG_BYTES",
+    "MAX_HEADER_BYTES",
+    "NONCE_PREFIX_BYTES",
+    "SEGMENT_MAGIC",
+    "SEGMENT_SUFFIX",
+    "SEGMENT_VERSION",
+    "ChunkRef",
+    "SegmentFile",
+    "SegmentHeader",
+    "SegmentLayout",
+    "SegmentLinear",
+    "chunk_aad",
+    "chunk_nonce",
+    "encode_header",
+    "read_header",
+    "seed_hash",
+]
 
 SEGMENT_MAGIC = b"PGWMASK1"
 SEGMENT_VERSION = 1
 SEGMENT_SUFFIX = ".pgwm"
 GCM_TAG_BYTES = 16
+DEK_BYTES = 32
+NONCE_PREFIX_BYTES = 4
+#: Upper bound on header size (a 200-layer model header is a few tens of KB).
+MAX_HEADER_BYTES = 16 << 20
+_PREAMBLE = len(SEGMENT_MAGIC) + 4
+_SEG_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 class SegmentLinear(BaseModel):
@@ -41,8 +85,16 @@ class SegmentLinear(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: str
-    out_features: int
-    in_features: int
+    out_features: int = Field(gt=0)
+    in_features: int = Field(gt=0)
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, v: str) -> str:
+        try:
+            return LinearId.parse(v).key
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class SegmentHeader(BaseModel):
@@ -62,3 +114,282 @@ class SegmentHeader(BaseModel):
     nonce_prefix: str = Field(description="hex, 4 bytes")
     factory_id: str = Field(description="Identifier of the producing factory (no secrets)")
     created_at: str
+
+    @field_validator("version")
+    @classmethod
+    def _version(cls, v: int) -> int:
+        if v != SEGMENT_VERSION:
+            raise ValueError(f"unsupported segment version {v}")
+        return v
+
+    @field_validator("segment_id")
+    @classmethod
+    def _seg_id(cls, v: str) -> str:
+        if not _SEG_ID_RE.match(v):
+            raise ValueError("segment_id must be 32 lowercase hex chars")
+        return v
+
+    @field_validator("fingerprint")
+    @classmethod
+    def _fp(cls, v: str) -> str:
+        try:
+            return validate_fingerprint(v)
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("ring")
+    @classmethod
+    def _ring(cls, v: str) -> str:
+        try:
+            return RingParams.from_name(v).name
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @field_validator("nonce_prefix")
+    @classmethod
+    def _nonce(cls, v: str) -> str:
+        if not _HEX8_RE.match(v):
+            raise ValueError("nonce_prefix must be 8 lowercase hex chars")
+        return v
+
+    @field_validator("linears")
+    @classmethod
+    def _linears(cls, v: tuple[SegmentLinear, ...]) -> tuple[SegmentLinear, ...]:
+        if not v:
+            raise ValueError("segment has no linears")
+        ids = [x.id for x in v]
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate linear ids")
+        return v
+
+    # ---- helpers ---------------------------------------------------------------------------------
+    @property
+    def ring_params(self) -> RingParams:
+        """Parsed ring."""
+        return RingParams.from_name(self.ring)
+
+    @property
+    def wrapped_dek_bytes(self) -> bytes:
+        """Decoded wrapped DEK."""
+        try:
+            return base64.b64decode(self.wrapped_dek, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise MaskStoreError(f"segment {self.segment_id}: wrapped_dek is not base64") from exc
+
+    def linear(self, lid: LinearId | str) -> tuple[int, SegmentLinear]:
+        """``(index, entry)`` of linear ``lid``; raise :class:`ConfigError` if absent."""
+        key = str(lid)
+        for i, lin in enumerate(self.linears):
+            if lin.id == key:
+                return i, lin
+        raise ConfigError(f"linear {key} is not part of segment {self.segment_id}")
+
+
+def encode_header(header: SegmentHeader) -> bytes:
+    """Canonical JSON bytes of a header (what is stored and authenticated)."""
+    return canonical_json(header.model_dump(mode="json"))
+
+
+def chunk_nonce(nonce_prefix: bytes, index: int) -> bytes:
+    """12-byte GCM nonce ``prefix(4) || u64be(index)``."""
+    return nonce_prefix + struct.pack(">Q", index)
+
+
+def chunk_aad(header_digest: bytes, index: int) -> bytes:
+    """AAD ``SHA-256(header JSON) || u32be(index)``."""
+    return header_digest + struct.pack(">I", index)
+
+
+def seed_hash(seed: bytes) -> str:
+    """Public identifier of a segment seed (used to refuse duplicate seeds forever)."""
+    return hashlib.sha256(b"pgw/v1/seed-id\0" + bytes(seed)).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkRef:
+    """Position of one chunk in the file."""
+
+    index: int
+    offset: int  #: byte offset of the ciphertext
+    plain_len: int  #: plaintext length (ciphertext is ``plain_len + 16``)
+
+    @property
+    def cipher_len(self) -> int:
+        """Ciphertext length including the tag."""
+        return self.plain_len + GCM_TAG_BYTES
+
+
+class SegmentLayout:
+    """Chunk geometry derived from a header (no I/O)."""
+
+    def __init__(self, header: SegmentHeader, header_len: int):
+        self.header = header
+        self.ring = header.ring_params
+        self.bpe = self.ring.bytes_per_element
+        self.data_start = _PREAMBLE + header_len
+        self.chunks_per_linear = -(-header.slots // header.chunk_slots)
+        self.secrets_len = SEED_BYTES + sum(header.checks * lin.in_features * self.bpe for lin in header.linears)
+        # cumulative ciphertext offsets per linear
+        self._linear_base: list[int] = []
+        off = self.data_start + self.secrets_len + GCM_TAG_BYTES
+        full = header.chunk_slots
+        last = header.slots - (self.chunks_per_linear - 1) * full
+        for lin in header.linears:
+            self._linear_base.append(off)
+            row_bytes = lin.out_features * self.bpe
+            off += (self.chunks_per_linear - 1) * (full * row_bytes + GCM_TAG_BYTES)
+            off += last * row_bytes + GCM_TAG_BYTES
+        self.total_size = off
+
+    def secrets_chunk(self) -> ChunkRef:
+        """Chunk 0 (seed and ``uW``)."""
+        return ChunkRef(0, self.data_start, self.secrets_len)
+
+    def chunk_rows(self, j: int) -> int:
+        """Rows in W r chunk ``j`` of any linear."""
+        return min(self.header.chunk_slots, self.header.slots - j * self.header.chunk_slots)
+
+    def wr_chunk(self, linear_index: int, j: int) -> ChunkRef:
+        """W r chunk ``j`` (slots ``[j*chunk_slots, ...)``) of linear number ``linear_index``."""
+        if not 0 <= j < self.chunks_per_linear:
+            raise ConfigError(f"chunk {j} out of range")
+        lin = self.header.linears[linear_index]
+        row_bytes = lin.out_features * self.bpe
+        off = self._linear_base[linear_index] + j * (self.header.chunk_slots * row_bytes + GCM_TAG_BYTES)
+        return ChunkRef(1 + linear_index * self.chunks_per_linear + j, off, self.chunk_rows(j) * row_bytes)
+
+    def chunks(self) -> list[ChunkRef]:
+        """All chunk references in file order (chunk index order)."""
+        refs = [self.secrets_chunk()]
+        for li in range(len(self.header.linears)):
+            refs.extend(self.wr_chunk(li, j) for j in range(self.chunks_per_linear))
+        return refs
+
+    def secrets_split(self, plain: bytes | bytearray | memoryview) -> tuple[bytes, list[memoryview]]:
+        """Split chunk-0 plaintext into ``(seed, [uW bytes per linear])``."""
+        if len(plain) != self.secrets_len:
+            raise MaskStoreError("secrets chunk has the wrong length")
+        mv = memoryview(plain)
+        seed = bytes(mv[:SEED_BYTES])
+        out: list[memoryview] = []
+        off = SEED_BYTES
+        for lin in self.header.linears:
+            n = self.header.checks * lin.in_features * self.bpe
+            out.append(mv[off : off + n])
+            off += n
+        return seed, out
+
+
+def read_header(f: BinaryIO, name: str = "segment") -> tuple[SegmentHeader, bytes]:
+    """Read and validate the preamble and header; return ``(header, raw header bytes)``.
+
+    Raises:
+        MaskStoreError: bad magic, truncated file or malformed header.
+    """
+    pre = f.read(_PREAMBLE)
+    if len(pre) != _PREAMBLE or pre[:8] != SEGMENT_MAGIC:
+        raise MaskStoreError(f"{name}: not a PGW mask segment (bad magic)")
+    (hlen,) = struct.unpack("<I", pre[8:])
+    if not 0 < hlen <= MAX_HEADER_BYTES:
+        raise MaskStoreError(f"{name}: implausible header length {hlen}")
+    raw = f.read(hlen)
+    if len(raw) != hlen:
+        raise MaskStoreError(f"{name}: truncated header")
+    try:
+        obj = json.loads(raw)
+        header = SegmentHeader.model_validate(obj)
+    except (ValueError, ValidationError) as exc:
+        raise MaskStoreError(f"{name}: malformed segment header: {_short(exc)}") from exc
+    return header, raw
+
+
+def _short(exc: Exception) -> str:
+    s = str(exc).splitlines()
+    return s[0] if s else type(exc).__name__
+
+
+class SegmentFile:
+    """Read-only access to an encrypted segment file.
+
+    Args:
+        path: File path.
+        dek: Unwrapped data key; may be set later with :meth:`set_dek`.
+
+    The file descriptor stays open for the lifetime of the object, so a segment that is unlinked
+    while a reservation still reads from it remains readable (POSIX semantics).
+    """
+
+    def __init__(self, path: str | Path, dek: bytes | None = None):
+        self.path = Path(path)
+        try:
+            self._f: BinaryIO | None = self.path.open("rb")
+        except OSError as exc:
+            raise MaskStoreError(f"cannot open segment {self.path.name}: {exc.strerror}") from exc
+        try:
+            self.header, self.header_raw = read_header(self._f, self.path.name)
+            self.layout = SegmentLayout(self.header, len(self.header_raw))
+            size = os.fstat(self._f.fileno()).st_size
+            if size != self.layout.total_size:
+                raise MaskStoreError(
+                    f"{self.path.name}: file size {size} does not match header ({self.layout.total_size})",
+                    details={"segment_id": self.header.segment_id},
+                )
+        except BaseException:
+            self.close()
+            raise
+        self.header_digest = hashlib.sha256(self.header_raw).digest()
+        self._nonce_prefix = bytes.fromhex(self.header.nonce_prefix)
+        self._aead: AESGCM | None = None
+        if dek is not None:
+            self.set_dek(dek)
+
+    def set_dek(self, dek: bytes) -> None:
+        """Install the unwrapped DEK."""
+        if len(dek) != DEK_BYTES:
+            raise MaskStoreError("data key must be 32 bytes")
+        self._aead = AESGCM(bytes(dek))
+
+    def _read(self, ref: ChunkRef) -> bytes:
+        if self._f is None:
+            raise MaskStoreError(f"segment {self.header.segment_id} is closed")
+        try:
+            data = os.pread(self._f.fileno(), ref.cipher_len, ref.offset)
+        except OSError as exc:
+            raise MaskStoreError(f"read error in segment {self.header.segment_id}: {exc.strerror}") from exc
+        if len(data) != ref.cipher_len:
+            raise MaskStoreError(f"segment {self.header.segment_id} is truncated")
+        return data
+
+    def decrypt(self, ref: ChunkRef) -> bytes:
+        """Read, authenticate and decrypt one chunk."""
+        if self._aead is None:
+            raise MaskStoreError("segment data key not available")
+        ct = self._read(ref)
+        try:
+            return self._aead.decrypt(
+                chunk_nonce(self._nonce_prefix, ref.index), ct, chunk_aad(self.header_digest, ref.index)
+            )
+        except InvalidTag as exc:
+            raise MaskStoreError(
+                f"segment {self.header.segment_id}: chunk {ref.index} failed authentication (corrupt or tampered)",
+                details={"segment_id": self.header.segment_id, "chunk": ref.index},
+            ) from exc
+
+    def iter_chunks(self) -> list[ChunkRef]:
+        """All chunk references in file order."""
+        return self.layout.chunks()
+
+    def close(self) -> None:
+        """Close the file and drop the key."""
+        self._aead = None
+        if self._f is not None:
+            try:
+                self._f.close()
+            finally:
+                self._f = None
+
+    def __enter__(self) -> SegmentFile:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

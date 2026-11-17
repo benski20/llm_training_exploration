@@ -61,12 +61,12 @@ def rope_inv_freq(
         orig = scaling.get("original_max_position_embeddings") or max_position_embeddings
         if orig is None:
             raise ConfigError("yarn rope scaling needs original_max_position_embeddings")
-        factor = scaling.get("factor")
-        if factor is None:
+        raw_factor = scaling.get("factor")
+        if raw_factor is None:
             if max_position_embeddings is None:
                 raise ConfigError("yarn rope scaling needs factor")
-            factor = max_position_embeddings / orig
-        factor = float(factor)
+            raw_factor = max_position_embeddings / orig
+        factor = float(raw_factor)
 
         def mscale_of(scale: float, m: float = 1.0) -> float:
             return 1.0 if scale <= 1 else 0.1 * m * math.log(scale) + 1.0

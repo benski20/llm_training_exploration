@@ -11,10 +11,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pgw.core.errors import ErrorCode, PGWError, error_from_code
+
 __all__ = [
+    "ATTEMPT_HEADER",
+    "COMPUTE_PATH",
+    "MODELS_PATH",
     "PROTOCOL_HEADER",
     "PROTOCOL_VERSION",
+    "REQUEST_ID_HEADER",
     "SUPPORTED_VERSIONS",
+    "WIRE_HEADERS",
     "ComputeItem",
     "ComputeRequest",
     "ComputeResponse",
@@ -30,6 +37,15 @@ PROTOCOL_VERSION = 1
 SUPPORTED_VERSIONS: tuple[int, ...] = (1,)
 #: HTTP header carrying the protocol major version on every request and response.
 PROTOCOL_HEADER = "PGW-Protocol"
+#: Optional correlation / idempotency header (equals the request ``id``; identical on retries).
+REQUEST_ID_HEADER = "PGW-Request-Id"
+#: 1-based attempt counter sent by :class:`pgw.wire.ComputeClient` (diagnostics only).
+ATTEMPT_HEADER = "PGW-Attempt"
+#: Header names used by the protocol (informational).
+WIRE_HEADERS: tuple[str, ...] = (PROTOCOL_HEADER, REQUEST_ID_HEADER, ATTEMPT_HEADER)
+#: HTTP paths (SPEC 6.2).
+COMPUTE_PATH = "/pgw/v1/compute"
+MODELS_PATH = "/pgw/v1/models"
 
 
 @dataclass(frozen=True)
@@ -61,6 +77,16 @@ class ComputeRequest:
     version: int = PROTOCOL_VERSION
     type: str = "compute"
 
+    @property
+    def payload_bytes(self) -> int:
+        """Total size of all ``x_hat`` blobs (excludes msgpack framing)."""
+        return sum(len(it.x_hat) for it in self.items)
+
+    @property
+    def total_rows(self) -> int:
+        """Sum of ``rows`` over all items."""
+        return sum(int(it.rows) for it in self.items)
+
 
 @dataclass(frozen=True)
 class ComputeResult:
@@ -91,6 +117,11 @@ class ComputeResponse:
     version: int = PROTOCOL_VERSION
     type: str = "compute_result"
 
+    @property
+    def payload_bytes(self) -> int:
+        """Total size of all ``y_hat`` blobs."""
+        return sum(len(it.y_hat) for it in self.items)
+
 
 @dataclass(frozen=True)
 class ErrorResponse:
@@ -105,6 +136,27 @@ class ErrorResponse:
     details: dict[str, Any] = field(default_factory=dict)
     version: int = PROTOCOL_VERSION
     type: str = "error"
+
+    @classmethod
+    def from_exception(cls, exc: BaseException, request_id: str | None = None) -> ErrorResponse:
+        """Wire form of ``exc``. Non-:class:`PGWError` exceptions become a generic ``internal``
+        error whose message and details are *not* leaked."""
+        if isinstance(exc, PGWError):
+            return cls(
+                code=str(exc.code),
+                message=exc.message,
+                retryable=exc.retryable,
+                request_id=request_id,
+                details=dict(exc.details),
+            )
+        return cls(code=str(ErrorCode.INTERNAL), message="internal server error", request_id=request_id)
+
+    def to_exception(self) -> PGWError:
+        """Typed exception for this error (unknown codes become a plain :class:`PGWError`)."""
+        details = dict(self.details)
+        if self.request_id is not None:
+            details.setdefault("request_id", self.request_id)
+        return error_from_code(self.code, self.message, details)
 
 
 @dataclass(frozen=True)
@@ -128,6 +180,10 @@ class ModelInfo:
     max_rows_per_item: int
     max_request_bytes: int
 
+    def linear_dims(self) -> dict[str, tuple[int, int]]:
+        """``{linear_id: (out_features m, in_features n)}``."""
+        return {li.id: (li.out_features, li.in_features) for li in self.linears}
+
 
 @dataclass(frozen=True)
 class ModelsResponse:
@@ -139,3 +195,10 @@ class ModelsResponse:
     server: str = ""
     version: int = PROTOCOL_VERSION
     type: str = "models"
+
+    def find(self, fingerprint: str) -> ModelInfo | None:
+        """The served model with ``fingerprint`` (``None`` if absent)."""
+        for m in self.models:
+            if m.fingerprint == fingerprint:
+                return m
+        return None

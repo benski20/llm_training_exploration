@@ -4,28 +4,43 @@ Owner: maskstore team. Contract: SPEC.md section 7.
 
 The factory writes immutable encrypted *segments* (``SegmentWriter``); the gateway *reserves*
 slots (``MaskStore.reserve``), which advances a durable, monotonic consumption cursor BEFORE any
-mask is returned, so a crash can lose masks but never reuse them.
+mask is returned, so a crash can lose masks but never reuse them. Rollback of the state database
+is detected with an HMAC-chained generation journal and optional monotonic counters
+(:mod:`pgw.maskstore.counters`).
 """
 
 from pgw.maskstore.config import MaskStoreSettings
+from pgw.maskstore.counters import (
+    FileMonotonicCounter,
+    GenerationJournal,
+    MonotonicCounter,
+    ProviderCounter,
+    TpmNvCounter,
+)
 from pgw.maskstore.format import (
     SEGMENT_MAGIC,
     SEGMENT_SUFFIX,
     SEGMENT_VERSION,
+    SegmentFile,
     SegmentHeader,
+    SegmentLayout,
     SegmentLinear,
 )
 from pgw.maskstore.keys import (
     EnvKeyProvider,
     FileKeyProvider,
     KeyProvider,
+    KmsClient,
     KmsKeyProvider,
     Pkcs11KeyProvider,
     RecipientKeyPair,
+    StaticKeyProvider,
     WrappedKey,
     hpke_wrap_for_recipient,
+    write_key_file,
 )
 from pgw.maskstore.store import (
+    IntegrityReport,
     Inventory,
     LowWaterListener,
     MaskReservation,
@@ -36,7 +51,9 @@ from pgw.maskstore.store import (
 
 __all__ = [
     "SEGMENT_MAGIC", "SEGMENT_SUFFIX", "SEGMENT_VERSION", "EnvKeyProvider", "FileKeyProvider",
-    "Inventory", "KeyProvider", "KmsKeyProvider", "LowWaterListener", "MaskReservation", "MaskStore",
-    "MaskStoreSettings", "Pkcs11KeyProvider", "RecipientKeyPair", "SegmentHeader", "SegmentLinear", "SegmentWriter",
-    "SlotExtent", "WrappedKey", "hpke_wrap_for_recipient",
+    "FileMonotonicCounter", "GenerationJournal", "IntegrityReport", "Inventory", "KeyProvider", "KmsClient",
+    "KmsKeyProvider", "LowWaterListener", "MaskReservation", "MaskStore", "MaskStoreSettings", "MonotonicCounter",
+    "Pkcs11KeyProvider", "ProviderCounter", "RecipientKeyPair", "SegmentFile", "SegmentHeader", "SegmentLayout",
+    "SegmentLinear", "SegmentWriter", "SlotExtent", "StaticKeyProvider", "TpmNvCounter", "WrappedKey",
+    "hpke_wrap_for_recipient", "write_key_file",
 ]

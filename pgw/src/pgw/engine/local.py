@@ -249,7 +249,8 @@ class LocalMaskReservation:
             start = self._cursor[key]
             if start + rows > self._slots:
                 raise MaskExhaustedError(
-                    "mask reservation exhausted", details={"linear": key, "needed": rows, "remaining": self._slots - start}
+                    "mask reservation exhausted",
+                    details={"linear": key, "needed": rows, "remaining": self._slots - start},
                 )
             self._cursor[key] = start + rows
         r = exp.ring_uniform_rows(spec.in_features, self.ring.k, self._offset + start, rows, "r", key)

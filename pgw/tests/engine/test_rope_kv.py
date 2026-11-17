@@ -49,11 +49,11 @@ def test_unsupported_rope_type() -> None:
 
 def test_rotary_tables_grow_and_rotate() -> None:
     rope = RotaryEmbedding(8, 10000.0)
-    cos, sin = rope.cos_sin(0, 4)
+    cos, _sin = rope.cos_sin(0, 4)
     assert cos.shape == (4, 8)
     cos2, sin2 = rope.cos_sin(1000, 3)  # forces growth
     assert cos2.shape == (3, 8)
-    c_all, s_all = rope.cos_sin(0, 1003)
+    c_all, _s_all = rope.cos_sin(0, 1003)
     torch.testing.assert_close(c_all[1000:], cos2)
     x = torch.randn(3, 2, 8)
     y = apply_rope(x, cos2, sin2)
