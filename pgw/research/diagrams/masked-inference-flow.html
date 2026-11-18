@@ -1,0 +1,217 @@
+<title>Masked Inference Flow</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one reading column; two wide figures (online path, mask supply) that scroll sideways on phones; one numbers table. */
+:root{
+  --bg:#f5f7f9; --fg:#17212b; --muted:#5a6672; --line:#c7cfd8; --panel:#ffffff;
+  --you:#2a6db3; --you-fill:#e7f0fa;          /* customer network */
+  --us:#6a5893;  --us-fill:#f0edf6;           /* our cloud */
+  --secret:#b04a2f;                            /* values that never leave the customer */
+  --sans:"IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f141a; --fg:#e5e9ee; --muted:#9aa5b1; --line:#3a4653; --panel:#151c24;
+  --you:#6aa7e8; --you-fill:#12253a; --us:#a994d8; --us-fill:#211c2d; --secret:#e7836a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --fg:#e5e9ee; --muted:#9aa5b1; --line:#3a4653; --panel:#151c24;
+  --you:#6aa7e8; --you-fill:#12253a; --us:#a994d8; --us-fill:#211c2d; --secret:#e7836a; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
+.wrap{max-width:1020px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 48px;display:flex;flex-direction:column;gap:28px}
+h1{font-size:clamp(24px,3vw,32px);line-height:1.2;margin:0;text-wrap:balance;letter-spacing:-.01em}
+h2{font-size:19px;margin:0;text-wrap:balance}
+.lede{color:var(--muted);margin:6px 0 0;max-width:68ch}
+.key{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13.5px;color:var(--muted)}
+.key span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:14px;height:14px;border-radius:3px;border:1.5px solid}
+.sw.you{background:var(--you-fill);border-color:var(--you)} .sw.us{background:var(--us-fill);border-color:var(--us)}
+.sw.sec{border-style:dashed;border-color:var(--secret);background:transparent}
+section{display:flex;flex-direction:column;gap:10px}
+section p{margin:0;max-width:70ch}
+figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 12px}
+.scroll{overflow-x:auto}
+svg{display:block;width:100%;min-width:760px;height:auto;color:var(--fg);font-family:var(--sans)}
+figcaption{font-size:13.5px;color:var(--muted);margin-top:8px;max-width:80ch}
+.zone-you{fill:var(--you-fill);stroke:var(--you);stroke-width:1.5}
+.zone-us{fill:var(--us-fill);stroke:var(--us);stroke-width:1.5}
+.zl-you{fill:var(--you);font-size:12px;font-weight:600;letter-spacing:.08em}
+.zl-us{fill:var(--us);font-size:12px;font-weight:600;letter-spacing:.08em}
+.box{fill:var(--panel);stroke:currentColor;stroke-width:1.2}
+.t{fill:currentColor;font-size:13px}
+.tb{fill:currentColor;font-size:14px;font-weight:600}
+.tm{fill:currentColor;font-family:var(--mono);font-size:12px}
+.tl{fill:var(--muted);font-size:12px}
+.edge{stroke:currentColor;stroke-width:1.4;fill:none}
+.sec-line{stroke:var(--secret);stroke-width:1.4;stroke-dasharray:5 4;fill:none}
+.ts{fill:var(--secret);font-size:12px;font-weight:600}
+.arrowhead{fill:currentColor}
+table{width:100%;border-collapse:collapse;font-size:14.5px;font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+td:first-child{color:var(--muted);min-width:150px}
+td.now{font-weight:600}
+.note{font-size:13.5px;color:var(--muted)}
+code{font-family:var(--mono);font-size:.92em}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>How private inference works, with encrypted masks</h1>
+    <p class="lede">The model's matrix multiplies run on our GPUs. Your prompts, answers and every intermediate value stay readable only inside your network. Two flows make that work: the online path for each token, and the mask supply that feeds it.</p>
+  </header>
+
+  <div class="key" aria-label="Legend">
+    <span><i class="sw you"></i>Your network (Private Gateway)</span>
+    <span><i class="sw us"></i>Our cloud (Masked Compute Service)</span>
+    <span><i class="sw sec"></i>Secret that never leaves your network</span>
+  </div>
+
+  <section>
+    <h2>1. The online path: one masked round trip per layer</h2>
+    <p>For every token, each of the model's linear layers (4 per transformer block) is sent to our GPU as a one-time-masked vector. The gateway removes the mask from the reply and checks it before using it.</p>
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 980 352" role="img" aria-label="Online path: the gateway adds a one-time mask r to the activation x, our service multiplies the masked vector by the weights, and the gateway subtracts W times r and checks the result.">
+        <defs>
+          <marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
+        </defs>
+        <!-- zones -->
+        <rect x="10" y="10" width="600" height="332" rx="10" class="zone-you"/>
+        <text x="26" y="34" class="zl-you">YOUR NETWORK</text>
+        <rect x="650" y="10" width="320" height="332" rx="10" class="zone-us"/>
+        <text x="666" y="34" class="zl-us">OUR CLOUD</text>
+
+        <!-- app -->
+        <rect x="30" y="118" width="120" height="64" rx="8" class="box"/>
+        <text x="90" y="146" text-anchor="middle" class="tb">Your app</text>
+        <text x="90" y="166" text-anchor="middle" class="tl">OpenAI-style API</text>
+
+        <!-- gateway -->
+        <rect x="244" y="56" width="330" height="168" rx="8" class="box"/>
+        <text x="258" y="80" class="tb">Private Gateway</text>
+        <text x="258" y="106" class="t">1  quantize activation x (12-bit, per token)</text>
+        <text x="258" y="130" class="t">2  mask it:</text><text x="338" y="130" class="tm">x̂ = x + r  (mod 2³²)</text>
+        <text x="258" y="160" class="t">4  check:</text><text x="326" y="160" class="tm">u·ŷ = (uW)·x̂</text>
+        <text x="258" y="184" class="t">5  unmask:</text><text x="334" y="184" class="tm">W·x = ŷ − W·r</text>
+        <text x="258" y="208" class="tl">nonlinear steps (attention, SiLU, norms) run here in plain text</text>
+
+        <!-- mask store -->
+        <rect x="244" y="252" width="330" height="50" rx="8" class="box"/>
+        <text x="258" y="274" class="tb">Mask store</text>
+        <text x="258" y="292" class="tl">one-time pairs (r, W·r), each used once</text>
+        <line x1="409" y1="252" x2="409" y2="226" class="edge" marker-end="url(#ah1)"/>
+        <text x="417" y="243" class="tl">r, W·r</text>
+
+        <!-- service -->
+        <rect x="690" y="110" width="250" height="80" rx="8" class="box"/>
+        <text x="706" y="134" class="tb">Masked Compute Service</text>
+        <text x="706" y="158" class="t">3  multiply by the weights:</text>
+        <text x="706" y="178" class="tm">ŷ = W8 · x̂  (mod 2³²)</text>
+
+        <!-- edges -->
+        <path d="M150,140 L242,140" class="edge" marker-end="url(#ah1)"/>
+        <text x="190" y="132" text-anchor="middle" class="tl">prompt</text>
+        <path d="M242,166 L152,166" class="edge" marker-end="url(#ah1)"/>
+        <text x="190" y="182" text-anchor="middle" class="tl">answer</text>
+
+        <path d="M574,118 L688,128" class="edge" marker-end="url(#ah1)"/>
+        <text x="632" y="92" text-anchor="middle" class="t">x̂: looks like</text>
+        <text x="632" y="106" text-anchor="middle" class="t">random noise</text>
+        <path d="M688,176 L576,186" class="edge" marker-end="url(#ah1)"/>
+        <text x="630" y="204" text-anchor="middle" class="t">ŷ</text>
+
+        <!-- secret boundary -->
+        <rect x="232" y="44" width="354" height="268" rx="12" class="sec-line"/>
+        <text x="236" y="330" class="ts">r, W·r and u never leave this boundary</text>
+      </svg>
+      </div>
+      <figcaption>A 7B model makes 112 of these round trips per token (28 blocks × 4 layers). Because r is fresh, uniform and used once, x̂ carries no information about x. The check vector u is secret, so a wrong ŷ is caught.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>2. The mask supply: our GPU computes W·r without seeing r</h2>
+    <p>Each mask needs its product W·r. Computing that locally costs as much as running the model, which is what we are outsourcing. So the gateway encrypts r with module-LWE, our GPU multiplies the ciphertext, and only the gateway can decrypt the result.</p>
+    <figure>
+      <div class="scroll">
+      <svg viewBox="0 0 980 360" role="img" aria-label="Mask supply: the gateway encrypts fresh masks r with a lattice secret s, our service multiplies the ciphertext b by the weights, and the gateway decrypts W times r using a one-time key file and writes it to the mask store.">
+        <defs>
+          <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="arrowhead"/></marker>
+        </defs>
+        <rect x="10" y="10" width="600" height="340" rx="10" class="zone-you"/>
+        <text x="26" y="34" class="zl-you">YOUR NETWORK · MASK FACTORY (CPU)</text>
+        <rect x="650" y="10" width="320" height="340" rx="10" class="zone-us"/>
+        <text x="666" y="34" class="zl-us">OUR CLOUD</text>
+
+        <!-- encrypt -->
+        <rect x="30" y="58" width="300" height="88" rx="8" class="box"/>
+        <text x="46" y="82" class="tb">Encrypt fresh masks</text>
+        <text x="46" y="106" class="tm">b = A·s + e + 2²⁴·r  (mod 2⁵⁶)</text>
+        <text x="46" y="128" class="tl">256 future tokens per ciphertext; new s each time</text>
+
+        <!-- service -->
+        <rect x="690" y="120" width="250" height="84" rx="8" class="box"/>
+        <text x="706" y="144" class="tb">Masked Compute Service</text>
+        <text x="706" y="168" class="tm">y = W8 · b  (mod 2⁵⁶)</text>
+        <text x="706" y="190" class="tl">plain int8 GEMM on its GPU</text>
+
+        <!-- key file -->
+        <rect x="30" y="182" width="300" height="70" rx="8" class="box"/>
+        <text x="46" y="206" class="tb">One-time key file</text>
+        <text x="46" y="228" class="tm">H = W8 · A</text>
+        <text x="46" y="244" class="tl">built locally once per model version</text>
+
+        <!-- decrypt -->
+        <rect x="360" y="182" width="230" height="70" rx="8" class="box"/>
+        <text x="376" y="206" class="tb">Decrypt and verify</text>
+        <text x="376" y="228" class="tm">W·r = ⌊(y − H·s) / 2²⁴⌉</text>
+        <text x="376" y="244" class="tl">every row checked</text>
+
+        <!-- store -->
+        <rect x="360" y="282" width="230" height="52" rx="8" class="box"/>
+        <text x="376" y="304" class="tb">Mask store</text>
+        <text x="376" y="322" class="tl">minutes of stock, refilled on demand</text>
+
+        <!-- edges -->
+        <path d="M330,96 L688,146" class="edge" marker-end="url(#ah2)"/>
+        <text x="512" y="88" text-anchor="middle" class="t">b: pseudorandom</text>
+        <text x="512" y="102" text-anchor="middle" class="tl">7 bytes per value</text>
+        <path d="M688,184 L592,206" class="edge" marker-end="url(#ah2)"/>
+        <text x="632" y="230" text-anchor="middle" class="t">y</text>
+        <path d="M330,217 L358,217" class="edge" marker-end="url(#ah2)"/>
+        <text x="344" y="210" text-anchor="middle" class="tl">H</text>
+        <path d="M475,252 L475,280" class="edge" marker-end="url(#ah2)"/>
+        <text x="483" y="270" class="tl">W·r</text>
+        <path d="M180,146 L180,164 L440,164 L440,180" class="sec-line" marker-end="url(#ah2)"/>
+        <text x="200" y="160" class="ts">secret s (kept locally)</text>
+
+        <rect x="22" y="48" width="580" height="294" rx="12" class="sec-line"/>
+      </svg>
+      </div>
+      <figcaption>Our service sees only ciphertexts. By the module-LWE assumption (the lattice family behind NIST's post-quantum standard) they are indistinguishable from random, so no second provider or partner factory is needed. A wrong y from us yields a wrong W·r, which the gateway's check rejects before anything is stored.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>What it costs (Qwen2.5-7B, per token)</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>&nbsp;</th><th>Masks made by the customer</th><th>Encrypted mask generation, 32-bit ring</th></tr></thead>
+        <tbody>
+          <tr><td>Mask storage at the customer</td><td>6.95 MB per token, growing with use (7 TB per 1M tokens)</td><td class="now">34 GB one-time key file plus minutes of stock</td></tr>
+          <tr><td>Customer compute</td><td>a factory GPU (one T4 makes 169k tokens/h)</td><td class="now">0.11 s per token on an AMX CPU or a small GPU</td></tr>
+          <tr><td>Our GPU for masks</td><td>none</td><td>about 0.02 s per token on a T4</td></tr>
+          <tr><td>Online traffic</td><td>4.2 MB up, 7.0 MB down (40-bit ring)</td><td class="now">3.3 MB up, 5.6 MB down (32-bit ring)</td></tr>
+          <tr><td>Mask-supply traffic</td><td>none</td><td>5.8 MB up, 7.0 MB down</td></tr>
+          <tr><td>Who must be trusted</td><td>us, plus the factory not colluding with us</td><td class="now">nobody for privacy: one provider, lattice cryptography</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Measured on a Tesla T4 and an Intel AMX CPU. Output is bit-identical to running the quantized model locally. Before production, the lattice parameters still need a formal estimator check and an outside review.</p>
+  </section>
+</div>

@@ -40,6 +40,9 @@ JOBS: dict[str, dict] = {
         {"kind": "shell", "name": "hemask_bench_7b",
          "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4",
          "timeout": 3600},
+        {"kind": "shell", "name": "hemask_bench_7b_k32",
+         "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda "
+                "--groups 4 --k 32", "timeout": 3600},
         {"kind": "shell", "name": "hemask_bench_7b_cpu_f64",
          "cmd": "PGW_HEMASK_ENGINE=cpu_f64 python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda "
                 "--groups 4", "timeout": 3600},
