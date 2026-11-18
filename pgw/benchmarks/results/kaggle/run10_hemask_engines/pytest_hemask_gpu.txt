@@ -1,0 +1,35 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /tmp/pgwsrc/pgw
+configfile: pyproject.toml
+plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 20 items
+
+tests/hemask/test_factory_he.py::test_he_factory_matches_local_factory PASSED [  5%]
+tests/hemask/test_factory_he.py::test_he_factory_rejects_tampered_provider PASSED [ 10%]
+tests/hemask/test_factory_he.py::test_hint_seed_is_fresh_per_build PASSED [ 15%]
+tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[96-64-256] PASSED     [ 20%]
+tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[4608-3584-256] PASSED [ 25%]
+tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[64-18944-1024] PASSED [ 30%]
+tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[37-70-256] PASSED     [ 35%]
+tests/hemask/test_gpu.py::test_cuda_provider_roundtrip_decrypts_exactly PASSED [ 40%]
+tests/hemask/test_gpu.py::test_cuda_gateway_engine_matches_reference PASSED [ 45%]
+tests/hemask/test_lwe.py::test_matmul_mod64_is_exact PASSED              [ 50%]
+tests/hemask/test_lwe.py::test_secret_matrix_is_negacyclic_product PASSED [ 55%]
+tests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[32] PASSED [ 60%]
+tests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[40] PASSED [ 65%]
+tests/hemask/test_lwe.py::test_roundtrip_partial_group_and_worst_case_weights PASSED [ 70%]
+tests/hemask/test_lwe.py::test_noise_budget_rejects_k48_on_wide_layers PASSED [ 75%]
+tests/hemask/test_lwe.py::test_rejects_small_rank_and_bad_k PASSED       [ 80%]
+tests/hemask/test_lwe.py::test_tampered_product_gives_wrong_masks PASSED [ 85%]
+tests/hemask/test_lwe.py::test_ciphertext_hides_masks PASSED             [ 90%]
+tests/hemask/test_lwe.py::test_secret_is_fresh_per_group PASSED          [ 95%]
+tests/hemask/test_lwe.py::test_public_matrix_depends_on_seed_and_prefix_is_stable PASSED [100%]
+
+======================== 20 passed in 65.12s (0:01:05) =========================
+
+---stderr---

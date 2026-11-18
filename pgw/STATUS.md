@@ -49,8 +49,9 @@ single provider.
   rejected, and an end-to-end chat on 0.5B with encrypted masks gives the same answers with 0
   integrity failures.
 - The refill daemon refilled the store through the service while the gateway was serving.
-- T4: the CUDA `mulmod64` kernel is exact. 7B costs 0.020 s of provider GPU per token and
-  1.18 s of gateway CPU per token (unoptimised numpy), with a 45.6 GB hint.
+- T4: the CUDA `mulmod64` kernel is exact. 7B costs 0.020 s of provider GPU per token.
+  Gateway CPU per token is 0.11 s with a gateway GPU and 0.116 s on an AMX CPU, after the
+  int8 byte-plane optimisation (it was 1.18 s). The hint is 39.9 GB.
 - Not done yet: a lattice-estimator confirmation of the parameters, int8 AMX for gateway
   encrypt and decrypt, and an external crypto review. See
   `docs/operations/encrypted-masks.md` and `research/mask-storage/`.

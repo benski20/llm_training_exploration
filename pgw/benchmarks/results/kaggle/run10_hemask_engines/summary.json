@@ -1,0 +1,103 @@
+{
+ "job": {
+  "steps": [
+   {
+    "kind": "pytest",
+    "name": "pytest_hemask_gpu",
+    "args": [
+     "tests/hemask",
+     "-v",
+     "-rs",
+     "--timeout",
+     "1800"
+    ],
+    "timeout": 2400
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_hemask_cuda_engine",
+    "args": [
+     "tests/hemask",
+     "tests/service/test_maskgen.py",
+     "-q",
+     "-rs",
+     "--timeout",
+     "1800"
+    ],
+    "env": {
+     "PGW_HEMASK_ENGINE": "cuda"
+    },
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "hemask_bench_7b",
+    "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4",
+    "timeout": 3600
+   },
+   {
+    "kind": "shell",
+    "name": "hemask_bench_7b_cpu_f64",
+    "cmd": "PGW_HEMASK_ENGINE=cpu_f64 python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4",
+    "timeout": 3600
+   },
+   {
+    "kind": "shell",
+    "name": "hemask_bench_05b",
+    "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda --groups 4",
+    "timeout": 1800
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 12.2,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 0.9,
+   "tail": "0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.0.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.0.1\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.1\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==1.17.3\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.37\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "pytest_hemask_gpu": {
+   "rc": 0,
+   "seconds": 72.6,
+   "tail": "\ntests/hemask/test_gpu.py::test_cuda_mulmod64_exact[96-64-256] PASSED     [ 20%]\ntests/hemask/test_gpu.py::test_cuda_mulmod64_exact[4608-3584-256] PASSED [ 25%]\ntests/hemask/test_gpu.py::test_cuda_mulmod64_exact[64-18944-1024] PASSED [ 30%]\ntests/hemask/test_gpu.py::test_cuda_mulmod64_exact[37-70-256] PASSED     [ 35%]\ntests/hemask/test_gpu.py::test_cuda_provider_roundtrip_decrypts_exactly PASSED [ 40%]\ntests/hemask/test_gpu.py::test_cuda_gateway_engine_matches_reference PASSED [ 45%]\ntests/hemask/test_lwe.py::test_matmul_mod64_is_exact PASSED              [ 50%]\ntests/hemask/test_lwe.py::test_secret_matrix_is_negacyclic_product PASSED [ 55%]\ntests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[32] PASSED [ 60%]\ntests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[40] PASSED [ 65%]\ntests/hemask/test_lwe.py::test_roundtrip_partial_group_and_worst_case_weights PASSED [ 70%]\ntests/hemask/test_lwe.py::test_noise_budget_rejects_k48_on_wide_layers PASSED [ 75%]\ntests/hemask/test_lwe.py::test_rejects_small_rank_and_bad_k PASSED       [ 80%]\ntests/hemask/test_lwe.py::test_tampered_product_gives_wrong_masks PASSED [ 85%]\ntests/hemask/test_lwe.py::test_ciphertext_hides_masks PASSED             [ 90%]\ntests/hemask/test_lwe.py::test_secret_is_fresh_per_group PASSED          [ 95%]\ntests/hemask/test_lwe.py::test_public_matrix_depends_on_seed_and_prefix_is_stable PASSED [100%]\n\n======================== 20 passed in 65.12s (0:01:05) =========================\n\n---stderr---\n"
+  },
+  "pytest_hemask_cuda_engine": {
+   "rc": 0,
+   "seconds": 56.3,
+   "tail": ".......................                                                  [100%]\n23 passed in 51.26s\n\n---stderr---\n"
+  },
+  "hemask_bench_7b": {
+   "rc": 0,
+   "seconds": 171.9,
+   "tail": "4, \"provider_ms_per_slot\": 0.15443732128905818, \"decrypt_ms_per_slot\": 0.12029003515634518}\n{\n \"preset\": \"qwen2.5-7b\",\n \"device\": \"cuda\",\n \"rank\": 16,\n \"groups\": 4,\n \"torch\": \"2.11.0+cu130\",\n \"cpu_int8_fast\": false,\n \"gateway_engine\": \"cuda\",\n \"gpu\": \"Tesla T4\",\n \"per_kind\": {\n  \"qkv\": {\n   \"m\": 4608,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 1.33,\n   \"encrypt_ms_per_slot\": 0.26002698730470675,\n   \"provider_ms_per_slot\": 0.06652111132815497,\n   \"decrypt_ms_per_slot\": 0.17586498632815584\n  },\n  \"o\": {\n   \"m\": 3584,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 0.99,\n   \"encrypt_ms_per_slot\": 0.2739699179687416,\n   \"provider_ms_per_slot\": 0.05734238671872838,\n   \"decrypt_ms_per_slot\": 0.12959592578126733\n  },\n  \"gate_up\": {\n   \"m\": 37888,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 7.7,\n   \"encrypt_ms_per_slot\": 0.2595102128906124,\n   \"provider_ms_per_slot\": 0.4130490908203499,\n   \"decrypt_ms_per_slot\": 0.9813365273437236\n  },\n  \"down\": {\n   \"m\": 3584,\n   \"n\": 18944,\n   \"exact\": true,\n   \"hint_build_s\": 3.98,\n   \"encrypt_ms_per_slot\": 1.7125144619141164,\n   \"provider_ms_per_slot\": 0.15443732128905818,\n   \"decrypt_ms_per_slot\": 0.12029003515634518\n  }\n },\n \"per_token_full_model\": {\n  \"gateway_encrypt_s\": 0.07016860424218896,\n  \"provider_s\": 0.01935779748437616,\n  \"gateway_decrypt_s\": 0.03939844928906577,\n  \"upload_MB\": 6.651904,\n  \"download_MB\": 8.343552\n },\n \"one_time\": {\n  \"hint_GB\": 39.871053824,\n  \"hint_build_s_cpu\": 392.2550597280001\n }\n}\n\n---stderr---\n"
+  },
+  "hemask_bench_7b_cpu_f64": {
+   "rc": 0,
+   "seconds": 256.7,
+   "tail": "666, \"provider_ms_per_slot\": 0.1556987128905618, \"decrypt_ms_per_slot\": 1.2392060341797073}\n{\n \"preset\": \"qwen2.5-7b\",\n \"device\": \"cuda\",\n \"rank\": 16,\n \"groups\": 4,\n \"torch\": \"2.11.0+cu130\",\n \"cpu_int8_fast\": false,\n \"gateway_engine\": \"cpu_f64\",\n \"gpu\": \"Tesla T4\",\n \"per_kind\": {\n  \"qkv\": {\n   \"m\": 4608,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 3.85,\n   \"encrypt_ms_per_slot\": 3.4349723291016154,\n   \"provider_ms_per_slot\": 0.0670586328124223,\n   \"decrypt_ms_per_slot\": 1.6535595546874893\n  },\n  \"o\": {\n   \"m\": 3584,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 3.03,\n   \"encrypt_ms_per_slot\": 3.3849450009765247,\n   \"provider_ms_per_slot\": 0.04191764160155209,\n   \"decrypt_ms_per_slot\": 1.2793504580077553\n  },\n  \"gate_up\": {\n   \"m\": 37888,\n   \"n\": 3584,\n   \"exact\": true,\n   \"hint_build_s\": 30.49,\n   \"encrypt_ms_per_slot\": 3.4072163134766242,\n   \"provider_ms_per_slot\": 0.41652427441407625,\n   \"decrypt_ms_per_slot\": 12.813595840820312\n  },\n  \"down\": {\n   \"m\": 3584,\n   \"n\": 18944,\n   \"exact\": true,\n   \"hint_build_s\": 18.72,\n   \"encrypt_ms_per_slot\": 18.039617322265666,\n   \"provider_ms_per_slot\": 0.1556987128905618,\n   \"decrypt_ms_per_slot\": 1.2392060341797073\n  }\n },\n \"per_token_full_model\": {\n  \"gateway_encrypt_s\": 0.7914690270429721,\n  \"provider_s\": 0.01907357932812115,\n  \"gateway_decrypt_s\": 0.4755999328554674,\n  \"upload_MB\": 6.651904,\n  \"download_MB\": 8.343552\n },\n \"one_time\": {\n  \"hint_GB\": 39.871053824,\n  \"hint_build_s_cpu\": 1570.4995377399982\n }\n}\n\n---stderr---\n"
+  },
+  "hemask_bench_05b": {
+   "rc": 0,
+   "seconds": 16.4,
+   "tail": "vider_ms_per_slot\": 0.032501580078059256, \"decrypt_ms_per_slot\": 0.06387385546868796}\n{\n \"preset\": \"qwen2.5-0.5b\",\n \"device\": \"cuda\",\n \"rank\": 16,\n \"groups\": 4,\n \"torch\": \"2.11.0+cu130\",\n \"cpu_int8_fast\": false,\n \"gateway_engine\": \"cuda\",\n \"gpu\": \"Tesla T4\",\n \"per_kind\": {\n  \"qkv\": {\n   \"m\": 1152,\n   \"n\": 896,\n   \"exact\": true,\n   \"hint_build_s\": 0.38,\n   \"encrypt_ms_per_slot\": 0.09309808105473216,\n   \"provider_ms_per_slot\": 0.013846848632814712,\n   \"decrypt_ms_per_slot\": 0.07755670996090203\n  },\n  \"o\": {\n   \"m\": 896,\n   \"n\": 896,\n   \"exact\": true,\n   \"hint_build_s\": 0.1,\n   \"encrypt_ms_per_slot\": 0.08954017382811763,\n   \"provider_ms_per_slot\": 0.008441945312576138,\n   \"decrypt_ms_per_slot\": 0.062200073242091314\n  },\n  \"gate_up\": {\n   \"m\": 9728,\n   \"n\": 896,\n   \"exact\": true,\n   \"hint_build_s\": 1.22,\n   \"encrypt_ms_per_slot\": 0.08891037207037211,\n   \"provider_ms_per_slot\": 0.09631796679687721,\n   \"decrypt_ms_per_slot\": 0.27664398144533475\n  },\n  \"down\": {\n   \"m\": 896,\n   \"n\": 4864,\n   \"exact\": true,\n   \"hint_build_s\": 0.55,\n   \"encrypt_ms_per_slot\": 0.34770264550776364,\n   \"provider_ms_per_slot\": 0.032501580078059256,\n   \"decrypt_ms_per_slot\": 0.06387385546868796\n  }\n },\n \"per_token_full_model\": {\n  \"gateway_encrypt_s\": 0.014862030539063653,\n  \"provider_s\": 0.0036266001796878555,\n  \"gateway_decrypt_s\": 0.011526590882808385,\n  \"upload_MB\": 1.449984,\n  \"download_MB\": 1.824768\n },\n \"one_time\": {\n  \"hint_GB\": 8.719958016,\n  \"hint_build_s_cpu\": 54.0051110159975\n }\n}\n\n---stderr---\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869292 kB",
+   "MemFree:        26262824 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  1.9M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 9.9
+}

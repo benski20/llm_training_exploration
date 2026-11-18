@@ -28,7 +28,7 @@ import torch
 from pgw.core.errors import ConfigError, IntegrityError
 from pgw.core.prng import new_seed
 from pgw.core.ring import RingParams
-from pgw.hemask.fastmm import big_planes_mm_small, to_planes
+from pgw.hemask.fastmm import big_planes_mm_small, engine, to_planes
 from pgw.hemask.lwe import DEGREE, HEParams, MaskCiphertext, encrypt_masks, matmul_mod64, public_matrix
 
 __all__ = ["HEMaskBackend", "HintStore"]
@@ -160,16 +160,20 @@ class HEMaskBackend:
         for key, norm in hints.meta["row_norms"].items():
             self.params.check_noise(norm, key)
         a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
-        # Public matrix kept as int8 byte planes (same memory as uint64); fastmm picks the engine
-        # (gateway GPU, CPU int8, or exact float64 rebuilt block by block).
-        self._a: np.ndarray = to_planes(a)
+        # Public matrix as int8 byte planes for the int8 engines (gateway GPU, CPU AMX/VNNI); as uint64
+        # for the float64 engine, which would otherwise rebuild the words on every call.
+        self._planes = engine() != "cpu_f64"
+        self._a: np.ndarray = to_planes(a) if self._planes else a
         del a
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0}
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-remote")
 
     def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
         a = self._a[:n]
-        return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a) for g0 in range(0, len(rn), DEGREE)]
+        if self._planes:
+            return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
+                    for g0 in range(0, len(rn), DEGREE)]
+        return [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
 
     def _decrypt(self, linear: str, y: np.ndarray, cts: list[MaskCiphertext], m: int) -> np.ndarray:
         """All groups of one provider reply with one GEMM: ``hint @ [S_1 | S_2 | ...]``."""

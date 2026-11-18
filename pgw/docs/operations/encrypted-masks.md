@@ -27,13 +27,14 @@ takes `--mask-source he`.
 
 On first use, the factory builds `H = W8 A mod 2^64` for every linear from the pack and a fresh
 public seed it chooses itself. It does this locally, so no provider input is trusted. The hint is
-reused until the model pack changes.
+stored as int8 byte planes of bytes 1-7. Byte 0 is not needed for decryption, and its absence is
+counted in the noise budget. The hint is reused until the model pack changes.
 
-| model | hint (rank 16) | equals today's masks for | build time (4-core CPU) |
-|---|---|---|---|
-| Qwen2.5-0.5B | 9.3 GB (measured) | about 6,100 tokens | about 2-3 min (measured, incl. the first 256 masks) |
-| Qwen2.5-7B | about 45 GB | about 6,600 tokens | tens of minutes (estimate) |
-| Llama-3-70B | about 220 GB | about 6,600 tokens | hours on CPU (estimate); can be built once per model version |
+| model | hint (rank 16) | build: gateway T4 / AMX CPU (4 vCPU) / CPU without fast int8 |
+|---|---|---|
+| Qwen2.5-0.5B | 8.7 GB | 54 s / about 90 s / about 2 min |
+| Qwen2.5-7B | 39.9 GB | 6.5 min / 10.5 min / 26 min |
+| Llama-3-70B | about 190 GB (estimate) | about 1 h on a gateway GPU (estimate) |
 
 After that, storage no longer grows with token volume.
 
@@ -53,28 +54,27 @@ After that, storage no longer grows with token volume.
 - **Metadata the provider sees:** linear ids, group counts and timing of mask generation.
   Generation runs ahead of use, so this reveals at most the volume of masks being stocked.
 
-## Costs (Qwen2.5-0.5B, this 4-vCPU container, measured)
+## Costs per token (measured)
 
-- One encrypted group (256 slots) for the largest 0.5B linear: encrypt 0.20 s, service 0.23 s
-  (CPU), decrypt 1.05 s.
-- Refill daemon at nice 19, 1 thread, 50% duty cycle: 256 slots in 256 s wall (127 s compute).
-- Network per 0.5B token: about 1.5 MB up and 2.4 MB down (64-bit coefficients).
+The provider multiplies on its GPU; on a T4 this is exact and fast. The gateway's side (encrypt
+and decrypt) is two GEMMs with a small ternary secret matrix. `pgw.hemask.fastmm` runs them as
+int8 GEMMs over byte planes on the fastest available engine: a GPU on the gateway, a CPU with
+AMX/VNNI, or exact float64 on other CPUs. Override with `PGW_HEMASK_ENGINE`.
 
-## Costs on a Tesla T4 (Kaggle, measured; `benchmarks/results/kaggle/run8_hemask/`)
+| Qwen2.5-7B, per token | before optimisation | gateway T4 (`cuda`) | AMX CPU, 4 vCPU (`cpu_int8`) | CPU without fast int8 (`cpu_f64`) |
+|---|---|---|---|---|
+| gateway encrypt + decrypt | 1.18 s | **0.11 s** (0.070 + 0.039) | **0.116 s** (0.051 + 0.065) | 1.27 s, before the uint64 A fix; about 0.9 s expected |
+| provider GPU (T4) | 0.020 s | 0.019 s | | |
+| upload / download | 6.7 / 11.1 MB | 6.7 / 8.3 MB (16 low bits rounded away) | | |
 
-The CUDA `mulmod64` kernel is exact (GPU tests, including worst-case 7B down-projection weights
-and a full encrypt-provider-decrypt round trip).
+Qwen2.5-0.5B: 0.026 s per token with a gateway T4, 0.031 s on the AMX CPU.
 
-| per token | Qwen2.5-0.5B | Qwen2.5-7B | Llama-3-8B |
-|---|---|---|---|
-| provider GPU (T4) | 0.004 s | 0.020 s (about 180k tokens/h per T4, about the same as today's T4 factory) | 0.019 s |
-| gateway CPU: encrypt + decrypt (numpy float64, Kaggle CPU) | 0.26 s | 1.18 s | 1.19 s |
-| upload / download | 1.4 / 2.4 MB | 6.7 / 11.1 MB | 6.8 / 11.0 MB |
-| one-time hint | 10.0 GB, 113 s | 45.6 GB, about 29 min | 45.1 GB, about 29 min |
+At 1M tokens/day of 7B, the gateway needs about 1.3 AMX cores, or a share of one small GPU.
+Results are in `benchmarks/results/kaggle/run10_hemask_engines/` and `benchmarks/hemask_bench.py`.
 
-The provider's work matches today's local factory, now on our GPU. The gateway's
-encrypt/decrypt CPU cost is the next thing to optimise. Both steps are GEMMs with a ternary
-secret matrix, which map onto int8 AMX/VNNI or a small GPU.
+The remaining bottleneck at volume is network: about 15 MB per 7B token, roughly 1.4 Gbit/s at
+1M tokens/day. Moving to the 32-bit ring (validated as lossless for quality) would cut it, along
+with the hint, by about a quarter.
 
-Planned speedups: AMX/VNNI int8 encryption and decryption on the gateway, 44-bit download truncation,
-and a smaller rank once the lattice estimate allows it.
+Planned: the K32 ring (less network and hint), a smaller rank once the lattice estimate allows it,
+and moving hint building to the provider with Freivalds verification (faster setup for 70B).
