@@ -1,0 +1,14 @@
+{
+ "lib": "openfhe-1.6.1 BFVrns",
+ "N": 8192,
+ "logQ": 120,
+ "t": 1099511922689,
+ "din": 896,
+ "dout": 8,
+ "ok": true,
+ "enc_s_per_ct": 0.003419892064162663,
+ "server_s_per_mac": 0.00017025680946452276,
+ "dec_s_per_ct": 0.0009453892707824707,
+ "ct_bytes": "name 'SerializeToString' is not defined",
+ "server_s_per_token_mac": 2.078330193658725e-08
+}

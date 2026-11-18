@@ -1,0 +1,86 @@
+{
+ "baseline stored, 2-day buffer, gp3": {
+  "storage_TB": 13.91,
+  "storage_usd_mo": 1112,
+  "factory": "5.9 T4-h/day",
+  "factory_usd_mo": 93,
+  "cpu_vcpu": 0
+ },
+ "baseline stored, 2-day buffer, S3": {
+  "storage_TB": 13.91,
+  "storage_usd_mo": 320,
+  "factory": "5.9 T4-h/day",
+  "factory_usd_mo": 93,
+  "cpu_vcpu": 0
+ },
+ "low-bit Wr storage (K40A12, 29/31 bits)": {
+  "storage_TB": 10.13,
+  "storage_usd_mo": 811,
+  "factory": "5.9 T4-h/day",
+  "factory_usd_mo": 93,
+  "cpu_vcpu": 0
+ },
+ "low-bit + K32A8": {
+  "storage_TB": 8.74,
+  "storage_usd_mo": 699,
+  "factory": "5.9 T4-h/day",
+  "factory_usd_mo": 93,
+  "cpu_vcpu": 0
+ },
+ "prefix cache (chat) + low-bit, stored 2d": {
+  "storage_TB": 4.56,
+  "storage_usd_mo": 365,
+  "factory": "2.7 T4-h/day",
+  "factory_usd_mo": 42,
+  "cpu_vcpu": 0
+ },
+ "prefix cache (rag) + low-bit, stored 2d": {
+  "storage_TB": 5.17,
+  "storage_usd_mo": 413,
+  "factory": "3.0 T4-h/day",
+  "factory_usd_mo": 48,
+  "cpu_vcpu": 0
+ },
+ "prefix cache (agent) + low-bit, stored 2d": {
+  "storage_TB": 1.62,
+  "storage_usd_mo": 130,
+  "factory": "0.9 T4-h/day",
+  "factory_usd_mo": 15,
+  "cpu_vcpu": 0
+ },
+ "JIT CPU factory (proto), provisioned for 3x peak, 15-min buffer": {
+  "storage_TB": 0.217,
+  "storage_usd_mo": 17,
+  "cpu_vcpu": 5.34,
+  "cpu_usd_mo": 174
+ },
+ "JIT CPU + low-bit (4 limbs)": {
+  "storage_TB": 0.158,
+  "storage_usd_mo": 13,
+  "cpu_vcpu": 4.27,
+  "cpu_usd_mo": 139
+ },
+ "JIT + low-bit + prefix cache (chat)": {
+  "storage_TB": 0.071,
+  "storage_usd_mo": 6,
+  "cpu_vcpu": 1.92,
+  "cpu_usd_mo": 63
+ },
+ "JIT + low-bit + prefix cache (rag)": {
+  "storage_TB": 0.081,
+  "storage_usd_mo": 6,
+  "cpu_vcpu": 2.18,
+  "cpu_usd_mo": 71
+ },
+ "JIT + low-bit + prefix cache (agent)": {
+  "storage_TB": 0.025,
+  "storage_usd_mo": 2,
+  "cpu_vcpu": 0.68,
+  "cpu_usd_mo": 22
+ },
+ "reference: all linears locally on CPU (no PGW)": {
+  "storage_TB": 0,
+  "cpu_vcpu": 1.39,
+  "cpu_usd_mo": 45
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "eval_tokens": 16384,
+ "results": [
+  {
+   "config": "i:K=23:t=10:mode=cs",
+   "ppl": 17.5707,
+   "top1_agreement_vs_fp": null,
+   "seconds": 306.2,
+   "stats": {
+    "qkv": {
+     "frac_tokens_fewer_bits": 0.981626,
+     "min_bits": 9,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "o": {
+     "frac_tokens_fewer_bits": 0.999947,
+     "min_bits": 9,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "gate_up": {
+     "frac_tokens_fewer_bits": 0.98806,
+     "min_bits": 9,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "down": {
+     "frac_tokens_fewer_bits": 1.0,
+     "min_bits": 8,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    }
+   }
+  }
+ ]
+}

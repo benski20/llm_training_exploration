@@ -1,0 +1,314 @@
+{
+ "A8.qkv": [
+  {
+   "layer": 0,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 24.945963541666668,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 14,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 24.75607638888889,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 27,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 24.71527777777778,
+   "max_bits": 25,
+   "generic": 27
+  }
+ ],
+ "A12.qkv": [
+  {
+   "layer": 0,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 28.947916666666668,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 14,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 28.760850694444443,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 27,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 28.72026909722222,
+   "max_bits": 29,
+   "generic": 31
+  }
+ ],
+ "A20.qkv": [
+  {
+   "layer": 0,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 36.947916666666664,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 14,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 36.76128472222222,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 27,
+   "m": 4608,
+   "n": 3584,
+   "mean_bits": 36.72026909722222,
+   "max_bits": 37,
+   "generic": 39
+  }
+ ],
+ "A8.o": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 24.688058035714285,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 24.769810267857142,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 24.931640625,
+   "max_bits": 25,
+   "generic": 27
+  }
+ ],
+ "A12.o": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 28.702287946428573,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 28.777622767857142,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 28.934988839285715,
+   "max_bits": 29,
+   "generic": 31
+  }
+ ],
+ "A20.o": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 36.702845982142854,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 36.777901785714285,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 3584,
+   "mean_bits": 36.934988839285715,
+   "max_bits": 37,
+   "generic": 39
+  }
+ ],
+ "A8.gate_up": [
+  {
+   "layer": 0,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 24.0912426097973,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 14,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 24.8701171875,
+   "max_bits": 25,
+   "generic": 27
+  },
+  {
+   "layer": 27,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 24.9556323902027,
+   "max_bits": 25,
+   "generic": 27
+  }
+ ],
+ "A12.gate_up": [
+  {
+   "layer": 0,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 28.093354096283782,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 14,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 28.872888513513512,
+   "max_bits": 29,
+   "generic": 31
+  },
+  {
+   "layer": 27,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 28.95703125,
+   "max_bits": 29,
+   "generic": 31
+  }
+ ],
+ "A20.gate_up": [
+  {
+   "layer": 0,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 36.093406883445944,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 14,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 36.87302048141892,
+   "max_bits": 37,
+   "generic": 39
+  },
+  {
+   "layer": 27,
+   "m": 37888,
+   "n": 3584,
+   "mean_bits": 36.95705764358108,
+   "max_bits": 37,
+   "generic": 39
+  }
+ ],
+ "A8.down": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 26.869419642857142,
+   "max_bits": 27,
+   "generic": 30
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 26.777622767857142,
+   "max_bits": 27,
+   "generic": 30
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 26.866629464285715,
+   "max_bits": 27,
+   "generic": 30
+  }
+ ],
+ "A12.down": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 30.872488839285715,
+   "max_bits": 31,
+   "generic": 34
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 30.782366071428573,
+   "max_bits": 31,
+   "generic": 34
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 30.867745535714285,
+   "max_bits": 31,
+   "generic": 34
+  }
+ ],
+ "A20.down": [
+  {
+   "layer": 0,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 38.872767857142854,
+   "max_bits": 39,
+   "generic": 42
+  },
+  {
+   "layer": 14,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 38.782924107142854,
+   "max_bits": 39,
+   "generic": 42
+  },
+  {
+   "layer": 27,
+   "m": 3584,
+   "n": 18944,
+   "mean_bits": 38.86802455357143,
+   "max_bits": 39,
+   "generic": 42
+  }
+ ]
+}

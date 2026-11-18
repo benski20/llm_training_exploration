@@ -1,0 +1,34 @@
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (299078 > 131072). Running this sequence through the model will result in indexing errors
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+setup 5s, 16 seqs
+layer 0 done 19s
+layer 1 done 33s
+layer 2 done 47s
+layer 3 done 62s
+layer 4 done 77s
+layer 5 done 92s
+layer 6 done 107s
+layer 7 done 123s
+layer 8 done 137s
+layer 9 done 152s
+layer 10 done 166s
+layer 11 done 180s
+layer 12 done 194s
+layer 13 done 207s
+layer 14 done 222s
+layer 15 done 236s
+layer 16 done 250s
+layer 17 done 264s
+layer 18 done 277s
+layer 19 done 292s
+layer 20 done 306s
+layer 21 done 319s
+layer 22 done 333s
+layer 23 done 346s
+{"config": "fp", "ppl": 22.4512}
+{"config": "w8a12", "ppl": 22.3324, "top1_vs_first": 0.9694, "kl_vs_first": 0.004191}
+{"config": "ring:qkv=24,o=24,gate_up=24,down=24", "ppl": 22.3208, "top1_vs_first": 0.9665, "kl_vs_first": 0.00447, "abits_qkv": {"mean": 11.734, "frac_lt12": 0.2658, "min": 10}, "abits_o": {"mean": 11.141, "frac_lt12": 0.7779, "min": 10}, "abits_gate_up": {"mean": 11.771, "frac_lt12": 0.2264, "min": 10}, "abits_down": {"mean": 10.336, "frac_lt12": 0.9751, "min": 9}}
+{"config": "ring:qkv=23,o=23,gate_up=23,down=23", "ppl": 22.3645, "top1_vs_first": 0.9616, "kl_vs_first": 0.005495, "abits_qkv": {"mean": 10.755, "frac_lt12": 0.9793, "min": 9}, "abits_o": {"mean": 10.142, "frac_lt12": 0.9999, "min": 9}, "abits_gate_up": {"mean": 10.788, "frac_lt12": 0.9826, "min": 9}, "abits_down": {"mean": 9.338, "frac_lt12": 1.0, "min": 8}}
+{"config": "ring:qkv=22,o=22,gate_up=22,down=22", "ppl": 22.4414, "top1_vs_first": 0.9421, "kl_vs_first": 0.01417, "abits_qkv": {"mean": 9.757, "frac_lt12": 1.0, "min": 8}, "abits_o": {"mean": 9.145, "frac_lt12": 1.0, "min": 7}, "abits_gate_up": {"mean": 9.79, "frac_lt12": 1.0, "min": 8}, "abits_down": {"mean": 8.341, "frac_lt12": 1.0, "min": 7}}
+{"config": "ring:qkv=24,o=24,gate_up=21,down=24", "ppl": 22.4465, "top1_vs_first": 0.9563, "kl_vs_first": 0.012131, "abits_qkv": {"mean": 11.733, "frac_lt12": 0.2662, "min": 10}, "abits_o": {"mean": 11.141, "frac_lt12": 0.7778, "min": 10}, "abits_gate_up": {"mean": 8.792, "frac_lt12": 1.0, "min": 7}, "abits_down": {"mean": 10.336, "frac_lt12": 0.9751, "min": 9}}
+{"config": "ring:qkv=24,o=24,gate_up=20,down=24", "ppl": 22.5568, "top1_vs_first": 0.9375, "kl_vs_first": 0.020703, "abits_qkv": {"mean": 11.733, "frac_lt12": 0.2666, "min": 10}, "abits_o": {"mean": 11.142, "frac_lt12": 0.7779, "min": 9}, "abits_gate_up": {"mean": 7.795, "frac_lt12": 1.0, "min": 6}, "abits_down": {"mean": 10.335, "frac_lt12": 0.9752, "min": 9}}

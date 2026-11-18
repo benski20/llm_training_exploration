@@ -1,0 +1,23 @@
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (299078 > 131072). Running this sequence through the model will result in indexing errors
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+setup 15s, 16 seqs
+layer 0 done 46s
+layer 1 done 76s
+layer 2 done 106s
+layer 3 done 136s
+layer 4 done 165s
+layer 5 done 193s
+layer 6 done 221s
+layer 7 done 251s
+layer 8 done 281s
+layer 9 done 311s
+layer 10 done 341s
+layer 11 done 368s
+layer 12 done 396s
+layer 13 done 426s
+layer 14 done 456s
+layer 15 done 484s
+layer 16 done 513s
+layer 17 done 542s
+layer 18 done 570s
+layer 19 done 598s

@@ -1,0 +1,24 @@
+2026-11-18 04:24:06,551 INFO pgw.modelpack.loader: opened model pack qwen2.5-0.5b-instruct fp=004f351fefb5 components=linears verify=fingerprint
+2026-11-18 04:24:06,604 INFO pgw.factory.streaming: weight streamer: 0/96 linears resident (0.0 MiB of 341.2 MiB) on cpu
+2026-11-18 04:24:06,604 INFO pgw.factory.generator: mask generator for qwen2.5-0.5b-instruct (004f351fefb5) ring K40A12 on cpu/cpu_int8, 96 linears, 1.52 MB/slot
+2026-11-18 04:24:06,630 INFO pgw.core.ringmm: CPU int8 GEMM 0.062 ms vs float64 0.221 ms: using cpu_int8
+{
+ "model": "qwen2.5-0.5b-instruct",
+ "mode": "pack",
+ "ring": "K40A12",
+ "device": "cpu",
+ "backend": "cpu_int8",
+ "slots_measured": 256,
+ "seconds": 6.316473057000167,
+ "slots_per_second": 42.38005063714976,
+ "tokens_per_hour": 152568.18229373914,
+ "seconds_per_token": 0.02359600767261505,
+ "gemm_fraction": 0.940337081849664,
+ "bytes_per_token": 1520640,
+ "price_per_hour": 0.08,
+ "usd_per_million_tokens": 0.5243557260581122,
+ "storage_tb_per_million_tokens": 1.52064,
+ "layers_measured": 1,
+ "layers_total": 1,
+ "gpu_name": null
+}

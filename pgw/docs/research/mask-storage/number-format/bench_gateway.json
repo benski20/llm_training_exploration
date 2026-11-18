@@ -1,0 +1,10 @@
+{
+ "decode_trunc_K24_t10_bits14_ms": 45.68801933343517,
+ "decode_trunc_K26_t10_bits16_ms": 61.77758466659119,
+ "decode_trunc_K25_t10_bits15_ms": 42.10567866660616,
+ "decode_today_K40_5byte_ms": 22.07753200006361,
+ "freivalds_c1_ms": 1.1870286666635366,
+ "freivalds_c2_ms": 2.797717999934927,
+ "freivalds_c4_ms": 6.234000666609063,
+ "freivalds_MACs_per_vector_per_token": 2222080
+}

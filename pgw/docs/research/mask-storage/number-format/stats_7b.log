@@ -1,0 +1,32 @@
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (299078 > 131072). Running this sequence through the model will result in indexing errors
+0 {'qkv': (26.47, 24.18, 9.14), 'o': (24.93, 21.49, 8.83), 'gate_up': (23.45, 21.11, 9.01), 'down': (25.53, 20.5, 9.99)}
+1 {'qkv': (24.38, 21.61, 8.83), 'o': (25.5, 22.07, 9.03), 'gate_up': (23.36, 20.52, 8.8), 'down': (25.33, 21.27, 11.22)}
+2 {'qkv': (25.17, 22.23, 9.0), 'o': (25.64, 21.79, 9.05), 'gate_up': (23.71, 20.97, 8.99), 'down': (25.14, 20.51, 10.04)}
+3 {'qkv': (25.19, 21.83, 9.0), 'o': (25.82, 21.67, 8.97), 'gate_up': (24.1, 21.18, 9.14), 'down': (26.33, 23.97, 10.0)}
+4 {'qkv': (24.82, 21.64, 9.0), 'o': (25.43, 21.8, 9.01), 'gate_up': (24.49, 21.23, 9.12), 'down': (26.59, 21.12, 10.05)}
+5 {'qkv': (25.17, 22.02, 9.0), 'o': (25.44, 21.7, 9.02), 'gate_up': (24.27, 20.83, 9.12), 'down': (26.55, 21.34, 10.06)}
+6 {'qkv': (24.88, 21.85, 9.01), 'o': (25.53, 21.95, 9.01), 'gate_up': (25.18, 21.62, 9.02), 'down': (26.29, 20.93, 10.07)}
+7 {'qkv': (25.1, 21.38, 8.98), 'o': (25.77, 21.45, 8.97), 'gate_up': (25.43, 22.14, 9.08), 'down': (26.43, 21.28, 10.07)}
+8 {'qkv': (24.99, 21.87, 8.96), 'o': (25.4, 21.34, 8.97), 'gate_up': (25.41, 21.93, 9.09), 'down': (26.36, 21.21, 10.06)}
+9 {'qkv': (25.25, 21.61, 8.95), 'o': (25.74, 21.77, 8.96), 'gate_up': (24.81, 21.42, 9.09), 'down': (26.14, 21.14, 10.06)}
+10 {'qkv': (24.92, 21.42, 9.0), 'o': (25.65, 21.46, 8.98), 'gate_up': (25.3, 21.72, 9.1), 'down': (26.33, 21.62, 10.06)}
+11 {'qkv': (24.98, 21.54, 8.99), 'o': (25.49, 21.17, 9.0), 'gate_up': (25.49, 22.27, 9.1), 'down': (26.51, 21.36, 10.07)}
+12 {'qkv': (25.08, 21.44, 8.97), 'o': (25.77, 21.81, 9.05), 'gate_up': (25.57, 21.96, 9.07), 'down': (26.58, 21.44, 9.97)}
+13 {'qkv': (25.15, 21.52, 8.94), 'o': (25.73, 21.2, 8.94), 'gate_up': (25.57, 21.9, 9.08), 'down': (26.54, 22.55, 10.01)}
+14 {'qkv': (24.85, 21.2, 8.94), 'o': (25.33, 20.93, 8.89), 'gate_up': (25.41, 22.03, 9.06), 'down': (26.72, 21.65, 9.96)}
+15 {'qkv': (24.78, 21.31, 8.94), 'o': (25.81, 21.75, 9.0), 'gate_up': (25.28, 22.14, 9.04), 'down': (26.74, 22.22, 10.01)}
+Exception in thread Thread-1 (prefetch):
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.13/threading.py", line 1044, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "/usr/local/lib/python3.13/threading.py", line 995, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-0/-home-user-llm-training-exploration/ccb74ae1-1118-5730-a172-4d0053661708/scratchpad/research/number-format/nf_stats_stream.py", line 110, in prefetch
+    q.put((i, {n: rem.get(n) for n in layer_names(i)}))
+                  ~~~~~~~^^^
+  File "/tmp/claude-0/-home-user-llm-training-exploration/ccb74ae1-1118-5730-a172-4d0053661708/scratchpad/research/number-format/nf_stats_stream.py", line 50, in get
+    t = torch.frombuffer(bytearray(r.content), dtype=torch.bfloat16).reshape(meta["shape"])
+                                   ^
+UnboundLocalError: cannot access local variable 'r' where it is not associated with a value

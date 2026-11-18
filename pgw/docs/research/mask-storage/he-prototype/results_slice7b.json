@@ -1,0 +1,43 @@
+{
+ "label": "7B-shaped qkv 4608x3584 (random full-range int8)",
+ "N": 4096,
+ "t_bits": 40,
+ "qd_bits": 50,
+ "qe_bits": 39,
+ "logQ": 89,
+ "d_in": 3584,
+ "d_out": 4608,
+ "b_download_bits": 45,
+ "threads": "2",
+ "variant_A": {
+  "client_gen_a_s": 0.14918056899978183,
+  "client_encrypt_s": 8.539499735999925,
+  "server_gemm_s": 14.987390274000063,
+  "server_modswitch_s": 2.3201111810003567,
+  "client_decrypt_s": 4.9953721970000515,
+  "exact_match": true,
+  "max_decode_frac(<0.5 required)": 0.0902099609375,
+  "server_s_per_token": 0.004225464222412212,
+  "client_s_per_token": 0.0033044120930175724,
+  "server_ns_per_token_MAC": 0.25585502881320843,
+  "upload_bytes_per_token": 39872.0,
+  "download_bytes_per_token": 54720.0,
+  "stored_Wr_bytes_per_token_K40": 23040
+ },
+ "variant_B": {
+  "hint_gen_s(one-time, = 1 batch of server work on a)": 7.173737690000053,
+  "hint_bytes_per_linear(qd+qe bits packed)": 209977344.0,
+  "client_encrypt_s": 8.588437391999832,
+  "server_gemm_s": 7.252639264000209,
+  "server_modswitch_s": 1.3067158069998186,
+  "client_decrypt_s": 10.052034826999716,
+  "exact_match": true,
+  "max_decode_frac(<0.5 required)": 0.0166015625,
+  "server_s_per_token": 0.002089686296630866,
+  "client_s_per_token": 0.004550896537841687,
+  "server_ns_per_token_MAC": 0.12653207304399677,
+  "upload_bytes_per_token": 39872.0,
+  "download_bytes_per_token": 25920.0,
+  "stored_Wr_bytes_per_token_K40": 23040
+ }
+}

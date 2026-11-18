@@ -1,0 +1,102 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "eval_tokens": 16384,
+ "results": [
+  {
+   "config": "i:K=24:t=12:mode=wrap",
+   "ppl": 17.6361,
+   "top1_agreement_vs_fp": null,
+   "seconds": 286.6,
+   "stats": {
+    "qkv": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "o": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "gate_up": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "down": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    }
+   }
+  },
+  {
+   "config": "i:K=24:t=10:mode=cs",
+   "ppl": 17.5245,
+   "top1_agreement_vs_fp": null,
+   "seconds": 290.3,
+   "stats": {
+    "qkv": {
+     "frac_tokens_fewer_bits": 0.293597,
+     "min_bits": 10,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "o": {
+     "frac_tokens_fewer_bits": 0.778961,
+     "min_bits": 10,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "gate_up": {
+     "frac_tokens_fewer_bits": 0.331301,
+     "min_bits": 10,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "down": {
+     "frac_tokens_fewer_bits": 0.973979,
+     "min_bits": 9,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    }
+   }
+  },
+  {
+   "config": "i:K=23,23,23,22:t=11,11,11,12:mode=wrap",
+   "ppl": 17.6678,
+   "top1_agreement_vs_fp": null,
+   "seconds": 274.2,
+   "stats": {
+    "qkv": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.0,
+     "wrap_elem_rate": 0.0
+    },
+    "o": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 5.5948893229166664e-05,
+     "wrap_elem_rate": 6.244296119326637e-08
+    },
+    "gate_up": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.000476837158203125,
+     "wrap_elem_rate": 2.130604626839621e-07
+    },
+    "down": {
+     "frac_tokens_fewer_bits": 0.0,
+     "min_bits": 12,
+     "wrap_call_rate": 0.004061381022135417,
+     "wrap_elem_rate": 6.2641643342517675e-06
+    }
+   }
+  }
+ ]
+}

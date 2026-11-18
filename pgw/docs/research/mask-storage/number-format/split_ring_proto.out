@@ -1,0 +1,12 @@
+K=22 Kw=22 err=2^-: A=10 log2B=20.46 harmful=0.000 undetected-harmful=0.0000
+K=22 Kw=22 err=2^0.0: A=10 log2B=20.46 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=22 err=2^20.0: A=10 log2B=20.48 harmful=1.000 undetected-harmful=0.2547
+K=22 Kw=22 err=2^21.0: A=10 log2B=20.46 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=22 err=2^22.0: A=10 log2B=20.48 harmful=0.000 undetected-harmful=0.0000
+K=22 Kw=22 err=2^22.584962500721158: A=10 log2B=20.48 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^-: A=10 log2B=20.48 harmful=0.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^0.0: A=10 log2B=20.47 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^20.0: A=10 log2B=20.46 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^21.0: A=10 log2B=20.48 harmful=1.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^22.0: A=10 log2B=20.46 harmful=0.000 undetected-harmful=0.0000
+K=22 Kw=48 err=2^22.584962500721158: A=10 log2B=20.47 harmful=1.000 undetected-harmful=0.0000
