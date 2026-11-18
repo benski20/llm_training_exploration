@@ -8,7 +8,7 @@ enough), so quality depends only on the quantization, which this script fake-qua
 * optional SmoothQuant (``alpha``): per-input-channel scales ``s`` move activation outliers into
   the weights (x/s, W*s). Only scales that can be folded into the previous op are used: RMSNorm
   weights for qkv and gate_up, v_proj rows for o_proj (shared across heads of a GQA group), up_proj
-  rows for down_proj. Calibrated on wikitext-2 *train*, evaluated on *test*.
+  rows for down_proj. Calibrated on wikitext-2 *validation*, evaluated on *test*.
 * optional GPTQ-free AWQ-style weight search is not included; see --wbits 4 results for RTN.
 
 Usage:
@@ -88,10 +88,12 @@ class QLinear(nn.Module):
 
 
 def load_tokens(tok: Any, split: str, n: int) -> torch.Tensor:
-    from datasets import load_dataset
+    import pyarrow.parquet as pq
+    from huggingface_hub import hf_hub_download
 
-    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split=split)
-    text = "\n\n".join(ds["text"])
+    path = hf_hub_download("Salesforce/wikitext", f"wikitext-2-raw-v1/{split}-00000-of-00001.parquet",
+                           repo_type="dataset")
+    text = "\n\n".join(pq.read_table(path).column("text").to_pylist())
     ids = tok(text, return_tensors="pt").input_ids[0]
     return ids[:n]
 
@@ -182,7 +184,7 @@ def main() -> None:
     load: Callable[[], nn.Module] = lambda: AutoModelForCausalLM.from_pretrained(  # noqa: E731
         args.model, torch_dtype=torch.float32).eval()
     test = load_tokens(tok, "test", args.eval_tokens)
-    calib = load_tokens(tok, "train", args.calib_tokens)
+    calib = load_tokens(tok, "validation", args.calib_tokens)
     base = load()
     stats = calibrate(base, calib, args.seq)
     hidden, inter = base.config.hidden_size, base.config.intermediate_size
