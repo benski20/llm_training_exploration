@@ -37,6 +37,16 @@ About 26.8k lines of Python in `src/pgw` (96 modules, mypy strict, ruff clean), 
 | `docs/` | complete | Security whitepaper, threat model, gateway API reference, operations guides (on-prem, customer cloud, air-gapped factory, sizing), compliance (audit readiness, FAQ), and a sizing tool. |
 | CI | written | `.github/workflows/ci.yml` (lint, types, tests, audit, images) and `ci/check.sh`. The workflow sits under `pgw/` and has not been copied to the repository root yet. |
 
+### 32-bit ring `K32A12C27` (new, 2026-11-18)
+
+This is a capped ring with per-token adaptive activation bits; it decodes any layer width exactly.
+Its quality is identical to `K40A12` on Qwen2.5-0.5B and 1.5B (perplexity 11.714 vs 11.714 on 1.5B,
+with 0 tokens needing fewer bits). It cuts 20% from traffic, service GPU work and mask storage. With
+encrypted masks it uses q = 2^56: 7B mask-supply traffic drops from 6.7/8.3 MB to 5.8/7.0 MB per
+token and the hint from 39.9 to 34.2 GB (T4 run 11). The cost is about 1 ms more gateway CPU per
+layer, for 7 Freivalds vectors instead of 3. Not done yet: a 7B quality check (blocked on memory
+here) and making it the default.
+
 ### Encrypted mask generation (new, 2026-11-18)
 
 `pgw.hemask` lets the mask factory get `W8 r` from the compute service on MLWE-encrypted masks

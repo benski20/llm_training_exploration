@@ -12,6 +12,7 @@ import torch
 
 from pgw.core import (
     RING_K32_A8,
+    RING_K32_A12_C27,
     RING_K40_A12,
     RING_K48_A20,
     ConfigError,
@@ -57,10 +58,10 @@ async def test_compute_exact_all_rings_and_items(tiny_pack_dir: Path, pack_fp: s
         models = await c.connect(pack_fp, "K40A12")
         info = models.find(pack_fp)
         assert info is not None and info.name == "tiny-qwen2"
-        assert set(info.rings) == {"K40A12", "K48A20", "K32A8"}
+        assert set(info.rings) == {"K40A12", "K48A20", "K32A8", "K32A12C27"}
         assert info.linear_dims() == {k: tuple(w.shape) for k, w in pack_weights.items()}
         assert models.server == "pgw-service"
-        for ring in (RING_K32_A8, RING_K40_A12, RING_K48_A20):
+        for ring in (RING_K32_A8, RING_K40_A12, RING_K48_A20, RING_K32_A12_C27):
             items = [(lid, rand_x(r, w.shape[1], ring, seed=i)) for i, (lid, w, r) in
                      enumerate((lid, w, 1 + i) for i, (lid, w) in enumerate(pack_weights.items()))]
             resp = await c.compute(make_req(pack_fp, ring, items, rid=f"req-{ring.name}"))

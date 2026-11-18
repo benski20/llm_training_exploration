@@ -53,7 +53,7 @@ class CommonSettings(PGWSettings):
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_json: bool = Field(False, description="Emit JSON log lines (recommended in production)")
-    ring: str = Field(DEFAULT_RING.name, description="Ring preset, e.g. K40A12, K48A20, K32A8")
+    ring: str = Field(DEFAULT_RING.name, description="Ring preset, e.g. K40A12, K48A20, K32A8, K32A12C27")
     hemask_engine: Literal["auto", "cuda", "cpu_int8", "cpu_f64"] = Field(
         "auto", description="Encrypted mask generation: where the gateway-side GEMMs run (auto: a gateway "
         "GPU, else CPU int8 with AMX/VNNI, else exact float64). Read from PGW_HEMASK_ENGINE.",

@@ -63,7 +63,7 @@ class LocalComputeClient:
         self,
         pack: Any,
         *,
-        rings: Sequence[str] = ("K32A8", "K40A12", "K48A20"),
+        rings: Sequence[str] = ("K32A8", "K40A12", "K48A20", "K32A12C27"),
         device: str = "cpu",
         backend: str = "auto",
         tamper: Callable[[str, torch.Tensor], torch.Tensor] | None = None,

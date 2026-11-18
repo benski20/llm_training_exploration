@@ -51,7 +51,7 @@ class ServiceSettings(PGWSettings):
     verify_packs: Literal["full", "fingerprint"] = Field(
         "full", description="Pack verification at startup ('full' hashes every linear shard)"
     )
-    rings: list[str] = Field(default_factory=lambda: ["K40A12", "K48A20", "K32A8"])
+    rings: list[str] = Field(default_factory=lambda: ["K40A12", "K48A20", "K32A8", "K32A12C27"])
     device: str = Field("auto", description="Single device: auto|cpu|cuda|cuda:i (used when devices is empty)")
     devices: list[str] = Field(
         default_factory=list, description="Devices for multi-GPU placement, e.g. ['cuda:0','cuda:1']"
