@@ -99,6 +99,18 @@ def _u64(t: torch.Tensor) -> np.ndarray:
     return t.detach().cpu().numpy().astype(np.uint64)
 
 
+class _RemoteKernel:
+    """Adapter giving :class:`pgw.hemask.HEMaskBackend` the ``RingKernel.matmul`` interface."""
+
+    def __init__(self, backend: Any, linear: str):
+        self.backend = backend
+        self.linear = linear
+
+    def matmul(self, r: torch.Tensor, ring: RingParams) -> torch.Tensor:
+        out: torch.Tensor = self.backend.matmul(self.linear, r)
+        return out
+
+
 class _Stop:
     """Writer-queue sentinel."""
 
@@ -146,8 +158,15 @@ class MaskGenerator:
         pipeline: bool = True,
         memory_fraction: float = 0.85,
         self_check_rows: int = DEFAULT_SELF_CHECK_ROWS,
+        remote: Any = None,
     ):
         self.pack = pack
+        # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
+        # MLWE ciphertexts. Every row is then verified with private check vectors (never the
+        # segment's stored u, which the provider could otherwise probe through rejections).
+        self.remote = remote
+        if remote is not None:
+            self_check_rows = -1
         self.ring = ring_from_setting(ring)
         if hasattr(pack, "check_ring"):
             pack.check_ring(self.ring)
@@ -302,22 +321,22 @@ class MaskGenerator:
                     raise PGWError(f"weight streamer order mismatch: got {lid}, expected {spec.id}")
                 if tuple(w.shape) != (spec.out_features, spec.in_features):
                     raise ConfigError(f"{lid}: weight shape {tuple(w.shape)} does not match manifest")
-                kern = RingKernel(w, self.backend)
+                kern: Any = RingKernel(w, self.backend) if self.remote is None else _RemoteKernel(self.remote, lid.key)
                 t0 = time.perf_counter()
                 cu: np.ndarray | None = None
                 cw: np.ndarray | None = None
                 if checks:
                     u = exp.ring_uniform((checks, spec.out_features), k, "u", lid.key)
                     uw: torch.Tensor = ring_vecmat(u, w, self.ring)
-                    if self.self_check_rows:
+                    if self.self_check_rows and self.remote is None:
                         cu, cw = _u64(u.t()), _u64(uw.t())
                     u.zero_()
                 else:
                     uw = torch.zeros((0, spec.in_features), dtype=torch.int64)
-                    if self.self_check_rows:  # private check vector, never stored
-                        v = SeedExpander(new_seed()).ring_uniform((2, spec.out_features), k, "v")
-                        cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
-                        v.zero_()
+                if cu is None and self.self_check_rows:  # private check vectors, never stored
+                    v = SeedExpander(new_seed()).ring_uniform((2, spec.out_features), k, "v")
+                    cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
+                    v.zero_()
                 stats.check_seconds += time.perf_counter() - t0
                 for start in range(0, slots, chunk_slots):
                     task = tasks[ti]

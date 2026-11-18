@@ -72,13 +72,42 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
     gens: dict[tuple[str, str], MaskGenerator] = {}
     for pack in packs:
         for ring in settings.ring_names:
+            remote = build_he_backend(settings, pack, ring) if settings.he_service_url else None
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
-                              self_check_rows=settings.self_check_rows)
+                              self_check_rows=settings.self_check_rows, remote=remote)
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g
     return gens
+
+
+def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
+    """Encrypted mask generation for ``pack``: W8.r from the provider on MLWE ciphertexts (pgw.hemask).
+
+    Builds the one-time hint W8.A locally on first use (minutes for 7B on CPU), then reuses it.
+    """
+    from pydantic import SecretStr
+
+    from pgw.core.ring import RingParams
+    from pgw.hemask.backend import HEMaskBackend, HintStore
+    from pgw.hemask.client import RemoteMulmod64
+    from pgw.wire import ClientConfig, ComputeClient
+
+    assert settings.he_service_url is not None
+    token = None
+    if settings.he_token_file is not None:
+        token = SecretStr(Path(settings.he_token_file).read_text().strip())
+    client = ComputeClient(ClientConfig(base_url=settings.he_service_url, token=token, ca_file=settings.he_ca_file,
+                                        request_timeout_s=settings.he_timeout_s,
+                                        max_request_bytes=1 << 30))
+    hint_root = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
+    hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank)
+    out = {s.id.key: s.out_features for s in pack.linear_specs()}
+    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s)
+    log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
+             pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
+    return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call)
 
 
 def build_sink(settings: FactorySettings, store: Any = None) -> Any:

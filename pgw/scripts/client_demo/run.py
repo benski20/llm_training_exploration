@@ -78,6 +78,9 @@ def main() -> None:
     ap.add_argument("--refill-low", type=int, default=0,
                     help="run the mask factory daemon: refill when fewer slots than this remain (0 = off)")
     ap.add_argument("--refill-target", type=int, default=0, help="factory daemon fills up to this many slots")
+    ap.add_argument("--mask-source", choices=["local", "he"], default="local",
+                    help="local: factory computes W8.r itself; he: the compute service computes it on "
+                         "MLWE-encrypted masks (no local GEMMs, no large mask stock needed)")
     args = ap.parse_args()
 
     work = Path(args.work)
@@ -100,12 +103,6 @@ def main() -> None:
     masks, kek = work / "masks", work / "secrets" / "kek"
     if not (masks / "state.sqlite").exists():
         pgw("maskstore", "init", "--root", str(masks), "--key-file", str(kek), env=env)
-    log(f"mask factory: generating {args.slots} one-time mask slots ({args.ring})")
-    t = time.time()
-    pgw("factory", "generate", "--pack", str(pack), "--store", str(masks), "--key-file", str(kek),
-        "--ring", args.ring, "--slots", str(args.slots), env=env, out=work / "logs" / "factory.log")
-    log(f"  done in {time.time() - t:.0f}s")
-
     if not (work / "secrets" / "service_token").exists():
         pgw("service", "token", "create", "--tenant", "demo", "--tokens-file", str(work / "secrets" / "tokens"),
             "--out", str(work / "secrets" / "service_token"), env=env)
@@ -145,6 +142,19 @@ def main() -> None:
         "PGW_SERVICE_TOKENS_FILE": str(work / "secrets" / "tokens")})
     wait_ready(f"http://127.0.0.1:{svc_port}/readyz", svc, "service", work / "logs" / "service.log")
 
+    # Mask source: local factory GEMMs, or encrypted generation by the compute service (pgw.hemask):
+    # the factory sends MLWE-encrypted masks, the service multiplies them by W8 blind.
+    he = ["--he-service", f"http://127.0.0.1:{svc_port}", "--he-token-file", str(work / "secrets" / "service_token"),
+          "--he-hint-dir", str(work / "hemask")] if args.mask_source == "he" else []
+    if he and not (work / "hemask").exists():
+        log("encrypted masks: building the one-time hint W8.A on this machine (once per model)")
+    log(f"mask factory ({args.mask_source}): generating {args.slots} one-time mask slots ({args.ring})")
+    t = time.time()
+    pgw("factory", "generate", "--pack", str(pack), "--store", str(masks), "--key-file", str(kek),
+        "--ring", args.ring, "--slots", str(args.slots), "--chunk-slots", "1024", *he,
+        env=env, out=work / "logs" / "factory.log")
+    log(f"  done in {time.time() - t:.0f}s")
+
     models = work / "secrets" / "models.json"
     models.write_text(json.dumps([{
         "name": args.name, "pack_path": str(pack), "fingerprint": fp, "ring": args.ring,
@@ -175,7 +185,7 @@ def main() -> None:
         start("factory", [sys.executable, "-m", "pgw.cli", "factory", "run", "--pack", str(pack), "--store", str(masks),
                           "--key-file", str(kek), "--ring", args.ring, "--low-water", str(args.refill_low),
                           "--target", str(target), "--segment-slots", "256", "--nice", "19", "--threads", "1",
-                          "--duty-cycle", "0.5", "--poll", "10"], env)
+                          "--duty-cycle", "0.5", "--poll", "10", "--chunk-slots", "1024", *he], env)
 
     log(f"READY: demo UI on http://127.0.0.1:{args.port}/   (logs in {work / 'logs'})")
     while True:

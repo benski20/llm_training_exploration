@@ -92,6 +92,17 @@ class FactorySettings(PGWSettings):
     self_check_rows: int = Field(
         8, ge=-1, description="Rows per chunk whose W8.r output is verified before writing (-1 = all, 0 = off)"
     )
+    # ---- encrypted mask generation (pgw.hemask) -----------------------------------------------
+    he_service_url: str | None = Field(
+        None, description="Compute service URL: get W8.r from the provider on MLWE-encrypted masks instead of "
+        "computing it locally (no local GEMMs; the provider learns nothing about the masks)",
+    )
+    he_token_file: Path | None = Field(None, description="File with the service bearer token (encrypted mode)")
+    he_ca_file: Path | None = Field(None, description="CA bundle for the service (encrypted mode)")
+    he_hint_dir: Path | None = Field(None, description="Where the one-time hint W8.A is kept (default: <state>/hemask)")
+    he_rank: int = Field(16, ge=8, le=32, description="MLWE module rank (LWE dimension = 256 x rank)")
+    he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
+    he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
     error_backoff_s: float = Field(10.0, gt=0, description="Initial back-off after a failed run (doubles to 600 s)")
