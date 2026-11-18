@@ -51,12 +51,16 @@ def key(keys: ApiKeyStore) -> str:
     return keys.create("app")[1]
 
 
-@pytest.mark.parametrize("ring", ["K40A12", "K48A20"])
+@pytest.mark.parametrize("ring", ["K40A12", "K48A20", "K32A12C27", "K32A12C18"])
 async def test_masked_bit_identical_to_plain(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any, make_store: Any,
                                              keys: ApiKeyStore, key: str, ring: str) -> None:
-    """Masked logprobs (hence logits) equal the local exact-integer reference bit for bit."""
+    """Masked logprobs (hence logits) equal the local exact-integer reference bit for bit.
+
+    The capped rings use per-token adaptive activation bits; C18 is tight enough on the tiny model
+    that many tokens lose bits, which must not break exactness between the two paths.
+    """
     store = make_store(200, ring=ring)
-    svc = InProcessService(gw_pack)
+    svc = InProcessService(gw_pack, rings=(ring,))
     req = {**CHAT, "logprobs": True, "top_logprobs": 5, "max_tokens": 8}
     masked = masked_app(tiny_pack_dir, tmp_path, store, svc, keys, model_kw={"ring": ring})
     async with gateway(masked) as c:

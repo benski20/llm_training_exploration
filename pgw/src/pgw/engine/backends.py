@@ -245,6 +245,12 @@ class _IntWeight:
     bias: torch.Tensor | None
     in_features: int
     out_features: int
+    wnorm: float = 0.0  # largest Euclidean norm of a W8 row (capped rings bound outputs with it)
+
+
+def _row_norm_max(w8: torch.Tensor) -> float:
+    """``max_j ||W8_j||_2`` (exact enough in float64 for integer rows; used with a relative slack)."""
+    return float(w8.to(torch.float64).pow(2).sum(dim=1).sqrt().max())
 
 
 def _to_int_weight(lw: Any, device: torch.device) -> _IntWeight:
@@ -260,6 +266,7 @@ def _to_int_weight(lw: Any, device: torch.device) -> _IntWeight:
         None if lw.bias is None else lw.bias.to(torch.float32).to(device),
         int(w8.shape[1]),
         int(w8.shape[0]),
+        _row_norm_max(w8),
     )
 
 
@@ -301,8 +308,8 @@ class PlainBackend(LinearBackend):
         x = call.x
         if x.ndim != 2 or x.shape[1] != w.in_features:
             raise ShapeError(f"{call.id}: x must be (T, {w.in_features}), got {tuple(x.shape)}")
-        xq, sx = quantize_activations(x.to(self.device), self.ring)
-        yq = exact_int_matmul(xq, w.w8t, self.ring.a)
+        xq, sx = quantize_activations(x.to(self.device), self.ring, w.wnorm if self.ring.cap else None)
+        yq = exact_int_matmul(xq.to(self.device), w.w8t, self.ring.a)
         y = dequantize_outputs(yq, sx, w.scale, w.bias, torch.float32)
         self.stats.add(calls=1, rows=int(x.shape[0]), local_seconds=time.perf_counter() - t0)
         return y.to(x.device)
@@ -383,6 +390,7 @@ class _MaskedMeta:
     bias: torch.Tensor | None
     in_features: int
     out_features: int
+    wnorm: float | None = None  # capped rings only: max W8 row norm (weights read once, then dropped)
 
 
 @dataclass
@@ -495,11 +503,17 @@ class MaskedBackend(LinearBackend):
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
             n, m = int(lw.in_features), int(lw.out_features)
             ring.check_in_features(n)
+            wnorm = None
+            if ring.cap:  # one pass over this linear's int8 weights for the per-call output bound
+                full = pack.load_linear(lw.id, device="cpu")  # type: ignore[attr-defined]
+                wnorm = _row_norm_max(full.w8)
+                del full
             return _MaskedMeta(
                 lw.scale.to(torch.float32).clone(),
                 None if lw.bias is None else lw.bias.to(torch.float32).clone(),
                 n,
                 m,
+                wnorm,
             )
 
         # Only scales, bias and shapes: never read the int8 weights the gateway does not need.
@@ -612,7 +626,8 @@ class MaskedBackend(LinearBackend):
         quantized: list[torch.Tensor] = []
         sxs: list[torch.Tensor] = []
         for call in calls:
-            xq, sx = quantize_activations(call.x.detach().to("cpu"), self.ring)
+            wn = self._meta.get(call.id).wnorm if self.ring.cap else None
+            xq, sx = quantize_activations(call.x.detach().to("cpu"), self.ring, wn)
             quantized.append(xq)
             sxs.append(sx)
         chunks: list[_Chunk] = []

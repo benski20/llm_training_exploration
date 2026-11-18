@@ -120,3 +120,37 @@ def test_balanced_digits_int8_castable():
         assert bool((d.to(torch.int8).to(torch.int64) == d).all())
     with pytest.raises(ConfigError):
         balanced_digits(v, 40, 1)
+
+
+def test_capped_ring_parsing_and_bounds() -> None:
+    from pgw.core.freivalds import soundness_bits
+
+    r = RingParams.from_name("k32a12c27")
+    assert (r.k, r.a, r.cap) == (32, 12, 27) and r.name == "K32A12C27"
+    assert RingParams.from_name("K40A12").cap == 0 and RingParams.from_name("K40A12").name == "K40A12"
+    assert r.output_bound(18944) == 1 << 27  # capped
+    assert r.output_bound(16) == r.qmax * 127 * 16  # the worst case is tighter for tiny widths
+    r.check_in_features(18944)  # any width decodes: the gateway enforces the cap per call
+    assert soundness_bits(r, 18944, 7) >= 20
+    with pytest.raises(ConfigError):
+        RingParams(32, 12, 30)  # cap must leave headroom for the range check
+    with pytest.raises(ConfigError):
+        RingParams.from_name("K32A12X9")
+
+
+def test_capped_quantization_guarantees_the_bound() -> None:
+    r = RingParams.from_name("K32A12C24")
+    n = 18944
+    g = torch.Generator().manual_seed(0)
+    w8 = torch.randint(-127, 128, (64, n), generator=g)
+    wnorm = float(w8.double().pow(2).sum(1).sqrt().max())
+    x = torch.randn(32, n, generator=g, dtype=torch.float64)
+    x[0, :50] = 40.0  # a token with outliers keeps more bits; flat tokens must drop some
+    xq, sx = quantize_activations(x, r, wnorm)
+    y = xq.double() @ w8.double().t()
+    assert float(y.abs().max()) <= 2.0**24
+    assert int(xq.abs().max(dim=1).values.min()) < r.qmax  # some tokens were reduced
+    # dequantization is consistent with the per-token scale
+    assert torch.allclose(xq.double() * sx[:, None], x, atol=float(sx.max()))
+    with pytest.raises(ConfigError):
+        quantize_activations(x, r)  # wide layer without the weight norm

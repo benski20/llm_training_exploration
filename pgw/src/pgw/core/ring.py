@@ -53,10 +53,16 @@ class RingParams:
     Attributes:
         k: Ring bit width; values live in ``Z_{2^k}``. Must be a multiple of 8 in [16, 56].
         a: Signed activation bit width; quantized activations satisfy ``|xq| <= 2^(a-1) - 1``.
+        cap: Per-call output bound ``2^cap`` (0 = none). Without a cap the ring must hold the worst
+            case ``qmax * 127 * n``. With a cap (preset ``K32A12C27``), the gateway quantizes each
+            token with the most activation bits ``<= A`` for which the exact Cauchy-Schwarz bound
+            ``max_j ||W8_j||_2 * ||xq||_2 <= 2^cap`` holds, so every genuine output fits ``2^cap``
+            for any width ``n``. The range check and Freivalds soundness use ``2^cap``.
     """
 
     k: int
     a: int
+    cap: int = 0
 
     WEIGHT_QMAX: ClassVar[int] = 127
 
@@ -65,6 +71,8 @@ class RingParams:
             raise ConfigError(f"ring K must be a multiple of 8 in [{_MIN_K}, {_MAX_K}], got {self.k}")
         if not (2 <= self.a <= self.k - 8):
             raise ConfigError(f"activation bits A must be in [2, K-8], got A={self.a} K={self.k}")
+        if self.cap and not (16 <= self.cap <= self.k - 3):
+            raise ConfigError(f"output cap C must be 0 or in [16, K-3], got C={self.cap} K={self.k}")
 
     # ---- derived constants -------------------------------------------------------------------
     @property
@@ -100,14 +108,19 @@ class RingParams:
     @property
     def name(self) -> str:
         """Canonical name, e.g. ``"K40A12"`` (used on the wire and in mask store headers)."""
-        return f"K{self.k}A{self.a}"
+        return f"K{self.k}A{self.a}" + (f"C{self.cap}" if self.cap else "")
 
     def output_bound(self, in_features: int) -> int:
         """Largest possible ``|yq|`` for a genuine product with inner dimension ``in_features``."""
-        return self.qmax * self.WEIGHT_QMAX * in_features
+        worst = self.qmax * self.WEIGHT_QMAX * in_features
+        return min(worst, 1 << self.cap) if self.cap else worst
 
     def max_in_features(self) -> int:
-        """Largest inner dimension for which decoding is unambiguous (``output_bound < 2^(K-1)``)."""
+        """Largest inner dimension for which decoding is unambiguous (``output_bound < 2^(K-1)``).
+
+        Capped rings decode any width (the gateway enforces the cap per call)."""
+        if self.cap:
+            return 1 << 31
         return (self.half - 1) // (self.qmax * self.WEIGHT_QMAX)
 
     def check_in_features(self, in_features: int) -> None:
@@ -124,15 +137,13 @@ class RingParams:
 
     @classmethod
     def from_name(cls, name: str) -> RingParams:
-        """Parse ``"K40A12"`` (case-insensitive)."""
-        s = name.strip().upper()
-        if not s.startswith("K") or "A" not in s:
-            raise ConfigError(f"bad ring name {name!r}; expected e.g. 'K40A12'")
-        k_str, a_str = s[1:].split("A", 1)
-        try:
-            return cls(int(k_str), int(a_str))
-        except ValueError as exc:
-            raise ConfigError(f"bad ring name {name!r}") from exc
+        """Parse ``"K40A12"`` or a capped ring such as ``"K32A12C27"`` (case-insensitive)."""
+        import re
+
+        m = re.fullmatch(r"K(\d+)A(\d+)(?:C(\d+))?", name.strip().upper())
+        if m is None:
+            raise ConfigError(f"bad ring name {name!r}; expected e.g. 'K40A12' or 'K32A12C27'")
+        return cls(int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
     def __str__(self) -> str:
         return self.name
@@ -169,14 +180,27 @@ def quantize_weight_rows(w: torch.Tensor | np.ndarray) -> tuple[torch.Tensor, to
     return w8, sw.to(torch.float32)
 
 
-def quantize_activations(x: torch.Tensor, params: RingParams) -> tuple[torch.Tensor, torch.Tensor]:
+def quantize_activations(
+    x: torch.Tensor, params: RingParams, wnorm: float | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Quantize activations ``(T, n)`` per token to signed A-bit integers.
+
+    For a capped ring (``params.cap``), ``wnorm`` is the largest Euclidean norm of the linear's int8
+    weight rows. Tokens whose exact bound ``wnorm * ||xq||_2`` would exceed ``2^cap`` are quantized
+    again with fewer bits (each token independently), so every genuine output satisfies
+    ``|yq| <= 2^cap``. Without ``wnorm`` a capped ring requires the worst case to fit the cap.
 
     Returns:
         ``(xq, sx)``: ``xq`` int64 ``(T, n)`` with ``|xq| <= qmax`` and ``sx`` float64 ``(T,)``.
     """
     if x.ndim != 2:
         raise ShapeError(f"activations must be 2-D (tokens, features), got {tuple(x.shape)}")
+    if params.cap:
+        if wnorm is None:
+            if params.qmax * params.WEIGHT_QMAX * int(x.shape[1]) > (1 << params.cap):
+                raise ConfigError(f"{params.name}: the weight-row norm is needed to quantize width {x.shape[1]}")
+        else:
+            return _quantize_capped(x, params, float(wnorm))
     if x.device.type == "cpu" and x.numel() <= _SMALL_NUMEL:
         # Decode-sized inputs: single-threaded numpy avoids torch intra-op threading overhead.
         # Same IEEE operations in the same order (float64 division, round-half-even), so the
@@ -196,6 +220,37 @@ def quantize_activations(x: torch.Tensor, params: RingParams) -> tuple[torch.Ten
     sx = torch.where(amax > 0, amax / params.qmax, torch.ones_like(amax))
     xq = torch.round(xf / sx[:, None]).clamp_(-params.qmax, params.qmax).to(torch.int64)
     return xq, sx
+
+
+#: Relative slack on the float64 norm product (the bound must hold exactly for integers).
+_NORM_SLACK = 1.0 + 1e-9
+
+
+def _quantize_capped(x: torch.Tensor, params: RingParams, wnorm: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-token quantization with the most bits ``<= A`` such that ``wnorm * ||xq||_2 <= 2^cap``."""
+    xf = x.detach().to("cpu", torch.float64).numpy()
+    if not np.isfinite(xf).all():
+        raise RingOverflowError("non-finite activation values cannot be quantized")
+    limit = float(1 << params.cap)
+    amax = np.abs(xf).max(axis=1)
+    rows = xf.shape[0]
+    xq = np.zeros(xf.shape, dtype=np.int64)
+    sx = np.ones(rows, dtype=np.float64)
+    todo = np.arange(rows)
+    for bits in range(params.a, 1, -1):
+        qmax = (1 << (bits - 1)) - 1
+        s_b = np.where(amax[todo] > 0, amax[todo] / qmax, 1.0)
+        q = np.clip(np.rint(xf[todo] / s_b[:, None]), -qmax, qmax)
+        fits = np.sqrt((q * q).sum(axis=1)) * wnorm * _NORM_SLACK <= limit
+        idx = todo[fits]
+        xq[idx] = q[fits].astype(np.int64)
+        sx[idx] = s_b[fits]
+        todo = todo[~fits]
+        if todo.size == 0:
+            break
+    if todo.size:  # pragma: no cover - only for absurd weight norms (1-bit activations still too big)
+        raise RingOverflowError(f"{params.name}: activations cannot be bounded by 2^{params.cap} for this linear")
+    return torch.from_numpy(xq), torch.from_numpy(sx)
 
 
 def dequantize_outputs(
