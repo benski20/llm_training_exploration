@@ -1,0 +1,47 @@
+{
+ "model": "Qwen/Qwen2.5-1.5B-Instruct",
+ "eval_tokens": 16384,
+ "seq": 512,
+ "results": [
+  {
+   "config": "fp",
+   "ppl": 11.6646,
+   "top1_agreement_vs_fp": null,
+   "seconds": 159.1
+  },
+  {
+   "config": "w8a12",
+   "ppl": 11.714,
+   "top1_agreement_vs_fp": 0.9789,
+   "seconds": 364.2,
+   "ring_bits_needed": {
+    "n=hidden": 30,
+    "n=intermediate": 33
+   }
+  },
+  {
+   "config": "k28ad",
+   "ppl": 11.714,
+   "top1_agreement_vs_fp": 0.9789,
+   "seconds": 393.8,
+   "adaptive": {
+    "ring_bits": 28,
+    "token_linear_calls": 3211264,
+    "fraction_with_fewer_bits": 0.0,
+    "min_activation_bits": 12
+   }
+  },
+  {
+   "config": "k24ad",
+   "ppl": 11.722,
+   "top1_agreement_vs_fp": 0.9752,
+   "seconds": 491.1,
+   "adaptive": {
+    "ring_bits": 24,
+    "token_linear_calls": 3211264,
+    "fraction_with_fewer_bits": 0.74329,
+    "min_activation_bits": 8
+   }
+  }
+ ]
+}
