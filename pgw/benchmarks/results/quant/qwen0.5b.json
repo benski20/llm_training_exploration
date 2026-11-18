@@ -1,0 +1,63 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "eval_tokens": 16384,
+ "seq": 512,
+ "results": [
+  {
+   "config": "fp",
+   "ppl": 17.5953,
+   "top1_agreement_vs_fp": null,
+   "seconds": 57.6
+  },
+  {
+   "config": "w8a12",
+   "ppl": 17.5227,
+   "top1_agreement_vs_fp": 0.9714,
+   "seconds": 106.0,
+   "ring_bits_needed": {
+    "n=hidden": 29,
+    "n=intermediate": 32
+   }
+  },
+  {
+   "config": "w8a8",
+   "ppl": 17.8673,
+   "top1_agreement_vs_fp": 0.9077,
+   "seconds": 113.7,
+   "ring_bits_needed": {
+    "n=hidden": 25,
+    "n=intermediate": 28
+   }
+  },
+  {
+   "config": "w8a8_sq",
+   "ppl": 17.7951,
+   "top1_agreement_vs_fp": 0.9351,
+   "seconds": 122.4,
+   "ring_bits_needed": {
+    "n=hidden": 25,
+    "n=intermediate": 28
+   }
+  },
+  {
+   "config": "w4a8",
+   "ppl": 41.9127,
+   "top1_agreement_vs_fp": 0.5405,
+   "seconds": 118.2,
+   "ring_bits_needed": {
+    "n=hidden": 21,
+    "n=intermediate": 24
+   }
+  },
+  {
+   "config": "w4a8_sq",
+   "ppl": 44.475,
+   "top1_agreement_vs_fp": 0.5263,
+   "seconds": 117.8,
+   "ring_bits_needed": {
+    "n=hidden": 21,
+    "n=intermediate": 24
+   }
+  }
+ ]
+}
