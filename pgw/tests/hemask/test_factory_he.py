@@ -40,12 +40,15 @@ def _collect(gen: MaskGenerator, slots: int, chunk: int) -> dict[tuple[str, int]
     return {(g.id.key, g.slot_start): g.wr.clone() for g in gen.generate(SEED, slots, checks=2, chunk_slots=chunk)}
 
 
-def test_he_factory_matches_local_factory(tiny_pack: Any, tmp_path: Path) -> None:
-    ring = RingParams.from_name("K40A12")
-    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8)
-    assert HintStore.open(tmp_path / "hints", tiny_pack.fingerprint, 8) is not None  # reused, not rebuilt
+@pytest.mark.parametrize("ring_name,q_bits", [("K40A12", 64), ("K32A12C27", 56)])
+def test_he_factory_matches_local_factory(tiny_pack: Any, tmp_path: Path, ring_name: str, q_bits: int) -> None:
+    ring = RingParams.from_name(ring_name)
+    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=q_bits)
+    assert HintStore.open(tmp_path / "hints", tiny_pack.fingerprint, 8, q_bits) is not None  # reused, not rebuilt
+    assert hints.hint(next(iter(hints.meta["row_norms"]))).shape[1] == q_bits // 8 - 1
     provider = FakeProvider(tiny_pack)
     remote = HEMaskBackend(tiny_pack, ring, hints, provider, groups_per_call=2)
+    assert remote.params.q == q_bits
     local = _collect(MaskGenerator(tiny_pack, ring, device="cpu"), 300, 300)
     he_gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=remote)
     assert he_gen.self_check_rows == -1  # every row is verified in encrypted mode
@@ -54,8 +57,9 @@ def test_he_factory_matches_local_factory(tiny_pack: Any, tmp_path: Path) -> Non
     for k in local:
         assert torch.equal(local[k], he[k]), k
     assert he_gen.last_stats.self_checked_rows == 300 * len(list(tiny_pack.linear_specs()))
-    # the provider only ever saw uniform-looking 64-bit words
-    top = np.concatenate([(b >> np.uint64(63)).ravel() for b in provider.seen]).astype(np.float64)
+    # the provider only ever saw uniform-looking q-bit words
+    top = np.concatenate([(b >> np.uint64(q_bits - 1)).ravel() for b in provider.seen]).astype(np.float64)
+    assert all(int(b.max()) < (1 << q_bits) for b in provider.seen)
     assert abs(top.mean() - 0.5) < 0.05
 
 

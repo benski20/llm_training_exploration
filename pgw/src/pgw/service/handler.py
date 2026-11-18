@@ -178,9 +178,7 @@ class ServiceHandler:
         The provider sees only pseudorandom ciphertexts. Admission and tenant limits count every
         256-column group as 256 rows, like the compute path.
         """
-        import numpy as np
-
-        from pgw.hemask.wire import MaskgenResponse, MaskgenResult, pack_y
+        from pgw.hemask.wire import MaskgenResponse, MaskgenResult, pack_y, unpack_b
 
         ident: TenantIdentity | None = identity if isinstance(identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
@@ -190,8 +188,9 @@ class ServiceHandler:
             if it.linear not in dims:
                 raise ProtocolError(f"unknown linear {it.linear!r}", details={"linear": it.linear})
             n = dims[it.linear][1]
-            if len(it.b) != 8 * n * it.cols:
-                raise ProtocolError(f"maskgen {it.linear}: b has {len(it.b)} bytes, expected {8 * n * it.cols}")
+            want = it.b_bytes_per_element * n * it.cols
+            if len(it.b) != want:
+                raise ProtocolError(f"maskgen {it.linear}: b has {len(it.b)} bytes, expected {want}")
         self._admit(tenant, sum(it.cols for it in request.items))
         self.inflight += 1
         self._idle.clear()
@@ -199,10 +198,11 @@ class ServiceHandler:
             out = []
             for it in request.items:
                 kern = model.kernel(it.linear)
-                b = np.frombuffer(it.b, dtype="<u8").reshape(kern.in_features, it.cols)
+                b = await asyncio.to_thread(unpack_b, it.b, (kern.in_features, it.cols), it.q_bits)
                 async with self._maskgen_lock:
-                    y = await asyncio.to_thread(kern.mulmod64, b)
-                out.append(MaskgenResult(it.linear, it.cols, await asyncio.to_thread(pack_y, y, it.drop_bits)))
+                    y = await asyncio.to_thread(kern.mulmod64, b, it.q_bits // 8)
+                out.append(MaskgenResult(it.linear, it.cols,
+                                         await asyncio.to_thread(pack_y, y, it.drop_bits, it.q_bits)))
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
             self.inflight -= 1

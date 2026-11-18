@@ -36,13 +36,16 @@ def main() -> None:
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--groups", type=int, default=4, help="256-slot groups per provider call")
     ap.add_argument("--rank", type=int, default=16)
+    ap.add_argument("--k", type=int, default=40, help="mask ring bits (32 uses q = 2^56)")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
     layers, shapes = PRESETS[args.preset]
-    p = HEParams(k=40, rank=args.rank)
+    p = HEParams(k=args.k, rank=args.rank)
+    planes = p.q // 8 - 1
     rng = np.random.default_rng(0)
     cols = DEGREE * args.groups
-    res: dict[str, object] = {"preset": args.preset, "device": args.device, "rank": args.rank, "groups": args.groups,
+    res: dict[str, object] = {"k": p.k, "q": p.q,
+                              "preset": args.preset, "device": args.device, "rank": args.rank, "groups": args.groups,
                               "torch": torch.__version__, "cpu_int8_fast": int8_gemm_available(),
                               "gateway_engine": engine(),
                               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
@@ -53,32 +56,32 @@ def main() -> None:
         a = public_matrix(bytes(32), n, p)
         t = time.perf_counter()
         fast = engine() != "cpu_f64"  # as the backend: planes for int8 engines, uint64 for float64
-        hint = np.empty((m, 7, p.dim), dtype=np.int8)  # the backend's format: byte planes 1..7
+        hint = np.empty((m, planes, p.dim), dtype=np.int8)  # the backend's format: byte planes 1..q/8-1
         for c0 in range(0, p.dim, 512):
-            hint[:, :, c0:c0 + 512] = to_planes(matmul_mod64(w, a[:, c0:c0 + 512]))[:, 1:]
+            hint[:, :, c0:c0 + 512] = to_planes(matmul_mod64(w, a[:, c0:c0 + 512]))[:, 1:1 + planes]
         t_hint = time.perf_counter() - t
         a_planes = to_planes(a) if fast else None
         kern = ComputeKernel(LinearSpec(LinearId(0, kind), m, n), torch.from_numpy(w), device=args.device)
-        r = rng.integers(0, 1 << 40, size=(cols, n), dtype=np.int64)
+        r = rng.integers(0, 1 << p.k, size=(cols, n), dtype=np.int64)
         t = time.perf_counter()
         cts = [encrypt_masks(r[g * DEGREE:(g + 1) * DEGREE], None if fast else a, p, a_planes=a_planes)
                for g in range(args.groups)]
         b = np.concatenate([c.b for c in cts], axis=1)
         t_enc = time.perf_counter() - t
-        kern.mulmod64(b[:, :DEGREE].copy())  # warm-up
+        kern.mulmod64(b[:, :DEGREE].copy(), p.b_bytes)  # warm-up
         if args.device.startswith("cuda"):
             torch.cuda.synchronize()
         t = time.perf_counter()
-        y = kern.mulmod64(b)
+        y = kern.mulmod64(b, p.b_bytes)
         t_prov = time.perf_counter() - t
         t = time.perf_counter()
         smat = np.concatenate([c.secret for c in cts], axis=1)  # one GEMM for all groups, as the backend
-        v = y - big_planes_mm_small(hint, smat)
-        wr = ((v + np.uint64(1 << (p.delta_bits - 1))) >> np.uint64(p.delta_bits)) & np.uint64((1 << 40) - 1)
+        v = (y - big_planes_mm_small(hint, smat, first_byte=1)) & p.q_mask
+        wr = ((v + np.uint64(1 << (p.delta_bits - 1))) >> np.uint64(p.delta_bits)) & np.uint64((1 << p.k) - 1)
         outs = [wr[:, g * DEGREE:(g + 1) * DEGREE].T.astype(np.int64) for g in range(args.groups)]
         t_dec = time.perf_counter() - t
         # exactness on a sample of rows
-        ref = np.array((r[:8].astype(object) @ w.T.astype(object)) % (1 << 40), dtype=np.int64)
+        ref = np.array((r[:8].astype(object) @ w.T.astype(object)) % (1 << p.k), dtype=np.int64)
         exact = bool(np.array_equal(outs[0][:8], ref))
         per_kind[kind] = {"m": m, "n": n, "exact": exact, "hint_build_s": round(t_hint, 2),
                           "encrypt_ms_per_slot": 1e3 * t_enc / cols, "provider_ms_per_slot": 1e3 * t_prov / cols,
@@ -88,8 +91,8 @@ def main() -> None:
         tot["decrypt"] += layers * t_dec / cols
         tot["hint_build"] += layers * t_hint
         tot["hint_bytes"] += layers * hint.nbytes
-        tot["up"] += layers * n * 8
-        tot["down"] += layers * m * (64 - HEParams.DROP_BITS) // 8
+        tot["up"] += layers * n * p.b_bytes
+        tot["down"] += layers * m * (p.q - HEParams.DROP_BITS) // 8
         print(kind, json.dumps(per_kind[kind]), flush=True)
         del hint, kern
     res["per_kind"] = per_kind

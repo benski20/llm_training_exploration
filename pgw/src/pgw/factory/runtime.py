@@ -102,9 +102,12 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
                                         request_timeout_s=settings.he_timeout_s,
                                         max_request_bytes=1 << 30))
     hint_root = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
-    hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank)
+    from pgw.hemask.lwe import HEParams
+
+    q_bits = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank).q
+    hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank, q_bits)
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
-    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s)
+    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call)

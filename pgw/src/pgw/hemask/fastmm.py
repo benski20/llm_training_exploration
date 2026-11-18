@@ -172,8 +172,11 @@ def big_planes_mm_small(planes: np.ndarray, small: np.ndarray, *, block_rows: in
     return out
 
 
-def small_mm_big(small: np.ndarray, big: np.ndarray, *, block_cols: int = 1024) -> np.ndarray:
-    """``W @ X mod 2^64`` for int8 ``W`` ``(m, n)`` and uint64 ``X`` ``(n, c)``."""
+def small_mm_big(small: np.ndarray, big: np.ndarray, *, block_cols: int = 1024, nbytes: int = 8) -> np.ndarray:
+    """``W @ X mod 2^64`` for int8 ``W`` ``(m, n)`` and uint64 ``X`` ``(n, c)``.
+
+    ``nbytes < 8`` declares ``X < 2^(8 nbytes)``: the zero top byte planes are skipped.
+    """
     m, n = small.shape
     if big.shape[0] != n:
         raise ValueError(f"shape mismatch: small {small.shape}, big {big.shape}")
@@ -192,8 +195,8 @@ def small_mm_big(small: np.ndarray, big: np.ndarray, *, block_cols: int = 1024) 
         xb = np.ascontiguousarray(big[:, c0:c0 + block_cols], dtype="<u8")
         cb = xb.shape[1]
         # planes of X^T stacked along the output axis: (8*cb, n), used as the column-major operand
-        raw = np.ascontiguousarray(xb.T).view(np.uint8).reshape(cb, n, 8).transpose(2, 0, 1)
-        pt = np.ascontiguousarray(raw ^ np.uint8(0x80)).view(np.int8).reshape(8 * cb, n)
-        part = _int_mm(wt, torch.from_numpy(pt), dev).reshape(m, 8, cb)
+        raw = np.ascontiguousarray(xb.T).view(np.uint8).reshape(cb, n, 8)[:, :, :nbytes].transpose(2, 0, 1)
+        pt = np.ascontiguousarray(raw ^ np.uint8(0x80)).view(np.int8).reshape(nbytes * cb, n)
+        part = _int_mm(wt, torch.from_numpy(pt), dev).reshape(m, nbytes, cb)
         out[:, c0:c0 + cb] = _combine(part, offset)
     return out

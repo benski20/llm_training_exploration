@@ -55,10 +55,16 @@ class MaskgenItem:
     #: Low bits of ``y`` the provider rounds away before replying (0 or 16). With 16, ``y`` is sent as
     #: ``round(y / 2^16)`` in 6 bytes per element: 25% less download, decryption error +2^15.
     drop_bits: int = 0
+    #: Ciphertext modulus bits: ``b`` carries ``q/8`` bytes per coefficient and only ``y mod 2^q`` matters.
+    q_bits: int = 64
 
     @property
     def y_bytes_per_element(self) -> int:
-        return (64 - self.drop_bits) // 8
+        return (self.q_bits - self.drop_bits) // 8
+
+    @property
+    def b_bytes_per_element(self) -> int:
+        return self.q_bits // 8
 
 
 @dataclass(frozen=True)
@@ -115,8 +121,8 @@ def _load(data: bytes | bytearray | memoryview, kind: str) -> dict[str, Any]:
 def encode_maskgen_request(req: MaskgenRequest) -> bytes:
     return bytes(msgpack.packb({
         "v": _VERSION, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint,
-        "items": [{"linear": it.linear, "cols": it.cols, "b": it.b, **({"drop": it.drop_bits} if it.drop_bits else {})}
-                  for it in req.items],
+        "items": [{"linear": it.linear, "cols": it.cols, "b": it.b, **({"drop": it.drop_bits} if it.drop_bits else {}),
+                   **({"q": it.q_bits} if it.q_bits != 64 else {})} for it in req.items],
     }, use_bin_type=True))
 
 
@@ -127,12 +133,15 @@ def decode_maskgen_request(data: bytes | bytearray | memoryview) -> MaskgenReque
         if not isinstance(it, dict) or not isinstance(it.get("b"), bytes):
             raise ProtocolError(f"maskgen: items[{i}] must be a map with binary 'b'")
         cols = _check_cols(it.get("cols"), f"items[{i}]")
-        if len(it["b"]) == 0 or len(it["b"]) % (8 * cols):
-            raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of 8*cols")
+        q = it.get("q", 64)
+        if q not in (56, 64) or isinstance(q, bool):
+            raise ProtocolError(f"maskgen: items[{i}].q must be 56 or 64")
+        if len(it["b"]) == 0 or len(it["b"]) % ((q // 8) * cols):
+            raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of (q/8)*cols")
         drop = it.get("drop", 0)
         if drop not in (0, 16) or isinstance(drop, bool):
             raise ProtocolError(f"maskgen: items[{i}].drop must be 0 or 16")
-        items.append(MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], int(drop)))
+        items.append(MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], int(drop), int(q)))
     return MaskgenRequest(_str(obj.get("id"), "id"), _str(obj.get("fp"), "fp"), tuple(items))
 
 
@@ -169,21 +178,40 @@ def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRe
     return MaskgenResponse(req.request_id, tuple(items))
 
 
-def pack_y(y: np.ndarray, drop_bits: int) -> bytes:
-    """Provider side: ``y`` (uint64) rounded by ``2^drop_bits`` and packed little-endian."""
-    if drop_bits == 0:
-        return np.ascontiguousarray(y, dtype="<u8").tobytes()
-    yr = (np.asarray(y, dtype=np.uint64) + np.uint64(1 << (drop_bits - 1))) >> np.uint64(drop_bits)
-    nb = (64 - drop_bits) // 8
-    return np.ascontiguousarray(np.ascontiguousarray(yr, dtype="<u8").view(np.uint8).reshape(*yr.shape, 8)[..., :nb]
-                                ).tobytes()
+def _to_bytes(v: np.ndarray, nb: int) -> bytes:
+    a = np.ascontiguousarray(v, dtype="<u8")
+    return np.ascontiguousarray(a.view(np.uint8).reshape(*a.shape, 8)[..., :nb]).tobytes()
 
 
-def unpack_y(data: bytes, shape: tuple[int, int], drop_bits: int) -> np.ndarray:
-    """Client side: inverse of :func:`pack_y` (the dropped low bits come back as zeros)."""
-    if drop_bits == 0:
+def _from_bytes(data: bytes | bytearray | memoryview, shape: tuple[int, int], nb: int) -> np.ndarray:
+    if nb == 8:
         return np.frombuffer(data, dtype="<u8").reshape(shape).astype(np.uint64)
-    nb = (64 - drop_bits) // 8
     buf = np.zeros((*shape, 8), dtype=np.uint8)
     buf[..., :nb] = np.frombuffer(data, dtype=np.uint8).reshape(*shape, nb)
-    return buf.view("<u8").reshape(shape).astype(np.uint64) << np.uint64(drop_bits)
+    return buf.view("<u8").reshape(shape).astype(np.uint64)
+
+
+def pack_b(b: np.ndarray, q_bits: int = 64) -> bytes:
+    """Ciphertext coefficients (``< 2^q``) as ``q/8`` little-endian bytes each."""
+    return _to_bytes(b, q_bits // 8)
+
+
+def unpack_b(data: bytes | bytearray | memoryview, shape: tuple[int, int], q_bits: int = 64) -> np.ndarray:
+    return _from_bytes(data, shape, q_bits // 8)
+
+
+def pack_y(y: np.ndarray, drop_bits: int, q_bits: int = 64) -> bytes:
+    """Provider side: ``y mod 2^q``, rounded by ``2^drop_bits``, as ``(q - drop)/8`` little-endian bytes."""
+    yv = np.asarray(y, dtype=np.uint64)
+    if q_bits < 64:
+        yv = yv & np.uint64((1 << q_bits) - 1)
+    if drop_bits:
+        yv = (yv + np.uint64(1 << (drop_bits - 1))) >> np.uint64(drop_bits)
+    return _to_bytes(yv, (q_bits - drop_bits) // 8)  # a rounding carry past bit q is dropped (mod 2^q)
+
+
+def unpack_y(data: bytes | bytearray | memoryview, shape: tuple[int, int], drop_bits: int,
+             q_bits: int = 64) -> np.ndarray:
+    """Client side: inverse of :func:`pack_y` (the dropped low bits come back as zeros)."""
+    v = _from_bytes(data, shape, (q_bits - drop_bits) // 8)
+    return v << np.uint64(drop_bits) if drop_bits else v

@@ -68,11 +68,15 @@ def test_roundtrip_partial_group_and_worst_case_weights() -> None:
     assert got.shape == (37, 4) and (got == ref).all()
 
 
-def test_noise_budget_rejects_k48_on_wide_layers() -> None:
-    p = HEParams(k=48)
+def test_noise_budget_rejects_k48_and_admits_k40_k32() -> None:
     with pytest.raises(ConfigError):
-        p.check_noise(127 * 18944**0.5, "down")
+        HEParams(k=48)  # 2^(64-48) leaves no room for the noise
     HEParams(k=40).check_noise(127 * 18944**0.5, "down")
+    p32 = HEParams(k=32)
+    assert (p32.q, p32.delta_bits, p32.b_bytes) == (56, 24, 7)
+    p32.check_noise(127 * 28672**0.5, "70B down")
+    with pytest.raises(ConfigError):
+        HEParams(k=40, q_bits=56)
 
 
 def test_rejects_small_rank_and_bad_k() -> None:

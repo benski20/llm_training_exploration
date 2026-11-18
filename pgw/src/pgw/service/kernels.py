@@ -215,24 +215,30 @@ class ComputeKernel:
 
     __call__ = run
 
-    def mulmod64(self, b: np.ndarray) -> np.ndarray:
+    def mulmod64(self, b: np.ndarray, nbytes: int = 8) -> np.ndarray:
         """``W8 b mod 2^64`` for MLWE mask ciphertexts ``b`` (``(n, cols)`` uint64 -> ``(m, cols)``).
 
         Used by ``POST /pgw/v1/maskgen`` (:mod:`pgw.hemask`). On CUDA, ``b`` is split into eight
         unsigned byte planes, offset to signed int8, multiplied with int8 tensor-core GEMMs
-        (``|partial| <= 127 * 128 * n < 2^31``) and recombined with wrapping int64 shifts.
+        (``|partial| <= 127 * 128 * n < 2^31``) and recombined with wrapping int64 shifts. With
+        ``nbytes < 8`` (coefficients below ``2^(8 nbytes)``, e.g. q = 2^56) the zero top planes are skipped.
         """
+        if not 1 <= nbytes <= 8:
+            raise ShapeError("nbytes must be in [1, 8]")
         if b.ndim != 2 or b.shape[0] != self.in_features or b.dtype != np.uint64:
             raise ShapeError(f"{self.linear}: maskgen operand must be ({self.in_features}, cols) uint64, "
                              f"got {b.dtype} {tuple(b.shape)}")
         w8 = self._w if self._w is not None else self._pw.w8  # type: ignore[union-attr]
         if self.device.type != "cuda":
+            from pgw.hemask.fastmm import engine, small_mm_big
             from pgw.hemask.lwe import matmul_mod64
 
-            return matmul_mod64(w8.cpu().numpy(), b)
-        return self._mulmod64_cuda(b)  # pragma: no cover - GPU only
+            if engine() == "cpu_f64":
+                return matmul_mod64(w8.cpu().numpy(), b, fast=False)
+            return small_mm_big(w8.cpu().numpy(), b, nbytes=nbytes)
+        return self._mulmod64_cuda(b, nbytes)  # pragma: no cover - GPU only
 
-    def _mulmod64_cuda(self, b: np.ndarray) -> np.ndarray:  # pragma: no cover - GPU only
+    def _mulmod64_cuda(self, b: np.ndarray, nbytes: int = 8) -> np.ndarray:  # pragma: no cover - GPU only
         assert self._pw is not None and self._pw._w_dev is not None
         wpad = self._pw._w_dev  # (mp, np_) int8, zero padded to multiples of 32
         n, cols = b.shape
@@ -243,7 +249,7 @@ class ComputeKernel:
         rowsum = wpad.to(torch.int64).sum(1, keepdim=True)  # for the -128 digit offset
         acc = torch.zeros((mp, colp), dtype=torch.int64, device=self.device)
         plane = torch.zeros((colp, np_), dtype=torch.int8, device=self.device)
-        for d in range(8):
+        for d in range(nbytes):  # coefficients < 2^(8 nbytes): the top planes are zero
             byte = (bt >> (8 * d)) & 0xFF  # arithmetic shift is fine: the mask keeps the byte
             plane[:cols, :n] = (byte - 128).to(torch.int8).t()
             part = torch._int_mm(wpad, plane.t()).to(torch.int64) + 128 * rowsum

@@ -21,30 +21,35 @@ def _settings(pack_dir: Any, tokens_file: Any, **kw: Any) -> ServiceSettings:
     return ServiceSettings(packs=[pack_dir], device="cpu", rings=["K40A12"], tokens_file=tokens_file, **kw)
 
 
+@pytest.mark.parametrize("k", [40, 32])
 async def test_maskgen_roundtrip_is_exact(tiny_pack_dir: Any, tokens_file: Any, pack_fp: str,
-                                          pack_weights: dict[str, torch.Tensor]) -> None:
+                                          pack_weights: dict[str, torch.Tensor], k: int) -> None:
     lid, w8 = next(iter(pack_weights.items()))
     w = w8.numpy().astype(np.int64)
     m, n = w.shape
-    p = HEParams(k=40, rank=8)
-    r = np.random.default_rng(0).integers(0, 1 << 40, size=(DEGREE, n), dtype=np.int64)
+    p = HEParams(k=k, rank=8)
+    r = np.random.default_rng(0).integers(0, 1 << k, size=(DEGREE, n), dtype=np.int64)
     a = public_matrix(bytes(32), n, p)
     hint = matmul_mod64(w, a)
     ct = encrypt_masks(r, a, p)
     async with running_app(_settings(tiny_pack_dir, tokens_file)) as app:
         client = asgi_client(app, TOKEN_A)
         try:
-            remote = RemoteMulmod64(client, pack_fp, {k: int(v.shape[0]) for k, v in pack_weights.items()})
+            remote = RemoteMulmod64(client, pack_fp, {kk: int(v.shape[0]) for kk, v in pack_weights.items()},
+                                    q_bits=p.q)
             y = await remote.acall(lid, ct.b)
         finally:
             await client.aclose()
     assert y.shape == (m, DEGREE)
-    diff = (y - matmul_mod64(w, ct.b)).view(np.int64)  # 16 low bits are rounded away on the wire
+    qmask = np.uint64((1 << p.q) - 1) if p.q < 64 else np.uint64(2**64 - 1)
+    diff = ((y - matmul_mod64(w, ct.b)) & qmask).astype(np.int64)  # 16 low bits are rounded away on the wire
+    diff = np.where(diff >= (1 << (p.q - 1)), diff - (1 << p.q), diff) if p.q < 64 else diff
     assert int(np.abs(diff).max()) <= 1 << 15
     got = decrypt_wr(y, hint, ct, p)
-    ref = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 40), dtype=np.int64)
+    ref = np.array((r.astype(object) @ w.T.astype(object)) % (1 << k), dtype=np.int64)
     assert np.array_equal(got, ref)
-    assert remote.bytes_up > 8 * n * DEGREE and 6 * m * DEGREE <= remote.bytes_down < 7 * m * DEGREE
+    yb = (p.q - 16) // 8  # 6 bytes at q=64, 5 at q=56
+    assert remote.bytes_up > p.b_bytes * n * DEGREE and yb * m * DEGREE <= remote.bytes_down < (yb + 1) * m * DEGREE
 
 
 async def test_maskgen_requires_auth_and_valid_sizes(tiny_pack_dir: Any, tokens_file: Any, pack_fp: str,

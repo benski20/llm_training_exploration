@@ -36,7 +36,7 @@ __all__ = ["HEMaskBackend", "HintStore"]
 log = logging.getLogger(__name__)
 
 _META = "meta.json"
-_HINT_VERSION = 2  # v2: hints stored as int8 byte planes 1..7 (m x 7 x dim); byte 0 is not needed
+_HINT_VERSION = 2  # v2: int8 byte planes 1..(q/8 - 1) of H mod 2^q (byte 0 is not needed for decryption)
 _BUILD_COLS = 512  # hint columns per GEMM block (bounds temporary memory)
 
 
@@ -56,12 +56,12 @@ class HintStore:
         self._maps: dict[str, np.ndarray] = {}
 
     @staticmethod
-    def dir_for(root: Path, fingerprint: str, rank: int) -> Path:
-        return Path(root) / f"{fingerprint[:16]}-r{rank}"
+    def dir_for(root: Path, fingerprint: str, rank: int, q_bits: int = 64) -> Path:
+        return Path(root) / (f"{fingerprint[:16]}-r{rank}" + ("" if q_bits == 64 else f"-q{q_bits}"))
 
     @classmethod
-    def open(cls, root: Path, fingerprint: str, rank: int) -> HintStore | None:
-        path = cls.dir_for(root, fingerprint, rank)
+    def open(cls, root: Path, fingerprint: str, rank: int, q_bits: int = 64) -> HintStore | None:
+        path = cls.dir_for(root, fingerprint, rank, q_bits)
         try:
             meta = json.loads((path / _META).read_text())
         except FileNotFoundError:
@@ -75,10 +75,11 @@ class HintStore:
         return cls(path, meta)
 
     @classmethod
-    def build(cls, root: Path, pack: Any, rank: int, *, log_every_s: float = 30.0) -> HintStore:
+    def build(cls, root: Path, pack: Any, rank: int, *, q_bits: int = 64, log_every_s: float = 30.0) -> HintStore:
         """Compute ``W8 A`` for every linear of ``pack`` (minutes for 7B on CPU; done once per pack)."""
-        params = HEParams(k=40, rank=rank)  # the hint does not depend on K
-        final = cls.dir_for(root, pack.fingerprint, rank)
+        params = HEParams(k=16, rank=rank, q_bits=q_bits)  # the hint depends on q and rank, not on K
+        planes = q_bits // 8 - 1  # bytes 1 .. q/8 - 1 of H mod 2^q
+        final = cls.dir_for(root, pack.fingerprint, rank, q_bits)
         tmp = final.with_name(final.name + f".building-{os.getpid()}")
         shutil.rmtree(tmp, ignore_errors=True)
         tmp.mkdir(parents=True)
@@ -97,16 +98,18 @@ class HintStore:
                 m, n = w.shape
                 norms[key] = float(np.sqrt((w.astype(np.float64) ** 2).sum(1)).max())
                 out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.int8,
-                                                shape=(m, 7, params.dim))
+                                                shape=(m, planes, params.dim))
                 for c0 in range(0, params.dim, _BUILD_COLS):
-                    out[:, :, c0:c0 + _BUILD_COLS] = to_planes(matmul_mod64(w, a[:n, c0:c0 + _BUILD_COLS]))[:, 1:]
+                    out[:, :, c0:c0 + _BUILD_COLS] = to_planes(
+                        matmul_mod64(w, a[:n, c0:c0 + _BUILD_COLS]))[:, 1:1 + planes]
                 out.flush()
                 del out
                 done += m
                 if time.monotonic() - last > log_every_s:
                     last = time.monotonic()
                     log.info("building HE hint: %.0f%% (%.0f s)", 100 * done / total, last - t0)
-            meta = {"version": _HINT_VERSION, "fingerprint": pack.fingerprint, "rank": rank, "a_seed": seed.hex(),
+            meta = {"version": _HINT_VERSION, "fingerprint": pack.fingerprint, "rank": rank, "q_bits": q_bits,
+                    "a_seed": seed.hex(),
                     "dim": params.dim, "row_norms": norms, "created": time.time()}
             (tmp / _META).write_text(json.dumps(meta, indent=1))
             if final.exists():
@@ -121,9 +124,9 @@ class HintStore:
         return cls(final, meta)
 
     @classmethod
-    def open_or_build(cls, root: Path, pack: Any, rank: int) -> HintStore:
-        hs = cls.open(root, pack.fingerprint, rank)
-        return hs if hs is not None else cls.build(root, pack, rank)
+    def open_or_build(cls, root: Path, pack: Any, rank: int, q_bits: int = 64) -> HintStore:
+        hs = cls.open(root, pack.fingerprint, rank, q_bits)
+        return hs if hs is not None else cls.build(root, pack, rank, q_bits=q_bits)
 
     def hint(self, linear: str) -> np.ndarray:
         h = self._maps.get(linear)
@@ -152,6 +155,9 @@ class HEMaskBackend:
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4):
         self.params = HEParams(k=ring.k, rank=hints.rank)
+        if int(hints.meta.get("q_bits", 64)) != self.params.q:
+            raise ConfigError(f"hint store is for q=2^{hints.meta.get('q_bits', 64)}, ring {ring.name} needs "
+                              f"q=2^{self.params.q}")
         self.ring = ring
         self.hints = hints
         self.remote = remote
@@ -183,7 +189,7 @@ class HEMaskBackend:
         hint = self.hints.hint(linear)
         smat = np.concatenate([ct.secret for ct in cts], axis=1)
         try:
-            corr = big_planes_mm_small(hint, smat)
+            corr = big_planes_mm_small(hint, smat, first_byte=1)
         finally:
             smat.fill(0)
         v = y - corr

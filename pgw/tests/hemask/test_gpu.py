@@ -57,3 +57,14 @@ def test_cuda_gateway_engine_matches_reference(monkeypatch: pytest.MonkeyPatch) 
         y = rng.integers(0, 2**64 - 1, size=(m, k), dtype=np.uint64)
         ref = matmul_mod64(s, y, small_left=False, fast=False)
         assert np.array_equal(big_planes_mm_small(to_planes(y), s.astype(np.int8)), ref)
+
+
+@pytest.mark.gpu
+def test_cuda_mulmod64_q56_skips_top_plane() -> None:
+    rng = np.random.default_rng(12)
+    m, n = 512, 3584
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int8)
+    b = rng.integers(0, 1 << 56, size=(n, DEGREE), dtype=np.uint64)
+    kern = ComputeKernel(LinearSpec(LinearId(0, "o"), m, n), torch.from_numpy(w), device="cuda")
+    ref = matmul_mod64(w.astype(np.int64), b, fast=False) & np.uint64((1 << 56) - 1)
+    assert np.array_equal(kern.mulmod64(b, nbytes=7) & np.uint64((1 << 56) - 1), ref)

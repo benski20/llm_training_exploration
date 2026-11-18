@@ -71,6 +71,10 @@ class HEParams:
     rank: int = 16
     eta: int = 21
     tail_sigmas: float = 24.0
+    #: Ciphertext modulus bits (0 = automatic: 56 for K <= 32, else 64). The scaling factor
+    #: ``2^(q-K)`` must stay >= 2^24 to absorb the noise, so a 32-bit mask ring fits q = 2^56:
+    #: 7-byte uploads, 5-byte downloads, 6-plane hints, and more lattice security at the same rank.
+    q_bits: int = 0
 
     def __post_init__(self) -> None:
         if not 16 <= self.k <= 48 or self.k % 8:
@@ -79,6 +83,11 @@ class HEParams:
             raise ConfigError(f"rank {self.rank} gives LWE dimension {self.rank * DEGREE} < 2048: insecure at q=2^64")
         if not 1 <= self.eta <= 32:
             raise ConfigError(f"eta must be in [1, 32], got {self.eta}")
+        if self.q_bits not in (0, 56, 64):
+            raise ConfigError(f"q_bits must be 0 (auto), 56 or 64, got {self.q_bits}")
+        if self.q - self.k < 24:
+            raise ConfigError(f"K={self.k} leaves only {self.q - self.k} bits of noise room at q=2^{self.q} "
+                              f"(24 needed): encrypted masks support rings up to K40 (K32 uses q=2^56)")
 
     @property
     def dim(self) -> int:
@@ -86,9 +95,23 @@ class HEParams:
         return self.rank * DEGREE
 
     @property
+    def q(self) -> int:
+        """Ciphertext modulus bits."""
+        return self.q_bits or (56 if self.k <= 32 else 64)
+
+    @property
+    def q_mask(self) -> np.uint64:
+        return np.uint64((1 << self.q) - 1) if self.q < 64 else np.uint64(0xFFFFFFFFFFFFFFFF)
+
+    @property
+    def b_bytes(self) -> int:
+        """Bytes per uploaded ciphertext coefficient."""
+        return self.q // 8
+
+    @property
     def delta_bits(self) -> int:
-        """``log2`` of the scaling factor ``2^(64-K)`` that lifts masks above the noise."""
-        return 64 - self.k
+        """``log2`` of the scaling factor ``2^(q-K)`` that lifts masks above the noise."""
+        return self.q - self.k
 
     @property
     def sigma(self) -> float:
@@ -266,7 +289,7 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
     else:
         assert a is not None
         pad = matmul_mod64(smat, a, small_left=False)
-    b = pad + e.astype(_U64) + (msg << _U64(params.delta_bits))
+    b = (pad + e.astype(_U64) + (msg << _U64(params.delta_bits))) & params.q_mask
     e.fill(0)
     msg.fill(0)
     return MaskCiphertext(b=b, secret=smat, rows=rows)
@@ -288,7 +311,7 @@ def decrypt_wr(y: np.ndarray, hint: np.ndarray, ct: MaskCiphertext, params: HEPa
             corr = big_planes_mm_small(np.asarray(hint), ct.secret)
         else:
             corr = matmul_mod64(ct.secret, np.asarray(hint, dtype=_U64), small_left=False)
-        v = np.asarray(y, dtype=_U64) - corr
+        v = (np.asarray(y, dtype=_U64) - corr) & params.q_mask
         half = _U64(1 << (params.delta_bits - 1))
         m = ((v + half) >> _U64(params.delta_bits)) & _U64((1 << params.k) - 1)
         out: np.ndarray = m[:, : ct.rows].T.astype(np.int64)
