@@ -1,0 +1,14 @@
+{
+  "name": "PGW live demo",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.13-bookworm",
+  "hostRequirements": { "cpus": 2, "memory": "8gb" },
+  "onCreateCommand": "bash .devcontainer/setup-demo.sh",
+  "postStartCommand": "nohup bash .devcontainer/start-demo.sh > /tmp/pgw-demo.log 2>&1 &",
+  "forwardPorts": [8080],
+  "portsAttributes": {
+    "8080": { "label": "PGW live demo", "onAutoForward": "openBrowser" }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": [".devcontainer/README.md"] }
+  }
+}
