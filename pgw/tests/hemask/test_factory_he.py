@@ -10,10 +10,10 @@ import pytest
 import torch
 
 from pgw.core.errors import IntegrityError
+from pgw.core.ring import RingParams
 from pgw.factory import MaskGenerator
 from pgw.hemask import matmul_mod64
 from pgw.hemask.backend import HEMaskBackend, HintStore
-from pgw.core.ring import RingParams
 
 SEED = bytes(range(1, 33))
 

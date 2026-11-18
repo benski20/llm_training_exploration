@@ -30,6 +30,17 @@ QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
 JOBS: dict[str, dict] = {
+    # encrypted mask generation: CUDA mulmod64 exactness + cost at 7B / 8B / 0.5B shapes
+    "pgw-he-gpu": {"steps": [
+        {"kind": "pytest", "name": "pytest_hemask_gpu", "args": ["tests/hemask", "-v", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        {"kind": "shell", "name": "hemask_bench_7b",
+         "cmd": "python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4", "timeout": 3600},
+        {"kind": "shell", "name": "hemask_bench_8b",
+         "cmd": "python benchmarks/hemask_bench.py --preset llama3-8b --device cuda --groups 4", "timeout": 3600},
+        {"kind": "shell", "name": "hemask_bench_05b",
+         "cmd": "python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda --groups 4", "timeout": 1800},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
