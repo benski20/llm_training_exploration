@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import msgpack
+import numpy as np
 
 from pgw.core.errors import ProtocolError
 from pgw.hemask.lwe import DEGREE
@@ -36,6 +37,8 @@ __all__ = [
     "decode_maskgen_response",
     "encode_maskgen_request",
     "encode_maskgen_response",
+    "pack_y",
+    "unpack_y",
 ]
 
 MASKGEN_PATH = "/pgw/v1/maskgen"
@@ -49,6 +52,13 @@ class MaskgenItem:
     linear: str
     cols: int
     b: bytes
+    #: Low bits of ``y`` the provider rounds away before replying (0 or 16). With 16, ``y`` is sent as
+    #: ``round(y / 2^16)`` in 6 bytes per element: 25% less download, decryption error +2^15.
+    drop_bits: int = 0
+
+    @property
+    def y_bytes_per_element(self) -> int:
+        return (64 - self.drop_bits) // 8
 
 
 @dataclass(frozen=True)
@@ -105,7 +115,8 @@ def _load(data: bytes | bytearray | memoryview, kind: str) -> dict[str, Any]:
 def encode_maskgen_request(req: MaskgenRequest) -> bytes:
     return bytes(msgpack.packb({
         "v": _VERSION, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint,
-        "items": [{"linear": it.linear, "cols": it.cols, "b": it.b} for it in req.items],
+        "items": [{"linear": it.linear, "cols": it.cols, "b": it.b, **({"drop": it.drop_bits} if it.drop_bits else {})}
+                  for it in req.items],
     }, use_bin_type=True))
 
 
@@ -118,7 +129,10 @@ def decode_maskgen_request(data: bytes | bytearray | memoryview) -> MaskgenReque
         cols = _check_cols(it.get("cols"), f"items[{i}]")
         if len(it["b"]) == 0 or len(it["b"]) % (8 * cols):
             raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of 8*cols")
-        items.append(MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"]))
+        drop = it.get("drop", 0)
+        if drop not in (0, 16) or isinstance(drop, bool):
+            raise ProtocolError(f"maskgen: items[{i}].drop must be 0 or 16")
+        items.append(MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], int(drop)))
     return MaskgenRequest(_str(obj.get("id"), "id"), _str(obj.get("fp"), "fp"), tuple(items))
 
 
@@ -144,11 +158,32 @@ def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRe
                 or not isinstance(it.get("y"), bytes):
             raise ProtocolError(f"maskgen: response items[{i}] does not match the request")
         y = it["y"]
+        nb = q.y_bytes_per_element
         if out_features is not None and q.linear in out_features:
-            if len(y) != 8 * q.cols * out_features[q.linear]:
+            if len(y) != nb * q.cols * out_features[q.linear]:
                 raise ProtocolError(f"maskgen: response items[{i}] has {len(y)} bytes, expected "
-                                    f"{8 * q.cols * out_features[q.linear]}")
-        elif len(y) == 0 or len(y) % (8 * q.cols):
+                                    f"{nb * q.cols * out_features[q.linear]}")
+        elif len(y) == 0 or len(y) % (nb * q.cols):
             raise ProtocolError(f"maskgen: response items[{i}] length is not a multiple of 8*cols")
         items.append(MaskgenResult(q.linear, q.cols, y))
     return MaskgenResponse(req.request_id, tuple(items))
+
+
+def pack_y(y: np.ndarray, drop_bits: int) -> bytes:
+    """Provider side: ``y`` (uint64) rounded by ``2^drop_bits`` and packed little-endian."""
+    if drop_bits == 0:
+        return np.ascontiguousarray(y, dtype="<u8").tobytes()
+    yr = (np.asarray(y, dtype=np.uint64) + np.uint64(1 << (drop_bits - 1))) >> np.uint64(drop_bits)
+    nb = (64 - drop_bits) // 8
+    return np.ascontiguousarray(np.ascontiguousarray(yr, dtype="<u8").view(np.uint8).reshape(*yr.shape, 8)[..., :nb]
+                                ).tobytes()
+
+
+def unpack_y(data: bytes, shape: tuple[int, int], drop_bits: int) -> np.ndarray:
+    """Client side: inverse of :func:`pack_y` (the dropped low bits come back as zeros)."""
+    if drop_bits == 0:
+        return np.frombuffer(data, dtype="<u8").reshape(shape).astype(np.uint64)
+    nb = (64 - drop_bits) // 8
+    buf = np.zeros((*shape, 8), dtype=np.uint8)
+    buf[..., :nb] = np.frombuffer(data, dtype=np.uint8).reshape(*shape, nb)
+    return buf.view("<u8").reshape(shape).astype(np.uint64) << np.uint64(drop_bits)

@@ -18,6 +18,7 @@ import os
 import shutil
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ import torch
 from pgw.core.errors import ConfigError, IntegrityError
 from pgw.core.prng import new_seed
 from pgw.core.ring import RingParams
+from pgw.hemask.fastmm import big_planes_mm_small, int8_gemm_available, planes_to_u64, to_planes
 from pgw.hemask.lwe import DEGREE, HEParams, MaskCiphertext, encrypt_masks, matmul_mod64, public_matrix
 
 __all__ = ["HEMaskBackend", "HintStore"]
@@ -34,7 +36,7 @@ __all__ = ["HEMaskBackend", "HintStore"]
 log = logging.getLogger(__name__)
 
 _META = "meta.json"
-_HINT_VERSION = 1
+_HINT_VERSION = 2  # v2: hints stored as int8 byte planes 1..7 (m x 7 x dim); byte 0 is not needed
 _BUILD_COLS = 512  # hint columns per GEMM block (bounds temporary memory)
 
 
@@ -64,7 +66,11 @@ class HintStore:
             meta = json.loads((path / _META).read_text())
         except FileNotFoundError:
             return None
-        if meta.get("version") != _HINT_VERSION or meta.get("fingerprint") != fingerprint or meta.get("rank") != rank:
+        if meta.get("version") != _HINT_VERSION:
+            log.warning("HE hint store %s has format v%s (want v%d): rebuilding", path, meta.get("version"),
+                        _HINT_VERSION)
+            return None
+        if meta.get("fingerprint") != fingerprint or meta.get("rank") != rank:
             raise ConfigError(f"hint store {path} does not match fingerprint/rank; delete it to rebuild")
         return cls(path, meta)
 
@@ -90,10 +96,10 @@ class HintStore:
                 w = lw.w8.numpy() if isinstance(lw.w8, torch.Tensor) else np.asarray(lw.w8)
                 m, n = w.shape
                 norms[key] = float(np.sqrt((w.astype(np.float64) ** 2).sum(1)).max())
-                out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.uint64,
-                                                shape=(m, params.dim))
+                out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.int8,
+                                                shape=(m, 7, params.dim))
                 for c0 in range(0, params.dim, _BUILD_COLS):
-                    out[:, c0:c0 + _BUILD_COLS] = matmul_mod64(w, a[:n, c0:c0 + _BUILD_COLS])
+                    out[:, :, c0:c0 + _BUILD_COLS] = to_planes(matmul_mod64(w, a[:n, c0:c0 + _BUILD_COLS]))[:, 1:]
                 out.flush()
                 del out
                 done += m
@@ -153,48 +159,85 @@ class HEMaskBackend:
         self.specs = {s.id.key: s for s in pack.linear_specs()}
         for key, norm in hints.meta["row_norms"].items():
             self.params.check_noise(norm, key)
-        self._a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
-        self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0}
+        a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
+        self._fast = int8_gemm_available()
+        # Public matrix kept as int8 byte planes when int8 GEMMs are fast (same memory as uint64).
+        self._a: np.ndarray = to_planes(a) if self._fast else a
+        del a
+        self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0}
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-remote")
+
+    def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
+        a = self._a[:n]
+        if self._fast:
+            return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
+                    for g0 in range(0, len(rn), DEGREE)]
+        return [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
+
+    def _decrypt(self, linear: str, y: np.ndarray, cts: list[MaskCiphertext], m: int) -> np.ndarray:
+        """All groups of one provider reply with one GEMM: ``hint @ [S_1 | S_2 | ...]``."""
+        if y.shape != (m, DEGREE * len(cts)):
+            raise IntegrityError(f"maskgen {linear}: provider returned shape {y.shape}, expected "
+                                 f"{(m, DEGREE * len(cts))}")
+        hint = self.hints.hint(linear)
+        smat = np.concatenate([ct.secret for ct in cts], axis=1)
+        try:
+            if self._fast:
+                corr = big_planes_mm_small(hint, smat)
+            else:
+                corr = matmul_mod64(smat, planes_to_u64(np.asarray(hint)), small_left=False)
+        finally:
+            smat.fill(0)
+        v = y - corr
+        half = np.uint64(1 << (self.params.delta_bits - 1))
+        wr = ((v + half) >> np.uint64(self.params.delta_bits)) & np.uint64(self.ring.mask)
+        return np.concatenate([wr[:, gi * DEGREE:gi * DEGREE + ct.rows] for gi, ct in enumerate(cts)], axis=1).T
 
     def matmul(self, linear: str, r: torch.Tensor) -> torch.Tensor:
-        """``(rows, n)`` masks -> ``(rows, m)`` ``W8 r mod 2^K`` (int64 CPU tensor)."""
+        """``(rows, n)`` masks -> ``(rows, m)`` ``W8 r mod 2^K`` (int64 CPU tensor).
+
+        Pipelined: while the provider works on one batch of groups, the next batch is encrypted and
+        the previous one decrypted (int8 GEMMs release the GIL).
+        """
         spec = self.specs[linear]
         n, m = spec.in_features, spec.out_features
         if r.ndim != 2 or r.shape[1] != n:
             raise ConfigError(f"{linear}: masks must be (rows, {n}), got {tuple(r.shape)}")
         rows = int(r.shape[0])
         rn = r.numpy() if isinstance(r, torch.Tensor) else np.asarray(r)
-        a = self._a[:n]
-        hint = self.hints.hint(linear)
         out = np.empty((rows, m), dtype=np.int64)
         step = DEGREE * self.groups_per_call
-        for s0 in range(0, rows, step):
-            t0 = time.perf_counter()
-            cts: list[MaskCiphertext] = [encrypt_masks(rn[g0:min(g0 + DEGREE, rows)], a, self.params)
-                                         for g0 in range(s0, min(s0 + step, rows), DEGREE)]
-            b = np.concatenate([ct.b for ct in cts], axis=1)
-            t1 = time.perf_counter()
+        batches = [(s0, min(s0 + step, rows)) for s0 in range(0, rows, step)]
+        t_wall = time.perf_counter()
+        inflight: list[tuple[int, int, list[MaskCiphertext], Any, float]] = []
+
+        def finish(item: tuple[int, int, list[MaskCiphertext], Any, float]) -> None:
+            s0, s1, cts, fut, t_sent = item
             try:
-                y = self.remote(linear, b)
-                if y.shape != (m, b.shape[1]):
-                    raise IntegrityError(f"maskgen {linear}: provider returned shape {y.shape}, expected "
-                                         f"{(m, b.shape[1])}")
-                t2 = time.perf_counter()
-                # One GEMM for all groups: hint @ [S_1 | S_2 | ...]
-                smat = np.concatenate([ct.secret for ct in cts], axis=1)
-                v = y - matmul_mod64(smat, np.asarray(hint), small_left=False)
-                smat.fill(0)
+                y = fut.result()
+                t1 = time.perf_counter()
+                self.stats["remote_s"] += t1 - t_sent
+                out[s0:s1] = self._decrypt(linear, y, cts, m)
+                self.stats["decrypt_s"] += time.perf_counter() - t1
+                self.stats["groups"] += len(cts)
             finally:
                 for ct in cts:
                     ct.wipe()
-            half = np.uint64(1 << (self.params.delta_bits - 1))
-            wr = ((v + half) >> np.uint64(self.params.delta_bits)) & np.uint64(self.ring.mask)
-            for gi, ct in enumerate(cts):
-                g0 = s0 + gi * DEGREE
-                out[g0:g0 + ct.rows] = wr[:, gi * DEGREE:gi * DEGREE + ct.rows].T.astype(np.int64)
-            t3 = time.perf_counter()
-            self.stats["groups"] += len(cts)
-            self.stats["encrypt_s"] += t1 - t0
-            self.stats["remote_s"] += t2 - t1
-            self.stats["decrypt_s"] += t3 - t2
+
+        try:
+            for s0, s1 in batches:
+                t0 = time.perf_counter()
+                cts = self._encrypt(rn[s0:s1], n)
+                b = np.concatenate([ct.b for ct in cts], axis=1)
+                self.stats["encrypt_s"] += time.perf_counter() - t0
+                inflight.append((s0, s1, cts, self._pool.submit(self.remote, linear, b), time.perf_counter()))
+                if len(inflight) > 1:  # decrypt the previous batch while this one is with the provider
+                    finish(inflight.pop(0))
+            while inflight:
+                finish(inflight.pop(0))
+        finally:
+            for item in inflight:
+                for ct in item[2]:
+                    ct.wipe()
+        self.stats["wall_s"] += time.perf_counter() - t_wall
         return torch.from_numpy(out)

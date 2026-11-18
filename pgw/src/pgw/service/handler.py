@@ -180,7 +180,7 @@ class ServiceHandler:
         """
         import numpy as np
 
-        from pgw.hemask.wire import MaskgenResponse, MaskgenResult
+        from pgw.hemask.wire import MaskgenResponse, MaskgenResult, pack_y
 
         ident: TenantIdentity | None = identity if isinstance(identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
@@ -202,7 +202,7 @@ class ServiceHandler:
                 b = np.frombuffer(it.b, dtype="<u8").reshape(kern.in_features, it.cols)
                 async with self._maskgen_lock:
                     y = await asyncio.to_thread(kern.mulmod64, b)
-                out.append(MaskgenResult(it.linear, it.cols, np.ascontiguousarray(y, dtype="<u8").tobytes()))
+                out.append(MaskgenResult(it.linear, it.cols, await asyncio.to_thread(pack_y, y, it.drop_bits)))
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
             self.inflight -= 1

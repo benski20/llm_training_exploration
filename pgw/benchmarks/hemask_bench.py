@@ -19,7 +19,8 @@ import numpy as np
 import torch
 
 from pgw.core.types import LinearId, LinearSpec
-from pgw.hemask import DEGREE, HEParams, decrypt_wr, encrypt_masks, matmul_mod64, public_matrix
+from pgw.hemask import DEGREE, HEParams, encrypt_masks, matmul_mod64, public_matrix
+from pgw.hemask.fastmm import big_planes_mm_small, int8_gemm_available, to_planes
 from pgw.service.kernels import ComputeKernel
 
 PRESETS = {  # (layers, {kind: (m, n)})
@@ -50,14 +51,17 @@ def main() -> None:
         w = rng.integers(-127, 128, size=(m, n)).astype(np.int8)
         a = public_matrix(bytes(32), n, p)
         t = time.perf_counter()
-        hint = np.empty((m, p.dim), dtype=np.uint64)
+        fast = int8_gemm_available()
+        hint = np.empty((m, 7, p.dim), dtype=np.int8)  # the backend's format: byte planes 1..7
         for c0 in range(0, p.dim, 512):
-            hint[:, c0:c0 + 512] = matmul_mod64(w, a[:, c0:c0 + 512])
+            hint[:, :, c0:c0 + 512] = to_planes(matmul_mod64(w, a[:, c0:c0 + 512]))[:, 1:]
         t_hint = time.perf_counter() - t
+        a_planes = to_planes(a) if fast else None
         kern = ComputeKernel(LinearSpec(LinearId(0, kind), m, n), torch.from_numpy(w), device=args.device)
         r = rng.integers(0, 1 << 40, size=(cols, n), dtype=np.int64)
         t = time.perf_counter()
-        cts = [encrypt_masks(r[g * DEGREE:(g + 1) * DEGREE], a, p) for g in range(args.groups)]
+        cts = [encrypt_masks(r[g * DEGREE:(g + 1) * DEGREE], None if fast else a, p, a_planes=a_planes)
+               for g in range(args.groups)]
         b = np.concatenate([c.b for c in cts], axis=1)
         t_enc = time.perf_counter() - t
         kern.mulmod64(b[:, :DEGREE].copy())  # warm-up
@@ -67,8 +71,10 @@ def main() -> None:
         y = kern.mulmod64(b)
         t_prov = time.perf_counter() - t
         t = time.perf_counter()
-        outs = [decrypt_wr(np.ascontiguousarray(y[:, g * DEGREE:(g + 1) * DEGREE]), hint, cts[g], p)
-                for g in range(args.groups)]
+        smat = np.concatenate([c.secret for c in cts], axis=1)  # one GEMM for all groups, as the backend
+        v = y - big_planes_mm_small(hint, smat)
+        wr = ((v + np.uint64(1 << (p.delta_bits - 1))) >> np.uint64(p.delta_bits)) & np.uint64((1 << 40) - 1)
+        outs = [wr[:, g * DEGREE:(g + 1) * DEGREE].T.astype(np.int64) for g in range(args.groups)]
         t_dec = time.perf_counter() - t
         # exactness on a sample of rows
         ref = np.array((r[:8].astype(object) @ w.T.astype(object)) % (1 << 40), dtype=np.int64)

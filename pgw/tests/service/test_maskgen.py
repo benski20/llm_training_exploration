@@ -39,11 +39,12 @@ async def test_maskgen_roundtrip_is_exact(tiny_pack_dir: Any, tokens_file: Any, 
         finally:
             await client.aclose()
     assert y.shape == (m, DEGREE)
-    assert np.array_equal(y, matmul_mod64(w, ct.b))
+    diff = (y - matmul_mod64(w, ct.b)).view(np.int64)  # 16 low bits are rounded away on the wire
+    assert int(np.abs(diff).max()) <= 1 << 15
     got = decrypt_wr(y, hint, ct, p)
     ref = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 40), dtype=np.int64)
     assert np.array_equal(got, ref)
-    assert remote.bytes_up > 8 * n * DEGREE and remote.bytes_down >= 8 * m * DEGREE
+    assert remote.bytes_up > 8 * n * DEGREE and 6 * m * DEGREE <= remote.bytes_down < 7 * m * DEGREE
 
 
 async def test_maskgen_requires_auth_and_valid_sizes(tiny_pack_dir: Any, tokens_file: Any, pack_fp: str,

@@ -13,6 +13,7 @@ from pgw.hemask.wire import (
     MaskgenRequest,
     decode_maskgen_response,
     encode_maskgen_request,
+    unpack_y,
 )
 
 __all__ = ["RemoteMulmod64"]
@@ -28,8 +29,10 @@ class RemoteMulmod64:
         timeout_s: Per-call budget (large GEMMs on CPU services can take seconds).
     """
 
-    def __init__(self, client: Any, fingerprint: str, out_features: dict[str, int], *, timeout_s: float = 600.0):
+    def __init__(self, client: Any, fingerprint: str, out_features: dict[str, int], *, timeout_s: float = 600.0,
+                 drop_bits: int = 16):
         self.client = client
+        self.drop_bits = drop_bits
         self.fingerprint = fingerprint
         self.out_features = dict(out_features)
         self.timeout_s = timeout_s
@@ -41,15 +44,15 @@ class RemoteMulmod64:
         if b.dtype != np.uint64 or b.ndim != 2:
             raise ValueError("ciphertext must be a 2-D uint64 array")
         req = MaskgenRequest(uuid.uuid4().hex, self.fingerprint,
-                             (MaskgenItem(linear, int(b.shape[1]), np.ascontiguousarray(b, dtype="<u8").tobytes()),))
+                             (MaskgenItem(linear, int(b.shape[1]), np.ascontiguousarray(b, dtype="<u8").tobytes(),
+                                         self.drop_bits),))
         return req, encode_maskgen_request(req)
 
     def _decode(self, req: MaskgenRequest, linear: str, cols: int) -> Any:
         def decode(data: bytes) -> np.ndarray:
             resp = decode_maskgen_response(data, req, self.out_features)
             self.bytes_down += len(data)
-            return np.frombuffer(resp.items[0].y, dtype="<u8").reshape(self.out_features[linear], cols).astype(
-                np.uint64)
+            return unpack_y(resp.items[0].y, (self.out_features[linear], cols), self.drop_bits)
         return decode
 
     def __call__(self, linear: str, b: np.ndarray) -> np.ndarray:

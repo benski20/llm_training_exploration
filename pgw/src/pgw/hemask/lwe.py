@@ -77,8 +77,8 @@ class HEParams:
             raise ConfigError(f"HE mask encryption needs a ring K in {{16, 24, 32, 40, 48}}, got {self.k}")
         if self.rank < 8:
             raise ConfigError(f"rank {self.rank} gives LWE dimension {self.rank * DEGREE} < 2048: insecure at q=2^64")
-        if not 1 <= self.eta <= 64:
-            raise ConfigError(f"eta must be in [1, 64], got {self.eta}")
+        if not 1 <= self.eta <= 32:
+            raise ConfigError(f"eta must be in [1, 32], got {self.eta}")
 
     @property
     def dim(self) -> int:
@@ -94,9 +94,16 @@ class HEParams:
     def sigma(self) -> float:
         return math.sqrt(self.eta / 2)
 
+    #: Low bits of the provider's output dropped on the wire (rounding error <= 2^(drop_bits-1)).
+    DROP_BITS = 16
+    #: The stored hint omits byte 0 of each word (decryption only): error <= 255 * sum|S| <= 255 * dim.
+    HINT_DROP_ERROR = 255
+
     def noise_bound(self, max_row_l2: float) -> float:
-        """High-probability bound on ``|W8 e|`` for weight rows of Euclidean norm ``<= max_row_l2``."""
-        return self.tail_sigmas * self.sigma * max_row_l2
+        """High-probability bound on the decryption error: ``|W8 e|`` for weight rows of Euclidean norm
+        ``<= max_row_l2`` plus the download rounding."""
+        return (self.tail_sigmas * self.sigma * max_row_l2 + 2.0 ** (self.DROP_BITS - 1)
+                + self.HINT_DROP_ERROR * self.dim)
 
     def check_noise(self, max_row_l2: float, label: str = "") -> None:
         """Raise :class:`ConfigError` if decryption could fail for rows of this norm."""
@@ -107,14 +114,27 @@ class HEParams:
             )
 
 
-def matmul_mod64(small: np.ndarray, big: np.ndarray, *, small_left: bool = True) -> np.ndarray:
+def matmul_mod64(small: np.ndarray, big: np.ndarray, *, small_left: bool = True, fast: bool | None = None
+                 ) -> np.ndarray:
     """Exact ``small @ big`` (or ``big @ small``) mod ``2^64``.
+
+    Uses int8 GEMMs on byte planes (:mod:`pgw.hemask.fastmm`) when the CPU has fast exact int8 GEMMs
+    and ``small`` fits in int8; ``fast=False`` forces the float64 bit-slice reference path.
 
     ``small`` holds small signed integers (int8 weights or a ternary secret matrix), ``big`` holds
     arbitrary ``uint64`` values. ``big`` is split into bit slices narrow enough that every float64
     partial sum stays below ``2^53``, so each slice GEMM is exact; the slices are recombined with
     wrapping ``uint64`` shifts and adds (two's complement wrap is reduction mod 2^64).
     """
+    if fast is None:
+        fast = _fast_ok(small)
+    if fast:
+        from pgw.hemask.fastmm import big_planes_mm_small, small_mm_big, to_planes
+
+        s8 = np.asarray(small).astype(np.int8)
+        if small_left:
+            return small_mm_big(s8, np.asarray(big, dtype=_U64))
+        return big_planes_mm_small(to_planes(np.asarray(big, dtype=_U64)), s8)
     small_f = np.asarray(small, dtype=np.float64)
     big = np.ascontiguousarray(big, dtype=_U64)
     inner = small_f.shape[1] if small_left else small_f.shape[0]
@@ -136,6 +156,16 @@ def matmul_mod64(small: np.ndarray, big: np.ndarray, *, small_left: bool = True)
         out = term if out is None else out + term
     assert out is not None
     return out
+
+
+def _fast_ok(small: np.ndarray) -> bool:
+    from pgw.hemask.fastmm import int8_gemm_available
+
+    if small.size == 0 or not int8_gemm_available():
+        return False
+    if np.asarray(small).dtype == np.int8:
+        return True
+    return bool(np.abs(np.asarray(small)).max() <= 127)
 
 
 def public_matrix(seed: bytes, rows: int, params: HEParams) -> np.ndarray:
@@ -170,10 +200,13 @@ def secret_matrix(s: np.ndarray) -> np.ndarray:
 def _cbd(sx: SeedExpander, shape: tuple[int, ...], eta: int, label: str) -> np.ndarray:
     """Centred binomial samples: popcount(eta random bits) - popcount(eta random bits)."""
     n = int(np.prod(shape))
-    nbytes = (2 * eta + 7) // 8
-    raw = np.frombuffer(sx.random_bytes(n * nbytes, label), dtype=np.uint8).reshape(n, nbytes)
-    bits = np.unpackbits(raw, axis=1, bitorder="little")[:, : 2 * eta].astype(np.int64)
-    return (bits[:, :eta].sum(1) - bits[:, eta:].sum(1)).reshape(shape)
+    if eta > 32:
+        raise ConfigError("eta must be <= 32")
+    raw = np.frombuffer(sx.random_bytes(8 * n, label), dtype="<u8")
+    mask = np.uint64((1 << eta) - 1)
+    pos = np.bitwise_count(raw & mask).astype(np.int64)
+    neg = np.bitwise_count((raw >> np.uint64(eta)) & mask).astype(np.int64)
+    return (pos - neg).reshape(shape)
 
 
 def _ternary(sx: SeedExpander, shape: tuple[int, ...], label: str) -> np.ndarray:
@@ -201,19 +234,24 @@ class MaskCiphertext:
         self.secret.fill(0)
 
 
-def encrypt_masks(r: np.ndarray, a: np.ndarray, params: HEParams) -> MaskCiphertext:
+def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
+                  a_planes: np.ndarray | None = None) -> MaskCiphertext:
     """Encrypt the masks of up to 256 slots of one linear.
 
     Args:
         r: ``(rows, n)`` masks in ``[0, 2^K)`` (int64/uint64), ``rows <= 256``.
         a: Public matrix rows for this linear (``n x dim`` uint64), e.g. ``public_matrix(...)[:n]``.
         params: Encryption parameters.
+        a_planes: The same rows as int8 byte planes (``n x 8 x dim``, :func:`pgw.hemask.fastmm.to_planes`);
+            used instead of ``a`` (faster: int8 GEMM, no per-call conversion).
     """
     rows, n = r.shape
     if rows > DEGREE:
         raise ConfigError(f"at most {DEGREE} slots per ciphertext group, got {rows}")
-    if a.shape != (n, params.dim):
-        raise ConfigError(f"public matrix shape {a.shape} != {(n, params.dim)}")
+    shape = a_planes.shape if a_planes is not None else (a.shape if a is not None else None)
+    want = (n, 8, params.dim) if a_planes is not None else (n, params.dim)
+    if shape != want:
+        raise ConfigError(f"public matrix shape {shape} != {want}")
     sx = SeedExpander(new_seed())  # fresh secret and noise from the OS CSPRNG; never stored
     s = _ternary(sx, (params.rank, DEGREE), "s")
     smat = secret_matrix(s)
@@ -221,7 +259,14 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray, params: HEParams) -> MaskCiphert
     e = _cbd(sx, (n, DEGREE), params.eta, "e")
     msg = np.zeros((n, DEGREE), dtype=_U64)
     msg[:, :rows] = np.asarray(r, dtype=np.int64).astype(_U64).T
-    b = matmul_mod64(smat, a, small_left=False) + e.astype(_U64) + (msg << _U64(params.delta_bits))
+    if a_planes is not None:
+        from pgw.hemask.fastmm import big_planes_mm_small
+
+        pad = big_planes_mm_small(a_planes, smat)
+    else:
+        assert a is not None
+        pad = matmul_mod64(smat, a, small_left=False)
+    b = pad + e.astype(_U64) + (msg << _U64(params.delta_bits))
     e.fill(0)
     msg.fill(0)
     return MaskCiphertext(b=b, secret=smat, rows=rows)
@@ -230,12 +275,19 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray, params: HEParams) -> MaskCiphert
 def decrypt_wr(y: np.ndarray, hint: np.ndarray, ct: MaskCiphertext, params: HEParams) -> np.ndarray:
     """Recover ``W8 r mod 2^K`` (``rows x m`` int64) from the provider's ``y = W8 b mod 2^64``.
 
-    ``hint`` is ``W8 A[:n] mod 2^64`` (``m x dim``). Wipes the ciphertext secret.
+    ``hint`` is ``W8 A[:n] mod 2^64``, either ``m x dim`` uint64 or ``m x 8 x dim`` int8 planes.
+    Wipes the ciphertext secret.
     """
     try:
-        if hint.shape[1] != params.dim or y.shape != (hint.shape[0], DEGREE):
+        planes = hint.ndim == 3
+        if hint.shape[-1] != params.dim or y.shape != (hint.shape[0], DEGREE):
             raise ConfigError(f"decrypt shapes do not match: y {y.shape}, hint {hint.shape}")
-        corr = matmul_mod64(ct.secret, np.asarray(hint, dtype=_U64), small_left=False)
+        if planes:
+            from pgw.hemask.fastmm import big_planes_mm_small
+
+            corr = big_planes_mm_small(np.asarray(hint), ct.secret)
+        else:
+            corr = matmul_mod64(ct.secret, np.asarray(hint, dtype=_U64), small_left=False)
         v = np.asarray(y, dtype=_U64) - corr
         half = _U64(1 << (params.delta_bits - 1))
         m = ((v + half) >> _U64(params.delta_bits)) & _U64((1 << params.k) - 1)
