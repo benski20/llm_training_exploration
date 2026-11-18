@@ -7,7 +7,7 @@ codespace takes about 2 minutes to generate masks; later starts take about 1 min
 - **Private by default:** only you (signed in to GitHub) can open the link. For a client meeting,
   right-click the port → Port Visibility → Public, and set it back to Private afterwards.
 - **Logs:** `/tmp/pgw-demo.log` (startup) and `~/pgw-demo/logs/` (gateway, service, factory, UI).
-- **Restart:** `pkill -f client_demo/run.py; nohup bash .devcontainer/start-demo.sh > /tmp/pgw-demo.log 2>&1 &`
+- **Restart:** `pkill -f client_demo/run.py; bash .devcontainer/start-demo.sh` (keep that terminal open)
 
 The codespace stops after 30 minutes without activity, which keeps it inside GitHub's free
 monthly hours. A 4-core machine answers about twice as fast as a 2-core one but uses the free
