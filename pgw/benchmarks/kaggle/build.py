@@ -34,12 +34,18 @@ JOBS: dict[str, dict] = {
     "pgw-he-gpu": {"steps": [
         {"kind": "pytest", "name": "pytest_hemask_gpu", "args": ["tests/hemask", "-v", "-rs", "--timeout", "1800"],
          "timeout": 2400},
+        {"kind": "pytest", "name": "pytest_hemask_cuda_engine", "args": ["tests/hemask", "tests/service/test_maskgen.py",
+                                                                         "-q", "-rs", "--timeout", "1800"],
+         "env": {"PGW_HEMASK_ENGINE": "cuda"}, "timeout": 2400},
         {"kind": "shell", "name": "hemask_bench_7b",
-         "cmd": "python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4", "timeout": 3600},
-        {"kind": "shell", "name": "hemask_bench_8b",
-         "cmd": "python benchmarks/hemask_bench.py --preset llama3-8b --device cuda --groups 4", "timeout": 3600},
+         "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4",
+         "timeout": 3600},
+        {"kind": "shell", "name": "hemask_bench_7b_cpu_f64",
+         "cmd": "PGW_HEMASK_ENGINE=cpu_f64 python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda "
+                "--groups 4", "timeout": 3600},
         {"kind": "shell", "name": "hemask_bench_05b",
-         "cmd": "python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda --groups 4", "timeout": 1800},
+         "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda "
+                "--groups 4", "timeout": 1800},
     ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [

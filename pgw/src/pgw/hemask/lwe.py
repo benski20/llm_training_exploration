@@ -159,9 +159,9 @@ def matmul_mod64(small: np.ndarray, big: np.ndarray, *, small_left: bool = True,
 
 
 def _fast_ok(small: np.ndarray) -> bool:
-    from pgw.hemask.fastmm import int8_gemm_available
+    from pgw.hemask.fastmm import engine
 
-    if small.size == 0 or not int8_gemm_available():
+    if small.size == 0 or engine() == "cpu_f64":
         return False
     if np.asarray(small).dtype == np.int8:
         return True

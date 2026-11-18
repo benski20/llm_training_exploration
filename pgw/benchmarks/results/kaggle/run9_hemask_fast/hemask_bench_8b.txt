@@ -1,0 +1,64 @@
+qkv {"m": 6144, "n": 4096, "exact": true, "hint_build_s": 5.73, "encrypt_ms_per_slot": 1.788904699218663, "provider_ms_per_slot": 0.0863438339844258, "decrypt_ms_per_slot": 58.64898693359366}
+o {"m": 4096, "n": 4096, "exact": true, "hint_build_s": 3.71, "encrypt_ms_per_slot": 1.8144119277343496, "provider_ms_per_slot": 0.04835652929680023, "decrypt_ms_per_slot": 39.286631308593776}
+gate_up {"m": 28672, "n": 4096, "exact": true, "hint_build_s": 25.39, "encrypt_ms_per_slot": 1.7713497226563568, "provider_ms_per_slot": 0.3295155742188971, "decrypt_ms_per_slot": 275.1350640966796}
+down {"m": 4096, "n": 14336, "exact": true, "hint_build_s": 16.14, "encrypt_ms_per_slot": 6.068937746093628, "provider_ms_per_slot": 0.12806017480482268, "decrypt_ms_per_slot": 39.234534096679766}
+{
+ "preset": "llama3-8b",
+ "device": "cuda",
+ "rank": 16,
+ "groups": 4,
+ "torch": "2.11.0+cu130",
+ "cpu_int8_fast": false,
+ "gpu": "Tesla T4",
+ "per_kind": {
+  "qkv": {
+   "m": 6144,
+   "n": 4096,
+   "exact": true,
+   "hint_build_s": 5.73,
+   "encrypt_ms_per_slot": 1.788904699218663,
+   "provider_ms_per_slot": 0.0863438339844258,
+   "decrypt_ms_per_slot": 58.64898693359366
+  },
+  "o": {
+   "m": 4096,
+   "n": 4096,
+   "exact": true,
+   "hint_build_s": 3.71,
+   "encrypt_ms_per_slot": 1.8144119277343496,
+   "provider_ms_per_slot": 0.04835652929680023,
+   "decrypt_ms_per_slot": 39.286631308593776
+  },
+  "gate_up": {
+   "m": 28672,
+   "n": 4096,
+   "exact": true,
+   "hint_build_s": 25.39,
+   "encrypt_ms_per_slot": 1.7713497226563568,
+   "provider_ms_per_slot": 0.3295155742188971,
+   "decrypt_ms_per_slot": 275.1350640966796
+  },
+  "down": {
+   "m": 4096,
+   "n": 14336,
+   "exact": true,
+   "hint_build_s": 16.14,
+   "encrypt_ms_per_slot": 6.068937746093628,
+   "provider_ms_per_slot": 0.12806017480482268,
+   "decrypt_ms_per_slot": 39.234534096679766
+  }
+ },
+ "per_token_full_model": {
+  "gateway_encrypt_s": 0.3661953310624959,
+  "provider_s": 0.018952835593758266,
+  "gateway_decrypt_s": 13.1937669259375,
+  "upload_MB": 6.815744,
+  "download_MB": 8.257536
+ },
+ "one_time": {
+  "hint_GB": 39.460012032,
+  "hint_build_s_cpu": 1631.1904686399976
+ }
+}
+
+---stderr---

@@ -28,7 +28,7 @@ import torch
 from pgw.core.errors import ConfigError, IntegrityError
 from pgw.core.prng import new_seed
 from pgw.core.ring import RingParams
-from pgw.hemask.fastmm import big_planes_mm_small, int8_gemm_available, planes_to_u64, to_planes
+from pgw.hemask.fastmm import big_planes_mm_small, to_planes
 from pgw.hemask.lwe import DEGREE, HEParams, MaskCiphertext, encrypt_masks, matmul_mod64, public_matrix
 
 __all__ = ["HEMaskBackend", "HintStore"]
@@ -160,19 +160,16 @@ class HEMaskBackend:
         for key, norm in hints.meta["row_norms"].items():
             self.params.check_noise(norm, key)
         a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
-        self._fast = int8_gemm_available()
-        # Public matrix kept as int8 byte planes when int8 GEMMs are fast (same memory as uint64).
-        self._a: np.ndarray = to_planes(a) if self._fast else a
+        # Public matrix kept as int8 byte planes (same memory as uint64); fastmm picks the engine
+        # (gateway GPU, CPU int8, or exact float64 rebuilt block by block).
+        self._a: np.ndarray = to_planes(a)
         del a
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0}
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-remote")
 
     def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
         a = self._a[:n]
-        if self._fast:
-            return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
-                    for g0 in range(0, len(rn), DEGREE)]
-        return [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
+        return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a) for g0 in range(0, len(rn), DEGREE)]
 
     def _decrypt(self, linear: str, y: np.ndarray, cts: list[MaskCiphertext], m: int) -> np.ndarray:
         """All groups of one provider reply with one GEMM: ``hint @ [S_1 | S_2 | ...]``."""
@@ -182,10 +179,7 @@ class HEMaskBackend:
         hint = self.hints.hint(linear)
         smat = np.concatenate([ct.secret for ct in cts], axis=1)
         try:
-            if self._fast:
-                corr = big_planes_mm_small(hint, smat)
-            else:
-                corr = matmul_mod64(smat, planes_to_u64(np.asarray(hint)), small_left=False)
+            corr = big_planes_mm_small(hint, smat)
         finally:
             smat.fill(0)
         v = y - corr

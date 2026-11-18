@@ -20,7 +20,7 @@ import torch
 
 from pgw.core.types import LinearId, LinearSpec
 from pgw.hemask import DEGREE, HEParams, encrypt_masks, matmul_mod64, public_matrix
-from pgw.hemask.fastmm import big_planes_mm_small, int8_gemm_available, to_planes
+from pgw.hemask.fastmm import big_planes_mm_small, engine, int8_gemm_available, to_planes
 from pgw.service.kernels import ComputeKernel
 
 PRESETS = {  # (layers, {kind: (m, n)})
@@ -43,7 +43,7 @@ def main() -> None:
     rng = np.random.default_rng(0)
     cols = DEGREE * args.groups
     res: dict[str, object] = {"preset": args.preset, "device": args.device, "rank": args.rank, "groups": args.groups,
-                              "torch": torch.__version__, "cpu_int8_fast": int8_gemm_available(),
+                              "torch": torch.__version__, "cpu_int8_fast": int8_gemm_available(), "gateway_engine": engine(),
                               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
     per_kind = {}
     tot = {"encrypt": 0.0, "provider": 0.0, "decrypt": 0.0, "hint_build": 0.0, "hint_bytes": 0, "up": 0, "down": 0}
@@ -51,7 +51,7 @@ def main() -> None:
         w = rng.integers(-127, 128, size=(m, n)).astype(np.int8)
         a = public_matrix(bytes(32), n, p)
         t = time.perf_counter()
-        fast = int8_gemm_available()
+        fast = True  # planes everywhere; fastmm picks the engine (PGW_HEMASK_ENGINE)
         hint = np.empty((m, 7, p.dim), dtype=np.int8)  # the backend's format: byte planes 1..7
         for c0 in range(0, p.dim, 512):
             hint[:, :, c0:c0 + 512] = to_planes(matmul_mod64(w, a[:, c0:c0 + 512]))[:, 1:]

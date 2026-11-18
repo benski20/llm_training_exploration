@@ -39,3 +39,21 @@ def test_cuda_provider_roundtrip_decrypts_exactly() -> None:
     got = decrypt_wr(kern.mulmod64(ct.b), hint, ct, p)
     ref = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 40), dtype=np.int64)
     assert np.array_equal(got, ref)
+
+
+@pytest.mark.gpu
+def test_cuda_gateway_engine_matches_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gateway-side byte-plane GEMMs on a GPU (PGW_HEMASK_ENGINE=cuda) are exact."""
+    from pgw.hemask.fastmm import big_planes_mm_small, small_mm_big, to_planes
+
+    monkeypatch.setenv("PGW_HEMASK_ENGINE", "cuda")
+    rng = np.random.default_rng(11)
+    for m, n, c in [(37, 300, 5), (4608, 3584, 256), (64, 18944, 64)]:
+        w = rng.integers(-127, 128, size=(m, n))
+        x = rng.integers(0, 2**64 - 1, size=(n, c), dtype=np.uint64)
+        assert np.array_equal(small_mm_big(w.astype(np.int8), x), matmul_mod64(w, x, fast=False))
+        k = min(n, 4096)
+        s = rng.integers(-1, 2, size=(k, c))
+        y = rng.integers(0, 2**64 - 1, size=(m, k), dtype=np.uint64)
+        ref = matmul_mod64(s, y, small_left=False, fast=False)
+        assert np.array_equal(big_planes_mm_small(to_planes(y), s.astype(np.int8)), ref)
