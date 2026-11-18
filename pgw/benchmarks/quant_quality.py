@@ -38,11 +38,15 @@ class Cfg:
     wbits: int | None  # None = float weights
     abits: int | None  # None = float activations
     alpha: float | None = None  # SmoothQuant migration strength
+    ring: int | None = None  # adaptive mode: per token, the largest A <= abits whose exact bound fits K
 
 
 def parse_cfg(s: str) -> Cfg:
     if s == "fp":
         return Cfg(s, None, None)
+    if s.startswith("k") and "ad" in s:  # e.g. k24ad, k32ad_sq: W8, adaptive A<=12 fitting a K-bit ring
+        k = int(s[1:s.index("ad")])
+        return Cfg(s, 8, 12, 0.5 if "_sq" in s else None, ring=k)
     base, _, sq = s.partition("_sq")
     w, a = base[1:].split("a")
     alpha = float(sq) if sq not in ("",) else 0.5
@@ -62,6 +66,9 @@ def quant_rows(t: torch.Tensor, bits: int) -> torch.Tensor:
     return torch.clamp(torch.round(t / s), -qmax, qmax) * s
 
 
+STATS: dict[int, dict[str, int]] = {}
+
+
 class QLinear(nn.Module):
     def __init__(self, lin: nn.Linear, cfg: Cfg, smooth: torch.Tensor | None) -> None:
         super().__init__()
@@ -73,18 +80,55 @@ class QLinear(nn.Module):
         self.w = quant_rows(w, cfg.wbits) if cfg.wbits else w
         self.b = None if lin.bias is None else lin.bias.detach().to(torch.float64)
         self.abits = cfg.abits
+        self.ring = cfg.ring
+        if cfg.ring:
+            # integer weight rows: |w8_j . xq| <= ||w8_j||_2 * ||xq||_2 (Cauchy-Schwarz), exact bound
+            ws = w.abs().amax(-1, keepdim=True) / 127
+            ws = torch.where(ws == 0, torch.ones_like(ws), ws)
+            w8 = torch.clamp(torch.round(w / ws), -127, 127)
+            self.wnorm = float(w8.norm(dim=-1).max())
+            self.stats = STATS.setdefault(id(cfg), {"tokens": 0, "reduced": 0, "min_bits": 99})
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dt = x.dtype
         x = x.to(torch.float64)
         if self.inv is not None:
             x = x * self.inv
-        if self.abits:
+        if self.ring:
+            x = self.adaptive(x)
+        elif self.abits:
             x = quant_rows(x, self.abits)
         y = x @ self.w.t()
         if self.b is not None:
             y = y + self.b
         return y.to(dt)
+
+
+def _adaptive(self: QLinear, x: torch.Tensor) -> torch.Tensor:
+    """Quantize each token with the most bits (<= abits) for which the exact bound fits the ring."""
+    assert self.ring is not None and self.abits is not None
+    limit = 2.0 ** (self.ring - 1)
+    flat = x.reshape(-1, x.shape[-1])
+    out = torch.empty_like(flat)
+    chosen = torch.full((flat.shape[0],), -1, dtype=torch.int64)
+    for bits in range(self.abits, 1, -1):
+        qmax = 2 ** (bits - 1) - 1
+        s = flat.abs().amax(-1, keepdim=True) / qmax
+        s = torch.where(s == 0, torch.ones_like(s), s)
+        q = torch.clamp(torch.round(flat / s), -qmax, qmax)
+        fits = (q.norm(dim=-1) * self.wnorm < limit) & (chosen < 0)
+        out[fits] = (q * s)[fits]
+        chosen[fits] = bits
+        if bool((chosen >= 0).all()):
+            break
+    st = self.stats
+    st["tokens"] += int(flat.shape[0])
+    st["reduced"] += int((chosen < self.abits).sum())
+    st["min_bits"] = min(st["min_bits"], int(chosen.min()))
+    return out.reshape(x.shape)
+
+
+QLinear.adaptive = _adaptive  # type: ignore[attr-defined]
 
 
 def load_tokens(tok: Any, split: str, n: int) -> torch.Tensor:
@@ -205,7 +249,12 @@ def main() -> None:
         row: dict[str, Any] = {"config": name, "ppl": round(ppl, 4),
                                "top1_agreement_vs_fp": None if agree is None else round(agree, 4),
                                "seconds": round(time.time() - t0, 1)}
-        if cfg.wbits and cfg.abits:
+        if cfg.ring:
+            st = STATS.get(id(cfg), {})
+            row["adaptive"] = {"ring_bits": cfg.ring, "token_linear_calls": st.get("tokens"),
+                               "fraction_with_fewer_bits": round(st.get("reduced", 0) / max(1, st.get("tokens", 1)), 5),
+                               "min_activation_bits": st.get("min_bits")}
+        elif cfg.wbits and cfg.abits:
             row["ring_bits_needed"] = {"n=hidden": ring_bits(cfg.wbits, cfg.abits, hidden),
                                        "n=intermediate": ring_bits(cfg.wbits, cfg.abits, inter)}
         results.append(row)
