@@ -60,6 +60,22 @@ After that, storage no longer grows with token volume.
 - Refill daemon at nice 19, 1 thread, 50% duty cycle: 256 slots in 256 s wall (127 s compute).
 - Network per 0.5B token: about 1.5 MB up and 2.4 MB down (64-bit coefficients).
 
+## Costs on a Tesla T4 (Kaggle, measured; `benchmarks/results/kaggle/run8_hemask/`)
+
+The CUDA `mulmod64` kernel is exact (GPU tests, including worst-case 7B down-projection weights
+and a full encrypt-provider-decrypt round trip).
+
+| per token | Qwen2.5-0.5B | Qwen2.5-7B | Llama-3-8B |
+|---|---|---|---|
+| provider GPU (T4) | 0.004 s | 0.020 s (about 180k tokens/h per T4, about the same as today's T4 factory) | 0.019 s |
+| gateway CPU: encrypt + decrypt (numpy float64, Kaggle CPU) | 0.26 s | 1.18 s | 1.19 s |
+| upload / download | 1.4 / 2.4 MB | 6.7 / 11.1 MB | 6.8 / 11.0 MB |
+| one-time hint | 10.0 GB, 113 s | 45.6 GB, about 29 min | 45.1 GB, about 29 min |
+
+The provider's work matches today's local factory, now on our GPU. The gateway's
+encrypt/decrypt CPU cost is the next thing to optimise. Both steps are GEMMs with a ternary
+secret matrix, which map onto int8 AMX/VNNI or a small GPU.
+
 Planned speedups: AMX/VNNI int8 decryption, a GPU service path (the CUDA `mulmod64` kernel is
 written but not yet validated on a GPU), 44-bit download truncation, and a smaller rank once the
 lattice estimate allows it.
