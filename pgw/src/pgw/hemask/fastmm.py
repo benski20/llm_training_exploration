@@ -57,10 +57,10 @@ def _combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int = 0, smal
     Bytes 0-3 and 4-7 are combined separately in int64 (every term is below ``2^30 * 2^24``, so
     nothing overflows); only the final ``hi << 32`` wraps, in numpy uint64 where wrap-around is well
     defined. With ``small`` (``|part| < 2^22``, true for ternary secrets), neighbouring planes are first
-    paired in int32, which halves the int64 traffic.
+    paired in int32 with one fused multiply-add, which halves the int64 traffic. The constant
+    ``offset`` (from the -128 plane bias) is folded in once per half.
     """
     rows, npl, cols = part.shape
-    x = part + offset  # int32
     halves: list[torch.Tensor | None] = []
     for lo_b, hi_b in ((0, 4), (4, 8)):
         idx = [i for i in range(npl) if lo_b <= first_byte + i < hi_b]
@@ -68,25 +68,33 @@ def _combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int = 0, smal
             halves.append(None)
             continue
         acc: torch.Tensor | None = None
+        weight_sum = 0
         i = 0
         while i < len(idx):
             p = idx[i]
             shift = 8 * (first_byte + p - lo_b)
             if small and i + 1 < len(idx) and idx[i + 1] == p + 1:
-                term = (x[:, p] + x[:, p + 1] * 256).to(torch.int64)  # |.| < 2^30: exact in int32
+                term = torch.add(part[:, p], part[:, p + 1], alpha=256).to(torch.int64)  # |.| < 2^31
+                weight_sum += (1 << shift) * 257
                 i += 2
             else:
-                term = x[:, p].to(torch.int64)
+                term = part[:, p].to(torch.int64)
+                weight_sum += 1 << shift
                 i += 1
-            term = term * (1 << shift) if shift else term
-            acc = term if acc is None else acc + term
+            if acc is None:
+                acc = term.mul_(1 << shift) if shift else term
+            else:
+                acc.add_(term, alpha=1 << shift)
+        assert acc is not None
+        acc.add_(offset.to(torch.int64).view(offset.shape[0], offset.shape[-1]), alpha=weight_sum)
         halves.append(acc)
     lo_t, hi_t = halves
-    out = np.zeros((rows, cols), dtype=np.uint64)
+    if hi_t is None:
+        assert lo_t is not None
+        return lo_t.numpy().view(np.uint64).copy()
+    out = hi_t.numpy().view(np.uint64) << np.uint64(32)
     if lo_t is not None:
         out += lo_t.numpy().view(np.uint64)
-    if hi_t is not None:
-        out += hi_t.numpy().view(np.uint64) << np.uint64(32)
     return out
 
 

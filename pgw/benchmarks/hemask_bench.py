@@ -43,7 +43,7 @@ def main() -> None:
     rng = np.random.default_rng(0)
     cols = DEGREE * args.groups
     res: dict[str, object] = {"preset": args.preset, "device": args.device, "rank": args.rank, "groups": args.groups,
-                              "torch": torch.__version__,
+                              "torch": torch.__version__, "cpu_int8_fast": int8_gemm_available(),
                               "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
     per_kind = {}
     tot = {"encrypt": 0.0, "provider": 0.0, "decrypt": 0.0, "hint_build": 0.0, "hint_bytes": 0, "up": 0, "down": 0}
@@ -88,7 +88,7 @@ def main() -> None:
         tot["hint_build"] += layers * t_hint
         tot["hint_bytes"] += layers * hint.nbytes
         tot["up"] += layers * n * 8
-        tot["down"] += layers * m * 8
+        tot["down"] += layers * m * (64 - HEParams.DROP_BITS) // 8
         print(kind, json.dumps(per_kind[kind]), flush=True)
         del hint, kern
     res["per_kind"] = per_kind
