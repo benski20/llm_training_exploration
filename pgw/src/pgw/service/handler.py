@@ -25,6 +25,7 @@ from typing import Any
 from pgw.core.errors import (
     ErrorCode,
     PGWError,
+    ProtocolError,
     RateLimitedError,
     ServiceUnavailableError,
 )
@@ -129,6 +130,7 @@ class ServiceHandler:
         self._tenants: dict[str, _TenantState] = {}
         self._idle = asyncio.Event()
         self._idle.set()
+        self._maskgen_lock = asyncio.Lock()  # one encrypted GEMM at a time (large, memory-heavy)
 
     # ---- ComputeHandler protocol -------------------------------------------------------------
     def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
@@ -167,6 +169,43 @@ class ServiceHandler:
             self.inflight -= 1
             st.inflight -= 1
             self.metrics.inflight(self.inflight)
+            if self.inflight == 0:
+                self._idle.set()
+
+    async def maskgen(self, request: Any, identity: Any) -> Any:
+        """``POST /pgw/v1/maskgen``: ``W8 b mod 2^64`` for MLWE-encrypted masks (see :mod:`pgw.hemask`).
+
+        The provider sees only pseudorandom ciphertexts. Admission and tenant limits count every
+        256-column group as 256 rows, like the compute path.
+        """
+        import numpy as np
+
+        from pgw.hemask.wire import MaskgenResponse, MaskgenResult
+
+        ident: TenantIdentity | None = identity if isinstance(identity, TenantIdentity) else None
+        tenant = ident.tenant_id if ident is not None else "anonymous"
+        model = self.registry.get(request.fingerprint)
+        dims = model.linear_dims
+        for it in request.items:
+            if it.linear not in dims:
+                raise ProtocolError(f"unknown linear {it.linear!r}", details={"linear": it.linear})
+            n = dims[it.linear][1]
+            if len(it.b) != 8 * n * it.cols:
+                raise ProtocolError(f"maskgen {it.linear}: b has {len(it.b)} bytes, expected {8 * n * it.cols}")
+        self._admit(tenant, sum(it.cols for it in request.items))
+        self.inflight += 1
+        self._idle.clear()
+        try:
+            out = []
+            for it in request.items:
+                kern = model.kernel(it.linear)
+                b = np.frombuffer(it.b, dtype="<u8").reshape(kern.in_features, it.cols)
+                async with self._maskgen_lock:
+                    y = await asyncio.to_thread(kern.mulmod64, b)
+                out.append(MaskgenResult(it.linear, it.cols, np.ascontiguousarray(y, dtype="<u8").tobytes()))
+            return MaskgenResponse(request.request_id, tuple(out))
+        finally:
+            self.inflight -= 1
             if self.inflight == 0:
                 self._idle.set()
 

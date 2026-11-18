@@ -28,6 +28,7 @@ import logging
 import time
 from typing import Literal
 
+import numpy as np
 import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
@@ -213,6 +214,42 @@ class ComputeKernel:
         return out.cpu() if out.device.type != "cpu" else out
 
     __call__ = run
+
+    def mulmod64(self, b: np.ndarray) -> np.ndarray:
+        """``W8 b mod 2^64`` for MLWE mask ciphertexts ``b`` (``(n, cols)`` uint64 -> ``(m, cols)``).
+
+        Used by ``POST /pgw/v1/maskgen`` (:mod:`pgw.hemask`). On CUDA, ``b`` is split into eight
+        unsigned byte planes, offset to signed int8, multiplied with int8 tensor-core GEMMs
+        (``|partial| <= 127 * 128 * n < 2^31``) and recombined with wrapping int64 shifts.
+        """
+        if b.ndim != 2 or b.shape[0] != self.in_features or b.dtype != np.uint64:
+            raise ShapeError(f"{self.linear}: maskgen operand must be ({self.in_features}, cols) uint64, "
+                             f"got {b.dtype} {tuple(b.shape)}")
+        w8 = self._w if self._w is not None else self._pw.w8  # type: ignore[union-attr]
+        if self.device.type != "cuda":
+            from pgw.hemask.lwe import matmul_mod64
+
+            return matmul_mod64(w8.cpu().numpy(), b)
+        return self._mulmod64_cuda(b)  # pragma: no cover - GPU only
+
+    def _mulmod64_cuda(self, b: np.ndarray) -> np.ndarray:  # pragma: no cover - GPU only
+        assert self._pw is not None and self._pw._w_dev is not None
+        wpad = self._pw._w_dev  # (mp, np_) int8, zero padded to multiples of 32
+        n, cols = b.shape
+        m = self.out_features
+        mp, np_ = wpad.shape
+        colp = -(-cols // 32) * 32
+        bt = torch.from_numpy(np.ascontiguousarray(b).view(np.int64)).to(self.device)
+        rowsum = wpad.to(torch.int64).sum(1, keepdim=True)  # for the -128 digit offset
+        acc = torch.zeros((mp, colp), dtype=torch.int64, device=self.device)
+        plane = torch.zeros((colp, np_), dtype=torch.int8, device=self.device)
+        for d in range(8):
+            byte = (bt >> (8 * d)) & 0xFF  # arithmetic shift is fine: the mask keeps the byte
+            plane[:cols, :n] = (byte - 128).to(torch.int8).t()
+            part = torch._int_mm(wpad, plane.t()).to(torch.int64) + 128 * rowsum
+            acc += part << (8 * d)  # int64 two's-complement wrap == mod 2^64
+        out = acc[:m, :cols].contiguous().cpu().numpy().view(np.uint64)
+        return np.asarray(out)
 
     def synchronize(self) -> None:
         """Wait for queued device work (no-op on CPU)."""

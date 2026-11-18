@@ -220,6 +220,10 @@ def create_app(
     wire_router = create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
                                 max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes))
     app.include_router(wire_router)
+    from pgw.hemask.server import add_maskgen_route
+
+    # Encrypted mask generation: W8 times MLWE ciphertexts (the provider never sees the masks).
+    add_maskgen_route(app, state.handler)
     from pgw.wire.server import ComputeFastPath
 
     # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any

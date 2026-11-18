@@ -718,6 +718,22 @@ class ComputeClient:
             fut.cancel()
             raise
 
+    async def post_raw(self, path: str, body: bytes, request_id: str, decode: Callable[[bytes], T], *,
+                       timeout_s: float | None = None, max_response_bytes: int | None = None) -> T:
+        """POST a msgpack body to another PGW endpoint with this client's TLS, auth, retries and limits.
+
+        Used by extensions that live outside :mod:`pgw.wire` (e.g. ``/pgw/v1/maskgen``).
+        """
+        deadline = time.monotonic() + (timeout_s if timeout_s is not None else self.config.request_timeout_s)
+        return await self._call("POST", path, body=body, request_id=request_id, deadline=deadline, decode=decode,
+                                max_response_bytes=max_response_bytes or self.config.max_response_bytes)
+
+    def post_raw_sync(self, path: str, body: bytes, request_id: str, decode: Callable[[bytes], T], *,
+                      timeout_s: float | None = None, max_response_bytes: int | None = None) -> T:
+        """Blocking :meth:`post_raw`."""
+        return self._run_sync(self.post_raw(path, body, request_id, decode, timeout_s=timeout_s,
+                                            max_response_bytes=max_response_bytes))
+
     def compute_sync(self, request: ComputeRequest) -> ComputeResponse:
         """Blocking wrapper (runs on a private event loop thread)."""
         return self._run_sync(self.compute(request))

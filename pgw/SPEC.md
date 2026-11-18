@@ -123,8 +123,9 @@ implemented in v1). Each costs masks and compute.
 
 Dependency rule: `core` depends on nothing internal. `modelpack` depends on `core`. `wire` depends
 on `core`. `maskstore` depends on `core`. `engine` depends on `core`, `modelpack`, `wire` and
-`maskstore`. `factory` depends on `core`, `modelpack` and `maskstore`. `service` depends on `core`,
-`modelpack`, `wire` and `observability`. `gateway` depends on everything except `service` and
+`maskstore`. `factory` depends on `core`, `modelpack`, `maskstore`, `wire` and `hemask`. `hemask` (encrypted mask
+generation) depends on `core` and `wire`. `service` depends on `core`, `modelpack`, `wire`, `hemask` and
+`observability`. `gateway` depends on everything except `service` and
 `factory`. `cli` may import anything, lazily. **`service` must never import `maskstore` or
 `factory`.** CI enforces this with an import-graph test.
 
