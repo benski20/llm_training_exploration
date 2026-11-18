@@ -1,0 +1,95 @@
+{
+ "model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "eval_tokens": 16384,
+ "seq": 512,
+ "results": [
+  {
+   "config": "fp",
+   "ppl": 17.5953,
+   "top1_agreement_vs_fp": null,
+   "seconds": 58.9
+  },
+  {
+   "config": "w8a12",
+   "ppl": 17.5227,
+   "top1_agreement_vs_fp": 0.9714,
+   "seconds": 113.8,
+   "ring_bits_needed": {
+    "n=hidden": 29,
+    "n=intermediate": 32
+   }
+  },
+  {
+   "config": "k32ad",
+   "ppl": 17.5227,
+   "top1_agreement_vs_fp": 0.9714,
+   "seconds": 123.2,
+   "adaptive": {
+    "ring_bits": 32,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 0.0,
+    "min_activation_bits": 12
+   }
+  },
+  {
+   "config": "k28ad",
+   "ppl": 17.5227,
+   "top1_agreement_vs_fp": 0.9714,
+   "seconds": 122.1,
+   "adaptive": {
+    "ring_bits": 28,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 0.0,
+    "min_activation_bits": 12
+   }
+  },
+  {
+   "config": "k24ad",
+   "ppl": 17.5187,
+   "top1_agreement_vs_fp": 0.968,
+   "seconds": 135.5,
+   "adaptive": {
+    "ring_bits": 24,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 0.43966,
+    "min_activation_bits": 9
+   }
+  },
+  {
+   "config": "k24ad_sq",
+   "ppl": 17.6518,
+   "top1_agreement_vs_fp": 0.9694,
+   "seconds": 143.8,
+   "adaptive": {
+    "ring_bits": 24,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 0.85107,
+    "min_activation_bits": 9
+   }
+  },
+  {
+   "config": "k22ad",
+   "ppl": 17.616,
+   "top1_agreement_vs_fp": 0.9474,
+   "seconds": 136.1,
+   "adaptive": {
+    "ring_bits": 22,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 0.99999,
+    "min_activation_bits": 7
+   }
+  },
+  {
+   "config": "k20ad",
+   "ppl": 19.0148,
+   "top1_agreement_vs_fp": 0.8418,
+   "seconds": 179.5,
+   "adaptive": {
+    "ring_bits": 20,
+    "token_linear_calls": 2752512,
+    "fraction_with_fewer_bits": 1.0,
+    "min_activation_bits": 5
+   }
+  }
+ ]
+}
