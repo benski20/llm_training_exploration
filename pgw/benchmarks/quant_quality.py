@@ -77,7 +77,16 @@ class QLinear(nn.Module):
         if smooth is not None:
             w = w * smooth[None, :]
             self.inv = (1.0 / smooth)
-        self.w = quant_rows(w, cfg.wbits) if cfg.wbits else w
+        # Keep integer weights (int8/int16) plus float64 row scales; widen one layer at a time in
+        # forward. A float64 copy of every weight does not fit in memory beyond ~1B parameters.
+        if cfg.wbits:
+            qmax = 2 ** (cfg.wbits - 1) - 1
+            sc = w.abs().amax(-1, keepdim=True) / qmax
+            sc = torch.where(sc == 0, torch.ones_like(sc), sc)
+            self.wq = torch.clamp(torch.round(w / sc), -qmax, qmax).to(torch.int16 if qmax > 127 else torch.int8)
+            self.wscale = sc.reshape(1, -1)
+        else:
+            self.wq, self.wscale = w.to(torch.float32), None
         self.b = None if lin.bias is None else lin.bias.detach().to(torch.float64)
         self.abits = cfg.abits
         self.ring = cfg.ring
@@ -87,6 +96,7 @@ class QLinear(nn.Module):
             ws = torch.where(ws == 0, torch.ones_like(ws), ws)
             w8 = torch.clamp(torch.round(w / ws), -127, 127)
             self.wnorm = float(w8.norm(dim=-1).max())
+            del w8
             self.stats = STATS.setdefault(id(cfg), {"tokens": 0, "reduced": 0, "min_bits": 99})
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -98,7 +108,9 @@ class QLinear(nn.Module):
             x = self.adaptive(x)
         elif self.abits:
             x = quant_rows(x, self.abits)
-        y = x @ self.w.t()
+        y = x @ self.wq.to(torch.float64).t()
+        if self.wscale is not None:
+            y = y * self.wscale
         if self.b is not None:
             y = y + self.b
         return y.to(dt)
