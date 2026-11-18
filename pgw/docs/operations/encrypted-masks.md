@@ -76,6 +76,5 @@ The provider's work matches today's local factory, now on our GPU. The gateway's
 encrypt/decrypt CPU cost is the next thing to optimise. Both steps are GEMMs with a ternary
 secret matrix, which map onto int8 AMX/VNNI or a small GPU.
 
-Planned speedups: AMX/VNNI int8 decryption, a GPU service path (the CUDA `mulmod64` kernel is
-written but not yet validated on a GPU), 44-bit download truncation, and a smaller rank once the
-lattice estimate allows it.
+Planned speedups: AMX/VNNI int8 encryption and decryption on the gateway, 44-bit download truncation,
+and a smaller rank once the lattice estimate allows it.
