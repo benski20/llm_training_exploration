@@ -37,6 +37,22 @@ About 26.8k lines of Python in `src/pgw` (96 modules, mypy strict, ruff clean), 
 | `docs/` | complete | Security whitepaper, threat model, gateway API reference, operations guides (on-prem, customer cloud, air-gapped factory, sizing), compliance (audit readiness, FAQ), and a sizing tool. |
 | CI | written | `.github/workflows/ci.yml` (lint, types, tests, audit, images) and `ci/check.sh`. The workflow sits under `pgw/` and has not been copied to the repository root yet. |
 
+### Encrypted mask generation (new, 2026-11-18)
+
+`pgw.hemask` lets the mask factory get `W8 r` from the compute service on MLWE-encrypted masks
+(`pgw factory run --he-service ...`, demo `--mask-source he`). Storage no longer grows with
+token volume. Instead there is a one-time hint of about 9.3 GB for 0.5B and about 45 GB for 7B,
+plus a just-in-time buffer, and there is no factory GPU. The privacy assumption is MLWE, with a
+single provider.
+
+- Verified: factory output is bit-identical to local generation, a tampered provider is
+  rejected, and an end-to-end chat on 0.5B with encrypted masks gives the same answers with 0
+  integrity failures.
+- The refill daemon refilled the store through the service while the gateway was serving.
+- Not done yet: a lattice-estimator confirmation of the parameters, validation of the CUDA
+  `mulmod64` kernel on a GPU, AMX decryption, and an external crypto review. See
+  `docs/operations/encrypted-masks.md` and `research/mask-storage/`.
+
 ## 2. Test results (this release run, 4-CPU container, CPU-only torch)
 
 | suite | result |
