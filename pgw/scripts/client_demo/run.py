@@ -174,7 +174,8 @@ def main() -> None:
         log(f"mask factory daemon: refill below {args.refill_low} slots, up to {target}")
         start("factory", [sys.executable, "-m", "pgw.cli", "factory", "run", "--pack", str(pack), "--store", str(masks),
                           "--key-file", str(kek), "--ring", args.ring, "--low-water", str(args.refill_low),
-                          "--target", str(target), "--segment-slots", "256", "--nice", "10", "--threads", "1", "--poll", "10"], env)
+                          "--target", str(target), "--segment-slots", "256", "--nice", "19", "--threads", "1",
+                          "--duty-cycle", "0.5", "--poll", "10"], env)
 
     log(f"READY: demo UI on http://127.0.0.1:{args.port}/   (logs in {work / 'logs'})")
     while True:

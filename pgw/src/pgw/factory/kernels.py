@@ -36,7 +36,7 @@ import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams, balanced_digits
-from pgw.core.ringmm import PreparedWeight, _shift_mod, cpu_int8_available, int8_ring_matmul
+from pgw.core.ringmm import PreparedWeight, _shift_mod, cpu_int8_available, cpu_int8_fast, int8_ring_matmul
 
 __all__ = [
     "FACTORY_BACKENDS",
@@ -87,7 +87,7 @@ def resolve_backend(device: torch.device, backend: str = "auto") -> str:
     if backend == "auto":
         if device.type == "cuda":
             return "cuda_int8"
-        return "cpu_int8" if cpu_int8_available() else "cpu_f64"
+        return "cpu_int8" if cpu_int8_fast() else "cpu_f64"
     if backend == "cuda_int8" and device.type != "cuda":
         raise BackendUnavailableError("cuda_int8 needs a CUDA device")
     if backend in ("cpu_int8", "cpu_f64", "cpu_f32") and device.type != "cpu":
@@ -217,7 +217,7 @@ def ring_vecmat(
         raise ConfigError(f"unknown vecmat method {method!r}")
     if method == "int8" and not (dev.type == "cpu" and cpu_int8_available()):
         raise BackendUnavailableError("int8 vecmat needs a CPU with an exact torch._int_mm")
-    if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_available()):
+    if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_fast()):
         # u @ W8 == int8 digit GEMMs against the transposed view (no copy): ~4x faster than float64
         return int8_ring_matmul(u.to(torch.int64), w8.t(), k)
     rows = max(1, min(m, _VECMAT_CHUNK_ELEMS // max(1, n)))

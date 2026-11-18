@@ -170,18 +170,38 @@ async def chat(request: Request) -> Response:
                "max_tokens": max(1, min(int(body.get("max_tokens", 90)), 400)),
                "messages": [{"role": "system", "content": SYSTEM}, *body.get("messages", [])[-8:]]}
 
-    async def gen() -> Any:
+    async def upstream(q: asyncio.Queue[bytes | str | None]) -> None:
         try:
             async with _client.stream("POST", GATEWAY + "/v1/chat/completions", json=payload,
                                       headers={"Authorization": f"Bearer {API_KEY}"}) as r:
                 if r.status_code != 200:
                     err = (await r.aread()).decode(errors="replace")
-                    yield f"data: {json.dumps({'demo_error': err[:600], 'status': r.status_code})}\n\n"
+                    await q.put(f"data: {json.dumps({'demo_error': err[:600], 'status': r.status_code})}\n\n")
                     return
                 async for chunk in r.aiter_raw():
-                    yield chunk
+                    await q.put(chunk)
         except httpx.HTTPError as exc:
-            yield f"data: {json.dumps({'demo_error': str(exc)[:300], 'status': 0})}\n\n"
+            await q.put(f"data: {json.dumps({'demo_error': str(exc)[:300], 'status': 0})}\n\n")
+        finally:
+            await q.put(None)
+
+    async def gen() -> Any:
+        # Masked prefill can take a while before the first token. Send an SSE comment every few
+        # seconds so proxies and port forwarders (GitHub Codespaces) keep the connection open.
+        q: asyncio.Queue[bytes | str | None] = asyncio.Queue()
+        task = asyncio.create_task(upstream(q))
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=5.0)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    break
+                yield item
+        finally:
+            task.cancel()
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"cache-control": "no-store"})
 

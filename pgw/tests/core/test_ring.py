@@ -56,7 +56,7 @@ def test_headroom(p):
 
 
 def test_weight_quantization():
-    w = torch.randn(33, 70, dtype=torch.float64)
+    w = torch.randn(33, 70, dtype=torch.float64, generator=torch.Generator().manual_seed(0))
     w[5] = 0.0
     w8, sw = quantize_weight_rows(w)
     assert w8.dtype == torch.int8 and sw.shape == (33,)

@@ -5,4 +5,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 exec python pgw/scripts/client_demo/run.py --host 127.0.0.1 --port 8080 \
     --pack-dir "$HOME/pgw-pack" --work "$HOME/pgw-demo" \
-    --slots 300 --refill-low 250 --refill-target 600
+    --slots 600 --refill-low 150 --refill-target 600

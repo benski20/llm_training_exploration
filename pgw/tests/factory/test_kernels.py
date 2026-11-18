@@ -180,3 +180,31 @@ def test_cuda_kernel_exact(ring: RingParams) -> None:  # pragma: no cover - GPU 
     assert got.tolist() == ringmm_reference(x, w, ring.k).tolist()
     u = _rand((2, 13), ring.k, 10)
     assert torch.equal(ring_vecmat(u, w.cuda(), ring), freivalds_precompute(u, w, ring))
+
+
+def test_auto_backend_avoids_slow_cpu_int8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CPU whose torch._int_mm is exact but far slower than float64 (no VNNI/AMX) gets cpu_f64."""
+    import sys
+    import time
+
+    from pgw.service.kernels import resolve_backend as service_backend
+
+    ringmm = sys.modules["pgw.core.ringmm"]  # pgw.core.ringmm is also a function name in pgw.core
+    real = torch._int_mm
+
+    def slow(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        time.sleep(0.01)
+        return real(a, b)
+
+    ringmm._cpu_int8_timing_ok.cache_clear()
+    monkeypatch.setattr(torch, "_int_mm", slow)
+    try:
+        if not cpu_int8_available():
+            pytest.skip("CPU torch._int_mm is not available here")
+        assert ringmm.cpu_int8_fast() is False
+        assert resolve_backend(CPU, "auto") == "cpu_f64"
+        assert service_backend(CPU, "auto") == "cpu_f64"
+        assert resolve_backend(CPU, "cpu_int8") == "cpu_int8"  # an explicit choice is still honoured
+    finally:
+        monkeypatch.setattr(torch, "_int_mm", real)
+        ringmm._cpu_int8_timing_ok.cache_clear()

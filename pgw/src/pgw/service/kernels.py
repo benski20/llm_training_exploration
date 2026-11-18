@@ -32,7 +32,13 @@ import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams
-from pgw.core.ringmm import PreparedWeight, cpu_int8_available, cuda_int8_available, int8_ring_matmul
+from pgw.core.ringmm import (
+    PreparedWeight,
+    cpu_int8_available,
+    cpu_int8_fast,
+    cuda_int8_available,
+    int8_ring_matmul,
+)
 from pgw.core.types import LinearSpec
 
 __all__ = [
@@ -87,7 +93,7 @@ def resolve_backend(device: torch.device, backend: str = "auto") -> str:
     if backend == "auto":
         if device.type == "cuda":
             return "cuda_int8"
-        return "cpu_int8" if cpu_int8_available() else "cpu_f64"
+        return "cpu_int8" if cpu_int8_fast() else "cpu_f64"
     if backend == "cuda_int8":
         if device.type != "cuda":
             raise BackendUnavailableError("cuda_int8 needs a CUDA device")

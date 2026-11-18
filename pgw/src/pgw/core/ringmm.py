@@ -29,6 +29,7 @@ from __future__ import annotations
 import functools
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -44,6 +45,7 @@ __all__ = [
     "Backend",
     "PreparedWeight",
     "cpu_int8_available",
+    "cpu_int8_fast",
     "cuda_int8_available",
     "int8_digit_gemm",
     "int8_ring_matmul",
@@ -183,6 +185,44 @@ def cpu_int8_available() -> bool:
     except Exception as exc:  # torch build without CPU _int_mm
         log.info("CPU torch._int_mm unavailable (%s); CPU int8 GEMMs disabled", type(exc).__name__)
         return False
+
+
+def cpu_int8_fast() -> bool:
+    """True if CPU int8 GEMMs are exact (:func:`cpu_int8_available`) *and* fast on this CPU.
+
+    Some CPUs (no VNNI/AMX, or a torch build without an optimized kernel) run ``torch._int_mm``
+    through a slow reference loop that is orders of magnitude slower than a float64 GEMM. The int8
+    path does about twice the multiplies of the float64 path (8-bit vs ~20-bit digits), so it is
+    kept only if it is at least 2x faster per call on a decode-sized product. The timing is cached
+    per process (``_cpu_int8_timing_ok.cache_clear()`` re-measures).
+    """
+    return cpu_int8_available() and _cpu_int8_timing_ok()
+
+
+@functools.cache
+def _cpu_int8_timing_ok() -> bool:
+    import time
+
+    gen = torch.Generator().manual_seed(7)
+    a = torch.randint(-128, 128, (8, 1024), dtype=torch.int8, generator=gen)
+    w = torch.randint(-128, 128, (512, 1024), dtype=torch.int8, generator=gen)
+    af, wf = a.to(torch.float64), w.to(torch.float64).t().contiguous()
+
+    def best(fn: Callable[[], object]) -> float:
+        fn()
+        times = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            fn()
+            times.append(time.perf_counter() - t0)
+        return min(times)
+
+    t_int8 = best(lambda: torch._int_mm(a, w.t()))
+    t_f64 = best(lambda: af @ wf)
+    fast = t_int8 * 2.0 <= t_f64
+    log.info("CPU int8 GEMM %.3f ms vs float64 %.3f ms: %s", t_int8 * 1e3, t_f64 * 1e3,
+             "using cpu_int8" if fast else "int8 is slow on this CPU, using cpu_f64")
+    return fast
 
 
 def select_backend(device: torch.device | str, backend: Backend = "auto") -> str:

@@ -43,7 +43,7 @@ from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
 from pgw.core.masking import mask_activations, unmask_outputs_u64
 from pgw.core.packing import pack_ring, unpack_ring_u64
 from pgw.core.ring import RingParams, balanced_digits, dequantize_outputs, quantize_activations
-from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_available, int8_digit_gemm
+from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_fast, int8_digit_gemm
 from pgw.core.types import LinearId
 
 __all__ = [
@@ -160,7 +160,7 @@ def exact_int_matmul(xq: torch.Tensor, w8t: torch.Tensor, value_bits: int) -> to
     if t == 0:
         return torch.zeros((0, m), dtype=torch.int64, device=xq.device)
     dev = xq.device
-    use_int = (dev.type == "cpu" and cpu_int8_available()) or dev.type == "cuda"
+    use_int = (dev.type == "cpu" and cpu_int8_fast()) or dev.type == "cuda"
     if not use_int:
         bound = (1 << (value_bits - 1)) * 128 * n
         if bound >= 1 << 53:  # pragma: no cover - only for exotic rings
