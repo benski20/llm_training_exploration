@@ -63,18 +63,24 @@ AMX/VNNI, or exact float64 on other CPUs. Override with `PGW_HEMASK_ENGINE`.
 
 | Qwen2.5-7B, per token | before optimisation | gateway T4 (`cuda`) | AMX CPU, 4 vCPU (`cpu_int8`) | CPU without fast int8 (`cpu_f64`) |
 |---|---|---|---|---|
-| gateway encrypt + decrypt | 1.18 s | **0.11 s** (0.070 + 0.039) | **0.116 s** (0.051 + 0.065) | 1.27 s, before the uint64 A fix; about 0.9 s expected |
+| gateway encrypt + decrypt | 1.18 s | **0.11 s** (0.069 + 0.042) | **0.116 s** (0.051 + 0.065) | 0.88 s (0.39 + 0.49) |
 | provider GPU (T4) | 0.020 s | 0.019 s | | |
-| upload / download | 6.7 / 11.1 MB | 6.7 / 8.3 MB (16 low bits rounded away) | | |
+
+| Qwen2.5-7B, per token | 40-bit ring (q = 2^64) | 32-bit ring (q = 2^56) |
+|---|---|---|
+| mask-supply upload / download | 6.7 / 8.3 MB | **5.8 / 7.0 MB** |
+| one-time hint | 39.9 GB | **34.2 GB** |
+| online traffic (masked calls) | 4.2 / 7.0 MB | **3.3 / 5.6 MB** |
+| gateway CPU and provider GPU | 0.11 s / 0.019 s | 0.11 s / 0.019 s |
+
+Results are in `benchmarks/results/kaggle/run11_k32/`. All results are exact, and all GPU tests pass.
 
 Qwen2.5-0.5B: 0.026 s per token with a gateway T4, 0.031 s on the AMX CPU.
 
 At 1M tokens/day of 7B, the gateway needs about 1.3 AMX cores, or a share of one small GPU.
-Results are in `benchmarks/results/kaggle/run10_hemask_engines/` and `benchmarks/hemask_bench.py`.
 
-The remaining bottleneck at volume is network: about 15 MB per 7B token, roughly 1.4 Gbit/s at
-1M tokens/day. Moving to the 32-bit ring (validated as lossless for quality) would cut it, along
-with the hint, by about a quarter.
+Network is the remaining cost at volume. On the 32-bit ring it is about 12.8 MB per 7B token for
+mask supply plus 8.9 MB for the masked calls themselves.
 
 Planned: the K32 ring (less network and hint), a smaller rank once the lattice estimate allows it,
 and moving hint building to the provider with Freivalds verification (faster setup for 70B).

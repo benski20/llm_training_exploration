@@ -1,0 +1,67 @@
+qkv {"m": 4608, "n": 3584, "exact": true, "hint_build_s": 1.26, "encrypt_ms_per_slot": 0.2720400439453208, "provider_ms_per_slot": 0.06648504492190455, "decrypt_ms_per_slot": 0.18884712500000234}
+o {"m": 3584, "n": 3584, "exact": true, "hint_build_s": 1.03, "encrypt_ms_per_slot": 0.2823330000000235, "provider_ms_per_slot": 0.052672483398463754, "decrypt_ms_per_slot": 0.13850550390626104}
+gate_up {"m": 37888, "n": 3584, "exact": true, "hint_build_s": 7.75, "encrypt_ms_per_slot": 0.2640024189453083, "provider_ms_per_slot": 0.436254048828133, "decrypt_ms_per_slot": 1.069534474609335}
+down {"m": 3584, "n": 18944, "exact": true, "hint_build_s": 4.13, "encrypt_ms_per_slot": 1.797924955078134, "provider_ms_per_slot": 0.15224278808595448, "decrypt_ms_per_slot": 0.12171195703120086}
+{
+ "k": 40,
+ "q": 64,
+ "preset": "qwen2.5-7b",
+ "device": "cuda",
+ "rank": 16,
+ "groups": 4,
+ "torch": "2.11.0+cu130",
+ "cpu_int8_fast": false,
+ "gateway_engine": "cuda",
+ "gpu": "Tesla T4",
+ "per_kind": {
+  "qkv": {
+   "m": 4608,
+   "n": 3584,
+   "exact": true,
+   "hint_build_s": 1.26,
+   "encrypt_ms_per_slot": 0.2720400439453208,
+   "provider_ms_per_slot": 0.06648504492190455,
+   "decrypt_ms_per_slot": 0.18884712500000234
+  },
+  "o": {
+   "m": 3584,
+   "n": 3584,
+   "exact": true,
+   "hint_build_s": 1.03,
+   "encrypt_ms_per_slot": 0.2823330000000235,
+   "provider_ms_per_slot": 0.052672483398463754,
+   "decrypt_ms_per_slot": 0.13850550390626104
+  },
+  "gate_up": {
+   "m": 37888,
+   "n": 3584,
+   "exact": true,
+   "hint_build_s": 7.75,
+   "encrypt_ms_per_slot": 0.2640024189453083,
+   "provider_ms_per_slot": 0.436254048828133,
+   "decrypt_ms_per_slot": 1.069534474609335
+  },
+  "down": {
+   "m": 3584,
+   "n": 18944,
+   "exact": true,
+   "hint_build_s": 4.13,
+   "encrypt_ms_per_slot": 1.797924955078134,
+   "provider_ms_per_slot": 0.15224278808595448,
+   "decrypt_ms_per_slot": 0.12171195703120086
+  }
+ },
+ "per_token_full_model": {
+  "gateway_encrypt_s": 0.07325641170312602,
+  "provider_s": 0.019814322226564762,
+  "gateway_decrypt_s": 0.04252077369531038,
+  "upload_MB": 6.651904,
+  "download_MB": 8.343552
+ },
+ "one_time": {
+  "hint_GB": 39.871053824,
+  "hint_build_s_cpu": 396.705094072001
+ }
+}
+
+---stderr---

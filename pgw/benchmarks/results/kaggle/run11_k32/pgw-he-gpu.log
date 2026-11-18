@@ -1,0 +1,510 @@
+[{"stream_name":"stdout","time":7.556573723,"data":"[   0.1m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869296 kB', 'MemFree:        26230268 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  1.9M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":7.744681978,"data":"[   0.1m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":21.455854589,"data":"[   0.3m] DONE pip_install rc 0 14s\n"}
+,{"stream_name":"stdout","time":21.455902665,"data":"\n"}
+,{"stream_name":"stdout","time":21.455906613,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":21.455909295,"data":"\n"}
+,{"stream_name":"stdout","time":21.455911701,"data":"[   0.3m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":22.425461281,"data":"[   0.4m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":22.425502818,"data":"0.0.8\n"}
+,{"stream_name":"stdout","time":22.425508297,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":22.425512336,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":22.425515751,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":22.425519031,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":22.425522318,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":22.425525445,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":22.425528641,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":22.425531822,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":22.425535011,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":22.425538205,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":22.425541405,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":22.42554466,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":22.425547825,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":22.42555093,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":22.425554141,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":22.425557726,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":22.425564797,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":22.425567533,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":22.425569828,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":22.425572043,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":22.42557495,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":22.425587792,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":22.425591473,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":22.425595185,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":22.425598476,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":22.425602234,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":22.425605891,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":22.425609043,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":22.425612186,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":22.425615295,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":22.425618365,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":22.425621571,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":22.425636242,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":22.425639672,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":22.425642874,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":22.425646083,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":22.425649280000002,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":22.425652353,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":22.425655461,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":22.425658681,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":22.425661788,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":22.425668324,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":22.425671203,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":22.425683791,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":22.425687512,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":22.425691184,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":22.425694564,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":22.425698382,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":22.425701924,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":22.425705249,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":22.425708421,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":22.425711634,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":22.425714832,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":22.425718027,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":22.425721261,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":22.425724458,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":22.425727669,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":22.425730819,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":22.425733952,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":22.42573707,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":22.425740262,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":22.425743423,"data":"texttable==1.7.2\n"}
+,{"stream_name":"stdout","time":22.42574663,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":22.425749746,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":22.425752969,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":22.425756346,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":22.425763066000002,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":22.425765956,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":22.425778516,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":22.425782284,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":22.425786199,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":22.425790189,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":22.42579386,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":22.425797379,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":22.425800552,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":22.425803772,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":22.425807019,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":22.425810209,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":22.425821290000002,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":22.425824521,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":22.425827714,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":22.425830835,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":22.425834048,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":22.425837182,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":22.425840439,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":22.425843643,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":22.425846773,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":22.425850054,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":22.425857863,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":22.425877314,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":22.425881969,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":22.42588591,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":22.425889591,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":22.425892926,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":22.425896056,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":22.425899262,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":22.425902379,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":22.425905519,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":22.42590893,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":22.425912116,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":22.42591529,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":22.425918523,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":22.425921749,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":22.425924947,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":22.42592818,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":22.425932876,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":22.425936111,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":22.425939306,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":22.425942438,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":22.425945542,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":22.425951747,"data":"ujson==6.0.0\n"}
+,{"stream_name":"stdout","time":22.425954594,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":22.425967131,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":22.425970772,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":22.425974543,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":22.425977922,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":22.425981679,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":22.425985369,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":22.425988547,"data":"urwid==5.0.1\n"}
+,{"stream_name":"stdout","time":22.425991736,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":22.425994939,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":22.425998081,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":22.426001248,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":22.42600446,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":22.426011183,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":22.426014395,"data":"vtk==9.7.1\n"}
+,{"stream_name":"stdout","time":22.426017498,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":22.426020715,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":22.42602392,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":22.42602711,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":22.426030291,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":22.426033487,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":22.426036788,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":22.426039914,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":22.426046875,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":22.426049507,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":22.42606258,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":22.426066263,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":22.426070044,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":22.426073667,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":22.426077343,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":22.426080555,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":22.426083771,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":22.426086855,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":22.426089978,"data":"wrapt==1.17.3\n"}
+,{"stream_name":"stdout","time":22.42609321,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":22.4260969,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":22.426120958,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":22.426124545,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":22.426127806,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":22.426131032,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":22.426134255,"data":"xvfbwrapper==0.2.37\n"}
+,{"stream_name":"stdout","time":22.426137423,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":22.426140598,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":22.42614378,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":22.426146938,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":22.42615015,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":22.426153292,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":22.426156444,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":22.426159615,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":22.426162728,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":22.426165941,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":22.426169657,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":22.42617574,"data":"\n"}
+,{"stream_name":"stdout","time":22.426177993,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":22.426192932,"data":"\n"}
+,{"stream_name":"stdout","time":22.426196726,"data":"[   0.4m] RUN pytest_hemask_gpu : /usr/bin/python3 -m pytest tests/hemask -v -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":97.005229919,"data":"[   1.6m] DONE pytest_hemask_gpu rc 0 75s\n"}
+,{"stream_name":"stdout","time":97.005264223,"data":"============================= test session starts ==============================\n"}
+,{"stream_name":"stdout","time":97.005274642,"data":"platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3\n"}
+,{"stream_name":"stdout","time":97.005285957,"data":"rootdir: /tmp/pgwsrc/pgw\n"}
+,{"stream_name":"stdout","time":97.0052885,"data":"configfile: pyproject.toml\n"}
+,{"stream_name":"stdout","time":97.005290745,"data":"plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0\n"}
+,{"stream_name":"stdout","time":97.005293097,"data":"asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function\n"}
+,{"stream_name":"stdout","time":97.005295552,"data":"timeout: 1800.0s\n"}
+,{"stream_name":"stdout","time":97.005297734,"data":"timeout method: signal\n"}
+,{"stream_name":"stdout","time":97.005299908,"data":"timeout func_only: False\n"}
+,{"stream_name":"stdout","time":97.00530219,"data":"collecting ... collected 22 items\n"}
+,{"stream_name":"stdout","time":97.005304521,"data":"\n"}
+,{"stream_name":"stdout","time":97.005306698,"data":"tests/hemask/test_factory_he.py::test_he_factory_matches_local_factory[K40A12-64] PASSED [  4%]\n"}
+,{"stream_name":"stdout","time":97.005309075,"data":"tests/hemask/test_factory_he.py::test_he_factory_matches_local_factory[K32A12C27-56] PASSED [  9%]\n"}
+,{"stream_name":"stdout","time":97.005311426,"data":"tests/hemask/test_factory_he.py::test_he_factory_rejects_tampered_provider PASSED [ 13%]\n"}
+,{"stream_name":"stdout","time":97.005313782,"data":"tests/hemask/test_factory_he.py::test_hint_seed_is_fresh_per_build PASSED [ 18%]\n"}
+,{"stream_name":"stdout","time":97.005316049,"data":"tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[96-64-256] PASSED     [ 22%]\n"}
+,{"stream_name":"stdout","time":97.005318335,"data":"tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[4608-3584-256] PASSED [ 27%]\n"}
+,{"stream_name":"stdout","time":97.005320609,"data":"tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[64-18944-1024] PASSED [ 31%]\n"}
+,{"stream_name":"stdout","time":97.005322925,"data":"tests/hemask/test_gpu.py::test_cuda_mulmod64_exact[37-70-256] PASSED     [ 36%]\n"}
+,{"stream_name":"stdout","time":97.005325172,"data":"tests/hemask/test_gpu.py::test_cuda_provider_roundtrip_decrypts_exactly PASSED [ 40%]\n"}
+,{"stream_name":"stdout","time":97.005327466,"data":"tests/hemask/test_gpu.py::test_cuda_gateway_engine_matches_reference PASSED [ 45%]\n"}
+,{"stream_name":"stdout","time":97.005329786,"data":"tests/hemask/test_gpu.py::test_cuda_mulmod64_q56_skips_top_plane PASSED  [ 50%]\n"}
+,{"stream_name":"stdout","time":97.005332122,"data":"tests/hemask/test_lwe.py::test_matmul_mod64_is_exact PASSED              [ 54%]\n"}
+,{"stream_name":"stdout","time":97.005334365,"data":"tests/hemask/test_lwe.py::test_secret_matrix_is_negacyclic_product PASSED [ 59%]\n"}
+,{"stream_name":"stdout","time":97.005336638,"data":"tests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[32] PASSED [ 63%]\n"}
+,{"stream_name":"stdout","time":97.005338901,"data":"tests/hemask/test_lwe.py::test_roundtrip_exact_random_weights[40] PASSED [ 68%]\n"}
+,{"stream_name":"stdout","time":97.005341152,"data":"tests/hemask/test_lwe.py::test_roundtrip_partial_group_and_worst_case_weights PASSED [ 72%]\n"}
+,{"stream_name":"stdout","time":97.005343469,"data":"tests/hemask/test_lwe.py::test_noise_budget_rejects_k48_and_admits_k40_k32 PASSED [ 77%]\n"}
+,{"stream_name":"stdout","time":97.005346837,"data":"tests/hemask/test_lwe.py::test_rejects_small_rank_and_bad_k PASSED       [ 81%]\n"}
+,{"stream_name":"stdout","time":97.005349178,"data":"tests/hemask/test_lwe.py::test_tampered_product_gives_wrong_masks PASSED [ 86%]\n"}
+,{"stream_name":"stdout","time":97.005351478,"data":"tests/hemask/test_lwe.py::test_ciphertext_hides_masks PASSED             [ 90%]\n"}
+,{"stream_name":"stdout","time":97.005356997,"data":"tests/hemask/test_lwe.py::test_secret_is_fresh_per_group PASSED          [ 95%]\n"}
+,{"stream_name":"stdout","time":97.005360394,"data":"tests/hemask/test_lwe.py::test_public_matrix_depends_on_seed_and_prefix_is_stable PASSED [100%]\n"}
+,{"stream_name":"stdout","time":97.00536402,"data":"\n"}
+,{"stream_name":"stdout","time":97.005367053,"data":"======================== 22 passed in 66.79s (0:01:06) =========================\n"}
+,{"stream_name":"stdout","time":97.005369365,"data":"\n"}
+,{"stream_name":"stdout","time":97.00537151,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":97.005373699,"data":"\n"}
+,{"stream_name":"stdout","time":97.005375966,"data":"[   1.6m] RUN pytest_hemask_cuda_engine : /usr/bin/python3 -m pytest tests/hemask tests/service/test_maskgen.py -q -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":154.810765814,"data":"[   2.6m] DONE pytest_hemask_cuda_engine rc 0 58s\n"}
+,{"stream_name":"stdout","time":154.810798285,"data":"..........................                                               [100%]\n"}
+,{"stream_name":"stdout","time":154.810804736,"data":"26 passed in 52.41s\n"}
+,{"stream_name":"stdout","time":154.81080962,"data":"\n"}
+,{"stream_name":"stdout","time":154.810814345,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":154.810818485,"data":"\n"}
+,{"stream_name":"stdout","time":154.810822585,"data":"[   2.6m] RUN hemask_bench_7b : PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4\n"}
+,{"stream_name":"stdout","time":329.106964733,"data":"[   5.5m] DONE hemask_bench_7b rc 0 174s\n"}
+,{"stream_name":"stdout","time":329.10701938,"data":"qkv {\"m\": 4608, \"n\": 3584, \"exact\": true, \"hint_build_s\": 1.26, \"encrypt_ms_per_slot\": 0.2720400439453208, \"provider_ms_per_slot\": 0.06648504492190455, \"decrypt_ms_per_slot\": 0.18884712500000234}\n"}
+,{"stream_name":"stdout","time":329.107030256,"data":"o {\"m\": 3584, \"n\": 3584, \"exact\": true, \"hint_build_s\": 1.03, \"encrypt_ms_per_slot\": 0.2823330000000235, \"provider_ms_per_slot\": 0.052672483398463754, \"decrypt_ms_per_slot\": 0.13850550390626104}\n"}
+,{"stream_name":"stdout","time":329.10703666,"data":"gate_up {\"m\": 37888, \"n\": 3584, \"exact\": true, \"hint_build_s\": 7.75, \"encrypt_ms_per_slot\": 0.2640024189453083, \"provider_ms_per_slot\": 0.436254048828133, \"decrypt_ms_per_slot\": 1.069534474609335}\n"}
+,{"stream_name":"stdout","time":329.107041973,"data":"down {\"m\": 3584, \"n\": 18944, \"exact\": true, \"hint_build_s\": 4.13, \"encrypt_ms_per_slot\": 1.797924955078134, \"provider_ms_per_slot\": 0.15224278808595448, \"decrypt_ms_per_slot\": 0.12171195703120086}\n"}
+,{"stream_name":"stdout","time":329.107047148,"data":"{\n"}
+,{"stream_name":"stdout","time":329.107051238,"data":" \"k\": 40,\n"}
+,{"stream_name":"stdout","time":329.107055371,"data":" \"q\": 64,\n"}
+,{"stream_name":"stdout","time":329.10706599,"data":" \"preset\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":329.10706932,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":329.107072211,"data":" \"rank\": 16,\n"}
+,{"stream_name":"stdout","time":329.107074995,"data":" \"groups\": 4,\n"}
+,{"stream_name":"stdout","time":329.107077748,"data":" \"torch\": \"2.11.0+cu130\",\n"}
+,{"stream_name":"stdout","time":329.107080661,"data":" \"cpu_int8_fast\": false,\n"}
+,{"stream_name":"stdout","time":329.107083517,"data":" \"gateway_engine\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":329.107086375,"data":" \"gpu\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":329.107125075,"data":" \"per_kind\": {\n"}
+,{"stream_name":"stdout","time":329.107129705,"data":"  \"qkv\": {\n"}
+,{"stream_name":"stdout","time":329.107133006,"data":"   \"m\": 4608,\n"}
+,{"stream_name":"stdout","time":329.107136242,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":329.107139423,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":329.107142645,"data":"   \"hint_build_s\": 1.26,\n"}
+,{"stream_name":"stdout","time":329.107145958,"data":"   \"encrypt_ms_per_slot\": 0.2720400439453208,\n"}
+,{"stream_name":"stdout","time":329.107149303,"data":"   \"provider_ms_per_slot\": 0.06648504492190455,\n"}
+,{"stream_name":"stdout","time":329.107152844,"data":"   \"decrypt_ms_per_slot\": 0.18884712500000234\n"}
+,{"stream_name":"stdout","time":329.107156142,"data":"  },\n"}
+,{"stream_name":"stdout","time":329.107159245,"data":"  \"o\": {\n"}
+,{"stream_name":"stdout","time":329.107162435,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":329.107165615,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":329.107168952,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":329.107177205,"data":"   \"hint_build_s\": 1.03,\n"}
+,{"stream_name":"stdout","time":329.107180035,"data":"   \"encrypt_ms_per_slot\": 0.2823330000000235,\n"}
+,{"stream_name":"stdout","time":329.107182292,"data":"   \"provider_ms_per_slot\": 0.052672483398463754,\n"}
+,{"stream_name":"stdout","time":329.107184568,"data":"   \"decrypt_ms_per_slot\": 0.13850550390626104\n"}
+,{"stream_name":"stdout","time":329.107186889,"data":"  },\n"}
+,{"stream_name":"stdout","time":329.107189021,"data":"  \"gate_up\": {\n"}
+,{"stream_name":"stdout","time":329.107191946,"data":"   \"m\": 37888,\n"}
+,{"stream_name":"stdout","time":329.107206206,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":329.107210203,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":329.107213965,"data":"   \"hint_build_s\": 7.75,\n"}
+,{"stream_name":"stdout","time":329.107218204,"data":"   \"encrypt_ms_per_slot\": 0.2640024189453083,\n"}
+,{"stream_name":"stdout","time":329.107222127,"data":"   \"provider_ms_per_slot\": 0.436254048828133,\n"}
+,{"stream_name":"stdout","time":329.107225523,"data":"   \"decrypt_ms_per_slot\": 1.069534474609335\n"}
+,{"stream_name":"stdout","time":329.107228876,"data":"  },\n"}
+,{"stream_name":"stdout","time":329.107231973,"data":"  \"down\": {\n"}
+,{"stream_name":"stdout","time":329.107235155,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":329.107238298,"data":"   \"n\": 18944,\n"}
+,{"stream_name":"stdout","time":329.107241586,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":329.107244831,"data":"   \"hint_build_s\": 4.13,\n"}
+,{"stream_name":"stdout","time":329.107248155,"data":"   \"encrypt_ms_per_slot\": 1.797924955078134,\n"}
+,{"stream_name":"stdout","time":329.107251523,"data":"   \"provider_ms_per_slot\": 0.15224278808595448,\n"}
+,{"stream_name":"stdout","time":329.107254861,"data":"   \"decrypt_ms_per_slot\": 0.12171195703120086\n"}
+,{"stream_name":"stdout","time":329.107258209,"data":"  }\n"}
+,{"stream_name":"stdout","time":329.107261284,"data":" },\n"}
+,{"stream_name":"stdout","time":329.107264337,"data":" \"per_token_full_model\": {\n"}
+,{"stream_name":"stdout","time":329.107267622,"data":"  \"gateway_encrypt_s\": 0.07325641170312602,\n"}
+,{"stream_name":"stdout","time":329.107272973,"data":"  \"provider_s\": 0.019814322226564762,\n"}
+,{"stream_name":"stdout","time":329.107278113,"data":"  \"gateway_decrypt_s\": 0.04252077369531038,\n"}
+,{"stream_name":"stdout","time":329.10728839,"data":"  \"upload_MB\": 6.651904,\n"}
+,{"stream_name":"stdout","time":329.107302628,"data":"  \"download_MB\": 8.343552\n"}
+,{"stream_name":"stdout","time":329.107306707,"data":" },\n"}
+,{"stream_name":"stdout","time":329.107310318,"data":" \"one_time\": {\n"}
+,{"stream_name":"stdout","time":329.10731445,"data":"  \"hint_GB\": 39.871053824,\n"}
+,{"stream_name":"stdout","time":329.107318396,"data":"  \"hint_build_s_cpu\": 396.705094072001\n"}
+,{"stream_name":"stdout","time":329.107321726,"data":" }\n"}
+,{"stream_name":"stdout","time":329.107324817,"data":"}\n"}
+,{"stream_name":"stdout","time":329.107327921,"data":"\n"}
+,{"stream_name":"stdout","time":329.107331077,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":329.107334253,"data":"\n"}
+,{"stream_name":"stdout","time":329.107337467,"data":"[   5.5m] RUN hemask_bench_7b_k32 : PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4 --k 32\n"}
+,{"stream_name":"stdout","time":504.081300083,"data":"[   8.4m] DONE hemask_bench_7b_k32 rc 0 175s\n"}
+,{"stream_name":"stdout","time":504.08136064,"data":"qkv {\"m\": 4608, \"n\": 3584, \"exact\": true, \"hint_build_s\": 1.25, \"encrypt_ms_per_slot\": 0.2750772656249789, \"provider_ms_per_slot\": 0.06257229199219116, \"decrypt_ms_per_slot\": 0.18065797265626182}\n"}
+,{"stream_name":"stdout","time":504.081371367,"data":"o {\"m\": 3584, \"n\": 3584, \"exact\": true, \"hint_build_s\": 0.84, \"encrypt_ms_per_slot\": 0.26906167578127915, \"provider_ms_per_slot\": 0.04521792480471909, \"decrypt_ms_per_slot\": 0.13550202734374794}\n"}
+,{"stream_name":"stdout","time":504.081377932,"data":"gate_up {\"m\": 37888, \"n\": 3584, \"exact\": true, \"hint_build_s\": 7.67, \"encrypt_ms_per_slot\": 0.27322211328129065, \"provider_ms_per_slot\": 0.41884076953124794, \"decrypt_ms_per_slot\": 1.0581001611327245}\n"}
+,{"stream_name":"stdout","time":504.081390174,"data":"down {\"m\": 3584, \"n\": 18944, \"exact\": true, \"hint_build_s\": 4.16, \"encrypt_ms_per_slot\": 1.6431516494140874, \"provider_ms_per_slot\": 0.14511271972650341, \"decrypt_ms_per_slot\": 0.13022272265628132}\n"}
+,{"stream_name":"stdout","time":504.081395819,"data":"{\n"}
+,{"stream_name":"stdout","time":504.081401527,"data":" \"k\": 32,\n"}
+,{"stream_name":"stdout","time":504.081409574,"data":" \"q\": 56,\n"}
+,{"stream_name":"stdout","time":504.081412552,"data":" \"preset\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":504.081415526,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":504.081418342,"data":" \"rank\": 16,\n"}
+,{"stream_name":"stdout","time":504.081421149,"data":" \"groups\": 4,\n"}
+,{"stream_name":"stdout","time":504.081424165,"data":" \"torch\": \"2.11.0+cu130\",\n"}
+,{"stream_name":"stdout","time":504.081427022,"data":" \"cpu_int8_fast\": false,\n"}
+,{"stream_name":"stdout","time":504.081429857,"data":" \"gateway_engine\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":504.08143281,"data":" \"gpu\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":504.081435622,"data":" \"per_kind\": {\n"}
+,{"stream_name":"stdout","time":504.081438464,"data":"  \"qkv\": {\n"}
+,{"stream_name":"stdout","time":504.08145433,"data":"   \"m\": 4608,\n"}
+,{"stream_name":"stdout","time":504.081459222,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":504.081464064,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":504.081468989,"data":"   \"hint_build_s\": 1.25,\n"}
+,{"stream_name":"stdout","time":504.08147411,"data":"   \"encrypt_ms_per_slot\": 0.2750772656249789,\n"}
+,{"stream_name":"stdout","time":504.081478382,"data":"   \"provider_ms_per_slot\": 0.06257229199219116,\n"}
+,{"stream_name":"stdout","time":504.08149252,"data":"   \"decrypt_ms_per_slot\": 0.18065797265626182\n"}
+,{"stream_name":"stdout","time":504.081495958,"data":"  },\n"}
+,{"stream_name":"stdout","time":504.081499176,"data":"  \"o\": {\n"}
+,{"stream_name":"stdout","time":504.081502424,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":504.081505645,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":504.081508849,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":504.081512092,"data":"   \"hint_build_s\": 0.84,\n"}
+,{"stream_name":"stdout","time":504.08151555,"data":"   \"encrypt_ms_per_slot\": 0.26906167578127915,\n"}
+,{"stream_name":"stdout","time":504.081518942,"data":"   \"provider_ms_per_slot\": 0.04521792480471909,\n"}
+,{"stream_name":"stdout","time":504.081527684,"data":"   \"decrypt_ms_per_slot\": 0.13550202734374794\n"}
+,{"stream_name":"stdout","time":504.081530213,"data":"  },\n"}
+,{"stream_name":"stdout","time":504.08153234,"data":"  \"gate_up\": {\n"}
+,{"stream_name":"stdout","time":504.081534548,"data":"   \"m\": 37888,\n"}
+,{"stream_name":"stdout","time":504.081537351,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":504.081551826,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":504.081555853,"data":"   \"hint_build_s\": 7.67,\n"}
+,{"stream_name":"stdout","time":504.081559616,"data":"   \"encrypt_ms_per_slot\": 0.27322211328129065,\n"}
+,{"stream_name":"stdout","time":504.081563125,"data":"   \"provider_ms_per_slot\": 0.41884076953124794,\n"}
+,{"stream_name":"stdout","time":504.081567143,"data":"   \"decrypt_ms_per_slot\": 1.0581001611327245\n"}
+,{"stream_name":"stdout","time":504.081570908,"data":"  },\n"}
+,{"stream_name":"stdout","time":504.081574038,"data":"  \"down\": {\n"}
+,{"stream_name":"stdout","time":504.081577332,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":504.081580493,"data":"   \"n\": 18944,\n"}
+,{"stream_name":"stdout","time":504.081583681,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":504.081586888,"data":"   \"hint_build_s\": 4.16,\n"}
+,{"stream_name":"stdout","time":504.081590126,"data":"   \"encrypt_ms_per_slot\": 1.6431516494140874,\n"}
+,{"stream_name":"stdout","time":504.081593448,"data":"   \"provider_ms_per_slot\": 0.14511271972650341,\n"}
+,{"stream_name":"stdout","time":504.081596794,"data":"   \"decrypt_ms_per_slot\": 0.13022272265628132\n"}
+,{"stream_name":"stdout","time":504.081600068,"data":"  }\n"}
+,{"stream_name":"stdout","time":504.081603135,"data":" },\n"}
+,{"stream_name":"stdout","time":504.081606251,"data":" \"per_token_full_model\": {\n"}
+,{"stream_name":"stdout","time":504.081609538,"data":"  \"gateway_encrypt_s\": 0.06889435571484581,\n"}
+,{"stream_name":"stdout","time":504.081615516,"data":"  \"provider_s\": 0.018808823769530525,\n"}
+,{"stream_name":"stdout","time":504.081618896,"data":"  \"gateway_decrypt_s\": 0.04212552074609244,\n"}
+,{"stream_name":"stdout","time":504.0816222,"data":"  \"upload_MB\": 5.820416,\n"}
+,{"stream_name":"stdout","time":504.081627076,"data":"  \"download_MB\": 6.95296\n"}
+,{"stream_name":"stdout","time":504.081633942,"data":" },\n"}
+,{"stream_name":"stdout","time":504.081647578,"data":" \"one_time\": {\n"}
+,{"stream_name":"stdout","time":504.081651632,"data":"  \"hint_GB\": 34.175188992,\n"}
+,{"stream_name":"stdout","time":504.081655491,"data":"  \"hint_build_s_cpu\": 389.8013803600013\n"}
+,{"stream_name":"stdout","time":504.081659721,"data":" }\n"}
+,{"stream_name":"stdout","time":504.081663845,"data":"}\n"}
+,{"stream_name":"stdout","time":504.081667129,"data":"\n"}
+,{"stream_name":"stdout","time":504.081674768,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":504.081678093,"data":"\n"}
+,{"stream_name":"stdout","time":504.08168134,"data":"[   8.4m] RUN hemask_bench_7b_cpu_f64 : PGW_HEMASK_ENGINE=cpu_f64 python benchmarks/hemask_bench.py --preset qwen2.5-7b --device cuda --groups 4\n"}
+,{"stream_name":"stdout","time":746.58272486,"data":"[  12.4m] DONE hemask_bench_7b_cpu_f64 rc 0 243s\n"}
+,{"stream_name":"stdout","time":746.582762509,"data":"qkv {\"m\": 4608, \"n\": 3584, \"exact\": true, \"hint_build_s\": 4.04, \"encrypt_ms_per_slot\": 1.7759043261718066, \"provider_ms_per_slot\": 0.06656944921867858, \"decrypt_ms_per_slot\": 1.7860583144531095}\n"}
+,{"stream_name":"stdout","time":746.582768409,"data":"o {\"m\": 3584, \"n\": 3584, \"exact\": true, \"hint_build_s\": 3.15, \"encrypt_ms_per_slot\": 1.6972592470703152, \"provider_ms_per_slot\": 0.05134297851561165, \"decrypt_ms_per_slot\": 1.2804193320312685}\n"}
+,{"stream_name":"stdout","time":746.582772095,"data":"gate_up {\"m\": 37888, \"n\": 3584, \"exact\": true, \"hint_build_s\": 30.93, \"encrypt_ms_per_slot\": 1.6226705966797539, \"provider_ms_per_slot\": 0.42349690234366744, \"decrypt_ms_per_slot\": 13.192241500976532}\n"}
+,{"stream_name":"stdout","time":746.582775694,"data":"down {\"m\": 3584, \"n\": 18944, \"exact\": true, \"hint_build_s\": 19.2, \"encrypt_ms_per_slot\": 8.772858106445236, \"provider_ms_per_slot\": 0.15239808300782087, \"decrypt_ms_per_slot\": 1.2393642382811931}\n"}
+,{"stream_name":"stdout","time":746.582792942,"data":"{\n"}
+,{"stream_name":"stdout","time":746.58279794,"data":" \"k\": 40,\n"}
+,{"stream_name":"stdout","time":746.58280291,"data":" \"q\": 64,\n"}
+,{"stream_name":"stdout","time":746.582807688,"data":" \"preset\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":746.582812953,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":746.582817772,"data":" \"rank\": 16,\n"}
+,{"stream_name":"stdout","time":746.58282261,"data":" \"groups\": 4,\n"}
+,{"stream_name":"stdout","time":746.582826915,"data":" \"torch\": \"2.11.0+cu130\",\n"}
+,{"stream_name":"stdout","time":746.582831859,"data":" \"cpu_int8_fast\": false,\n"}
+,{"stream_name":"stdout","time":746.582836346,"data":" \"gateway_engine\": \"cpu_f64\",\n"}
+,{"stream_name":"stdout","time":746.582840506,"data":" \"gpu\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":746.582844717,"data":" \"per_kind\": {\n"}
+,{"stream_name":"stdout","time":746.582848815,"data":"  \"qkv\": {\n"}
+,{"stream_name":"stdout","time":746.582852907,"data":"   \"m\": 4608,\n"}
+,{"stream_name":"stdout","time":746.582858632,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":746.582866115,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":746.582868931,"data":"   \"hint_build_s\": 4.04,\n"}
+,{"stream_name":"stdout","time":746.582871841,"data":"   \"encrypt_ms_per_slot\": 1.7759043261718066,\n"}
+,{"stream_name":"stdout","time":746.582874805,"data":"   \"provider_ms_per_slot\": 0.06656944921867858,\n"}
+,{"stream_name":"stdout","time":746.582877785,"data":"   \"decrypt_ms_per_slot\": 1.7860583144531095\n"}
+,{"stream_name":"stdout","time":746.582891875,"data":"  },\n"}
+,{"stream_name":"stdout","time":746.582896679,"data":"  \"o\": {\n"}
+,{"stream_name":"stdout","time":746.582902132,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":746.582906995,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":746.582911494,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":746.582915927,"data":"   \"hint_build_s\": 3.15,\n"}
+,{"stream_name":"stdout","time":746.582920709,"data":"   \"encrypt_ms_per_slot\": 1.6972592470703152,\n"}
+,{"stream_name":"stdout","time":746.582933053,"data":"   \"provider_ms_per_slot\": 0.05134297851561165,\n"}
+,{"stream_name":"stdout","time":746.582936707,"data":"   \"decrypt_ms_per_slot\": 1.2804193320312685\n"}
+,{"stream_name":"stdout","time":746.582940004,"data":"  },\n"}
+,{"stream_name":"stdout","time":746.58294314,"data":"  \"gate_up\": {\n"}
+,{"stream_name":"stdout","time":746.582952802,"data":"   \"m\": 37888,\n"}
+,{"stream_name":"stdout","time":746.582956039,"data":"   \"n\": 3584,\n"}
+,{"stream_name":"stdout","time":746.58295925,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":746.58296252,"data":"   \"hint_build_s\": 30.93,\n"}
+,{"stream_name":"stdout","time":746.582965677,"data":"   \"encrypt_ms_per_slot\": 1.6226705966797539,\n"}
+,{"stream_name":"stdout","time":746.582970982,"data":"   \"provider_ms_per_slot\": 0.42349690234366744,\n"}
+,{"stream_name":"stdout","time":746.582977738,"data":"   \"decrypt_ms_per_slot\": 13.192241500976532\n"}
+,{"stream_name":"stdout","time":746.582980132,"data":"  },\n"}
+,{"stream_name":"stdout","time":746.582982346,"data":"  \"down\": {\n"}
+,{"stream_name":"stdout","time":746.58298454,"data":"   \"m\": 3584,\n"}
+,{"stream_name":"stdout","time":746.58298728,"data":"   \"n\": 18944,\n"}
+,{"stream_name":"stdout","time":746.583001183,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":746.583004999,"data":"   \"hint_build_s\": 19.2,\n"}
+,{"stream_name":"stdout","time":746.583008917,"data":"   \"encrypt_ms_per_slot\": 8.772858106445236,\n"}
+,{"stream_name":"stdout","time":746.58301245,"data":"   \"provider_ms_per_slot\": 0.15239808300782087,\n"}
+,{"stream_name":"stdout","time":746.583016483,"data":"   \"decrypt_ms_per_slot\": 1.2393642382811931\n"}
+,{"stream_name":"stdout","time":746.583020613,"data":"  }\n"}
+,{"stream_name":"stdout","time":746.58302376,"data":" },\n"}
+,{"stream_name":"stdout","time":746.583027258,"data":" \"per_token_full_model\": {\n"}
+,{"stream_name":"stdout","time":746.583030723,"data":"  \"gateway_encrypt_s\": 0.3883233837382791,\n"}
+,{"stream_name":"stdout","time":746.583035638,"data":"  \"provider_s\": 0.0194266075664018,\n"}
+,{"stream_name":"stdout","time":746.583039075,"data":"  \"gateway_decrypt_s\": 0.48994633480077887,\n"}
+,{"stream_name":"stdout","time":746.583042548,"data":"  \"upload_MB\": 6.651904,\n"}
+,{"stream_name":"stdout","time":746.583045856,"data":"  \"download_MB\": 8.343552\n"}
+,{"stream_name":"stdout","time":746.583049125,"data":" },\n"}
+,{"stream_name":"stdout","time":746.583052213,"data":" \"one_time\": {\n"}
+,{"stream_name":"stdout","time":746.583055466,"data":"  \"hint_GB\": 39.871053824,\n"}
+,{"stream_name":"stdout","time":746.583058709,"data":"  \"hint_build_s_cpu\": 1604.898363376\n"}
+,{"stream_name":"stdout","time":746.58306204,"data":" }\n"}
+,{"stream_name":"stdout","time":746.583065105,"data":"}\n"}
+,{"stream_name":"stdout","time":746.583068233,"data":"\n"}
+,{"stream_name":"stdout","time":746.583071324,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":746.583076283,"data":"\n"}
+,{"stream_name":"stdout","time":746.58308289,"data":"[  12.4m] RUN hemask_bench_05b : PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda --groups 4\n"}
+,{"stream_name":"stdout","time":762.836952339,"data":"[  12.7m] DONE hemask_bench_05b rc 0 16s\n"}
+,{"stream_name":"stdout","time":762.836989346,"data":"qkv {\"m\": 1152, \"n\": 896, \"exact\": true, \"hint_build_s\": 0.37, \"encrypt_ms_per_slot\": 0.0957753427733854, \"provider_ms_per_slot\": 0.013903655273428406, \"decrypt_ms_per_slot\": 0.07830522949214824}\n"}
+,{"stream_name":"stdout","time":762.837005178,"data":"o {\"m\": 896, \"n\": 896, \"exact\": true, \"hint_build_s\": 0.1, \"encrypt_ms_per_slot\": 0.09245565234372588, \"provider_ms_per_slot\": 0.008479818359385938, \"decrypt_ms_per_slot\": 0.05910876953119093}\n"}
+,{"stream_name":"stdout","time":762.837008705,"data":"gate_up {\"m\": 9728, \"n\": 896, \"exact\": true, \"hint_build_s\": 0.96, \"encrypt_ms_per_slot\": 0.09489759667968833, \"provider_ms_per_slot\": 0.09626216992186798, \"decrypt_ms_per_slot\": 0.2991571738281129}\n"}
+,{"stream_name":"stdout","time":762.837011622,"data":"down {\"m\": 896, \"n\": 4864, \"exact\": true, \"hint_build_s\": 0.54, \"encrypt_ms_per_slot\": 0.35019208300779425, \"provider_ms_per_slot\": 0.03255196972662411, \"decrypt_ms_per_slot\": 0.06476138769528905}\n"}
+,{"stream_name":"stdout","time":762.837014478,"data":"{\n"}
+,{"stream_name":"stdout","time":762.83701667,"data":" \"k\": 40,\n"}
+,{"stream_name":"stdout","time":762.837019135,"data":" \"q\": 64,\n"}
+,{"stream_name":"stdout","time":762.837021483,"data":" \"preset\": \"qwen2.5-0.5b\",\n"}
+,{"stream_name":"stdout","time":762.837023915,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":762.837026182,"data":" \"rank\": 16,\n"}
+,{"stream_name":"stdout","time":762.837028467,"data":" \"groups\": 4,\n"}
+,{"stream_name":"stdout","time":762.837030709,"data":" \"torch\": \"2.11.0+cu130\",\n"}
+,{"stream_name":"stdout","time":762.837033005,"data":" \"cpu_int8_fast\": false,\n"}
+,{"stream_name":"stdout","time":762.837035279,"data":" \"gateway_engine\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":762.837037648,"data":" \"gpu\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":762.837039956,"data":" \"per_kind\": {\n"}
+,{"stream_name":"stdout","time":762.837042254,"data":"  \"qkv\": {\n"}
+,{"stream_name":"stdout","time":762.837044488,"data":"   \"m\": 1152,\n"}
+,{"stream_name":"stdout","time":762.837046734,"data":"   \"n\": 896,\n"}
+,{"stream_name":"stdout","time":762.837048951,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":762.837051172,"data":"   \"hint_build_s\": 0.37,\n"}
+,{"stream_name":"stdout","time":762.837053461,"data":"   \"encrypt_ms_per_slot\": 0.0957753427733854,\n"}
+,{"stream_name":"stdout","time":762.837055782,"data":"   \"provider_ms_per_slot\": 0.013903655273428406,\n"}
+,{"stream_name":"stdout","time":762.837058106,"data":"   \"decrypt_ms_per_slot\": 0.07830522949214824\n"}
+,{"stream_name":"stdout","time":762.837060369,"data":"  },\n"}
+,{"stream_name":"stdout","time":762.837062551,"data":"  \"o\": {\n"}
+,{"stream_name":"stdout","time":762.83706475,"data":"   \"m\": 896,\n"}
+,{"stream_name":"stdout","time":762.837066962,"data":"   \"n\": 896,\n"}
+,{"stream_name":"stdout","time":762.837069159,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":762.837071368,"data":"   \"hint_build_s\": 0.1,\n"}
+,{"stream_name":"stdout","time":762.837073614,"data":"   \"encrypt_ms_per_slot\": 0.09245565234372588,\n"}
+,{"stream_name":"stdout","time":762.837075912,"data":"   \"provider_ms_per_slot\": 0.008479818359385938,\n"}
+,{"stream_name":"stdout","time":762.837078199,"data":"   \"decrypt_ms_per_slot\": 0.05910876953119093\n"}
+,{"stream_name":"stdout","time":762.837080459,"data":"  },\n"}
+,{"stream_name":"stdout","time":762.837082611,"data":"  \"gate_up\": {\n"}
+,{"stream_name":"stdout","time":762.837084878,"data":"   \"m\": 9728,\n"}
+,{"stream_name":"stdout","time":762.837087112,"data":"   \"n\": 896,\n"}
+,{"stream_name":"stdout","time":762.837089315,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":762.837131708,"data":"   \"hint_build_s\": 0.96,\n"}
+,{"stream_name":"stdout","time":762.837138948,"data":"   \"encrypt_ms_per_slot\": 0.09489759667968833,\n"}
+,{"stream_name":"stdout","time":762.837142534,"data":"   \"provider_ms_per_slot\": 0.09626216992186798,\n"}
+,{"stream_name":"stdout","time":762.837145946,"data":"   \"decrypt_ms_per_slot\": 0.2991571738281129\n"}
+,{"stream_name":"stdout","time":762.837149337,"data":"  },\n"}
+,{"stream_name":"stdout","time":762.837152518,"data":"  \"down\": {\n"}
+,{"stream_name":"stdout","time":762.837155884,"data":"   \"m\": 896,\n"}
+,{"stream_name":"stdout","time":762.837169906,"data":"   \"n\": 4864,\n"}
+,{"stream_name":"stdout","time":762.837172763,"data":"   \"exact\": true,\n"}
+,{"stream_name":"stdout","time":762.837175185,"data":"   \"hint_build_s\": 0.54,\n"}
+,{"stream_name":"stdout","time":762.83717773,"data":"   \"encrypt_ms_per_slot\": 0.35019208300779425,\n"}
+,{"stream_name":"stdout","time":762.83718013,"data":"   \"provider_ms_per_slot\": 0.03255196972662411,\n"}
+,{"stream_name":"stdout","time":762.837182455,"data":"   \"decrypt_ms_per_slot\": 0.06476138769528905\n"}
+,{"stream_name":"stdout","time":762.83718471,"data":"  }\n"}
+,{"stream_name":"stdout","time":762.837187141,"data":" },\n"}
+,{"stream_name":"stdout","time":762.837189301,"data":" \"per_token_full_model\": {\n"}
+,{"stream_name":"stdout","time":762.837191578,"data":"  \"gateway_encrypt_s\": 0.015199696195310253,\n"}
+,{"stream_name":"stdout","time":762.837195473,"data":"  \"provider_s\": 0.0036287427187513543,\n"}
+,{"stream_name":"stdout","time":762.837197875,"data":"  \"gateway_decrypt_s\": 0.012031981453121787,\n"}
+,{"stream_name":"stdout","time":762.837200215,"data":"  \"upload_MB\": 1.449984,\n"}
+,{"stream_name":"stdout","time":762.837202501,"data":"  \"download_MB\": 1.824768\n"}
+,{"stream_name":"stdout","time":762.837204835,"data":" },\n"}
+,{"stream_name":"stdout","time":762.83720697,"data":" \"one_time\": {\n"}
+,{"stream_name":"stdout","time":762.837209191,"data":"  \"hint_GB\": 8.719958016,\n"}
+,{"stream_name":"stdout","time":762.837211476,"data":"  \"hint_build_s_cpu\": 47.678588327996295\n"}
+,{"stream_name":"stdout","time":762.837213804,"data":" }\n"}
+,{"stream_name":"stdout","time":762.837215961,"data":"}\n"}
+,{"stream_name":"stdout","time":762.837218121,"data":"\n"}
+,{"stream_name":"stdout","time":762.837220274,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":762.837222463,"data":"\n"}
+,{"stream_name":"stdout","time":762.837487872,"data":"[  12.7m] ALL DONE\n"}
+,{"stream_name":"stderr","time":765.215944895,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":765.215976202,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":765.430015586,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":765.430045654,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":766.183730145,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":767.147597115,"data":"[NbConvertApp] Writing 1450477 bytes to __results__.html\n"}
+]
