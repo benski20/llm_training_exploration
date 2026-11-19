@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from pgw.core import native
 from pgw.core.errors import (
     ConfigError,
     FingerprintMismatchError,
@@ -36,13 +37,15 @@ from pgw.core.errors import (
     MaskStoreError,
     PGWError,
     ProtocolError,
+    RingOverflowError,
     ServiceUnavailableError,
     ShapeError,
 )
 from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
 from pgw.core.masking import mask_activations, mask_pack_u32, unmask_outputs_u32, unmask_outputs_u64
+from pgw.core.native import native_available
 from pgw.core.packing import pack_ring, unpack_ring_u64
-from pgw.core.ring import RingParams, balanced_digits, dequantize_outputs, quantize_activations
+from pgw.core.ring import RingParams, balanced_digits, center, dequantize_outputs, quantize_activations
 from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_fast, int8_digit_gemm
 from pgw.core.types import LinearId
 
@@ -606,6 +609,7 @@ class MaskedBackend(LinearBackend):
         self.client = client
         self.ring = ring
         self._u32 = ring.k == 32  # uint32 masking/unmasking fast path (bit-identical; K=32 only)
+        self._native_consts: dict[str, tuple[np.ndarray, np.ndarray | None, int]] = {}
         self.fingerprint = fingerprint
         self.freivalds_rate = freivalds_rate
         self.noise_monitor = noise_monitor
@@ -734,7 +738,99 @@ class MaskedBackend(LinearBackend):
                 )
         return reservations, metas
 
+    def _native_prepare_ok(self, calls: Sequence[LinearCall]) -> bool:
+        if not native_available("quantize_mask_pack") or self.ring.k % 8 or self.ring.k > 56:
+            return False
+        if self.ring.cap:  # capped rings need each linear's weight-row norm
+            return all(self._meta.get(c.id).wnorm is not None for c in calls)
+        return True
+
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
+        if self._native_prepare_ok(calls):
+            return self._prepare_native(calls)
+        return self._prepare_python(calls)
+
+    def _prepare_native(self, calls: Sequence[LinearCall]) -> _Prepared:
+        """:meth:`_prepare_python` with quantize + mask + pack fused in ``pgw_fast`` (bit-identical)."""
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        t0 = time.perf_counter()
+        reservations, metas = self._precheck(calls)
+        # Same guarantee as the Python path: a non-finite activation in a later call must not
+        # consume mask rows of earlier calls, so check every call before taking any row.
+        xs: list[np.ndarray] = []
+        for call in calls:
+            x = call.x.detach().to("cpu", torch.float32)
+            if x.numel() and not bool(torch.isfinite(x).all()):
+                raise RingOverflowError("non-finite activation values cannot be quantized")
+            xs.append(np.ascontiguousarray(x.numpy()))
+        ring = self.ring
+        sx_parts: list[list[torch.Tensor]] = [[] for _ in calls]
+        chunks: list[_Chunk] = []
+        try:
+            for ci, (call, res, meta, xn) in enumerate(zip(calls, reservations, metas, xs, strict=True)):
+                t = int(xn.shape[0])
+                row = 0
+                while row < t:
+                    boundary = int(res.rows_until_boundary(call.id))
+                    if boundary <= 0:
+                        raise MaskExhaustedError("mask reservation has no rows left", details={"linear": call.id.key})
+                    rows = min(t - row, boundary, self.max_rows_per_item)
+                    check = self._should_check()
+                    u = uw = None
+                    if check or self.min_soundness_bits > 0:
+                        u, uw = self._checks_u64(res, call.id)
+                        self._check_soundness(call.id, meta.in_features, u)
+                        if not check:
+                            u = uw = None
+                    r, wr = res.take(call.id, rows)
+                    try:
+                        if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
+                            raise ShapeError(
+                                f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                            )
+                        r_np = np.ascontiguousarray(r.numpy())
+                        try:
+                            payload, xh, sx = native.fast.quantize_mask_pack(
+                                xn[row : row + rows], r_np, ring.k, ring.a, int(ring.cap or 0), float(meta.wnorm or 0.0)
+                            )
+                        except ValueError as exc:
+                            if str(exc).startswith("ring_overflow"):
+                                raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                            raise ShapeError(str(exc)) from exc
+                        x_hat = torch.from_numpy(xh)
+                        if self.noise_monitor is not None:  # xq = centered(x_hat - r), only for its checks
+                            xq = center(x_hat - r.to(torch.int64), ring)
+                            try:
+                                self.noise_monitor.guard(x_hat, xq)  # type: ignore[attr-defined]
+                            finally:
+                                xq.zero_()
+                    except BaseException:
+                        wr.zero_()
+                        raise
+                    finally:
+                        r.zero_()  # one-time pad: never keep it around
+                    chunks.append(_Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload))
+                    sx_parts[ci].append(torch.from_numpy(sx))
+                    row += rows
+        except BaseException:
+            for ch in chunks:
+                ch.wr.zero_()
+            raise
+        sxs = [torch.cat(p) if len(p) > 1 else (p[0] if p else torch.zeros(0, dtype=torch.float64))
+               for p in sx_parts]
+        request = None
+        if chunks:
+            request = ComputeRequest(
+                request_id=uuid.uuid4().hex,
+                fingerprint=self.fingerprint,
+                ring=self.ring.name,
+                items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]
+                deadline_ms=self.deadline_ms,
+            )
+        return _Prepared(calls, chunks, sxs, metas, request, time.perf_counter() - t0)
+
+    def _prepare_python(self, calls: Sequence[LinearCall]) -> _Prepared:
         from pgw.wire.messages import ComputeItem, ComputeRequest
 
         t0 = time.perf_counter()
@@ -814,6 +910,7 @@ class MaskedBackend(LinearBackend):
         outs: list[list[torch.Tensor]] = [[] for _ in prep.calls]
         bytes_down = 0
         checked = skipped = 0
+        use_native = native_available("finish_chunk") and self.ring.k % 8 == 0 and self.ring.k <= 56
         try:
             if req is not None:
                 if getattr(response, "request_id", None) != req.request_id:
@@ -833,6 +930,13 @@ class MaskedBackend(LinearBackend):
                         details={"expected": ch.lid.key, "got": str(res.linear)},
                     )
                 bytes_down += len(res.y_hat)
+                if use_native:
+                    outs[ch.call_index].append(self._finish_chunk_native(prep, ch, meta, res.y_hat))
+                    if ch.u is not None:
+                        checked += 1
+                    else:
+                        skipped += 1
+                    continue
                 if self._u32:
                     y_hat = None
                 else:
@@ -893,6 +997,42 @@ class MaskedBackend(LinearBackend):
             local_seconds=prep.t_prepare + time.perf_counter() - t0,
         )
         return result
+
+    def _finish_chunk_native(self, prep: _Prepared, ch: _Chunk, meta: _MaskedMeta, y_hat: bytes) -> torch.Tensor:
+        """Freivalds, unmask, range check and dequantize one chunk in ``pgw_fast`` (bit-identical)."""
+        key = ch.lid.key
+        consts = self._native_consts.get(key)
+        if consts is None:
+            consts = self._native_consts[key] = (
+                np.ascontiguousarray(meta.scale.numpy(), dtype=np.float32),
+                None if meta.bias is None else np.ascontiguousarray(meta.bias.numpy(), dtype=np.float32),
+                int(self.ring.output_bound(meta.in_features)),
+            )
+        scale, bias, bound = consts
+        sx = np.ascontiguousarray(prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows].numpy(), dtype=np.float64)
+        checked = ch.u is not None and ch.uw is not None
+        try:
+            out, status, bad = native.fast.finish_chunk(
+                y_hat, ch.wr.numpy(), ch.x_hat.numpy() if checked else None, ch.u if checked else None,
+                ch.uw if checked else None, sx, scale, bias, self.ring.k, bound,
+            )
+        except ValueError as exc:
+            raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+        finally:
+            ch.wr.zero_()
+        if status == 3:
+            raise MaskReuseError("mask reservation closed during a compute call")
+        if status == 1:
+            raise IntegrityError(
+                "compute service result failed the Freivalds check",
+                details={"linear": key, "bad_rows": int(bad), "rows": ch.rows},
+            )
+        if status == 2:
+            raise IntegrityError(
+                "decoded linear output outside the representable range (corrupt or tampered result)",
+                details={"bound": bound, "ring": self.ring.name},
+            )
+        return torch.from_numpy(out)
 
     @staticmethod
     def _wrap_transport(exc: Exception) -> PGWError:
