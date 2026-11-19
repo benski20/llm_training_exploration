@@ -120,15 +120,32 @@ def test_every_response_freivalds_checked(e2e_stack: E2EStack) -> None:
     assert be["freivalds_skipped"] == 0 and be["integrity_failures"] == 0
     assert model["noise_monitor"]["state"] == "active" and not model["noise_monitor"]["alarm"]
     # compute calls go over the persistent WebSocket channel, not one HTTP request each
-    assert model["client"]["stream_requests"] > 0 and model["client"]["stream_open_failures"] == 0
+    assert model["client"]["stream_requests"] > 0 and model["client"]["stream_open_failures"] == 0, model["client"]
 
 
 # ---- 3. privacy: what the service saw -------------------------------------------------------------------
+def _joined(items: list[Any], calls: list[Any]) -> list[Any]:
+    """Rejoin pipelined prefill halves (one call sent as consecutive items of the same linear)."""
+    from tests.e2e.proxy import CapturedItem
+
+    out, i = [], 0
+    for lid, xq in calls:
+        want, parts = int(xq.shape[0]), []
+        while sum(int(p.rows) for p in parts) < want:
+            assert items[i].linear == lid, (items[i].linear, lid)
+            parts.append(items[i])
+            i += 1
+        out.append(parts[0] if len(parts) == 1 else
+                   CapturedItem(parts[0].request_id, lid, want, torch.cat([p.x_hat for p in parts], dim=0)))
+    assert i == len(items)
+    return out
+
+
 def test_service_never_receives_plaintext(e2e_stack: E2EStack, reference: Reference) -> None:
     exp = _reference(reference)
-    items = _STATE["chat_items"]
-    ring = e2e_stack.ring
     calls = exp["calls"]
+    items = _joined(_STATE["chat_items"], calls)
+    ring = e2e_stack.ring
     # same linear/row structure as the reference run of the same request
     assert [(i.linear, i.rows) for i in items] == [(k, int(x.shape[0])) for k, x in calls]
     total = equal = small = 0
@@ -168,7 +185,7 @@ def test_outbound_traffic_passes_uniformity_monitor(e2e_stack: E2EStack, referen
     ring = e2e_stack.ring
     mon = OutboundNoiseMonitor(ring, sample_rate=1.0, fail_closed=True, window_values=1 << 14, seed=1)
     calls = exp["calls"]
-    for it, (_, xq) in zip(_STATE["chat_items"], calls, strict=True):
+    for it, (_, xq) in zip(_joined(_STATE["chat_items"], calls), calls, strict=True):
         mon.guard(it.x_hat, xq)  # with the plaintext for the correlation test
     seen = {id(it) for it in _STATE["chat_items"]}
     for it in e2e_stack.all_items:  # everything else sent so far (the streaming request)

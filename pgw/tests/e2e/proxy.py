@@ -7,14 +7,14 @@ service receives passes through it. Tests use it to
   uniform ring noise, never the plaintext quantized activations;
 * simulate a malicious or faulty service by corrupting one element of the next compute response.
 
-Plain HTTP/1.1 on loopback (the gateway allows plain http only to loopback hosts).
+Plain HTTP/1.1 and the WebSocket compute stream on loopback (the gateway allows plain http only to
+loopback hosts). Stream frames are recorded and can be tampered with like HTTP bodies.
 """
 
 from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import httpx
@@ -49,7 +49,7 @@ class CapturedRequest:
 
 
 class RecordingProxy:
-    """Threaded reverse proxy ``127.0.0.1:<port>`` -> ``upstream``.
+    """Reverse proxy ``127.0.0.1:<port>`` -> ``upstream`` for HTTP and the WebSocket compute stream.
 
     Args:
         upstream: Base URL of the real compute service.
@@ -58,6 +58,11 @@ class RecordingProxy:
     """
 
     def __init__(self, upstream: str, in_features: dict[str, int], ring: RingParams):
+        import asyncio
+        import socket
+
+        import uvicorn
+
         self.upstream = upstream.rstrip("/")
         self.in_features = in_features
         self.ring = ring
@@ -65,47 +70,102 @@ class RecordingProxy:
         self.raw: list[CapturedRequest] = []
         self.tamper_next = 0  # number of upcoming compute responses to corrupt
         self.tampered = 0
+        self.stream_frames = 0  # compute requests that arrived over the WebSocket stream
         self._lock = threading.Lock()
-        self._client = httpx.Client(base_url=self.upstream, timeout=300.0, trust_env=False)
         proxy = self
+        client = httpx.AsyncClient(base_url=self.upstream, timeout=300.0, trust_env=False)
 
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
+        async def http(scope: Any, receive: Any, send: Any) -> None:
+            body = b""
+            while True:
+                msg = await receive()
+                body += msg.get("body", b"")
+                if not msg.get("more_body"):
+                    break
+            headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]
+                       if k.decode("latin-1").lower() not in _HOP}
+            path = scope["path"] + (("?" + scope["query_string"].decode()) if scope.get("query_string") else "")
+            proxy._record(scope["method"], scope["path"], headers, body)
+            up = await client.request(scope["method"], path, content=body, headers=headers)
+            out = up.content
+            if scope["path"] == COMPUTE_PATH and up.status_code == 200:
+                out = proxy._maybe_tamper(out)
+            hdrs = [(k.encode("latin-1"), v.encode("latin-1")) for k, v in up.headers.items()
+                    if k.lower() not in _HOP and k.lower() != "content-encoding"]
+            hdrs.append((b"content-length", str(len(out)).encode()))
+            await send({"type": "http.response.start", "status": up.status_code, "headers": hdrs})
+            await send({"type": "http.response.body", "body": out})
 
-            def log_message(self, format: str, *args: Any) -> None:
+        async def ws(scope: Any, receive: Any, send: Any) -> None:
+            from websockets.asyncio.client import connect
+
+            fwd = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]
+                   if k.decode("latin-1").lower() in ("authorization", "pgw-protocol")}
+            await receive()  # websocket.connect
+            proxy._record("WS", scope["path"], fwd, b"")
+            try:
+                upstream_ws = await connect("ws" + self.upstream[4:] + scope["path"], additional_headers=fwd,
+                                            max_size=None, compression=None)
+            except Exception:
+                await send({"type": "websocket.close", "code": 1011})
                 return
+            await send({"type": "websocket.accept"})
 
-            def _forward(self) -> None:
-                n = int(self.headers.get("Content-Length") or 0)
-                body = self.rfile.read(n) if n else b""
-                headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP}
-                proxy._record(self.command, self.path, headers, body)
-                up = proxy._client.request(self.command, self.path, content=body, headers=headers)
-                out = up.content
-                if self.path == COMPUTE_PATH and up.status_code == 200:
-                    out = proxy._maybe_tamper(out)
-                self.send_response(up.status_code)
-                for k, v in up.headers.items():
-                    if k.lower() not in _HOP and k.lower() != "content-encoding":
-                        self.send_header(k, v)
-                self.send_header("Content-Length", str(len(out)))
-                self.end_headers()
-                self.wfile.write(out)
+            async def down() -> None:
+                async for frame in upstream_ws:
+                    data = frame if isinstance(frame, bytes) else frame.encode()
+                    await send({"type": "websocket.send", "bytes": proxy._maybe_tamper_frame(data)})
 
-            do_GET = _forward  # noqa: N815 - stdlib naming
-            do_POST = _forward  # noqa: N815
+            task = asyncio.ensure_future(down())
+            try:
+                while True:
+                    msg = await receive()
+                    if msg["type"] == "websocket.disconnect":
+                        break
+                    data = msg.get("bytes") or b""
+                    proxy._record("POST", COMPUTE_PATH, fwd, data, stream=True)
+                    await upstream_ws.send(data)
+            finally:
+                task.cancel()
+                await upstream_ws.close()
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._server.daemon_threads = True
-        self.port = int(self._server.server_address[1])
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            if scope["type"] == "http":
+                await http(scope, receive, send)
+            elif scope["type"] == "websocket":
+                await ws(scope, receive, send)
+            elif scope["type"] == "lifespan":
+                while True:
+                    m = await receive()
+                    if m["type"] == "lifespan.startup":
+                        await send({"type": "lifespan.startup.complete"})
+                    else:
+                        await send({"type": "lifespan.shutdown.complete"})
+                        return
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = int(sock.getsockname()[1])
         self.url = f"http://127.0.0.1:{self.port}"
-        self._thread = threading.Thread(target=self._server.serve_forever, name="e2e-proxy", daemon=True)
+        cfg = uvicorn.Config(app, log_level="warning", access_log=False, ws="websockets", lifespan="on",
+                             ws_max_size=1 << 30)
+        self._server = uvicorn.Server(cfg)
+        self._thread = threading.Thread(target=lambda: self._server.run(sockets=[sock]), name="e2e-proxy",
+                                        daemon=True)
         self._thread.start()
+        import time
+
+        for _ in range(200):
+            if self._server.started:
+                break
+            time.sleep(0.02)
 
     # ---- recording --------------------------------------------------------------------------------
-    def _record(self, method: str, path: str, headers: dict[str, str], body: bytes) -> None:
+    def _record(self, method: str, path: str, headers: dict[str, str], body: bytes, *, stream: bool = False) -> None:
         with self._lock:
             self.raw.append(CapturedRequest(method, path, headers, body))
+            if stream:
+                self.stream_frames += 1
         if method != "POST" or path != COMPUTE_PATH:
             return
         req = decode_message(body, ComputeRequest)
@@ -131,6 +191,15 @@ class RecordingProxy:
         items = (ComputeResult(first.linear, first.rows, bytes(y)), *resp.items[1:])
         return encode_message(ComputeResponse(resp.request_id, items, resp.timing))
 
+    def _maybe_tamper_frame(self, frame: bytes) -> bytes:
+        from pgw.wire.codec import decode_any
+
+        try:
+            msg = decode_any(frame)
+        except Exception:
+            return frame
+        return self._maybe_tamper(frame) if isinstance(msg, ComputeResponse) else frame
+
     # ---- helpers ----------------------------------------------------------------------------------
     def take(self) -> list[CapturedItem]:
         """Return and clear the captured compute items."""
@@ -146,6 +215,5 @@ class RecordingProxy:
 
     def close(self) -> None:
         """Stop serving."""
-        self._server.shutdown()
-        self._server.server_close()
-        self._client.close()
+        self._server.should_exit = True
+        self._thread.join(10)
