@@ -521,7 +521,7 @@ async def test_speculative_decoding_through_the_gateway_is_identical(tiny_pack_d
     req = {**CHAT, "logprobs": True, "top_logprobs": 2, "max_tokens": 12, "stream": stream}
 
     async def run(model_kw: dict[str, Any]) -> tuple[Any, Any]:
-        store = make_store(400, name=f"store-{len(model_kw)}")
+        store = make_store(400, name=f"store-{abs(hash(json.dumps(model_kw, sort_keys=True)))}")
         svc = InProcessService(gw_pack)
         app = masked_app(tiny_pack_dir, tmp_path, store, svc, keys, model_kw=model_kw)
         async with gateway(app) as c:
@@ -538,5 +538,7 @@ async def test_speculative_decoding_through_the_gateway_is_identical(tiny_pack_d
     base, be0 = await run({})
     spec, be1 = await run({"draft_pack_path": str(tiny_pack_dir), "spec_tokens": 4})
     assert spec == base  # bit-identical, logprobs included
+    looked, _ = await run({"spec_lookup": 3, "spec_tokens": 4})  # prompt lookup only, no draft model
+    assert looked == base
     assert be1["round_trips"] < be0["round_trips"]  # fewer sequential passes for the same output
     assert be1["integrity_failures"] == 0 and be1["freivalds_checked"] == be1["round_trips"]

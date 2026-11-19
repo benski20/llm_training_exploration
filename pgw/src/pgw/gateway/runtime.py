@@ -654,7 +654,7 @@ class ModelRuntime:
         self.draft_model = self._load_draft()
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
-            draft=self.draft_model, spec_tokens=self.config.spec_tokens,
+            draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
         )
         self.tokenizer = tokenizer
         self.pack = pack
@@ -684,7 +684,8 @@ class ModelRuntime:
     @property
     def spec_factor(self) -> int:
         """Mask rows per generated token in the worst case (1 without speculation)."""
-        return 1 + (self.config.spec_tokens if self.draft_model is not None else 0)
+        speculating = self.draft_model is not None or self.config.spec_lookup > 0
+        return 1 + (self.config.spec_tokens if speculating else 0)
 
     def mask_cache_estimate(self) -> int:
         """Worst-case decrypted mask bytes cached by ``max_concurrent_sessions`` sessions (0 if unknown)."""

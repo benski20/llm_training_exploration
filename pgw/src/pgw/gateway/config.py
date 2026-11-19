@@ -85,6 +85,11 @@ class GatewayModelConfig(BaseModel):
         "Qwen2.5-7B), run locally in plaintext on the gateway to propose tokens the target checks in one masked pass",
     )
     spec_tokens: int = Field(4, ge=0, le=16, description="Draft tokens proposed per step (0 disables speculation)")
+    spec_lookup: int = Field(
+        0, ge=0, le=8, description="Prompt-lookup drafting: propose what followed the latest earlier match of the "
+        "last N (down to 1) context tokens, before (or without) a draft model; free to compute, strong on RAG, code "
+        "and summaries. Rejected proposals use mask rows. 0 disables; 3 is a good value",
+    )
     draft_device: str | None = Field(None, description="Device of the draft model (default: the model's device)")
     service_url: str | None = None
     service_token: SecretStr | None = None

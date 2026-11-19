@@ -104,6 +104,21 @@ class _SeqState:
         return self.finish is not None
 
 
+def _lookup_drafts(seq: Sequence[int], k: int, max_n: int) -> list[int]:
+    """Prompt-lookup proposal: the up-to-``k`` tokens that followed the latest earlier occurrence of
+    the last ``n`` tokens of ``seq`` (``n`` from ``max_n`` down to 1); ``[]`` if there is none."""
+    size = len(seq)
+    for n in range(min(max_n, size - 1), 0, -1):
+        tail = list(seq[size - n :])
+        first = tail[0]
+        for i in range(size - n - 1, -1, -1):  # latest match first, never the tail itself
+            if seq[i] == first and list(seq[i : i + n]) == tail:
+                out = list(seq[i + n : i + n + k])
+                if out:
+                    return out
+    return []
+
+
 def _dcache(st: _SeqState) -> KVCache:
     assert st.draft_cache is not None
     return st.draft_cache
@@ -147,6 +162,7 @@ class Generator:
         batching: bool = True,
         draft: TransformerModel | None = None,
         spec_tokens: int = 4,
+        lookup: int = 0,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
@@ -160,8 +176,13 @@ class Generator:
         dv = getattr(getattr(draft, "arch", None), "vocab_size", None) if draft is not None else None
         self._target_vocab = int(tv) if tv is not None else None
         self._draft_vocab = int(dv) if dv is not None else None
+        if lookup < 0 or lookup > 8:
+            raise ConfigError("lookup must be in [0, 8]")
         self.draft = draft if spec_tokens > 0 else None
-        self.spec_tokens = spec_tokens if draft is not None else 0
+        #: Prompt-lookup drafting: propose what followed the latest earlier match of the last
+        #: ``lookup`` (down to 1) tokens of the context. Costs no model compute.
+        self.lookup = lookup if spec_tokens > 0 else 0
+        self.spec_tokens = spec_tokens if (draft is not None or self.lookup) else 0
         self.model = model
         self.tokenizer = tokenizer
         self.max_batch = max_batch
@@ -373,7 +394,7 @@ class Generator:
     # ---- speculative decoding ---------------------------------------------------------------
     def _spec_budget(self, st: _SeqState) -> int:
         """Draft tokens for this step: never past max_tokens, the context, or the masks needed to finish."""
-        if self.draft is None or st.draft_cache is None:
+        if not self.spec_tokens:
             return 0
         left = st.params.max_tokens - len(st.generated)  # tokens still to emit, including this step's
         k = min(self.spec_tokens, left - 1, st.cache.max_len - st.cache.length - len(st.pending))
@@ -391,8 +412,9 @@ class Generator:
         return max(0, k)
 
     def _plan_drafts(self, batch: Sequence[_SeqState]) -> None:
-        """Run the draft model (plaintext, local) to propose up to ``spec_tokens`` tokens per sequence."""
-        if self.draft is None:
+        """Propose up to ``spec_tokens`` tokens per sequence: prompt lookup first (free), else the draft model
+        (plaintext, local)."""
+        if not self.spec_tokens:
             return
         active: list[tuple[_SeqState, int]] = []
         for st in batch:
@@ -400,9 +422,18 @@ class Generator:
             if st.draft_cache is not None and st.draft_cache.length > len(st.ctx):
                 st.draft_cache.truncate(len(st.ctx))  # drop proposals of an earlier (failed) step
             k = self._spec_budget(st)
-            if k > 0:
+            if k <= 0:
+                continue
+            if self.lookup:
+                found = _lookup_drafts(st.ctx + st.pending, k, self.lookup)
+                if self._target_vocab is not None:
+                    found = [t for t in found if t < self._target_vocab][:k]
+                if found:
+                    st.drafts = found
+                    continue
+            if self.draft is not None:
                 active.append((st, k))
-        if not active:
+        if not active or self.draft is None:
             return
         dv, tv = self._draft_vocab, self._target_vocab
 
@@ -440,7 +471,7 @@ class Generator:
         n_in = len(pending) + len(st.drafts)
         st.masks += n_in
         if not st.drafts:
-            if st.draft_cache is not None:
+            if self.spec_tokens:
                 st.ctx.extend(pending)
             return [self._consume(st, logits)]
         drafts = st.drafts
@@ -626,7 +657,7 @@ class Generator:
         return (live[start:] + live[:start])[: self.max_batch]
 
     async def _run_step(self, batch: list[_SeqState]) -> None:
-        if self.draft is not None:
+        if self.spec_tokens:
             await self._run_plain(self._plan_drafts, batch)
         logits = await self.model.aforward_batch(self._inputs(batch))
         events = await self._run_plain(self._consume_batch, batch, logits)

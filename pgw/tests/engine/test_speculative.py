@@ -199,3 +199,38 @@ def test_int8_draft_backend_is_accurate_with_activation_outliers(qwen_pack: InMe
     ref = FloatBackend(qwen_pack, DEFAULT_RING).forward(LinearCall(lid, x))
     got = Int8DraftBackend(qwen_pack, DEFAULT_RING).forward(LinearCall(lid, x))
     assert float((got - ref).abs().max() / ref.abs().max()) < 1e-4
+
+
+def test_lookup_drafts_unit() -> None:
+    from pgw.engine.generate import _lookup_drafts
+
+    seq = [1, 2, 3, 4, 5, 9, 2, 3]
+    assert _lookup_drafts(seq, 3, 3) == [4, 5, 9]  # "2 3" matched earlier -> what followed
+    assert _lookup_drafts([7, 8, 9], 2, 3) == []  # no repeat
+    assert _lookup_drafts([5, 1, 5, 2, 5], 2, 3) == [2, 5]  # latest earlier match of "5" wins
+    assert _lookup_drafts([1, 2, 1, 2], 4, 3) == [1, 2]  # stops at the end of the context
+    assert _lookup_drafts([4], 2, 3) == []
+
+
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded", "penalties", "stop"])
+@pytest.mark.parametrize("with_draft", [False, True])
+def test_prompt_lookup_output_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                        tiny_tokenizer: ChatTokenizer, params: SamplingParams,
+                                        with_draft: bool) -> None:
+    target = _plain(qwen_pack)
+    prompt = PROMPT * 4  # repetitive context: lookup has something to propose
+    base = Generator(target, tiny_tokenizer).generate(prompt, params)
+    draft = _plain(other_draft_pack) if with_draft else None
+    spec = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=4, lookup=3).generate(prompt, params)
+    assert spec.token_ids == base.token_ids and spec.text == base.text
+    assert spec.finish_reason == base.finish_reason and spec.logprobs == base.logprobs
+
+
+def test_prompt_lookup_cuts_passes_on_repetitive_output(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer) -> None:
+    """Greedy decoding of a tiny random model quickly loops; lookup then proposes the loop."""
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=48, temperature=0.0, ignore_eos=True)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    spec = Generator(target, tiny_tokenizer, spec_tokens=4, lookup=3).generate(PROMPT, params)
+    assert spec.token_ids == base.token_ids
+    assert spec.timings_ms["spec_passes"] < len(base.token_ids)

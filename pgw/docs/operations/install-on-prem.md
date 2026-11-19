@@ -132,7 +132,14 @@ proposes `spec_tokens` tokens (default 4). The masked target checks them all in 
 is still chosen by the target with the request's own sampler, so responses are identical to
 decoding without a draft, and nothing about the draft leaves the gateway. Speculation only uses
 mask slots that a request has already reserved beyond what it needs; it never makes a request run
-out of slots. `draft_device` puts the draft on a gateway GPU if there is one.
+out of slots. `draft_device` puts the draft on a gateway GPU if there is one; on CPU the draft
+uses int8 weights.
+
+`"spec_lookup": 3` adds prompt-lookup drafting: when the last few tokens already occurred earlier in
+the conversation, the gateway proposes what followed them, at no compute cost. It works with or
+without a draft model and helps most when answers quote their input (RAG, code edits, summaries,
+structured output). Output is unchanged. Rejected proposals use mask rows, so it raises mask use
+somewhat on text that does not repeat.
 
 Environment (`/etc/pgw/gateway.env`):
 
