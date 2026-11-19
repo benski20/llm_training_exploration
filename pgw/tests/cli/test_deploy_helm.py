@@ -43,6 +43,10 @@ VARIANTS: dict[str, list[dict[str, Any]]] = {
                                                           "namespaceSelector": {"matchLabels": {"ns": "c"}}}}}},
         {"networkPolicy": {"enabled": False}, "serviceAccount": {"create": False},
          "config": {"extraEnv": {"PGW_GATEWAY_CORS_ORIGINS": "[]"}, "integrityCooldownSeconds": 300}},
+        {"console": {"viewerTokensKey": "viewer-tokens"},
+         "consoleIngress": {"enabled": True, "className": "nginx-internal", "host": "pgw-console.example.internal",
+                            "tls": [{"secretName": "console-tls", "hosts": ["pgw-console.example.internal"]}]}},
+        {"console": {"enabled": False}},
     ],
     "pgw-factory": [
         {},
@@ -424,6 +428,48 @@ def test_helm_lint_and_template(chart: str, tmp_path: Path) -> None:
     docs = [d for d in yaml.safe_load_all(out) if d]
     ours = sorted((o["kind"], o["metadata"]["name"]) for o in _objects(chart, MINIMAL[chart]))
     assert sorted((d["kind"], d["metadata"]["name"]) for d in docs) == ours
+
+
+def test_gateway_console_wiring() -> None:
+    """Console: on by default next to /admin, viewer tokens as a mounted Secret file, internal ingress."""
+    spec = _pod_spec(_objects("pgw-gateway", MINIMAL["pgw-gateway"]))
+    env = _env(spec["containers"][0])
+    assert env["PGW_GATEWAY_CONSOLE_ENABLED"] == "true" and "PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE" not in env
+    assert "console-viewers" not in {v["name"] for v in spec["volumes"]}
+
+    vals = deep_merge(MINIMAL["pgw-gateway"], VARIANTS["pgw-gateway"][-2])
+    objs = _objects("pgw-gateway", vals)
+    spec = _pod_spec(objs)
+    main = spec["containers"][0]
+    env = _env(main)
+    assert env["PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE"] == "/etc/pgw/console/viewer-tokens"
+    vol = next(v for v in spec["volumes"] if v["name"] == "console-viewers")
+    assert vol["secret"] == {"secretName": "gw-secrets", "defaultMode": 0o440,
+                             "items": [{"key": "viewer-tokens", "path": "viewer-tokens"}]}
+    mount = next(m for m in main["volumeMounts"] if m["name"] == "console-viewers")
+    assert mount["mountPath"] == "/etc/pgw/console" and mount["readOnly"] is True and "subPath" not in mount
+    ings = {o["metadata"]["name"]: o for o in objs if o["kind"] == "Ingress"}
+    ing = ings["gw-pgw-gateway-console"]
+    assert ing["spec"]["ingressClassName"] == "nginx-internal" and ing["spec"]["tls"]
+    (rule,) = ing["spec"]["rules"]
+    assert rule["host"] == "pgw-console.example.internal"
+    assert {p["path"] for p in rule["http"]["paths"]} == {"/console", "/admin"}  # never /v1 or /
+    notes = render_chart(HELM / "pgw-gateway", vals)["pgw-gateway/templates/NOTES.txt"]
+    assert "https://pgw-console.example.internal/console/" in notes
+
+    # fail closed: console ingress without TLS or host, or with the console disabled
+    for override, msg in (({"consoleIngress": {"tls": []}}, "tls is required"),
+                          ({"consoleIngress": {"host": ""}}, "host is required"),
+                          ({"console": {"enabled": False}}, "needs console.enabled")):
+        with pytest.raises(RenderError, match=msg):
+            render_chart(HELM / "pgw-gateway", deep_merge(vals, override))
+
+    off = deep_merge(MINIMAL["pgw-gateway"], {"console": {"enabled": False, "viewerTokensKey": "viewer-tokens"}})
+    env = _env(_pod_spec(_objects("pgw-gateway", off))["containers"][0])
+    assert env["PGW_GATEWAY_CONSOLE_ENABLED"] == "false" and "PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE" not in env
+    # a catch-all API ingress is flagged in NOTES (it also publishes /admin and /console)
+    notes = render_chart(HELM / "pgw-gateway", deep_merge(MINIMAL["pgw-gateway"], {"ingress": {"enabled": True}}))
+    assert "route only /v1" in notes["pgw-gateway/templates/NOTES.txt"]
 
 
 # ---- review hardening: fail closed on settings that would weaken isolation ------------------------

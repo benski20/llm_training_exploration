@@ -7,6 +7,23 @@ PGW gateway {{ include "pgw-gateway.fullname" . }} ({{ .Chart.AppVersion }}) ins
    "{{ include "pgw-gateway.stateClaim" . }}" (or import partner segments with `pgw maskstore import`).
 3. Check the deployment:
      kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "pgw-gateway.fullname" . }} -- pgw doctor --role gateway
+4. Operator console{{ if not .Values.console.enabled }}: disabled (console.enabled=false){{ else }} (sign in with the admin token{{ if .Values.console.viewerTokensKey }} or a viewer token{{ end }}):
+{{- if .Values.consoleIngress.enabled }}
+     https://{{ .Values.consoleIngress.host }}/console/
+{{- else }}
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "pgw-gateway.fullname" . }} 8080:{{ .Values.service.port }}
+     then open http://localhost:8080/console/ (or publish it internally with consoleIngress)
+{{- end }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+{{- $all := false }}
+{{- range .Values.ingress.hosts }}{{ range .paths }}{{ if eq .path "/" }}{{ $all = true }}{{ end }}{{ end }}{{ end }}
+{{- if $all }}
+
+NOTE: ingress routes "/", which also publishes /admin and /console. If this ingress is reachable
+by applications or the internet, route only /v1 here and use consoleIngress on an internal class.
+{{- end }}
+{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 {{- $cs := .Values.networkPolicy.egress.computeService }}
 {{- if not (or $cs.cidrs $cs.podSelector $cs.namespaceSelector) }}

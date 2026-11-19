@@ -16,6 +16,7 @@ reviewers, operators, developers and compliance teams.
 | Operators | [Mask factory air-gapped from us](operations/air-gapped-factory.md) | offline factory, partner delivery with HPKE, media handling |
 | Operators, architects | [Sizing](operations/sizing.md) | bandwidth, mask storage, factory throughput, latency, with measured numbers |
 | Operators, security | [Encrypted mask generation](operations/encrypted-masks.md) | no factory GPU and no large mask store: the service computes W8.r on MLWE-encrypted masks |
+| Operators, security | [Operator console](operations/console.md) | enabling the web console, roles and tokens, sessions/CSRF/CSP, network exposure, playground quotas, audit data, troubleshooting |
 | Developers | [Gateway API reference](api/gateway-api.md) | OpenAI-compatible endpoints, streaming, errors, limits, admin API |
 | Operators, frontend | [Console API contract](api/console-api.md) | Web console sign-in, roles, usage/audit/overview endpoints, security headers |
 | Legal, compliance | [Compliance FAQ (draft, needs legal review)](compliance/faq.md) | GDPR, HIPAA, FERPA and other questions |

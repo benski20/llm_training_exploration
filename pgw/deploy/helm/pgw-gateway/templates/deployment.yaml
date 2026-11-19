@@ -125,6 +125,12 @@ spec:
               value: {{ .Values.config.metricsRequireAdmin | quote }}
             - name: PGW_GATEWAY_DASHBOARD_ENABLED
               value: {{ .Values.config.dashboardEnabled | quote }}
+            - name: PGW_GATEWAY_CONSOLE_ENABLED
+              value: {{ .Values.console.enabled | quote }}
+            {{- if and .Values.console.enabled .Values.console.viewerTokensKey }}
+            - name: PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE
+              value: /etc/pgw/console/viewer-tokens
+            {{- end }}
             - name: PGW_GATEWAY_OPS_PORT
               value: {{ .Values.opsPort | quote }}
             - name: PGW_GATEWAY_DRAIN_TIMEOUT_S
@@ -253,6 +259,11 @@ spec:
               mountPath: /run/pgw
             - name: tmp
               mountPath: /tmp
+            {{- if and .Values.console.enabled .Values.console.viewerTokensKey }}
+            - name: console-viewers
+              mountPath: /etc/pgw/console
+              readOnly: true
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /etc/pgw/tls
@@ -303,6 +314,15 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
+        {{- if and .Values.console.enabled .Values.console.viewerTokensKey }}
+        - name: console-viewers
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.console.viewerTokensKey }}
+                path: viewer-tokens
+        {{- end }}
         {{- if .Values.tls.enabled }}
         - name: tls
           secret:

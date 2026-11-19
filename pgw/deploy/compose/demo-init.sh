@@ -45,6 +45,13 @@ if [ ! -f "$STATE/api_keys.json" ]; then
     log "demo API key (shown once, demo only): $(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["key"])' "$GW/demo_api_key.json")"
 fi
 
+# Admin token: /admin/* API and console sign-in (http://localhost:8080/console/). The gateway reads it
+# from the file (PGW_GATEWAY_ADMIN_TOKEN_FILE), so it never appears in the compose file or `docker inspect`.
+if [ ! -f "$GW/admin_token" ]; then
+    (umask 077 && python -c 'import secrets; print(secrets.token_urlsafe(32))' > "$GW/admin_token")
+    log "demo admin token for the console (shown once, demo only): $(cat "$GW/admin_token")"
+fi
+
 # Models template: the service token is referenced, not inlined; the gateway entrypoint renders it
 # into /run/pgw/models.json (tmpfs, 0600) at start-up.
 cat > "$GW/models.tmpl.json" <<EOF
