@@ -214,3 +214,24 @@ async def test_admin_token_file(tiny_pack_dir: Path, tmp_path: Path, monkeypatch
         monkeypatch.setenv("PGW_GATEWAY_ADMIN_TOKEN_FILE", str(tmp_path / name))
         with pytest.raises(ValidationError, match=msg):
             GatewaySettings()
+
+
+def test_removing_a_viewer_token_ends_its_sessions(tmp_path: Path) -> None:
+    """Revocation is immediate: sessions signed in with a removed viewer token stop working."""
+    import os
+
+    from pgw.console.sessions import ConsoleSessions
+
+    f = tmp_path / "viewers.txt"
+    f.write_text("viewer-token-aaaaaaaaaaaa\nviewer-token-bbbbbbbbbbbb\n")
+    store = ConsoleSessions("admin-token-0123456789", f)
+    assert store.authenticate("viewer-token-aaaaaaaaaaaa") == "viewer"
+    sid_a, _ = store.create("viewer", token="viewer-token-aaaaaaaaaaaa")
+    sid_b, _ = store.create("viewer", token="viewer-token-bbbbbbbbbbbb")
+    sid_admin, _ = store.create("admin", token="admin-token-0123456789")
+    assert store.get(sid_a) and store.get(sid_b) and store.get(sid_admin)
+    f.write_text("viewer-token-bbbbbbbbbbbb\n")
+    st = f.stat()
+    os.utime(f, (st.st_atime, st.st_mtime + 5))  # make sure the reload sees a new mtime
+    assert store.get(sid_a) is None  # revoked token: session gone
+    assert store.get(sid_b) is not None and store.get(sid_admin) is not None

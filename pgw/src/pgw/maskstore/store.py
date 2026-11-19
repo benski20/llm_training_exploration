@@ -409,7 +409,9 @@ class MaskReservation:
             r = _mask_rows(seed, lin.in_features, self.ring.k, slot0, rows, key)
             wr = self._read_wr(ei, ex, li, lin, slot0, rows)
             if slot0 + rows >= ex.ext.start + ex.ext.count:
-                self._chunk_cache.pop((ei, key), None)  # this linear is done with the extent
+                done = self._chunk_cache.pop((ei, key), None)  # this linear is done with the extent
+                if done is not None:
+                    _zero(done[1])  # decrypted W r rows (incl. slots other reservations may still use)
         return r, wr
 
     def _read_wr(self, ei: int, ex: _Extent, li: int, lin: SegmentLinear, slot0: int, rows: int) -> torch.Tensor:

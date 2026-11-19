@@ -72,6 +72,9 @@ class ConsoleSession:
     auth: Literal["token", "oidc"] = "token"
     #: SSO user (``{"sub", "email", "name"}``); ``None`` for token sign-in.
     user: dict[str, str | None] | None = None
+    #: Viewer-token sessions: digest of the token, re-checked on every use so removing the token
+    #: from ``console_viewer_tokens_file`` ends its sessions too.
+    token_digest: bytes | None = field(default=None, repr=False)
 
     @property
     def actor(self) -> str:
@@ -193,12 +196,13 @@ class ConsoleSessions:
         return min(s.last_seen + self.idle_s, s.created + self.max_age_s)
 
     def create(self, role: Role, *, auth: Literal["token", "oidc"] = "token",
-               user: dict[str, str | None] | None = None) -> tuple[str, ConsoleSession]:
+               user: dict[str, str | None] | None = None, token: str | None = None) -> tuple[str, ConsoleSession]:
         """New session; returns ``(cookie value, session)``."""
         sid = secrets.token_urlsafe(32)  # 256 bits
         now = self.clock()
         sess = ConsoleSession(role=role, csrf=secrets.token_urlsafe(32), created=now, last_seen=now, auth=auth,
-                              user=dict(user) if user is not None else None)
+                              user=dict(user) if user is not None else None,
+                              token_digest=_digest(token) if (token is not None and role == "viewer") else None)
         with self._lock:
             self._purge(now)
             self._sessions[_digest(sid)] = sess
@@ -221,13 +225,23 @@ class ConsoleSessions:
             s = self._sessions.get(k)
             if s is None:
                 return None
-            if now >= self.expires_at(s):
+            if now >= self.expires_at(s) or not self._token_still_valid(s):
                 del self._sessions[k]
                 return None
             if touch:
                 s.last_seen = now
                 self._sessions.move_to_end(k)
             return s
+
+    def _token_still_valid(self, s: ConsoleSession) -> bool:
+        if s.token_digest is None:
+            return True
+        if self.viewer_tokens_file is not None:
+            self._load_viewers(strict=False)
+        ok = False
+        for v in self._viewers:
+            ok |= hmac.compare_digest(s.token_digest, v)
+        return ok
 
     def delete(self, sid: str | None) -> ConsoleSession | None:
         """End a session (returns it, or ``None`` if there was none)."""

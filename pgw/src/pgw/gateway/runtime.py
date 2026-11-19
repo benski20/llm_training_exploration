@@ -220,7 +220,7 @@ class ActiveSession:
                 t_prev = now
                 n += 1
                 self.completion_tokens = n
-                self.masks_consumed = len(self.prompt_ids) + n - 1
+                self.masks_consumed = ev.masks or (len(self.prompt_ids) + n - 1)
                 if ev.finish_reason is not None:
                     self.finish_reason = str(ev.finish_reason)
                 yield ev

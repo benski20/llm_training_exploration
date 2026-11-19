@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import contextlib
 import inspect
 import logging
 import secrets
@@ -1032,6 +1033,8 @@ class MaskedBackend(LinearBackend):
             raise ProtocolError(f"compute response item is malformed: {exc}") from exc
         finally:
             _wipe(ch.wr)
+        if status in (1, 2) and checked and ch.u is not None and not ch.u.any():
+            status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
         if status == 3:
             raise MaskReuseError("mask reservation closed during a compute call")
         if status == 1:
@@ -1091,9 +1094,15 @@ class MaskedBackend(LinearBackend):
             return []
         prep = await asyncio.to_thread(self._prepare, calls)
         response, remote_s = await self.send_prepared(prep)
+        fut = asyncio.ensure_future(asyncio.to_thread(self._finish, prep, response, remote_s))
         try:
-            return await asyncio.to_thread(self._finish, prep, response, remote_s)
+            return await asyncio.shield(fut)
         except asyncio.CancelledError:
+            # The worker thread is still reading the buffers: let it finish (it wipes them itself)
+            # instead of zeroing them underneath it, which could turn a cancel into a false
+            # integrity failure.
+            with contextlib.suppress(BaseException):
+                await fut
             prep.wipe()
             raise
 

@@ -7,6 +7,7 @@ Installed into the gateway app by :func:`install_console` (called from
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hmac
 import html
 import time
@@ -27,6 +28,14 @@ from pgw.core.errors import AuthError, ErrorCode, PGWError
 from pgw.gateway.auth import ApiKey
 from pgw.gateway.openai_schemas import ChatCompletionRequest
 from pgw.gateway.runtime import InvalidRequestError
+
+#: Audit-log scans (overview, usage, audit) run on their own thread so a few busy console tabs cannot
+#: occupy the default executor that inference uses for masking and reservation work.
+_SCAN_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-console-scan")
+
+
+async def _scan(fn: Any, *args: Any) -> Any:
+    return await asyncio.get_running_loop().run_in_executor(_SCAN_POOL, fn, *args)
 
 __all__ = ["CONSOLE_SECURITY_HEADERS", "DEFAULT_STATIC_DIR", "PLAYGROUND_KEY", "ConsoleHeaders", "install_console"]
 
@@ -152,7 +161,7 @@ def install_console(
     async def admin_overview(request: Request) -> Any:
         require_admin(request, "admin.overview")
         statuses = await asyncio.to_thread(lambda: [rt.status() for rt in runtime.runtimes.values()])
-        day = await asyncio.to_thread(reader.usage, "24h", _key_name)
+        day = await _scan(reader.usage, "24h", _key_name)
         consumed_24h = {m: int(a.get("masks_consumed", 0)) for m, a in day["by_model"].items()}
         models = []
         integrity = checked = 0
@@ -200,7 +209,7 @@ def install_console(
         require_admin(request, "admin.usage")
         if window not in WINDOWS:
             raise InvalidRequestError(f"window must be one of {', '.join(WINDOWS)}")
-        return await asyncio.to_thread(reader.usage, window, _key_name)
+        return await _scan(reader.usage, window, _key_name)
 
     @app.get("/admin/audit")
     async def admin_audit(request: Request, limit: int = 100, before: str | None = None, key_id: str | None = None,
@@ -214,9 +223,9 @@ def install_console(
             if before_ms is None:
                 try:
                     before_ms = int(float(before) * 1000)
-                except ValueError as exc:
+                except (ValueError, OverflowError) as exc:
                     raise InvalidRequestError("before must be an audit timestamp or Unix seconds") from exc
-        return await asyncio.to_thread(lambda: reader.events(
+        return await _scan(lambda: reader.events(
             limit=limit, before_ms=before_ms, key_id=key_id or None, model=model or None, status=status or None,
             event=event or None))
 
@@ -278,7 +287,7 @@ def install_console(
         old = request.cookies.get(COOKIE_NAME)
         if old:
             store.delete(old)
-        sid, sess = store.create(role)
+        sid, sess = store.create(role, token=token.strip())
         state.audit.event("console.login", action="console_login", key_id=sess.actor, client=client, reason=role,
                           method="token")
         resp = JSONResponse({"role": role, "csrf": sess.csrf})
