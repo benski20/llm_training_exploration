@@ -76,13 +76,14 @@ async function handle(method: string, url: URL, headers: Headers, body: unknown,
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
     return json(session);
   }
+  if (p === "/console/api/auth-methods") return json({ token: true, oidc: { enabled: false, label: "SSO" } });
   if (p === "/console/api/logout" && method === "POST") {
     session = null;
     sessionStorage.removeItem(SESSION_KEY);
     return json(null, 204);
   }
   if (!session) return err(401, "unauthenticated", "not signed in");
-  if (p === "/console/api/me") return json({ ...session, expires_at: new Date(Date.now() + 8 * 3600e3).toISOString(), version: "0.1.0" });
+  if (p === "/console/api/me") return json({ ...session, expires_at: new Date(Date.now() + 8 * 3600e3).toISOString(), version: "0.1.0", auth: "token", user: null });
 
   if (method !== "GET") {
     if (headers.get("X-PGW-CSRF") !== session.csrf) return err(403, "permission_denied", "missing or invalid CSRF token");

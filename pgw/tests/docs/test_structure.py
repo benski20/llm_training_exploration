@@ -100,9 +100,11 @@ def test_no_secrets_or_personal_data() -> None:
 
 def test_example_hosts_use_reserved_or_internal_names(docs: dict[str, str]) -> None:
     allowed_suffixes = (".example.net", ".example.com", ".example.org", ".example.internal", ".internal")
+    # public identity providers whose issuer host is fixed (console SSO examples)
+    public_idps = ("login.microsoftonline.com",)
     for rel, text in docs.items():
         for host in re.findall(r"https?://([a-zA-Z0-9.-]+)", text):
-            assert host.endswith(allowed_suffixes) or host in ("localhost", "127.0.0.1"), (
+            assert host.endswith(allowed_suffixes) or host in ("localhost", "127.0.0.1", *public_idps), (
                 f"{rel}: example URL with a real-looking host {host}")
 
 

@@ -13,7 +13,7 @@ maximum request body is `PGW_GATEWAY_MAX_BODY_BYTES` (default 4 MiB).
 |---|---|---|
 | Applications | `Authorization: Bearer pgw-<key_id>-<secret>` | `key_id` is 12 hex characters; only a SHA-256 hash of the secret is stored. Keys carry scopes (`inference`, `admin`), an optional model allow-list, and limits |
 | Operators | `Authorization: Bearer <admin token>` | `PGW_GATEWAY_ADMIN_TOKEN`, or an API key with the `admin` scope |
-| Console users | `pgw_console` session cookie (+ `X-PGW-CSRF` on writes) | sign in at `/console/` with the admin token or a viewer token (`PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE`); viewers may only read. See [console-api.md](console-api.md) |
+| Console users | `pgw_console` session cookie (+ `X-PGW-CSRF` on writes) | sign in at `/console/` with the admin token or a viewer token (`PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE`), or with optional single sign-on ([console-sso.md](../operations/console-sso.md)); viewers may only read. See [console-api.md](console-api.md) |
 
 Keys are created with `pgw gateway keys create` or `POST /admin/keys`, and the plaintext is shown
 **once**. A key restricted to some models gets `model_not_found` (404) for others, so other model
@@ -42,7 +42,10 @@ and is refused under the production policy.
 | GET | `/admin/audit` | admin or console viewer | newest-first audit events (never content), filters and `before` paging |
 | POST | `/console/api/login` | console token | sign in to the console; sets the `pgw_console` session cookie |
 | POST | `/console/api/logout` | console session | sign out |
-| GET | `/console/api/me` | console session | role, CSRF token and expiry of the current session |
+| GET | `/console/api/me` | console session | role, CSRF token and expiry of the current session, sign-in method and SSO user |
+| GET | `/console/api/auth-methods` | none | sign-in methods the console offers (token, single sign-on) |
+| GET | `/console/api/oidc/login` | none | start single sign-on: redirect to the identity provider ([console-sso.md](../operations/console-sso.md)) |
+| GET | `/console/api/oidc/callback` | none (OIDC state) | single sign-on redirect URI: creates the console session |
 | POST | `/console/api/playground/chat` | console admin | `/v1/chat/completions` as the built-in key `console-playground` |
 | GET | `/console` | none | redirect to `/console/` |
 | GET | `/console/` | none (page) / session (data) | operator console (static single-page app) |

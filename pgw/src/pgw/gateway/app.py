@@ -135,6 +135,10 @@ class GatewayState:
     #: Console sign-in sessions (``None`` when the console is disabled).
     console: ConsoleSessions | None = None
     login_limiter: LoginRateLimiter = field(default_factory=LoginRateLimiter)
+    #: Console single sign-on (:class:`pgw.console.oidc.OIDCClient`; ``None`` when not configured).
+    oidc: Any = None
+    #: Limits SSO sign-in starts per client (bounds the pending sign-in store).
+    oidc_start_limiter: LoginRateLimiter = field(default_factory=lambda: LoginRateLimiter(attempts=30))
     audit_reader: Any = None
     #: Streaming API requests since start-up.
     stream_requests: int = 0
@@ -393,6 +397,7 @@ def create_app(
     transports: dict[str, Any] | None = None,
     client_factory: Any = None,
     console_static_dir: Path | None = None,
+    oidc_transport: Any = None,
 ) -> Any:
     """Build the FastAPI app.
 
@@ -434,6 +439,10 @@ def create_app(
             settings.admin_token.get_secret_value() if settings.admin_token is not None else None,
             settings.console_viewer_tokens_file,
         )
+        if settings.console_oidc_enabled:
+            from pgw.console.oidc import OIDCClient
+
+            state.oidc = OIDCClient.from_settings(settings, transport=oidc_transport)
     req_counter = metrics.get("pgw_gateway_requests_total")
     runtime.add_safety_listener(
         lambda event, model, reason: state.audit.event(event, action="safety", model=model, reason=reason)

@@ -15,6 +15,7 @@ reviewers, operators, developers and compliance teams.
 | Operators | [Gateway in your cloud account](operations/install-customer-cloud.md) | topology B: private link, Helm, KMS, cloud storage |
 | Operators | [Mask factory air-gapped from us](operations/air-gapped-factory.md) | offline factory, partner delivery with HPKE, media handling |
 | Operators, architects | [Sizing](operations/sizing.md) | bandwidth, mask storage, factory throughput, latency, with measured numbers |
+| Operators, security | [Console single sign-on](operations/console-sso.md) | OpenID Connect sign-in for the operator console: settings, role mapping, Entra ID, Okta and Keycloak examples |
 | Operators, security | [Encrypted mask generation](operations/encrypted-masks.md) | no factory GPU and no large mask store: the service computes W8.r on MLWE-encrypted masks |
 | Operators, security | [Operator console](operations/console.md) | enabling the web console, roles and tokens, sessions/CSRF/CSP, network exposure, playground quotas, audit data, troubleshooting |
 | Developers | [Gateway API reference](api/gateway-api.md) | OpenAI-compatible endpoints, streaming, errors, limits, admin API |

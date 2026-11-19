@@ -1,12 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api/client";
-import type { Role } from "../api/types";
+import type { AuthKind, MeResponse, Role, SessionUser } from "../api/types";
 
 export interface SessionState {
   status: "loading" | "authed" | "anon";
   role: Role | null;
   version: string | null;
   expiresAt: string | number | null;
+  /** How the user signed in (token or single sign-on). */
+  auth: AuthKind | null;
+  /** Single sign-on user (null for token sign-in). */
+  user: SessionUser | null;
   /** Set when the session ended because the server answered 401. */
   expired: boolean;
 }
@@ -19,17 +23,31 @@ interface SessionApi extends SessionState {
 
 const Ctx = createContext<SessionApi | null>(null);
 
+const ANON = { role: null, version: null, expiresAt: null, auth: null, user: null, expired: false } as const;
+
+function fromMe(m: MeResponse): SessionState {
+  return {
+    status: "authed",
+    role: m.role,
+    version: m.version ?? null,
+    expiresAt: m.expires_at ?? null,
+    auth: m.auth ?? "token",
+    user: m.user ?? null,
+    expired: false,
+  };
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [s, setS] = useState<SessionState>({ status: "loading", role: null, version: null, expiresAt: null, expired: false });
+  const [s, setS] = useState<SessionState>({ status: "loading", ...ANON });
 
   useEffect(() => {
     let alive = true;
     api
       .me()
-      .then((m) => alive && setS({ status: "authed", role: m.role, version: m.version ?? null, expiresAt: m.expires_at ?? null, expired: false }))
-      .catch(() => alive && setS((x) => ({ ...x, status: "anon", role: null })));
+      .then((m) => alive && setS(fromMe(m)))
+      .catch(() => alive && setS((x) => ({ ...x, status: "anon", role: null, auth: null, user: null })));
     const unsub = api.subscribe((e) => {
-      if (e.kind === "unauthorized") setS((x) => ({ ...x, status: "anon", role: null, expired: x.status === "authed" }));
+      if (e.kind === "unauthorized") setS((x) => ({ ...x, status: "anon", role: null, auth: null, user: null, expired: x.status === "authed" }));
     });
     return () => {
       alive = false;
@@ -39,23 +57,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (token: string) => {
     const r = await api.login(token);
-    let version: string | null = null;
-    let expiresAt: string | number | null = null;
+    let next: SessionState = { status: "authed", ...ANON, role: r.role, auth: "token" };
     try {
-      const m = await api.me();
-      version = m.version ?? null;
-      expiresAt = m.expires_at ?? null;
+      next = fromMe(await api.me());
     } catch {
       /* /me is informational here; login already succeeded */
     }
-    setS({ status: "authed", role: r.role, version, expiresAt, expired: false });
+    setS(next);
   }, []);
 
   const logout = useCallback(async () => {
     try {
       await api.logout();
     } finally {
-      setS({ status: "anon", role: null, version: null, expiresAt: null, expired: false });
+      setS({ status: "anon", ...ANON });
     }
   }, []);
 

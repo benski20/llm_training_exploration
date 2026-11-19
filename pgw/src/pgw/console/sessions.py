@@ -68,6 +68,10 @@ class ConsoleSession:
     created: float
     last_seen: float
     public_id: str = field(default_factory=lambda: secrets.token_hex(4))
+    #: How the user signed in: ``token`` (admin/viewer token) or ``oidc`` (single sign-on).
+    auth: Literal["token", "oidc"] = "token"
+    #: SSO user (``{"sub", "email", "name"}``); ``None`` for token sign-in.
+    user: dict[str, str | None] | None = None
 
     @property
     def actor(self) -> str:
@@ -188,11 +192,13 @@ class ConsoleSessions:
         """Unix time the session expires unless used again (idle) or at all (absolute)."""
         return min(s.last_seen + self.idle_s, s.created + self.max_age_s)
 
-    def create(self, role: Role) -> tuple[str, ConsoleSession]:
+    def create(self, role: Role, *, auth: Literal["token", "oidc"] = "token",
+               user: dict[str, str | None] | None = None) -> tuple[str, ConsoleSession]:
         """New session; returns ``(cookie value, session)``."""
         sid = secrets.token_urlsafe(32)  # 256 bits
         now = self.clock()
-        sess = ConsoleSession(role=role, csrf=secrets.token_urlsafe(32), created=now, last_seen=now)
+        sess = ConsoleSession(role=role, csrf=secrets.token_urlsafe(32), created=now, last_seen=now, auth=auth,
+                              user=dict(user) if user is not None else None)
         with self._lock:
             self._purge(now)
             self._sessions[_digest(sid)] = sess

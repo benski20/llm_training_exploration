@@ -295,6 +295,43 @@ class GatewaySettings(PGWSettings):
     console_enabled: bool = Field(
         True, description="Serve the operator console at /console/ (sign-in with admin_token or a viewer token)"
     )
+    console_token_login_enabled: bool = Field(
+        True, description="Allow console sign-in with the admin or a viewer token. Set false when SSO is mandatory "
+        "(needs console OIDC; the admin token keeps working as a Bearer token for /admin/* scripts)",
+    )
+    # ---- console single sign-on (OpenID Connect, authorization code flow + PKCE; off unless issuer + client id) --
+    console_oidc_issuer: str | None = Field(
+        None, description="OIDC issuer URL (https), exactly as the provider's discovery document states it",
+    )
+    console_oidc_client_id: str | None = Field(None, description="Client id registered at the OIDC provider")
+    console_oidc_client_secret_file: Path | None = Field(
+        None, description="File holding the OIDC client secret (confidential client; never set the secret inline)",
+    )
+    console_oidc_redirect_url: str | None = Field(
+        None, description="Redirect URI registered at the provider, e.g. "
+        "https://gw.example.com/console/api/oidc/callback (path must end with /console/api/oidc/callback)",
+    )
+    console_oidc_scopes: str = Field("openid email profile", description="Space-separated scopes (must include openid)")
+    console_oidc_role_claim: str = Field(
+        "groups", description="ID-token claim holding the user's groups or roles (dotted path for nested claims, "
+        "e.g. realm_access.roles)",
+    )
+    console_oidc_admin_values: list[str] = Field(
+        default_factory=list, description="Values of the role claim that grant the admin role (JSON list)",
+    )
+    console_oidc_viewer_values: list[str] = Field(
+        default_factory=list, description="Values of the role claim that grant the read-only viewer role (JSON "
+        "list); users with neither an admin nor a viewer value are refused (403)",
+    )
+    console_oidc_allowed_domains: list[str] = Field(
+        default_factory=list, description="Optional allowlist of email domains (JSON list); empty = any domain",
+    )
+    console_oidc_ca_file: Path | None = Field(
+        None, description="CA bundle (PEM) to verify the OIDC provider's TLS certificate (default: system/certifi)",
+    )
+    console_oidc_label: str = Field(
+        "SSO", min_length=1, max_length=40, description="Provider name on the sign-in button ('Sign in with <label>')",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -325,7 +362,50 @@ class GatewaySettings(PGWSettings):
                 origin_of(o)
             except ConfigError as exc:
                 raise ValueError(exc.message) from exc
+        self._check_console_oidc()
         return self
+
+    @property
+    def console_oidc_enabled(self) -> bool:
+        """Console single sign-on is configured (issuer and client id set)."""
+        return bool(self.console_oidc_issuer) and bool(self.console_oidc_client_id)
+
+    def _check_console_oidc(self) -> None:
+        if bool(self.console_oidc_issuer) != bool(self.console_oidc_client_id):
+            raise ValueError("console_oidc_issuer and console_oidc_client_id must be set together")
+        if not self.console_oidc_enabled:
+            if not self.console_token_login_enabled and self.console_enabled:
+                raise ValueError("console_token_login_enabled=false needs console SSO (console_oidc_issuer and "
+                                 "console_oidc_client_id); otherwise nobody can sign in to the console")
+            return
+        assert self.console_oidc_issuer is not None
+        for name, url in (("console_oidc_issuer", self.console_oidc_issuer),
+                          ("console_oidc_redirect_url", self.console_oidc_redirect_url)):
+            if not url:
+                raise ValueError(f"{name} is required for console SSO")
+            try:
+                scheme, host, _ = origin_of(url)
+            except ConfigError as exc:
+                raise ValueError(f"{name}: {exc.message}") from exc
+            if scheme != "https" and not _is_loopback(host):
+                raise ValueError(f"{name} must use https (plain http only to loopback, for tests)")
+            if urlsplit(url).query or urlsplit(url).fragment:
+                raise ValueError(f"{name} must not have a query or fragment")
+        assert self.console_oidc_redirect_url is not None
+        if not urlsplit(self.console_oidc_redirect_url).path.endswith("/console/api/oidc/callback"):
+            raise ValueError("console_oidc_redirect_url must end with /console/api/oidc/callback")
+        if self.console_oidc_client_secret_file is None:
+            raise ValueError("console SSO needs console_oidc_client_secret_file (confidential client)")
+        if "openid" not in self.console_oidc_scopes.split():
+            raise ValueError("console_oidc_scopes must include 'openid'")
+        if not self.console_oidc_role_claim.strip():
+            raise ValueError("console_oidc_role_claim must not be empty")
+        if not [v for v in (*self.console_oidc_admin_values, *self.console_oidc_viewer_values) if v.strip()]:
+            raise ValueError("console SSO needs console_oidc_admin_values and/or console_oidc_viewer_values "
+                             "(users without a mapped role are refused)")
+        for d in self.console_oidc_allowed_domains:
+            if not d.strip().lstrip("@") or any(c.isspace() or c in "/@" for c in d.strip().lstrip("@")):
+                raise ValueError(f"console_oidc_allowed_domains: invalid domain {d!r}")
 
     def all_models(self) -> list[GatewayModelConfig]:
         """Models from ``models`` plus ``models_file`` (names must be unique)."""

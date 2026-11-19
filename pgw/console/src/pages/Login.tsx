@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { ApiError } from "../api/client";
+import { ApiError, SSO_LOGIN_PATH, api } from "../api/client";
+import type { AuthMethods } from "../api/types";
 import { useSession } from "../app/session";
 import { useTheme } from "../lib/theme";
 import { Button, Callout, Field, IconEye, IconEyeOff, IconLock, IconMoon, IconSun, Input, Loading, Logo } from "../ui";
@@ -15,6 +16,22 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const from = (loc.state as { from?: string } | null)?.from ?? "/";
+  // Until the gateway answers, offer the token form (older gateways have no /auth-methods).
+  const [methods, setMethods] = useState<AuthMethods | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .authMethods()
+      .then((m) => alive && setMethods(m))
+      .catch(() => alive && setMethods(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const sso = methods?.oidc.enabled ? methods.oidc.label || "SSO" : null;
+  const tokenForm = methods ? methods.token || !sso : true;
 
   if (s.status === "loading") return <div className="boot"><Loading label="Connecting to gateway" /></div>;
   if (s.status === "authed") return <Navigate to={from} replace />;
@@ -56,34 +73,50 @@ export function LoginPage() {
             Your session expired. Sign in again to continue.
           </Callout>
         ) : null}
-        <form onSubmit={submit} className="login-form" noValidate>
-          <Field label="Access token" error={error} hint="The gateway admin token, or a viewer token for read-only access.">
-            {({ id, describedBy, invalid }) => (
-              <div className="input-affix">
-                <Input
-                  id={id}
-                  type={show ? "text" : "password"}
-                  autoComplete="current-password"
-                  spellCheck={false}
-                  mono
-                  autoFocus
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  aria-describedby={describedBy}
-                  aria-invalid={invalid || undefined}
-                  placeholder="••••••••••••••••"
-                />
-                <Button variant="ghost" size="sm" iconOnly label={show ? "Hide token" : "Show token"} icon={show ? <IconEyeOff /> : <IconEye />} onClick={() => setShow((v) => !v)} className="input-affix-btn" />
-              </div>
-            )}
-          </Field>
-          <Button type="submit" variant="primary" loading={busy} className="login-submit">
-            Sign in
-          </Button>
-        </form>
+        {sso ? (
+          <div className="login-sso">
+            <a className="btn btn-primary btn-md login-submit" href={SSO_LOGIN_PATH}>
+              <span className="btn-label">Sign in with {sso}</span>
+            </a>
+          </div>
+        ) : null}
+        {sso && tokenForm ? (
+          <div className="login-divider" role="separator">
+            <span>or use an access token</span>
+          </div>
+        ) : null}
+        {tokenForm ? (
+          <form onSubmit={submit} className="login-form" noValidate>
+            <Field label="Access token" error={error} hint="The gateway admin token, or a viewer token for read-only access.">
+              {({ id, describedBy, invalid }) => (
+                <div className="input-affix">
+                  <Input
+                    id={id}
+                    type={show ? "text" : "password"}
+                    autoComplete="current-password"
+                    spellCheck={false}
+                    mono
+                    autoFocus
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid || undefined}
+                    placeholder="••••••••••••••••"
+                  />
+                  <Button variant="ghost" size="sm" iconOnly label={show ? "Hide token" : "Show token"} icon={show ? <IconEyeOff /> : <IconEye />} onClick={() => setShow((v) => !v)} className="input-affix-btn" />
+                </div>
+              )}
+            </Field>
+            <Button type="submit" variant={sso ? "secondary" : "primary"} loading={busy} className="login-submit">
+              Sign in{sso ? " with token" : ""}
+            </Button>
+          </form>
+        ) : null}
         <p className="login-foot">
           <IconLock size={13} />
-          The token is exchanged for an HttpOnly session cookie and is never stored by the browser.
+          {tokenForm
+            ? "The token is exchanged for an HttpOnly session cookie and is never stored by the browser."
+            : "Single sign-on is required on this gateway. Your session is kept in an HttpOnly cookie."}
         </p>
       </main>
     </div>

@@ -10,7 +10,10 @@ served from. No external network resources: no CDNs, web fonts or analytics.
 |---|---|---|
 | POST | `/console/api/login` | `{"token": "<admin or viewer token>"}` -> `200 {"role", "csrf"}` (role is `admin` or `viewer`), sets cookie `pgw_console` (HttpOnly, SameSite=Strict, Secure unless plain-HTTP loopback, Path=/, 8 h idle expiry) |
 | POST | `/console/api/logout` | -> `204`, clears the session |
-| GET | `/console/api/me` | -> `200 {"role", "csrf", "expires_at", "version"}` or `401` |
+| GET | `/console/api/me` | -> `200 {"role", "csrf", "expires_at", "version", "auth", "user"}` or `401`; `auth` is `"token"` or `"oidc"`, `user` is `{"sub", "email", "name"}` for single sign-on (`email`/`name` may be `null`) and `null` for token sign-in |
+| GET | `/console/api/auth-methods` | -> `200 {"token": bool, "oidc": {"enabled": bool, "label": str}}` (no session needed): which sign-in options the sign-in page shows |
+| GET | `/console/api/oidc/login` | single sign-on start: `302` to the identity provider (see below); `404` when SSO is not configured |
+| GET | `/console/api/oidc/callback` | redirect URI registered at the provider: on success sets the same `pgw_console` cookie as token login and answers `302 Location: /console/`; on failure an HTML page with status `400`, `401`, `403`, `429` or `503` |
 
 - The console is served when `PGW_GATEWAY_CONSOLE_ENABLED` is true (the default). When false, nothing
   under `/console/` exists and session cookies are ignored; the `/admin/*` data endpoints below still
@@ -29,19 +32,72 @@ served from. No external network resources: no CDNs, web fonts or analytics.
   `console.login_failed`, `console.logout`; the actor id is `console-<role>:<8 hex>` (a random
   per-session id, never token or cookie material). Admin actions made through the console carry that
   actor id in `key_id`.
-- If no admin token is configured, `POST /console/api/login` and `GET /console/api/me` answer `503`
-  (`unavailable`, "console login is disabled") even when viewer tokens exist.
+- If no admin token is configured, `POST /console/api/login` answers `503` (`unavailable`, "console
+  login is disabled") even when viewer tokens exist; so does `GET /console/api/me` unless single
+  sign-on is configured.
 - `POST /console/api/logout` needs `X-PGW-CSRF` when a live session cookie is sent (viewers may sign
   out); without a live session it answers `204` anyway and clears the cookie.
 - Cookie-authenticated errors: `401` no or expired session, `403` (`permission_denied`) for a missing
   or wrong CSRF token or a viewer write.
 
+- `token` in `/console/api/auth-methods` is true when token sign-in is enabled
+  (`PGW_GATEWAY_CONSOLE_TOKEN_LOGIN_ENABLED`, default true) and an admin token is configured. With
+  `PGW_GATEWAY_CONSOLE_TOKEN_LOGIN_ENABLED=false` (allowed only when SSO is configured)
+  `POST /console/api/login` answers `403` (`permission_denied`); the admin token still works as a
+  Bearer token on `/admin/*`. `oidc.label` is `PGW_GATEWAY_CONSOLE_OIDC_LABEL` (default `SSO`); the
+  page shows "Sign in with <label>".
 - Admin tokens: the gateway's existing `PGW_GATEWAY_ADMIN_TOKEN`. Viewer tokens: optional
   `PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE` (one token per line; SHA-256 stored in memory only).
 - Every console request that changes state (POST, PUT, DELETE) must send header `X-PGW-CSRF: <csrf>`.
 - The admin endpoints below accept either `Authorization: Bearer <admin token>` (unchanged, for scripts)
   or a console session cookie, plus the CSRF header for writes. Viewers may only use GET.
 - Login attempts are rate limited (per client IP) and audited; failures return `401 {"error": {...}}`.
+
+### Single sign-on (OpenID Connect)
+
+Optional; off unless `PGW_GATEWAY_CONSOLE_OIDC_ISSUER` and `PGW_GATEWAY_CONSOLE_OIDC_CLIENT_ID` are
+set. Configuration and provider examples: [console-sso.md](../operations/console-sso.md).
+
+- The gateway is a confidential client using the authorization code flow with PKCE (`S256`),
+  `state` and `nonce`. `GET /console/api/oidc/login` creates a pending sign-in (random `state`,
+  `nonce` and `code_verifier`, kept in gateway memory for 10 minutes, at most 1000 at once, single
+  use) and sets cookie `pgw_oidc` (HttpOnly, SameSite=Lax, Path=/console/api/oidc/, 10 min) that binds
+  it to the browser. It then redirects to the provider's `authorization_endpoint` with
+  `response_type=code`, `client_id`, `redirect_uri` (`PGW_GATEWAY_CONSOLE_OIDC_REDIRECT_URL`),
+  `scope`, `state`, `nonce`, `code_challenge` and `code_challenge_method=S256`. Sign-in starts are
+  limited to 30 per minute per client address.
+- `GET /console/api/oidc/callback` (query `code`, `state`, optional `iss`, or `error`) counts against
+  the login rate limit (10 per minute per client address, shared with `POST /console/api/login`),
+  consumes the pending sign-in (an unknown, expired, reused or other-browser `state` is `400`), checks
+  `iss` against the issuer when the provider sends it (RFC 9207), and redeems the code at the
+  `token_endpoint` with `code_verifier` and the client secret (HTTP Basic; form fields only when the
+  provider supports only `client_secret_post`). Provider errors and refused exchanges are `401`; an
+  unreachable provider is `503`.
+- ID token checks: compact JWS signed with `RS256` (RSA of at least 2048 bits) or `ES256` (P-256)
+  only (`none`, `HS*` and every other `alg` are refused, as are `jku`, `jwk`, `x5u` and `crit`
+  headers); key from the provider's JWKS by `kid` (cached for an hour; an unknown `kid` refetches the
+  JWKS, at most every 30 s); `iss` equals the issuer exactly; `aud` contains the client id; `azp`
+  equals the client id when present and is required with several audiences; `exp`, `iat` and `nbf`
+  with 60 s leeway, and `iat` at most 10 minutes old; `nonce` equals the pending sign-in's; `sub`
+  present. Failures are `401`.
+- Role: the claim `PGW_GATEWAY_CONSOLE_OIDC_ROLE_CLAIM` (default `groups`; a dotted path such as
+  `realm_access.roles` reads a nested claim; a string or a list of strings) is matched against
+  `PGW_GATEWAY_CONSOLE_OIDC_ADMIN_VALUES` first, then `PGW_GATEWAY_CONSOLE_OIDC_VIEWER_VALUES`.
+  Neither matches: `403`. With `PGW_GATEWAY_CONSOLE_OIDC_ALLOWED_DOMAINS` set, the `email` claim's
+  domain must be in the list (exact match, case-insensitive) and `email_verified` must not be
+  `false`, else `403`.
+- Success creates the same session as token login (cookie, CSRF token, expiry, role rules) with
+  `auth: "oidc"` and `user` from the `sub`, `email` and `name` (or `preferred_username`) claims. No
+  provider token (code, access token, ID token) is stored or logged. Audit: `console.login` with
+  `method: "oidc"`, `subject` (the `sub` claim), `email` and `reason` = role;
+  `console.login_failed` with `method: "oidc"`, `code` and `reason` (`oidc_bad_state`,
+  `oidc_bad_binding`, `oidc_provider_error`, `oidc_token_error`, `oidc_bad_token`, `oidc_bad_alg`,
+  `oidc_unknown_key`, `oidc_bad_signature`, `oidc_bad_issuer`, `oidc_bad_audience`, `oidc_expired`,
+  `oidc_bad_nonce`, `oidc_bad_claims`, `oidc_no_role`, `oidc_domain_not_allowed`,
+  `oidc_unreachable`, `oidc_bad_response`, `oidc_bad_discovery`), plus `subject` and `email` for the
+  `403` cases. Token logins carry `method: "token"`.
+- Signing out (`POST /console/api/logout`) ends the console session only, not the session at the
+  identity provider.
 
 ## Data endpoints (all JSON)
 
