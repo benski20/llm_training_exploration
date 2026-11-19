@@ -16,7 +16,7 @@ def _load() -> Any:
     if os.environ.get("PGW_NATIVE", "1").strip().lower() in ("0", "false", "no", "off"):
         return None
     try:
-        import pgw_fast  # type: ignore[import-not-found]
+        import pgw_fast  # type: ignore[import-not-found,unused-ignore]
     except ImportError:
         return None
     return pgw_fast

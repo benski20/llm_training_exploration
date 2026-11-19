@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]  # pgw/
 
 def main() -> int:
     env = {**os.environ, "PYO3_PYTHON": sys.executable}
-    subprocess.run(["cargo", "build", "--release", "-p", "pgw-fast"], cwd=ROOT / "rust", env=env, check=True)  # noqa: S603, S607
+    subprocess.run(["cargo", "build", "--release", "-p", "pgw-fast"], cwd=ROOT / "rust", env=env, check=True)  # noqa: S607
     lib = ROOT / "rust" / "target" / "release" / ("pgw_fast.dll" if os.name == "nt" else "libpgw_fast.so")
     if sys.platform == "darwin":
         lib = lib.with_suffix(".dylib")
