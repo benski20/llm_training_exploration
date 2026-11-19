@@ -3,10 +3,12 @@
 Public (API key, scope ``inference``): ``POST /v1/chat/completions``, ``POST /v1/completions``
 (``stream=true`` gives SSE ``data:`` chunks ending with ``data: [DONE]``), ``GET /v1/models``,
 ``GET /v1/models/{name}``.
-Admin (admin token, or an API key with scope ``admin``): ``GET /admin/status``,
+Admin (admin token, an API key with scope ``admin``, or a console session): ``GET /admin/status``,
 ``GET /admin/masks``, ``GET /admin/keys``, ``POST /admin/keys``, ``DELETE /admin/keys/{key_id}``,
-``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``.
+``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``, ``GET /admin/overview``,
+``GET /admin/usage``, ``GET /admin/audit``.
 Ops (no auth unless ``metrics_require_admin``): ``/healthz``, ``/readyz``, ``/metrics``, ``/dashboard``.
+Console (:mod:`pgw.console`): ``/console/`` (static app) and ``/console/api/*``.
 
 Errors use the OpenAI shape ``{"error": {"message", "type", "code", "param"}}`` with ``code`` set
 to a :class:`pgw.core.ErrorCode` value. Nothing here logs prompts or completions; every request
@@ -24,6 +26,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -32,6 +35,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import ValidationError
 from starlette.responses import StreamingResponse
 
+from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, LoginRateLimiter
 from pgw.core.errors import AuthError, ErrorCode, PGWError, RateLimitedError
 from pgw.engine import SamplingParams, TokenEvent
 from pgw.gateway.audit import AuditLog
@@ -128,6 +132,12 @@ class GatewayState:
     metrics: GatewayMetrics
     started_at: float = field(default_factory=time.time)
     key_inflight: dict[str, int] = field(default_factory=dict)
+    #: Console sign-in sessions (``None`` when the console is disabled).
+    console: ConsoleSessions | None = None
+    login_limiter: LoginRateLimiter = field(default_factory=LoginRateLimiter)
+    audit_reader: Any = None
+    #: Streaming API requests since start-up.
+    stream_requests: int = 0
 
     def lease(self, key: ApiKey, est_tokens: int) -> _KeyLease:
         """Admit a request for ``key`` (raises :class:`RateLimitedError`)."""
@@ -382,15 +392,19 @@ def create_app(
     mask_store: Any = None,
     transports: dict[str, Any] | None = None,
     client_factory: Any = None,
+    console_static_dir: Path | None = None,
 ) -> Any:
     """Build the FastAPI app.
 
     Public (API key): ``POST /v1/chat/completions``, ``POST /v1/completions``, ``GET /v1/models``,
     ``GET /v1/models/{name}``.
-    Admin (admin token or ``admin`` scope): ``GET /admin/status``, ``GET /admin/masks``,
+    Admin (admin token, ``admin`` scope, or a console session cookie; viewers GET only, writes need
+    the CSRF header): ``GET /admin/status``, ``GET /admin/masks``,
     ``GET /admin/keys``, ``POST /admin/keys``, ``DELETE /admin/keys/{key_id}``,
-    ``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``.
+    ``POST /admin/models/{name}/reload``, ``POST /admin/models/{name}/reset``,
+    ``GET /admin/overview``, ``GET /admin/usage``, ``GET /admin/audit``.
     Ops: ``/healthz``, ``/readyz``, ``/metrics``, ``/dashboard``.
+    Console (``console_enabled``): ``/console/`` and ``/console/api/*`` (see :mod:`pgw.console`).
     Errors use the OpenAI error shape with ``code`` = :class:`pgw.core.ErrorCode` value.
 
     All keyword arguments are optional injection points (tests, embedding); by default everything
@@ -415,6 +429,11 @@ def create_app(
         audit=audit or AuditLog(settings.audit_log_file),
         metrics=metrics,
     )
+    if settings.console_enabled:
+        state.console = ConsoleSessions(
+            settings.admin_token.get_secret_value() if settings.admin_token is not None else None,
+            settings.console_viewer_tokens_file,
+        )
     req_counter = metrics.get("pgw_gateway_requests_total")
     runtime.add_safety_listener(
         lambda event, model, reason: state.audit.event(event, action="safety", model=model, reason=reason)
@@ -540,6 +559,9 @@ def create_app(
         try:
             tok = _bearer(request)
             if tok is None:
+                sid = request.cookies.get(COOKIE_NAME)
+                if sid and state.console is not None:
+                    return state.console.authorize(sid, request.method, request.headers.get(CSRF_HEADER)).actor
                 raise AuthError("missing admin credentials")
             admin = settings.admin_token
             if admin is not None and hmac.compare_digest(tok.encode(), admin.get_secret_value().encode()):
@@ -594,6 +616,8 @@ def create_app(
         t0: float, sessions: list[ActiveSession], stream: bool,
     ) -> None:
         req_counter.labels(model=rt.name if rt else "", endpoint=endpoint, status=str(status)).inc()
+        if stream:
+            state.stream_requests += 1
         state.audit.event(
             "inference",
             request_id=rid, key_id=key.key_id, model=rt.name if rt else None, endpoint=endpoint, status=status,
@@ -619,11 +643,13 @@ def create_app(
         logprobs: int | None,
         render: Callable[..., Any],
         render_stream: Callable[..., AsyncIterator[bytes]],
+        key: ApiKey | None = None,
     ) -> Any:
         t0 = time.perf_counter()
         prefix = "chatcmpl-" if endpoint == "chat" else "cmpl-"
         rid = prefix + uuid.uuid4().hex[:24]
-        key = require_key(request, endpoint)
+        if key is None:
+            key = require_key(request, endpoint)
         rt: ModelRuntime | None = None
         sessions: list[ActiveSession] = []
         lease: _KeyLease | None = None
@@ -743,15 +769,20 @@ def create_app(
         if include_usage:
             yield _sse({**base, "choices": [], "usage": usage()})
 
-    @app.post("/v1/chat/completions")
-    async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+    async def _run_chat(req: ChatCompletionRequest, request: Request, key: ApiKey | None = None) -> Any:
+        """Chat completion; ``key`` given = already authenticated (console playground)."""
+
         async def prompts(rt: ModelRuntime) -> tuple[list[list[int]], list[str]]:
             msgs = _chat_messages(req)
             ids = await asyncio.to_thread(rt.encode_chat, msgs)
             return [ids], [""]
 
         lp = (req.top_logprobs or 0) if req.logprobs else None
-        return await _handle(request, "chat", req, prompts, lp, _render_chat, _stream_chat)
+        return await _handle(request, "chat", req, prompts, lp, _render_chat, _stream_chat, key=key)
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+        return await _run_chat(req, request)
 
     # ---- /v1/completions -------------------------------------------------------------------------
     def _render_completion(rid: str, created: int, rt: ModelRuntime, fp: str | None, results: list[_Collected],
@@ -985,4 +1016,9 @@ def create_app(
         async def dashboard() -> Any:
             return HTMLResponse(html, headers={"Content-Security-Policy": "default-src 'self' 'unsafe-inline'"})
 
+    # ---- console (operator web UI and its data endpoints) ---------------------------------------
+    from pgw.console.routes import ConsoleHeaders, install_console
+
+    install_console(app, state, require_admin=require_admin, run_chat=_run_chat, static_dir=console_static_dir)
+    app.add_middleware(ConsoleHeaders)
     return app

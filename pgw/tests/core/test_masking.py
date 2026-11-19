@@ -81,7 +81,7 @@ def test_server_view_is_uniform_and_uncorrelated(p):
 def test_u32_fast_path_is_identical_to_the_generic_path(rows: int, n: int, m: int) -> None:
     """K=32: mask_pack_u32 == mask_activations + pack_ring, and unmask_outputs_u32 == unpack + unmask_outputs_u64,
     including the range-check verdicts at +-bound, +-(bound + 1) and the int32 extremes."""
-    from pgw.core import DEFAULT_RING as ring
+    from pgw.core import DEFAULT_RING as ring  # noqa: N811
     from pgw.core.masking import mask_pack_u32, unmask_outputs_u32, unmask_outputs_u64
     from pgw.core.packing import pack_ring, unpack_ring_u64
 

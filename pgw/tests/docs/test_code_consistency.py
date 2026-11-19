@@ -212,10 +212,12 @@ def test_api_key_format_matches_auth() -> None:
 
 
 def test_endpoint_table_matches_gateway_routes(docs: dict[str, str]) -> None:
+    import pgw.console.routes as console_mod
     import pgw.gateway.app as app_mod
 
-    src = Path(app_mod.__file__).read_text(encoding="utf-8")
-    routes = {(m.upper(), p) for m, p in re.findall(r'@app\.(get|post|delete|put|patch)\("([^"]+)"', src)}
+    src = "".join(Path(m.__file__).read_text(encoding="utf-8") for m in (app_mod, console_mod))
+    routes = {(m.upper(), re.sub(r":path}", "}", p))
+              for m, p in re.findall(r'@app\.(get|post|delete|put|patch)\("([^"]+)"', src)}
     sec = section(docs["api/gateway-api.md"], "2. Endpoints")
     documented = {(r[0], unticks(r[1])[0]) for r in table_rows(sec)}
     assert documented == routes

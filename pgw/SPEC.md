@@ -390,7 +390,10 @@ Errors use the OpenAI shape `{"error":{"message","type","code","param"}}` with `
 Admin endpoints (admin token, or an API key with scope `admin`): `GET /admin/status`,
 `GET /admin/masks`, `GET /admin/keys`, `POST /admin/keys`, `DELETE /admin/keys/{key_id}`,
 `POST /admin/models/{name}/reload`, `POST /admin/models/{name}/reset` (`{"breaker": bool,
-"noise": bool}`). Ops endpoints: `/healthz`, `/readyz`, `/metrics`, `/dashboard`.
+"noise": bool}`), and the console data views `GET /admin/overview`, `GET /admin/usage`,
+`GET /admin/audit` (these admin endpoints also accept a console session cookie; console viewers may
+only read). Ops endpoints: `/healthz`, `/readyz`, `/metrics`, `/dashboard`. Operator console:
+`/console/` (contract: `docs/api/console-api.md`).
 
 ### 9.2 Engine loop
 `TransformerModel.forward` runs, per layer: RMSNorm → `qkv` → split, RoPE, causal GQA attention
