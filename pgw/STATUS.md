@@ -18,13 +18,14 @@ SLA pilot. Three reasons:
 ## Update 2026-11-19
 
 **Speed (Qwen2.5-7B, one Kaggle T4, default ring K32A12C27, output bit-identical to the plaintext
-reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*` to `run18_*`.
+reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*` to `run19_*` (run 19: all changes together).
 
 | metric | 2026-11-17 | 2026-11-19 | what changed |
 |---|---|---|---|
-| decode, 1 request | 0.86 s/token | 0.65-0.72 s/token | persistent WebSocket channel, K=32 uint32 path, native (Rust) gateway kernels, faster mask wipes |
-| time to first token, 40-token prompt | 8.4 s | 4.0 s | pipelined prefill (gateway and service overlap) |
-| decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.61 s/token | exact verification, coupled drafts, adaptive draft length; 2-2.5x fewer round trips |
+| decode, 1 request | 0.86 s/token | 0.54 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
+| time to first token, 40-token prompt | 8.4 s | 3.3 s | pipelined prefill (gateway and service overlap) |
+| one service round trip, 1 row (load test) | 2.5 ms | 1.84 ms (0.90 ms GPU) | uvicorn WebSocket framing, inline small batches |
+| decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.52 s/token | exact verification, coupled drafts, adaptive draft length; 2.6x fewer round trips |
 | gateway CPU per masked call (Kaggle CPU) | about 2.9 ms | about 1.8 ms | `pgw_fast` kernels: prepare 0.05 ms, finish 0.2 ms; the rest is Python orchestration |
 
 Where a decode token's time goes now: about 112 x 3.5 ms in round trips (of which about 0.9 ms is GPU

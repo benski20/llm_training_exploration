@@ -1,0 +1,103 @@
+pack ready in 18.3s
+factory: 28 slots in 4.5s
+{
+  "preset": "7b",
+  "ring": "K32A12C27",
+  "rows": 1,
+  "gateway_ms_per_call": {
+    "qkv": 0.9430270869534465,
+    "o": 0.857423217370445,
+    "gate_up": 1.300509565201379,
+    "down": 1.4353190000075182
+  },
+  "gateway_ms_per_layer": 4.536278869532788,
+  "gateway_s_per_step_full_model": 0.12701580834691809,
+  "service_s_per_step_full_model": 3.082010736000721,
+  "wall_s": 2.642632552000009,
+  "wall_ms_per_call": 28.724266869565316
+}
+         31361 function calls (31354 primitive calls) in 2.630 seconds
+
+   Ordered by: cumulative time
+   List reduced from 186 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       92    0.001    0.000    2.625    0.029 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1063(forward_many)
+       92    0.004    0.000    2.532    0.028 /tmp/pgwsrc/pgw/benchmarks/profile_gateway.py:117(compute_sync)
+       92    0.003    0.000    2.527    0.027 /tmp/pgwsrc/pgw/src/pgw/engine/local.py:95(compute_sync)
+       92    0.004    0.000    2.514    0.027 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:360(matmul)
+       92    2.474    0.027    2.509    0.027 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:413(_mm_f64)
+    93/86    0.001    0.000    2.411    0.028 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1059(forward)
+       92    0.001    0.000    0.060    0.001 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:758(_prepare)
+       92    0.005    0.000    0.058    0.001 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:763(_prepare_native)
+       92    0.003    0.000    0.032    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:917(_finish)
+       92    0.002    0.000    0.023    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1014(_finish_chunk_native)
+       92    0.001    0.000    0.020    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:374(take)
+       92    0.010    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ring.py:312(balanced_digits)
+       92    0.016    0.000    0.016    0.000 {built-in method pgw_fast.finish_chunk}
+       92    0.000    0.000    0.010    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:531(_mask_rows)
+       92    0.002    0.000    0.009    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:712(_precheck)
+       92    0.001    0.000    0.009    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:417(_read_wr)
+      115    0.008    0.000    0.008    0.000 {built-in method torch.where}
+      736    0.007    0.000    0.007    0.000 {method 'to' of 'torch._C.TensorBase' objects}
+       23    0.002    0.000    0.006    0.000 /tmp/pgwsrc/pgw/src/pgw/core/prng.py:126(ring_uniform_rows)
+       92    0.006    0.000    0.006    0.000 {built-in method torch.isfinite}
+       92    0.005    0.000    0.006    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:142(_combine_digit_rows)
+      276    0.002    0.000    0.006    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:531(_wipe)
+      184    0.000    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:674(_checks_u64)
+       92    0.001    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/core/packing.py:34(pack_ring)
+      184    0.001    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:456(checks_u64)
+     1196    0.005    0.000    0.005    0.000 {method 'numpy' of 'torch._C.TensorBase' objects}
+       92    0.004    0.000    0.004    0.000 {built-in method pgw_fast.quantize_mask_pack}
+       12    0.000    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:541(_decrypt_buf)
+       92    0.004    0.000    0.004    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       12    0.001    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/format.py:419(decrypt_into)
+       92    0.003    0.000    0.003    0.000 {built-in method torch.round}
+      380    0.003    0.000    0.003    0.000 {method 'fill' of 'numpy.ndarray' objects}
+      207    0.003    0.000    0.003    0.000 {method 'astype' of 'numpy.ndarray' objects}
+     1288    0.002    0.000    0.003    0.000 /tmp/pgwsrc/pgw/src/pgw/core/types.py:46(key)
+       92    0.001    0.000    0.003    0.000 /tmp/pgwsrc/pgw/src/pgw/core/packing.py:48(unpack_ring)
+
+
+
+         31361 function calls (31354 primitive calls) in 2.630 seconds
+
+   Ordered by: internal time
+   List reduced from 186 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       92    2.474    0.027    2.509    0.027 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:413(_mm_f64)
+       92    0.016    0.000    0.016    0.000 {built-in method pgw_fast.finish_chunk}
+       92    0.010    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ring.py:312(balanced_digits)
+      115    0.008    0.000    0.008    0.000 {built-in method torch.where}
+      736    0.007    0.000    0.007    0.000 {method 'to' of 'torch._C.TensorBase' objects}
+       92    0.006    0.000    0.006    0.000 {built-in method torch.isfinite}
+       92    0.005    0.000    0.058    0.001 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:763(_prepare_native)
+       92    0.005    0.000    0.006    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:142(_combine_digit_rows)
+     1196    0.005    0.000    0.005    0.000 {method 'numpy' of 'torch._C.TensorBase' objects}
+       92    0.004    0.000    0.004    0.000 {built-in method pgw_fast.quantize_mask_pack}
+       92    0.004    0.000    2.532    0.028 /tmp/pgwsrc/pgw/benchmarks/profile_gateway.py:117(compute_sync)
+       92    0.004    0.000    0.004    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       92    0.004    0.000    2.514    0.027 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:360(matmul)
+       92    0.003    0.000    2.527    0.027 /tmp/pgwsrc/pgw/src/pgw/engine/local.py:95(compute_sync)
+       92    0.003    0.000    0.003    0.000 {built-in method torch.round}
+       92    0.003    0.000    0.032    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:917(_finish)
+      380    0.003    0.000    0.003    0.000 {method 'fill' of 'numpy.ndarray' objects}
+      207    0.003    0.000    0.003    0.000 {method 'astype' of 'numpy.ndarray' objects}
+       92    0.002    0.000    0.002    0.000 {built-in method torch.cat}
+       92    0.002    0.000    0.009    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:712(_precheck)
+      276    0.002    0.000    0.006    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:531(_wipe)
+      552    0.002    0.000    0.002    0.000 {built-in method torch.from_numpy}
+       69    0.002    0.000    0.002    0.000 {built-in method pgw_fast.mask_rows}
+       92    0.002    0.000    0.023    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1014(_finish_chunk_native)
+       92    0.002    0.000    0.002    0.000 {built-in method pgw_fast.unpack_rows}
+
+
+
+
+---stderr---
+
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  6.66it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  6.64it/s]
+mask inventory low: 9f72ce779c34 K32A12C27 has 28 slots (< 4096)
