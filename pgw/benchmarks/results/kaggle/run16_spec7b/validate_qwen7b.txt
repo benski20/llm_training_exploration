@@ -1,0 +1,38 @@
+[gpu_validate 03:15:38] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (289.5s)
+[gpu_validate 03:15:41] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (2.5s)
+[gpu_validate 03:16:08] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (20.4s)
+[gpu_validate 03:17:46] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or"
+[gpu_validate 03:17:49] pgw maskstore init --root ... ok (2.7s)
+[gpu_validate 03:21:09] pgw factory generate --pack ... ok (200.6s)
+[gpu_validate 03:21:25] pgw bench factory --pack ... ok (15.3s)
+[gpu_validate 03:21:27] pgw service token create ... ok (2.6s)
+[gpu_validate 03:21:30] pgw gateway keys create ... ok (2.8s)
+[gpu_validate 03:23:58] chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 03:24:46] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 5.641, 'prefill_s_per_prompt_token': 0.141, 'decode_s_per_token': 0.6664, 'decode_tokens_per_s': 1.501, 'wall_s': 47.67, 'gateway_cpu_s': 36.47, 'backend_delta': {'calls': 7168, 'rows': 11536, 'round_trips': 7168, 'bytes_up': 342573056, 'bytes_down': 572923904, 'freivalds_checked': 7168, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 20.660337190007112, 'local_seconds': 15.866036705990837}, 'gateway_local_engine_s_per_token': 0.1526, 'remote_s_per_token': 0.1987}
+[gpu_validate 03:27:00] concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 133.99, 'generated_tokens_per_s': 1.911, 'all_tokens_per_s': 3.105, 'gateway_cpu_s_per_token': 0.3013}
+[gpu_validate 03:29:57] spec_chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 03:31:30] spec_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 17.898, 'prefill_s_per_prompt_token': 0.4474, 'decode_s_per_token': 1.1976, 'decode_tokens_per_s': 0.835, 'wall_s': 93.38, 'gateway_cpu_s': 137.07, 'backend_delta': {'calls': 2912, 'rows': 18480, 'round_trips': 2912, 'bytes_up': 548782080, 'bytes_down': 917790720, 'freivalds_checked': 2912, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 13.454582997993612, 'local_seconds': 15.022076468990008}, 'gateway_local_engine_s_per_token': 0.1444, 'remote_s_per_token': 0.1294}
+[gpu_validate 03:37:20] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 349.4, 'generated_tokens_per_s': 0.733, 'all_tokens_per_s': 1.191, 'gateway_cpu_s_per_token': 1.2785}
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:  18%|█▊        | 2/11 [00:00<00:00, 13.07it/s]
+Fetching 11 files:  55%|█████▍    | 6/11 [00:00<00:00, 22.32it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 22.32it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:08<00:35, 11.77s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  7.29s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  6.53s/it]
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]
+Fetching 7 files:  29%|██▊       | 2/7 [00:00<00:00, 12.65it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.02s/it]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.06it/s]
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 527, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 344, in run
+    raise RuntimeError(f"chat failed {r.status_code}: {r.text[:2000]}")
+RuntimeError: chat failed 500: {"error":{"message":"internal error","type":"server_error","code":"internal","param":null}}

@@ -1,0 +1,135 @@
+2026-11-19 03:37:23,022 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 83b89754, generation 18)
+2026-11-19 03:37:23,107 INFO uvicorn.error: Started server process [478]
+2026-11-19 03:37:23,107 INFO uvicorn.error: Waiting for application startup.
+2026-11-19 03:37:23,107 INFO pgw.audit: {"action": "start", "event": "gateway.start", "ts": "2026-11-19T03:37:23.107Z"}
+2026-11-19 03:37:35,134 INFO pgw.modelpack.loader: verified 5 file(s) of model pack qwen7b (linears,plain,tokenizer)
+2026-11-19 03:37:35,134 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears,plain,tokenizer verify=full
+2026-11-19 03:37:40,622 INFO numexpr.utils: NumExpr defaulting to 4 threads.
+2026-11-19 03:37:41,769 INFO pgw.wire.client: pgw wire connected
+2026-11-19 03:37:43,677 INFO pgw.engine.model: engine model ready: arch=qwen2 layers=28 hidden=3584 heads=28/4 vocab=152064 backend=MaskedBackend
+2026-11-19 03:37:45,534 INFO pgw.modelpack.loader: verified 2 file(s) of model pack qwen7b-draft (linears,plain,tokenizer)
+2026-11-19 03:37:45,534 INFO pgw.modelpack.loader: opened model pack qwen7b-draft fp=0b72ba3a69ec components=linears,plain,tokenizer verify=full
+2026-11-19 03:37:45,969 INFO pgw.engine.model: engine model ready: arch=qwen2 layers=24 hidden=896 heads=14/2 vocab=151936 backend=FloatBackend
+2026-11-19 03:37:45,970 INFO pgw.gateway.runtime: model qwen7b: speculative decoding with draft qwen7b-draft (4 tokens per step)
+2026-11-19 03:37:45,970 INFO pgw.gateway.runtime: model runtime started
+2026-11-19 03:37:45,970 INFO pgw.maskstore.store: holding the mask store gateway owner lock (reservations of previous instances are dead)
+2026-11-19 03:37:45,971 INFO uvicorn.error: Application startup complete.
+2026-11-19 03:37:45,971 INFO uvicorn.error: Uvicorn running on http://127.0.0.1:33255 (Press CTRL+C to quit)
+2026-11-19 03:37:46,405 INFO uvicorn.access: 127.0.0.1:50094 - "GET /readyz HTTP/1.1" 200
+2026-11-19 03:37:46,437 INFO uvicorn.access: 127.0.0.1:50096 - "GET /admin/status HTTP/1.1" 200
+2026-11-19 03:37:48,485 ERROR pgw.engine.generate: batched step failed for 1 sessions: OutOfMemoryError
+2026-11-19 03:37:48,486 INFO pgw.audit: {"code": "internal", "completion_tokens": 0, "duration_ms": 2017.7, "endpoint": "chat", "event": "inference", "finish_reason": "", "key_id": "085c6bcf340a", "masks_burned": 104, "masks_consumed": 0, "masks_reserved": 104, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-00dfbf2c1282449da641aa94", "ring": "K32A12C27", "status": 500, "stream": false, "ts": "2026-11-19T03:37:48.486Z"}
+2026-11-19 03:37:48,487 ERROR pgw.gateway.app: unhandled error on /v1/chat/completions: OutOfMemoryError
+2026-11-19 03:37:48,487 INFO uvicorn.access: 127.0.0.1:50106 - "POST /v1/chat/completions HTTP/1.1" 500
+2026-11-19 03:37:48,488 ERROR uvicorn.error: Exception in ASGI application
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self.scope, self.receive, self.send
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/usr/local/lib/python3.13/dist-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 332, in __call__
+    await self.app(scope, guarded, guarded_send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/usr/local/lib/python3.13/dist-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 2734, in app
+    await route.handle(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 1281, in handle
+    await super().handle(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/routing.py", line 284, in handle
+    await self.app(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 158, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/usr/local/lib/python3.13/dist-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/usr/local/lib/python3.13/dist-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 144, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 706, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/usr/local/lib/python3.13/dist-packages/fastapi/routing.py", line 352, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 754, in chat_completions
+    return await _handle(request, "chat", req, prompts, lp, _render_chat, _stream_chat)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 658, in _handle
+    results = await asyncio.gather(*tasks)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 582, in _collect
+    async for ev in sess.stream():
+    ...<5 lines>...
+            out.finish = str(ev.finish_reason)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 212, in _stream
+    async for ev in it:
+    ...<12 lines>...
+        yield ev
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 556, in astream
+    async for ev in inner:
+        yield ev
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 598, in _astream_state
+    raise item
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 667, in _run_loop
+    await self._run_step(batch)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 630, in _run_step
+    await self._run_plain(self._plan_drafts, batch)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 646, in _run_plain
+    return await run(fn, *args)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/model.py", line 319, in run_plain
+    return await asyncio.shield(fut)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 422, in _plan_drafts
+    for (st, k), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
+                                   ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/model.py", line 291, in forward_batch
+    res = self._check_results(calls, self.backend.forward_many(calls))
+                                     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 125, in forward_many
+    return [self.forward(c) for c in calls]
+            ~~~~~~~~~~~~^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 373, in forward
+    w: _FloatWeight = self._weights.get(call.id)
+                      ~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 232, in get
+    hit = self.convert(self.loader(lid), self.device)
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 367, in conv
+    return _FloatWeight(w.t().contiguous().to(dev), b, int(lw.w8.shape[1]))
+                        ~~~~~~~~~~~~~~~~~~~~~^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 34.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 16.75 MiB is free. Process 395 has 13.64 GiB memory in use. Including non-PyTorch memory, this process has 922.00 MiB memory in use. Of the allocated memory 772.60 MiB is allocated by PyTorch, and 21.40 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+2026-11-19 03:37:48,529 INFO uvicorn.access: 127.0.0.1:50114 - "GET /admin/status HTTP/1.1" 200
+2026-11-19 03:37:48,585 INFO uvicorn.error: Shutting down
+2026-11-19 03:37:48,685 INFO uvicorn.error: Waiting for application shutdown.
+2026-11-19 03:37:48,687 INFO pgw.gateway.runtime: model runtime stopped
+2026-11-19 03:37:48,692 INFO pgw.audit: {"action": "stop", "event": "gateway.stop", "ts": "2026-11-19T03:37:48.692Z"}
+2026-11-19 03:37:48,692 INFO uvicorn.error: Application shutdown complete.
+2026-11-19 03:37:48,692 INFO uvicorn.error: Finished server process [478]

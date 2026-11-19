@@ -441,7 +441,7 @@ class Generator:
                 if found:
                     st.drafts = found
                     continue
-            if self.draft is not None:
+            if self.draft is not None and not self._needs_draft_prefill(st):
                 active.append((st, k))
         if not active or self.draft is None:
             return
@@ -487,6 +487,20 @@ class Generator:
             for (st, k), lg in zip(cur, outs, strict=True):
                 take(st, k, lg)
 
+    def _needs_draft_prefill(self, st: _SeqState) -> bool:
+        """First step of a request: the draft has not seen the prompt yet. That step carries no model
+        drafts; the draft reads the prompt while the target's prefill runs (:meth:`_draft_prefill`)."""
+        return st.draft_cache is not None and st.draft_cache.length == 0 and not st.ctx and not st.drafts
+
+    def _draft_prefill(self, states: Sequence[_SeqState]) -> None:
+        """Feed the prompt to the draft (its logits are not needed); runs alongside the target's prefill."""
+        if self.draft is None or not states:
+            return
+        dv = self._draft_vocab
+        feeds = [SequenceInput([t if dv is None or t < dv else dv - 1 for t in st.pending], _dcache(st))
+                 for st in states]
+        self.draft.forward_batch(feeds)
+
     def _inputs(self, batch: Sequence[_SeqState]) -> list[SequenceInput]:
         return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1,
                               serial_tail=len(st.drafts))
@@ -522,7 +536,9 @@ class Generator:
 
     def _step_sync(self, states: Sequence[_SeqState]) -> list[list[TokenEvent]]:
         self._plan_drafts(states)
+        warm = [st for st in states if self._needs_draft_prefill(st)]
         logits = self.model.forward_batch(self._inputs(states))
+        self._draft_prefill(warm)
         return [self._consume_step(st, lg) for st, lg in zip(states, logits, strict=True)]
 
     def stream(
@@ -639,7 +655,12 @@ class Generator:
             try:
                 while not st.done:
                     await self._run_plain(self._plan_drafts, [st])
-                    logits = (await self.model.aforward_batch(self._inputs([st])))[0]
+                    warm = [st] if self._needs_draft_prefill(st) else []
+                    if warm:
+                        logits = (await asyncio.gather(self.model.aforward_batch(self._inputs([st])),
+                                                       asyncio.to_thread(self._draft_prefill, warm)))[0][0]
+                    else:
+                        logits = (await self.model.aforward_batch(self._inputs([st])))[0]
                     for ev in await self._run_plain(self._consume_step, st, logits):
                         yield ev
             finally:
@@ -686,7 +707,12 @@ class Generator:
     async def _run_step(self, batch: list[_SeqState]) -> None:
         if self.spec_tokens:
             await self._run_plain(self._plan_drafts, batch)
-        logits = await self.model.aforward_batch(self._inputs(batch))
+        warm = [st for st in batch if self._needs_draft_prefill(st)]
+        if warm:  # the draft reads the prompt in its own thread while the masked prefill runs
+            logits, _ = await asyncio.gather(self.model.aforward_batch(self._inputs(batch)),
+                                             asyncio.to_thread(self._draft_prefill, warm))
+        else:
+            logits = await self.model.aforward_batch(self._inputs(batch))
         events = await self._run_plain(self._consume_batch, batch, logits)
         for st, evs in zip(batch, events, strict=True):
             if st.queue is not None and not st.cancelled:

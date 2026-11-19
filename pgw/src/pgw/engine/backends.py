@@ -316,21 +316,26 @@ class PlainBackend(LinearBackend):
 
     def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
         """Concatenate rows of calls on the same linear into one product (exactness unaffected)."""
-        if len(calls) <= 1:
-            return [self.forward(c) for c in calls]
-        out: list[torch.Tensor | None] = [None] * len(calls)
-        groups: dict[str, list[int]] = {}
-        for i, c in enumerate(calls):
-            groups.setdefault(c.id.key, []).append(i)
-        for idxs in groups.values():
-            if len(idxs) == 1:
-                out[idxs[0]] = self.forward(calls[idxs[0]])
-                continue
-            xs = [calls[i].x for i in idxs]
-            y = self.forward(LinearCall(calls[idxs[0]].id, torch.cat(xs, dim=0)))
-            for i, part in zip(idxs, torch.split(y, [int(x.shape[0]) for x in xs]), strict=True):
-                out[i] = part
-        return [o for o in out if o is not None]
+        return _grouped_forward(self, calls)
+
+
+def _grouped_forward(backend: Any, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+    """One product per linear for all calls on it (rows concatenated, results split back)."""
+    if len(calls) <= 1:
+        return [backend.forward(c) for c in calls]
+    out: list[torch.Tensor | None] = [None] * len(calls)
+    groups: dict[str, list[int]] = {}
+    for i, c in enumerate(calls):
+        groups.setdefault(c.id.key, []).append(i)
+    for idxs in groups.values():
+        if len(idxs) == 1:
+            out[idxs[0]] = backend.forward(calls[idxs[0]])
+            continue
+        xs = [calls[i].x for i in idxs]
+        y = backend.forward(LinearCall(calls[idxs[0]].id, torch.cat(xs, dim=0)))
+        for i, part in zip(idxs, torch.split(y, [int(x.shape[0]) for x in xs]), strict=True):
+            out[i] = part
+    return [o for o in out if o is not None]
 
 
 #: Name used in design docs for the exact integer reference backend.
@@ -354,11 +359,15 @@ class FloatBackend(LinearBackend):
         dtype: Weight/compute dtype (float32 default).
     """
 
-    def __init__(self, pack: object, ring: RingParams, device: str = "cpu", *, dtype: torch.dtype = torch.float32):
+    def __init__(self, pack: object, ring: RingParams, device: str = "cpu", *, dtype: torch.dtype = torch.float32,
+                 batch_rows: bool = False):
         self.pack = pack
         self.ring = ring
         self.device = torch.device(device)
         self.dtype = dtype
+        #: Concatenate sequences' rows into one GEMM per linear (draft models: faster; float results
+        #: then depend on the batch, which is fine for drafts but not for a reference).
+        self.batch_rows = batch_rows
         self.stats = BackendStats()
 
         def conv(lw: Any, dev: torch.device) -> _FloatWeight:
@@ -379,6 +388,12 @@ class FloatBackend(LinearBackend):
             y = y + w.bias
         self.stats.add(calls=1, rows=int(x.shape[0]))
         return y.to(x.device)
+
+    def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+        """One GEMM per linear for all sequences when ``batch_rows`` (weights read once per batch)."""
+        if self.batch_rows:
+            return _grouped_forward(self, calls)
+        return [self.forward(c) for c in calls]
 
 
 def _weight_only_int8(w8: torch.Tensor, scale: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:
@@ -428,6 +443,34 @@ class Int8DraftBackend(LinearBackend):
     def available() -> bool:
         return _weight_only_int8(torch.ones((8, 8), dtype=torch.int8), torch.ones(8)) is not None
 
+    @staticmethod
+    def faster_than_float(pack: Any, reps: int = 5) -> bool:
+        """Time int8 weight-only vs float32 on the pack's largest first-layer linear (1 row, as in
+        drafting). The int8 kernel's speed varies a lot between CPUs (slower than float32 on some)."""
+        import time as _t
+
+        specs = [sp for sp in pack.linear_specs() if sp.id.layer == 0]
+        if not specs:
+            return False
+        sp = max(specs, key=lambda x: x.out_features * x.in_features)
+        lw = pack.load_linear(sp.id)
+        fn = _weight_only_int8(lw.w8, lw.scale)
+        if fn is None:
+            return False
+        wt = (lw.w8.to(torch.float32) * lw.scale.to(torch.float32)[:, None]).t().contiguous()
+        x = torch.randn(1, int(lw.w8.shape[1]))
+
+        def best(f: Callable[[], Any]) -> float:
+            f()
+            times = []
+            for _ in range(reps):
+                t0 = _t.perf_counter()
+                f()
+                times.append(_t.perf_counter() - t0)
+            return min(times)
+
+        return best(lambda: fn(x)) < 0.8 * best(lambda: x @ wt)
+
     def forward(self, call: LinearCall) -> torch.Tensor:
         kind, w, b, n = self._weights.get(call.id)
         x = call.x
@@ -439,6 +482,10 @@ class Int8DraftBackend(LinearBackend):
             y = y + b
         self.stats.add(calls=1, rows=int(x.shape[0]))
         return y.to(x.device)
+
+    def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+        """One GEMM per linear for all sequences (weights read once per batch)."""
+        return _grouped_forward(self, calls)
 
 
 def int8_lm_head(weight: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:

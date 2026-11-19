@@ -670,17 +670,27 @@ class ModelRuntime:
 
         dpack = ModelPack.open(path, verify=self.settings.pack_verify)
         # Approximate compute is fine: the draft only proposes tokens, the masked target decides every one.
-        # On CPU: int8 weights (a quarter of the float32 memory traffic, which bounds draft speed).
+        # CPU: weight-only int8 when it measures faster here than float32 (CPU-dependent); GPU: float16.
         dev = self.config.draft_device or self.config.device
         import torch
 
-        if torch.device(dev).type == "cpu" and Int8DraftBackend.available():
+        kind = "float32"
+        on_cpu = torch.device(dev).type == "cpu"
+        if on_cpu and Int8DraftBackend.available() and Int8DraftBackend.faster_than_float(dpack):
             draft = TransformerModel(dpack, Int8DraftBackend(dpack, self.ring), device=dev)
             draft.lm_head_fn = int8_lm_head(draft.lm_head)
+            kind = "int8"
+        elif torch.device(dev).type == "cuda":
+            draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev, dtype=torch.float16,
+                                                         batch_rows=True), device=dev, dtype=torch.float16)
+            w16 = draft.lm_head.to(torch.float16)
+            draft.lm_head = w16  # drop the float32 copy (GPU memory next to the target's service)
+            draft.lm_head_fn = lambda h: (h.to(torch.float16) @ w16.t()).to(torch.float32)
+            kind = "float16"
         else:
-            draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev), device=dev)
-        log.info("model %s: speculative decoding with draft %s (%d tokens per step)", self.name,
-                 getattr(dpack, "name", path), self.config.spec_tokens)
+            draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev, batch_rows=True), device=dev)
+        log.info("model %s: speculative decoding with draft %s (%s on %s, %d-%d tokens per step)", self.name,
+                 getattr(dpack, "name", path), kind, dev, self.config.spec_min_tokens, self.config.spec_tokens)
         return draft
 
     @property
