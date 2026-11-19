@@ -381,30 +381,31 @@ class FloatBackend(LinearBackend):
         return y.to(x.device)
 
 
-def _int8_dynamic_linear(w8: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None) -> Any:
-    """Prepacked fbgemm/onednn int8 weight for ``torch.ops.quantized.linear_dynamic`` (or ``None``)."""
-    import warnings
+def _weight_only_int8(w8: torch.Tensor, scale: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:
+    """``x -> x @ (w8 * scale)^T`` with int8 weights and float activations (``None`` if unsupported).
 
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            m = int(w8.shape[0])
-            qw = torch._make_per_channel_quantized_tensor(
-                w8.contiguous(), scale.to(torch.float64), torch.zeros(m, dtype=torch.long), 0
-            )
-            return torch.ops.quantized.linear_prepack(qw, None if bias is None else bias.to(torch.float32))
-    except Exception:  # quantized engines are optional (and deprecated in future torch releases)
+    Weight-only: activations stay float, so activation outliers (common in Qwen/Llama) do not hurt
+    accuracy, unlike per-tensor dynamic activation quantization.
+    """
+    fn = getattr(torch, "_weight_int8pack_mm", None)
+    if fn is None:
         return None
+    w = w8.contiguous()
+    sc = scale.to(torch.float32).contiguous()
+    try:
+        fn(torch.zeros((1, int(w.shape[1])), dtype=torch.float32), w, sc)
+    except Exception:
+        return None
+    return lambda x: fn(x.to(torch.float32).contiguous(), w, sc)
 
 
 class Int8DraftBackend(LinearBackend):
     """Fast approximate CPU backend for a speculative-decoding *draft* model.
 
-    Uses the pack's own int8 weights and scales with dynamically quantized activations
-    (``torch.ops.quantized.linear_dynamic``): about a quarter of the float32 weight traffic. Its
-    numerics differ slightly from :class:`FloatBackend`, which is fine for a draft: drafts are only
-    proposals, and every emitted token is chosen by the masked target. Falls back to float per linear
-    when the quantized engine is unavailable.
+    Uses the pack's own int8 weights and per-row scales with float activations (weight-only int8):
+    a quarter of the float32 weight traffic, which bounds draft speed on CPU. Its numerics differ
+    slightly from :class:`FloatBackend`, which is fine for a draft: drafts are only proposals, and
+    every emitted token is chosen by the masked target. Falls back to float when unsupported.
     """
 
     def __init__(self, pack: object, ring: RingParams):
@@ -414,46 +415,39 @@ class Int8DraftBackend(LinearBackend):
         self.stats = BackendStats()
 
         def conv(lw: Any, dev: torch.device) -> Any:
-            packed = _int8_dynamic_linear(lw.w8, lw.scale, lw.bias)
-            if packed is not None:
-                return ("q", packed, int(lw.w8.shape[1]))
-            w = lw.w8.to(torch.float32) * lw.scale.to(torch.float32)[:, None]
+            fn = _weight_only_int8(lw.w8, lw.scale)
             b = None if lw.bias is None else lw.bias.to(torch.float32)
-            return ("f", _FloatWeight(w.t().contiguous(), b, int(lw.w8.shape[1])), int(lw.w8.shape[1]))
+            if fn is not None:
+                return ("q", fn, b, int(lw.w8.shape[1]))
+            w = lw.w8.to(torch.float32) * lw.scale.to(torch.float32)[:, None]
+            return ("f", w.t().contiguous(), b, int(lw.w8.shape[1]))
 
         self._weights = _WeightCache(pack, self.device, conv)
 
     @staticmethod
     def available() -> bool:
-        w = torch.ones((8, 8), dtype=torch.int8)
-        return _int8_dynamic_linear(w, torch.ones(8), None) is not None
+        return _weight_only_int8(torch.ones((8, 8), dtype=torch.int8), torch.ones(8)) is not None
 
     def forward(self, call: LinearCall) -> torch.Tensor:
-        kind, w, n = self._weights.get(call.id)
+        kind, w, b, n = self._weights.get(call.id)
         x = call.x
         if x.ndim != 2 or x.shape[1] != n:
             raise ShapeError(f"{call.id}: x must be (T, {n}), got {tuple(x.shape)}")
-        xf = x.to("cpu", torch.float32).contiguous()
-        if kind == "q":
-            y: torch.Tensor = torch.ops.quantized.linear_dynamic(xf, w)
-        else:
-            y = xf @ w.wt
-            if w.bias is not None:
-                y = y + w.bias
+        xf = x.to("cpu", torch.float32)
+        y: torch.Tensor = w(xf) if kind == "q" else xf @ w
+        if b is not None:
+            y = y + b
         self.stats.add(calls=1, rows=int(x.shape[0]))
         return y.to(x.device)
 
 
 def int8_lm_head(weight: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:
-    """An int8 ``h -> h @ weight^T`` for a draft model's output layer (``None`` if unavailable)."""
+    """A weight-only int8 ``h -> h @ weight^T`` for a draft model's output layer (``None`` if unavailable)."""
     w = weight.to(torch.float32)
     sc = w.abs().amax(dim=1) / 127.0
     sc = torch.where(sc == 0, torch.ones_like(sc), sc)
     w8 = torch.clamp(torch.round(w / sc[:, None]), -127, 127).to(torch.int8)
-    packed = _int8_dynamic_linear(w8, sc, None)
-    if packed is None:
-        return None
-    return lambda h: torch.ops.quantized.linear_dynamic(h.to(torch.float32).contiguous(), packed)
+    return _weight_only_int8(w8, sc)
 
 
 # ---- masked backend ----------------------------------------------------------------------------------

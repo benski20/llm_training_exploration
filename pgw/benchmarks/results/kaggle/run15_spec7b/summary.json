@@ -1,0 +1,106 @@
+{
+ "job": {
+  "steps": [
+   {
+    "kind": "pytest",
+    "name": "pytest_gpu",
+    "args": [
+     "tests",
+     "-m",
+     "gpu",
+     "-q",
+     "-rs",
+     "--timeout",
+     "900"
+    ],
+    "timeout": 1800
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_spec_ringmm",
+    "args": [
+     "tests/engine/test_speculative.py",
+     "tests/core/test_ringmm.py",
+     "tests/wire/test_stream.py",
+     "-q",
+     "-rs",
+     "--timeout",
+     "900"
+    ],
+    "timeout": 1500
+   },
+   {
+    "kind": "validate",
+    "label": "qwen7b",
+    "args": [
+     "--model",
+     "Qwen/Qwen2.5-7B-Instruct",
+     "--label",
+     "qwen7b",
+     "--device",
+     "cuda",
+     "--ref-device",
+     "cuda",
+     "--ring",
+     "K32A12C27",
+     "--plain-dtype",
+     "float16",
+     "--delete-hf",
+     "--max-tokens",
+     "64",
+     "--concurrent",
+     "4",
+     "--draft-model",
+     "Qwen/Qwen2.5-0.5B-Instruct",
+     "--spec-tokens",
+     "4",
+     "--loadtest",
+     "--factory-bench-slots",
+     "64"
+    ],
+    "timeout": 7800
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 16.6,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "pytest_gpu": {
+   "rc": 0,
+   "seconds": 314.4,
+   "tail": "..........................................                               [100%]\n42 passed, 1687 deselected in 304.97s (0:05:04)\n\n---stderr---\n"
+  },
+  "pytest_spec_ringmm": {
+   "rc": 0,
+   "seconds": 30.4,
+   "tail": "........................................................................ [ 34%]\n........................................................................ [ 68%]\n..................................................................       [100%]\n210 passed in 25.17s\n\n---stderr---\n"
+  },
+  "validate_qwen7b": {
+   "rc": 0,
+   "seconds": 1684.6,
+   "tail": "ens_per_s': 0.644, 'wall_s': 104.74, 'gateway_cpu_s': 90.61, 'backend_delta': {'calls': 6944, 'rows': 35504, 'round_trips': 6944, 'bytes_up': 1054326784, 'bytes_down': 1763270656, 'freivalds_checked': 6944, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 33.98358354500556, 'local_seconds': 35.670540798000275}, 'gateway_local_engine_s_per_token': 0.343, 'remote_s_per_token': 0.3268}\n[gpu_validate 02:57:52] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 355.23, 'generated_tokens_per_s': 0.721, 'all_tokens_per_s': 1.171, 'gateway_cpu_s_per_token': 0.8009}\n\n---stderr---\n\nFetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 11 files:   9%|\u2589         | 1/11 [00:00<00:01,  7.19it/s]\nFetching 11 files:  45%|\u2588\u2588\u2588\u2588\u258c     | 5/11 [00:00<00:00, 22.77it/s]\nFetching 11 files:  64%|\u2588\u2588\u2588\u2588\u2588\u2588\u258e   | 7/11 [00:20<00:00, 22.77it/s]\nFetching 11 files:  73%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258e  | 8/11 [00:42<00:20,  6.74s/it]\nFetching 11 files:  82%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258f | 9/11 [01:11<00:21, 10.85s/it]\nFetching 11 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 11/11 [01:11<00:00,  6.49s/it]\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]\nFetching 7 files:  29%|\u2588\u2588\u258a       | 2/7 [00:00<00:00, 17.53it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:06<00:00,  1.02s/it]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:06<00:00,  1.07it/s]\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        26265572 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 34.3
+}

@@ -1,0 +1,31 @@
+[gpu_validate 02:35:42] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (277.8s)
+[gpu_validate 02:35:45] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (3.0s)
+[gpu_validate 02:36:11] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (19.8s)
+[gpu_validate 02:37:52] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or"
+[gpu_validate 02:37:55] pgw maskstore init --root ... ok (2.9s)
+[gpu_validate 02:40:19] pgw factory generate --pack ... ok (143.4s)
+[gpu_validate 02:40:34] pgw bench factory --pack ... ok (15.0s)
+[gpu_validate 02:40:36] pgw service token create ... ok (2.6s)
+[gpu_validate 02:40:39] pgw gateway keys create ... ok (3.2s)
+[gpu_validate 02:43:14] chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 02:44:09] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 6.14, 'prefill_s_per_prompt_token': 0.1535, 'decode_s_per_token': 0.78, 'decode_tokens_per_s': 1.282, 'wall_s': 55.32, 'gateway_cpu_s': 42.01, 'backend_delta': {'calls': 7168, 'rows': 11536, 'round_trips': 7168, 'bytes_up': 342573056, 'bytes_down': 572923904, 'freivalds_checked': 7168, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 24.491054288990426, 'local_seconds': 18.104766456994867}, 'gateway_local_engine_s_per_token': 0.1741, 'remote_s_per_token': 0.2355}
+[gpu_validate 02:46:49] concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 160.4, 'generated_tokens_per_s': 1.596, 'all_tokens_per_s': 2.593, 'gateway_cpu_s_per_token': 0.3497}
+[gpu_validate 02:50:12] spec_chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 02:51:57] spec_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 6.809, 'prefill_s_per_prompt_token': 0.1702, 'decode_s_per_token': 1.5538, 'decode_tokens_per_s': 0.644, 'wall_s': 104.74, 'gateway_cpu_s': 90.61, 'backend_delta': {'calls': 6944, 'rows': 35504, 'round_trips': 6944, 'bytes_up': 1054326784, 'bytes_down': 1763270656, 'freivalds_checked': 6944, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 33.98358354500556, 'local_seconds': 35.670540798000275}, 'gateway_local_engine_s_per_token': 0.343, 'remote_s_per_token': 0.3268}
+[gpu_validate 02:57:52] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 355.23, 'generated_tokens_per_s': 0.721, 'all_tokens_per_s': 1.171, 'gateway_cpu_s_per_token': 0.8009}
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  7.19it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 22.77it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 22.77it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [00:42<00:20,  6.74s/it]
+Fetching 11 files:  82%|████████▏ | 9/11 [01:11<00:21, 10.85s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  6.49s/it]
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]
+Fetching 7 files:  29%|██▊       | 2/7 [00:00<00:00, 17.53it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.02s/it]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.07it/s]

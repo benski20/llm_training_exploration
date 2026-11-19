@@ -224,7 +224,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cli("pack", str(dsrc), str(draft_pack), "--name", f"{args.label}-draft", "-q", env=env,
                 log_file=work / "logs" / "pack_draft.log")
         R["draft"] = {"model": args.draft_model, "spec_tokens": args.spec_tokens,
-                      "device": args.draft_device or "cpu", "pack_bytes": dir_bytes(draft_pack)}
+                      "devices": args.draft_device or ["cpu"], "pack_bytes": dir_bytes(draft_pack)}
     save()
 
     # 2. reference
@@ -245,7 +245,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     n_requests = 2 + args.concurrent  # non-streaming, streaming, concurrent batch
     slots = per_req * n_requests + 16
     if args.draft_model:  # the same requests again, with room for speculation rows
-        slots += (n_prompt + args.max_tokens * (1 + args.spec_tokens)) * n_requests
+        slots += (n_prompt + args.max_tokens * (1 + args.spec_tokens)) * n_requests * len(args.draft_device or ["cpu"])
     store, kek = work / "masks", work / "secrets" / "kek"
     kek.parent.mkdir(mode=0o700, exist_ok=True)
     if not (store / "state.sqlite").exists():
@@ -296,10 +296,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         models = sec / "models.json"
         variants: list[tuple[str, dict[str, Any]]] = [("", {})]
         if draft_pack is not None:
-            dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": args.spec_tokens}
-            if args.draft_device:
-                dk["draft_device"] = args.draft_device
-            variants.append(("spec_", dk))
+            for dev in args.draft_device or ["cpu"]:
+                dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": args.spec_tokens,
+                                      "draft_device": dev}
+                variants.append(("spec_" if dev == "cpu" else f"spec_{dev}_", dk))
         gw: subprocess.Popen[bytes] | None = None
         for prefix, extra in variants:
             if gw is not None:  # the next gateway reuses the store; stop the previous one first
@@ -477,7 +477,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_end"] = gpu_mem_mb()
     finally:
         stack.stop()
-        for name in ("service", "gateway", "gateway" + "spec_"):
+        for name in ("service", "gateway", "gatewayspec_", "gatewayspec_cuda_"):
             lf = work / "logs" / f"{name}.log"
             if lf.exists():
                 shutil.copy(lf, out_dir / f"{args.label}_{name}.log")
@@ -510,7 +510,8 @@ def main() -> int:
     ap.add_argument("--batch-window-ms", type=float, default=0.0)
     ap.add_argument("--draft-model", default=None, help="also run with speculative decoding (this draft model)")
     ap.add_argument("--spec-tokens", type=int, default=4)
-    ap.add_argument("--draft-device", default=None, help="draft model device on the gateway (default cpu)")
+    ap.add_argument("--draft-device", nargs="+", default=None,
+                    help="draft model device(s) on the gateway; one speculative run each (default cpu)")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")
     ap.add_argument("--out", default="results")

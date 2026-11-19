@@ -1,0 +1,12 @@
+2026-11-19 02:40:42,083 INFO pgw.service.server: starting pgw-service on 127.0.0.1:58647 (tls=False, mtls=False, packs=1)
+2026-11-19 02:40:42,423 INFO pgw.service.auth: tenant auth: 1 token(s), 0 certificate subject(s)
+2026-11-19 02:40:52,591 INFO pgw.modelpack.loader: verified 4 file(s) of model pack qwen7b (linears)
+2026-11-19 02:40:52,591 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears verify=full
+2026-11-19 02:40:55,215 INFO pgw.service.registry: loaded model qwen7b fp=41a5b3a483ae linears=112 rings=K32A12C27 devices=cuda:0 backend=cuda_int8 bytes=6525288448 in 12.70s
+2026-11-19 02:40:55,216 INFO pgw.service.app: serving qwen7b fp=41a5b3a483ae
+2026-11-19 02:40:55,226 INFO pgw.service.app: compute service ready: 1 model(s), devices=['cuda:0'], startup 12.73s
+2026-11-19 02:40:55,227 INFO hypercorn.error: Running on http://127.0.0.1:58647 (CTRL + C to quit)
+2026-11-19 02:57:52,585 INFO pgw.service.app: compute service draining: no new requests admitted
+2026-11-19 02:57:52,586 INFO pgw.service.server: shutdown requested; draining
+2026-11-19 02:57:52,705 INFO pgw.service.batcher: batch scheduler stopped (drain=True, batches=42616, mean_rows=6.6)
+2026-11-19 02:57:52,705 INFO pgw.service.app: compute service stopped

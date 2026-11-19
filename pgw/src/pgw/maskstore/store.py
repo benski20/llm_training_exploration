@@ -242,9 +242,7 @@ class _Extent:
 
     def secrets(self) -> tuple[bytes, list[memoryview]]:
         if self._secrets is None:
-            plain = self.seg.decrypt(self.seg.layout.secrets_chunk())
-            self._secrets = bytearray(plain)
-            del plain
+            self._secrets = _decrypt_buf(self.seg, self.seg.layout.secrets_chunk())
             self.seed, self._uw_views = self.seg.layout.secrets_split(self._secrets)
         assert self.seed is not None
         return self.seed, self._uw_views
@@ -427,9 +425,7 @@ class MaskReservation:
             if cached is None or cached[0] != j:
                 if cached is not None:
                     _zero(cached[1])
-                plain = ex.seg.decrypt(layout.wr_chunk(li, j))
-                cached = (j, bytearray(plain))
-                del plain
+                cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j)))
                 self._chunk_cache[(ei, lin.id)] = cached
             buf = cached[1]
             in_chunk = slot - j * cs
@@ -520,6 +516,17 @@ class MaskReservation:
             self._store = None
             with contextlib.suppress(Exception):
                 self.close()
+
+
+def _decrypt_buf(seg: Any, ref: Any) -> bytearray:
+    """Decrypt a chunk into a zeroable bytearray (segment readers without ``decrypt_into``: copy)."""
+    into = getattr(seg, "decrypt_into", None)
+    if into is not None:
+        return into(ref)  # type: ignore[no-any-return]
+    plain = seg.decrypt(ref)
+    out = bytearray(plain)
+    del plain
+    return out
 
 
 def _zero(buf: bytearray | memoryview) -> None:

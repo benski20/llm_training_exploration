@@ -181,3 +181,21 @@ def test_int8_draft_backend_keeps_output_identical(qwen_pack: InMemoryPack, othe
         assert draft.lm_head_fn is not None
         spec = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=4).generate(PROMPT, params)
         assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
+
+
+def test_int8_draft_backend_is_accurate_with_activation_outliers(qwen_pack: InMemoryPack) -> None:
+    """Regression: per-tensor dynamic activation quantization lost ~4% on outlier-heavy activations
+    (real Qwen drafts were then almost never accepted). Weight-only int8 must track float closely."""
+    from pgw.core.types import LinearId
+    from pgw.engine import FloatBackend, LinearCall
+    from pgw.engine.backends import Int8DraftBackend
+
+    if not Int8DraftBackend.available():
+        pytest.skip("no int8 weight-only CPU kernel in this torch build")
+    lid = LinearId(0, "gate_up")
+    n = qwen_pack.load_linear(lid).w8.shape[1]
+    x = torch.randn(3, n, generator=torch.Generator().manual_seed(0))
+    x[:, 1] = 300.0  # massive-activation outlier channel
+    ref = FloatBackend(qwen_pack, DEFAULT_RING).forward(LinearCall(lid, x))
+    got = Int8DraftBackend(qwen_pack, DEFAULT_RING).forward(LinearCall(lid, x))
+    assert float((got - ref).abs().max() / ref.abs().max()) < 1e-4

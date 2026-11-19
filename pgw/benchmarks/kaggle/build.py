@@ -41,7 +41,8 @@ JOBS: dict[str, dict] = {
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
             "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
-            "--draft-model", QWEN05, "--spec-tokens", "4", "--loadtest", "--factory-bench-slots", "64"],
+            "--draft-model", QWEN05, "--spec-tokens", "4", "--draft-device", "cpu", "cuda",
+            "--loadtest", "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
     # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)

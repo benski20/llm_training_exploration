@@ -1,0 +1,25 @@
+{
+ "model": "qwen7b",
+ "mode": "pack",
+ "ring": "K32A12C27",
+ "device": "cuda",
+ "backend": "cuda_int8",
+ "slots_measured": 64,
+ "seconds": 5.104085272999782,
+ "slots_per_second": 83.7367003290742,
+ "tokens_per_hour": 301452.1211846671,
+ "seconds_per_token": 0.011942194952394014,
+ "gemm_fraction": 0.1237749122924124,
+ "bytes_per_token": 5562368,
+ "price_per_hour": 0.2,
+ "usd_per_million_tokens": 0.6634552751330007,
+ "storage_tb_per_million_tokens": 5.562368,
+ "layers_measured": 1,
+ "layers_total": 1,
+ "gpu_name": "Tesla T4"
+}
+
+---stderr---
+2026-11-19 02:40:21,213 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears verify=fingerprint
+2026-11-19 02:40:21,470 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+2026-11-19 02:40:21,471 INFO pgw.factory.generator: mask generator for qwen7b (41a5b3a483ae) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
