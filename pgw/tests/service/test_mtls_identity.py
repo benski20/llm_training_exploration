@@ -41,8 +41,8 @@ def two_client_pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     return out
 
 
-@pytest.fixture(scope="module")
-def id_server(tiny_pack_dir: Path, two_client_pki: dict[str, Path],
+@pytest.fixture(scope="module", params=["hypercorn", "uvicorn"])
+def id_server(request: pytest.FixtureRequest, tiny_pack_dir: Path, two_client_pki: dict[str, Path],
               tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Any]]:
     d = tmp_path_factory.mktemp("mtls-id")
     tok = d / "tenants.txt"
@@ -55,7 +55,7 @@ def id_server(tiny_pack_dir: Path, two_client_pki: dict[str, Path],
         host="127.0.0.1", port=port, metrics_port=mport, packs=[tiny_pack_dir], device="cpu",
         tokens_file=tok, mtls_tenants_file=mt, batch_window_ms=1.0,
         tls={"cert_file": pki["server"], "key_file": pki["server_key"], "ca_file": pki["ca"],
-             "require_client_cert": True},
+             "require_client_cert": True}, server=request.param,
     )
     srv = _ServerThread(s)
     srv.start()
@@ -66,7 +66,7 @@ def id_server(tiny_pack_dir: Path, two_client_pki: dict[str, Path],
         ctx.load_cert_chain(str(pki[who]), str(pki[f"{who}_key"]))
         ctxs[who] = ctx
     _wait_ready(url, verify=ctxs["a"])
-    yield {"url": url, "ctx": ctxs}
+    yield {"url": url, "ctx": ctxs, "server": request.param, "pki": pki}
     srv.stop()
     assert srv.error is None, srv.error
 
@@ -83,6 +83,8 @@ def _post(srv: dict[str, Any], who: str, pack_fp: str, token: str | None, http2:
 
 @pytest.mark.parametrize("http2", [False, True])
 def test_cert_identity_reaches_tenant_auth(id_server: dict[str, Any], pack_fp: str, http2: bool) -> None:
+    if http2 and id_server["server"] == "uvicorn":
+        pytest.skip("uvicorn serves HTTP/1.1 only")
     # mapped certificate alone authenticates (mtls_tenants_file-only deployments work)
     assert _post(id_server, "a", pack_fp, None, http2) == 200
     # matching token + certificate
@@ -91,6 +93,41 @@ def test_cert_identity_reaches_tenant_auth(id_server: dict[str, Any], pack_fp: s
     assert _post(id_server, "a", pack_fp, TOKEN_B, http2) == 403
     # CA-issued certificate that is not mapped to any tenant is refused even with a valid token
     assert _post(id_server, "b", pack_fp, TOKEN_B, http2) == 403
+
+
+async def _stream_call(srv: dict[str, Any], who: str, pack_fp: str, token: str | None) -> Any:
+    from websockets.asyncio.client import connect
+
+    from pgw.wire import decode_any
+
+    pki = srv["pki"]
+    ctx = ssl.create_default_context(cafile=str(pki["ca"]))
+    ctx.load_cert_chain(str(pki[who]), str(pki[f"{who}_key"]))
+    ctx.set_alpn_protocols(["http/1.1"])
+    headers = {"PGW-Protocol": "1"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    ring = RING_K40_A12
+    req = make_req(pack_fp, ring, [("0.o", rand_x(1, 64, ring))])
+    url = srv["url"].replace("https://", "wss://") + "/pgw/v1/stream"
+    async with connect(url, ssl=ctx, additional_headers=headers, compression=None, proxy=None) as ws:
+        await ws.send(encode_message(req))
+        return decode_any(await ws.recv())
+
+
+async def test_cert_identity_reaches_tenant_auth_on_the_stream(id_server: dict[str, Any], pack_fp: str) -> None:
+    from websockets.exceptions import InvalidStatus
+
+    from pgw.wire import ComputeResponse
+
+    # certificate alone, and certificate + matching token
+    assert isinstance(await _stream_call(id_server, "a", pack_fp, None), ComputeResponse)
+    assert isinstance(await _stream_call(id_server, "a", pack_fp, TOKEN_A), ComputeResponse)
+    # another tenant's token with tenant-a's certificate, and an unmapped certificate: refused at the handshake
+    for who, token in (("a", TOKEN_B), ("b", TOKEN_B), ("b", None)):
+        with pytest.raises(InvalidStatus) as ei:
+            await _stream_call(id_server, who, pack_fp, token)
+        assert ei.value.response.status_code == 403
 
 
 def test_settings_refuse_mtls_map_without_verified_certs(tmp_path: Path) -> None:

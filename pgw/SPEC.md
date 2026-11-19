@@ -168,7 +168,12 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
   supported as a fallback (uvicorn). Clients in Rust or Go need only an HTTP client and msgpack.
 - Cost: there is no IDL. This spec plus strict codec validation and conformance tests
   (`tests/wire/`) serve as the schema.
-- Server: hypercorn (h2 and h2c). Client: `httpx` with `http2=True` and a connection pool.
+- Server: uvicorn by default (HTTP/1.1 via httptools, and the `websockets` framing for the
+  `/pgw/v1/stream` channel that clients use for compute calls: about half the per-frame CPU of
+  hypercorn's pure-Python framing), or hypercorn (h2 and h2c) with `PGW_SERVICE_SERVER=hypercorn`
+  for HTTP-only clients that want HTTP/2 multiplexing. Both publish the verified client-certificate
+  subject to the app. Client: `httpx` with `http2=True` (ALPN falls back to HTTP/1.1) and a
+  connection pool, plus the stream channel.
 
 ### 6.2 Endpoints (compute service)
 | method | path | body | response |

@@ -274,13 +274,17 @@ class ServiceHandler:
                 data = pack_ring(y, ring)
             return ComputeResult(it.linear, rows, data), timing
 
-        tasks = [asyncio.ensure_future(one(i)) for i in range(len(request.items))]
-        try:
-            results = await asyncio.gather(*tasks)
-        except BaseException:
-            for t in tasks:
-                t.cancel()
-            raise
+        results: list[tuple[ComputeResult, BatchTiming]]
+        if len(request.items) == 1:  # decode calls: no extra task per item
+            results = [await one(0)]
+        else:
+            tasks = [asyncio.ensure_future(one(i)) for i in range(len(request.items))]
+            try:
+                results = list(await asyncio.gather(*tasks))
+            except BaseException:
+                for t in tasks:
+                    t.cancel()
+                raise
         out = tuple(r[0] for r in results)
         bytes_out = sum(len(r.y_hat) for r in out)
         kinds: dict[str, int] = {}

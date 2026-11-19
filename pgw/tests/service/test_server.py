@@ -159,7 +159,7 @@ def mtls_server(tiny_pack_dir: Path, pki: dict[str, Path], tmp_path_factory: pyt
         host="127.0.0.1", port=port, metrics_port=mport, metrics_on_main_port=False, packs=[tiny_pack_dir],
         device="cpu", tokens_file=tok, batch_window_ms=1.0,
         tls={"cert_file": pki["server"], "key_file": pki["server_key"], "ca_file": pki["ca"],
-             "require_client_cert": True},
+             "require_client_cert": True}, server="hypercorn",
     )
     srv = _ServerThread(s)
     srv.start()
@@ -234,11 +234,30 @@ def test_build_hypercorn_config(tmp_path: Path, pki: dict[str, Path]) -> None:
     assert cfg3.ssl_enabled and cfg3.verify_mode == ssl.CERT_REQUIRED and "h2" in cfg3.alpn_protocols
 
 
+def test_build_uvicorn_config(pki: dict[str, Path]) -> None:
+    from pgw.service.server import build_uvicorn_config
+
+    s = ServiceSettings(tls={"cert_file": pki["server"], "key_file": pki["server_key"], "ca_file": pki["ca"],
+                             "require_client_cert": True}, allow_unauthenticated=True, port=1234, server="uvicorn")
+    cfg = build_uvicorn_config(s, app=lambda *a: None)
+    cfg.load()
+    assert cfg.ssl is not None and cfg.ssl.verify_mode == ssl.CERT_REQUIRED
+    assert cfg.ssl.minimum_version >= ssl.TLSVersion.TLSv1_2
+    assert cfg.http_protocol_class.__name__.startswith("PeerCert")  # verified identities published
+    assert cfg.ws_protocol_class.__name__.startswith("PeerCert")
+    assert not cfg.proxy_headers and cfg.port == 1234
+    plain = build_uvicorn_config(ServiceSettings(allow_unauthenticated=True, host="127.0.0.1"), app=lambda *a: None)
+    plain.load()
+    assert plain.ssl is None and not plain.ws_protocol_class.__name__.startswith("PeerCert")
+
+
 @pytest.mark.slow
-def test_sigterm_graceful_shutdown_subprocess(tiny_pack_dir: Path, tmp_path: Path, pack_fp: str) -> None:
+@pytest.mark.parametrize("server", ["hypercorn", "uvicorn"])
+def test_sigterm_graceful_shutdown_subprocess(tiny_pack_dir: Path, tmp_path: Path, pack_fp: str, server: str) -> None:
     port = _free_port()
     env = {
         **os.environ,
+        "PGW_SERVICE_SERVER": server,
         "PGW_SERVICE_HOST": "127.0.0.1",
         "PGW_SERVICE_PORT": str(port),
         "PGW_SERVICE_PACKS": f'["{tiny_pack_dir}"]',

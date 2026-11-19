@@ -478,9 +478,9 @@ def create_router(
         An ``APIRouter`` to mount with ``app.include_router(...)``.
     """
     from fastapi import APIRouter
+    from starlette.datastructures import Headers
     from starlette.requests import Request
     from starlette.responses import Response
-    from starlette.websockets import WebSocket
 
     lim = limits or WireLimits()
     router = APIRouter()
@@ -626,22 +626,30 @@ def create_router(
                 body_budget.release(held[0])
             await _done(box, t0, status, code)
 
-    async def stream(ws: WebSocket) -> None:
+    async def stream(scope: Any, receive: Any, send: Any) -> None:
         """Persistent compute channel: one msgpack ``ComputeRequest`` per binary frame, one reply frame
         (``ComputeResponse`` or ``ErrorResponse`` carrying the request id) per request, in completion
         order. Authenticated once at the handshake; every request still goes through ``precheck``,
         the byte budget, decoding limits, deadlines, response validation and the metrics hook.
         A frame whose request id cannot be read closes the channel (the client cannot match a reply).
+
+        A raw ASGI app (no per-message framework wrappers): it runs once per frame on the hot path.
         """
+        if scope.get("type") != "websocket":  # pragma: no cover - routed by path and type
+            return
+        msg = await receive()
+        if msg.get("type") != "websocket.connect":
+            return
         try:
-            identity = await _authenticate(ws.headers, ws.scope)
+            identity = await _authenticate(Headers(scope=scope), scope)
             if callable(precheck):  # draining: refuse new channels so clients go elsewhere
                 await _maybe_await(precheck())
         except Exception as exc:
             _log_error(exc, None, STREAM_PATH)
-            await ws.close(code=1008, reason=str(getattr(exc, "code", "unauthorized"))[:100])
+            await send({"type": "websocket.close", "code": 1008,
+                        "reason": str(getattr(exc, "code", "unauthorized"))[:100]})
             return
-        await ws.accept()
+        await send({"type": "websocket.accept"})
         send_lock = asyncio.Lock()
         slots = asyncio.Semaphore(max(1, lim.max_stream_inflight))
         tasks: set[asyncio.Task[None]] = set()
@@ -649,7 +657,11 @@ def create_router(
 
         async def reply(data: bytes) -> None:
             async with send_lock:
-                await ws.send_bytes(data)
+                await send({"type": "websocket.send", "bytes": data})
+
+        async def close(code: int, reason: str) -> None:
+            async with send_lock:
+                await send({"type": "websocket.close", "code": code, "reason": reason})
 
         async def one(body: bytes) -> None:
             t0 = time.monotonic()
@@ -663,7 +675,7 @@ def create_router(
                         if not body_budget.try_acquire(len(body)):
                             raise _budget_exhausted(body_budget, len(body))
                         held = len(body)
-                    if callable(precheck):
+                    if precheck is not None:
                         await _maybe_await(precheck())
                     out = await _process(body, identity, t0, 1, None, box)
                     status, code = 200, None
@@ -689,15 +701,18 @@ def create_router(
 
         try:
             while not closing.is_set():
-                msg = await ws.receive()
-                if msg["type"] == "websocket.disconnect":
+                msg = await receive()
+                mtype = msg["type"]
+                if mtype == "websocket.disconnect":
                     break
+                if mtype != "websocket.receive":  # pragma: no cover - nothing else is defined
+                    continue
                 data = msg.get("bytes")
                 if data is None:
-                    await ws.close(code=1003, reason="binary frames only")
+                    await close(1003, "binary frames only")
                     break
                 if len(data) > lim.max_request_bytes:
-                    await ws.close(code=1009, reason="frame too large")
+                    await close(1009, "frame too large")
                     break
                 await slots.acquire()
                 t = asyncio.create_task(one(data))
@@ -705,7 +720,7 @@ def create_router(
                 t.add_done_callback(tasks.discard)
             if closing.is_set():
                 with contextlib.suppress(Exception):
-                    await ws.close(code=1008, reason="unreadable request")
+                    await close(1008, "unreadable request")
         except Exception as exc:  # disconnects surface as exceptions on some servers
             log.debug("pgw stream closed: %s", type(exc).__name__)
         finally:
@@ -734,29 +749,49 @@ def create_router(
     # schema generation is bypassed on purpose.
     router.add_route(COMPUTE_PATH, compute, methods=["POST"], include_in_schema=False)
     router.add_route(MODELS_PATH, models, methods=["GET"], include_in_schema=False)
+    stream_app = _ASGIEndpoint(stream)
     if lim.stream:
-        router.add_websocket_route(STREAM_PATH, stream)
+        router.add_websocket_route(STREAM_PATH, stream_app)  # type: ignore[arg-type]  # an ASGI app, not a WebSocket endpoint
     router.pgw_compute_endpoint = compute  # type: ignore[attr-defined]  # for ComputeFastPath
+    router.pgw_stream_app = stream_app if lim.stream else None  # type: ignore[attr-defined]
     return router
 
 
-class ComputeFastPath:
-    """ASGI middleware sending ``POST`` :data:`COMPUTE_PATH` straight to the compute endpoint.
+class _ASGIEndpoint:
+    """Wraps a raw ASGI coroutine function so Starlette mounts it as an app (not as a
+    ``WebSocket``-taking endpoint)."""
 
-    The endpoint built by :func:`create_router` already does everything a request needs (auth,
-    limits, decoding, error mapping to wire errors, metrics hook) and never raises, so routing and
+    __slots__ = ("fn",)
+
+    def __init__(self, fn: Callable[[Any, Any, Any], Awaitable[None]]):
+        self.fn = fn
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        await self.fn(scope, receive, send)
+
+
+class ComputeFastPath:
+    """ASGI middleware sending ``POST`` :data:`COMPUTE_PATH` straight to the compute endpoint, and
+    WebSocket connections to :data:`STREAM_PATH` straight to the stream channel.
+
+    The endpoints built by :func:`create_router` already do everything a request needs (auth,
+    limits, decoding, error mapping to wire errors, metrics hook) and never raise, so routing and
     the framework's exception/telemetry middleware add only per-request overhead (about a third
-    of the service's non-kernel CPU per round trip, measured). Every other path, and compute
-    requests when no endpoint is known, go to the wrapped app unchanged.
+    of the service's non-kernel CPU per round trip, measured; for the stream they would wrap every
+    frame's ``send``). Every other path, and requests whose endpoint is not known, go to the
+    wrapped app unchanged.
 
     Args:
         app: The next ASGI app (set by Starlette's ``add_middleware``).
         endpoint: The compute endpoint (``router.pgw_compute_endpoint`` of :func:`create_router`).
         routes: Alternatively, routes to search for the ``POST`` :data:`COMPUTE_PATH` endpoint.
+        stream: The stream channel app (``router.pgw_stream_app``), or ``None``.
     """
 
-    def __init__(self, app: Any, endpoint: Callable[[Any], Awaitable[Any]] | None = None, routes: Any = ()):
+    def __init__(self, app: Any, endpoint: Callable[[Any], Awaitable[Any]] | None = None, routes: Any = (),
+                 stream: Callable[[Any, Any, Any], Awaitable[None]] | None = None):
         self.app = app
+        self._stream = stream
         self._endpoint: Callable[[Any], Awaitable[Any]] | None = endpoint
         for r in () if endpoint is not None else routes:
             if getattr(r, "path", None) == COMPUTE_PATH and "POST" in (getattr(r, "methods", None) or ()):
@@ -772,6 +807,9 @@ class ComputeFastPath:
 
             response = await ep(_Request(scope, receive))
             await response(scope, receive, send)
+            return
+        if self._stream is not None and scope.get("type") == "websocket" and scope.get("path") == STREAM_PATH:
+            await self._stream(scope, receive, send)
             return
         await self.app(scope, receive, send)
 

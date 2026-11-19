@@ -44,6 +44,13 @@ class ServiceSettings(PGWSettings):
         "series (request counts, rows, bytes, latency) that other tenants must not read",
     )
     workers_keep_alive_s: float = Field(75.0, gt=0, description="HTTP keep-alive timeout")
+    server: Literal["hypercorn", "uvicorn"] = Field(
+        "uvicorn",
+        description="HTTP server of the main listener. 'uvicorn' (default): HTTP/1.1 (httptools) with the "
+        "`websockets` framing for the /pgw/v1/stream channel, which ComputeClient uses by default (lowest per-call "
+        "overhead). 'hypercorn': HTTP/2 + HTTP/1.1, for HTTP-only clients that want HTTP/2 multiplexing (its "
+        "pure-Python WebSocket framing costs more per stream frame). Both publish verified mTLS identities",
+    )
     tls: TLSConfig = TLSConfig()
 
     # ---- models and devices --------------------------------------------------------------
@@ -74,6 +81,13 @@ class ServiceSettings(PGWSettings):
     cpu_workers: int = Field(2, gt=0, description="Concurrent kernel executions on the CPU device")
     gpu_workers_per_device: int = Field(1, gt=0, description="Concurrent kernel executions per GPU")
     max_queued_rows: int = Field(1 << 20, gt=0, description="Above this many queued rows, reply 'unavailable'")
+    batch_inline_max_rows: int = Field(
+        8, ge=0,
+        description="Run batches of at most this many rows (decode and speculative-verify calls) directly on the "
+        "event loop when their device is completely idle: saves the kernel pool's two thread hand-offs (measured "
+        "0.2-0.4 ms per call) at the cost of blocking the loop for that kernel's time. A busy device always queues "
+        "and coalesces in the pool. 0 = always use the pool",
+    )
     codec_offload_bytes: int = Field(
         1 << 20, ge=0, description="Payloads above this size are (un)packed in a worker thread"
     )

@@ -53,6 +53,9 @@ class ServiceMetrics:
         self.enabled = enabled
         self.registry: Any = None
         self._c: dict[str, Any] = {}
+        # labelled children by (metric, label values): ``Collector.labels(**kw)`` validates and
+        # sorts on every call, which is measurable on the per-request hot path
+        self._children: dict[tuple[str, ...], Any] = {}
         if not enabled:
             return
         try:
@@ -113,33 +116,52 @@ class ServiceMetrics:
             return _Noop()
         return self._c[name]
 
+    def _child(self, name: str, *values: str) -> Any:
+        """``get(name).labels(*values)``, cached (label sets are bounded: tenants x kinds x codes)."""
+        key = (name, *values)
+        c = self._children.get(key)
+        if c is None:
+            c = self.get(name).labels(*values)
+            if len(self._children) < 65536:
+                self._children[key] = c
+        return c
+
     # ---- convenience ---------------------------------------------------------------------
     def request_done(self, tenant: str, code: str, seconds: float) -> None:
         """Count one finished compute request and its latency."""
-        self.get("pgw_service_requests_total").labels(tenant=tenant, code=code).inc()
-        self.get("pgw_service_request_seconds").labels(tenant=tenant).observe(max(0.0, seconds))
+        if not self.enabled:
+            return
+        self._child("pgw_service_requests_total", tenant, code).inc()
+        self._child("pgw_service_request_seconds", tenant).observe(max(0.0, seconds))
 
     def rows(self, tenant: str, kind: str, rows: int) -> None:
         """Count rows computed for a tenant."""
-        self.get("pgw_service_rows_total").labels(tenant=tenant, linear_kind=kind).inc(rows)
+        if self.enabled:
+            self._child("pgw_service_rows_total", tenant, kind).inc(rows)
 
     def bytes_io(self, tenant: str, bytes_in: int, bytes_out: int) -> None:
         """Count payload bytes."""
-        self.get("pgw_service_bytes_in_total").labels(tenant=tenant).inc(bytes_in)
-        self.get("pgw_service_bytes_out_total").labels(tenant=tenant).inc(bytes_out)
+        if not self.enabled:
+            return
+        self._child("pgw_service_bytes_in_total", tenant).inc(bytes_in)
+        self._child("pgw_service_bytes_out_total", tenant).inc(bytes_out)
 
     def batch(self, kind: str, backend: str, rows: int, seconds: float) -> None:
         """Record one kernel batch."""
-        self.get("pgw_service_batch_rows").labels(linear_kind=kind).observe(rows)
-        self.get("pgw_service_kernel_seconds").labels(linear_kind=kind, backend=backend).observe(seconds)
+        if not self.enabled:
+            return
+        self._child("pgw_service_batch_rows", kind).observe(rows)
+        self._child("pgw_service_kernel_seconds", kind, backend).observe(seconds)
 
     def queue_depth(self, items: int) -> None:
         """Set the number of queued compute items."""
-        self.get("pgw_service_queue_depth").set(items)
+        if self.enabled:
+            self._c["pgw_service_queue_depth"].set(items)
 
     def inflight(self, n: int) -> None:
         """Set the number of in-flight requests."""
-        self.get("pgw_service_inflight").set(n)
+        if self.enabled:
+            self._c["pgw_service_inflight"].set(n)
 
     def render(self) -> tuple[bytes, str]:
         """``(body, content_type)`` in Prometheus text format."""

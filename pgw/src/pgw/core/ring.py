@@ -16,6 +16,7 @@ Quantization conventions (normative, see SPEC.md section 5):
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -138,16 +139,24 @@ class RingParams:
     @classmethod
     def from_name(cls, name: str) -> RingParams:
         """Parse ``"K40A12"`` or a capped ring such as ``"K32A12C27"`` (case-insensitive)."""
-        import re
-
-        m = re.fullmatch(r"K(\d+)A(\d+)(?:C(\d+))?", name.strip().upper())
+        hit = _FROM_NAME_CACHE.get(name) if cls is RingParams else None
+        if hit is not None:  # parsed on every wire message: cache the (few) valid names
+            return hit
+        m = _RING_NAME_RE.fullmatch(name.strip().upper())
         if m is None:
             raise ConfigError(f"bad ring name {name!r}; expected e.g. 'K40A12' or 'K32A12C27'")
-        return cls(int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+        params = cls(int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+        if cls is RingParams and len(_FROM_NAME_CACHE) < 256:
+            _FROM_NAME_CACHE[name] = params
+        return params
 
     def __str__(self) -> str:
         return self.name
 
+
+_RING_NAME_RE = re.compile(r"K(\d+)A(\d+)(?:C(\d+))?")
+#: ``from_name`` results by the exact string given (bounded; RingParams is frozen, so sharing is safe).
+_FROM_NAME_CACHE: dict[str, RingParams] = {}
 
 RING_K32_A8 = RingParams(32, 8)
 RING_K40_A12 = RingParams(40, 12)
