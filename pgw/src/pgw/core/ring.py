@@ -254,7 +254,7 @@ def _quantize_capped(x: torch.Tensor, params: RingParams, wnorm: float) -> tuple
             break
     if todo.size:  # pragma: no cover - only for absurd weight norms (1-bit activations still too big)
         raise RingOverflowError(f"{params.name}: activations cannot be bounded by 2^{params.cap} for this linear")
-    return torch.from_numpy(xq), torch.from_numpy(sx)
+    return torch.from_numpy(xq).to(x.device), torch.from_numpy(sx).to(x.device)
 
 
 def dequantize_outputs(
