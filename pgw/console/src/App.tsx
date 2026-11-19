@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import { GatewayProvider } from "./app/gateway";
 import { SessionProvider, useSession } from "./app/session";
@@ -70,13 +70,19 @@ export function AppRoutes() {
 
 export function App() {
   return (
-    <BrowserRouter basename="/console">
+    <Router>
       <ToastProvider>
         <SessionProvider>
           <ApiToasts />
           <AppRoutes />
         </SessionProvider>
       </ToastProvider>
-    </BrowserRouter>
+    </Router>
   );
+}
+
+// The gateway serves the console at /console/ (history routing); the standalone demo build uses hash
+// routing so it works from any URL.
+function Router({ children }: { children: ReactNode }) {
+  return __DEMO__ ? <HashRouter>{children}</HashRouter> : <BrowserRouter basename="/console">{children}</BrowserRouter>;
 }

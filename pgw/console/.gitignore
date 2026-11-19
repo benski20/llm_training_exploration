@@ -1,3 +1,4 @@
 node_modules/
 .mock-dist/
 *.tsbuildinfo
+.demo-dist/

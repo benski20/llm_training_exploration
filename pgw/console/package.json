@@ -13,7 +13,8 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "build:demo": "vite build --mode demo --outDir .demo-dist --emptyOutDir"
   },
   "dependencies": {
     "react": "18.3.1",

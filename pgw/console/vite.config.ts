@@ -12,7 +12,8 @@ const CSP =
   "frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 export default defineConfig(({ mode }) => ({
-  base: "/console/",
+  // "demo": a self-contained preview with fixture data (relative paths, hash routing), not served by a gateway.
+  base: mode === "demo" ? "./" : "/console/",
   plugins: [react()],
   build: {
     outDir,
@@ -24,7 +25,8 @@ export default defineConfig(({ mode }) => ({
     reportCompressedSize: true,
   },
   define: {
-    __MOCK__: JSON.stringify(mode === "mock"),
+    __MOCK__: JSON.stringify(mode === "mock" || mode === "demo"),
+    __DEMO__: JSON.stringify(mode === "demo"),
   },
   server: { port: 5173 },
   preview: { headers: { "Content-Security-Policy": CSP } },

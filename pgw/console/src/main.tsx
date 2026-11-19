@@ -23,6 +23,12 @@ function render() {
 if (__MOCK__) {
   void import("./mock").then((m) => {
     m.installMock();
+    if (__DEMO__) {
+      const tag = document.createElement("div");
+      tag.className = "demo-banner";
+      tag.textContent = "Demo with sample data. Sign in with the token \"admin\" (or \"viewer\").";
+      document.body.prepend(tag);
+    }
     render();
   });
 } else {
