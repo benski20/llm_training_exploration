@@ -527,6 +527,15 @@ class _Chunk:
     payload: bytes | None = None  # packed x_hat (K=32 fast path)
 
 
+def _wipe(t: torch.Tensor) -> None:
+    """Zero a buffer in place. CPU tensors go through numpy: torch's multithreaded fill is up to
+    ~10x slower for these sizes when the CPU is busy (OpenMP threads contend), same result."""
+    if t.device.type == "cpu" and t.is_contiguous():
+        t.numpy().fill(0)
+    else:
+        t.zero_()
+
+
 @dataclass
 class _Prepared:
     calls: Sequence[LinearCall]
@@ -539,7 +548,7 @@ class _Prepared:
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
         for ch in self.chunks:
-            ch.wr.zero_()
+            _wipe(ch.wr)
 
 
 class MaskedBackend(LinearBackend):
@@ -804,18 +813,18 @@ class MaskedBackend(LinearBackend):
                             try:
                                 self.noise_monitor.guard(x_hat, xq)  # type: ignore[attr-defined]
                             finally:
-                                xq.zero_()
+                                _wipe(xq)
                     except BaseException:
-                        wr.zero_()
+                        _wipe(wr)
                         raise
                     finally:
-                        r.zero_()  # one-time pad: never keep it around
+                        _wipe(r)  # one-time pad: never keep it around
                     chunks.append(_Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload))
                     sx_parts[ci].append(torch.from_numpy(sx))
                     row += rows
         except BaseException:
             for ch in chunks:
-                ch.wr.zero_()
+                _wipe(ch.wr)
             raise
         sxs = [torch.cat(p) if len(p) > 1 else (p[0] if p else torch.zeros(0, dtype=torch.float64))
                for p in sx_parts]
@@ -875,10 +884,10 @@ class MaskedBackend(LinearBackend):
                             payload = None
                             x_hat = mask_activations(xq[row : row + rows], r.to(torch.int64), self.ring)
                     except BaseException:
-                        wr.zero_()
+                        _wipe(wr)
                         raise
                     finally:
-                        r.zero_()  # one-time pad: never keep it around
+                        _wipe(r)  # one-time pad: never keep it around
                     chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload)
                     chunks.append(chunk)
                     if self.noise_monitor is not None:
@@ -886,11 +895,11 @@ class MaskedBackend(LinearBackend):
                     row += rows
         except BaseException:
             for ch in chunks:
-                ch.wr.zero_()
+                _wipe(ch.wr)
             raise
         finally:
             for xq in quantized:
-                xq.zero_()
+                _wipe(xq)
         request = None
         if chunks:
             items = tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload if ch.payload is not None
@@ -963,7 +972,7 @@ class MaskedBackend(LinearBackend):
                 else:
                     assert y_hat is not None
                     yq = torch.from_numpy(unmask_outputs_u64(y_hat, ch.wr.numpy(), self.ring, meta.in_features))
-                ch.wr.zero_()
+                _wipe(ch.wr)
                 sx = prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows]
                 outs[ch.call_index].append(dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32))
         except IntegrityError as exc:
@@ -982,7 +991,10 @@ class MaskedBackend(LinearBackend):
             prep.wipe()
         result = []
         for call, meta, parts in zip(prep.calls, prep.metas, outs, strict=True):
-            y = torch.cat(parts, dim=0) if parts else torch.zeros((0, meta.out_features), dtype=torch.float32)
+            if len(parts) == 1:
+                y = parts[0]
+            else:
+                y = torch.cat(parts, dim=0) if parts else torch.zeros((0, meta.out_features), dtype=torch.float32)
             result.append(y.to(call.x.device))
         bytes_up = sum(len(it.x_hat) for it in req.items) if req is not None else 0
         self.stats.add(
@@ -1019,7 +1031,7 @@ class MaskedBackend(LinearBackend):
         except ValueError as exc:
             raise ProtocolError(f"compute response item is malformed: {exc}") from exc
         finally:
-            ch.wr.zero_()
+            _wipe(ch.wr)
         if status == 3:
             raise MaskReuseError("mask reservation closed during a compute call")
         if status == 1:
