@@ -234,3 +234,57 @@ def test_prompt_lookup_cuts_passes_on_repetitive_output(qwen_pack: InMemoryPack,
     spec = Generator(target, tiny_tokenizer, spec_tokens=4, lookup=3).generate(PROMPT, params)
     assert spec.token_ids == base.token_ids
     assert spec.timings_ms["spec_passes"] < len(base.token_ids)
+
+
+def test_sampler_rng_advance_does_not_depend_on_logits() -> None:
+    """Coupled drafting relies on this: after one draw the RNG state is the same whatever the logits."""
+    from pgw.engine.sampling import Sampler
+
+    params = SamplingParams(max_tokens=4, temperature=0.8, top_p=0.9, seed=11)
+    a, b = Sampler(params), Sampler(params)
+    g = torch.Generator().manual_seed(0)
+    for _ in range(5):
+        a.propose(torch.randn(300, generator=g) * 3, [])
+        b.propose(torch.randn(300, generator=g), [])
+        assert torch.equal(a._gen.get_state(), b._gen.get_state())
+    f = a.fork()
+    assert torch.equal(f._gen.get_state(), a._gen.get_state())
+    lg = torch.randn(300, generator=g)
+    assert f.propose(lg.clone(), [1, 2]) == a.sample(lg.clone(), [1, 2])[0]  # a fork draws what the target draws
+
+
+@pytest.mark.parametrize("params", PARAMS[1:2], ids=["seeded"])
+def test_coupled_drafting_accepts_sampled_tokens(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer,
+                                                 params: SamplingParams) -> None:
+    """With the target itself as draft, coupled proposals at temperature 0.9 are (almost) always accepted."""
+    target = _plain(qwen_pack)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    spec = Generator(target, tiny_tokenizer, draft=_plain(qwen_pack), spec_tokens=4).generate(PROMPT, params)
+    assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
+    assert spec.timings_ms["spec_accept_rate"] > 0.9
+
+
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded", "penalties", "stop"])
+@pytest.mark.parametrize("tau", [0.0, 0.3, 0.99])
+def test_adaptive_draft_length_identical_and_two_sizes(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                                       tiny_tokenizer: ChatTokenizer, params: SamplingParams,
+                                                       tau: float) -> None:
+    target = _plain(qwen_pack)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=8, spec_min_tokens=3,
+                    draft_confidence=tau)
+    sizes: list[int] = []
+    orig = gen._inputs
+
+    def spy(batch: Any) -> Any:
+        sizes.extend(len(st.drafts) for st in batch)
+        return orig(batch)
+
+    gen._inputs = spy  # type: ignore[method-assign]
+    spec = gen.generate(PROMPT, params)
+    assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
+    left = params.max_tokens
+    for k in sizes[1:]:  # after the first pass: 3 or 8 drafts, fewer only when the budget runs out
+        assert k in (0, 3, 8) or k < min(8, left)
+    if tau == 0.0:
+        assert 8 in sizes  # never unsure: always the long draft when the budget allows

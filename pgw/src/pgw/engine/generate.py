@@ -163,6 +163,8 @@ class Generator:
         draft: TransformerModel | None = None,
         spec_tokens: int = 4,
         lookup: int = 0,
+        spec_min_tokens: int | None = None,
+        draft_confidence: float = 0.0,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
@@ -183,6 +185,14 @@ class Generator:
         #: ``lookup`` (down to 1) tokens of the context. Costs no model compute.
         self.lookup = lookup if spec_tokens > 0 else 0
         self.spec_tokens = spec_tokens if (draft is not None or self.lookup) else 0
+        # Adaptive draft length: always draft spec_min_tokens; continue to spec_tokens only when every
+        # draft token so far had top probability >= draft_confidence. Two fixed sizes, so the row count
+        # of a pass tells the compute service at most one bit about how predictable the text is.
+        lo = self.spec_tokens if spec_min_tokens is None else max(0, min(spec_min_tokens, self.spec_tokens))
+        if not 0.0 <= draft_confidence < 1.0:
+            raise ConfigError("draft_confidence must be in [0, 1)")
+        self.spec_min_tokens = lo
+        self.draft_confidence = draft_confidence
         self.model = model
         self.tokenizer = tokenizer
         self.max_batch = max_batch
@@ -441,9 +451,25 @@ class Generator:
             return ids if dv is None else [t if t < dv else dv - 1 for t in ids]
 
         stopped: set[int] = set()
+        # Coupled drafting for sampled requests: each draft token is drawn with a fork of the request's
+        # own sampler (same RNG state, penalties, temperature and filters), so it uses exactly the noise
+        # the target's sample at that position will use and agrees whenever the two distributions are
+        # close. Acceptance is unchanged (target sample == draft), so the output is too.
+        forks = {id(st): st.sampler.fork() for st, _ in active if not st.params.greedy}
+
+        unsure: set[int] = set()
+        tau = self.draft_confidence
 
         def take(st: _SeqState, k: int, lg: torch.Tensor) -> None:
-            t = int(torch.argmax(lg))
+            if tau > 0 and float(torch.softmax(lg.to(torch.float32), dim=-1).max()) < tau:
+                unsure.add(id(st))
+            fk = forks.get(id(st))
+            if fk is None:
+                t = int(torch.argmax(lg))
+            else:
+                if tv is not None and lg.numel() != tv:  # align with the target's vocabulary (RNG draws)
+                    lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
+                t = fk.propose(lg, st.generated + st.drafts)
             if tv is not None and t >= tv:  # not a target token: end this sequence's draft here
                 stopped.add(id(st))
             else:
@@ -453,7 +479,8 @@ class Generator:
         for (st, k), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
             take(st, k, lg)
         while True:
-            cur = [(st, k) for st, k in active if len(st.drafts) < k and id(st) not in stopped]
+            cur = [(st, k) for st, k in active if len(st.drafts) < k and id(st) not in stopped
+                   and not (len(st.drafts) >= self.spec_min_tokens and id(st) in unsure)]
             if not cur:
                 break
             outs = self.draft.forward_batch([SequenceInput(din([st.drafts[-1]]), _dcache(st)) for st, _ in cur])

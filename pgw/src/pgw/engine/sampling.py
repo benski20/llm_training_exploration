@@ -76,6 +76,29 @@ class Sampler:
         self._prompt = set(int(t) for t in prompt_ids)
         self.last_top_logprobs: list[tuple[int, float]] | None = None
 
+    def fork(self) -> Sampler:
+        """A copy with the same parameters and the RNG at the same state (for coupled drafting: a draft
+        sampled with the fork draws the very noise the target's next samples will draw)."""
+        other = Sampler.__new__(Sampler)
+        other.params = self.params
+        other._gen = torch.Generator(device="cpu")
+        other._gen.set_state(self._gen.get_state())
+        other._prompt = self._prompt
+        other.last_top_logprobs = None
+        return other
+
+    def propose(self, logits: torch.Tensor, generated: list[int]) -> int:
+        """Like :meth:`sample` without logprobs (draft proposals). Advances this sampler's RNG exactly as
+        :meth:`sample` would."""
+        work = self._penalize(logits.detach().to(torch.float32).cpu().clone(), generated)
+        p = self.params
+        if p.greedy:
+            return int(torch.argmax(work))
+        probs = torch.softmax(self._filter(work / p.temperature), dim=-1)
+        if not torch.isfinite(probs).all() or float(probs.sum()) <= 0:
+            return int(torch.argmax(work))
+        return int(torch.multinomial(probs, 1, generator=self._gen))
+
     def _penalize(self, logits: torch.Tensor, generated: Sequence[int]) -> torch.Tensor:
         p = self.params
         if p.repetition_penalty != 1.0:

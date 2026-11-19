@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import random
 import threading
 import time
@@ -655,6 +656,7 @@ class ModelRuntime:
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
+            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence,
         )
         self.tokenizer = tokenizer
         self.pack = pack
@@ -682,10 +684,10 @@ class ModelRuntime:
         return draft
 
     @property
-    def spec_factor(self) -> int:
+    def spec_factor(self) -> float:
         """Mask rows per generated token in the worst case (1 without speculation)."""
-        speculating = self.draft_model is not None or self.config.spec_lookup > 0
-        return 1 + (self.config.spec_tokens if speculating else 0)
+        speculating = (self.draft_model is not None or self.config.spec_lookup > 0) and self.config.spec_tokens > 0
+        return min(1.0 + self.config.spec_tokens, self.config.spec_row_budget) if speculating else 1
 
     def mask_cache_estimate(self) -> int:
         """Worst-case decrypted mask bytes cached by ``max_concurrent_sessions`` sessions (0 if unknown)."""
@@ -914,7 +916,7 @@ class ModelRuntime:
         need = len(ids) + params.max_tokens
         # Speculative decoding may use more rows (rejected drafts); the cap allows it, but the engine
         # only speculates with rows the session already holds, so a short store never fails a request.
-        cap = len(ids) + params.max_tokens * self.spec_factor
+        cap = len(ids) + math.ceil(params.max_tokens * self.spec_factor)
         window = int(self.settings.mask_window_tokens)
         if window <= 0:  # everything up front: reserve what the request needs (speculation uses slack only)
             cap = need

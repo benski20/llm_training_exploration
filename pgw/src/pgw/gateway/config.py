@@ -84,7 +84,16 @@ class GatewayModelConfig(BaseModel):
         None, description="Speculative decoding: a small model pack with the same tokenizer (e.g. Qwen2.5-0.5B for "
         "Qwen2.5-7B), run locally in plaintext on the gateway to propose tokens the target checks in one masked pass",
     )
-    spec_tokens: int = Field(4, ge=0, le=16, description="Draft tokens proposed per step (0 disables speculation)")
+    spec_tokens: int = Field(8, ge=0, le=16, description="Most draft tokens proposed per step (0 disables speculation)")
+    spec_min_tokens: int = Field(
+        4, ge=0, le=16, description="Draft tokens always proposed; more (up to spec_tokens) only while the draft is "
+        "confident (spec_confidence). Two fixed sizes per pass",
+    )
+    spec_confidence: float = Field(0.3, ge=0.0, lt=1.0, description="Draft top-probability needed to extend a draft")
+    spec_row_budget: float = Field(
+        2.0, ge=1.0, le=17.0, description="Mask rows reserved per requested token when speculating (speculation "
+        "only ever uses rows the request already holds; measured use is about 1.3-1.6)",
+    )
     spec_lookup: int = Field(
         0, ge=0, le=8, description="Prompt-lookup drafting: propose what followed the latest earlier match of the "
         "last N (down to 1) context tokens, before (or without) a draft model; free to compute, strong on RAG, code "
