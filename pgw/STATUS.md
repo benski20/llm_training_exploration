@@ -15,6 +15,33 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-19
+
+**Speed (Qwen2.5-7B, one Kaggle T4, default ring K32A12C27, output bit-identical to the plaintext
+reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*` to `run18_*`.
+
+| metric | 2026-11-17 | 2026-11-19 | what changed |
+|---|---|---|---|
+| decode, 1 request | 0.86 s/token | 0.65-0.72 s/token | persistent WebSocket channel, K=32 uint32 path, native (Rust) gateway kernels, faster mask wipes |
+| time to first token, 40-token prompt | 8.4 s | 4.0 s | pipelined prefill (gateway and service overlap) |
+| decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.61 s/token | exact verification, coupled drafts, adaptive draft length; 2-2.5x fewer round trips |
+| gateway CPU per masked call (Kaggle CPU) | about 2.9 ms | about 1.8 ms | `pgw_fast` kernels: prepare 0.05 ms, finish 0.2 ms; the rest is Python orchestration |
+
+Where a decode token's time goes now: about 112 x 3.5 ms in round trips (of which about 0.9 ms is GPU
+work; the rest is service and client Python and WebSocket framing), about 0.2 s gateway work, and
+about 0.1 s for the float32 LM head. A draft model on a CPU-only gateway does not pay off yet.
+
+**New components.** `rust/pgw-fast` (native hot path, optional, bit-identical, falls back to Python);
+PGW Console (`/console/`: operator web UI with sessions, admin/viewer roles, CSRF, strict CSP, usage,
+audit, playground); prompt-lookup drafting; WebSocket compute channel with HTTP fallback.
+
+**Fixed.** A shutdown spin in `Generator.wait_closed` that could hang model reload or gateway stop
+under load. Speculative verification is now bit-identical (it differed by up to 0.054 in logprobs).
+
+**Readiness.** Unchanged in substance: a technical pilot in topology B is reasonable; a production SLA
+pilot still needs SSO for the console, the hardware key path, a GPU soak test, signed images and an
+external security review.
+
 ## 1. What is built
 
 About 26.8k lines of Python in `src/pgw` (96 modules, mypy strict, ruff clean), 89 test files, and a
