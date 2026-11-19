@@ -69,6 +69,17 @@ class ServiceSettings(PGWSettings):
     backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"
     cache_float_weights: bool = Field(True, description="CPU float backends keep float weight copies")
     warmup: bool = Field(True, description="Run one dummy product per linear at startup")
+    cuda_graphs: bool = Field(
+        True,
+        description="CUDA devices: replay captured CUDA graphs for small calls (rows * K/8 <= the largest of "
+        "`cuda_graph_buckets`), one graph per (linear, K, bucket), captured at warm-up or on first use and checked "
+        "against the eager result. Falls back to eager per shape if a capture fails. No effect on CPU",
+    )
+    cuda_graph_buckets: list[int] = Field(
+        default_factory=lambda: [32, 64, 128],
+        description="Padded GEMM row counts that get a CUDA graph (multiples of 32). With K=32 (4 byte planes) "
+        "32/64/128 cover up to 8/16/32 rows",
+    )
 
     # ---- batching / scheduling -----------------------------------------------------------
     batch_window_ms: float = Field(
@@ -143,6 +154,16 @@ class ServiceSettings(PGWSettings):
         if not out:
             raise ValueError("at least one ring must be served")
         return out
+
+    @field_validator("cuda_graph_buckets")
+    @classmethod
+    def _valid_buckets(cls, v: list[int]) -> list[int]:
+        from pgw.service.gpu_exec import validate_buckets
+
+        try:
+            return list(validate_buckets(v))
+        except PGWError as exc:
+            raise ValueError(exc.message) from exc
 
     @model_validator(mode="after")
     def _check(self) -> Self:

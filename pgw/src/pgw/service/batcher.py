@@ -39,6 +39,7 @@ import torch
 
 from pgw.core.errors import PGWError, ServiceUnavailableError, ShapeError
 from pgw.core.ring import RingParams
+from pgw.service.gpu_exec import from_compact
 from pgw.service.kernels import ComputeKernel
 
 __all__ = ["BatchScheduler", "BatchStats", "BatchTiming"]
@@ -83,6 +84,8 @@ class _Entry:
     x: torch.Tensor
     fut: asyncio.Future[tuple[torch.Tensor, BatchTiming]]
     t_enq: float
+    #: the caller accepts the kernel's compact result (int32 bit patterns for K <= 32 on CUDA)
+    compact: bool = False
 
 
 @dataclass(eq=False)
@@ -244,9 +247,13 @@ class BatchScheduler:
         return y
 
     async def submit_timed(
-        self, fingerprint: str, ring: RingParams, linear: str, x_hat: torch.Tensor
+        self, fingerprint: str, ring: RingParams, linear: str, x_hat: torch.Tensor, *, compact: bool = False
     ) -> tuple[torch.Tensor, BatchTiming]:
         """Like :meth:`submit`, also returning :class:`BatchTiming`.
+
+        With ``compact=True`` the result may be the kernel's compact form (int32 bit patterns for
+        ``K <= 32`` on CUDA, see :meth:`ComputeKernel.run_compact`), which :func:`pgw.core.pack_ring`
+        packs directly; otherwise it is always int64 in ``[0, 2^K)``.
 
         Raises:
             ServiceUnavailableError: not started, shutting down, or queue full.
@@ -270,7 +277,7 @@ class BatchScheduler:
             )
         key = (fingerprint, ring.name, linear)
         if rows <= self.max_batch_rows:  # the common case: one chunk, await its future directly
-            fut = self._add(key, kernel, ring, x_hat)
+            fut = self._add(key, kernel, ring, x_hat, compact)
             self.stats.submitted_rows += rows
             try:
                 return await fut
@@ -279,7 +286,7 @@ class BatchScheduler:
                 raise
         futs: list[asyncio.Future[tuple[torch.Tensor, BatchTiming]]] = []
         for r0 in range(0, rows, self.max_batch_rows):
-            futs.append(self._add(key, kernel, ring, x_hat[r0 : r0 + self.max_batch_rows]))
+            futs.append(self._add(key, kernel, ring, x_hat[r0 : r0 + self.max_batch_rows], compact))
         self.stats.submitted_rows += rows
         try:
             results = await asyncio.gather(*futs)
@@ -296,7 +303,8 @@ class BatchScheduler:
         return (ys[0] if len(ys) == 1 else torch.cat(ys, dim=0)), timing
 
     def _add(
-        self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams, x: torch.Tensor
+        self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams, x: torch.Tensor,
+        compact: bool = False,
     ) -> asyncio.Future[tuple[torch.Tensor, BatchTiming]]:
         loop = self._loop
         assert loop is not None
@@ -310,7 +318,7 @@ class BatchScheduler:
             self._open[key] = b
             new = True
         fut: asyncio.Future[tuple[torch.Tensor, BatchTiming]] = loop.create_future()
-        b.entries.append(_Entry(x, fut, time.perf_counter()))
+        b.entries.append(_Entry(x, fut, time.perf_counter(), compact))
         b.rows += rows
         self._queued_rows += rows
         self._queued_items += 1
@@ -448,7 +456,8 @@ class BatchScheduler:
             n = int(e.x.shape[0])
             if not e.fut.done():
                 timing = BatchTiming(queue_ms=(t_start - e.t_enq) * 1e3, compute_ms=compute_ms, batch_rows=rows)
-                e.fut.set_result((y[r0 : r0 + n], timing))
+                ye = y[r0 : r0 + n]
+                e.fut.set_result((ye if e.compact else from_compact(ye, b.ring.k), timing))
             r0 += n
 
     def _fail(self, b: _Batch, exc: PGWError) -> None:
@@ -470,14 +479,15 @@ def _run_kernel(
     """Concatenate the batch's row blocks and run the kernel (executes in a worker thread).
 
     Returns:
-        ``(y, seconds)``; ``y`` has ``sum(rows)`` rows in the order of ``parts``.
+        ``(y, seconds)``; ``y`` (:meth:`ComputeKernel.run_compact`) has ``sum(rows)`` rows in the
+        order of ``parts``.
 
     Raises:
         PGWError: shape errors, or a kernel that returned a wrong shape (``internal``).
     """
     t0 = time.perf_counter()
     x = parts[0] if len(parts) == 1 else torch.cat(list(parts), dim=0)
-    y = kernel.run(x, ring)
+    y = kernel.run_compact(x, ring)
     if tuple(y.shape) != (int(x.shape[0]), kernel.out_features):
         raise PGWError(f"kernel {kernel.linear} returned shape {tuple(y.shape)}")
     return y, time.perf_counter() - t0

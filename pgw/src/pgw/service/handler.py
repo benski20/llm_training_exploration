@@ -265,7 +265,8 @@ class ServiceHandler:
                 x = await asyncio.to_thread(unpack_ring, it.x_hat, (rows, n), ring)
             else:
                 x = unpack_ring(it.x_hat, (rows, n), ring)
-            y, timing = await self.batcher.submit_timed(request.fingerprint, ring, it.linear, x)
+            # compact: 32-bit results for K <= 32 on CUDA (packed as-is, half the device-to-host bytes)
+            y, timing = await self.batcher.submit_timed(request.fingerprint, ring, it.linear, x, compact=True)
             if y.shape != (rows, m):  # pragma: no cover - kernel contract
                 raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
             if rows * m * ring.bytes_per_element > offload:

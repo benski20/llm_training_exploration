@@ -31,6 +31,7 @@ from pgw.core.errors import (
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.ring import RingParams
 from pgw.core.types import LinearId, LinearKind, LinearSpec
+from pgw.service.gpu_exec import GRAPH_BUCKETS, validate_buckets
 from pgw.service.kernels import ComputeKernel, resolve_backend, resolve_device
 
 __all__ = ["ModelRegistry", "RegisteredModel", "place_layers"]
@@ -160,7 +161,10 @@ class ModelRegistry:
             enough headroom).
         verify: Pack verification mode at load time (``"full"`` or ``"fingerprint"``).
         cache_float: Keep float weight copies for CPU float backends.
-        warmup: Run one dummy product per linear after loading.
+        warmup: Run one dummy product per linear after loading (on CUDA this also captures
+            the CUDA graphs of every row bucket for the first served ring).
+        cuda_graphs: CUDA kernels replay captured graphs for small calls (see :class:`ComputeKernel`).
+        cuda_graph_buckets: Padded GEMM row counts with a graph.
     """
 
     def __init__(
@@ -174,6 +178,8 @@ class ModelRegistry:
         verify: str = "full",
         cache_float: bool = True,
         warmup: bool = False,
+        cuda_graphs: bool = True,
+        cuda_graph_buckets: Sequence[int] = GRAPH_BUCKETS,
     ):
         if placement not in ("single", "by_layer"):
             raise ConfigError(f"unknown placement {placement!r}; use 'single' or 'by_layer'")
@@ -196,6 +202,8 @@ class ModelRegistry:
         self.verify = verify
         self.cache_float = cache_float
         self.warmup = warmup
+        self.cuda_graphs = cuda_graphs
+        self.cuda_graph_buckets = validate_buckets(cuda_graph_buckets)
         self._models: dict[str, RegisteredModel] = {}
         self._lock = threading.RLock()
 
@@ -234,7 +242,8 @@ class ModelRegistry:
             for spec in specs:
                 lw = pack.load_linear(spec.id)
                 kernels[spec.id.key] = ComputeKernel(
-                    spec, lw.w8, device=placement[spec.id.layer], backend=self.backend, cache_float=self.cache_float
+                    spec, lw.w8, device=placement[spec.id.layer], backend=self.backend, cache_float=self.cache_float,
+                    cuda_graphs=self.cuda_graphs, graph_buckets=self.cuda_graph_buckets,
                 )
                 del lw
             entry = RegisteredModel(
@@ -246,7 +255,7 @@ class ModelRegistry:
         if self.warmup:
             ring = RingParams.from_name(entry.rings[0])
             for k in entry.kernels.values():
-                k.warmup(ring)
+                k.warmup(ring, all_buckets=True)
         with self._lock:
             existing = self._models.get(fp)
             if existing is not None:  # lost a race with a concurrent load
@@ -346,7 +355,8 @@ class ModelRegistry:
         spec = LinearSpec(LinearId(0, LinearKind.O), int(w.shape[0]), int(w.shape[1]))
         for d in self.devices:
             try:
-                k = ComputeKernel(spec, w, device=d, backend=self.backend, cache_float=False)
+                # no graphs: a throwaway kernel per check (eager path, same executor and staging)
+                k = ComputeKernel(spec, w, device=d, backend=self.backend, cache_float=False, cuda_graphs=False)
                 out[str(d)] = bool(torch.equal(k.run(x, ring), expected))
                 if not out[str(d)]:
                     log.error("device check on %s: wrong ring product", d)

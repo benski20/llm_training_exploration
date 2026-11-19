@@ -429,6 +429,13 @@ segment-extent boundaries. If the store has too few slots, the request fails fas
 - Stateless: no KV cache, no sessions, no request persistence, and no payload bytes in logs or traces.
 - `ModelRegistry` loads packs (linears only, `verify="full"`), keyed by fingerprint.
   `ComputeKernel` wraps `PreparedWeight` per linear on the device. `BatchScheduler` does cross-request batching.
+- CUDA execution (`pgw.service.gpu_exec`): one CUDA graph per (linear, K, row bucket) replays the
+  offset-byte GEMM for calls with `rows·K/8 ≤ p`, `p ∈ cuda_graph_buckets` (default 32/64/128; larger calls
+  run eagerly); captured at warm-up or first use and checked against the eager result once (a failed
+  capture falls back to eager, logged once). Pinned staging, non-blocking copies, and int32 results for
+  K ≤ 32 on the request path. Replays share per-device static buffers and a graph memory pool, so calls
+  are serialized per device by a lock (the batcher already runs one GPU batch per device). Bit-exact.
+  `PGW_SERVICE_CUDA_GRAPHS=false` disables graphs.
 - Admission control: `max_inflight_requests` (beyond it, `unavailable` with `Retry-After`) and per-tenant quotas.
 - Graceful drain on SIGTERM: `/readyz` returns 503, in-flight work finishes, then exit.
 - Scaling: horizontally behind an L7 LB. Any replica can serve any request because the service is stateless.

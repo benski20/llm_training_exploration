@@ -32,12 +32,21 @@ def packed_size(shape: tuple[int, ...], params: RingParams | int) -> int:
 
 
 def pack_ring(t: torch.Tensor | np.ndarray, params: RingParams | int) -> bytes:
-    """Encode int64 ring values (reduced mod ``2^K`` first) to ``K/8`` bytes each."""
+    """Encode int64 ring values (reduced mod ``2^K`` first) to ``K/8`` bytes each.
+
+    For ``K <= 32`` the values may also be 32-bit (int32 or uint32) holding the low 32 bits of
+    each element: the compact form the compute service's GPU path returns (half the D2H bytes).
+    """
     k = _k(params)
     nb = k // 8
     a = t.detach().cpu().numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
-    if a.dtype != np.int64 and a.dtype != np.uint64:
+    if a.dtype in (np.int32, np.uint32):
+        if nb > 4:
+            raise ShapeError(f"32-bit ring tensors need K <= 32, got K={k}")
+    elif a.dtype != np.int64 and a.dtype != np.uint64:
         raise ShapeError(f"ring tensors must be int64, got {a.dtype}")
+    if nb == 4 and a.dtype.itemsize == 4:  # compact 32-bit values: reinterpret, no conversion pass
+        return np.ascontiguousarray(a).view(np.uint32).astype("<u4", copy=False).tobytes()
     if nb in (2, 4):  # astype to a narrower unsigned type wraps mod 2^K: one pass, no byte shuffling
         return np.ascontiguousarray(a).astype("<u4" if nb == 4 else "<u2").tobytes()
     u = np.ascontiguousarray(a.astype(np.uint64, copy=False) & np.uint64((1 << k) - 1))

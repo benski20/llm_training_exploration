@@ -18,6 +18,11 @@ Backends (all exact modulo ``2^K``; see SPEC.md section 5):
 ``auto``
     ``cuda_int8`` on CUDA devices; on CPU ``cpu_int8`` if the probe passes, else ``cpu_f64``.
 
+On CUDA, :meth:`ComputeKernel.run` goes through the device's
+:class:`pgw.service.gpu_exec.DeviceExecutor`: CUDA graphs per ``(linear, K, row bucket)`` for
+decode-sized calls, pinned staging and non-blocking copies, and (:meth:`ComputeKernel.run_compact`)
+32-bit results for ``K <= 32``. Results are bit-identical to the eager path.
+
 Measured: Llama-3-8B, T4, K=48: 0.45 s/token at batch 1, 0.014 s/token amortized at batch 32.
 Future: fused CUDA/Triton kernel doing digit split + K/8 GEMMs + shift-accumulate in one pass.
 """
@@ -41,6 +46,14 @@ from pgw.core.ringmm import (
     int8_ring_matmul,
 )
 from pgw.core.types import LinearSpec
+from pgw.service.gpu_exec import (
+    GRAPH_BUCKETS,
+    DeviceExecutor,
+    KernelGraphs,
+    device_executor,
+    from_compact,
+    validate_buckets,
+)
 
 __all__ = [
     "SERVICE_BACKENDS",
@@ -117,9 +130,13 @@ class ComputeKernel:
         device: ``"auto"``, ``"cpu"``, ``"cuda"`` or ``"cuda:i"``.
         backend: See module docstring.
         cache_float: CPU float backends keep a float copy of the weight (faster, 4-8x memory).
+        cuda_graphs: On CUDA, replay captured CUDA graphs for calls that fit a row bucket
+            (``rows * K/8 <= p``); other calls run eagerly. Ignored on CPU.
+        graph_buckets: Padded GEMM row counts that get a graph (multiples of 32).
 
-    Thread-safety: :meth:`run` may be called from several threads (weights are read-only), but the
-    service serializes GPU work per device through :class:`pgw.service.BatchScheduler`.
+    Thread-safety: :meth:`run` may be called from several threads (weights are read-only). On CUDA
+    every call holds its device executor's lock (graphs share per-device static buffers), and the
+    service also serializes GPU work per device through :class:`pgw.service.BatchScheduler`.
     """
 
     def __init__(
@@ -130,6 +147,8 @@ class ComputeKernel:
         backend: str = "auto",
         *,
         cache_float: bool = True,
+        cuda_graphs: bool = True,
+        graph_buckets: tuple[int, ...] | list[int] = GRAPH_BUCKETS,
     ):
         if w8.dtype != torch.int8 or w8.ndim != 2:
             raise ShapeError(f"{spec.id}: weight must be 2-D int8, got {w8.dtype} {tuple(w8.shape)}")
@@ -143,6 +162,9 @@ class ComputeKernel:
         self.backend = resolve_backend(self.device, backend)
         self._pw: PreparedWeight | None = None
         self._w: torch.Tensor | None = None
+        self._exec: DeviceExecutor | None = None
+        self._graphs: KernelGraphs | None = None
+        self._buckets = validate_buckets(graph_buckets)
         # Own the memory: a pack's tensors may be memory-mapped views of files.
         wd = w8.detach().to(self.device)
         if wd.data_ptr() == w8.data_ptr():
@@ -155,6 +177,10 @@ class ComputeKernel:
                 wd, device=self.device, backend=self.backend,  # type: ignore[arg-type]
                 cache_float=cache_float,
             )
+        if self.backend == "cuda_int8":  # pragma: no cover - GPU only
+            self._exec = device_executor(self.device)
+            self._exec.reserve(self.in_features, self.out_features, self._buckets)
+            self._graphs = KernelGraphs() if cuda_graphs else None
 
     # ---- metadata ------------------------------------------------------------------------
     @property
@@ -196,15 +222,11 @@ class ComputeKernel:
         Raises:
             ShapeError: wrong shape or dtype.
         """
-        if x_hat.ndim != 2 or x_hat.shape[1] != self.in_features:
-            raise ShapeError(
-                f"{self.linear}: x_hat must be (B, {self.in_features}), got {tuple(x_hat.shape)}",
-                details={"linear": self.linear},
-            )
-        if x_hat.dtype != torch.int64:
-            raise ShapeError(f"{self.linear}: x_hat must be int64, got {x_hat.dtype}", details={"linear": self.linear})
+        self._check_input(x_hat)
         if x_hat.shape[0] == 0:
             return torch.zeros((0, self.out_features), dtype=torch.int64)
+        if self._exec is not None and self._exec_ok(ring.k):  # pragma: no cover - GPU only
+            return from_compact(self._run_exec(x_hat, ring.k), ring.k)
         if self._w is not None:
             out = int8_ring_matmul(x_hat.to(self.device), self._w, ring.k)
         else:
@@ -212,6 +234,44 @@ class ComputeKernel:
             xin = x_hat.to(self.device, non_blocking=True) if self.device.type == "cuda" else x_hat
             out = self._pw.matmul(xin, ring)
         return out.cpu() if out.device.type != "cpu" else out
+
+    def run_compact(self, x_hat: torch.Tensor, ring: RingParams) -> torch.Tensor:
+        """Like :meth:`run`, but for ``K <= 32`` on CUDA the result may be int32 bit patterns.
+
+        They are the low 32 bits of each ring element (half the device-to-host bytes);
+        :func:`pgw.core.pack_ring` packs either form and :func:`pgw.service.gpu_exec.from_compact`
+        restores int64. CPU backends return :meth:`run`'s int64 result.
+        """
+        if self._exec is not None and self._exec_ok(ring.k):  # pragma: no cover - GPU only
+            self._check_input(x_hat)
+            if x_hat.shape[0] == 0:
+                return torch.zeros((0, self.out_features), dtype=torch.int64)
+            return self._run_exec(x_hat, ring.k)
+        return self.run(x_hat, ring)
+
+    def _check_input(self, x_hat: torch.Tensor) -> None:
+        if x_hat.ndim != 2 or x_hat.shape[1] != self.in_features:
+            raise ShapeError(
+                f"{self.linear}: x_hat must be (B, {self.in_features}), got {tuple(x_hat.shape)}",
+                details={"linear": self.linear},
+            )
+        if x_hat.dtype != torch.int64:
+            raise ShapeError(f"{self.linear}: x_hat must be int64, got {x_hat.dtype}", details={"linear": self.linear})
+
+    @staticmethod
+    def _exec_ok(k: int) -> bool:
+        return k % 8 == 0 and 8 <= k <= 56
+
+    def _run_exec(self, x_hat: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
+        assert self._exec is not None and self._pw is not None and self._pw._w_dev is not None
+        x = x_hat if x_hat.device.type == "cpu" else x_hat.cpu()
+        return self._exec.run(x, k, self._pw._w_dev, self._pw._rowsum(), self.out_features,
+                              graphs=self._graphs, buckets=self._buckets)
+
+    @property
+    def cuda_graphs(self) -> int:
+        """Number of CUDA graphs captured for this linear (0 on CPU or with graphs off)."""
+        return len(self._graphs) if self._graphs is not None else 0
 
     __call__ = run
 
@@ -262,10 +322,18 @@ class ComputeKernel:
         if self.device.type == "cuda":  # pragma: no cover - GPU only
             torch.cuda.synchronize(self.device)
 
-    def warmup(self, ring: RingParams, rows: int = 1) -> float:
-        """Run one dummy product (allocator / cuBLAS warm-up); returns seconds taken."""
+    def warmup(self, ring: RingParams, rows: int = 1, *, all_buckets: bool = False) -> float:
+        """Run one dummy product (allocator / cuBLAS warm-up); returns seconds taken.
+
+        On CUDA this captures the graph of ``rows``'s bucket; ``all_buckets`` captures every bucket.
+        """
         t0 = time.perf_counter()
-        self.run(torch.zeros((rows, self.in_features), dtype=torch.int64), ring)
+        sizes = [rows]
+        if all_buckets and self._graphs is not None:
+            nb = ring.k // 8
+            sizes += [p // nb for p in self._buckets if p // nb > 0]
+        for r in dict.fromkeys(sizes):
+            self.run(torch.zeros((r, self.in_features), dtype=torch.int64), ring)
         self.synchronize()
         return time.perf_counter() - t0
 

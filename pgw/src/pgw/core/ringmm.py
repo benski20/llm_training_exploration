@@ -50,6 +50,10 @@ __all__ = [
     "int8_digit_gemm",
     "int8_ring_matmul",
     "int_mm_max_inner",
+    "offset_byte_consts",
+    "offset_byte_core",
+    "offset_byte_rows",
+    "pad_weight_cuda",
     "ringmm",
     "ringmm_reference",
     "select_backend",
@@ -275,11 +279,41 @@ def _offset_byte_mm(x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tens
     """
     if k % 8 or not 8 <= k <= 56:
         raise ShapeError(f"offset-byte matmul needs K a multiple of 8 in [8, 56], got {k}")
+    sh, pm = offset_byte_consts(k, x.device)
+    return offset_byte_core(x, k, w, rowsum, sh, pm, offset_byte_rows(k, int(x.shape[0])))[:, :m]
+
+
+def offset_byte_rows(k: int, b: int) -> int:
+    """Padded GEMM rows of the eager offset-byte path: ``K/8 * b`` rounded up to 8, at least 32."""
+    return max(_INT_MM_MIN_ROWS, -(-((k // 8) * b) // 8) * 8)
+
+
+def offset_byte_consts(k: int, device: torch.device | str) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-plane shifts ``8 i`` and masks ``2^(K - 8 i) - 1`` (int64 ``(K/8, 1, 1)``) on ``device``.
+
+    Built eagerly (a host-to-device copy); CUDA-graph captures create them before capturing.
+    """
+    nb = k // 8
+    sh = torch.arange(0, 8 * nb, 8, dtype=torch.int64, device=device).view(nb, 1, 1)
+    pm = torch.tensor([(1 << (k - 8 * i)) - 1 for i in range(nb)], dtype=torch.int64, device=device).view(nb, 1, 1)
+    return sh, pm
+
+
+def offset_byte_core(
+    x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tensor, sh: torch.Tensor, pm: torch.Tensor, p: int
+) -> torch.Tensor:
+    """Device-only body of :func:`_offset_byte_mm`: returns ``(b, mp)`` int64 in ``[0, 2^K)``.
+
+    No host synchronization and no host-to-device copies, so it can be captured in a CUDA graph.
+    ``p >= (K/8) * b`` is the padded GEMM row count (the caller picks a shape ``torch._int_mm``
+    accepts); ``sh``/``pm`` come from :func:`offset_byte_consts`. Columns past ``m`` are padding.
+    """
     nb = k // 8
     b, n = x.shape
     mp, np_ = w.shape
     rows = nb * b
-    p = max(_INT_MM_MIN_ROWS, -(-rows // 8) * 8)
+    if p < rows:
+        raise ShapeError(f"offset-byte matmul: {p} padded rows < {rows} digit rows")
     planes = (x.contiguous().view(torch.uint8).view(b, n, 8)[:, :, :nb] ^ 0x80).view(torch.int8)
     d8 = torch.zeros((p, np_), dtype=torch.int8, device=x.device)
     d8[:rows, :n].view(nb, b, n).copy_(planes.permute(2, 0, 1))
@@ -290,13 +324,18 @@ def _offset_byte_mm(x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tens
         y32 = part if y32 is None else y32 + part
     assert y32 is not None
     y = y32.view(nb, b, mp)
-    dev = x.device
-    sh = torch.arange(0, 8 * nb, 8, dtype=torch.int64, device=dev).view(nb, 1, 1)
-    pm = torch.tensor([(1 << (k - 8 * i)) - 1 for i in range(nb)], dtype=torch.int64, device=dev).view(nb, 1, 1)
     acc = ((y & pm) << sh).sum(0)
     c = (128 * sum(1 << (8 * i) for i in range(nb))) % (1 << k)
-    acc = (acc + c * rowsum) & ((1 << k) - 1)
-    return acc[:, :m]
+    return (acc + c * rowsum) & ((1 << k) - 1)
+
+
+def pad_weight_cuda(w8: torch.Tensor, device: torch.device | str) -> torch.Tensor:
+    """``w8 (m, n)`` zero padded to multiples of 32 in both dimensions on ``device`` (CUDA layout)."""
+    m, n = w8.shape
+    mp, np_ = -(-m // _CUDA_ALIGN) * _CUDA_ALIGN, -(-n // _CUDA_ALIGN) * _CUDA_ALIGN
+    w = torch.zeros((mp, np_), dtype=torch.int8, device=device)
+    w[:m, :n] = w8.to(device)
+    return w
 
 
 @dataclass
@@ -326,12 +365,8 @@ class PreparedWeight:
         dev = torch.device(self.device) if self.device is not None else self.w8.device
         self.device = dev
         self._resolved = select_backend(dev, self.backend)
-        m, n = self.w8.shape
         if self._resolved == "cuda_int8":
-            mp, np_ = -(-m // _CUDA_ALIGN) * _CUDA_ALIGN, -(-n // _CUDA_ALIGN) * _CUDA_ALIGN
-            w = torch.zeros((mp, np_), dtype=torch.int8, device=dev)
-            w[:m, :n] = self.w8.to(dev)
-            self._w_dev = w
+            self._w_dev = pad_weight_cuda(self.w8, dev)
         else:
             self._w_dev = self.w8.to(dev)
             if self.cache_float:
