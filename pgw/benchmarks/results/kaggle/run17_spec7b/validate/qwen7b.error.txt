@@ -1,0 +1,94 @@
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 527, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 323, in run
+    ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 146, in wait_ready
+    raise RuntimeError(f"{name} exited {p.returncode}:\n{tail}")
+RuntimeError: gatewayspec_cuda_ exited 3:
+     ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 432, in lifespan
+    await runtime.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1198, in start
+    raise errors[0]
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1191, in start
+    await rt.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 521, in start
+    await self._finish_masked(pack, tokenizer, client, models)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 635, in _finish_masked
+    self._finish_engine(pack, tokenizer)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 655, in _finish_engine
+    self.draft_model = self._load_draft()
+                       ~~~~~~~~~~~~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 686, in _load_draft
+    w16 = draft.lm_head.to(torch.float16)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 260.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 38.75 MiB is free. Process 315 has 13.64 GiB memory in use. Including non-PyTorch memory, this process has 900.00 MiB memory in use. Of the allocated memory 780.10 MiB is allocated by PyTorch, and 1.90 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+
+2026-11-19 04:12:03,546 ERROR uvicorn.error: Application startup failed. Exiting.
+2026-11-19 04:12:03,814 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-2' coro=<Server.serve() done, defined at /usr/local/lib/python3.13/dist-packages/uvicorn/server.py:88> exception=SystemExit(3)>
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/__main__.py", line 6, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/main.py", line 597, in main
+    cli(prog_name="pgw")
+    ~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1631, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1552, in main
+    rv = self.invoke(ctx)
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1415, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 910, in invoke
+    return callback(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 30, in wrapper
+    return fn(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 86, in serve
+    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 130, in run_gateway_servers
+    asyncio.run(_main())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 196, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 119, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 713, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 684, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 2061, in _run_once
+    handle._run()
+    ~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/events.py", line 89, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 90, in serve
+    await self._serve(sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 105, in _serve
+    await self.startup(sockets=sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 118, in startup
+    sys.exit(STARTUP_FAILURE)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^
+SystemExit: 3
+

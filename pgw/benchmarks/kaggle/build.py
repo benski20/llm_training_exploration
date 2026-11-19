@@ -49,7 +49,7 @@ JOBS: dict[str, dict] = {
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
             "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
-            "--draft-model", QWEN05, "--spec-tokens", "8", "--draft-device", "cpu", "cuda",
+            "--draft-model", QWEN05, "--spec-tokens", "8", "--draft-device", "cpu", "cuda:1",
             "--loadtest", "1x1", "1x5", "4x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},

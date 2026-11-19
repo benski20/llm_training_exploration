@@ -299,7 +299,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             for dev in args.draft_device or ["cpu"]:
                 dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": args.spec_tokens,
                                       "draft_device": dev}
-                variants.append(("spec_" if dev == "cpu" else f"spec_{dev}_", dk))
+                variants.append(("spec_" if dev == "cpu" else f"spec_{dev.replace(':', '')}_", dk))
         gw: subprocess.Popen[bytes] | None = None
         for prefix, extra in variants:
             if gw is not None:  # the next gateway reuses the store; stop the previous one first
@@ -477,7 +477,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_end"] = gpu_mem_mb()
     finally:
         stack.stop()
-        for name in ("service", "gateway", "gatewayspec_", "gatewayspec_cuda_"):
+        for name in ("service", "gateway", "gatewayspec_", "gatewayspec_cuda_", "gatewayspec_cuda1_"):
             lf = work / "logs" / f"{name}.log"
             if lf.exists():
                 shutil.copy(lf, out_dir / f"{args.label}_{name}.log")

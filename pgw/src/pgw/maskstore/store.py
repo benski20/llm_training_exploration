@@ -46,6 +46,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from pgw.core import native
 from pgw.core.errors import ConfigError, MaskExhaustedError, MaskReuseError, MaskStoreError, PGWError, ShapeError
 from pgw.core.fingerprint import short_fingerprint, validate_fingerprint
 from pgw.core.packing import pack_ring, unpack_ring
@@ -405,7 +406,7 @@ class MaskReservation:
             li, lin = self._linears[key]
             slot0 = ex.ext.start + (start - ex.first_row)
             seed, _ = ex.secrets()
-            r = SeedExpander(seed).ring_uniform_rows(lin.in_features, self.ring.k, slot0, rows, "r", key)
+            r = _mask_rows(seed, lin.in_features, self.ring.k, slot0, rows, key)
             wr = self._read_wr(ei, ex, li, lin, slot0, rows)
             if slot0 + rows >= ex.ext.start + ex.ext.count:
                 self._chunk_cache.pop((ei, key), None)  # this linear is done with the extent
@@ -430,6 +431,9 @@ class MaskReservation:
             buf = cached[1]
             in_chunk = slot - j * cs
             n = min(rows - done, layout.chunk_rows(j) - in_chunk)
+            if done == 0 and n == rows and _native_unpack:  # all rows in one cached chunk: no copy
+                _zero(out)
+                return torch.from_numpy(native.fast.unpack_rows(buf, in_chunk, rows, lin.out_features, self.ring.k))
             out[done * row_bytes : (done + n) * row_bytes] = buf[in_chunk * row_bytes : (in_chunk + n) * row_bytes]
             done += n
         t = unpack_ring(out, (rows, lin.out_features), self.ring)
@@ -516,6 +520,20 @@ class MaskReservation:
             self._store = None
             with contextlib.suppress(Exception):
                 self.close()
+
+
+_native_unpack = native.native_available("unpack_rows")
+_native_mask_rows = native.native_available("mask_rows")
+
+
+def _mask_rows(seed: bytes, cols: int, k: int, slot0: int, rows: int, key: str) -> torch.Tensor:
+    """The one-time pad rows ``r`` (``SeedExpander(seed).ring_uniform_rows(..., "r", key)``).
+
+    The native ChaCha20 is bit-identical; it is used where it measured faster (OpenSSL's AVX-512
+    ChaCha wins for single wide rows)."""
+    if _native_mask_rows and (rows * cols * 8 >= 512 * 1024 or cols <= 4096):
+        return torch.from_numpy(native.fast.mask_rows(seed, ["r", key], cols, k, slot0, rows))
+    return SeedExpander(seed).ring_uniform_rows(cols, k, slot0, rows, "r", key)
 
 
 def _decrypt_buf(seg: Any, ref: Any) -> bytearray:

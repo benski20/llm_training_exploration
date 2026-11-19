@@ -1,0 +1,124 @@
+[gpu_validate 03:54:26] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (271.1s)
+[gpu_validate 03:54:28] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (2.8s)
+[gpu_validate 03:54:55] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (19.5s)
+[gpu_validate 03:56:29] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or"
+[gpu_validate 03:56:31] pgw maskstore init --root ... ok (2.5s)
+[gpu_validate 04:00:08] pgw factory generate --pack ... ok (216.8s)
+[gpu_validate 04:00:24] pgw bench factory --pack ... ok (15.7s)
+[gpu_validate 04:00:26] pgw service token create ... ok (2.6s)
+[gpu_validate 04:00:29] pgw gateway keys create ... ok (2.9s)
+[gpu_validate 04:02:52] chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 04:03:38] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 4.376, 'prefill_s_per_prompt_token': 0.1094, 'decode_s_per_token': 0.6523, 'decode_tokens_per_s': 1.533, 'wall_s': 45.51, 'gateway_cpu_s': 35.93, 'backend_delta': {'calls': 7280, 'rows': 11536, 'round_trips': 7280, 'bytes_up': 342573056, 'bytes_down': 572923904, 'freivalds_checked': 7280, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 21.114186135013824, 'local_seconds': 15.423190802031968}, 'gateway_local_engine_s_per_token': 0.1483, 'remote_s_per_token': 0.203}
+[gpu_validate 04:05:47] concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 129.08, 'generated_tokens_per_s': 1.983, 'all_tokens_per_s': 3.223, 'gateway_cpu_s_per_token': 0.2923}
+[gpu_validate 04:07:57] spec_chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 04:08:48] spec_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 4.493, 'prefill_s_per_prompt_token': 0.1123, 'decode_s_per_token': 0.7397, 'decode_tokens_per_s': 1.352, 'wall_s': 51.13, 'gateway_cpu_s': 57.44, 'backend_delta': {'calls': 3248, 'rows': 18480, 'round_trips': 3248, 'bytes_up': 548782080, 'bytes_down': 917790720, 'freivalds_checked': 3248, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 14.441875993014946, 'local_seconds': 15.311503339989486}, 'gateway_local_engine_s_per_token': 0.1472, 'remote_s_per_token': 0.1389}
+[gpu_validate 04:11:38] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 170.05, 'generated_tokens_per_s': 1.505, 'all_tokens_per_s': 2.446, 'gateway_cpu_s_per_token': 0.5196}
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  6.84it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 22.01it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 22.01it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:11<00:33, 11.28s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  6.46s/it]
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]
+Fetching 7 files:  29%|██▊       | 2/7 [00:00<00:00, 15.49it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.05s/it]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.04it/s]
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 527, in main
+    run(args)
+    ~~~^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 323, in run
+    ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 146, in wait_ready
+    raise RuntimeError(f"{name} exited {p.returncode}:\n{tail}")
+RuntimeError: gatewayspec_cuda_ exited 3:
+     ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 432, in lifespan
+    await runtime.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1198, in start
+    raise errors[0]
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1191, in start
+    await rt.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 521, in start
+    await self._finish_masked(pack, tokenizer, client, models)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 635, in _finish_masked
+    self._finish_engine(pack, tokenizer)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 655, in _finish_engine
+    self.draft_model = self._load_draft()
+                       ~~~~~~~~~~~~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 686, in _load_draft
+    w16 = draft.lm_head.to(torch.float16)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 260.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 38.75 MiB is free. Process 315 has 13.64 GiB memory in use. Including non-PyTorch memory, this process has 900.00 MiB memory in use. Of the allocated memory 780.10 MiB is allocated by PyTorch, and 1.90 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+
+2026-11-19 04:12:03,546 ERROR uvicorn.error: Application startup failed. Exiting.
+2026-11-19 04:12:03,814 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-2' coro=<Server.serve() done, defined at /usr/local/lib/python3.13/dist-packages/uvicorn/server.py:88> exception=SystemExit(3)>
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/__main__.py", line 6, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/main.py", line 597, in main
+    cli(prog_name="pgw")
+    ~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1631, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1552, in main
+    rv = self.invoke(ctx)
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1415, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 910, in invoke
+    return callback(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 30, in wrapper
+    return fn(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 86, in serve
+    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 130, in run_gateway_servers
+    asyncio.run(_main())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 196, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 119, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 713, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 684, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 2061, in _run_once
+    handle._run()
+    ~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/events.py", line 89, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 90, in serve
+    await self._serve(sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 105, in _serve
+    await self.startup(sockets=sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 118, in startup
+    sys.exit(STARTUP_FAILURE)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^
+SystemExit: 3
+
