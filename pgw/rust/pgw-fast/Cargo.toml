@@ -15,3 +15,4 @@ crate-type = ["cdylib", "rlib"]
 pgw-core-rs = { path = "../pgw-core-rs" }
 pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"] }
 numpy = "0.23"
+zeroize = "1"

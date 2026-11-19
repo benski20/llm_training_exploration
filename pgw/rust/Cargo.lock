@@ -245,6 +245,7 @@ dependencies = [
  "numpy",
  "pgw-core-rs",
  "pyo3",
+ "zeroize",
 ]
 
 [[package]]
