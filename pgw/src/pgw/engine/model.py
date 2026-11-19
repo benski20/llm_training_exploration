@@ -364,37 +364,82 @@ class TransformerModel:
         finally:
             gen.close()  # drop references to activations promptly on failure
 
+    #: Round trips with at least this many rows (prefill) are split in two halves that overlap: the
+    #: gateway masks the second half while the service computes the first, and verifies the first
+    #: while the service computes the second. Rows are independent, so results are identical.
+    pipeline_min_rows = 16
+
     async def _aforward_split(self, gen: _Steps, backend: Any) -> list[torch.Tensor]:
         """One plaintext-thread hop per round trip: finish(previous) + model step + prepare(next).
 
         The plaintext segment between two linears only needs the previous results, so verifying and
         unmasking them, running the step and masking the next calls happen in one worker call; the
-        event loop only awaits the network. Any prepared-but-unsent request is wiped on failure.
+        event loop only awaits the network. Large (prefill) round trips are pipelined in two halves.
+        Any prepared-but-unsent request is wiped on failure.
         """
-        pending: list[Any] = [None]  # prepared request owned by this coroutine (wiped on failure)
+        owned: list[Any] = []  # prepared requests owned by this coroutine (wiped on failure)
+        big = self.pipeline_min_rows
 
-        def hop(prev: Any, response: Any, remote_s: float) -> tuple[bool, Any]:
+        def rows(calls: Sequence[LinearCall]) -> int:
+            return sum(int(c.x.shape[0]) for c in calls)
+
+        def finish(prev: Any, response: Any, remote_s: float) -> list[torch.Tensor]:
+            owned.remove(prev)  # finish_prepared always wipes prev
+            return self._check_results(list(prev.calls), backend.finish_prepared(prev, response, remote_s))
+
+        def prepare(calls: Sequence[LinearCall]) -> Any:
+            prep = backend.prepare_calls(calls)
+            owned.append(prep)
+            return prep
+
+        def hop(prev: Any, response: Any, remote_s: float, extra: list[torch.Tensor] | None) -> tuple[bool, Any]:
             res = None
             if prev is not None:
-                pending[0] = None  # finish_prepared always wipes prev
-                calls = prev.calls
-                res = self._check_results(list(calls), backend.finish_prepared(prev, response, remote_s))
+                res = finish(prev, response, remote_s)
+                if extra is not None:  # second half of a pipelined round trip
+                    res = [torch.cat([a, b], dim=0) for a, b in zip(extra, res, strict=True)]
             finished, out = self._advance(gen, res)
             if finished:
                 return True, out
-            pending[0] = backend.prepare_calls(out)
-            return False, pending[0]
+            if big and rows(out) >= big and all(int(c.x.shape[0]) >= 2 for c in out):
+                return False, ("split", out)
+            return False, prepare(out)
 
         try:
-            finished, out = await self.run_plain(hop, None, None, 0.0)
+            finished, out = await self.run_plain(hop, None, None, 0.0, None)
             while not finished:
+                if isinstance(out, tuple):  # pipelined halves
+                    calls = out[1]
+                    halves = [[], []]  # type: list[list[LinearCall]]
+                    for c in calls:
+                        h = int(c.x.shape[0]) // 2
+                        halves[0].append(LinearCall(c.id, c.x[:h], c.session, c.meta))
+                        halves[1].append(LinearCall(c.id, c.x[h:], c.session, c.meta))
+                    pa = await self.run_plain(prepare, halves[0])
+                    ta = asyncio.ensure_future(backend.send_prepared(pa))
+                    try:
+                        pb = await self.run_plain(prepare, halves[1])
+                        tb = asyncio.ensure_future(backend.send_prepared(pb))
+                    except BaseException:
+                        ta.cancel()
+                        raise
+                    try:
+                        ra, sa = await ta
+                        ya = await self.run_plain(finish, pa, ra, sa)
+                        rb, sb = await tb
+                    except BaseException:
+                        tb.cancel()
+                        raise
+                    finished, out = await self.run_plain(hop, pb, rb, sb, ya)
+                    continue
                 prep = out
                 response, remote_s = await backend.send_prepared(prep)
-                finished, out = await self.run_plain(hop, prep, response, remote_s)
+                finished, out = await self.run_plain(hop, prep, response, remote_s, None)
             return out  # type: ignore[no-any-return]
         finally:
-            backend.discard(pending[0])
-            pending[0] = None
+            for prep in owned:
+                backend.discard(prep)
+            owned.clear()
 
     def forward(self, input_ids: torch.Tensor | Sequence[int], cache: KVCache, *, session: object | None = None,
                 all_logits: bool = False) -> torch.Tensor:
