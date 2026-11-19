@@ -242,9 +242,11 @@ dependencies = [
 name = "pgw-fast"
 version = "0.1.0"
 dependencies = [
+ "chacha20",
  "numpy",
  "pgw-core-rs",
  "pyo3",
+ "zeroize",
 ]
 
 [[package]]
