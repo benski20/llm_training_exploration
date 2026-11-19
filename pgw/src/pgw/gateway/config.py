@@ -196,6 +196,9 @@ class GatewaySettings(PGWSettings):
     maskstore_root: Path = Path("/var/lib/pgw/masks")
     api_keys_file: Path | None = Field(None, description="Hashed API keys (managed with 'pgw gateway keys')")
     admin_token: SecretStr | None = None
+    console_viewer_tokens_file: Path | None = Field(
+        None, description="Console read-only (viewer) tokens, one per line; admins sign in with admin_token",
+    )
     allow_anonymous: bool = Field(False, description="Dev only (needs allow_dev_modes)")
     allow_dev_modes: bool = Field(
         False, description="Permit 'plain'/'float' models, sampled Freivalds and anonymous access. Never in production"

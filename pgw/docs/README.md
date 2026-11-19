@@ -17,6 +17,7 @@ reviewers, operators, developers and compliance teams.
 | Operators, architects | [Sizing](operations/sizing.md) | bandwidth, mask storage, factory throughput, latency, with measured numbers |
 | Operators, security | [Encrypted mask generation](operations/encrypted-masks.md) | no factory GPU and no large mask store: the service computes W8.r on MLWE-encrypted masks |
 | Developers | [Gateway API reference](api/gateway-api.md) | OpenAI-compatible endpoints, streaming, errors, limits, admin API |
+| Operators, frontend | [Console API contract](api/console-api.md) | Web console sign-in, roles, usage/audit/overview endpoints, security headers |
 | Legal, compliance | [Compliance FAQ (draft, needs legal review)](compliance/faq.md) | GDPR, HIPAA, FERPA and other questions |
 | Auditors, security teams | [Audit-readiness checklist](compliance/audit-readiness.md) | controls, evidence, owners |
 | Everyone | [Glossary](glossary.md) | terms and symbols |
