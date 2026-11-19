@@ -25,7 +25,10 @@ def _k(params: RingParams | int) -> int:
 
 def packed_size(shape: tuple[int, ...], params: RingParams | int) -> int:
     """Byte length of a packed tensor of ``shape``."""
-    return int(np.prod(shape, dtype=np.int64)) * (_k(params) // 8)
+    n = 1
+    for d in shape:  # plain ints: np.prod costs microseconds per wire message
+        n *= int(d)
+    return n * (_k(params) // 8)
 
 
 def pack_ring(t: torch.Tensor | np.ndarray, params: RingParams | int) -> bytes:

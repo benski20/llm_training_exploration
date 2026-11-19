@@ -152,6 +152,7 @@ def _build_state(
     batcher = BatchScheduler(
         registry, batch_window_ms=s.batch_window_ms, max_batch_rows=s.max_batch_rows, cpu_workers=s.cpu_workers,
         gpu_workers_per_device=s.gpu_workers_per_device, max_queued_rows=s.max_queued_rows, metrics=metrics,
+        inline_max_rows=s.batch_inline_max_rows,
     )
     handler = ServiceHandler(s, registry, batcher, authenticator, metrics)
     return ServiceState(settings=s, registry=registry, metrics=metrics, batcher=batcher, handler=handler)
@@ -229,7 +230,8 @@ def create_app(
 
     # Innermost middleware: compute requests skip routing and framework middleware (hot path). Any
     # middleware added below (e.g. the trusted client-cert header) still runs first.
-    app.add_middleware(ComputeFastPath, endpoint=getattr(wire_router, "pgw_compute_endpoint", None))
+    app.add_middleware(ComputeFastPath, endpoint=getattr(wire_router, "pgw_compute_endpoint", None),
+                       stream=getattr(wire_router, "pgw_stream_app", None))
 
     async def healthz(request: Request) -> Response:
         return PlainTextResponse("ok")

@@ -1,4 +1,4 @@
-"""The persistent compute channel (``/pgw/v1/stream``) over a real hypercorn socket.
+"""The persistent compute channel (``/pgw/v1/stream``) over a real hypercorn or uvicorn socket.
 
 Same results, errors and limits as one HTTP request per call; the client falls back to HTTP
 whenever the channel cannot be opened, and retries on a new connection when it breaks.
@@ -32,21 +32,32 @@ def _free_port() -> int:
 
 
 class _Server:
-    def __init__(self, handler: Any, limits: WireLimits | None = None):
-        from hypercorn.asyncio import serve
-        from hypercorn.config import Config
-
+    def __init__(self, handler: Any, limits: WireLimits | None = None, kind: str = "hypercorn"):
         self.handler = handler
         self.port = _free_port()
-        cfg = Config()
-        cfg.bind = [f"127.0.0.1:{self.port}"]
-        cfg.accesslog = None
-        cfg.errorlog = None
         self.loop = asyncio.new_event_loop()
         self.stop = asyncio.Event()
         app = make_app(handler, limits)
 
         async def main() -> None:
+            if kind == "uvicorn":
+                import uvicorn
+
+                server = uvicorn.Server(uvicorn.Config(
+                    app, host="127.0.0.1", port=self.port, ws="websockets-sansio", log_config=None,
+                    lifespan="off", ws_ping_interval=None, ws_per_message_deflate=False))
+                task = asyncio.ensure_future(server.serve())
+                await self.stop.wait()
+                server.should_exit = True
+                await task
+                return
+            from hypercorn.asyncio import serve
+            from hypercorn.config import Config
+
+            cfg = Config()
+            cfg.bind = [f"127.0.0.1:{self.port}"]
+            cfg.accesslog = None
+            cfg.errorlog = None
             await serve(app, cfg, shutdown_trigger=self.stop.wait)  # type: ignore[arg-type]
 
         self.thread = threading.Thread(target=lambda: self.loop.run_until_complete(main()), daemon=True)
@@ -67,12 +78,12 @@ class _Server:
         self.thread.join(10)
 
 
-@pytest.fixture
-def serve() -> Iterator[Any]:
+@pytest.fixture(params=["hypercorn", "uvicorn"])
+def serve(request: pytest.FixtureRequest) -> Iterator[Any]:
     servers: list[_Server] = []
 
     def start(handler: Any, limits: WireLimits | None = None) -> _Server:
-        s = _Server(handler, limits)
+        s = _Server(handler, limits, request.param)
         servers.append(s)
         return s
 

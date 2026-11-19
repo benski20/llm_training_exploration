@@ -602,15 +602,6 @@ class ComputeClient:
                     code=ErrorCode.DEADLINE_EXCEEDED,
                     details={"request_id": request_id, "attempts": attempt - 1},
                 )
-            # The body (and its deadline_ms) stays byte-identical across retries; the server uses
-            # what is left of *this* attempt's budget, so an abandoned attempt stops early.
-            headers = {REQUEST_ID_HEADER: request_id, ATTEMPT_HEADER: str(attempt),
-                       DEADLINE_HEADER: str(max(1, int(remaining * 1000)))}
-            if body is not None:
-                headers["Content-Type"] = CONTENT_TYPE
-            timeout = httpx.Timeout(
-                remaining, connect=min(cfg.connect_timeout_s, remaining), pool=min(cfg.pool_timeout_s, remaining)
-            )
             self.stats.attempts += 1
             t0 = time.monotonic()
             status: int | None = None
@@ -640,6 +631,15 @@ class ComputeClient:
                     if exc.code == ErrorCode.UNAVAILABLE:
                         chan.retire()  # e.g. draining: the next attempt opens a new connection
                     raise _StreamReply(exc)
+                # The body (and its deadline_ms) stays byte-identical across retries; the server uses
+                # what is left of *this* attempt's budget, so an abandoned attempt stops early.
+                headers = {REQUEST_ID_HEADER: request_id, ATTEMPT_HEADER: str(attempt),
+                           DEADLINE_HEADER: str(max(1, int(remaining * 1000)))}
+                if body is not None:
+                    headers["Content-Type"] = CONTENT_TYPE
+                timeout = httpx.Timeout(
+                    remaining, connect=min(cfg.connect_timeout_s, remaining), pool=min(cfg.pool_timeout_s, remaining)
+                )
                 # asyncio.timeout also bounds transports that ignore httpx timeouts (e.g. in-process).
                 async with asyncio.timeout(remaining):
                     async with http.stream(method, path, content=body, headers=headers, timeout=timeout) as resp:

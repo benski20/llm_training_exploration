@@ -239,3 +239,35 @@ async def test_metrics_hooks() -> None:
     assert 'pgw_service_batch_rows_sum{linear_kind="o"} 6.0' in text
     assert "pgw_service_kernel_seconds_count" in text
     assert "pgw_service_queue_depth 0.0" in text
+
+
+async def test_inline_small_batches_on_an_idle_device() -> None:
+    import threading
+
+    reg, ws = _registry(delay=0.05)
+    b = BatchScheduler(reg, batch_window_ms=0, cpu_workers=1, inline_max_rows=2)
+    await b.start()
+    k = reg.get(FP).kernel("0.qkv")
+    seen: list[str] = []
+    orig = k.run
+
+    def run(x: torch.Tensor, ring: Any) -> torch.Tensor:
+        seen.append(threading.current_thread().name)
+        return orig(x, ring)
+
+    k.run = run  # type: ignore[method-assign]
+    x = rand_x(2, 16, RING_K40_A12, seed=1)
+    assert torch.equal(await b.submit(FP, RING_K40_A12, "0.qkv", x), expected(x, ws["0.qkv"], RING_K40_A12))
+    assert seen == [threading.current_thread().name]  # ran on the event loop thread, no pool hand-off
+    # larger batches use the pool; rows arriving while the device is busy still coalesce
+    big = asyncio.ensure_future(b.submit(FP, RING_K40_A12, "0.qkv", rand_x(3, 16, RING_K40_A12, seed=2)))
+    await asyncio.sleep(0.01)
+    xs = [rand_x(1, 16, RING_K40_A12, seed=10 + i) for i in range(2)]
+    ys = await asyncio.gather(*(b.submit(FP, RING_K40_A12, "0.qkv", xx) for xx in xs))
+    await big
+    for xx, y in zip(xs, ys, strict=True):
+        assert torch.equal(y, expected(xx, ws["0.qkv"], RING_K40_A12))
+    assert seen[1].startswith("pgw-kernel")
+    assert k.calls[-2:] == [3, 2]  # type: ignore[attr-defined]
+    await b.stop()
+    assert b.queued_rows == 0 and b.queued_items == 0

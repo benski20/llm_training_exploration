@@ -11,20 +11,26 @@ Scheduling model
 * A batch keeps accepting rows **while it waits in the ready queue**, until a worker picks it up.
   Under load (device busy) batches therefore grow beyond what the window alone would collect,
   which is exactly when batching pays off; when idle, latency is bounded by the window.
-* Every device has its own ready queue and worker tasks (``gpu_workers_per_device``, default 1, so
-  GPU work is serialized per device; ``cpu_workers`` for the CPU). Kernels run in a per-device
-  thread pool, so the event loop never blocks on a GEMM. With multi-GPU layer placement the
-  devices work in parallel on different layers.
+* Every device has its own FIFO ready queue and a fixed number of execution slots
+  (``gpu_workers_per_device``, default 1, so GPU work is serialized per device; ``cpu_workers`` for
+  the CPU). Kernels run in a per-device thread pool, so the event loop never blocks on a GEMM. With
+  multi-GPU layer placement the devices work in parallel on different layers.
+* Dispatch is callback driven, without worker tasks: a batch that becomes ready while its device
+  has a free slot is handed to the thread pool synchronously, and the pool's completion callback
+  resolves the callers' futures and starts the next ready batch. An idle device therefore costs
+  one thread hand-off per round trip and no extra event-loop hops (decode-sized calls are latency
+  bound), while a busy device still queues batches that keep growing.
 * Rows whose caller went away (deadline, disconnect) before the batch starts are dropped.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import Future as _CFuture
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -90,6 +96,20 @@ class _Batch:
     queued: bool = False
     started: bool = False
     timer: asyncio.TimerHandle | None = None
+    #: entries still wanted when the batch started, and their rows
+    live: list[_Entry] = field(default_factory=list)
+    live_rows: int = 0
+    #: failed by ``stop(drain=False)`` while its kernel was still running
+    aborted: bool = False
+
+
+@dataclass(eq=False)
+class _Device:
+    executor: ThreadPoolExecutor
+    slots: int
+    busy: int = 0
+    ready: deque[_Batch] = field(default_factory=deque)
+    running: set[_Batch] = field(default_factory=set)
 
 
 class BatchScheduler:
@@ -107,6 +127,9 @@ class BatchScheduler:
         cpu_workers: Concurrent kernel executions on the CPU device.
         gpu_workers_per_device: Concurrent kernel executions per GPU.
         max_queued_rows: Admission limit on rows waiting or running (``unavailable`` above it).
+        inline_max_rows: Run a batch of at most this many rows directly on the event loop when its
+            device is completely idle (nothing running or queued), saving the two thread hand-offs
+            of the pool (0 = always use the pool). Blocks the loop for the kernel's duration.
         metrics: Optional :class:`pgw.service.metrics.ServiceMetrics`.
     """
 
@@ -120,6 +143,7 @@ class BatchScheduler:
         gpu_workers_per_device: int = 1,
         max_queued_rows: int = 1 << 20,
         metrics: Any | None = None,
+        inline_max_rows: int = 0,
     ):
         if batch_window_ms < 0:
             raise ValueError("batch_window_ms must be >= 0")
@@ -132,16 +156,16 @@ class BatchScheduler:
         self.gpu_workers_per_device = gpu_workers_per_device
         self.max_queued_rows = max_queued_rows
         self.metrics = metrics
+        self.inline_max_rows = max(0, int(inline_max_rows))
         self.stats = BatchStats()
         self._open: dict[tuple[str, str, str], _Batch] = {}
-        self._queues: dict[str, asyncio.Queue[_Batch]] = {}
-        self._executors: dict[str, ThreadPoolExecutor] = {}
-        self._workers: list[asyncio.Task[None]] = []
+        self._devices: dict[str, _Device] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._accepting = False
         self._queued_rows = 0
         self._queued_items = 0
-        self._busy = 0
+        self._pending_batches = 0  # enqueued and not finished
+        self._idle: asyncio.Event | None = None
 
     # ---- lifecycle -----------------------------------------------------------------------
     @property
@@ -160,26 +184,25 @@ class BatchScheduler:
         return self._queued_items
 
     async def start(self) -> None:
-        """Start worker tasks (idempotent). Workers for devices are created lazily on first use."""
+        """Start accepting work (idempotent). Device thread pools are created lazily on first use."""
         self._loop = asyncio.get_running_loop()
+        if self._idle is None:
+            self._idle = asyncio.Event()
+            self._idle.set()
         self._accepting = True
 
-    def _ensure_device(self, device: str) -> asyncio.Queue[_Batch]:
-        q = self._queues.get(device)
-        if q is not None:
-            return q
-        assert self._loop is not None
+    def _ensure_device(self, device: str) -> _Device:
+        d = self._devices.get(device)
+        if d is not None:
+            return d
         n = self.cpu_workers if device.startswith("cpu") else self.gpu_workers_per_device
-        q = asyncio.Queue()
-        self._queues[device] = q
-        self._executors[device] = ThreadPoolExecutor(max_workers=n, thread_name_prefix=f"pgw-kernel-{device}")
-        for i in range(n):
-            self._workers.append(self._loop.create_task(self._worker(device, q), name=f"pgw-batch-{device}-{i}"))
-        log.debug("batch workers started for %s (%d)", device, n)
-        return q
+        d = _Device(ThreadPoolExecutor(max_workers=n, thread_name_prefix=f"pgw-kernel-{device}"), n)
+        self._devices[device] = d
+        log.debug("batch executor started for %s (%d slot(s))", device, n)
+        return d
 
     async def stop(self, drain: bool = True, timeout: float | None = None) -> None:
-        """Stop accepting work, then finish (``drain=True``) or fail queued work, and stop workers.
+        """Stop accepting work, then finish (``drain=True``) or fail queued work, and stop the pools.
 
         Args:
             drain: Finish everything already submitted (graceful shutdown).
@@ -188,28 +211,28 @@ class BatchScheduler:
         self._accepting = False
         for b in list(self._open.values()):
             self._enqueue(b)
-        if drain and self._queues:
-            joins = [q.join() for q in self._queues.values()]
+        if drain and self._pending_batches and self._idle is not None:
             try:
-                await asyncio.wait_for(asyncio.gather(*joins), timeout=timeout)
+                await asyncio.wait_for(self._idle.wait(), timeout=timeout)
             except TimeoutError:
                 log.warning("batch drain timed out after %.1fs; failing remaining work", timeout or 0.0)
         # fail whatever is left (not drained or timed out)
-        for q in self._queues.values():
-            while not q.empty():
-                b = q.get_nowait()
-                self._fail(b, ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0}))
-                q.task_done()
-        for t in self._workers:
-            t.cancel()
-        for t in self._workers:
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
-        self._workers.clear()
-        self._queues.clear()
-        for ex in self._executors.values():
-            ex.shutdown(wait=True, cancel_futures=True)
-        self._executors.clear()
+        stop_err = ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0})
+        for d in self._devices.values():
+            while d.ready:
+                b = d.ready.popleft()
+                self._fail(b, stop_err)
+                self._batch_done()
+            for b in list(d.running):  # kernels still running: their callers get an error now
+                b.aborted = True
+                d.running.discard(b)
+                self._queued_rows -= b.live_rows
+                for e in b.live:
+                    if not e.fut.done():
+                        e.fut.set_exception(stop_err)
+        for d in self._devices.values():
+            d.executor.shutdown(wait=True, cancel_futures=True)
+        self._devices.clear()
         self._open.clear()
         log.info("batch scheduler stopped (drain=%s, batches=%d, mean_rows=%.1f)",
                  drain, self.stats.batches, self.stats.mean_batch_rows)
@@ -246,6 +269,14 @@ class BatchScheduler:
                 "compute queue is full", details={"retry_after_s": 1.0, "queued_rows": self._queued_rows}
             )
         key = (fingerprint, ring.name, linear)
+        if rows <= self.max_batch_rows:  # the common case: one chunk, await its future directly
+            fut = self._add(key, kernel, ring, x_hat)
+            self.stats.submitted_rows += rows
+            try:
+                return await fut
+            except BaseException:
+                fut.cancel()  # caller gone or failed: drop our rows if not started yet
+                raise
         futs: list[asyncio.Future[tuple[torch.Tensor, BatchTiming]]] = []
         for r0 in range(0, rows, self.max_batch_rows):
             futs.append(self._add(key, kernel, ring, x_hat[r0 : r0 + self.max_batch_rows]))
@@ -271,23 +302,23 @@ class BatchScheduler:
         assert loop is not None
         rows = int(x.shape[0])
         b = self._open.get(key)
+        new = False
         if b is None or b.started or b.rows + rows > self.max_batch_rows:
             if b is not None and not b.queued:
                 self._enqueue(b)  # full: send it off now
             b = _Batch(key=key, kernel=kernel, ring=ring, device=str(kernel.device))
             self._open[key] = b
-            if self.window_s <= 0:
-                self._enqueue(b)
-            else:
-                b.timer = loop.call_later(self.window_s, self._enqueue, b)
+            new = True
         fut: asyncio.Future[tuple[torch.Tensor, BatchTiming]] = loop.create_future()
         b.entries.append(_Entry(x, fut, time.perf_counter()))
         b.rows += rows
         self._queued_rows += rows
         self._queued_items += 1
         self._set_depth()
-        if b.rows >= self.max_batch_rows and not b.queued:
-            self._enqueue(b)
+        if not b.queued and (self.window_s <= 0 or b.rows >= self.max_batch_rows):
+            self._enqueue(b)  # starts it right away when the device has a free slot
+        elif new and not b.queued:
+            b.timer = loop.call_later(self.window_s, self._enqueue, b)
         return fut
 
     def _enqueue(self, b: _Batch) -> None:
@@ -297,25 +328,32 @@ class BatchScheduler:
         if b.timer is not None:
             b.timer.cancel()
             b.timer = None
-        self._ensure_device(b.device).put_nowait(b)
+        d = self._ensure_device(b.device)
+        d.ready.append(b)
+        self._pending_batches += 1
+        if self._idle is not None:
+            self._idle.clear()
+        self._pump(d)
+
+    def _pump(self, d: _Device) -> None:
+        """Start ready batches while the device has free slots (FIFO across keys and tenants)."""
+        while d.busy < d.slots and d.ready:
+            self._start(d, d.ready.popleft())
+
+    def _batch_done(self) -> None:
+        self._pending_batches -= 1
+        if self._pending_batches <= 0:
+            self._pending_batches = 0
+            if self._idle is not None:
+                self._idle.set()
 
     def _set_depth(self) -> None:
         if self.metrics is not None:
             self.metrics.queue_depth(self._queued_items)
 
     # ---- execution -----------------------------------------------------------------------
-    async def _worker(self, device: str, q: asyncio.Queue[_Batch]) -> None:
-        loop = asyncio.get_running_loop()
-        while True:
-            b = await q.get()
-            try:
-                await self._run_batch(loop, device, b)
-            except Exception:  # pragma: no cover - _run_batch already routes errors to futures
-                log.exception("batch worker error")
-            finally:
-                q.task_done()
-
-    async def _run_batch(self, loop: asyncio.AbstractEventLoop, device: str, b: _Batch) -> None:
+    def _start(self, d: _Device, b: _Batch) -> None:
+        """Hand ``b`` to the device's thread pool (runs on the event loop, never blocks)."""
         b.started = True
         if self._open.get(b.key) is b:
             del self._open[b.key]
@@ -328,32 +366,77 @@ class BatchScheduler:
                 self.stats.dropped_rows += n
             else:
                 live.append(e)
+        b.entries = []
         self._set_depth()
         if not live:
+            self._batch_done()
             return
-        rows = sum(int(e.x.shape[0]) for e in live)
+        b.live = live
+        b.live_rows = sum(int(e.x.shape[0]) for e in live)
+        loop = self._loop
+        assert loop is not None
         t_start = time.perf_counter()
+        parts = [e.x for e in live]  # concatenated in the worker thread, off the event loop
+        if b.live_rows <= self.inline_max_rows and d.busy == 0 and not d.ready:
+            # idle device, small batch: run it here (no pool hand-off and wake-up in either direction)
+            res: _CFuture[tuple[torch.Tensor, float]] = _CFuture()
+            d.busy += 1
+            try:
+                res.set_result(_run_kernel(b.kernel, parts, b.ring))
+            except Exception as exc:
+                res.set_exception(exc)
+            self._finish(d, b, t_start, res)
+            return
         try:
-            parts = [e.x for e in live]  # concatenated in the worker thread, off the event loop
-            y, secs = await loop.run_in_executor(self._executors[device], _run_kernel, b.kernel, parts, b.ring)
-        except asyncio.CancelledError:  # scheduler stopped without drain while this batch ran
-            self._queued_rows -= rows
-            stop_err = ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0})
+            cf = d.executor.submit(_run_kernel, b.kernel, parts, b.ring)
+        except RuntimeError:  # pool already shut down
+            self._queued_rows -= b.live_rows
+            err = ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0})
             for e in live:
                 if not e.fut.done():
-                    e.fut.set_exception(stop_err)
-            raise
-        except Exception as exc:
+                    e.fut.set_exception(err)
+            self._batch_done()
+            return
+        d.busy += 1
+        d.running.add(b)
+
+        def done(f: _CFuture[tuple[torch.Tensor, float]]) -> None:  # runs in the worker thread
+            try:
+                loop.call_soon_threadsafe(self._finish, d, b, t_start, f)
+            except RuntimeError:  # event loop already closed (process shutting down)
+                pass
+
+        cf.add_done_callback(done)
+
+    def _finish(self, d: _Device, b: _Batch, t_start: float, f: _CFuture[tuple[torch.Tensor, float]]) -> None:
+        """Kernel finished (on the event loop): resolve the callers, then start the next ready batch."""
+        d.busy -= 1
+        d.running.discard(b)
+        try:
+            if not b.aborted:
+                self._resolve(b, t_start, f)
+        finally:
+            self._batch_done()
+            self._pump(d)
+
+    def _resolve(self, b: _Batch, t_start: float, f: _CFuture[tuple[torch.Tensor, float]]) -> None:
+        live, rows = b.live, b.live_rows
+        self._queued_rows -= rows
+        exc: BaseException | None
+        if f.cancelled():
+            exc = ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0})
+        else:
+            exc = f.exception()
+        if exc is not None:
             self.stats.failed_batches += 1
-            self._queued_rows -= rows
             err = exc if isinstance(exc, PGWError) else PGWError("compute kernel failed")
             if not isinstance(exc, PGWError):
-                log.error("kernel failed for %s (%d rows) on %s", b.key[2], rows, device, exc_info=exc)
+                log.error("kernel failed for %s (%d rows) on %s", b.key[2], rows, b.device, exc_info=exc)
             for e in live:
                 if not e.fut.done():
                     e.fut.set_exception(err)
             return
-        self._queued_rows -= rows
+        y, secs = f.result()
         self.stats.batches += 1
         self.stats.batched_rows += rows
         self.stats.max_batch_rows_seen = max(self.stats.max_batch_rows_seen, rows)
@@ -377,8 +460,8 @@ class BatchScheduler:
         self._set_depth()
 
     def devices(self) -> Sequence[str]:
-        """Devices with active workers."""
-        return list(self._queues)
+        """Devices with an active thread pool."""
+        return list(self._devices)
 
 
 def _run_kernel(

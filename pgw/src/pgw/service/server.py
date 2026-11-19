@@ -1,15 +1,26 @@
-"""Run the compute service with hypercorn (HTTP/2 over TLS, h2c or HTTP/1.1 without TLS).
+"""Run the compute service with hypercorn (HTTP/2 over TLS, h2c or HTTP/1.1 without TLS) or uvicorn.
+
+* ``settings.server`` picks the HTTP server of the main listener:
+
+  - ``hypercorn``: HTTP/2 (and HTTP/1.1) for ``POST /pgw/v1/compute``; the WebSocket stream channel
+    runs on hypercorn's pure-Python WebSocket framing (wsproto).
+  - ``uvicorn``: HTTP/1.1 only (httptools) with the ``websockets`` framing for the stream channel,
+    which costs about half the CPU per frame. Use it when clients use the stream channel (the
+    default for :class:`pgw.wire.ComputeClient`); HTTP clients then keep a pool of HTTP/1.1
+    connections instead of multiplexing HTTP/2 streams. Same routes, auth, limits, TLS policy
+    (the SSL context is built by the same code) and verified client identities.
 
 * TLS from ``settings.tls``; with ``tls.require_client_cert`` the server demands a client
-  certificate signed by ``tls.ca_file`` (mTLS). ALPN offers ``h2`` and ``http/1.1``.
+  certificate signed by ``tls.ca_file`` (mTLS). ALPN offers ``h2`` and ``http/1.1`` (hypercorn) or
+  ``http/1.1`` (uvicorn).
 * SIGTERM / SIGINT start a graceful drain: ``/readyz`` turns 503 at once (so the load balancer
   stops routing here), hypercorn stops accepting connections and waits for open requests
   (``drain_timeout_s``), then the app's lifespan drains the batch scheduler.
 * ``metrics_port`` serves ``/metrics`` on a separate plain-HTTP listener (bind it to an internal
   interface) in the same event loop.
 * Verified client certificates are published to the app as
-  ``scope["extensions"]["tls"]["client_cert_name"]`` (see :mod:`pgw.service.tls_peer`; hypercorn
-  itself does not), so the mTLS tenant map and the token-vs-certificate cross-check work natively.
+  ``scope["extensions"]["tls"]["client_cert_name"]`` (see :mod:`pgw.service.tls_peer`; neither
+  server does itself), so the mTLS tenant map and the token-vs-certificate cross-check work natively.
 * Access logs are off: request paths are harmless, but the service keeps its logs minimal and
   never logs payloads anyway.
 
@@ -21,14 +32,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import signal
 import ssl
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, cast
 
 from pgw.core.errors import ConfigError
 from pgw.service.config import ServiceSettings
 
-__all__ = ["build_hypercorn_config", "serve", "serve_async"]
+__all__ = ["build_hypercorn_config", "build_uvicorn_config", "serve", "serve_async"]
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +99,111 @@ def build_hypercorn_config(settings: ServiceSettings, *, bind: str | None = None
     return cfg
 
 
+def _needs_peer_identity(settings: ServiceSettings) -> bool:
+    t = settings.tls
+    return t.enabled and t.ca_file is not None and not settings.trusted_client_cert_header
+
+
+def build_uvicorn_config(settings: ServiceSettings, app: Any, *, bind: str | None = None) -> Any:
+    """uvicorn ``Config`` for the main listener: httptools + ``websockets`` framing, the same TLS
+    policy as hypercorn (the SSL context comes from :func:`build_hypercorn_config`, with ALPN
+    ``http/1.1``), no proxy-header rewriting, no access log, uvicorn's logging left alone.
+
+    With client-certificate verification (and no ``trusted_client_cert_header``) the protocol
+    classes publish the verified subject (:func:`pgw.service.tls_peer.uvicorn_peer_cert_protocol`).
+
+    Raises:
+        ConfigError: TLS files missing, or the identity hook does not fit this uvicorn version.
+    """
+    import uvicorn
+    from uvicorn.config import HTTP_PROTOCOLS, WS_PROTOCOLS
+    from uvicorn.importer import import_from_string
+
+    from pgw.service.tls_peer import uvicorn_peer_cert_protocol, uvicorn_peer_cert_supported
+
+    s = settings
+    hcfg = build_hypercorn_config(s, bind=bind)  # validates TLS files, warns about plaintext
+    host, _, port = hcfg.bind[0].rpartition(":")
+    try:
+        import httptools  # noqa: F401
+        http_name = "httptools"
+    except ImportError:  # pragma: no cover - part of uvicorn[standard]
+        http_name = "h11"
+    http_cls = import_from_string(HTTP_PROTOCOLS[http_name])
+    ws_path = WS_PROTOCOLS.get("websockets-sansio")
+    if ws_path is None:  # pragma: no cover - uvicorn < 0.35
+        ws_path = WS_PROTOCOLS["websockets"]
+    assert ws_path is not None
+    ws_cls = import_from_string(ws_path)
+    if _needs_peer_identity(s):
+        if not uvicorn_peer_cert_supported(http_cls, ws_cls):
+            raise ConfigError(
+                "this uvicorn version does not let pgw publish verified client certificates; use "
+                "server='hypercorn', or terminate TLS in a proxy and set trusted_client_cert_header"
+            )
+        http_cls, ws_cls = uvicorn_peer_cert_protocol(http_cls), uvicorn_peer_cert_protocol(ws_cls)
+    kw: dict[str, Any] = {}
+    if s.tls.enabled:
+        import inspect
+
+        if "ssl_context_factory" not in inspect.signature(uvicorn.Config).parameters:
+            raise ConfigError("server='uvicorn' with TLS needs a uvicorn release with ssl_context_factory")
+        ctx = hcfg.create_ssl_context()
+        ctx.set_alpn_protocols(["http/1.1"])  # no HTTP/2 without uvicorn's optional h2 support
+
+        def ssl_factory(config: Any, default: Callable[[], ssl.SSLContext]) -> ssl.SSLContext:
+            return cast(ssl.SSLContext, ctx)
+
+        kw["ssl_context_factory"] = ssl_factory
+    return uvicorn.Config(
+        app, host=host.strip("[]"), port=int(port), http=http_cls, ws=ws_cls, lifespan="on",
+        log_config=None, access_log=False, proxy_headers=False, server_header=False,
+        timeout_keep_alive=max(1, math.ceil(s.workers_keep_alive_s)),
+        timeout_graceful_shutdown=max(1, math.ceil(s.drain_timeout_s)),
+        ws_max_size=s.max_request_bytes, ws_ping_interval=None, ws_ping_timeout=None,
+        ws_per_message_deflate=False, **kw,
+    )
+
+
+def _uvicorn_server(config: Any) -> Any:
+    import uvicorn
+
+    class _Server(uvicorn.Server):
+        """Signals are handled by :func:`serve_async` (uvicorn's own handler re-raises them on exit)."""
+
+        @contextlib.contextmanager
+        def capture_signals(self) -> Iterator[None]:
+            yield
+
+    return _Server(config)
+
+
+async def _serve_uvicorn(app: Any, settings: ServiceSettings, stop: asyncio.Event,
+                         drained: Callable[[], Awaitable[None]]) -> None:
+    server = _uvicorn_server(build_uvicorn_config(settings, app))
+    task = asyncio.create_task(server.serve())
+
+    async def trigger() -> None:
+        await stop.wait()
+        # In-flight requests (stream frames included) finish before uvicorn closes connections:
+        # it closes WebSocket channels at once (1012) when told to exit.
+        await drained()
+        server.should_exit = True
+
+    trig = asyncio.create_task(trigger())
+    try:
+        await asyncio.wait([task, trig], return_when=asyncio.FIRST_COMPLETED)
+        if not task.done():
+            await task
+        task.result()
+        if not server.started:
+            raise ConfigError("compute service failed to start (see the log)")
+    finally:
+        trig.cancel()
+        with contextlib.suppress(BaseException):
+            await trig
+
+
 async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Event | None = None,
                       app: Any | None = None) -> None:
     """Serve until ``shutdown_event`` is set (or SIGTERM/SIGINT when ``shutdown_event`` is None).
@@ -104,7 +222,7 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
 
     app = app if app is not None else create_app(settings)
     state = app.state.pgw
-    if settings.tls.enabled and settings.tls.ca_file is not None and not settings.trusted_client_cert_header:
+    if settings.server == "hypercorn" and _needs_peer_identity(settings):
         if not peer_cert_supported():
             # Fail closed: without the peer certificate the tenant map rejects everything and the
             # token-vs-certificate tenant cross-check would silently never run.
@@ -127,7 +245,16 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
         state.begin_drain()  # /readyz -> 503 immediately; LB stops routing new requests here
         log.info("shutdown requested; draining")
 
-    tasks = [asyncio.create_task(hyper_serve(app, build_hypercorn_config(settings), shutdown_trigger=trigger))]
+    async def drained() -> None:
+        state.begin_drain()
+        log.info("shutdown requested; draining")
+        await state.handler.wait_idle(settings.drain_timeout_s)
+
+    if settings.server == "uvicorn":
+        main = _serve_uvicorn(app, settings, stop, drained)
+    else:
+        main = hyper_serve(app, build_hypercorn_config(settings), shutdown_trigger=trigger)
+    tasks = [asyncio.create_task(main)]
     if settings.metrics_port is not None and settings.metrics_enabled:
         mcfg = Config()
         mcfg.bind = [f"{settings.metrics_host}:{settings.metrics_port}"]

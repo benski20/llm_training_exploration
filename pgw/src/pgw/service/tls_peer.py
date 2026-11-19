@@ -19,6 +19,13 @@ This module closes that gap with two small pieces:
 If hypercorn changes its internals the shim refuses to install (:func:`peer_cert_supported`
 returns False) and :func:`pgw.service.server.serve_async` refuses to start a configuration that
 needs certificate identities, instead of failing open.
+
+Under uvicorn (``server="uvicorn"``, which does not publish the peer certificate either),
+:func:`uvicorn_peer_cert_protocol` subclasses uvicorn's HTTP and WebSocket protocol classes: when
+a connection is made, the verified subject is read from the connection's own TLS transport and the
+protocol's ASGI app is replaced, for that connection only, by a wrapper that publishes it (again
+overwriting anything already in the scope). No context variables or global state are involved, and
+:func:`uvicorn_peer_cert_supported` checks the hook points before the server starts.
 """
 
 from __future__ import annotations
@@ -36,6 +43,8 @@ __all__ = [
     "peer_cert_subject",
     "peer_cert_supported",
     "subject_from_der",
+    "uvicorn_peer_cert_protocol",
+    "uvicorn_peer_cert_supported",
 ]
 
 log = logging.getLogger(__name__)
@@ -143,14 +152,87 @@ class PeerCertMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") in ("http", "websocket"):
-            subject = _PEER_SUBJECT.get()
-            scope = dict(scope)
-            ext = dict(scope.get("extensions") or {})
-            tls = dict(ext.get("tls") or {})
-            tls.pop("client_cert_name", None)
-            tls.pop("client_cert_subject", None)
-            if subject:
-                tls["client_cert_name"] = subject
-            ext["tls"] = tls
-            scope["extensions"] = ext
+            scope = _publish(scope, _PEER_SUBJECT.get())
         await self.app(scope, receive, send)
+
+
+def _publish(scope: Scope, subject: str | None) -> Scope:
+    """Copy of ``scope`` whose TLS extension carries exactly ``subject`` (nothing when ``None``)."""
+    scope = dict(scope)
+    ext = dict(scope.get("extensions") or {})
+    tls = dict(ext.get("tls") or {})
+    tls.pop("client_cert_name", None)
+    tls.pop("client_cert_subject", None)
+    if subject:
+        tls["client_cert_name"] = subject
+    ext["tls"] = tls
+    scope["extensions"] = ext
+    return scope
+
+
+# ---------------------------------------------------------------------------------------------
+# uvicorn
+# ---------------------------------------------------------------------------------------------
+class _ConnectionPeerApp:
+    """The ASGI app of one uvicorn connection: publishes that connection's verified subject."""
+
+    __slots__ = ("app", "subject")
+
+    def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]], subject: str | None):
+        self.app = app
+        self.subject = subject
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") in ("http", "websocket"):
+            scope = _publish(scope, self.subject)
+        await self.app(scope, receive, send)
+
+
+async def _refuse(scope: Scope, receive: Receive, send: Send) -> None:  # pragma: no cover - API drift guard
+    """Fail closed when the per-connection identity could not be attached."""
+    if scope.get("type") == "websocket":
+        await send({"type": "websocket.close", "code": 1011, "reason": "identity unavailable"})
+    elif scope.get("type") == "http":
+        await send({"type": "http.response.start", "status": 503, "headers": [(b"content-length", b"0")]})
+        await send({"type": "http.response.body", "body": b""})
+
+
+def uvicorn_peer_cert_protocol(base: type[Any]) -> type[Any]:
+    """Subclass of a uvicorn protocol class (HTTP or WebSocket) that publishes the connection's
+    verified client-certificate subject in every scope it creates.
+
+    uvicorn hands the upgraded WebSocket protocol the same TLS transport, so the HTTP and the
+    WebSocket protocol of a connection both read the certificate the handshake verified.
+    """
+
+    class PeerCertProtocol(base):  # type: ignore[misc]
+        def connection_made(self, transport: Any) -> None:
+            app = getattr(self, "app", None)
+            subject: str | None = None
+            try:
+                subject = _subject_of_writer(transport)
+            except Exception:  # never break the connection over identity capture
+                log.exception("could not read the TLS peer certificate")
+            # the protocol instance serves exactly this connection: wrap its app for it alone
+            self.app = _ConnectionPeerApp(app, subject) if callable(app) else _refuse
+            super().connection_made(transport)
+
+    PeerCertProtocol.__name__ = PeerCertProtocol.__qualname__ = f"PeerCert{base.__name__}"
+    return PeerCertProtocol
+
+
+def uvicorn_peer_cert_supported(*protocol_classes: type[Any]) -> bool:
+    """Whether :func:`uvicorn_peer_cert_protocol` can hook these uvicorn protocol classes: each must
+    keep its ASGI app in the instance attribute ``app`` (set in ``__init__``) and receive its
+    transport through ``connection_made``."""
+    import inspect
+
+    for cls in protocol_classes:
+        try:
+            init_src = inspect.getsource(cls.__init__)
+        except (OSError, TypeError):  # pragma: no cover - no source available: cannot verify
+            return False
+        if "self.app = " not in init_src or not callable(getattr(cls, "connection_made", None)):
+            log.error("uvicorn protocol %s does not look as expected; mTLS identities unavailable", cls.__name__)
+            return False
+    return True
