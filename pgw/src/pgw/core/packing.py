@@ -35,6 +35,8 @@ def pack_ring(t: torch.Tensor | np.ndarray, params: RingParams | int) -> bytes:
     a = t.detach().cpu().numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
     if a.dtype != np.int64 and a.dtype != np.uint64:
         raise ShapeError(f"ring tensors must be int64, got {a.dtype}")
+    if nb in (2, 4):  # astype to a narrower unsigned type wraps mod 2^K: one pass, no byte shuffling
+        return np.ascontiguousarray(a).astype("<u4" if nb == 4 else "<u2").tobytes()
     u = np.ascontiguousarray(a.astype(np.uint64, copy=False) & np.uint64((1 << k) - 1))
     by = u.astype("<u8", copy=False).view(np.uint8).reshape(-1, 8)
     return bytes(by[:, :nb].tobytes() if nb < 8 else by.tobytes())
@@ -47,6 +49,9 @@ def unpack_ring(data: bytes | bytearray | memoryview, shape: tuple[int, ...], pa
     expected = packed_size(shape, k)
     if len(data) != expected:
         raise ProtocolError(f"ring payload has {len(data)} bytes, expected {expected} for shape {shape} K={k}")
+    if nb in (2, 4, 8):
+        vals = np.frombuffer(data, dtype={2: "<u2", 4: "<u4", 8: "<u8"}[nb]).astype(np.int64).reshape(shape)
+        return torch.from_numpy(vals)
     raw = np.frombuffer(data, dtype=np.uint8).reshape(-1, nb)
     full = np.zeros((raw.shape[0], 8), dtype=np.uint8)
     full[:, :nb] = raw
@@ -69,6 +74,8 @@ def unpack_ring_u64(
     raw = np.frombuffer(data, dtype=np.uint8)
     if nb == 8:
         return raw.view("<u8").reshape(shape).copy()
+    if nb in (2, 4):
+        return raw.view("<u4" if nb == 4 else "<u2").astype(np.uint64).reshape(shape)
     full = np.zeros((raw.size // nb, 8), dtype=np.uint8)
     full[:, :nb] = raw.reshape(-1, nb)
     return full.view("<u8").reshape(shape)

@@ -252,8 +252,7 @@ class _Extent:
     def wipe(self) -> None:
         self._uw_views = []
         if self._secrets is not None:
-            for i in range(len(self._secrets)):
-                self._secrets[i] = 0
+            _zero(self._secrets)  # in place (views into it see zeros); never a Python byte loop
             self._secrets = None
         self.seed = None
         self.seg.close()
@@ -523,8 +522,12 @@ class MaskReservation:
                 self.close()
 
 
-def _zero(buf: bytearray) -> None:
-    buf[:] = bytes(len(buf))
+def _zero(buf: bytearray | memoryview) -> None:
+    """Overwrite ``buf`` with zeros in place (no temporary allocation)."""
+    if len(buf):
+        a = np.frombuffer(buf, dtype=np.uint8)
+        a.fill(0)
+        del a  # release the buffer export
 
 
 # =================================================================================================
@@ -691,7 +694,10 @@ class SegmentWriter:
 
 
 def _zero_prefix(buf: bytearray, n: int) -> None:
-    buf[:n] = bytes(n)
+    if n > 0:
+        a = np.frombuffer(buf, dtype=np.uint8, count=min(n, len(buf)))
+        a.fill(0)
+        del a
 
 
 # =================================================================================================

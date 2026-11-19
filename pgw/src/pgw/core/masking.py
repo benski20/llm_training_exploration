@@ -18,7 +18,8 @@ import torch
 from pgw.core.errors import IntegrityError, RingOverflowError, ShapeError
 from pgw.core.ring import RingParams, center
 
-__all__ = ["check_output_range", "mask_activations", "unmask_outputs", "unmask_outputs_u64"]
+__all__ = ["check_output_range", "mask_activations", "mask_pack_u32", "unmask_outputs", "unmask_outputs_u32",
+           "unmask_outputs_u64"]
 
 
 def mask_activations(xq: torch.Tensor, r: torch.Tensor, params: RingParams) -> torch.Tensor:
@@ -96,6 +97,52 @@ def unmask_outputs_u64(
     if in_features is not None and yq.size:
         bound = params.output_bound(in_features)
         if int(np.abs(yq).max()) > bound:
+            raise IntegrityError(
+                "decoded linear output outside the representable range (corrupt or tampered result)",
+                details={"bound": bound, "ring": params.name},
+            )
+    return yq
+
+
+def mask_pack_u32(xq: np.ndarray, r: np.ndarray, params: RingParams) -> tuple[np.ndarray, bytes]:
+    """K=32 fast path of :func:`mask_activations` + ``pack_ring``: ``(x_hat uint32, wire bytes)``.
+
+    ``int32(xq)`` reinterpreted as uint32 plus ``uint32(r)`` wraps mod ``2^32``, which is exactly
+    ``(xq + r) & (2^32 - 1)``. Same range check as :func:`mask_activations`.
+    """
+    if params.k != 32:
+        raise ShapeError(f"mask_pack_u32 needs a 32-bit ring, got {params.name}")
+    if xq.shape != r.shape:
+        raise ShapeError(f"activation shape {xq.shape} != mask shape {r.shape}")
+    if xq.size and (int(xq.min()) < -params.qmax or int(xq.max()) > params.qmax):
+        raise RingOverflowError(f"quantized activations exceed |xq| <= qmax={params.qmax}")
+    x_hat = xq.astype(np.int32).view(np.uint32)
+    x_hat += r.astype(np.uint32)  # astype from int64 keeps the low 32 bits (r is in [0, 2^32))
+    return x_hat, x_hat.astype("<u4", copy=False).tobytes()
+
+
+def unmask_outputs_u32(
+    y_hat: bytes | bytearray | memoryview,
+    wr: np.ndarray,
+    params: RingParams,
+    in_features: int | None = None,
+) -> np.ndarray:
+    """K=32 fast path of ``unpack_ring`` + :func:`unmask_outputs_u64`: int32 ``yq`` from wire bytes.
+
+    ``(y_hat - W r) mod 2^32`` read as int32 is the centred product. The range check uses min/max
+    (``abs`` of int32 min would overflow).
+    """
+    if params.k != 32:
+        raise ShapeError(f"unmask_outputs_u32 needs a 32-bit ring, got {params.name}")
+    if len(y_hat) != wr.size * 4:
+        from pgw.core.errors import ProtocolError
+
+        raise ProtocolError(f"ring payload has {len(y_hat)} bytes, expected {wr.size * 4} for shape {wr.shape} K=32")
+    y = np.frombuffer(y_hat, dtype="<u4").reshape(wr.shape)
+    yq: np.ndarray = np.subtract(y, wr.astype(np.uint32)).view(np.int32)
+    if in_features is not None and yq.size:
+        bound = params.output_bound(in_features)
+        if int(yq.max()) > bound or int(yq.min()) < -bound:
             raise IntegrityError(
                 "decoded linear output outside the representable range (corrupt or tampered result)",
                 details={"bound": bound, "ring": params.name},

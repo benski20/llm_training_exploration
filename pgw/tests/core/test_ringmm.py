@@ -128,3 +128,35 @@ def test_cuda_exact(p, b, m, n):  # pragma: no cover - GPU only
     w8 = _rand((m, n), -128, 128, 12).to(torch.int8)
     out = PreparedWeight(w8, device="cuda").matmul(x.cuda(), p).cpu()
     assert np.array_equal(out.numpy(), ringmm_reference(x, w8, p.k))
+
+
+@pytest.mark.parametrize("k", [8, 16, 24, 32, 40, 48, 56])
+@pytest.mark.parametrize("b,m,n", [(1, 37, 70), (5, 64, 3584), (8, 40, 18944), (3, 7, 33), (33, 5, 9)])
+@pytest.mark.parametrize("mode", ["rand", "max", "min", "zero"])
+def test_offset_byte_mm_exact(k: int, b: int, m: int, n: int, mode: str) -> None:
+    """The CUDA kernel's offset-byte-plane math, run on CPU: exact against the reference, including
+    the worst cases for the int32 accumulator (all-ones x with W = -128, 0x80 bytes with W = 127)."""
+    if not hasattr(torch, "_int_mm"):
+        pytest.skip("torch._int_mm not available")
+    from pgw.core.ringmm import _offset_byte_mm
+
+    g = torch.Generator().manual_seed(k * 1000 + b * 10 + n)
+    w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
+    if mode == "rand":
+        x = torch.randint(0, 1 << min(k, 62), (b, n), generator=g) & ((1 << k) - 1)
+    elif mode == "max":
+        x = torch.full((b, n), (1 << k) - 1)
+        w8 = torch.full((m, n), -128, dtype=torch.int8)
+    elif mode == "min":
+        x = torch.full((b, n), sum(0x80 << (8 * i) for i in range(k // 8)))
+        w8 = torch.full((m, n), 127, dtype=torch.int8)
+    else:
+        x = torch.zeros((b, n), dtype=torch.int64)
+    mp, np_ = -(-m // 32) * 32, -(-n // 32) * 32
+    w = torch.zeros((mp, np_), dtype=torch.int8)
+    w[:m, :n] = w8
+    try:
+        got = _offset_byte_mm(x, k, w, w.to(torch.int64).sum(1), m)
+    except RuntimeError as exc:  # some CPU builds lack the int8 GEMM kernel
+        pytest.skip(f"torch._int_mm unavailable on CPU: {exc}")
+    assert np.array_equal(got.numpy(), ringmm_reference(x, w8, k))

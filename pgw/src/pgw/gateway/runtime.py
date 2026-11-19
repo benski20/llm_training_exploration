@@ -53,6 +53,7 @@ from pgw.engine import (
     TokenEvent,
     TransformerModel,
 )
+from pgw.engine.backends import Int8DraftBackend, int8_lm_head
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, origin_of
 from pgw.gateway.egress import EgressGuardTransport
 from pgw.gateway.masks import WindowedReservation
@@ -425,6 +426,7 @@ class ModelRuntime:
             user_agent="pgw-gateway/1",
         )
         inner = self._transport
+        real_network = inner is None
         if inner is None:
             inner = httpx.AsyncHTTPTransport(
                 http2=cc.http2,
@@ -440,7 +442,9 @@ class ModelRuntime:
         if origin_of(c.service_url) not in allowed:  # pragma: no cover - egress_origins includes it
             raise ConfigError("service URL is not on the egress allowlist")
         guard = EgressGuardTransport(inner, allowed)
-        return ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt)
+        # The compute stream connects only to service_url, which is on the egress allowlist (checked above).
+        return ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt,
+                             stream_with_transport=real_network)
 
     def _on_service_attempt(self, path: str, status: int | None, seconds: float, code: str | None) -> None:
         """``ComputeClient`` hook: every HTTP attempt (incl. retries) by outcome."""
@@ -663,9 +667,16 @@ class ModelRuntime:
         from pgw.modelpack import ModelPack
 
         dpack = ModelPack.open(path, verify=self.settings.pack_verify)
-        # Float compute: the draft only proposes tokens, the masked target decides every one of them.
+        # Approximate compute is fine: the draft only proposes tokens, the masked target decides every one.
+        # On CPU: int8 weights (a quarter of the float32 memory traffic, which bounds draft speed).
         dev = self.config.draft_device or self.config.device
-        draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev), device=dev)
+        import torch
+
+        if torch.device(dev).type == "cpu" and Int8DraftBackend.available():
+            draft = TransformerModel(dpack, Int8DraftBackend(dpack, self.ring), device=dev)
+            draft.lm_head_fn = int8_lm_head(draft.lm_head)
+        else:
+            draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev), device=dev)
         log.info("model %s: speculative decoding with draft %s (%d tokens per step)", self.name,
                  getattr(dpack, "name", path), self.config.spec_tokens)
         return draft

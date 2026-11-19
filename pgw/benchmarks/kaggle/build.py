@@ -33,8 +33,11 @@ JOBS: dict[str, dict] = {
     # speculative decoding: 7B target (masked, service on the T4) with a 0.5B draft on the gateway CPU;
     # the same requests with and without the draft, outputs compared with the plaintext reference
     "pgw-spec-7b": {"steps": [
-        {"kind": "pytest", "name": "pytest_spec", "args": ["tests/engine/test_speculative.py", "-q", "-rs",
-                                                           "--timeout", "900"], "timeout": 1200},
+        {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
+         "timeout": 1800},
+        {"kind": "pytest", "name": "pytest_spec_ringmm", "args": ["tests/engine/test_speculative.py",
+                                                                  "tests/core/test_ringmm.py", "tests/wire/test_stream.py",
+                                                                  "-q", "-rs", "--timeout", "900"], "timeout": 1500},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
             "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",

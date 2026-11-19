@@ -348,6 +348,8 @@ class ComputeClient:
         on_attempt: Optional hook ``fn(path, status_or_None, seconds, error_code_or_None)`` called
             after every HTTP attempt (metrics).
         sleep: Injectable async sleep (tests).
+        stream_with_transport: Also use the WebSocket compute channel when ``transport`` is set (the
+            transport only wraps the real network to ``base_url``).
     """
 
     def __init__(
@@ -357,8 +359,12 @@ class ComputeClient:
         transport: httpx.AsyncBaseTransport | None = None,
         on_attempt: Callable[[str, int | None, float, str | None], None] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        stream_with_transport: bool = False,
     ):
         self.config = config
+        # A custom transport (tests, in-process) usually cannot carry the WebSocket channel; callers
+        # whose transport only wraps the real network (e.g. the gateway's egress guard) opt in.
+        self._stream_with_transport = stream_with_transport
         self.stats = ClientStats()
         self._transport = transport
         self._on_attempt = on_attempt
@@ -444,7 +450,7 @@ class ComputeClient:
     async def _channel(self) -> _StreamChannel | None:
         """The open compute stream of the running loop, opening one if needed; ``None`` = use HTTP."""
         cfg = self.config
-        if not cfg.stream or self._transport is not None or self._closed:
+        if not cfg.stream or self._closed or (self._transport is not None and not self._stream_with_transport):
             return None
         loop = asyncio.get_running_loop()
         ch = self._channels.get(loop)

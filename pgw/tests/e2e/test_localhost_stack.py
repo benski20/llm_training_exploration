@@ -119,6 +119,8 @@ def test_every_response_freivalds_checked(e2e_stack: E2EStack) -> None:
     assert be["freivalds_checked"] >= be["round_trips"]
     assert be["freivalds_skipped"] == 0 and be["integrity_failures"] == 0
     assert model["noise_monitor"]["state"] == "active" and not model["noise_monitor"]["alarm"]
+    # compute calls go over the persistent WebSocket channel, not one HTTP request each
+    assert model["client"]["stream_requests"] > 0 and model["client"]["stream_open_failures"] == 0
 
 
 # ---- 3. privacy: what the service saw -------------------------------------------------------------------

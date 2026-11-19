@@ -20,7 +20,7 @@ import secrets
 import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,7 +40,7 @@ from pgw.core.errors import (
     ShapeError,
 )
 from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
-from pgw.core.masking import mask_activations, unmask_outputs_u64
+from pgw.core.masking import mask_activations, mask_pack_u32, unmask_outputs_u32, unmask_outputs_u64
 from pgw.core.packing import pack_ring, unpack_ring_u64
 from pgw.core.ring import RingParams, balanced_digits, dequantize_outputs, quantize_activations
 from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_fast, int8_digit_gemm
@@ -381,6 +381,81 @@ class FloatBackend(LinearBackend):
         return y.to(x.device)
 
 
+def _int8_dynamic_linear(w8: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None) -> Any:
+    """Prepacked fbgemm/onednn int8 weight for ``torch.ops.quantized.linear_dynamic`` (or ``None``)."""
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            m = int(w8.shape[0])
+            qw = torch._make_per_channel_quantized_tensor(
+                w8.contiguous(), scale.to(torch.float64), torch.zeros(m, dtype=torch.long), 0
+            )
+            return torch.ops.quantized.linear_prepack(qw, None if bias is None else bias.to(torch.float32))
+    except Exception:  # quantized engines are optional (and deprecated in future torch releases)
+        return None
+
+
+class Int8DraftBackend(LinearBackend):
+    """Fast approximate CPU backend for a speculative-decoding *draft* model.
+
+    Uses the pack's own int8 weights and scales with dynamically quantized activations
+    (``torch.ops.quantized.linear_dynamic``): about a quarter of the float32 weight traffic. Its
+    numerics differ slightly from :class:`FloatBackend`, which is fine for a draft: drafts are only
+    proposals, and every emitted token is chosen by the masked target. Falls back to float per linear
+    when the quantized engine is unavailable.
+    """
+
+    def __init__(self, pack: object, ring: RingParams):
+        self.pack = pack
+        self.ring = ring
+        self.device = torch.device("cpu")
+        self.stats = BackendStats()
+
+        def conv(lw: Any, dev: torch.device) -> Any:
+            packed = _int8_dynamic_linear(lw.w8, lw.scale, lw.bias)
+            if packed is not None:
+                return ("q", packed, int(lw.w8.shape[1]))
+            w = lw.w8.to(torch.float32) * lw.scale.to(torch.float32)[:, None]
+            b = None if lw.bias is None else lw.bias.to(torch.float32)
+            return ("f", _FloatWeight(w.t().contiguous(), b, int(lw.w8.shape[1])), int(lw.w8.shape[1]))
+
+        self._weights = _WeightCache(pack, self.device, conv)
+
+    @staticmethod
+    def available() -> bool:
+        w = torch.ones((8, 8), dtype=torch.int8)
+        return _int8_dynamic_linear(w, torch.ones(8), None) is not None
+
+    def forward(self, call: LinearCall) -> torch.Tensor:
+        kind, w, n = self._weights.get(call.id)
+        x = call.x
+        if x.ndim != 2 or x.shape[1] != n:
+            raise ShapeError(f"{call.id}: x must be (T, {n}), got {tuple(x.shape)}")
+        xf = x.to("cpu", torch.float32).contiguous()
+        if kind == "q":
+            y: torch.Tensor = torch.ops.quantized.linear_dynamic(xf, w)
+        else:
+            y = xf @ w.wt
+            if w.bias is not None:
+                y = y + w.bias
+        self.stats.add(calls=1, rows=int(x.shape[0]))
+        return y.to(x.device)
+
+
+def int8_lm_head(weight: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:
+    """An int8 ``h -> h @ weight^T`` for a draft model's output layer (``None`` if unavailable)."""
+    w = weight.to(torch.float32)
+    sc = w.abs().amax(dim=1) / 127.0
+    sc = torch.where(sc == 0, torch.ones_like(sc), sc)
+    w8 = torch.clamp(torch.round(w / sc[:, None]), -127, 127).to(torch.int8)
+    packed = _int8_dynamic_linear(w8, sc, None)
+    if packed is None:
+        return None
+    return lambda h: torch.ops.quantized.linear_dynamic(h.to(torch.float32).contiguous(), packed)
+
+
 # ---- masked backend ----------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class _MaskedMeta:
@@ -405,6 +480,7 @@ class _Chunk:
     wr: torch.Tensor
     u: np.ndarray | None  # uint64 (c, m) read-only view, or None when this chunk is not checked
     uw: np.ndarray | None  # uint64 (c, n)
+    payload: bytes | None = None  # packed x_hat (K=32 fast path)
 
 
 @dataclass
@@ -488,6 +564,7 @@ class MaskedBackend(LinearBackend):
         self.mask_source = mask_source
         self.client = client
         self.ring = ring
+        self._u32 = ring.k == 32  # uint32 masking/unmasking fast path (bit-identical; K=32 only)
         self.fingerprint = fingerprint
         self.freivalds_rate = freivalds_rate
         self.noise_monitor = noise_monitor
@@ -654,13 +731,18 @@ class MaskedBackend(LinearBackend):
                             raise ShapeError(
                                 f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
                             )
-                        x_hat = mask_activations(xq[row : row + rows], r.to(torch.int64), self.ring)
+                        if self._u32:
+                            x32, payload = mask_pack_u32(xq[row : row + rows].numpy(), r.numpy(), self.ring)
+                            x_hat = torch.from_numpy(x32.astype(np.int64))
+                        else:
+                            payload = None
+                            x_hat = mask_activations(xq[row : row + rows], r.to(torch.int64), self.ring)
                     except BaseException:
                         wr.zero_()
                         raise
                     finally:
                         r.zero_()  # one-time pad: never keep it around
-                    chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw)
+                    chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload)
                     chunks.append(chunk)
                     if self.noise_monitor is not None:
                         self.noise_monitor.guard(x_hat, xq[row : row + rows])  # type: ignore[attr-defined]
@@ -674,7 +756,8 @@ class MaskedBackend(LinearBackend):
                 xq.zero_()
         request = None
         if chunks:
-            items = tuple(ComputeItem(ch.lid.key, ch.rows, pack_ring(ch.x_hat, self.ring)) for ch in chunks)
+            items = tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload if ch.payload is not None
+                                      else pack_ring(ch.x_hat, self.ring)) for ch in chunks)
             request = ComputeRequest(
                 request_id=uuid.uuid4().hex,
                 fingerprint=self.fingerprint,
@@ -709,8 +792,14 @@ class MaskedBackend(LinearBackend):
                         details={"expected": ch.lid.key, "got": str(res.linear)},
                     )
                 bytes_down += len(res.y_hat)
-                y_hat = unpack_ring_u64(res.y_hat, (ch.rows, meta.out_features), self.ring)
+                if self._u32:
+                    y_hat = None
+                else:
+                    y_hat = unpack_ring_u64(res.y_hat, (ch.rows, meta.out_features), self.ring)
                 if ch.u is not None and ch.uw is not None:
+                    if y_hat is None:
+                        y_hat = np.frombuffer(res.y_hat, dtype="<u4").reshape(ch.rows, meta.out_features).astype(
+                            np.uint64)
                     if not ch.u.any():
                         # The reservation was closed (and its cached vectors wiped) while this call
                         # was in flight: an all-zero u would make the check vacuous.
@@ -724,7 +813,11 @@ class MaskedBackend(LinearBackend):
                     checked += 1
                 else:
                     skipped += 1
-                yq = torch.from_numpy(unmask_outputs_u64(y_hat, ch.wr.numpy(), self.ring, meta.in_features))
+                if self._u32:
+                    yq = torch.from_numpy(unmask_outputs_u32(res.y_hat, ch.wr.numpy(), self.ring, meta.in_features))
+                else:
+                    assert y_hat is not None
+                    yq = torch.from_numpy(unmask_outputs_u64(y_hat, ch.wr.numpy(), self.ring, meta.in_features))
                 ch.wr.zero_()
                 sx = prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows]
                 outs[ch.call_index].append(dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32))

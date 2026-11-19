@@ -49,8 +49,12 @@ class SequenceInput:
         cache: That sequence's KV cache.
         session: Backend session handle (mask reservation) or ``None``.
         all_logits: Return logits for every new position instead of only the last one.
-        last_logits: Return logits ``(N, vocab)`` for the last ``N`` new positions (speculative
+        last_logits: Return :class:`RowLogits` for the last ``N`` new positions (speculative
             verification); takes precedence over ``all_logits`` when > 0.
+        serial_tail: The last ``serial_tail`` positions are computed exactly as if each had been fed
+            alone in its own step (attention one row at a time; each row's logits a 1-row product),
+            so speculative verification gives bit-identical results to plain decoding. The rows
+            before them are processed as one block, as plain decoding would.
     """
 
     input_ids: torch.Tensor | Sequence[int]
@@ -58,6 +62,31 @@ class SequenceInput:
     session: object | None = None
     all_logits: bool = False
     last_logits: int = 0
+    serial_tail: int = 0
+
+
+class RowLogits:
+    """Logits of a verify pass, computed per row on first access (each a 1-row ``lm_head`` product,
+    the same operation as plain decoding). Rows after a rejected draft are never computed, so the
+    ``lm_head`` costs one product per emitted token, as without speculation."""
+
+    def __init__(self, h: torch.Tensor, norm: torch.Tensor, eps: float, lm_head: torch.Tensor):
+        self._h = h
+        self._norm = norm
+        self._eps = eps
+        self._lm_head = lm_head
+        self._rows: dict[int, torch.Tensor] = {}
+
+    def __len__(self) -> int:
+        return int(self._h.shape[0])
+
+    def __getitem__(self, i: int) -> torch.Tensor:
+        i = int(i) if i >= 0 else len(self) + int(i)
+        hit = self._rows.get(i)
+        if hit is None:
+            hn = rms_norm(self._h[i : i + 1], self._norm, self._eps).to(torch.float32)
+            hit = self._rows[i] = (hn @ self._lm_head.t())[0]
+        return hit
 
 
 class TransformerModel:
@@ -108,6 +137,8 @@ class TransformerModel:
             self.lm_head = self.embed_tokens if dtype == torch.float32 else load("lm_head", torch.float32, self.device)
         else:
             self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
+        #: Optional replacement for ``h @ lm_head^T`` (draft models only: e.g. an int8 product).
+        self.lm_head_fn: Callable[[torch.Tensor], torch.Tensor] | None = None
         layers = range(a.num_layers)
         self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in layers]
         self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
@@ -208,7 +239,15 @@ class TransformerModel:
                 q = apply_rope(q, cos, sin)
                 k = apply_rope(k, cos, sin)
                 k_all, v_all = caches[si].append(layer, k, v)
-                attn_out.append(self._attention(q, k_all, v_all, starts[si]))
+                tail = min(int(seqs[si].serial_tail), rows)
+                if tail <= 0:
+                    attn_out.append(self._attention(q, k_all, v_all, starts[si]))
+                else:  # the head as one block, then each tail row alone (as plain decoding would)
+                    st0, head = starts[si], rows - tail
+                    parts = [self._attention(q[:head], k_all[: st0 + head], v_all[: st0 + head], st0)] if head else []
+                    for j in range(head, rows):
+                        parts.append(self._attention(q[j : j + 1], k_all[: st0 + j + 1], v_all[: st0 + j + 1], st0 + j))
+                    attn_out.append(torch.cat(parts, dim=0))
             lid = LinearId(layer, LinearKind.O)
             o = yield [LinearCall(lid, x, sess) for x, sess in zip(attn_out, sessions, strict=True)]
             hs = [h + y.to(self.dtype) for h, y in zip(hs, o, strict=True)]
@@ -222,12 +261,15 @@ class TransformerModel:
             hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
         for t, c in zip(ids, caches, strict=True):
             c.advance(t.numel())
-        out = []
+        out: list[Any] = []
         for s, h in zip(seqs, hs, strict=True):
-            many = s.all_logits or s.last_logits > 0
-            hsel = h[-s.last_logits:] if s.last_logits > 0 else (h if s.all_logits else h[-1:])
+            if s.last_logits > 0:
+                out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head))
+                continue
+            many = s.all_logits
+            hsel = h if s.all_logits else h[-1:]
             hn = rms_norm(hsel, self.final_norm, self.eps).to(torch.float32)
-            logits = hn @ self.lm_head.t()
+            logits = hn @ self.lm_head.t() if self.lm_head_fn is None else self.lm_head_fn(hn)
             out.append(logits if many else logits[0])
         return out
 

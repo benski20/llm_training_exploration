@@ -430,7 +430,8 @@ class Generator:
                 take(st, k, lg)
 
     def _inputs(self, batch: Sequence[_SeqState]) -> list[SequenceInput]:
-        return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1)
+        return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1,
+                              serial_tail=len(st.drafts))
                 if st.drafts else SequenceInput(st.pending, st.cache, st.session) for st in batch]
 
     def _consume_step(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:

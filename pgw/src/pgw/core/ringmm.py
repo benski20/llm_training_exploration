@@ -254,6 +254,51 @@ def _shift_mod(y: torch.Tensor, shift: int, k: int) -> torch.Tensor:
     return (y & ((1 << (k - shift)) - 1)) << shift
 
 
+def _offset_byte_mm(x: torch.Tensor, k: int, w: torch.Tensor, rowsum: torch.Tensor, m: int) -> torch.Tensor:
+    """Exact ``x @ w^T mod 2^K`` with one int8 GEMM over offset byte planes (CUDA path).
+
+    ``x`` holds ring elements in ``[0, 2^K)`` as int64; its little-endian bytes ``u_i`` are the
+    unsigned base-256 digits. With ``d_i = u_i - 128`` (int8)::
+
+        W x = sum_i 2^(8i) W d_i + C * rowsum(W)   (mod 2^K),   C = 128 * sum_i 2^(8i)
+
+    Every ``|W d_i| <= 128 * 128 * n < 2^31`` for ``n < 131072`` (int32-exact; larger ``n`` is
+    chunked). Each term is reduced mod ``2^(K - 8i)`` before the shift, so the int64 sum cannot
+    overflow. About a dozen device ops per call (the balanced-digit path took ~45).
+
+    Args:
+        x: ``(b, n)`` int64 in ``[0, 2^K)``, on ``w``'s device.
+        k: Ring bits (multiple of 8, ``<= 56``).
+        w: ``(mp, np_)`` int8 weight, zero padded (``mp, np_`` multiples of 32).
+        rowsum: ``(mp,)`` int64 row sums of ``w``.
+        m: Output features (the unpadded ``mp``).
+    """
+    if k % 8 or not 8 <= k <= 56:
+        raise ShapeError(f"offset-byte matmul needs K a multiple of 8 in [8, 56], got {k}")
+    nb = k // 8
+    b, n = x.shape
+    mp, np_ = w.shape
+    rows = nb * b
+    p = max(_INT_MM_MIN_ROWS, -(-rows // 8) * 8)
+    planes = (x.contiguous().view(torch.uint8).view(b, n, 8)[:, :, :nb] ^ 0x80).view(torch.int8)
+    d8 = torch.zeros((p, np_), dtype=torch.int8, device=x.device)
+    d8[:rows, :n].view(nb, b, n).copy_(planes.permute(2, 0, 1))
+    y32: torch.Tensor | None = None
+    for c0 in range(0, np_, INT_MM_MAX_INNER):
+        c1 = min(np_, c0 + INT_MM_MAX_INNER)
+        part = torch._int_mm(d8[:, c0:c1].contiguous(), w[:, c0:c1].t())[:rows].to(torch.int64)
+        y32 = part if y32 is None else y32 + part
+    assert y32 is not None
+    y = y32.view(nb, b, mp)
+    dev = x.device
+    sh = torch.arange(0, 8 * nb, 8, dtype=torch.int64, device=dev).view(nb, 1, 1)
+    pm = torch.tensor([(1 << (k - 8 * i)) - 1 for i in range(nb)], dtype=torch.int64, device=dev).view(nb, 1, 1)
+    acc = ((y & pm) << sh).sum(0)
+    c = (128 * sum(1 << (8 * i) for i in range(nb))) % (1 << k)
+    acc = (acc + c * rowsum) & ((1 << k) - 1)
+    return acc[:, :m]
+
+
 @dataclass
 class PreparedWeight:
     """A public int8 weight prepared for repeated exact ring matmuls on one device/backend.
@@ -273,6 +318,7 @@ class PreparedWeight:
     _resolved: str = field(init=False, default="")
     _w_dev: torch.Tensor | None = field(init=False, default=None, repr=False)
     _w_float: torch.Tensor | None = field(init=False, default=None, repr=False)
+    _w_rowsum: torch.Tensor | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.w8.dtype != torch.int8 or self.w8.ndim != 2:
@@ -340,6 +386,8 @@ class PreparedWeight:
     # ---- backends --------------------------------------------------------------------------
     def _mm_cuda(self, x: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
         assert self._w_dev is not None
+        if k % 8 == 0 and k <= 56:
+            return _offset_byte_mm(x, k, self._w_dev, self._rowsum(), self.out_features)
         b, n = x.shape
         m = self.out_features
         mp, np_ = self._w_dev.shape
@@ -355,6 +403,12 @@ class PreparedWeight:
             c1 = min(np_, c0 + INT_MM_MAX_INNER)
             y += torch._int_mm(d8[:, c0:c1].contiguous(), self._w_dev[:, c0:c1].t()).to(torch.int64)
         return _combine_digit_rows(y, b, limbs, 8, k)[:, :m]
+
+    def _rowsum(self) -> torch.Tensor:
+        if self._w_rowsum is None:
+            assert self._w_dev is not None
+            self._w_rowsum = self._w_dev.to(torch.int64).sum(1)
+        return self._w_rowsum
 
     def _mm_f64(self, x: torch.Tensor, k: int) -> torch.Tensor:
         wf = self._w_float if self._w_float is not None else self._float_weight()

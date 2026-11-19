@@ -1,8 +1,9 @@
 """Speculative decoding: a local draft model proposes tokens, the target checks them in one pass.
 
-Acceptance samples every position with the request's own sampler, so the output must be the same as
-without speculation: same tokens, text, finish reason and logprobs, for greedy and seeded sampling,
-with stop strings and penalties, through the masked path too.
+Acceptance samples every position with the request's own sampler, and verify rows are computed as plain
+decoding would compute them (serial attention, 1-row logits), so the output is bit-identical to decoding
+without speculation: same tokens, text, finish reason and logprobs, for greedy and seeded sampling, with
+stop strings and penalties, through the masked path too.
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ def test_speculative_output_identical(qwen_pack: InMemoryPack, other_draft_pack:
     assert spec.completion_tokens == base.completion_tokens
     if params.logprobs is not None:
         assert spec.logprobs is not None and base.logprobs is not None
-        assert spec.logprobs == pytest.approx(base.logprobs, abs=1e-4)
+        assert spec.logprobs == base.logprobs  # bit-identical, not just close
     passes = spec.timings_ms.get("spec_passes", 0.0)
     if which == "same" and params.temperature == 0.0 and params.repetition_penalty == 1.0 and not params.stop:
         # a perfect draft: about spec_tokens + 1 tokens per target pass
@@ -161,3 +162,22 @@ def test_draft_with_another_vocab_size(qwen_pack: InMemoryPack, other_draft_pack
     spec = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=4).generate(PROMPT, params)  # type: ignore[arg-type]
     assert spec.token_ids == base.token_ids
     assert draft.calls > 0 and draft.max_fed < small
+
+
+def test_int8_draft_backend_keeps_output_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                                   tiny_tokenizer: ChatTokenizer) -> None:
+    """The gateway's CPU draft (int8 weights, dynamic activations, int8 lm_head) is approximate by design;
+    the output is still bit-identical because the masked target decides every token."""
+    from pgw.engine.backends import Int8DraftBackend, int8_lm_head
+
+    if not Int8DraftBackend.available():
+        pytest.skip("no quantized CPU engine in this torch build")
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=20, temperature=0.8, seed=3, ignore_eos=True, logprobs=1)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    for pack in (qwen_pack, other_draft_pack):
+        draft = TransformerModel(pack, Int8DraftBackend(pack, DEFAULT_RING))
+        draft.lm_head_fn = int8_lm_head(draft.lm_head)
+        assert draft.lm_head_fn is not None
+        spec = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=4).generate(PROMPT, params)
+        assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
