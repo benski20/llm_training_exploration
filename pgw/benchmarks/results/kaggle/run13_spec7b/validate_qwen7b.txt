@@ -1,60 +1,130 @@
-[gpu_validate 01:03:14] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (292.0s)
-[gpu_validate 01:03:18] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (3.5s)
-[gpu_validate 01:03:45] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (20.5s)
+[gpu_validate 01:13:41] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (274.6s)
+[gpu_validate 01:13:43] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (2.3s)
+[gpu_validate 01:14:11] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (19.2s)
+[gpu_validate 01:15:46] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or"
+[gpu_validate 01:15:49] pgw maskstore init --root ... ok (2.7s)
+[gpu_validate 01:19:08] pgw factory generate --pack ... ok (198.9s)
+[gpu_validate 01:19:22] pgw bench factory --pack ... ok (14.8s)
+[gpu_validate 01:19:25] pgw service token create ... ok (2.4s)
+[gpu_validate 01:19:27] pgw gateway keys create ... ok (2.8s)
+[gpu_validate 01:22:02] chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 01:23:07] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 8.958, 'prefill_s_per_prompt_token': 0.224, 'decode_s_per_token': 0.8804, 'decode_tokens_per_s': 1.136, 'wall_s': 64.62, 'gateway_cpu_s': 48.92, 'backend_delta': {'calls': 7168, 'rows': 11536, 'round_trips': 7168, 'bytes_up': 342573056, 'bytes_down': 572923904, 'freivalds_checked': 7168, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 33.68847427400647, 'local_seconds': 19.286788886986642}, 'gateway_local_engine_s_per_token': 0.1854, 'remote_s_per_token': 0.3239}
+[gpu_validate 01:25:54] concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 166.82, 'generated_tokens_per_s': 1.535, 'all_tokens_per_s': 2.494, 'gateway_cpu_s_per_token': 0.3575}
 
 ---stderr---
 
 Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
 
-Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  7.67it/s]
-Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 17.83it/s]
-Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 17.83it/s]
-Fetching 11 files:  73%|███████▎  | 8/11 [01:01<00:29,  9.70s/it]
-Fetching 11 files:  82%|████████▏ | 9/11 [01:13<00:20, 10.12s/it]
-Fetching 11 files: 100%|██████████| 11/11 [01:13<00:00,  6.65s/it]
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:02,  4.76it/s]
+Fetching 11 files:  45%|████▌     | 5/11 [00:00<00:00, 11.62it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 11.62it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:15<00:35, 11.91s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:15<00:00,  6.83s/it]
 
 Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]
-Fetching 7 files:  14%|█▍        | 1/7 [00:00<00:00,  8.43it/s]
-Fetching 7 files:  86%|████████▌ | 6/7 [00:00<00:00, 29.47it/s]
-Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.01it/s]
-Traceback (most recent call last):
-  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 537, in <module>
-    sys.exit(main())
-             ~~~~^^
-  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 523, in main
-    reference_main(args)
-    ~~~~~~~~~~~~~~^^^^^^
-  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 110, in reference_main
-    events = list(gen.stream(ids, params))
-  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 467, in stream
-    yield from self._step_sync([st])[0]
-               ~~~~~~~~~~~~~~~^^^^^^
-  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 449, in _step_sync
-    logits = self.model.forward_batch(self._inputs(states))
-  File "/tmp/pgwsrc/pgw/src/pgw/engine/model.py", line 249, in forward_batch
-    res = self._check_results(calls, self.backend.forward_many(calls))
-                                     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
-  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 320, in forward_many
-    return [self.forward(c) for c in calls]
-            ~~~~~~~~~~~~^^^
-  File "/tmp/pgwsrc/pgw/src/pgw/engine/backends.py", line 313, in forward
-    y = dequantize_outputs(yq, sx, w.scale, w.bias, torch.float32)
-  File "/tmp/pgwsrc/pgw/src/pgw/core/ring.py", line 275, in dequantize_outputs
-    y = yq.to(torch.float64) * sx.to(torch.float64)[:, None] * sw.to(torch.float64)[None, :]
-        ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+Fetching 7 files:  14%|█▍        | 1/7 [00:00<00:01,  4.77it/s]
+Fetching 7 files:  86%|████████▌ | 6/7 [00:00<00:00, 21.94it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:07<00:00,  1.09s/it]
 Traceback (most recent call last):
   File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 526, in main
     run(args)
     ~~~^^^^^^
-  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 233, in run
-    subprocess.run([sys.executable, __file__, "--phase", "reference", "--pack", str(pack), "--fingerprint", fp,  # noqa: S603
-    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    "--ring", args.ring, "--ref-device", args.ref_device, "--max-tokens", str(args.max_tokens),
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    "--prompt", args.prompt, "--ref-out", str(ref_out)], env=env, check=True, timeout=7200)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.13/subprocess.py", line 578, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K32A12C27', '--ref-device', 'cuda', '--max-tokens', '64', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 323, in run
+    ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 146, in wait_ready
+    raise RuntimeError(f"{name} exited {p.returncode}:\n{tail}")
+RuntimeError: gatewayspec_ exited 3:
+eback (most recent call last):
+  File "/usr/local/lib/python3.13/dist-packages/starlette/routing.py", line 656, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 432, in lifespan
+    await runtime.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1174, in start
+    raise errors[0]
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1167, in start
+    await rt.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 516, in start
+    await self._finish_masked(pack, tokenizer, client, models)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 630, in _finish_masked
+    self._finish_engine(pack, tokenizer)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 651, in _finish_engine
+    self.generator = Generator(
+                     ~~~~~~~~~^
+        self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        draft=self.draft_model, spec_tokens=self.config.spec_tokens,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 159, in __init__
+    raise ConfigError(f"draft model vocabulary ({dv}) differs from the target's ({tv})")
+pgw.core.errors.ConfigError: draft model vocabulary (151936) differs from the target's (152064)
+
+2026-11-19 01:26:23,153 ERROR uvicorn.error: Application startup failed. Exiting.
+2026-11-19 01:26:23,390 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-2' coro=<Server.serve() done, defined at /usr/local/lib/python3.13/dist-packages/uvicorn/server.py:88> exception=SystemExit(3)>
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/__main__.py", line 6, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/main.py", line 597, in main
+    cli(prog_name="pgw")
+    ~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1631, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1552, in main
+    rv = self.invoke(ctx)
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1415, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 910, in invoke
+    return callback(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 30, in wrapper
+    return fn(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 86, in serve
+    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 130, in run_gateway_servers
+    asyncio.run(_main())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 196, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 119, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 713, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 684, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 2061, in _run_once
+    handle._run()
+    ~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/events.py", line 89, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 90, in serve
+    await self._serve(sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 105, in _serve
+    await self.startup(sockets=sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 118, in startup
+    sys.exit(STARTUP_FAILURE)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^
+SystemExit: 3
+

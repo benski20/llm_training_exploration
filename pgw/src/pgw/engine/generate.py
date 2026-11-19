@@ -152,11 +152,14 @@ class Generator:
             raise ConfigError("max_batch must be >= 1")
         if spec_tokens < 0 or spec_tokens > 16:
             raise ConfigError("spec_tokens must be in [0, 16]")
-        if draft is not None:
-            tv = getattr(model.arch, "vocab_size", None)
-            dv = getattr(draft.arch, "vocab_size", None)
-            if tv is not None and dv is not None and int(tv) != int(dv):
-                raise ConfigError(f"draft model vocabulary ({dv}) differs from the target's ({tv})")
+        # The draft must share the target's tokenizer; its embedding table may be padded to another
+        # size (Qwen2.5-0.5B: 151936 rows, 7B: 152064). Drafts are proposals only, so ids outside
+        # either table are never fed to the target (a proposal there ends the draft) and are
+        # clamped when fed to the draft (a worse proposal, never a different output).
+        tv = getattr(getattr(model, "arch", None), "vocab_size", None)
+        dv = getattr(getattr(draft, "arch", None), "vocab_size", None) if draft is not None else None
+        self._target_vocab = int(tv) if tv is not None else None
+        self._draft_vocab = int(dv) if dv is not None else None
         self.draft = draft if spec_tokens > 0 else None
         self.spec_tokens = spec_tokens if draft is not None else 0
         self.model = model
@@ -401,16 +404,30 @@ class Generator:
                 active.append((st, k))
         if not active:
             return
-        feeds = [SequenceInput(st.ctx[_dcache(st).length:] + st.pending, _dcache(st)) for st, _ in active]
-        for (st, _), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
-            st.drafts.append(int(torch.argmax(lg)))
+        dv, tv = self._draft_vocab, self._target_vocab
+
+        def din(ids: list[int]) -> list[int]:
+            return ids if dv is None else [t if t < dv else dv - 1 for t in ids]
+
+        stopped: set[int] = set()
+
+        def take(st: _SeqState, k: int, lg: torch.Tensor) -> None:
+            t = int(torch.argmax(lg))
+            if tv is not None and t >= tv:  # not a target token: end this sequence's draft here
+                stopped.add(id(st))
+            else:
+                st.drafts.append(t)
+
+        feeds = [SequenceInput(din(st.ctx[_dcache(st).length:] + st.pending), _dcache(st)) for st, _ in active]
+        for (st, k), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
+            take(st, k, lg)
         while True:
-            cur = [(st, k) for st, k in active if len(st.drafts) < k]
+            cur = [(st, k) for st, k in active if len(st.drafts) < k and id(st) not in stopped]
             if not cur:
                 break
-            outs = self.draft.forward_batch([SequenceInput([st.drafts[-1]], _dcache(st)) for st, _ in cur])
-            for (st, _), lg in zip(cur, outs, strict=True):
-                st.drafts.append(int(torch.argmax(lg)))
+            outs = self.draft.forward_batch([SequenceInput(din([st.drafts[-1]]), _dcache(st)) for st, _ in cur])
+            for (st, k), lg in zip(cur, outs, strict=True):
+                take(st, k, lg)
 
     def _inputs(self, batch: Sequence[_SeqState]) -> list[SequenceInput]:
         return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1)

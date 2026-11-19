@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import torch
 
 from pgw.core import DEFAULT_RING
 from pgw.engine import (
@@ -124,12 +125,39 @@ def test_speculative_async_batched_streams(qwen_pack: InMemoryPack, other_draft_
     assert asyncio.run(main()) == base
 
 
-def test_draft_vocab_must_match(qwen_pack: InMemoryPack, llama_pack: InMemoryPack,
-                                tiny_tokenizer: ChatTokenizer) -> None:
-    from pgw.core import ConfigError
+class _OddVocabDraft:
+    """Wraps a draft: reports a smaller table (ids fed to it must be clamped) and, every other call,
+    proposes an id the target does not have (that draft must end there, never reach the target)."""
 
-    t, d = _plain(qwen_pack), _plain(llama_pack)
-    if getattr(t.arch, "vocab_size", None) == getattr(d.arch, "vocab_size", None):
-        pytest.skip("tiny test models share a vocabulary size")
-    with pytest.raises(ConfigError):
-        Generator(t, tiny_tokenizer, draft=d)
+    def __init__(self, inner: TransformerModel, vocab: int, target_vocab: int):
+        self.inner = inner
+        self.arch = type("A", (), {"vocab_size": vocab})()
+        self.target_vocab = target_vocab
+        self.calls = 0
+        self.max_fed = -1
+
+    def new_cache(self, n: int) -> Any:
+        return self.inner.new_cache(n)
+
+    def forward_batch(self, inputs: list[Any]) -> list[torch.Tensor]:
+        self.calls += 1
+        self.max_fed = max(self.max_fed, *(max(i.input_ids) for i in inputs))
+        outs = self.inner.forward_batch(inputs)
+        if self.calls % 2 == 0:
+            outs = [torch.cat([o, torch.full((3,), 1e9)]) for o in outs]  # argmax = target_vocab + k
+        return outs
+
+
+def test_draft_with_another_vocab_size(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                       tiny_tokenizer: ChatTokenizer) -> None:
+    """Real draft/target pairs pad their embedding tables differently (Qwen2.5-0.5B vs 7B): allowed,
+    and the output stays identical."""
+    target = _plain(qwen_pack)
+    tv = int(target.arch.vocab_size)
+    params = SamplingParams(max_tokens=20, temperature=0.0, ignore_eos=True)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    small = tv - 40
+    draft = _OddVocabDraft(_plain(other_draft_pack), small, tv)
+    spec = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=4).generate(PROMPT, params)  # type: ignore[arg-type]
+    assert spec.token_ids == base.token_ids
+    assert draft.calls > 0 and draft.max_fed < small

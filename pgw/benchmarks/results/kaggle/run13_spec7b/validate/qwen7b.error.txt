@@ -2,14 +2,102 @@ Traceback (most recent call last):
   File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 526, in main
     run(args)
     ~~~^^^^^^
-  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 233, in run
-    subprocess.run([sys.executable, __file__, "--phase", "reference", "--pack", str(pack), "--fingerprint", fp,  # noqa: S603
-    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    "--ring", args.ring, "--ref-device", args.ref_device, "--max-tokens", str(args.max_tokens),
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                    "--prompt", args.prompt, "--ref-out", str(ref_out)], env=env, check=True, timeout=7200)
-                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.13/subprocess.py", line 578, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K32A12C27', '--ref-device', 'cuda', '--max-tokens', '64', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 323, in run
+    ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
+  File "/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py", line 146, in wait_ready
+    raise RuntimeError(f"{name} exited {p.returncode}:\n{tail}")
+RuntimeError: gatewayspec_ exited 3:
+eback (most recent call last):
+  File "/usr/local/lib/python3.13/dist-packages/starlette/routing.py", line 656, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "/usr/lib/python3.13/contextlib.py", line 214, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/app.py", line 432, in lifespan
+    await runtime.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1174, in start
+    raise errors[0]
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 1167, in start
+    await rt.start()
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 516, in start
+    await self._finish_masked(pack, tokenizer, client, models)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 630, in _finish_masked
+    self._finish_engine(pack, tokenizer)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/runtime.py", line 651, in _finish_engine
+    self.generator = Generator(
+                     ~~~~~~~~~^
+        self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        draft=self.draft_model, spec_tokens=self.config.spec_tokens,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/tmp/pgwsrc/pgw/src/pgw/engine/generate.py", line 159, in __init__
+    raise ConfigError(f"draft model vocabulary ({dv}) differs from the target's ({tv})")
+pgw.core.errors.ConfigError: draft model vocabulary (151936) differs from the target's (152064)
+
+2026-11-19 01:26:23,153 ERROR uvicorn.error: Application startup failed. Exiting.
+2026-11-19 01:26:23,390 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-2' coro=<Server.serve() done, defined at /usr/local/lib/python3.13/dist-packages/uvicorn/server.py:88> exception=SystemExit(3)>
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/__main__.py", line 6, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/cli/main.py", line 597, in main
+    cli(prog_name="pgw")
+    ~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1631, in __call__
+    return self.main(*args, **kwargs)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1552, in main
+    rv = self.invoke(ctx)
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 2032, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 1415, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/click/core.py", line 910, in invoke
+    return callback(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 30, in wrapper
+    return fn(*args, **kwargs)
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 86, in serve
+    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/gateway/cli.py", line 130, in run_gateway_servers
+    asyncio.run(_main())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 196, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/runners.py", line 119, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 713, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 684, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/base_events.py", line 2061, in _run_once
+    handle._run()
+    ~~~~~~~~~~~^^
+  File "/usr/lib/python3.13/asyncio/events.py", line 89, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 90, in serve
+    await self._serve(sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 105, in _serve
+    await self.startup(sockets=sockets)
+  File "/usr/local/lib/python3.13/dist-packages/uvicorn/server.py", line 118, in startup
+    sys.exit(STARTUP_FAILURE)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^
+SystemExit: 3
+

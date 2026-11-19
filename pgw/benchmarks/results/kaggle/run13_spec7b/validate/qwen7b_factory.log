@@ -1,0 +1,12 @@
+41a5b3a483ae K32A12C27 segment 1/1: 5de64536b12649a494e31fc9043e07cd (2800 slots, 14.9 slots/s)
+
+---stderr---
+2026-11-19 01:15:50,968 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 3ea56d79, generation 0)
+2026-11-19 01:15:59,750 INFO pgw.modelpack.loader: verified 4 file(s) of model pack qwen7b (linears)
+2026-11-19 01:15:59,750 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears verify=full
+2026-11-19 01:15:59,750 INFO pgw.factory.runtime: factory loaded pack qwen7b (41a5b3a483ae) from pack
+2026-11-19 01:16:00,016 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+2026-11-19 01:16:00,016 INFO pgw.factory.generator: mask generator for qwen7b (41a5b3a483ae) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+2026-11-19 01:19:07,363 INFO pgw.maskstore.store: committed segment 5de64536b12649a494e31fc9043e07cd: 41a5b3a483ae K32A12C27, 2800 slots, 15598.8 MB
+2026-11-19 01:19:07,364 WARNING pgw.maskstore.store: mask inventory low: 41a5b3a483ae K32A12C27 has 2800 slots (< 4096)
+2026-11-19 01:19:07,365 INFO pgw.factory.generator: segment 5de64536b12649a494e31fc9043e07cd: 41a5b3a483ae K32A12C27, 2800 slots in 187.35s (14.9 slots/s; gemm 96.96s, rng 62.51s, write 147.20s, throttle 0.00s)

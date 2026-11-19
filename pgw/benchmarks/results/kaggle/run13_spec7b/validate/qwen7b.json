@@ -8,8 +8,8 @@
  "torch": "2.11.0+cu130",
  "gpu": "Tesla T4",
  "cpu_count": 4,
- "download_s": 73.5,
- "pack_s": 292.0,
+ "download_s": 75.8,
+ "pack_s": 274.6,
  "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
  "pack_bytes": 8723796019,
  "pack_info": {
@@ -52,5 +52,187 @@
   "spec_tokens": 4,
   "device": "cpu",
   "pack_bytes": 915469648
+ },
+ "reference": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "prompt_tokens": 40,
+  "seconds": 82.26,
+  "device": "cuda",
+  "wall_s": 95.2
+ },
+ "factory_generate": {
+  "slots": 2800,
+  "wall_s": 198.94,
+  "tokens_per_hour_wall_incl_startup": 50667,
+  "store_bytes": 15598755673,
+  "store_MB_per_token": 5.571,
+  "output": "41a5b3a483ae K32A12C27 segment 1/1: 5de64536b12649a494e31fc9043e07cd (2800 slots, 14.9 slots/s)\n"
+ },
+ "factory_bench": {
+  "model": "qwen7b",
+  "mode": "pack",
+  "ring": "K32A12C27",
+  "device": "cuda",
+  "backend": "cuda_int8",
+  "slots_measured": 64,
+  "seconds": 4.9426928419999285,
+  "slots_per_second": 94.96005494174942,
+  "tokens_per_hour": 341856.1977902979,
+  "seconds_per_token": 0.010530743696530315,
+  "gemm_fraction": 0.11275151214423966,
+  "bytes_per_token": 5562368,
+  "price_per_hour": 0.2,
+  "usd_per_million_tokens": 0.5850413164739063,
+  "storage_tb_per_million_tokens": 5.562368,
+  "layers_measured": 1,
+  "layers_total": 1,
+  "gpu_name": "Tesla T4"
+ },
+ "service_startup_s": 13.6,
+ "gpu_mem_MB_service_loaded": [
+  12833,
+  3
+ ],
+ "gateway_startup_s": 28.5,
+ "chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 64,
+   "total_tokens": 104
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 112.4,
+  "backend_delta": {
+   "calls": 7168,
+   "rows": 11536,
+   "round_trips": 7168,
+   "bytes_up": 342573056,
+   "bytes_down": 572923904,
+   "freivalds_checked": 7168,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 33.60010885199404,
+   "local_seconds": 68.08798572498313
+  },
+  "gateway_cpu_s": 136.68,
+  "service_cpu_s": 24.2,
+  "slots_used": 104,
+  "wire_bytes_per_token": 8802855,
+  "wire_up_bytes_per_token": 3293972,
+  "wire_down_bytes_per_token": 5508884,
+  "round_trips_per_token_decode": null,
+  "gateway_cpu_s_per_token": 1.3142,
+  "status_after": {
+   "name": "qwen7b",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+   "fingerprint_short": "41a5b3a483ae",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 4,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:34607",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 2696,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 3623936,
+    "windows": 43,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 7168,
+    "attempts": 7169,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 343834024,
+    "bytes_received": 574051284,
+    "last_rtt_s": 0.003773810999973648
+   }
+  }
+ },
+ "stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 8.958,
+  "prefill_s_per_prompt_token": 0.224,
+  "decode_s_per_token": 0.8804,
+  "decode_tokens_per_s": 1.136,
+  "wall_s": 64.62,
+  "gateway_cpu_s": 48.92,
+  "backend_delta": {
+   "calls": 7168,
+   "rows": 11536,
+   "round_trips": 7168,
+   "bytes_up": 342573056,
+   "bytes_down": 572923904,
+   "freivalds_checked": 7168,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 33.68847427400647,
+   "local_seconds": 19.286788886986642
+  },
+  "gateway_local_engine_s_per_token": 0.1854,
+  "remote_s_per_token": 0.3239
+ },
+ "concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 166.82,
+  "generated_tokens_per_s": 1.535,
+  "all_tokens_per_s": 2.494,
+  "gateway_cpu_s_per_token": 0.3575,
+  "backend_delta": {
+   "calls": 28672,
+   "rows": 46144,
+   "round_trips": 7280,
+   "bytes_up": 1370292224,
+   "bytes_down": 2291695616,
+   "freivalds_checked": 28672,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 57.62223250799866,
+   "local_seconds": 72.67193353898688
+  }
  }
 }

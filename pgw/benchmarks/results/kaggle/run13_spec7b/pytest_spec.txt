@@ -1,6 +1,6 @@
 ...........s                                                             [100%]
 =========================== short test summary info ============================
 SKIPPED [1] tests/engine/test_speculative.py:133: tiny test models share a vocabulary size
-11 passed, 1 skipped in 40.61s
+11 passed, 1 skipped in 23.83s
 
 ---stderr---
