@@ -1,0 +1,87 @@
+{"load_s": 204.5, "gpu_mem_GB": 8.71, "linears": 196, "gpu": "Tesla T4"}
+{"config": "w8a12", "cap": null, "ppl": 8.4904, "top1_agreement_vs_first": null, "token_linear_calls": 3211264, "fraction_with_fewer_bits": 0.0, "min_activation_bits": 12, "seconds": 74.1, "max_wnorm_log2": 12.28}
+{"config": "c27", "cap": 27, "ppl": 8.4904, "top1_agreement_vs_first": 1.0, "token_linear_calls": 3211264, "fraction_with_fewer_bits": 0.0, "min_activation_bits": 12, "seconds": 76.6, "max_wnorm_log2": 12.28}
+{"config": "c25", "cap": 25, "ppl": 8.4875, "top1_agreement_vs_first": 0.9917, "token_linear_calls": 3211264, "fraction_with_fewer_bits": 0.17299, "min_activation_bits": 10, "seconds": 79.1, "max_wnorm_log2": 12.28}
+{"config": "c23", "cap": 23, "ppl": 8.5134, "top1_agreement_vs_first": 0.9693, "token_linear_calls": 3211264, "fraction_with_fewer_bits": 0.971822, "min_activation_bits": 8, "seconds": 83.0, "max_wnorm_log2": 12.28}
+{
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "eval_tokens": 16384,
+ "seq": 512,
+ "results": [
+  {
+   "config": "w8a12",
+   "cap": null,
+   "ppl": 8.4904,
+   "top1_agreement_vs_first": null,
+   "token_linear_calls": 3211264,
+   "fraction_with_fewer_bits": 0.0,
+   "min_activation_bits": 12,
+   "seconds": 74.1,
+   "max_wnorm_log2": 12.28
+  },
+  {
+   "config": "c27",
+   "cap": 27,
+   "ppl": 8.4904,
+   "top1_agreement_vs_first": 1.0,
+   "token_linear_calls": 3211264,
+   "fraction_with_fewer_bits": 0.0,
+   "min_activation_bits": 12,
+   "seconds": 76.6,
+   "max_wnorm_log2": 12.28
+  },
+  {
+   "config": "c25",
+   "cap": 25,
+   "ppl": 8.4875,
+   "top1_agreement_vs_first": 0.9917,
+   "token_linear_calls": 3211264,
+   "fraction_with_fewer_bits": 0.17299,
+   "min_activation_bits": 10,
+   "seconds": 79.1,
+   "max_wnorm_log2": 12.28
+  },
+  {
+   "config": "c23",
+   "cap": 23,
+   "ppl": 8.5134,
+   "top1_agreement_vs_first": 0.9693,
+   "token_linear_calls": 3211264,
+   "fraction_with_fewer_bits": 0.971822,
+   "min_activation_bits": 8,
+   "seconds": 83.0,
+   "max_wnorm_log2": 12.28
+  }
+ ]
+}
+
+---stderr---
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]
+Fetching 4 files:  25%|██▌       | 1/4 [01:04<03:14, 64.78s/it]
+Fetching 4 files:  75%|███████▌  | 3/4 [01:13<00:20, 20.09s/it]
+Fetching 4 files: 100%|██████████| 4/4 [01:13<00:00, 18.43s/it]
+
+Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]
+Loading weights:   0%|          | 1/339 [00:07<42:57,  7.63s/it]
+Loading weights:   1%|          | 2/339 [00:07<18:18,  3.26s/it]
+Loading weights:  37%|███▋      | 124/339 [00:07<00:06, 30.94it/s]
+Loading weights:  53%|█████▎    | 180/339 [00:10<00:06, 25.96it/s]
+Loading weights:  63%|██████▎   | 215/339 [00:16<00:08, 14.14it/s]
+Loading weights:  70%|███████   | 238/339 [00:20<00:09, 11.17it/s]
+Loading weights:  75%|███████▍  | 253/339 [00:21<00:07, 10.94it/s]
+Loading weights:  78%|███████▊  | 264/339 [00:23<00:07,  9.49it/s]
+Loading weights:  80%|████████  | 272/339 [00:25<00:08,  8.35it/s]
+Loading weights:  83%|████████▎ | 280/339 [00:26<00:07,  8.03it/s]
+Loading weights:  84%|████████▍ | 284/339 [00:27<00:07,  7.36it/s]
+Loading weights:  86%|████████▌ | 292/339 [00:28<00:06,  7.57it/s]
+Loading weights:  87%|████████▋ | 295/339 [00:28<00:05,  7.71it/s]
+Loading weights:  90%|████████▉ | 304/339 [00:30<00:05,  6.52it/s]
+Loading weights:  90%|█████████ | 306/339 [00:30<00:04,  6.78it/s]
+Loading weights:  93%|█████████▎| 316/339 [00:32<00:03,  7.59it/s]
+Loading weights:  94%|█████████▍| 318/339 [00:33<00:03,  6.05it/s]
+Loading weights:  97%|█████████▋| 328/339 [00:34<00:01,  7.06it/s]
+Loading weights:  97%|█████████▋| 330/339 [00:34<00:01,  7.13it/s]
+Loading weights: 100%|██████████| 339/339 [00:34<00:00,  9.87it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (299078 > 131072). Running this sequence through the model will result in indexing errors
