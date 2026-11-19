@@ -170,7 +170,7 @@ class ModelRegistry:
         *,
         devices: Sequence[str] | None = None,
         placement: str = "by_layer",
-        rings: Sequence[str] = ("K40A12", "K48A20", "K32A8"),
+        rings: Sequence[str] = ("K32A12C27", "K40A12", "K48A20", "K32A8"),
         verify: str = "full",
         cache_float: bool = True,
         warmup: bool = False,

@@ -176,7 +176,7 @@ def test_demo_flow_without_docker(compose: dict[str, Any], tiny_hf_dir: Path, tm
     fac = compose["services"]["factory"]["command"]
     fac = [_remap(str(a), root) for a in fac]
     fac[fac.index("${PGW_DEMO_SLOTS:-2048}")] = "64"
-    fac[fac.index("${PGW_DEMO_RING:-K40A12}")] = "K40A12"
+    fac[fac.index("${PGW_DEMO_RING:-K32A12C27}")] = "K32A12C27"
     r = subprocess.run([sys.executable, "-m", "pgw.cli.main", *fac[1:]], env=base_env,  # noqa: S603
                        capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr[-4000:]
@@ -184,7 +184,7 @@ def test_demo_flow_without_docker(compose: dict[str, Any], tiny_hf_dir: Path, tm
     def env_of(name: str, port_var: str, port: int) -> dict[str, str]:
         env = dict(base_env)
         for k, v in compose["services"][name]["environment"].items():
-            v = str(v).replace("${PGW_LOG_LEVEL:-INFO}", "INFO").replace("${PGW_DEMO_RING:-K40A12}", "K40A12")
+            v = str(v).replace("${PGW_LOG_LEVEL:-INFO}", "INFO").replace("${PGW_DEMO_RING:-K32A12C27}", "K32A12C27")
             env[k] = _remap(v, root)
         env[port_var] = str(port)
         return env

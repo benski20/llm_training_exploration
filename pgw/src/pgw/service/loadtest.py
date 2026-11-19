@@ -88,7 +88,7 @@ async def run_load(
     client: Any,
     *,
     fingerprint: str | None = None,
-    ring: str = "K40A12",
+    ring: str = "K32A12C27",
     sessions: int = 8,
     tokens: int = 4,
     rows: int = 1,
@@ -251,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--url", help="service base URL (https://host:8443)")
     ap.add_argument("--pack", help="model pack: start an in-process service (unless --url) and/or --verify")
     ap.add_argument("--fingerprint", help="model fingerprint (default: the only served model)")
-    ap.add_argument("--ring", default="K40A12")
+    ap.add_argument("--ring", default="K32A12C27")
     ap.add_argument("--sessions", type=int, default=8)
     ap.add_argument("--tokens", type=int, default=4)
     ap.add_argument("--rows", type=int, default=1, help="rows per call (1 = decode)")

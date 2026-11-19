@@ -67,7 +67,7 @@ gpu:
 # Non-secret service settings (PGW_SERVICE_*). See `pgw config show service`.
 config:
   logLevel: INFO
-  rings: [K40A12, K48A20, K32A8]
+  rings: [K32A12C27, K40A12, K48A20, K32A8]
   device: auto
   backend: auto
   verifyPacks: full

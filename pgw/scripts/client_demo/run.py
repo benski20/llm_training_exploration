@@ -69,7 +69,7 @@ def main() -> None:
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
     ap.add_argument("--name", default="qwen2.5-0.5b-instruct", help="model name shown in the API")
     ap.add_argument("--work", default=str(Path.home() / ".pgw-client-demo"))
-    ap.add_argument("--ring", default="K40A12")
+    ap.add_argument("--ring", default="K32A12C27")
     ap.add_argument("--slots", type=int, default=800, help="mask slots (one per prompt or generated token)")
     ap.add_argument("--port", type=int, default=8080, help="demo UI port")
     ap.add_argument("--host", default="127.0.0.1")

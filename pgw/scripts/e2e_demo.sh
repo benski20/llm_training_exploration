@@ -10,7 +10,7 @@
 #
 # Environment (all optional):
 #   PGW_DEMO_DIR      working directory (default: a new temp dir; kept afterwards for inspection)
-#   PGW_DEMO_RING     ring preset (default K40A12)
+#   PGW_DEMO_RING     ring preset (default K32A12C27)
 #   PGW_DEMO_SLOTS    mask slots to generate (default 256; one slot per prompt or generated token)
 #   PGW_DEMO_PROMPT   user message (default: a short question)
 #   PGW_DEMO_KEEP=1   keep service and gateway running after the demo (Ctrl-C stops them)
@@ -22,7 +22,7 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PGW_ROOT=$(cd "$HERE/.." && pwd)
 MODEL=${PGW_E2E_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}
-RING=${PGW_DEMO_RING:-K40A12}
+RING=${PGW_DEMO_RING:-K32A12C27}
 SLOTS=${PGW_DEMO_SLOTS:-256}
 PROMPT=${PGW_DEMO_PROMPT:-What is the capital of France? Answer in one word.}
 WORK=${PGW_DEMO_DIR:-$(mktemp -d -t pgw-demo.XXXXXX)}

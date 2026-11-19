@@ -6,7 +6,7 @@ partner; never at the compute-service operator.
 Typical use::
 
     pack = ModelPack.open("packs/qwen0.5b", components=("linears",))
-    gen = MaskGenerator(pack, "K40A12", device="auto")
+    gen = MaskGenerator(pack, "K32A12C27", device="auto")
     seg_id = gen.generate_into_store(store, slots=4096)
 
 or, as a service, ``pgw factory run`` (:class:`FactoryScheduler`).

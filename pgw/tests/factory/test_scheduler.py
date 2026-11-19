@@ -222,7 +222,7 @@ def test_settings_validation(tmp_path: Path) -> None:
         FactorySettings(pack_path=tmp_path, low_water_slots=10, target_slots=5)
     s = FactorySettings(pack_path=tmp_path, rings=("k48a20", "K48A20", "K40A12"), ring="k32a8")
     assert s.ring_names == ("K48A20", "K40A12") and s.ring == "K32A8"
-    assert FactorySettings(pack_path=tmp_path).ring_names == ("K40A12",)
+    assert FactorySettings(pack_path=tmp_path).ring_names == ("K32A12C27",)
 
 
 def test_settings_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

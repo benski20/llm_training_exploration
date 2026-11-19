@@ -98,7 +98,7 @@ models:
   - name: llama3-8b
     packDir: llama3-8b                  # directory under modelPacks.mountPath
     fingerprint: ""                     # REQUIRED: the 64-hex pack fingerprint (`pgw inspect`)
-    ring: K40A12
+    ring: K32A12C27
     serviceUrl: https://compute.pgw.example.net:8443
     maxConcurrentSessions: 32
     serviceTimeoutSeconds: 60

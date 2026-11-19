@@ -21,8 +21,8 @@ curl -s localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" \
 | `service` | service-cpu | stateless masked compute over TLS; sees only the read-only pack and its token hashes; internal network only |
 | `gateway` | gateway | OpenAI-compatible API on `127.0.0.1:8080`; renders its models file from the template at start-up |
 
-Masks are single use: every prompt or generated token consumes one slot (about 1.5 MB per slot for
-Qwen2.5-0.5B at K40A12, so the default 2048 slots take about 3 GB). When the store runs low, start
+Masks are single use: every prompt or generated token consumes one slot (about 1.2 MB per slot for
+Qwen2.5-0.5B at the default K32A12C27, so the default 2048 slots take about 2.5 GB). When the store runs low, start
 the refill profile (`docker compose --profile refill up -d`) or rerun `docker compose run --rm factory`.
 
 Inspect the stack:

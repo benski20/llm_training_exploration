@@ -21,7 +21,7 @@ import httpx
 import pytest
 import torch
 
-from pgw.core import ConfigError, FingerprintMismatchError, RingParams
+from pgw.core import DEFAULT_RING, ConfigError, FingerprintMismatchError, RingParams
 from pgw.engine import LocalComputeClient
 
 SERVICE_URL = "http://127.0.0.1:18443"
@@ -33,7 +33,7 @@ class LocalHandler:
     """``pgw.wire.ComputeHandler`` doing exact masked compute with a :class:`LocalComputeClient`."""
 
     def __init__(self, pack: Any, *, tamper: Callable[[str, torch.Tensor], torch.Tensor] | None = None,
-                 fingerprint: str | None = None, rings: tuple[str, ...] = ("K32A8", "K40A12", "K48A20")):
+                 fingerprint: str | None = None, rings: tuple[str, ...] = ("K32A8", "K40A12", "K48A20", "K32A12C27")):
         self.pack = pack
         self.local = LocalComputeClient(pack, tamper=tamper, record=True, rings=rings)
         self.fp = fingerprint or pack.fingerprint
@@ -108,7 +108,7 @@ def make_store(tmp_path: Path, gw_pack: Any) -> Any:
 
     stores: list[Any] = []
 
-    def make(slots: int, ring: RingParams | str = "K40A12", name: str = "store", **overrides: Any) -> Any:
+    def make(slots: int, ring: RingParams | str = DEFAULT_RING, name: str = "store", **overrides: Any) -> Any:
         rp = RingParams.from_name(ring) if isinstance(ring, str) else ring
         kp = FileKeyProvider(tmp_path / f"{name}.kek", create=True)
         store = MaskStore.open(tmp_path / name, kp, fsync=False, low_water_slots=overrides.pop("low_water_slots", 64),

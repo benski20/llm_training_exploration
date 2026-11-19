@@ -71,7 +71,7 @@ def version(as_json: bool) -> None:
               show_default=True, help="Deployment role: its extras and PGW_* settings become mandatory")
 @click.option("--pack", "pack_path", type=click.Path(path_type=Path, exists=True, file_okay=False), default=None,
               help="Fully verify a model pack (SHA-256 of every file)")
-@click.option("--ring", default=None, help="Ring preset to check against the pack / service (e.g. K40A12)")
+@click.option("--ring", default=None, help="Ring preset to check against the pack / service (e.g. K32A12C27)")
 @click.option("--maskstore", "maskstore_root", type=click.Path(path_type=Path, exists=True, file_okay=False),
               default=None, help="Open and verify a mask store (KEK from PGW_MASKSTORE_* or --key-file)")
 @click.option("--key-file", type=click.Path(path_type=Path, exists=True, dir_okay=False), default=None,
@@ -502,7 +502,7 @@ def bench() -> None:
 
 
 @bench.command("ring")
-@click.option("--ring", "rings", multiple=True, default=("K40A12",), show_default=True)
+@click.option("--ring", "rings", multiple=True, default=("K32A12C27",), show_default=True)
 @click.option("--backend", "backends", multiple=True, help="Backend(s) (default: all available)")
 @click.option("--shape", default="llama3-8b.qkv", show_default=True,
               help="Preset name or 'MxN' (out x in features)")

@@ -95,7 +95,7 @@ def factory_group() -> None:
 
 
 _common = [
-    click.option("--ring", "rings", multiple=True, help="Ring preset(s), e.g. K40A12 (repeatable)"),
+    click.option("--ring", "rings", multiple=True, help="Ring preset(s), e.g. K32A12C27 (repeatable)"),
     click.option("--device", default=None, help="auto | cpu | cuda | cuda:N"),
     click.option("--backend", type=click.Choice(["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"]), default=None),
     click.option("--chunk-slots", type=int, default=None, help="Rows per GEMM batch / encrypted chunk"),
@@ -357,7 +357,7 @@ def _print_status(report: dict[str, Any]) -> None:
 @factory_group.command("benchmark")
 @click.option("--model", "preset", default=None, help="Architecture preset (e.g. llama3-8b, qwen2.5-0.5b)")
 @click.option("--pack", "pack_path", type=click.Path(path_type=Path), default=None, help="Benchmark a real pack")
-@click.option("--ring", default="K40A12", show_default=True)
+@click.option("--ring", default="K32A12C27", show_default=True)
 @click.option("--device", default="auto", show_default=True)
 @click.option("--backend", type=click.Choice(["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"]), default="auto")
 @click.option("--slots", type=int, default=256, show_default=True, help="Slots to time")

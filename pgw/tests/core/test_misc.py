@@ -81,7 +81,7 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("PGW_RING", "K36A12")
     with pytest.raises(Exception):
         CommonSettings()
-    assert ring_from_setting(None).name == "K40A12"
+    assert ring_from_setting(None).name == "K32A12C27"
 
 
 def test_json_logging(capsys):

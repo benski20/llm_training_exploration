@@ -193,7 +193,7 @@ def _time_generation(gen: Any, slots: int, chunk_slots: int, checks: int, store:
 def benchmark_preset(
     preset: str,
     *,
-    ring: str | RingParams = "K40A12",
+    ring: str | RingParams = "K32A12C27",
     device: str = "auto",
     backend: str = "auto",
     slots: int = 256,
@@ -224,7 +224,7 @@ def benchmark_preset(
 def benchmark_pack(
     pack: Any,
     *,
-    ring: str | RingParams = "K40A12",
+    ring: str | RingParams = "K32A12C27",
     device: str = "auto",
     backend: str = "auto",
     slots: int = 256,

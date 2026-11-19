@@ -153,10 +153,11 @@ RING_K32_A8 = RingParams(32, 8)
 RING_K40_A12 = RingParams(40, 12)
 RING_K48_A20 = RingParams(48, 20)
 #: 32-bit ring with 12-bit activations and a per-call output cap of 2^27 (adaptive bits; lossless on
-#: Qwen2.5-0.5B and 1.5B): 20% less traffic, service work and mask storage than K40A12.
+#: Qwen2.5-0.5B, 1.5B and 7B; identical perplexity): 20% less traffic, service work and mask storage than
+#: K40A12. The default since 2026-11-19.
 RING_K32_A12_C27 = RingParams(32, 12, 27)
 #: Default ring: 40-bit ring with 12-bit activations (A8 measured too lossy).
-DEFAULT_RING = RING_K40_A12
+DEFAULT_RING = RING_K32_A12_C27
 
 
 # ---- quantization ------------------------------------------------------------------------------

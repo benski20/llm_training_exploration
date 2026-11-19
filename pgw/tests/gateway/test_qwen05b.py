@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from pgw.core import RING_K40_A12
+from pgw.core import DEFAULT_RING
 from pgw.gateway import ApiKeyStore, GatewayModelConfig, GatewaySettings, create_app
 from tests.gateway.conftest import ADMIN_TOKEN, SERVICE_URL, InProcessService, auth, fill_store, gateway
 
@@ -34,7 +34,7 @@ async def test_qwen05b_masked_equals_plain(q05_pack_dir: Path, tmp_path: Path) -
     pack = ModelPack.open(q05_pack_dir)
     store = MaskStore.open(tmp_path / "store", FileKeyProvider(tmp_path / "kek", create=True), fsync=False,
                            low_water_slots=0)
-    fill_store(store, pack, RING_K40_A12, 48)
+    fill_store(store, pack, DEFAULT_RING, 48)
     svc = InProcessService(pack)
     keys = ApiKeyStore(None)
     _, key = keys.create("app")

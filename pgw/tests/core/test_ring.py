@@ -24,7 +24,7 @@ RINGS = [RING_K32_A8, RING_K40_A12, RING_K48_A20]
 
 
 def test_presets_and_names():
-    assert DEFAULT_RING == RING_K40_A12
+    assert DEFAULT_RING == RingParams(32, 12, 27) and DEFAULT_RING.name == "K32A12C27"
     assert RING_K40_A12.name == "K40A12"
     assert RingParams.from_name("k48a20") == RING_K48_A20
     assert RING_K40_A12.limbs == 5 and RING_K40_A12.bytes_per_element == 5

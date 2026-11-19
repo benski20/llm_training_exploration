@@ -57,7 +57,7 @@ matches 'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?' "$SERVICE_UR
 [ -z "$MODEL" ] || matches '[A-Za-z0-9][A-Za-z0-9._:-]{0,127}' "$MODEL" || fail "pgw.model_name is invalid"
 matches '[A-Za-z0-9][A-Za-z0-9._-]{0,127}' "$PACK_DIR" || fail "pgw.pack_dir must be a directory name"
 matches '[0-9a-f]{64}' "$FINGERPRINT" || fail "pgw.fingerprint must be 64 lowercase hex digits"
-[ -z "$RING" ] || matches 'K[0-9]{2}A[0-9]{1,2}' "$RING" || fail "pgw.ring must look like K40A12"
+[ -z "$RING" ] || matches 'K[0-9]{2}A[0-9]{1,2}(C[0-9]{2})?' "$RING" || fail "pgw.ring must look like K32A12C27 or K40A12"
 if [ -n "$SERVICE_CIDR" ]; then
     python3 -c 'import ipaddress, sys; n = ipaddress.ip_network(sys.argv[1], strict=False); sys.exit(n.version != 4)' \
         "$SERVICE_CIDR" 2>/dev/null || fail "pgw.service_cidr must be an IPv4 address or CIDR"
@@ -110,7 +110,7 @@ cat > /etc/pgw/models.tmpl.yaml <<EOF
 - name: ${MODEL:-default}
   pack_path: /var/lib/pgw/packs/${PACK_DIR}
   fingerprint: "${FINGERPRINT}"
-  ring: ${RING:-K40A12}
+  ring: ${RING:-K32A12C27}
   service_url: ${SERVICE_URL}
   service_token: "\${file:/run/credentials/pgw-gateway.service/service-token}"
 EOF

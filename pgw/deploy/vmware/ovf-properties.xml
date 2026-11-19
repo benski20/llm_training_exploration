@@ -30,7 +30,7 @@
   <Property ovf:key="pgw.fingerprint" ovf:type="string" ovf:userConfigurable="true" ovf:value="">
     <Label>Model pack fingerprint (64 hex)</Label>
   </Property>
-  <Property ovf:key="pgw.ring" ovf:type="string" ovf:userConfigurable="true" ovf:value="K40A12">
+  <Property ovf:key="pgw.ring" ovf:type="string" ovf:userConfigurable="true" ovf:value="K32A12C27">
     <Label>Ring preset</Label>
   </Property>
   <Property ovf:key="pgw.counter" ovf:type="string" ovf:userConfigurable="true" ovf:value="file">

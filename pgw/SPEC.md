@@ -131,12 +131,12 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
 
 ## 5. Arithmetic and quantization (normative)
 
-- **Ring** `Z_{2^K}`, `K ∈ {32, 40, 48}`, multiple of 8 in [16, 56]. Presets: `K40A12`
-  (**default**), `K48A20` (max quality), `K32A8` (cheapest, measured lossy: ppl 11.09 vs 10.93 for
-  Qwen2.5-0.5B). `K32A12C27`: a 32-bit ring with a per-call output cap of 2^27. The gateway
+- **Ring** `Z_{2^K}`, `K ∈ {32, 40, 48}`, multiple of 8 in [16, 56]. Presets: `K32A12C27`
+  (**default**, see below), `K40A12` (previous default), `K48A20` (max quality), `K32A8` (cheapest, measured lossy: ppl 11.09 vs 10.93 for
+  Qwen2.5-0.5B). `K32A12C27` (default): a 32-bit ring with a per-call output cap of 2^27. The gateway
   quantizes each token with the most activation bits (up to 12) for which the exact Cauchy-Schwarz bound
   `max_j ||W8_j||_2 * ||xq||_2 <= 2^27` holds. That makes any layer width decodable, and the range check
-  and Freivalds use 2^27 (7 vectors give at least 20 bits). It is lossless on Qwen2.5-0.5B and 1.5B
+  and Freivalds use 2^27 (7 vectors give at least 20 bits). It is lossless on Qwen2.5-0.5B, 1.5B and 7B
   (perplexity identical to `K40A12`, no token reduced) and gives 20% less traffic, service work and mask
   storage. Encrypted mask generation uses q = 2^56 with it. Canonical values are `int64` in `[0, 2^K)`. Centered values are in `[−2^(K−1), 2^(K−1))`.
 - **Weights:** int8, symmetric per output row: `sw[j] = max_i |W[j,i]| / 127` (1.0 for zero rows),

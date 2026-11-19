@@ -3,7 +3,7 @@
 - name: llama3-8b
   pack_path: /var/lib/pgw/packs/llama3-8b
   fingerprint: "<64-hex fingerprint printed by pgw pack / pgw inspect>"
-  ring: K40A12
+  ring: K32A12C27
   service_url: https://compute.pgw.example.net:8443
   service_token: "${file:/run/credentials/pgw-gateway.service/service-token}"
   service_ca_file: /etc/pgw/tls/service-ca.crt

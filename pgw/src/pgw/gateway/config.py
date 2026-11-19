@@ -79,7 +79,7 @@ class GatewayModelConfig(BaseModel):
     mode: Literal["masked", "plain", "float"] = Field(
         "masked", description="'masked' = production; 'plain'/'float' = local dev/testing only (no service)"
     )
-    ring: str = "K40A12"
+    ring: str = "K32A12C27"
     service_url: str | None = None
     service_token: SecretStr | None = None
     service_token_file: Path | None = Field(

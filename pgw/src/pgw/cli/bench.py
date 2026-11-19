@@ -87,7 +87,7 @@ def _kernel(w8: torch.Tensor, backend: str) -> tuple[Any, str]:
 
 def bench_ring(
     *,
-    ring: str = "K40A12",
+    ring: str = "K32A12C27",
     backend: str = "cpu_f64",
     m: int = 1024,
     n: int = 1024,

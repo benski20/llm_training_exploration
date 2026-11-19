@@ -10,6 +10,6 @@ networkPolicy:
 models:
   - name: llama3-8b
     packDir: llama3-8b
-    ring: K40A12
+    ring: K32A12C27
     serviceUrl: https://compute.example.net:8443
     fingerprint: abababababababababababababababababababababababababababababababab

@@ -9,12 +9,13 @@ from typing import Any
 
 import pytest
 
+from pgw.core import DEFAULT_RING
 from pgw.gateway import ApiKeyStore
 from pgw.gateway.runtime import InferenceRuntime
 from tests.gateway.conftest import MODEL, InProcessService, masked_settings
 
 
-def available(store: Any, pack: Any, ring: str = "K40A12") -> int:
+def available(store: Any, pack: Any, ring: str = DEFAULT_RING.name) -> int:
     return sum(i.slots_available for i in store.inventory(pack.fingerprint, ring))
 
 

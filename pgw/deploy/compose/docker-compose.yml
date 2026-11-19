@@ -45,7 +45,7 @@ services:
     environment:
       <<: *common-env
       PGW_DEMO_MODEL: ${PGW_DEMO_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}
-      PGW_DEMO_RING: ${PGW_DEMO_RING:-K40A12}
+      PGW_DEMO_RING: ${PGW_DEMO_RING:-K32A12C27}
       HF_HOME: /var/lib/pgw/hf
     volumes:
       - ./demo-init.sh:/demo/demo-init.sh:ro
@@ -78,7 +78,7 @@ services:
       - --key-file
       - /var/lib/pgw/kek/kek
       - --ring
-      - ${PGW_DEMO_RING:-K40A12}
+      - ${PGW_DEMO_RING:-K32A12C27}
       - --slots
       - ${PGW_DEMO_SLOTS:-2048}
     environment:
@@ -102,7 +102,7 @@ services:
     environment:
       <<: *common-env
       PGW_FACTORY_PACK_PATH: /var/lib/pgw/packs/demo
-      PGW_FACTORY_RING: ${PGW_DEMO_RING:-K40A12}
+      PGW_FACTORY_RING: ${PGW_DEMO_RING:-K32A12C27}
       PGW_FACTORY_SEGMENT_SLOTS: "1024"
       PGW_FACTORY_LOW_WATER_SLOTS: "1024"
       PGW_FACTORY_TARGET_SLOTS: "4096"
@@ -129,7 +129,7 @@ services:
     environment:
       <<: *common-env
       PGW_SERVICE_PACKS: '["/var/lib/pgw/packs/demo"]'
-      PGW_SERVICE_RINGS: '["${PGW_DEMO_RING:-K40A12}"]'
+      PGW_SERVICE_RINGS: '["${PGW_DEMO_RING:-K32A12C27}"]'
       PGW_SERVICE_TOKENS_FILE: /etc/pgw/tenants/tokens
       PGW_SERVICE_TLS__CERT_FILE: /etc/pgw/tenants/tls.crt
       PGW_SERVICE_TLS__KEY_FILE: /etc/pgw/tenants/tls.key

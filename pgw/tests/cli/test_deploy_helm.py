@@ -243,7 +243,7 @@ def test_gateway_models_template_is_valid_and_secret_free(tmp_path: Path) -> Non
     p = tmp_path / "models.json"
     p.write_text(rendered)
     (models,) = load_models_file(p)
-    assert models.name == "llama3-8b" and models.mode == "masked" and models.ring == "K40A12"
+    assert models.name == "llama3-8b" and models.mode == "masked" and models.ring == "K32A12C27"
     assert str(models.pack_path) == "/var/lib/pgw/packs/llama3-8b"
     assert models.fingerprint == "ab" * 32
     assert str(models.client_cert_file) == "/etc/pgw/service-tls/tls.crt"

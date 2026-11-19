@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 import torch
 
-from pgw.core import RING_K40_A12, FingerprintMismatchError, RingParams
+from pgw.core import DEFAULT_RING, FingerprintMismatchError, RingParams
 from pgw.gateway import ApiKeyStore, EgressGuardTransport, create_app
 from pgw.gateway.runtime import InferenceRuntime
 from tests.gateway.conftest import (
@@ -31,7 +31,7 @@ CHAT = {"model": MODEL, "messages": [{"role": "user", "content": "Hello there"}]
         "max_tokens": 6, "ignore_eos": True}
 
 
-def available(store: Any, pack: Any, ring: str = "K40A12") -> int:
+def available(store: Any, pack: Any, ring: str = DEFAULT_RING.name) -> int:
     return sum(i.slots_available for i in store.inventory(pack.fingerprint, ring))
 
 
@@ -103,7 +103,7 @@ async def test_single_use_mask_accounting_and_privacy(tiny_pack_dir: Path, tmp_p
         metrics = (await c.get("/metrics")).text
         assert "pgw_masks_available_slots" in metrics and "pgw_gateway_round_trip_seconds_count" in metrics
     # what the service saw: uniform ring noise, no duplicate rows (no mask reuse)
-    ring = RingParams.from_name("K40A12")
+    ring = DEFAULT_RING
     rows = torch.cat([x.reshape(-1, x.shape[-1]) for lid, x in svc.received if lid.endswith(".qkv")])
     assert rows.min() >= 0 and rows.max() < ring.modulus
     assert len({tuple(r.tolist()) for r in rows}) == rows.shape[0]
@@ -469,7 +469,7 @@ async def test_weak_segments_refused_before_any_mask_is_used(tiny_pack_dir: Path
     from pgw.factory import MaskGenerator
 
     store = make_store(0)
-    MaskGenerator(gw_pack, RING_K40_A12).generate_into_store(store, 64, checks=1, chunk_slots=16, factory_id="weak")
+    MaskGenerator(gw_pack, DEFAULT_RING).generate_into_store(store, 64, checks=1, chunk_slots=16, factory_id="weak")
     svc = InProcessService(gw_pack)
     app = masked_app(tiny_pack_dir, tmp_path, store, svc, keys, min_soundness_bits=40)
     async with gateway(app) as c:

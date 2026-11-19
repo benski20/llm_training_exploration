@@ -83,7 +83,7 @@ export:
 
 config:
   logLevel: INFO
-  rings: [K40A12]
+  rings: [K32A12C27]
   segmentSlots: 4096
   chunkSlots: 256
   checks: 2

@@ -5,7 +5,7 @@ Models template. Secrets are referenced as ${file:...} and substituted at contai
 {{- $_ := include "pgw-gateway.secretName" . -}}
 {{- $models := list -}}
 {{- range .Values.models -}}
-{{- $m := dict "name" .name "pack_path" (printf "%s/%s" $.Values.modelPacks.mountPath (required "models[].packDir is required" .packDir)) "ring" (default "K40A12" .ring) "service_url" (required "models[].serviceUrl is required" .serviceUrl) "service_token" (printf "${file:/etc/pgw/secrets/%s}" $.Values.secrets.serviceTokenKey) "mode" "masked" -}}
+{{- $m := dict "name" .name "pack_path" (printf "%s/%s" $.Values.modelPacks.mountPath (required "models[].packDir is required" .packDir)) "ring" (default "K32A12C27" .ring) "service_url" (required "models[].serviceUrl is required" .serviceUrl) "service_token" (printf "${file:/etc/pgw/secrets/%s}" $.Values.secrets.serviceTokenKey) "mode" "masked" -}}
 {{- $_ := set $m "fingerprint" (required "models[].fingerprint is required: pin the 64-hex pack fingerprint" .fingerprint) -}}
 {{- if .maxConcurrentSessions -}}
 {{- $_ := set $m "max_concurrent_sessions" .maxConcurrentSessions -}}

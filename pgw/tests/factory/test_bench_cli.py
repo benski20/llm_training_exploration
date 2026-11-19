@@ -33,7 +33,7 @@ def test_benchmark_preset_small() -> None:
     assert r.layers_measured == 1 and r.layers_total == 24
     assert r.slots_per_second > 0 and r.tokens_per_hour == pytest.approx(3600 * r.slots_per_second)
     assert r.usd_per_million_tokens == pytest.approx(1.0 / (r.tokens_per_hour / 1e6))
-    assert r.bytes_per_token == 1_520_640  # sum(m) * 24 layers * 5 bytes
+    assert r.bytes_per_token == 1_216_512  # sum(m) * 24 layers * 4 bytes (default K32A12C27)
     rep = format_report(r)
     assert "tokens/hour" in rep and "per million tokens" in rep and "extrapolated" in rep
     assert json.loads(json.dumps(r.to_dict()))["model"] == "qwen2.5-0.5b"

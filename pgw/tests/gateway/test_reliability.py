@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from pgw.core import MaskExhaustedError, ServiceUnavailableError
+from pgw.core import DEFAULT_RING, MaskExhaustedError, ServiceUnavailableError
 from pgw.gateway import ApiKeyStore, create_app
 from pgw.gateway.auth import QuotaTracker
 from pgw.gateway.masks import WindowedReservation
@@ -21,7 +21,7 @@ CHAT = {"model": MODEL, "messages": [{"role": "user", "content": "Hello there"}]
         "max_tokens": 6, "ignore_eos": True}
 
 
-def available(store: Any, pack: Any, ring: str = "K40A12") -> int:
+def available(store: Any, pack: Any, ring: str = DEFAULT_RING.name) -> int:
     return sum(i.slots_available for i in store.inventory(pack.fingerprint, ring))
 
 
@@ -239,12 +239,12 @@ def test_cli_passes_graceful_shutdown_timeout(monkeypatch: pytest.MonkeyPatch, t
 # ---- mask store housekeeping ------------------------------------------------------------------------
 async def test_gateway_runs_gc_and_owns_the_store(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
                                                   make_store: Any, keys: ApiKeyStore) -> None:
-    from pgw.core import RING_K40_A12
+    from pgw.core import DEFAULT_RING
     from pgw.maskstore import store as store_mod
 
     store = make_store(600)
     # an open lease of a crashed previous gateway pod (other hostname) holding a segment
-    res = store.reserve(gw_pack.fingerprint, RING_K40_A12, 512)
+    res = store.reserve(gw_pack.fingerprint, DEFAULT_RING, 512)
     with store._lock.hold(), store._txn() as conn:
         conn.execute("UPDATE reservations SET host=? WHERE id=?", ("old-pod|pid:[1]", res.id))
     store._open_reservations.pop(res.id, None)

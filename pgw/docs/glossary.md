@@ -102,8 +102,9 @@ for the Freivalds bound.
 
 **Reservation**: Durable claim of mask slots for one request, committed before any mask is decrypted.
 
-**Ring preset**: Named pair `(K, A)`: K40A12 (default), K48A20 (maximum quality), K32A8 (cheapest,
-measured lossy).
+**Ring preset**: Named ring `K..A..[C..]`: K32A12C27 (default; 32-bit with a per-call output cap of 2^27
+and adaptive activation bits, measured lossless up to 7B), K40A12 (previous default), K48A20 (maximum
+quality), K32A8 (cheapest, measured lossy).
 
 **Rollback protection**: Detection of a restored, older mask-store state (which could cause reuse),
 via a generation counter mirrored to an HMAC journal (detects a restored database) and a monotonic

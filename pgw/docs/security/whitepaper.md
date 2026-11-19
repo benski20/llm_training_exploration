@@ -100,8 +100,15 @@ malicious partner factory, malicious insiders on the customer side, and a supply
 | `B = qmax·127·n` | bound on the absolute value of any genuine output `yq_j` |
 | `centered(v)` | the representative of `v mod 2^K` in `[−2^(K−1), 2^(K−1))` |
 
-Ring presets: **K40A12 (default)**, K48A20 (maximum quality), K32A8 (cheapest; *measured* to lose
-quality, perplexity 11.09 vs 10.92 for float activations on Qwen2.5-0.5B, against 10.93 for A12).
+Ring presets: **K32A12C27 (default)**, K40A12 (the previous default), K48A20 (maximum quality), K32A8
+(cheapest; *measured* to lose quality, perplexity 11.09 vs 10.92 for float activations on
+Qwen2.5-0.5B, against 10.93 for A12).
+
+K32A12C27 is a 32-bit ring with a per-call output cap of 2^27. The gateway quantizes each token with
+the most activation bits (up to 12) for which the exact bound `max_j ||W8_j||_2 * ||xq||_2 <= 2^27`
+holds, so every genuine output decodes exactly for any layer width. The range check and Freivalds
+use 2^27; the factory picks 7 check vectors for at least 20 bits. *Measured*: perplexity is identical
+to K40A12 on Qwen2.5-0.5B, 1.5B and 7B (8.4904 on 7B), and no token needed fewer bits.
 
 ### 3.2 Offline phase (mask factory)
 
@@ -469,7 +476,7 @@ exactness and near-plaintext server cost.
   planned (SPEC 16).
 * Metadata (lengths, timing) is not hidden in v1.0. Padding and dummy-round mitigations are planned.
 * Integrity bounds are weak for K32A8 (section 5.3): even `c = 8` gives fewer than 20 bits for large
-  `n`, so the default `min_soundness_bits` floor refuses such segments. Use K40A12.
+  `n`, so the default `min_soundness_bits` floor refuses such segments. Use K32A12C27 (default) or K40A12.
 * Availability depends on the service and is not cryptographically protected.
 * The guarantee is computational at the PRG level (section 4.4), not unconditional.
 * Model weights must be public. Fine-tuned private weights would need a different scheme, because the

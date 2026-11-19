@@ -164,7 +164,7 @@ def test_security_relevant_defaults_match_the_docs(docs: dict[str, str]) -> None
     g = GatewaySettings.model_fields
     assert GatewayModelConfig.model_fields["freivalds_rate"].default == 1.0
     assert GatewayModelConfig.model_fields["mode"].default == "masked"
-    assert GatewayModelConfig.model_fields["ring"].default == DEFAULT_RING.name == "K40A12"
+    assert GatewayModelConfig.model_fields["ring"].default == DEFAULT_RING.name == "K32A12C27"
     assert g["allow_dev_modes"].default is False and g["allow_anonymous"].default is False
     assert g["require_service_tls"].default is True
     assert g["noise_monitor"].default is True and g["noise_monitor_fail_closed"].default is True

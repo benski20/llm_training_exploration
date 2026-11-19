@@ -138,7 +138,7 @@ Severity is the product of impact and likelihood after controls: **H**igh, **M**
 | 3 | Metadata leakage | T-05, T-35 | product | disclose; padding and dummy rounds (roadmap) |
 | 4 | Availability of the service and the mask supply | T-07, T-24, T-31 | operations | SLA, multi-endpoint, buffer sizing, alerts |
 | 5 | Rollback (snapshot revert) without a monotonic counter off the mask volume | T-22 | customer operations | configure a TPM, HSM, provider or separate-volume file counter; never restore the mask volume |
-| 6 | Integrity margin at K32A8 | T-03 | customer configuration | K40A12 default; `checks ≥ 4` for K32A8 |
+| 6 | Integrity margin at K32A8 | T-03 | customer configuration | K32A12C27 default (7 check vectors, ≥ 20 bits); `checks ≥ 4` for K32A8 |
 
 ## 5. Assumptions and out of scope
 

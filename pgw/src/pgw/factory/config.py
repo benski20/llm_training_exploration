@@ -21,7 +21,7 @@ class FactorySettings(PGWSettings):
     Example (env)::
 
         PGW_FACTORY_PACK_PATH=/packs/llama3-8b
-        PGW_FACTORY_RINGS='["K40A12"]'
+        PGW_FACTORY_RINGS='["K32A12C27"]'
         PGW_FACTORY_LOW_WATER_SLOTS=50000
         PGW_FACTORY_TARGET_SLOTS=500000
         PGW_FACTORY_MAX_SLOTS_PER_HOUR=200000   # leave GPU headroom for other jobs
@@ -34,7 +34,7 @@ class FactorySettings(PGWSettings):
 
     pack_path: Path = Field(description="Model pack directory")
     extra_pack_paths: tuple[Path, ...] = Field((), description="Further packs kept topped up by the same factory")
-    ring: str = "K40A12"
+    ring: str = "K32A12C27"
     rings: tuple[str, ...] = Field((), description="Rings to produce (default: just `ring`)")
     device: str = Field("auto", description="'auto', 'cpu', 'cuda', 'cuda:1'")
     backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"

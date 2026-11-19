@@ -128,7 +128,7 @@ class SegmentHeader(BaseModel):
     version: int = SEGMENT_VERSION
     segment_id: str = Field(description="UUIDv4 hex; unique forever")
     fingerprint: str
-    ring: str = Field(description="e.g. 'K40A12'")
+    ring: str = Field(description="e.g. 'K32A12C27'")
     slots: int = Field(gt=0, description="Token positions in this segment")
     chunk_slots: int = Field(gt=0, description="Slots per W r chunk")
     checks: int = Field(ge=0, description="Freivalds check vectors per linear")
