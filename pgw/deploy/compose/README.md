@@ -33,7 +33,14 @@ docker compose exec gateway pgw maskstore status --root /var/lib/pgw/masks --key
 curl -s localhost:8080/metrics | grep pgw_masks_available_slots
 ```
 
-Everything generated here (CA, tokens, KEK, API key) is for the demo only. Production deployments
+Operator console: open <http://localhost:8080/console/> and sign in with the admin token that
+`docker compose logs init` prints once ("demo admin token"; also in the `gw-secrets` volume as
+`admin_token`). Use `localhost`, not another host name: without TLS the browser only keeps the
+console's `Secure` session cookie for `localhost`. The console shares the gateway listener with
+`/admin`, so the port stays bound to `127.0.0.1`. See
+[docs/operations/console.md](../../docs/operations/console.md) for production setups.
+
+Everything generated here (CA, tokens, KEK, API key, admin token) is for the demo only. Production deployments
 use the Helm charts or the VM image with secrets from your secret manager.
 
 `tests/cli/test_deploy_compose.py` runs this exact flow (the init script, the factory command, and the

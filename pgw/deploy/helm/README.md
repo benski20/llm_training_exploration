@@ -52,6 +52,14 @@ helm install factory deploy/helm/pgw-factory \
   the pod checks the configuration.
 * `networkPolicy.egress.computeService` is the gateway's only allowed destination besides DNS:
   the PrivateLink / Private Endpoint addresses or the service's public range.
+* Operator console (`/console/`, on by default with `console.enabled`): it shares the API listener
+  with `/admin/*` and signs in with the admin token. Read-only viewer tokens come from
+  `console.viewerTokensKey` (a key of `secrets.existingSecret`, mounted as a file and re-read on
+  change). Keep `/console` and `/admin` off the application ingress: route only `/v1` through
+  `ingress` and publish the console with `consoleIngress` on an internal ingress class (TLS
+  required, own host name, no path rewriting). Without an ingress, use
+  `kubectl port-forward svc/<release>-pgw-gateway 8080:8080` and `http://localhost:8080/console/`.
+  See [docs/operations/console.md](../../docs/operations/console.md).
 
 ## Operator side (compute service)
 

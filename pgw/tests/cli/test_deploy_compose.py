@@ -171,7 +171,10 @@ def test_demo_flow_without_docker(compose: dict[str, Any], tiny_hf_dir: Path, tm
     # idempotent second run
     r2 = subprocess.run(["sh", str(DEPLOY / "compose" / "demo-init.sh")], env=init_env,  # noqa: S603,S607
                         capture_output=True, text=True, timeout=300)
-    assert r2.returncode == 0 and "demo API key" not in r2.stderr
+    assert r2.returncode == 0 and "demo API key" not in r2.stderr and "demo admin token" not in r2.stderr
+    assert "demo admin token" in r.stderr
+    admin_file = root / "secrets" / "admin_token"
+    assert admin_file.stat().st_mode & 0o077 == 0
     # factory step, exactly as in the compose file (fewer slots)
     fac = compose["services"]["factory"]["command"]
     fac = [_remap(str(a), root) for a in fac]
@@ -218,6 +221,12 @@ def test_demo_flow_without_docker(compose: dict[str, Any], tiny_hf_dir: Path, tm
                           timeout=120)
         assert resp.status_code == 200, resp.text
         assert resp.json()["usage"]["completion_tokens"] >= 1
+        # operator console: served by the gateway image, sign-in with the generated admin token file
+        page = httpx.get(f"http://127.0.0.1:{gw_port}/console/", timeout=30)
+        assert page.status_code == 200 and "/console/assets/" in page.text
+        login = httpx.post(f"http://127.0.0.1:{gw_port}/console/api/login",
+                           json={"token": admin_file.read_text().strip()}, timeout=30)
+        assert login.status_code == 200 and login.json()["role"] == "admin", login.text
     finally:
         for p in (gw, svc):
             if p is not None and p.poll() is None:

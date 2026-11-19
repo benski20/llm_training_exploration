@@ -298,7 +298,11 @@ def _check_role_settings(role: str) -> tuple[Status, str, dict[str, Any]]:
         if not models:
             warnings.append("no models configured (PGW_GATEWAY_MODELS / PGW_GATEWAY_MODELS_FILE)")
         if g.admin_token is None:
-            warnings.append("no admin token (PGW_GATEWAY_ADMIN_TOKEN): /admin/* disabled")
+            warnings.append("no admin token (PGW_GATEWAY_ADMIN_TOKEN or PGW_GATEWAY_ADMIN_TOKEN_FILE): /admin/* and "
+                            "console sign-in disabled")
+        vf = g.console_viewer_tokens_file
+        if g.console_enabled and vf is not None and not Path(vf).is_file():
+            return "fail", f"console viewer tokens file {vf} not found (gateway would not start)", data
         if g.api_keys_file is None and not g.allow_anonymous:
             warnings.append("no API key file (PGW_GATEWAY_API_KEYS_FILE)")
         if g.allow_dev_modes:

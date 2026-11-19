@@ -197,6 +197,11 @@ class GatewaySettings(PGWSettings):
     maskstore_root: Path = Path("/var/lib/pgw/masks")
     api_keys_file: Path | None = Field(None, description="Hashed API keys (managed with 'pgw gateway keys')")
     admin_token: SecretStr | None = None
+    admin_token_file: Path | None = Field(
+        None,
+        description="Read admin_token from this file (a mounted Docker/Kubernetes secret; read at start-up). "
+        "Mutually exclusive with admin_token",
+    )
     console_viewer_tokens_file: Path | None = Field(
         None, description="Console read-only (viewer) tokens, one per line; admins sign in with admin_token",
     )
@@ -290,6 +295,21 @@ class GatewaySettings(PGWSettings):
     console_enabled: bool = Field(
         True, description="Serve the operator console at /console/ (sign-in with admin_token or a viewer token)"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _admin_token_from_file(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("admin_token_file") in (None, ""):
+            return data
+        if data.get("admin_token") not in (None, ""):
+            raise ValueError("admin_token and admin_token_file are mutually exclusive")
+        try:
+            text = Path(data["admin_token_file"]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ValueError(f"cannot read admin_token_file ({exc.strerror or type(exc).__name__})") from exc
+        if not text or any(c.isspace() for c in text):
+            raise ValueError("admin_token_file must contain exactly one token")
+        return {**data, "admin_token": text}
 
     @field_validator("admin_token")
     @classmethod

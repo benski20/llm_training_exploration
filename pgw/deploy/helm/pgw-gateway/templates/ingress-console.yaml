@@ -1,0 +1,43 @@
+{{- if .Values.consoleIngress.enabled }}
+{{- if not .Values.console.enabled }}
+{{- fail "consoleIngress.enabled needs console.enabled=true" }}
+{{- end }}
+{{- if not .Values.consoleIngress.tls }}
+{{- fail "consoleIngress.tls is required: the console session cookie is Secure and only works over HTTPS" }}
+{{- end }}
+# Operator paths only (/console, /admin), on their own host: the console app and its API share one origin.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "pgw-gateway.fullname" . }}-console
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+  {{- with .Values.consoleIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.consoleIngress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    {{- toYaml .Values.consoleIngress.tls | nindent 4 }}
+  rules:
+    - host: {{ required "consoleIngress.host is required" .Values.consoleIngress.host | quote }}
+      http:
+        paths:
+          - path: /console
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pgw-gateway.fullname" . }}
+                port:
+                  name: http
+          - path: /admin
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "pgw-gateway.fullname" . }}
+                port:
+                  name: http
+{{- end }}

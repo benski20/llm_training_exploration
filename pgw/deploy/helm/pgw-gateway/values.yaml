@@ -62,6 +62,9 @@ service:
   port: 8080
   annotations: {}
 
+# Ingress for the API. The gateway serves /v1 (applications), /admin and /console (operators) on one
+# listener: with a public or shared ingress, route only /v1 here (paths: [{path: /v1, ...}]) and
+# publish /console + /admin on an internal ingress with consoleIngress below. "/" exposes everything.
 ingress:
   enabled: false
   className: ""
@@ -91,6 +94,26 @@ config:
   maskWindowTokens: 64
   # Additional PGW_* environment variables (non-secret).
   extraEnv: {}
+
+# Operator console (/console/): a static web app plus a cookie-session API on the API listener, next
+# to /admin/*. It is reachable wherever /admin is; sign-in uses the admin token (secrets.adminTokenKey)
+# or a read-only viewer token. See docs/operations/console.md.
+console:
+  enabled: true
+  # Optional key in secrets.existingSecret holding viewer tokens, one per line ('#' comments allowed).
+  # Mounted as a file; edits to the Secret take effect without a restart (the file is re-read).
+  viewerTokensKey: ""
+
+# Optional second Ingress that publishes only /console and /admin, e.g. on an internal ingress class
+# (VPN / corporate network only). TLS is required: the console session cookie is Secure. Serve the
+# console on its own host name and do not rewrite paths (the app and its API share one origin).
+# Allow the ingress controller in networkPolicy.ingressFrom.
+consoleIngress:
+  enabled: false
+  className: ""                       # e.g. nginx-internal
+  annotations: {}
+  host: ""                            # REQUIRED when enabled, e.g. pgw-console.example.internal
+  tls: []                             # REQUIRED when enabled: [{secretName: ..., hosts: [...]}]
 
 # Served models. The compute-service token is read from secrets.existingSecret at start-up and
 # substituted into the rendered models file (tmpfs, mode 0600); it never appears in a ConfigMap.

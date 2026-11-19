@@ -184,3 +184,33 @@ async def test_console_disabled(tiny_pack_dir: Path, tmp_path: Path) -> None:
         assert (await c.get("/admin/overview", headers=ADMIN)).status_code == 200
         c.cookies.set("pgw_console", "anything")
         assert (await c.get("/admin/status")).status_code == 401
+
+
+async def test_admin_token_file(tiny_pack_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``admin_token_file`` (a mounted secret) signs in like ``admin_token``; misuse fails at start-up."""
+    import os
+
+    from pydantic import ValidationError
+
+    from pgw.gateway import GatewaySettings
+
+    tok = tmp_path / "admin-token"
+    tok.write_text(ADMIN_TOKEN + "\n", encoding="utf-8")
+    async with client(make_console_app(tiny_pack_dir, tmp_path, admin_token=None, admin_token_file=tok)) as c:
+        await login(c)
+    for k in list(os.environ):
+        if k.startswith("PGW_GATEWAY_"):
+            monkeypatch.delenv(k)
+    monkeypatch.setenv("PGW_GATEWAY_ADMIN_TOKEN_FILE", str(tok))
+    token = GatewaySettings().admin_token
+    assert token is not None and token.get_secret_value() == ADMIN_TOKEN
+    monkeypatch.setenv("PGW_GATEWAY_ADMIN_TOKEN", ADMIN_TOKEN)
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        GatewaySettings()
+    monkeypatch.delenv("PGW_GATEWAY_ADMIN_TOKEN")
+    (tmp_path / "two").write_text("a" * 20 + " " + "b" * 20, encoding="utf-8")
+    (tmp_path / "short").write_text("short", encoding="utf-8")
+    for name, msg in (("missing", "cannot read"), ("two", "exactly one token"), ("short", "at least")):
+        monkeypatch.setenv("PGW_GATEWAY_ADMIN_TOKEN_FILE", str(tmp_path / name))
+        with pytest.raises(ValidationError, match=msg):
+            GatewaySettings()
