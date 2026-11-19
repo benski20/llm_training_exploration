@@ -9,3 +9,5 @@ dist/
 rust/target/
 *.whl
 __pycache__/
+src/pgw_fast*.so
+src/pgw_fast*.pyd
