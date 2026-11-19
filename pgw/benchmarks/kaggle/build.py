@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 PGW = HERE.parents[1]
 EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
 #: Top-level folders the GPU jobs never use (Kaggle rejects scripts above about 1 MB).
-EXCLUDE_TOP = {"docs", "rust", "requirements", ".github", "ci"}
+EXCLUDE_TOP = {"docs", "requirements", ".github", "ci", "research"}
 
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
@@ -33,6 +33,11 @@ JOBS: dict[str, dict] = {
     # speculative decoding: 7B target (masked, service on the T4) with a 0.5B draft on the gateway CPU;
     # the same requests with and without the draft, outputs compared with the plaintext reference
     "pgw-spec-7b": {"steps": [
+        {"kind": "shell", "name": "build_native",
+         "cmd": "(command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) && "
+                ". $HOME/.cargo/env && python rust/tools/build_fast.py && "
+                "python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
+         "timeout": 1200},
         {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
          "timeout": 1800},
         {"kind": "shell", "name": "profile_gateway_cpu",
@@ -139,7 +144,7 @@ def source_tarball() -> bytes:
         parts = Path(ti.name).parts
         if len(parts) > 1 and parts[1] in EXCLUDE_TOP:
             return None
-        if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts) or ti.name.endswith(".whl"):
+        if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts) or ti.name.endswith((".whl", ".so")):
             return None
         return ti
 
