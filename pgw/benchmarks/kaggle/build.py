@@ -30,6 +30,12 @@ QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
 JOBS: dict[str, dict] = {
+    # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)
+    "pgw-quality-7b": {"steps": [
+        {"kind": "shell", "name": "quality_7b",
+         "cmd": "python benchmarks/quant_quality_gpu.py --model Qwen/Qwen2.5-7B-Instruct --configs w8a12 c27 c25 c23 "
+                "--eval-tokens 16384", "timeout": 7000},
+    ]},
     # encrypted mask generation: CUDA mulmod64 exactness + cost at 7B / 8B / 0.5B shapes
     "pgw-he-gpu": {"steps": [
         {"kind": "pytest", "name": "pytest_hemask_gpu", "args": ["tests/hemask", "-v", "-rs", "--timeout", "1800"],
