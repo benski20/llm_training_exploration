@@ -42,6 +42,8 @@ JOBS: dict[str, dict] = {
          "timeout": 1200},
         {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
          "timeout": 1800},
+        {"kind": "shell", "name": "gpu_kernel_bench",
+         "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300", "timeout": 1800},
         {"kind": "shell", "name": "profile_gateway_cpu",
          "cmd": "python benchmarks/profile_gateway.py --preset 7b --layers 1 --steps 24 --ring K32A12C27 --profile "
                 "--workdir /tmp/pgw_prof", "timeout": 1800},
