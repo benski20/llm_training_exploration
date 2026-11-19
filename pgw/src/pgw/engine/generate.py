@@ -23,6 +23,9 @@ __all__ = ["FinishReason", "GenerationResult", "Generator", "SessionFactory", "T
 
 log = logging.getLogger(__name__)
 
+#: Any linear id works for asking a mask reservation how many rows are left (all advance together).
+_FIRST_LINEAR = "0.qkv"
+
 #: ``fn(slots) -> session`` creating a mask reservation of ``slots`` positions (SPEC 9.4).
 SessionFactory = Callable[[int], object]
 
@@ -88,10 +91,22 @@ class _SeqState:
     t_end: float | None = None
     queue: asyncio.Queue[TokenEvent | BaseException] | None = None
     cancelled: bool = False
+    # speculative decoding
+    ctx: list[int] = field(default_factory=list)  # tokens held in the target KV cache
+    draft_cache: KVCache | None = None
+    drafts: list[int] = field(default_factory=list)  # proposals for the current step
+    spec_proposed: int = 0
+    spec_accepted: int = 0
+    spec_passes: int = 0
 
     @property
     def done(self) -> bool:
         return self.finish is not None
+
+
+def _dcache(st: _SeqState) -> KVCache:
+    assert st.draft_cache is not None
+    return st.draft_cache
 
 
 class Generator:
@@ -113,6 +128,13 @@ class Generator:
         max_batch: Maximum sequences per batched step.
         session_factory: Optional ``fn(slots) -> session`` used when a call passes no session.
         batching: Use the shared continuous-batching loop in :meth:`astream`.
+        draft: Optional small model (same tokenizer) run locally in plaintext for speculative
+            decoding. Each step it proposes up to ``spec_tokens`` tokens; the target model checks
+            them all in one pass (one masked round trip per linear for all of them). Tokens are
+            accepted by sampling each position with the request's own sampler and keeping the draft
+            while it agrees, so every emitted token is drawn exactly as without speculation (same
+            greedy choice, same seeded sample). Rejected positions cost mask rows, never tokens.
+        spec_tokens: Draft tokens proposed per step (0 disables speculation).
     """
 
     def __init__(
@@ -123,9 +145,20 @@ class Generator:
         max_batch: int = 32,
         session_factory: SessionFactory | None = None,
         batching: bool = True,
+        draft: TransformerModel | None = None,
+        spec_tokens: int = 4,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
+        if spec_tokens < 0 or spec_tokens > 16:
+            raise ConfigError("spec_tokens must be in [0, 16]")
+        if draft is not None:
+            tv = getattr(model.arch, "vocab_size", None)
+            dv = getattr(draft.arch, "vocab_size", None)
+            if tv is not None and dv is not None and int(tv) != int(dv):
+                raise ConfigError(f"draft model vocabulary ({dv}) differs from the target's ({tv})")
+        self.draft = draft if spec_tokens > 0 else None
+        self.spec_tokens = spec_tokens if draft is not None else 0
         self.model = model
         self.tokenizer = tokenizer
         self.max_batch = max_batch
@@ -170,7 +203,7 @@ class Generator:
                     f"prompt of {len(prompt)} tokens leaves no room in the {ctx}-token context",
                     details={"prompt_tokens": len(prompt), "max_len": ctx},
                 )
-            cap = min(len(prompt) + params.max_tokens, ctx)
+            cap = min(len(prompt) + params.max_tokens + self.spec_tokens, ctx)
             if session is None and self.session_factory is not None:
                 session = self.session_factory(len(prompt) + params.max_tokens)
                 own = session is not None
@@ -183,6 +216,7 @@ class Generator:
                 session=session,
                 own_session=own,
                 cache=self.model.new_cache(cap),
+                draft_cache=self.draft.new_cache(cap) if self.draft is not None else None,
                 sampler=Sampler(params, prompt),
                 decoder=self.tokenizer.incremental_decoder() if self.tokenizer is not None else None,
                 stop_ids=frozenset(stop_ids),
@@ -211,6 +245,8 @@ class Generator:
             st.own_session = False
             Generator._close_session(st.session)
         st.cache.clear()
+        if st.draft_cache is not None:
+            st.draft_cache.clear()
 
     def _arelease(self, st: _SeqState) -> None:
         """Release from async code without blocking the event loop.
@@ -225,6 +261,8 @@ class Generator:
         session = st.session if st.own_session else None
         st.own_session = False
         st.cache.clear()
+        if st.draft_cache is not None:
+            st.draft_cache.clear()
         if session is None:
             return
         try:
@@ -314,6 +352,9 @@ class Generator:
         n_decode = max(0, len(st.generated) - 1)
         if n_decode:
             timings["tpot_ms"] = timings["decode_ms"] / n_decode
+        if st.spec_passes:
+            timings["spec_passes"] = float(st.spec_passes)
+            timings["spec_accept_rate"] = st.spec_accepted / max(1, st.spec_proposed)
         return GenerationResult(
             token_ids=list(st.output_ids),
             text="".join(st.text_parts),
@@ -326,14 +367,87 @@ class Generator:
         )
 
     # ---- synchronous API -------------------------------------------------------------------------
-    def _step_sync(self, states: Sequence[_SeqState]) -> list[TokenEvent]:
-        inputs = [SequenceInput(st.pending, st.cache, st.session) for st in states]
-        logits = self.model.forward_batch(inputs)
-        events = []
-        for st, lg in zip(states, logits, strict=True):
-            st.masks += len(st.pending)
-            events.append(self._consume(st, lg))
+    # ---- speculative decoding ---------------------------------------------------------------
+    def _spec_budget(self, st: _SeqState) -> int:
+        """Draft tokens for this step: never past max_tokens, the context, or the masks needed to finish."""
+        if self.draft is None or st.draft_cache is None:
+            return 0
+        left = st.params.max_tokens - len(st.generated)  # tokens still to emit, including this step's
+        k = min(self.spec_tokens, left - 1, st.cache.max_len - st.cache.length - len(st.pending))
+        remaining = getattr(st.session, "remaining", None)
+        if callable(remaining) and k > 0:
+            try:
+                rows = int(remaining(_FIRST_LINEAR))
+                reserved = getattr(st.session, "reserved_rows", None)
+                held = int(reserved(_FIRST_LINEAR)) if callable(reserved) else rows
+            except Exception:
+                return 0  # unknown session type: do not speculate
+            # Never use rows that finishing without speculation needs (the cap), and never make the
+            # store reserve more just to speculate: only rows the session already holds.
+            k = min(k, rows - (len(st.pending) + left - 1), held - len(st.pending))
+        return max(0, k)
+
+    def _plan_drafts(self, batch: Sequence[_SeqState]) -> None:
+        """Run the draft model (plaintext, local) to propose up to ``spec_tokens`` tokens per sequence."""
+        if self.draft is None:
+            return
+        active: list[tuple[_SeqState, int]] = []
+        for st in batch:
+            st.drafts = []
+            if st.draft_cache is not None and st.draft_cache.length > len(st.ctx):
+                st.draft_cache.truncate(len(st.ctx))  # drop proposals of an earlier (failed) step
+            k = self._spec_budget(st)
+            if k > 0:
+                active.append((st, k))
+        if not active:
+            return
+        feeds = [SequenceInput(st.ctx[_dcache(st).length:] + st.pending, _dcache(st)) for st, _ in active]
+        for (st, _), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
+            st.drafts.append(int(torch.argmax(lg)))
+        while True:
+            cur = [(st, k) for st, k in active if len(st.drafts) < k]
+            if not cur:
+                break
+            outs = self.draft.forward_batch([SequenceInput([st.drafts[-1]], _dcache(st)) for st, _ in cur])
+            for (st, _), lg in zip(cur, outs, strict=True):
+                st.drafts.append(int(torch.argmax(lg)))
+
+    def _inputs(self, batch: Sequence[_SeqState]) -> list[SequenceInput]:
+        return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1)
+                if st.drafts else SequenceInput(st.pending, st.cache, st.session) for st in batch]
+
+    def _consume_step(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
+        """Emit this step's tokens: one, or (speculative) every draft the sampler agrees with plus one."""
+        pending = st.pending
+        n_in = len(pending) + len(st.drafts)
+        st.masks += n_in
+        if not st.drafts:
+            if st.draft_cache is not None:
+                st.ctx.extend(pending)
+            return [self._consume(st, logits)]
+        drafts = st.drafts
+        base = st.cache.length - n_in
+        events: list[TokenEvent] = []
+        i = 0
+        for i in range(len(drafts) + 1):
+            st.cache.set_length(base + len(pending) + i)  # the cache holds pending + drafts[:i]
+            events.append(self._consume(st, logits[i]))
+            if st.done or i == len(drafts) or st.generated[-1] != drafts[i]:
+                break
+        st.ctx.extend(pending)
+        st.ctx.extend(drafts[:i])
+        if st.draft_cache is not None and st.draft_cache.length > len(st.ctx):
+            st.draft_cache.truncate(len(st.ctx))
+        st.spec_passes += 1
+        st.spec_proposed += len(drafts)
+        st.spec_accepted += i
+        st.drafts = []
         return events
+
+    def _step_sync(self, states: Sequence[_SeqState]) -> list[list[TokenEvent]]:
+        self._plan_drafts(states)
+        logits = self.model.forward_batch(self._inputs(states))
+        return [self._consume_step(st, lg) for st, lg in zip(states, logits, strict=True)]
 
     def stream(
         self,
@@ -350,7 +464,7 @@ class Generator:
         st = self._new_state(prompt_ids, params, session, own_session)
         try:
             while not st.done:
-                yield self._step_sync([st])[0]
+                yield from self._step_sync([st])[0]
         finally:
             if st.finish is None:
                 st.finish = FinishReason.CANCELLED
@@ -448,9 +562,10 @@ class Generator:
         if not self.batching:
             try:
                 while not st.done:
-                    logits = await self.model.aforward(st.pending, st.cache, session=st.session)
-                    st.masks += len(st.pending)
-                    yield await self._run_plain(self._consume, st, logits)
+                    await self._run_plain(self._plan_drafts, [st])
+                    logits = (await self.model.aforward_batch(self._inputs([st])))[0]
+                    for ev in await self._run_plain(self._consume_step, st, logits):
+                        yield ev
             finally:
                 if st.finish is None:
                     st.finish = FinishReason.CANCELLED
@@ -493,21 +608,19 @@ class Generator:
         return (live[start:] + live[:start])[: self.max_batch]
 
     async def _run_step(self, batch: list[_SeqState]) -> None:
-        inputs = [SequenceInput(st.pending, st.cache, st.session) for st in batch]
-        logits = await self.model.aforward_batch(inputs)
+        if self.draft is not None:
+            await self._run_plain(self._plan_drafts, batch)
+        logits = await self.model.aforward_batch(self._inputs(batch))
         events = await self._run_plain(self._consume_batch, batch, logits)
-        for st, ev in zip(batch, events, strict=True):
+        for st, evs in zip(batch, events, strict=True):
             if st.queue is not None and not st.cancelled:
-                st.queue.put_nowait(ev)
+                for ev in evs:
+                    st.queue.put_nowait(ev)
 
-    def _consume_batch(self, batch: Sequence[_SeqState], logits: Sequence[torch.Tensor]) -> list[TokenEvent]:
-        events = []
-        for st, lg in zip(batch, logits, strict=True):
-            st.masks += len(st.pending)
-            events.append(self._consume(st, lg))
-        return events
+    def _consume_batch(self, batch: Sequence[_SeqState], logits: Sequence[torch.Tensor]) -> list[list[TokenEvent]]:
+        return [self._consume_step(st, lg) for st, lg in zip(batch, logits, strict=True)]
 
-    async def _run_plain(self, fn: Callable[..., TokenEvent | list[TokenEvent]], *args: Any) -> Any:
+    async def _run_plain(self, fn: Callable[..., Any], *args: Any) -> Any:
         """Sampling/detokenization off the event loop (on the model's plaintext thread when it has one)."""
         run = getattr(self.model, "run_plain", None)
         if run is None:

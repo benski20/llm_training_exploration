@@ -80,6 +80,12 @@ class GatewayModelConfig(BaseModel):
         "masked", description="'masked' = production; 'plain'/'float' = local dev/testing only (no service)"
     )
     ring: str = "K32A12C27"
+    draft_pack_path: Path | None = Field(
+        None, description="Speculative decoding: a small model pack with the same tokenizer (e.g. Qwen2.5-0.5B for "
+        "Qwen2.5-7B), run locally in plaintext on the gateway to propose tokens the target checks in one masked pass",
+    )
+    spec_tokens: int = Field(4, ge=0, le=16, description="Draft tokens proposed per step (0 disables speculation)")
+    draft_device: str | None = Field(None, description="Device of the draft model (default: the model's device)")
     service_url: str | None = None
     service_token: SecretStr | None = None
     service_token_file: Path | None = Field(

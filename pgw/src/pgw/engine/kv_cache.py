@@ -57,6 +57,7 @@ class KVCache:
         self._k = torch.zeros((num_layers, max(cap, 1), num_kv_heads, head_dim), dtype=dtype, device=self.device)
         self._v = torch.zeros_like(self._k)
         self._len = 0
+        self._hi = 0  # highest committed length since the last clear (positions still hold valid K/V)
 
     @property
     def length(self) -> int:
@@ -113,18 +114,31 @@ class KVCache:
         if self._len + tokens > self.capacity:
             raise ConfigError("advance() beyond written positions")
         self._len += tokens
+        self._hi = max(self._hi, self._len)
+
+    def set_length(self, length: int) -> None:
+        """Move the committed length within positions written since the last :meth:`clear`.
+
+        Speculative decoding verifies several drafted positions in one pass and then walks the
+        committed length forward position by position while it accepts them.
+        """
+        if not 0 <= length <= self._hi:
+            raise ConfigError(f"set_length {length} outside [0, {self._hi}]")
+        self._len = length
 
     def truncate(self, length: int) -> None:
         """Drop positions ``>= length`` (used for stop-sequence rollback / prefix reuse)."""
         if not 0 <= length <= self._len:
             raise ConfigError(f"truncate length {length} outside [0, {self._len}]")
         self._len = length
+        self._hi = length
 
     def clear(self) -> None:
         """Zero the storage (plaintext hygiene) and reset the length."""
         self._k.zero_()
         self._v.zero_()
         self._len = 0
+        self._hi = 0
 
     def nbytes(self) -> int:
         """Memory allocated."""

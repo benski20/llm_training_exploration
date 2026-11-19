@@ -126,6 +126,14 @@ The service tenant token is a secret. Do not put it in `models.json` in clear te
 repositories. Inject it from your secret manager when you render the file (`pgw config render
 TEMPLATE OUT`) and keep the rendered file mode 0600.
 
+**Faster decoding (optional).** Add `"draft_pack_path": "/packs/qwen2.5-0.5b"` (a small pack with the
+same tokenizer) to turn on speculative decoding. The draft runs in plaintext on the gateway and
+proposes `spec_tokens` tokens (default 4). The masked target checks them all in one pass. Every token
+is still chosen by the target with the request's own sampler, so responses are identical to
+decoding without a draft, and nothing about the draft leaves the gateway. Speculation only uses
+mask slots that a request has already reserved beyond what it needs; it never makes a request run
+out of slots. `draft_device` puts the draft on a gateway GPU if there is one.
+
 Environment (`/etc/pgw/gateway.env`):
 
 ```bash

@@ -30,6 +30,17 @@ QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
 JOBS: dict[str, dict] = {
+    # speculative decoding: 7B target (masked, service on the T4) with a 0.5B draft on the gateway CPU;
+    # the same requests with and without the draft, outputs compared with the plaintext reference
+    "pgw-spec-7b": {"steps": [
+        {"kind": "pytest", "name": "pytest_spec", "args": ["tests/engine/test_speculative.py", "-q", "-rs",
+                                                           "--timeout", "900"], "timeout": 1200},
+        {"kind": "validate", "label": "qwen7b", "args": [
+            "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
+            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
+            "--draft-model", QWEN05, "--spec-tokens", "4", "--loadtest", "--factory-bench-slots", "64"],
+         "timeout": 7800},
+    ]},
     # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)
     "pgw-quality-7b": {"steps": [
         {"kind": "shell", "name": "quality_7b",

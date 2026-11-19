@@ -511,3 +511,40 @@ async def test_swapped_tokenizer_file_refused_at_startup(tiny_pack_dir: Path, tm
     with pytest.raises(PGWError):
         async with gateway(app):
             pass
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_speculative_decoding_through_the_gateway_is_identical(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                                     make_store: Any, keys: ApiKeyStore, key: str,
+                                                                     stream: bool) -> None:
+    """A draft model on the gateway changes how many masked passes run, never the response."""
+    req = {**CHAT, "logprobs": True, "top_logprobs": 2, "max_tokens": 12, "stream": stream}
+
+    async def run(model_kw: dict[str, Any]) -> tuple[Any, Any]:
+        store = make_store(400, name=f"store-{len(model_kw)}")
+        svc = InProcessService(gw_pack)
+        app = masked_app(tiny_pack_dir, tmp_path, store, svc, keys, model_kw=model_kw)
+        async with gateway(app) as c:
+            r = await c.post("/v1/chat/completions", json=req, headers=auth(key))
+            assert r.status_code == 200, r.text
+            status = (await c.get("/admin/status", headers=ADMIN)).json()
+        if stream:
+            chunks = [d for d in parse_sse(r.text) if d != "[DONE]"]
+            body = ["".join(ch["choices"][0]["delta"].get("content") or "" for ch in chunks if ch.get("choices"))]
+        else:
+            body = r.json()["choices"][0]
+        return body, status["models"][0]["backend"]
+
+    base, be0 = await run({})
+    spec, be1 = await run({"draft_pack_path": str(tiny_pack_dir), "spec_tokens": 4})
+    if stream:
+        assert spec == base
+    else:  # same tokens and text; logprobs equal up to float rounding (rows are verified in one batch)
+        lp0, lp1 = base.pop("logprobs")["content"], spec.pop("logprobs")["content"]
+        assert spec == base
+        assert [t["token"] for t in lp1] == [t["token"] for t in lp0]
+        assert [t["logprob"] for t in lp1] == pytest.approx([t["logprob"] for t in lp0], abs=1e-4)
+        for a, b in zip(lp1, lp0, strict=True):
+            assert [x["token"] for x in a["top_logprobs"]] == [x["token"] for x in b["top_logprobs"]]
+    assert be1["round_trips"] < be0["round_trips"]  # fewer sequential passes for the same output
+    assert be1["integrity_failures"] == 0 and be1["freivalds_checked"] == be1["round_trips"]

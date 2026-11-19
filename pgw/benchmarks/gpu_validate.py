@@ -212,6 +212,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     R["pack_info"] = {k: info[k] for k in info if k not in ("linears", "files", "tensors")}
     if args.delete_hf and Path(src) != Path(args.model):
         shutil.rmtree(Path(src).resolve().parents[1], ignore_errors=True)  # free disk (blobs dir)
+    draft_pack: Path | None = None
+    if args.draft_model:
+        dsrc = args.draft_model
+        if not Path(dsrc).exists():
+            from huggingface_hub import snapshot_download
+
+            dsrc = snapshot_download(args.draft_model, allow_patterns=["*.json", "*.safetensors", "*.txt"])
+        draft_pack = work / "draft_pack"
+        if not (draft_pack / "manifest.json").exists():
+            cli("pack", str(dsrc), str(draft_pack), "--name", f"{args.label}-draft", "-q", env=env,
+                log_file=work / "logs" / "pack_draft.log")
+        R["draft"] = {"model": args.draft_model, "spec_tokens": args.spec_tokens,
+                      "device": args.draft_device or "cpu", "pack_bytes": dir_bytes(draft_pack)}
     save()
 
     # 2. reference
@@ -231,6 +244,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     per_req = n_prompt + args.max_tokens
     n_requests = 2 + args.concurrent  # non-streaming, streaming, concurrent batch
     slots = per_req * n_requests + 16
+    if args.draft_model:  # the same requests again, with room for speculation rows
+        slots += (n_prompt + args.max_tokens * (1 + args.spec_tokens)) * n_requests
     store, kek = work / "masks", work / "secrets" / "kek"
     kek.parent.mkdir(mode=0o700, exist_ok=True)
     if not (store / "state.sqlite").exists():
@@ -279,150 +294,163 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_service_loaded"] = gpu_mem_mb()
         svc_url = f"http://127.0.0.1:{svc_port}"
         models = sec / "models.json"
-        models.write_text(json.dumps([{"name": args.label, "pack_path": str(pack), "fingerprint": fp,
-                                       "ring": args.ring, "service_url": svc_url,
-                                       "service_token_file": str(sec / "service_token"),
-                                       "max_concurrent_sessions": max(4, args.concurrent),
-                                       "service_timeout_s": 600}]))
-        models.chmod(0o600)
-        gw_port = free_port()
-        gw_env = {**env, "PGW_GATEWAY_HOST": "127.0.0.1", "PGW_GATEWAY_PORT": str(gw_port),
-                  "PGW_GATEWAY_MODELS_FILE": str(models), "PGW_GATEWAY_API_KEYS_FILE": str(keys),
-                  "PGW_GATEWAY_ADMIN_TOKEN": ADMIN, "PGW_GATEWAY_MASKSTORE_ROOT": str(store),
-                  "PGW_GATEWAY_AUDIT_LOG_FILE": str(work / "state" / "audit.jsonl"),
-                  "PGW_GATEWAY_TOKENS_PER_MINUTE": "10000000", "PGW_GATEWAY_REQUESTS_PER_MINUTE": "10000",
-                  "PGW_MASKSTORE_ROOT": str(store), "PGW_MASKSTORE_KEY_FILE": str(kek),
-                  "PGW_MASKSTORE_LOW_WATER_SLOTS": "1"}
-        gw = stack.start("gateway", ["gateway", "serve"], gw_env)
-        R["gateway_startup_s"] = round(stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, "gateway"), 1)
-        gw_url = f"http://127.0.0.1:{gw_port}"
-        H = {"Authorization": f"Bearer {api_key}"}
+        variants: list[tuple[str, dict[str, Any]]] = [("", {})]
+        if draft_pack is not None:
+            dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": args.spec_tokens}
+            if args.draft_device:
+                dk["draft_device"] = args.draft_device
+            variants.append(("spec_", dk))
+        gw: subprocess.Popen[bytes] | None = None
+        for prefix, extra in variants:
+            if gw is not None:  # the next gateway reuses the store; stop the previous one first
+                gw.terminate()
+                gw.wait(timeout=120)
+            models.write_text(json.dumps([{"name": args.label, "pack_path": str(pack), "fingerprint": fp,
+                                           "ring": args.ring, "service_url": svc_url,
+                                           "service_token_file": str(sec / "service_token"),
+                                           "max_concurrent_sessions": max(4, args.concurrent),
+                                           "service_timeout_s": 600, **extra}]))
+            models.chmod(0o600)
+            gw_port = free_port()
+            gw_env = {**env, "PGW_GATEWAY_HOST": "127.0.0.1", "PGW_GATEWAY_PORT": str(gw_port),
+                      "PGW_GATEWAY_MODELS_FILE": str(models), "PGW_GATEWAY_API_KEYS_FILE": str(keys),
+                      "PGW_GATEWAY_ADMIN_TOKEN": ADMIN, "PGW_GATEWAY_MASKSTORE_ROOT": str(store),
+                      "PGW_GATEWAY_AUDIT_LOG_FILE": str(work / "state" / "audit.jsonl"),
+                      "PGW_GATEWAY_TOKENS_PER_MINUTE": "10000000", "PGW_GATEWAY_REQUESTS_PER_MINUTE": "10000",
+                      "PGW_MASKSTORE_ROOT": str(store), "PGW_MASKSTORE_KEY_FILE": str(kek),
+                      "PGW_MASKSTORE_LOW_WATER_SLOTS": "1"}
+            gw = stack.start(f"gateway{prefix}", ["gateway", "serve"], gw_env)
+            ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
+            R[prefix + "gateway_startup_s"] = round(ready_s, 1)
+            gw_url = f"http://127.0.0.1:{gw_port}"
+            H = {"Authorization": f"Bearer {api_key}"}
 
-        def status() -> dict[str, Any]:
-            r = httpx.get(f"{gw_url}/admin/status", headers={"Authorization": f"Bearer {ADMIN}"}, timeout=60,
-                          trust_env=False)
-            r.raise_for_status()
-            return dict(r.json()["models"][0])
+            def status(gw_url: str = gw_url) -> dict[str, Any]:
+                r = httpx.get(f"{gw_url}/admin/status", headers={"Authorization": f"Bearer {ADMIN}"}, timeout=60,
+                              trust_env=False)
+                r.raise_for_status()
+                return dict(r.json()["models"][0])
 
-        body = {"model": args.label, "messages": [{"role": "user", "content": args.prompt}], "temperature": 0,
-                "max_tokens": args.max_tokens, "ignore_eos": True, "logprobs": True, "top_logprobs": 2}
+            body = {"model": args.label, "messages": [{"role": "user", "content": args.prompt}], "temperature": 0,
+                    "max_tokens": args.max_tokens, "ignore_eos": True, "logprobs": True, "top_logprobs": 2}
 
-        # 5a. non-streaming, compared with the reference
-        s0, c0, t0 = status(), proc_cpu_seconds(gw.pid), time.perf_counter()
-        sc0 = proc_cpu_seconds(svc.pid)
-        r = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200, trust_env=False)
-        wall = time.perf_counter() - t0
-        c1, sc1, s1 = proc_cpu_seconds(gw.pid), proc_cpu_seconds(svc.pid), status()
-        if r.status_code != 200:
-            raise RuntimeError(f"chat failed {r.status_code}: {r.text[:2000]}")
-        js = r.json()
-        content = js["choices"][0]["logprobs"]["content"]
-        got_tokens = [c["token"] for c in content]
-        got_lps = [c["logprob"] for c in content]
-        got_top = [[(t["token"], t["logprob"]) for t in c["top_logprobs"]] for c in content]
-        b0, b1 = s0["backend"], s1["backend"]
-        ntok = n_prompt + args.max_tokens
-        d = {k: b1[k] - b0[k] for k in b1 if isinstance(b1[k], (int, float))}
-        R["chat"] = {
-            "text": js["choices"][0]["message"]["content"],
-            "usage": js["usage"],
-            "tokens_identical": got_tokens == ref["tokens"],
-            "logprobs_identical": got_lps == ref["logprobs"],
-            "top2_identical": [[tuple(x) for x in t] for t in got_top] == [[tuple(x) for x in t] for t in ref["top"]],
-            "text_identical": js["choices"][0]["message"]["content"] == ref["text"],
-            "max_abs_logprob_diff": max((abs(a - b) for a, b in zip(got_lps, ref["logprobs"], strict=False)),
-                                        default=None),
-            "wall_s": round(wall, 2),
-            "backend_delta": d,
-            "gateway_cpu_s": round(c1 - c0, 2),
-            "service_cpu_s": round(sc1 - sc0, 2),
-            "slots_used": ntok,
-            "wire_bytes_per_token": round((d.get("bytes_up", 0) + d.get("bytes_down", 0)) / ntok),
-            "wire_up_bytes_per_token": round(d.get("bytes_up", 0) / ntok),
-            "wire_down_bytes_per_token": round(d.get("bytes_down", 0) / ntok),
-            "round_trips_per_token_decode": None,
-            "gateway_cpu_s_per_token": round((c1 - c0) / ntok, 4),
-            "status_after": {k: v for k, v in s1.items() if k != "backend"},
-        }
-        if got_tokens != ref["tokens"]:
-            R["chat"]["got_tokens"], R["chat"]["ref_tokens"] = got_tokens, ref["tokens"]
-        log("chat:", repr(R["chat"]["text"]), "identical:", R["chat"]["tokens_identical"],
-            R["chat"]["logprobs_identical"])
-        save()
-
-        # 5b. streaming: TTFT (prefill) and decode s/token
-        s0, c0 = status(), proc_cpu_seconds(gw.pid)
-        times: list[float] = []
-        text: list[str] = []
-        lps: list[float] = []
-        t0 = time.perf_counter()
-        with httpx.stream("POST", f"{gw_url}/v1/chat/completions", json={**body, "stream": True}, headers=H,
-                          timeout=7200, trust_env=False) as resp:
-            if resp.status_code != 200:
-                resp.read()
-                raise RuntimeError(f"stream failed {resp.status_code}: {resp.text[:2000]}")
-            for line in resp.iter_lines():
-                if not line.startswith("data: ") or line.strip() == "data: [DONE]":
-                    continue
-                ev = json.loads(line[6:])
-                if ev.get("choices"):
-                    ch = ev["choices"][0]
-                    piece = ch["delta"].get("content")
-                    if ch.get("logprobs"):
-                        for c in ch["logprobs"]["content"]:
-                            lps.append(c["logprob"])
-                            times.append(time.perf_counter() - t0)
-                    if piece:
-                        text.append(piece)
-        c1, s1 = proc_cpu_seconds(gw.pid), status()
-        db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"] if isinstance(s1["backend"][k], (int, float))}
-        dec = (times[-1] - times[0]) / (len(times) - 1) if len(times) > 1 else None
-        R["stream"] = {
-            "text_identical": "".join(text) == ref["text"],
-            "logprobs_identical": lps == ref["logprobs"],
-            "ttft_s": round(times[0], 3) if times else None,
-            "prefill_s_per_prompt_token": round(times[0] / n_prompt, 4) if times else None,
-            "decode_s_per_token": round(dec, 4) if dec else None,
-            "decode_tokens_per_s": round(1 / dec, 3) if dec else None,
-            "wall_s": round(time.perf_counter() - t0, 2),
-            "gateway_cpu_s": round(c1 - c0, 2),
-            "backend_delta": db,
-        }
-        if dec:
-            # gateway CPU per decoded token: total CPU minus an estimate of the prefill share is not
-            # separable from /proc; report the request average and the local engine seconds instead.
-            R["stream"]["gateway_local_engine_s_per_token"] = round(db.get("local_seconds", 0) / ntok, 4)
-            R["stream"]["remote_s_per_token"] = round(db.get("remote_seconds", 0) / ntok, 4)
-        log("stream:", R["stream"])
-        save()
-
-        # 6. concurrent requests (gateway engine batches sessions; service batches rows)
-        if args.concurrent > 1:
+            # 5a. non-streaming, compared with the reference
             s0, c0, t0 = status(), proc_cpu_seconds(gw.pid), time.perf_counter()
-
-            def one(_: int) -> dict[str, Any]:
-                rr = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200, trust_env=False)
-                return {"status": rr.status_code, "json": rr.json() if rr.status_code == 200 else rr.text[:500]}
-
-            with cf.ThreadPoolExecutor(args.concurrent) as ex:
-                res = list(ex.map(one, range(args.concurrent)))
+            sc0 = proc_cpu_seconds(svc.pid)
+            r = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200, trust_env=False)
             wall = time.perf_counter() - t0
-            c1, s1 = proc_cpu_seconds(gw.pid), status()
-            db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"]
-                  if isinstance(s1["backend"][k], (int, float))}
-            ok = [x for x in res if x["status"] == 200]
-            same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"] for x in ok]
-            R["concurrent"] = {
-                "requests": args.concurrent, "ok": len(ok), "tokens_identical": same,
-                "errors": [x for x in res if x["status"] != 200][:3],
+            c1, sc1, s1 = proc_cpu_seconds(gw.pid), proc_cpu_seconds(svc.pid), status()
+            if r.status_code != 200:
+                raise RuntimeError(f"chat failed {r.status_code}: {r.text[:2000]}")
+            js = r.json()
+            content = js["choices"][0]["logprobs"]["content"]
+            got_tokens = [c["token"] for c in content]
+            got_lps = [c["logprob"] for c in content]
+            got_top = [[(t["token"], t["logprob"]) for t in c["top_logprobs"]] for c in content]
+            b0, b1 = s0["backend"], s1["backend"]
+            ntok = n_prompt + args.max_tokens
+            d = {k: b1[k] - b0[k] for k in b1 if isinstance(b1[k], (int, float))}
+            R[prefix + "chat"] = {
+                "text": js["choices"][0]["message"]["content"],
+                "usage": js["usage"],
+                "tokens_identical": got_tokens == ref["tokens"],
+                "logprobs_identical": got_lps == ref["logprobs"],
+                "top2_identical": [[tuple(x) for x in t] for t in got_top] == [[tuple(x) for x in t] for t in ref["top"]],
+                "text_identical": js["choices"][0]["message"]["content"] == ref["text"],
+                "max_abs_logprob_diff": max((abs(a - b) for a, b in zip(got_lps, ref["logprobs"], strict=False)),
+                                            default=None),
                 "wall_s": round(wall, 2),
-                "generated_tokens_per_s": round(len(ok) * args.max_tokens / wall, 3),
-                "all_tokens_per_s": round(len(ok) * ntok / wall, 3),
-                "gateway_cpu_s_per_token": round((c1 - c0) / max(1, len(ok) * ntok), 4),
+                "backend_delta": d,
+                "gateway_cpu_s": round(c1 - c0, 2),
+                "service_cpu_s": round(sc1 - sc0, 2),
+                "slots_used": ntok,
+                "wire_bytes_per_token": round((d.get("bytes_up", 0) + d.get("bytes_down", 0)) / ntok),
+                "wire_up_bytes_per_token": round(d.get("bytes_up", 0) / ntok),
+                "wire_down_bytes_per_token": round(d.get("bytes_down", 0) / ntok),
+                "round_trips_per_token_decode": None,
+                "gateway_cpu_s_per_token": round((c1 - c0) / ntok, 4),
+                "status_after": {k: v for k, v in s1.items() if k != "backend"},
+            }
+            if got_tokens != ref["tokens"]:
+                R[prefix + "chat"]["got_tokens"], R[prefix + "chat"]["ref_tokens"] = got_tokens, ref["tokens"]
+            log(prefix + "chat:", repr(R[prefix + "chat"]["text"]), "identical:", R[prefix + "chat"]["tokens_identical"],
+                R[prefix + "chat"]["logprobs_identical"])
+            save()
+
+            # 5b. streaming: TTFT (prefill) and decode s/token
+            s0, c0 = status(), proc_cpu_seconds(gw.pid)
+            times: list[float] = []
+            text: list[str] = []
+            lps: list[float] = []
+            t0 = time.perf_counter()
+            with httpx.stream("POST", f"{gw_url}/v1/chat/completions", json={**body, "stream": True}, headers=H,
+                              timeout=7200, trust_env=False) as resp:
+                if resp.status_code != 200:
+                    resp.read()
+                    raise RuntimeError(f"stream failed {resp.status_code}: {resp.text[:2000]}")
+                for line in resp.iter_lines():
+                    if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                        continue
+                    ev = json.loads(line[6:])
+                    if ev.get("choices"):
+                        ch = ev["choices"][0]
+                        piece = ch["delta"].get("content")
+                        if ch.get("logprobs"):
+                            for c in ch["logprobs"]["content"]:
+                                lps.append(c["logprob"])
+                                times.append(time.perf_counter() - t0)
+                        if piece:
+                            text.append(piece)
+            c1, s1 = proc_cpu_seconds(gw.pid), status()
+            db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"] if isinstance(s1["backend"][k], (int, float))}
+            dec = (times[-1] - times[0]) / (len(times) - 1) if len(times) > 1 else None
+            R[prefix + "stream"] = {
+                "text_identical": "".join(text) == ref["text"],
+                "logprobs_identical": lps == ref["logprobs"],
+                "ttft_s": round(times[0], 3) if times else None,
+                "prefill_s_per_prompt_token": round(times[0] / n_prompt, 4) if times else None,
+                "decode_s_per_token": round(dec, 4) if dec else None,
+                "decode_tokens_per_s": round(1 / dec, 3) if dec else None,
+                "wall_s": round(time.perf_counter() - t0, 2),
+                "gateway_cpu_s": round(c1 - c0, 2),
                 "backend_delta": db,
             }
-            log("concurrent:", {k: v for k, v in R["concurrent"].items() if k != "backend_delta"})
+            if dec:
+                # gateway CPU per decoded token: total CPU minus an estimate of the prefill share is not
+                # separable from /proc; report the request average and the local engine seconds instead.
+                R[prefix + "stream"]["gateway_local_engine_s_per_token"] = round(db.get("local_seconds", 0) / ntok, 4)
+                R[prefix + "stream"]["remote_s_per_token"] = round(db.get("remote_seconds", 0) / ntok, 4)
+            log(prefix + "stream:", R[prefix + "stream"])
             save()
+
+            # 6. concurrent requests (gateway engine batches sessions; service batches rows)
+            if args.concurrent > 1:
+                s0, c0, t0 = status(), proc_cpu_seconds(gw.pid), time.perf_counter()
+
+                def one(_: int, gw_url: str = gw_url, body: dict[str, Any] = body,
+                        H: dict[str, str] = H) -> dict[str, Any]:
+                    rr = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200, trust_env=False)
+                    return {"status": rr.status_code, "json": rr.json() if rr.status_code == 200 else rr.text[:500]}
+
+                with cf.ThreadPoolExecutor(args.concurrent) as ex:
+                    res = list(ex.map(one, range(args.concurrent)))
+                wall = time.perf_counter() - t0
+                c1, s1 = proc_cpu_seconds(gw.pid), status()
+                db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"]
+                      if isinstance(s1["backend"][k], (int, float))}
+                ok = [x for x in res if x["status"] == 200]
+                same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"] for x in ok]
+                R[prefix + "concurrent"] = {
+                    "requests": args.concurrent, "ok": len(ok), "tokens_identical": same,
+                    "errors": [x for x in res if x["status"] != 200][:3],
+                    "wall_s": round(wall, 2),
+                    "generated_tokens_per_s": round(len(ok) * args.max_tokens / wall, 3),
+                    "all_tokens_per_s": round(len(ok) * ntok / wall, 3),
+                    "gateway_cpu_s_per_token": round((c1 - c0) / max(1, len(ok) * ntok), 4),
+                    "backend_delta": db,
+                }
+                log(prefix + "concurrent:", {k: v for k, v in R[prefix + "concurrent"].items() if k != "backend_delta"})
+                save()
 
         # 7. service load test (decode rows, all layers), batch 1 and batched
         R["service_loadtest"] = {}
@@ -449,7 +477,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_end"] = gpu_mem_mb()
     finally:
         stack.stop()
-        for name in ("service", "gateway"):
+        for name in ("service", "gateway", "gateway" + "spec_"):
             lf = work / "logs" / f"{name}.log"
             if lf.exists():
                 shutil.copy(lf, out_dir / f"{args.label}_{name}.log")
@@ -480,6 +508,9 @@ def main() -> int:
     ap.add_argument("--loadtest-tokens", type=int, default=4)
     ap.add_argument("--factory-bench-slots", type=int, default=256)
     ap.add_argument("--batch-window-ms", type=float, default=0.0)
+    ap.add_argument("--draft-model", default=None, help="also run with speculative decoding (this draft model)")
+    ap.add_argument("--spec-tokens", type=int, default=4)
+    ap.add_argument("--draft-device", default=None, help="draft model device on the gateway (default cpu)")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")
     ap.add_argument("--out", default="results")

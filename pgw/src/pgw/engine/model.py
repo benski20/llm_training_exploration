@@ -49,12 +49,15 @@ class SequenceInput:
         cache: That sequence's KV cache.
         session: Backend session handle (mask reservation) or ``None``.
         all_logits: Return logits for every new position instead of only the last one.
+        last_logits: Return logits ``(N, vocab)`` for the last ``N`` new positions (speculative
+            verification); takes precedence over ``all_logits`` when > 0.
     """
 
     input_ids: torch.Tensor | Sequence[int]
     cache: KVCache
     session: object | None = None
     all_logits: bool = False
+    last_logits: int = 0
 
 
 class TransformerModel:
@@ -221,10 +224,11 @@ class TransformerModel:
             c.advance(t.numel())
         out = []
         for s, h in zip(seqs, hs, strict=True):
-            hsel = h if s.all_logits else h[-1:]
+            many = s.all_logits or s.last_logits > 0
+            hsel = h[-s.last_logits:] if s.last_logits > 0 else (h if s.all_logits else h[-1:])
             hn = rms_norm(hsel, self.final_norm, self.eps).to(torch.float32)
             logits = hn @ self.lm_head.t()
-            out.append(logits if s.all_logits else logits[0])
+            out.append(logits if many else logits[0])
         return out
 
     @staticmethod

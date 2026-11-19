@@ -316,6 +316,7 @@ class ModelRuntime:
         self.model: TransformerModel | None = None
         self.backend: Any = None
         self.generator: Generator = None  # type: ignore[assignment]
+        self.draft_model: TransformerModel | None = None
         self.client: Any = None
         self.noise_monitor: Any = None
         self.noise_monitor_state = "disabled"
@@ -646,11 +647,33 @@ class ModelRuntime:
 
     def _finish_engine(self, pack: Any, tokenizer: ChatTokenizer) -> None:
         self.model = TransformerModel(pack, self.backend, device=self.config.device)
+        self.draft_model = self._load_draft()
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
+            draft=self.draft_model, spec_tokens=self.config.spec_tokens,
         )
         self.tokenizer = tokenizer
         self.pack = pack
+
+    def _load_draft(self) -> TransformerModel | None:
+        """The speculative-decoding draft model: plaintext, local to the gateway (never sent anywhere)."""
+        path = self.config.draft_pack_path
+        if path is None or self.config.spec_tokens == 0:
+            return None
+        from pgw.modelpack import ModelPack
+
+        dpack = ModelPack.open(path, verify=self.settings.pack_verify)
+        # Float compute: the draft only proposes tokens, the masked target decides every one of them.
+        dev = self.config.draft_device or self.config.device
+        draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev), device=dev)
+        log.info("model %s: speculative decoding with draft %s (%d tokens per step)", self.name,
+                 getattr(dpack, "name", path), self.config.spec_tokens)
+        return draft
+
+    @property
+    def spec_factor(self) -> int:
+        """Mask rows per generated token in the worst case (1 without speculation)."""
+        return 1 + (self.config.spec_tokens if self.draft_model is not None else 0)
 
     def mask_cache_estimate(self) -> int:
         """Worst-case decrypted mask bytes cached by ``max_concurrent_sessions`` sessions (0 if unknown)."""
@@ -876,16 +899,21 @@ class ModelRuntime:
 
     async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str) -> tuple[Any, int]:
         """Reserve the prompt plus a first window (or everything when windows are disabled)."""
-        cap = len(ids) + params.max_tokens
+        need = len(ids) + params.max_tokens
+        # Speculative decoding may use more rows (rejected drafts); the cap allows it, but the engine
+        # only speculates with rows the session already holds, so a short store never fails a request.
+        cap = len(ids) + params.max_tokens * self.spec_factor
         window = int(self.settings.mask_window_tokens)
+        if window <= 0:  # everything up front: reserve what the request needs (speculation uses slack only)
+            cap = need
         first = cap if window <= 0 else min(cap, len(ids) + window)
         if first < cap:
             # Fail fast (before any compute) when the store could not serve the whole request.
             avail = await asyncio.to_thread(self._available_slots)
-            if avail < cap:
+            if avail < need:
                 raise MaskExhaustedError(
                     "not enough mask slots for this request",
-                    details={"needed": cap, "available": avail, "model": self.name},
+                    details={"needed": need, "available": avail, "model": self.name},
                 )
         res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)
         if first >= cap:

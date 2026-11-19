@@ -99,6 +99,11 @@ class WindowedReservation:
         with self._lock:
             return self._reserved_left(lid) + max(0, self.cap - self.slots)
 
+    def reserved_rows(self, lid: LinearId | str) -> int:
+        """Rows of ``lid`` already reserved and not yet taken (no store extension needed for them)."""
+        with self._lock:
+            return self._reserved_left(lid)
+
     def taken(self, lid: LinearId | str) -> int:
         """Rows of ``lid`` already taken."""
         with self._lock:
