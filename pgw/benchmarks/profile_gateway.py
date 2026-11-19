@@ -70,6 +70,9 @@ def main() -> None:
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--json", default=None)
     ap.add_argument("--noise", action="store_true", help="enable the outbound-noise monitor (gateway default)")
+    ap.add_argument("--service-url", default=None, help="use a real compute service (ComputeClient) instead of "
+                    "the in-process one; reports wall ms per call including the round trip")
+    ap.add_argument("--token-file", default=None, help="service bearer token file (with --service-url)")
     args = ap.parse_args()
 
     from pgw.core import RingParams
@@ -118,7 +121,13 @@ def main() -> None:
             finally:
                 TimedClient.service_s += time.perf_counter() - t
 
-    client = TimedClient(pack)
+    client: Any = TimedClient(pack)
+    if args.service_url:
+        from pgw.wire.client import ClientConfig, ComputeClient
+
+        tok = Path(args.token_file).read_text().strip() if args.token_file else None
+        client = ComputeClient(ClientConfig(base_url=args.service_url, token=tok))
+        client.connect_sync(pack.fingerprint, ring.name)
     noise = None
     if args.noise:
         from pgw.observability.noise import OutboundNoiseMonitor
@@ -160,6 +169,7 @@ def main() -> None:
         "gateway_s_per_step_full_model": sum(per_group.values()) / n * scale,
         "service_s_per_step_full_model": TimedClient.service_s / n * scale,
         "wall_s": wall,
+        "wall_ms_per_call": 1000 * wall / max(1, (args.steps - 1) * args.layers * len(groups)),
     }
     print(json.dumps(out, indent=2))
     if args.json:

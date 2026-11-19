@@ -35,14 +35,17 @@ JOBS: dict[str, dict] = {
     "pgw-spec-7b": {"steps": [
         {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
          "timeout": 1800},
+        {"kind": "shell", "name": "profile_gateway_cpu",
+         "cmd": "python benchmarks/profile_gateway.py --preset 7b --layers 1 --steps 24 --ring K32A12C27 --profile "
+                "--workdir /tmp/pgw_prof", "timeout": 1800},
         {"kind": "pytest", "name": "pytest_spec_ringmm", "args": ["tests/engine/test_speculative.py",
                                                                   "tests/core/test_ringmm.py", "tests/wire/test_stream.py",
                                                                   "-q", "-rs", "--timeout", "900"], "timeout": 1500},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
             "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
-            "--draft-model", QWEN05, "--spec-tokens", "4", "--draft-device", "cpu", "cuda",
-            "--loadtest", "--factory-bench-slots", "64"],
+            "--draft-model", QWEN05, "--spec-tokens", "8", "--draft-device", "cpu", "cuda",
+            "--loadtest", "1x1", "1x5", "4x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
     # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)
