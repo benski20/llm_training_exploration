@@ -1,0 +1,235 @@
+[{"stream_name":"stdout","time":15.474365990999999,"data":"[   0.2m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869296 kB', 'MemFree:        26227440 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":15.678677669,"data":"[   0.2m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":29.304604898,"data":"[   0.5m] DONE pip_install rc 0 14s\n"}
+,{"stream_name":"stdout","time":29.304654073000002,"data":"\n"}
+,{"stream_name":"stdout","time":29.304658608,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":29.304663193,"data":"\n"}
+,{"stream_name":"stdout","time":29.304666947,"data":"[   0.5m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":30.383476803,"data":"[   0.5m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":30.383503143,"data":"=0.0.8\n"}
+,{"stream_name":"stdout","time":30.383507104,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":30.383510367,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":30.383513692,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":30.383516977,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":30.383521834,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":30.383528674,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":30.383530972,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":30.383533172,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":30.383535456,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":30.383537654,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":30.38353982,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":30.383542007,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":30.383544295,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":30.383546424,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":30.383548549,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":30.383550762,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":30.383552988,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":30.383555155,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":30.383557304,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":30.383559472,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":30.383561775,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":30.383563896,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":30.383566025,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":30.383568135,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":30.383570339,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":30.383572499,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":30.38357463,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":30.383576779,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":30.383578932,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":30.383581055,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":30.383583196,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":30.383585349,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":30.383598169,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":30.383607683,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":30.383609958,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":30.383612098,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":30.383614233,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":30.383616335,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":30.383618448,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":30.383620762,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":30.383622888,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":30.383624982,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":30.383627082,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":30.383629199,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":30.38363133,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":30.383633429,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":30.383635609,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":30.383637739,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":30.383639958,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":30.383642124,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":30.383644237,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":30.383646392,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":30.383648592,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":30.383650723,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":30.383652869,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":30.383655288,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":30.38365786,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":30.38365999,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":30.38366212,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":30.383664225,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":30.38366637,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":30.383668485,"data":"texttable==1.7.3\n"}
+,{"stream_name":"stdout","time":30.383670604,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":30.383672714,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":30.383674902,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":30.383677012,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":30.38367915,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":30.383681275,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":30.383683401,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":30.383685499,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":30.383687622,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":30.383689735,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":30.38369186,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":30.383693956,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":30.38369607,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":30.383698195,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":30.383700332,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":30.383702444,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":30.383707147,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":30.383709443,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":30.383711605,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":30.383713762,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":30.383715914,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":30.383718239,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":30.383720375,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":30.383722537,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":30.383724668,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":30.383726788,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":30.383728917,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":30.383731052,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":30.383733197,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":30.383735342,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":30.38373747,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":30.383739602,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":30.383741736,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":30.383743875,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":30.383746007,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":30.383748129,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":30.383750277,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":30.383752401,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":30.383754525,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":30.383756648,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":30.383758839,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":30.383761055,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":30.38376329,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":30.383766524,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":30.383768792,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":30.383770997,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":30.383773175,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":30.383775349,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":30.383777542,"data":"ujson==6.1.0\n"}
+,{"stream_name":"stdout","time":30.383779715,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":30.383781877,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":30.38378403,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":30.383786222,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":30.383788397,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":30.383795985,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":30.383798182,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":30.383800296,"data":"urwid==5.1.3\n"}
+,{"stream_name":"stdout","time":30.383802414,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":30.383804643,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":30.38380678,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":30.383808898,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":30.383811014,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":30.38381574,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":30.383818066,"data":"vtk==9.7.2\n"}
+,{"stream_name":"stdout","time":30.383820243,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":30.383822408,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":30.383824634,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":30.383826804,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":30.383828959,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":30.383831134,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":30.383833369,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":30.383835548,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":30.383837695,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":30.383839859,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":30.383842059,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":30.383844257,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":30.38384646,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":30.383848637,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":30.383850807,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":30.383852964,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":30.383855183,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":30.383857355,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":30.383859534,"data":"wrapt==2.5.1\n"}
+,{"stream_name":"stdout","time":30.383861689,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":30.38386389,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":30.383866078,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":30.383868275,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":30.383870423,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":30.383872589,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":30.383874764,"data":"xvfbwrapper==0.2.38\n"}
+,{"stream_name":"stdout","time":30.383876948,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":30.38387912,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":30.383881299,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":30.383883483,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":30.383885679,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":30.383887849,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":30.383890004,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":30.383892189,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":30.383894397,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":30.383896557,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":30.383898721,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":30.383900905,"data":"\n"}
+,{"stream_name":"stdout","time":30.383903049,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":30.383905243,"data":"\n"}
+,{"stream_name":"stdout","time":30.383907654,"data":"[   0.5m] RUN pytest_spec : /usr/bin/python3 -m pytest tests/engine/test_speculative.py -q -rs --timeout 900 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":82.791367161,"data":"[   1.4m] DONE pytest_spec rc 0 52s\n"}
+,{"stream_name":"stdout","time":82.791402257,"data":"...........s                                                             [100%]\n"}
+,{"stream_name":"stdout","time":82.79140807,"data":"=========================== short test summary info ============================\n"}
+,{"stream_name":"stdout","time":82.791421101,"data":"SKIPPED [1] tests/engine/test_speculative.py:133: tiny test models share a vocabulary size\n"}
+,{"stream_name":"stdout","time":82.791425351,"data":"11 passed, 1 skipped in 40.61s\n"}
+,{"stream_name":"stdout","time":82.791429367,"data":"\n"}
+,{"stream_name":"stdout","time":82.791433119,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":82.791437097,"data":"\n"}
+,{"stream_name":"stdout","time":82.791441628,"data":"[   1.4m] RUN validate_qwen7b : /usr/bin/python3 /tmp/pgwsrc/pgw/benchmarks/gpu_validate.py --out /kaggle/working/validate --model Qwen/Qwen2.5-7B-Instruct --label qwen7b --device cuda --ref-device cuda --ring K32A12C27 --plain-dtype float16 --delete-hf --max-tokens 64 --concurrent 4 --draft-model Qwen/Qwen2.5-0.5B-Instruct --spec-tokens 4 --loadtest --factory-bench-slots 64\n"}
+,{"stream_name":"stdout","time":500.510564096,"data":"[   8.3m] DONE validate_qwen7b rc 1 418s\n"}
+,{"stream_name":"stdout","time":500.510613219,"data":"date.py\", line 537, in \u003cmodule\u003e\n"}
+,{"stream_name":"stdout","time":500.510621462,"data":"    sys.exit(main())\n"}
+,{"stream_name":"stdout","time":500.510626624,"data":"             ~~~~^^\n"}
+,{"stream_name":"stdout","time":500.51063154,"data":"  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 523, in main\n"}
+,{"stream_name":"stdout","time":500.51063712,"data":"    reference_main(args)\n"}
+,{"stream_name":"stdout","time":500.510641996,"data":"    ~~~~~~~~~~~~~~^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510650818,"data":"  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 110, in reference_main\n"}
+,{"stream_name":"stdout","time":500.51065434,"data":"    events = list(gen.stream(ids, params))\n"}
+,{"stream_name":"stdout","time":500.510657695,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/engine/generate.py\", line 467, in stream\n"}
+,{"stream_name":"stdout","time":500.510661035,"data":"    yield from self._step_sync([st])[0]\n"}
+,{"stream_name":"stdout","time":500.510664219,"data":"               ~~~~~~~~~~~~~~~^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510667476,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/engine/generate.py\", line 449, in _step_sync\n"}
+,{"stream_name":"stdout","time":500.510670889,"data":"    logits = self.model.forward_batch(self._inputs(states))\n"}
+,{"stream_name":"stdout","time":500.510674264,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/engine/model.py\", line 249, in forward_batch\n"}
+,{"stream_name":"stdout","time":500.510677634,"data":"    res = self._check_results(calls, self.backend.forward_many(calls))\n"}
+,{"stream_name":"stdout","time":500.510680903,"data":"                                     ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510696136,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/engine/backends.py\", line 320, in forward_many\n"}
+,{"stream_name":"stdout","time":500.510703988,"data":"    return [self.forward(c) for c in calls]\n"}
+,{"stream_name":"stdout","time":500.510709847,"data":"            ~~~~~~~~~~~~^^^\n"}
+,{"stream_name":"stdout","time":500.510715661,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/engine/backends.py\", line 313, in forward\n"}
+,{"stream_name":"stdout","time":500.510720813,"data":"    y = dequantize_outputs(yq, sx, w.scale, w.bias, torch.float32)\n"}
+,{"stream_name":"stdout","time":500.510725712,"data":"  File \"/tmp/pgwsrc/pgw/src/pgw/core/ring.py\", line 275, in dequantize_outputs\n"}
+,{"stream_name":"stdout","time":500.510730712,"data":"    y = yq.to(torch.float64) * sx.to(torch.float64)[:, None] * sw.to(torch.float64)[None, :]\n"}
+,{"stream_name":"stdout","time":500.51073587,"data":"        ~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"}
+,{"stream_name":"stdout","time":500.510765116,"data":"RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n"}
+,{"stream_name":"stdout","time":500.510768626,"data":"Traceback (most recent call last):\n"}
+,{"stream_name":"stdout","time":500.510771137,"data":"  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 526, in main\n"}
+,{"stream_name":"stdout","time":500.510773776,"data":"    run(args)\n"}
+,{"stream_name":"stdout","time":500.510776188,"data":"    ~~~^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510778952,"data":"  File \"/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py\", line 233, in run\n"}
+,{"stream_name":"stdout","time":500.510792999,"data":"    subprocess.run([sys.executable, __file__, \"--phase\", \"reference\", \"--pack\", str(pack), \"--fingerprint\", fp,  # noqa: S603\n"}
+,{"stream_name":"stdout","time":500.510798271,"data":"    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510804421,"data":"                    \"--ring\", args.ring, \"--ref-device\", args.ref_device, \"--max-tokens\", str(args.max_tokens),\n"}
+,{"stream_name":"stdout","time":500.510809721,"data":"                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510814711,"data":"                    \"--prompt\", args.prompt, \"--ref-out\", str(ref_out)], env=env, check=True, timeout=7200)\n"}
+,{"stream_name":"stdout","time":500.510819241,"data":"                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"}
+,{"stream_name":"stdout","time":500.510823527,"data":"  File \"/usr/lib/python3.13/subprocess.py\", line 578, in run\n"}
+,{"stream_name":"stdout","time":500.510827356,"data":"    raise CalledProcessError(retcode, process.args,\n"}
+,{"stream_name":"stdout","time":500.510832806,"data":"                             output=stdout, stderr=stderr)\n"}
+,{"stream_name":"stdout","time":500.510839189,"data":"subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/gpu_validate.py', '--phase', 'reference', '--pack', '/tmp/pgw_bench/qwen7b/pack', '--fingerprint', '41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424', '--ring', 'K32A12C27', '--ref-device', 'cuda', '--max-tokens', '64', '--prompt', 'Explain in three sentences why the sky is blue.', '--ref-out', '/tmp/pgw_bench/qwen7b/reference.json']' returned non-zero exit status 1.\n"}
+,{"stream_name":"stdout","time":500.510846533,"data":"\n"}
+,{"stream_name":"stdout","time":500.510875634,"data":"[   8.3m] ALL DONE\n"}
+,{"stream_name":"stderr","time":503.638997483,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":503.639051439,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":503.995953576,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":503.995984168,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":504.947336211,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":506.384976302,"data":"[NbConvertApp] Writing 1464669 bytes to __results__.html\n"}
+]

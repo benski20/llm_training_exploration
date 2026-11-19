@@ -108,7 +108,7 @@ def _client_cert_header_middleware(app: ASGIApp, header: str) -> ASGIApp:
     hname = header.lower().encode("latin-1")
 
     async def mw(scope: Scope, receive: Callable[[], Awaitable[Any]], send: Callable[[Any], Awaitable[None]]) -> None:
-        if scope.get("type") == "http":
+        if scope.get("type") in ("http", "websocket"):
             values = [v for k, v in scope.get("headers") or () if k.lower() == hname]
             value: str | None = None
             if len(values) == 1:
@@ -215,7 +215,8 @@ def create_app(
     )
     app.state.pgw = state
     limits = WireLimits(
-        max_request_bytes=s.max_request_bytes, max_items=s.max_items, max_rows_per_item=s.max_rows_per_item
+        max_request_bytes=s.max_request_bytes, max_items=s.max_items, max_rows_per_item=s.max_rows_per_item,
+        stream=s.stream_channel,
     )
     wire_router = create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
                                 max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes))

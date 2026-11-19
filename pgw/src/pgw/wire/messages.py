@@ -21,6 +21,7 @@ __all__ = [
     "PROTOCOL_HEADER",
     "PROTOCOL_VERSION",
     "REQUEST_ID_HEADER",
+    "STREAM_PATH",
     "SUPPORTED_VERSIONS",
     "WIRE_HEADERS",
     "ComputeItem",
@@ -50,6 +51,8 @@ WIRE_HEADERS: tuple[str, ...] = (PROTOCOL_HEADER, REQUEST_ID_HEADER, ATTEMPT_HEA
 #: HTTP paths (SPEC 6.2).
 COMPUTE_PATH = "/pgw/v1/compute"
 MODELS_PATH = "/pgw/v1/models"
+#: Persistent WebSocket channel for compute calls (one msgpack ComputeRequest per binary frame).
+STREAM_PATH = "/pgw/v1/stream"
 
 
 @dataclass(frozen=True)

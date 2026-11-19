@@ -175,6 +175,7 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
 |---|---|---|---|
 | POST | `/pgw/v1/compute` | `ComputeRequest` | `ComputeResponse` or `ErrorResponse` |
 | GET | `/pgw/v1/models` | – | `ModelsResponse` |
+| GET (WebSocket) | `/pgw/v1/stream` | one `ComputeRequest` per binary frame | one `ComputeResponse` or `ErrorResponse` frame per request |
 | GET | `/healthz` | – | `200 ok` (process alive) |
 | GET | `/readyz` | – | `200` when packs are loaded and the device is OK, else `503` |
 | GET | `/metrics` | – | Prometheus text (separate port or IP allowlist recommended) |
@@ -182,6 +183,18 @@ generation) depends on `core` and `wire`. `service` depends on `core`, `modelpac
 Headers: `Content-Type: application/vnd.pgw+msgpack`, `PGW-Protocol: 1`,
 `Authorization: Bearer <tenant token>` (alongside or instead of mTLS), and optionally
 `PGW-Request-Id`. Compression: none, because uniform data does not compress.
+
+`/pgw/v1/stream` (v1.2) carries the same messages over one persistent WebSocket, removing the
+per-call HTTP cost (about 1-3 ms per call; a 7B token makes 112 sequential calls). The handshake
+carries the same `PGW-Protocol` and `Authorization` headers and the same mTLS identity, and is
+refused (close 1008) when authentication or admission fails. Requests are multiplexed and replies
+come in completion order, matched by the request `id`. Every frame passes the same limits, byte
+budget, admission check, deadline (`deadline_ms`), response self-check and metrics hook as
+`POST /pgw/v1/compute`. A frame whose `id` cannot be read closes the channel. Clients fall back
+to `POST /pgw/v1/compute` when the channel cannot be opened, open a new channel after an
+`unavailable` reply (e.g. draining), and retry requests that were in flight on a broken channel.
+Over TLS the stream's ALPN offers only `http/1.1`. Services can turn the channel off
+(`PGW_SERVICE_STREAM_CHANNEL=false`); clients with `stream=false`.
 
 ### 6.3 Messages (msgpack maps, string keys)
 Ring tensors are `bin` in `pack_ring` format: K/8 little-endian bytes per element, row-major.

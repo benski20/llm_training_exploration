@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import math
 import random
@@ -41,6 +42,7 @@ from pgw.core.ring import RingParams
 from pgw.wire.codec import (
     CONTENT_TYPE,
     JSON_CONTENT_TYPE,
+    decode_any,
     decode_error_json,
     decode_message,
     encode_message,
@@ -53,6 +55,7 @@ from pgw.wire.messages import (
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
     REQUEST_ID_HEADER,
+    STREAM_PATH,
     ComputeItem,
     ComputeRequest,
     ComputeResponse,
@@ -107,6 +110,11 @@ class ClientConfig(BaseModel):
     client_key_password: SecretStr | None = None
     verify_tls: bool = Field(True, description="Verify the server certificate (never disable in production)")
     http2: bool = True
+    stream: bool = Field(
+        True, description="Send compute calls over one persistent WebSocket (/pgw/v1/stream) instead of one HTTP "
+        "request each (lower per-call latency). Falls back to HTTP for a while if the channel cannot be opened",
+    )
+    stream_retry_s: float = Field(60.0, ge=0, description="After a failed channel open, use HTTP this long")
     connect_timeout_s: float = Field(5.0, gt=0)
     request_timeout_s: float = Field(60.0, gt=0, description="Overall budget per compute() incl. retries")
     pool_timeout_s: float = Field(10.0, gt=0)
@@ -187,6 +195,9 @@ class ClientStats:
     bytes_sent: int = 0
     bytes_received: int = 0
     last_rtt_s: float = 0.0
+    stream_requests: int = 0
+    stream_opens: int = 0
+    stream_open_failures: int = 0
 
 
 _STATUS_CODES: dict[int, ErrorCode] = {
@@ -221,6 +232,100 @@ class _Piece:
     item_index: int
     row0: int
     rows: int
+
+
+class _StreamReply(Exception):  # noqa: N818 - internal control flow
+    """An error reply (or channel failure) on the compute stream, handled by the retry loop."""
+
+    def __init__(self, error: PGWError):
+        super().__init__(str(error))
+        self.error = error
+
+
+class _StreamChannel:
+    """One WebSocket to :data:`STREAM_PATH`; concurrent requests are matched to replies by request id."""
+
+    def __init__(self, ws: Any, max_response_bytes: int):
+        self.ws = ws
+        self.max_response_bytes = max_response_bytes
+        # request id -> waiters in send order (ids are unique in practice; duplicates are answered FIFO)
+        self.pending: dict[str, list[asyncio.Future[Any]]] = {}
+        self.closed = False
+        self.retiring = False  # no new requests; closes once the in-flight ones are answered
+        self._send_lock = asyncio.Lock()
+        self.reader = asyncio.get_running_loop().create_task(self._read())
+
+    async def _read(self) -> None:
+        why = "compute stream closed"
+        try:
+            async for msg in self.ws:
+                if isinstance(msg, str):
+                    why = "compute stream sent a text frame"
+                    break
+                try:
+                    obj = decode_any(msg, max_bytes=self.max_response_bytes)
+                except PGWError as exc:
+                    why = f"undecodable compute stream frame ({exc.code})"
+                    break
+                rid = getattr(obj, "request_id", None)
+                if rid is None and isinstance(obj, ErrorResponse):
+                    why = f"compute stream closed by the service: {obj.code}: {obj.message}"
+                    break
+                for fut in self.pending.get(rid, ()) if rid else ():
+                    if not fut.done():
+                        fut.set_result(obj)
+                        break
+                # nothing waiting: a late reply to a request that already gave up - drop it
+        except Exception as exc:  # connection errors
+            why = f"compute stream connection lost ({type(exc).__name__})"
+        finally:
+            self._fail_all(why)
+
+    def _fail_all(self, why: str) -> None:
+        self.closed = True
+        for futs in self.pending.values():
+            for fut in futs:
+                if not fut.done():
+                    fut.set_exception(ServiceUnavailableError(why))
+        self.pending.clear()
+
+    async def request(self, request_id: str, body: bytes) -> Any:
+        """Send one encoded ComputeRequest; returns the decoded ComputeResponse or ErrorResponse."""
+        if self.closed:
+            raise ServiceUnavailableError("compute stream closed")
+        fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self.pending.setdefault(request_id, []).append(fut)
+        try:
+            try:
+                async with self._send_lock:
+                    await self.ws.send(body)
+            except Exception as exc:
+                raise ServiceUnavailableError(f"compute stream send failed ({type(exc).__name__})") from exc
+            return await fut
+        finally:
+            futs = self.pending.get(request_id)
+            if futs is not None:
+                if fut in futs:
+                    futs.remove(fut)
+                if not futs:
+                    del self.pending[request_id]
+            if self.retiring and not self.pending and not self.closed:
+                asyncio.get_running_loop().create_task(self.aclose())
+
+    def retire(self) -> None:
+        self.retiring = True
+        if not self.pending and not self.closed:
+            asyncio.get_running_loop().create_task(self.aclose())
+
+    async def aclose(self) -> None:
+        self._fail_all("compute stream closed by the client")
+        try:
+            await asyncio.wait_for(self.ws.close(), timeout=2)
+        except Exception:  # noqa: S110 - best effort
+            pass
+        self.reader.cancel()
+        with contextlib.suppress(BaseException):
+            await self.reader
 
 
 class ComputeClient:
@@ -272,6 +377,14 @@ class ComputeClient:
             weakref.WeakKeyDictionary()
         )
         self._clients_lock = threading.Lock()
+        self._channels: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _StreamChannel] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._channel_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._stream_off_until = 0.0
+        self._stream_ssl: ssl.SSLContext | None = None
         self._retry_tokens = float(config.retry_budget_burst)
         self._retry_lock = threading.Lock()
         self._model: ModelInfo | None = None
@@ -322,6 +435,78 @@ class ComputeClient:
                 c = httpx.AsyncClient(**kwargs)
                 self._clients[loop] = c
             return c
+
+    def _stream_url(self) -> str:
+        base = self.config.base_url.rstrip("/")
+        scheme, rest = base.split("://", 1)
+        return ("wss" if scheme == "https" else "ws") + "://" + rest + STREAM_PATH
+
+    async def _channel(self) -> _StreamChannel | None:
+        """The open compute stream of the running loop, opening one if needed; ``None`` = use HTTP."""
+        cfg = self.config
+        if not cfg.stream or self._transport is not None or self._closed:
+            return None
+        loop = asyncio.get_running_loop()
+        ch = self._channels.get(loop)
+        if ch is not None and not ch.closed and not ch.retiring:
+            return ch
+        if time.monotonic() < self._stream_off_until:
+            return None
+        lock = self._channel_locks.setdefault(loop, asyncio.Lock())
+        async with lock:
+            ch = self._channels.get(loop)
+            if ch is not None and not ch.closed and not ch.retiring:
+                return ch
+            if time.monotonic() < self._stream_off_until:
+                return None
+            headers = {PROTOCOL_HEADER: str(PROTOCOL_VERSION)}
+            if cfg.token is not None:
+                headers["Authorization"] = f"Bearer {cfg.token.get_secret_value()}"
+            try:
+                from websockets.asyncio.client import connect
+
+                kw: dict[str, Any] = {
+                    "additional_headers": headers, "user_agent_header": cfg.user_agent, "compression": None,
+                    "max_size": cfg.max_response_bytes, "open_timeout": cfg.connect_timeout_s,
+                    "ping_interval": 20, "ping_timeout": 20, "close_timeout": 2,
+                }
+                if self._ssl is not None:
+                    if self._stream_ssl is None:  # the upgrade is HTTP/1.1: never let ALPN pick h2
+                        self._stream_ssl = build_ssl_context(cfg)
+                        self._stream_ssl.set_alpn_protocols(["http/1.1"])
+                    kw["ssl"] = self._stream_ssl
+                try:
+                    ws = await connect(self._stream_url(), proxy=None, **kw)
+                except TypeError:  # websockets < 15 has no proxy support (and never uses one)
+                    ws = await connect(self._stream_url(), **kw)
+            except Exception as exc:
+                self.stats.stream_open_failures += 1
+                self._stream_off_until = time.monotonic() + cfg.stream_retry_s
+                log.info("compute stream unavailable (%s); using HTTP for %.0fs", type(exc).__name__,
+                         cfg.stream_retry_s)
+                return None
+            self.stats.stream_opens += 1
+            ch = _StreamChannel(ws, cfg.max_response_bytes)
+            self._channels[loop] = ch
+            return ch
+
+    async def _drop_channel(self, ch: _StreamChannel) -> None:
+        loop = asyncio.get_running_loop()
+        if self._channels.get(loop) is ch:
+            del self._channels[loop]
+        await ch.aclose()
+
+    async def _close_channels(self) -> None:
+        current = asyncio.get_running_loop()
+        items = list(self._channels.items())
+        self._channels.clear()
+        for loop, ch in items:
+            if loop is current:
+                await ch.aclose()
+            elif not loop.is_closed() and loop.is_running():
+                fut = asyncio.run_coroutine_threadsafe(ch.aclose(), loop)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.wrap_future(fut), timeout=5)
 
     def _effective_limits(self) -> tuple[int, int, int]:
         cfg = self.config
@@ -391,6 +576,7 @@ class ComputeClient:
         deadline: float,
         decode: Callable[[bytes], T],
         max_response_bytes: int,
+        stream_check: Callable[[ComputeResponse], T] | None = None,
     ) -> T:
         """One logical call with retries until success, a non-retryable error or the deadline.
 
@@ -423,7 +609,31 @@ class ComputeClient:
             t0 = time.monotonic()
             status: int | None = None
             exc: PGWError
+            chan = await self._channel() if stream_check is not None and body is not None else None
             try:
+                if chan is not None:
+                    self.stats.stream_requests += 1
+                    try:
+                        async with asyncio.timeout(remaining):
+                            obj: Any = await chan.request(request_id, body)  # type: ignore[arg-type]
+                    except ServiceUnavailableError as e:  # the channel failed: retry (reconnects or HTTP)
+                        obj = e
+                    self.stats.bytes_sent += len(body)  # type: ignore[arg-type]
+                    self.stats.last_rtt_s = time.monotonic() - t0
+                    if isinstance(obj, ComputeResponse):
+                        self.stats.bytes_received += obj.payload_bytes
+                        result = stream_check(obj)  # type: ignore[misc]
+                        self._hook(path, 200, t0, None)
+                        return result
+                    if isinstance(obj, PGWError):
+                        exc = obj
+                    elif isinstance(obj, ErrorResponse):
+                        exc = obj.to_exception()
+                    else:
+                        exc = ProtocolError("unexpected message on the compute stream")
+                    if exc.code == ErrorCode.UNAVAILABLE:
+                        chan.retire()  # e.g. draining: the next attempt opens a new connection
+                    raise _StreamReply(exc)
                 # asyncio.timeout also bounds transports that ignore httpx timeouts (e.g. in-process).
                 async with asyncio.timeout(remaining):
                     async with http.stream(method, path, content=body, headers=headers, timeout=timeout) as resp:
@@ -454,6 +664,8 @@ class ComputeClient:
                 exc = ServiceUnavailableError(
                     f"compute service transport error ({type(e).__name__})", details={"request_id": request_id}
                 )
+            except _StreamReply as e:
+                exc = e.error
             except PGWError as e:  # decoding a 200 body failed: not retryable
                 self._hook(path, status, t0, str(e.code))
                 raise
@@ -595,10 +807,12 @@ class ComputeClient:
         if self._model is not None and self._model.fingerprint == req.fingerprint:
             out_features = {k: m for k, (m, _) in self._model.linear_dims().items()}
 
-        def decode(b: bytes) -> ComputeResponse:
-            resp = decode_message(b, ComputeResponse, max_bytes=self.config.max_response_bytes)
+        def check(resp: ComputeResponse) -> ComputeResponse:
             validate_compute_response(req, resp, out_features)
             return resp
+
+        def decode(b: bytes) -> ComputeResponse:
+            return check(decode_message(b, ComputeResponse, max_bytes=self.config.max_response_bytes))
 
         t0 = time.monotonic()
         resp = await self._call(
@@ -609,6 +823,7 @@ class ComputeClient:
             deadline=deadline,
             decode=decode,
             max_response_bytes=self.config.max_response_bytes,
+            stream_check=check,
         )
         log.debug(
             "pgw compute",
@@ -745,6 +960,7 @@ class ComputeClient:
     async def aclose(self) -> None:
         """Close connections (all pools, including the private sync loop's)."""
         self._closed = True
+        await self._close_channels()
         with self._clients_lock:
             items = list(self._clients.items())
             self._clients.clear()
@@ -770,6 +986,10 @@ class ComputeClient:
         self._closed = True
         loop = self._loop
         if loop is not None and not loop.is_closed() and loop.is_running():
+            ch = self._channels.pop(loop, None)
+            if ch is not None:
+                with contextlib.suppress(Exception):
+                    asyncio.run_coroutine_threadsafe(ch.aclose(), loop).result(timeout=5)
             with self._clients_lock:
                 c = self._clients.pop(loop, None)
             if c is not None:

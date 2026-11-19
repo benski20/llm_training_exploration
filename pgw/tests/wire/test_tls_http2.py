@@ -177,6 +177,7 @@ async def test_mtls_http2_end_to_end(pki, server):
             assert (y == expected_y(RING_K40_A12, it.linear, x, handler.weights)).all()
     # blocking API on the same client
     assert client.compute_sync(req) == resps[0]
+    assert client.stats.stream_requests == 5 and client.stats.stream_open_failures == 0  # wss with mTLS
     await client.aclose()
 
 

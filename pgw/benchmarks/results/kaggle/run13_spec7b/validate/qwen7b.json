@@ -1,0 +1,56 @@
+{
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "label": "qwen7b",
+ "device": "cuda",
+ "ring": "K32A12C27",
+ "max_tokens": 64,
+ "prompt": "Explain in three sentences why the sky is blue.",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "cpu_count": 4,
+ "download_s": 73.5,
+ "pack_s": 292.0,
+ "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+ "pack_bytes": 8723796019,
+ "pack_info": {
+  "arch": "qwen2",
+  "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+  "hidden_size": 3584,
+  "layers": 28,
+  "max_in_features": 18944,
+  "name": "qwen7b",
+  "per_token": {
+   "K32A8": {
+    "download_bytes": 5562368,
+    "mask_bytes": 5562368,
+    "round_trips": 112,
+    "upload_bytes": 3325952
+   },
+   "K40A12": {
+    "download_bytes": 6952960,
+    "mask_bytes": 6952960,
+    "round_trips": 112,
+    "upload_bytes": 4157440
+   },
+   "K48A20": {
+    "download_bytes": 8343552,
+    "mask_bytes": 8343552,
+    "round_trips": 112,
+    "upload_bytes": 4988928
+   }
+  },
+  "supported_rings": [
+   "K32A8",
+   "K40A12",
+   "K48A20"
+  ],
+  "verified": "fingerprint",
+  "vocab_size": 152064
+ },
+ "draft": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "spec_tokens": 4,
+  "device": "cpu",
+  "pack_bytes": 915469648
+ }
+}

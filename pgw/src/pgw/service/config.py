@@ -82,6 +82,10 @@ class ServiceSettings(PGWSettings):
     max_request_bytes: int = Field(256 << 20, gt=4096)
     max_items: int = Field(256, gt=0)
     max_rows_per_item: int = Field(8192, gt=0)
+    stream_channel: bool = Field(
+        True, description="Serve the persistent WebSocket compute channel /pgw/v1/stream (lower per-call overhead "
+        "than one HTTP request per call; same authentication, limits and checks)",
+    )
     max_inflight_requests: int = Field(256, gt=0, description="Above this, reply 'unavailable'")
     max_inflight_bytes: int = Field(
         1 << 30, gt=0,

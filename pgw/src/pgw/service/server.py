@@ -59,6 +59,8 @@ def build_hypercorn_config(settings: ServiceSettings, *, bind: str | None = None
     cfg.include_server_header = False
     cfg.h2_max_concurrent_streams = max(100, s.max_inflight_requests)
     cfg.alpn_protocols = ["h2", "http/1.1"]
+    cfg.websocket_max_message_size = s.max_request_bytes  # the stream channel's frame limit
+    cfg.websocket_ping_interval = None  # clients ping; the channel carries its own traffic
     t = s.tls
     if t.enabled:
         for label, path in (("cert_file", t.cert_file), ("key_file", t.key_file), ("ca_file", t.ca_file)):

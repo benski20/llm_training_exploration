@@ -17,6 +17,7 @@ The router never logs or echoes payload bytes; it logs ids, sizes, timings and e
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import math
@@ -51,6 +52,7 @@ from pgw.wire.messages import (
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
     REQUEST_ID_HEADER,
+    STREAM_PATH,
     SUPPORTED_VERSIONS,
     ComputeRequest,
     ComputeResponse,
@@ -91,9 +93,14 @@ class WireLimits:
     max_request_bytes: int = 256 << 20
     max_items: int = 256
     max_rows_per_item: int = 8192
+    #: Serve the persistent WebSocket compute channel (:data:`STREAM_PATH`).
+    stream: bool = True
+    #: Requests one stream connection may have in flight (further frames wait: backpressure).
+    max_stream_inflight: int = 64
 
     def __post_init__(self) -> None:
-        if self.max_request_bytes <= 0 or self.max_items <= 0 or self.max_rows_per_item <= 0:
+        if (self.max_request_bytes <= 0 or self.max_items <= 0 or self.max_rows_per_item <= 0
+                or self.max_stream_inflight <= 0):
             raise ValueError("WireLimits values must be positive")
 
 
@@ -322,6 +329,17 @@ def _safe_id(v: Any) -> str | None:
         return None
 
 
+def _peek_request_id(body: bytes | bytearray) -> str | None:
+    """Request id of a compute frame that failed validation (``None`` if it cannot be read)."""
+    try:
+        import msgpack
+
+        obj = msgpack.unpackb(bytes(body), raw=False, max_map_len=4096, max_str_len=1 << 20)
+    except Exception:
+        return None
+    return _safe_id(obj.get("id")) if isinstance(obj, dict) else None
+
+
 def _wants_json(accept: str | None) -> bool:
     a = (accept or "").lower()
     return "json" in a and "msgpack" not in a
@@ -462,6 +480,7 @@ def create_router(
     from fastapi import APIRouter
     from starlette.requests import Request
     from starlette.responses import Response
+    from starlette.websockets import WebSocket
 
     lim = limits or WireLimits()
     router = APIRouter()
@@ -489,91 +508,112 @@ def create_router(
         else:
             log.error("pgw wire %s internal error", path, extra={"request_id": rid}, exc_info=exc)
 
+    async def _process(body: bytes | bytearray, identity: Any, t0: float, attempt: int,
+                       header_budget_s: float | None, box: list[Any]) -> bytes:
+        """Decode, run and encode one compute request (shared by HTTP and the stream channel).
+
+        ``box`` receives ``[request_id, RequestContext]`` as soon as they are known (for error
+        replies and the metrics hook).
+        """
+        req = decode_compute_request(body, lim, handler.linear_dims)
+        box[0] = req.request_id
+        budget: float | None = None
+        if req.deadline_ms is not None:
+            budget = req.deadline_ms / 1000.0
+        if header_budget_s is not None:  # what is left of the client's budget for *this* attempt
+            budget = header_budget_s if budget is None else min(budget, header_budget_s)
+        if max_deadline_s is not None:
+            budget = max_deadline_s if budget is None else min(budget, max_deadline_s)
+        ctx = RequestContext(
+            request_id=req.request_id,
+            identity=identity,
+            received_at=t0,
+            deadline=None if budget is None else t0 + budget,
+            body_bytes=len(body),
+            attempt=attempt,
+        )
+        box[1] = ctx
+        if budget is not None:
+            remaining = ctx.remaining_s() or 0.0
+            if remaining <= 0:
+                raise PGWError("deadline exceeded before compute", code=ErrorCode.DEADLINE_EXCEEDED)
+            try:
+                # asyncio.timeout (not wait_for): no extra task per request on the hot path
+                async with asyncio.timeout(remaining):
+                    resp = await handler.compute(req, ctx)
+            except TimeoutError as exc:
+                raise PGWError(
+                    "deadline exceeded during compute",
+                    code=ErrorCode.DEADLINE_EXCEEDED,
+                    details={"deadline_ms": req.deadline_ms},
+                ) from exc
+        else:
+            resp = await handler.compute(req, ctx)
+        if validate_responses:
+            dims = _resolve_dims(handler.linear_dims, req.fingerprint, req.ring)
+            try:
+                validate_compute_response(req, resp, {k: int(v[0]) for k, v in dims.items()})
+            except ProtocolError as exc:  # our own bug: never send a malformed result
+                raise PGWError(f"service produced an invalid response: {exc.message}") from exc
+        out = encode_message(resp)
+        log.debug(
+            "pgw compute ok",
+            extra={
+                "request_id": req.request_id,
+                "items": len(req.items),
+                "rows": req.total_rows,
+                "bytes_in": len(body),
+                "bytes_out": len(out),
+                "ms": round((time.monotonic() - t0) * 1e3, 3),
+            },
+        )
+        return out
+
+    async def _done(box: list[Any], t0: float, status: int, code: str | None) -> None:
+        if done_hook is None:
+            return
+        try:
+            await _maybe_await(done_hook(box[1] or RequestContext(request_id=box[0] or "", received_at=t0),
+                                         status, code))
+        except Exception:  # metrics must never break a reply
+            log.exception("on_request_done hook failed")
+
+    async def _authenticate(headers: Mapping[str, str], scope: Mapping[str, Any]) -> Any:
+        check_protocol_header(headers.get(PROTOCOL_HEADER))
+        if has_auth:
+            return await _maybe_await(
+                handler.authenticate(  # type: ignore[attr-defined]
+                    headers.get("authorization"), _client_cert_subject(scope)
+                )
+            )
+        return None
+
     async def compute(request: Request) -> Response:
         t0 = time.monotonic()
         header_rid = request.headers.get(REQUEST_ID_HEADER)
-        rid: str | None = None
-        if header_rid is not None:
-            rid = _safe_id(header_rid)
+        box: list[Any] = [_safe_id(header_rid) if header_rid is not None else None, None]
         accept = request.headers.get("accept")
         # 499 ("client closed request") is reported to on_request_done if the request task is
         # cancelled (client went away) before a reply was produced.
         status = 499
         code: str | None = "cancelled"
-        ctx: RequestContext | None = None
         held = [0]
         try:
-            check_protocol_header(request.headers.get(PROTOCOL_HEADER))
             check_content_type(request.headers.get("content-type"))
-            identity = None
-            if has_auth:
-                identity = await _maybe_await(
-                    handler.authenticate(  # type: ignore[attr-defined]
-                        request.headers.get("authorization"), _client_cert_subject(request.scope)
-                    )
-                )
+            identity = await _authenticate(request.headers, request.scope)
             if callable(precheck):
                 await _maybe_await(precheck())
             body = await _read_body(request, lim.max_request_bytes, body_budget, held)
-            req = decode_compute_request(body, lim, handler.linear_dims)
-            rid = req.request_id
             try:
                 attempt = max(1, int(request.headers.get("pgw-attempt", "1")))
             except ValueError:
                 attempt = 1
-            budget: float | None = None
-            if req.deadline_ms is not None:
-                budget = req.deadline_ms / 1000.0
-            hdr = _header_deadline_s(request.headers.get(DEADLINE_HEADER))
-            if hdr is not None:  # what is left of the client's budget for *this* attempt
-                budget = hdr if budget is None else min(budget, hdr)
-            if max_deadline_s is not None:
-                budget = max_deadline_s if budget is None else min(budget, max_deadline_s)
-            ctx = RequestContext(
-                request_id=req.request_id,
-                identity=identity,
-                received_at=t0,
-                deadline=None if budget is None else t0 + budget,
-                body_bytes=len(body),
-                attempt=attempt,
-            )
-            if budget is not None:
-                remaining = ctx.remaining_s() or 0.0
-                if remaining <= 0:
-                    raise PGWError("deadline exceeded before compute", code=ErrorCode.DEADLINE_EXCEEDED)
-                try:
-                    # asyncio.timeout (not wait_for): no extra task per request on the hot path
-                    async with asyncio.timeout(remaining):
-                        resp = await handler.compute(req, ctx)
-                except TimeoutError as exc:
-                    raise PGWError(
-                        "deadline exceeded during compute",
-                        code=ErrorCode.DEADLINE_EXCEEDED,
-                        details={"deadline_ms": req.deadline_ms},
-                    ) from exc
-            else:
-                resp = await handler.compute(req, ctx)
-            if validate_responses:
-                dims = _resolve_dims(handler.linear_dims, req.fingerprint, req.ring)
-                try:
-                    validate_compute_response(req, resp, {k: int(v[0]) for k, v in dims.items()})
-                except ProtocolError as exc:  # our own bug: never send a malformed result
-                    raise PGWError(f"service produced an invalid response: {exc.message}") from exc
-            out = encode_message(resp)
-            log.debug(
-                "pgw compute ok",
-                extra={
-                    "request_id": rid,
-                    "items": len(req.items),
-                    "rows": req.total_rows,
-                    "bytes_in": len(body),
-                    "bytes_out": len(out),
-                    "ms": round((time.monotonic() - t0) * 1e3, 3),
-                },
-            )
+            out = await _process(body, identity, t0, attempt, _header_deadline_s(request.headers.get(DEADLINE_HEADER)),
+                                 box)
             status, code = 200, None
-            return Response(content=out, media_type=CONTENT_TYPE, headers=response_headers(rid))
+            return Response(content=out, media_type=CONTENT_TYPE, headers=response_headers(box[0]))
         except Exception as exc:
+            rid = box[0]
             if rid is None and isinstance(exc, PGWError):
                 rid = _safe_id(exc.details.get("request_id"))
             _log_error(exc, rid, COMPUTE_PATH)
@@ -584,13 +624,95 @@ def create_router(
         finally:
             if body_budget is not None and held[0]:
                 body_budget.release(held[0])
-            if done_hook is not None:
+            await _done(box, t0, status, code)
+
+    async def stream(ws: WebSocket) -> None:
+        """Persistent compute channel: one msgpack ``ComputeRequest`` per binary frame, one reply frame
+        (``ComputeResponse`` or ``ErrorResponse`` carrying the request id) per request, in completion
+        order. Authenticated once at the handshake; every request still goes through ``precheck``,
+        the byte budget, decoding limits, deadlines, response validation and the metrics hook.
+        A frame whose request id cannot be read closes the channel (the client cannot match a reply).
+        """
+        try:
+            identity = await _authenticate(ws.headers, ws.scope)
+            if callable(precheck):  # draining: refuse new channels so clients go elsewhere
+                await _maybe_await(precheck())
+        except Exception as exc:
+            _log_error(exc, None, STREAM_PATH)
+            await ws.close(code=1008, reason=str(getattr(exc, "code", "unauthorized"))[:100])
+            return
+        await ws.accept()
+        send_lock = asyncio.Lock()
+        slots = asyncio.Semaphore(max(1, lim.max_stream_inflight))
+        tasks: set[asyncio.Task[None]] = set()
+        closing = asyncio.Event()
+
+        async def reply(data: bytes) -> None:
+            async with send_lock:
+                await ws.send_bytes(data)
+
+        async def one(body: bytes) -> None:
+            t0 = time.monotonic()
+            box: list[Any] = [None, None]
+            status: int = 499
+            code: str | None = "cancelled"
+            held = 0
+            try:
                 try:
-                    await _maybe_await(
-                        done_hook(ctx or RequestContext(request_id=rid or "", received_at=t0), status, code)
-                    )
-                except Exception:  # metrics must never break a reply
-                    log.exception("on_request_done hook failed")
+                    if body_budget is not None:
+                        if not body_budget.try_acquire(len(body)):
+                            raise _budget_exhausted(body_budget, len(body))
+                        held = len(body)
+                    if callable(precheck):
+                        await _maybe_await(precheck())
+                    out = await _process(body, identity, t0, 1, None, box)
+                    status, code = 200, None
+                except Exception as exc:
+                    rid = box[0]
+                    if rid is None:
+                        rid = _peek_request_id(body)
+                    _log_error(exc, rid, STREAM_PATH)
+                    status, out = error_response_bytes(exc, rid)
+                    code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
+                    if rid is None:
+                        await reply(out)
+                        closing.set()
+                        return
+                await reply(out)
+            except Exception:  # the socket went away mid-reply
+                closing.set()
+            finally:
+                if body_budget is not None and held:
+                    body_budget.release(held)
+                slots.release()
+                await _done(box, t0, status, code)
+
+        try:
+            while not closing.is_set():
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                data = msg.get("bytes")
+                if data is None:
+                    await ws.close(code=1003, reason="binary frames only")
+                    break
+                if len(data) > lim.max_request_bytes:
+                    await ws.close(code=1009, reason="frame too large")
+                    break
+                await slots.acquire()
+                t = asyncio.create_task(one(data))
+                tasks.add(t)
+                t.add_done_callback(tasks.discard)
+            if closing.is_set():
+                with contextlib.suppress(Exception):
+                    await ws.close(code=1008, reason="unreadable request")
+        except Exception as exc:  # disconnects surface as exceptions on some servers
+            log.debug("pgw stream closed: %s", type(exc).__name__)
+        finally:
+            for t in list(tasks):
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     async def models(request: Request) -> Response:
         accept = request.headers.get("accept")
@@ -612,6 +734,8 @@ def create_router(
     # schema generation is bypassed on purpose.
     router.add_route(COMPUTE_PATH, compute, methods=["POST"], include_in_schema=False)
     router.add_route(MODELS_PATH, models, methods=["GET"], include_in_schema=False)
+    if lim.stream:
+        router.add_websocket_route(STREAM_PATH, stream)
     router.pgw_compute_endpoint = compute  # type: ignore[attr-defined]  # for ComputeFastPath
     return router
 
