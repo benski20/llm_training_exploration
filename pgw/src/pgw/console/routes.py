@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import html
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from pydantic import ValidationError
 
 import pgw
+from pgw.console.oidc import BINDING_COOKIE, BINDING_COOKIE_PATH, OIDCClient, OIDCError, as_auth_error
 from pgw.console.sessions import COOKIE_NAME, CSRF_HEADER, ConsoleSessions, cookie_secure
 from pgw.console.usage import WINDOWS, AuditReader, parse_ts_ms
 from pgw.core.errors import AuthError, ErrorCode, PGWError
@@ -88,6 +90,18 @@ class ConsoleHeaders:
             await send(msg)
 
         await self.app(scope, receive, wrapped)
+
+
+_SSO_ERROR = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>PGW Console: {title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body><main><h1>{title}</h1><p>{message}</p><p><a href="/console/login">Back to sign-in</a></p></main></body></html>"""
+_SSO_TITLES = {400: "Sign-in could not be completed", 401: "Sign-in failed", 403: "Access denied",
+               429: "Too many sign-in attempts", 503: "Single sign-on is unavailable"}
+
+
+def _not_found() -> JSONResponse:
+    return JSONResponse({"error": {"message": "unknown console API endpoint", "type": "not_found_error",
+                                   "code": str(ErrorCode.PROTOCOL), "param": None}}, status_code=404)
 
 
 def _client(request: Request) -> str:
@@ -211,19 +225,42 @@ def install_console(
     root = static_dir if static_dir is not None else DEFAULT_STATIC_DIR
 
     # ---- sign-in -------------------------------------------------------------------------------------
+    oidc: OIDCClient | None = state.oidc
+    token_login = bool(settings.console_token_login_enabled)
+
     def _sessions() -> ConsoleSessions:
-        if sessions is None or not sessions.login_enabled:
+        """The session store, if anybody can sign in (admin token configured or SSO)."""
+        if sessions is None or not (sessions.login_enabled or oidc is not None):
             raise PGWError("console login is disabled: no admin token is configured (PGW_GATEWAY_ADMIN_TOKEN)",
                            code=ErrorCode.UNAVAILABLE)
         return sessions
 
     def _me(s: Any) -> dict[str, Any]:
         assert sessions is not None
-        return {"role": s.role, "csrf": s.csrf, "expires_at": int(sessions.expires_at(s)), "version": pgw.__version__}
+        return {"role": s.role, "csrf": s.csrf, "expires_at": int(sessions.expires_at(s)), "version": pgw.__version__,
+                "auth": s.auth, "user": s.user}
+
+    def _secure(request: Request) -> bool:
+        return cookie_secure(request.url.scheme, request.url.hostname, _client(request))
+
+    def _start_session(request: Request, resp: Response, store: ConsoleSessions, sess_sid: str) -> None:
+        resp.set_cookie(COOKIE_NAME, sess_sid, max_age=int(store.max_age_s), path="/", httponly=True,
+                        samesite="strict", secure=_secure(request))
+
+    @app.get("/console/api/auth-methods")
+    async def console_auth_methods() -> Any:
+        return {"token": token_login and sessions is not None and sessions.login_enabled,
+                "oidc": {"enabled": oidc is not None, "label": oidc.label if oidc is not None else "SSO"}}
 
     @app.post("/console/api/login")
     async def console_login(request: Request) -> Any:
+        if not token_login:
+            raise PGWError("token sign-in is disabled on this gateway; sign in with SSO",
+                           code=ErrorCode.PERMISSION_DENIED)
         store = _sessions()
+        if not store.login_enabled:
+            raise PGWError("console login is disabled: no admin token is configured (PGW_GATEWAY_ADMIN_TOKEN)",
+                           code=ErrorCode.UNAVAILABLE)
         client = _client(request)
         state.login_limiter.check(client)
         try:
@@ -235,17 +272,85 @@ def install_console(
             raise InvalidRequestError("body needs a string 'token'")
         role = store.authenticate(token.strip())
         if role is None:
-            state.audit.event("console.login_failed", action="console_login", client=client,
+            state.audit.event("console.login_failed", action="console_login", client=client, method="token",
                               code=str(ErrorCode.UNAUTHENTICATED))
             raise AuthError("invalid console token")
         old = request.cookies.get(COOKIE_NAME)
         if old:
             store.delete(old)
         sid, sess = store.create(role)
-        state.audit.event("console.login", action="console_login", key_id=sess.actor, client=client, reason=role)
+        state.audit.event("console.login", action="console_login", key_id=sess.actor, client=client, reason=role,
+                          method="token")
         resp = JSONResponse({"role": role, "csrf": sess.csrf})
-        resp.set_cookie(COOKIE_NAME, sid, max_age=int(store.max_age_s), path="/", httponly=True, samesite="strict",
-                        secure=cookie_secure(request.url.scheme, request.url.hostname, _client(request)))
+        _start_session(request, resp, store, sid)
+        return resp
+
+    # ---- single sign-on (OIDC) -------------------------------------------------------------------------
+    def _sso_error_page(exc: PGWError) -> HTMLResponse:
+        status = exc.http_status
+        page = _SSO_ERROR.format(title=html.escape(_SSO_TITLES.get(status, "Sign-in failed")),
+                                 message=html.escape(exc.message))
+        headers = {"Cache-Control": "no-store"}
+        retry = exc.details.get("retry_after_s")
+        if status == 429 and isinstance(retry, int | float):
+            headers["Retry-After"] = str(max(1, round(retry)))
+        return HTMLResponse(page, status_code=status, headers=headers)
+
+    def _clear_binding(request: Request, resp: Response) -> None:
+        resp.delete_cookie(BINDING_COOKIE, path=BINDING_COOKIE_PATH, httponly=True, samesite="lax",
+                           secure=_secure(request))
+
+    @app.get("/console/api/oidc/login")
+    async def console_oidc_login(request: Request) -> Any:
+        if oidc is None:
+            return _not_found()
+        try:
+            _sessions()
+            state.oidc_start_limiter.check(_client(request))
+            url, binding = await oidc.start()
+        except PGWError as exc:
+            return _sso_error_page(exc)
+        resp = RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
+        resp.set_cookie(BINDING_COOKIE, binding, max_age=int(oidc.pending.ttl_s), path=BINDING_COOKIE_PATH,
+                        httponly=True, samesite="lax", secure=_secure(request))
+        return resp
+
+    @app.get("/console/api/oidc/callback")
+    async def console_oidc_callback(request: Request) -> Any:
+        if oidc is None:
+            return _not_found()
+        client = _client(request)
+        q = request.query_params
+        try:
+            store = _sessions()
+            state.login_limiter.check(client)
+            try:
+                ident = await oidc.finish(code=q.get("code"), state=q.get("state"), error=q.get("error"),
+                                          iss=q.get("iss"), binding=request.cookies.get(BINDING_COOKIE))
+            except OIDCError as exc:
+                state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
+                                  code=str(exc.code), reason=exc.reason, subject=exc.subject, email=exc.email)
+                raise
+            except PGWError:
+                raise
+            except Exception as exc:  # never leak details of a failed sign-in
+                err = as_auth_error(exc)
+                state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
+                                  code=str(err.code), reason="oidc_error")
+                raise err from exc
+        except PGWError as exc:
+            resp: Response = _sso_error_page(exc)
+            _clear_binding(request, resp)
+            return resp
+        old = request.cookies.get(COOKIE_NAME)
+        if old:
+            store.delete(old)
+        sid, sess = store.create(ident.role, auth="oidc", user=ident.user())
+        state.audit.event("console.login", action="console_login", key_id=sess.actor, client=client,
+                          reason=ident.role, method="oidc", subject=ident.sub, email=ident.email)
+        resp = RedirectResponse("/console/", status_code=302, headers={"Cache-Control": "no-store"})
+        _start_session(request, resp, store, sid)
+        _clear_binding(request, resp)
         return resp
 
     @app.post("/console/api/logout", status_code=204, response_class=Response)
@@ -260,8 +365,7 @@ def install_console(
             store.delete(sid)
             state.audit.event("console.logout", action="console_logout", key_id=sess.actor, client=_client(request))
         resp = Response(status_code=204)
-        resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict",
-                           secure=cookie_secure(request.url.scheme, request.url.hostname, _client(request)))
+        resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=_secure(request))
         return resp
 
     @app.get("/console/api/me")
@@ -291,8 +395,7 @@ def install_console(
 
     @app.api_route("/console/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def console_api_missing(rest: str) -> Any:
-        return JSONResponse({"error": {"message": "unknown console API endpoint", "type": "not_found_error",
-                                       "code": str(ErrorCode.PROTOCOL), "param": None}}, status_code=404)
+        return _not_found()
 
     # ---- static app ----------------------------------------------------------------------------------
     def _index() -> Path | None:

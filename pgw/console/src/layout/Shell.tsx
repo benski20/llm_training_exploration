@@ -135,6 +135,11 @@ export function Shell() {
               </Badge>
             )}
             <span className="topbar-sep" aria-hidden="true" />
+            {session.user ? (
+              <span className="topbar-user hide-sm" title={session.user.email ? `Signed in with SSO as ${session.user.email}` : "Signed in with SSO"}>
+                {session.user.name || session.user.email || session.user.sub}
+              </span>
+            ) : null}
             <Badge tone={session.isAdmin ? "accent" : "neutral"} title={session.isAdmin ? "Full access" : "Read-only access"}>
               {session.isAdmin ? "Admin" : "Viewer"}
             </Badge>

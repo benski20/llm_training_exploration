@@ -35,6 +35,23 @@ describe("api client", () => {
     expect(header(calls[2], "X-PGW-CSRF")).toBe("tok123");
   });
 
+  it("reads the sign-in methods and the SSO user from /me", async () => {
+    const { fn, calls } = fakeFetch((url) =>
+      url === "/console/api/auth-methods"
+        ? json({ token: false, oidc: { enabled: true, label: "Entra ID" } })
+        : json({ role: "viewer", csrf: "c1", auth: "oidc", user: { sub: "u1", email: "a@corp.example.com", name: "A" } }),
+    );
+    const api = createApi(fn);
+    const m = await api.authMethods();
+    expect(m.oidc).toEqual({ enabled: true, label: "Entra ID" });
+    expect(m.token).toBe(false);
+    const me = await api.me();
+    expect(me.auth).toBe("oidc");
+    expect(me.user?.email).toBe("a@corp.example.com");
+    expect(api.csrf).toBe("c1");
+    expect(calls.map((c) => c.init.method)).toEqual(["GET", "GET"]);
+  });
+
   it("builds audit query strings without empty filters", async () => {
     const { fn, calls } = fakeFetch(() => json({ events: [], next_before: null }));
     const api = createApi(fn);

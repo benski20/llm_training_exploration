@@ -9,11 +9,28 @@ export interface LoginResponse {
   csrf: string;
 }
 
+export type AuthKind = "token" | "oidc";
+
+/** The signed-in single sign-on user (null for token sign-in). */
+export interface SessionUser {
+  sub: string;
+  email?: string | null;
+  name?: string | null;
+}
+
 export interface MeResponse {
   role: Role;
   csrf: string;
   expires_at?: string | number | null;
   version?: string | null;
+  auth?: AuthKind;
+  user?: SessionUser | null;
+}
+
+/** GET /console/api/auth-methods: which sign-in methods the gateway offers. */
+export interface AuthMethods {
+  token: boolean;
+  oidc: { enabled: boolean; label: string };
 }
 
 export interface ApiErrorBody {

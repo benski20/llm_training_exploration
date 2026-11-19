@@ -6,6 +6,7 @@ import type {
   ApiErrorBody,
   ApiKeyRecord,
   AuditPage,
+  AuthMethods,
   AuditQuery,
   ChatChunk,
   ChatCompletion,
@@ -177,6 +178,8 @@ export function createApi(fetchImpl: FetchLike = (i, init) => fetch(i, init)) {
         csrf = null;
       }
     },
+    /** Sign-in methods offered by the gateway (no session needed). */
+    authMethods: () => json<AuthMethods>("GET", "/console/api/auth-methods", undefined, { quiet401: true }),
     async me(): Promise<MeResponse> {
       const r = await json<MeResponse>("GET", "/console/api/me", undefined, { quiet401: true });
       csrf = r.csrf;
@@ -254,6 +257,9 @@ export function createApi(fetchImpl: FetchLike = (i, init) => fetch(i, init)) {
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** Starts single sign-on: a full-page navigation (the gateway redirects to the identity provider). */
+export const SSO_LOGIN_PATH = "/console/api/oidc/login";
 
 /** The app-wide client instance. */
 export const api = createApi();

@@ -47,6 +47,30 @@
   width: 100%;
   height: 36px;
 }
+.login-sso {
+  margin-top: var(--space-6);
+}
+a.login-submit {
+  text-decoration: none;
+}
+.login-divider {
+  margin-top: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.login-divider + .login-form {
+  margin-top: var(--space-4);
+}
 .login-foot {
   margin-top: var(--space-6);
   padding-top: var(--space-4);

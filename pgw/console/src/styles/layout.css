@@ -151,6 +151,14 @@
   align-items: center;
   gap: var(--space-2);
 }
+.topbar-user {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
 .topbar-sep {
   width: 1px;
   height: 18px;
