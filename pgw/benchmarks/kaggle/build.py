@@ -21,9 +21,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PGW = HERE.parents[1]
-EXCLUDE_DIRS = {"__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
+EXCLUDE_DIRS = {"node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
 #: Top-level folders the GPU jobs never use (Kaggle rejects scripts above about 1 MB).
-EXCLUDE_TOP = {"docs", "requirements", ".github", "ci", "research"}
+#: Paths (relative to pgw/) the GPU jobs never use: the console UI and its tests.
+EXCLUDE_PATHS = ("tests/console", "src/pgw/console/static")
+EXCLUDE_TOP = {"docs", "requirements", ".github", "ci", "research", "console"}
 
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
@@ -143,6 +145,9 @@ def source_tarball() -> bytes:
     def filt(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
         parts = Path(ti.name).parts
         if len(parts) > 1 and parts[1] in EXCLUDE_TOP:
+            return None
+        rel = "/".join(parts[1:])
+        if any(rel == p or rel.startswith(p + "/") for p in EXCLUDE_PATHS):
             return None
         if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts) or ti.name.endswith((".whl", ".so")):
             return None
