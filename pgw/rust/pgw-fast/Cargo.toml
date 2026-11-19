@@ -15,3 +15,7 @@ crate-type = ["cdylib", "rlib"]
 pgw-core-rs = { path = "../pgw-core-rs" }
 pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"] }
 numpy = "0.23"
+# store.rs: ChaCha20 keystream written straight into the numpy output (the key comes from
+# pgw_core_rs::prng); same versions as pgw-core-rs, already in Cargo.lock.
+chacha20 = "0.9"
+zeroize = "1"
