@@ -286,6 +286,9 @@ class GatewaySettings(PGWSettings):
     metrics_require_admin: bool = Field(False, description="Protect /metrics with the admin token")
     cors_origins: list[str] = Field(default_factory=list)
     dashboard_enabled: bool = True
+    console_enabled: bool = Field(
+        True, description="Serve the operator console at /console/ (sign-in with admin_token or a viewer token)"
+    )
 
     @field_validator("admin_token")
     @classmethod

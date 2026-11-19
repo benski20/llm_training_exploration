@@ -13,6 +13,7 @@ maximum request body is `PGW_GATEWAY_MAX_BODY_BYTES` (default 4 MiB).
 |---|---|---|
 | Applications | `Authorization: Bearer pgw-<key_id>-<secret>` | `key_id` is 12 hex characters; only a SHA-256 hash of the secret is stored. Keys carry scopes (`inference`, `admin`), an optional model allow-list, and limits |
 | Operators | `Authorization: Bearer <admin token>` | `PGW_GATEWAY_ADMIN_TOKEN`, or an API key with the `admin` scope |
+| Console users | `pgw_console` session cookie (+ `X-PGW-CSRF` on writes) | sign in at `/console/` with the admin token or a viewer token (`PGW_GATEWAY_CONSOLE_VIEWER_TOKENS_FILE`); viewers may only read. See [console-api.md](console-api.md) |
 
 Keys are created with `pgw gateway keys create` or `POST /admin/keys`, and the plaintext is shown
 **once**. A key restricted to some models gets `model_not_found` (404) for others, so other model
@@ -36,6 +37,16 @@ and is refused under the production policy.
 | DELETE | `/admin/keys/{key_id}` | admin | revoke a key |
 | POST | `/admin/models/{name}/reload` | admin | reload a model (pack, service check) |
 | POST | `/admin/models/{name}/reset` | admin | reset the integrity circuit breaker and/or the noise alarm |
+| GET | `/admin/overview` | admin or console viewer | console overview: models, mask runway, 24 h totals, privacy settings |
+| GET | `/admin/usage` | admin or console viewer | request/token/latency series from the audit log (`window=1h`, `24h`, `7d`) |
+| GET | `/admin/audit` | admin or console viewer | newest-first audit events (never content), filters and `before` paging |
+| POST | `/console/api/login` | console token | sign in to the console; sets the `pgw_console` session cookie |
+| POST | `/console/api/logout` | console session | sign out |
+| GET | `/console/api/me` | console session | role, CSRF token and expiry of the current session |
+| POST | `/console/api/playground/chat` | console admin | `/v1/chat/completions` as the built-in key `console-playground` |
+| GET | `/console` | none | redirect to `/console/` |
+| GET | `/console/` | none (page) / session (data) | operator console (static single-page app) |
+| GET | `/console/{path}` | none | console assets; other client routes get the app's `index.html` |
 | GET | `/healthz` | none | process alive: `{"status":"ok"}` |
 | GET | `/readyz` | none | 200 once the process is started and not draining (per-model state in the body); `?models=all`: 503 unless every model is ready |
 | GET | `/metrics` | none or admin | Prometheus text (`metrics_require_admin`) |
