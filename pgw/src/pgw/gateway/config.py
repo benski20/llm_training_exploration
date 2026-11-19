@@ -91,8 +91,9 @@ class GatewayModelConfig(BaseModel):
     )
     spec_confidence: float = Field(0.3, ge=0.0, lt=1.0, description="Draft top-probability needed to extend a draft")
     spec_row_budget: float = Field(
-        2.0, ge=1.0, le=17.0, description="Mask rows reserved per requested token when speculating (speculation "
-        "only ever uses rows the request already holds; measured use is about 1.3-1.6)",
+        3.0, ge=1.0, le=17.0, description="Mask rows reserved per requested token when speculating (speculation "
+        "only ever uses rows the request already holds; unused rows are burned when the request ends). 2.0 starved "
+        "a 0.5B->7B draft in tests (35 vs 29 passes per 64 tokens); 3.0 is the default",
     )
     spec_lookup: int = Field(
         0, ge=0, le=8, description="Prompt-lookup drafting: propose what followed the latest earlier match of the "

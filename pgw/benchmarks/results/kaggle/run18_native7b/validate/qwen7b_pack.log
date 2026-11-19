@@ -1,0 +1,9 @@
+packed qwen7b fingerprint 41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424
+
+---stderr---
+2026-11-19 04:40:22,751 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-7B-Instruct (qwen2, 28 layers) -> pack
+2026-11-19 04:41:36,431 INFO pgw.modelpack.packer: wrote linears-00000-of-00004.safetensors (38 linear groups)
+2026-11-19 04:43:00,106 INFO pgw.modelpack.packer: wrote linears-00001-of-00004.safetensors (36 linear groups)
+2026-11-19 04:44:25,262 INFO pgw.modelpack.packer: wrote linears-00002-of-00004.safetensors (36 linear groups)
+2026-11-19 04:44:34,132 INFO pgw.modelpack.packer: wrote linears-00003-of-00004.safetensors (2 linear groups)
+2026-11-19 04:45:10,023 INFO pgw.modelpack.packer: packed qwen7b: 28 layers, 4 linear shards, fingerprint 41a5b3a483ae (287.3s)

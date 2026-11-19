@@ -310,8 +310,14 @@ class Generator:
 
     async def wait_closed(self) -> None:
         """Wait until every reservation close handed to a worker thread has finished."""
-        while self._closing:
-            await asyncio.gather(*list(self._closing), return_exceptions=True)
+        while True:
+            # Prune finished closes here rather than relying on their done-callbacks having run:
+            # re-gathering an already finished future in a loop can spin without ever yielding to them.
+            pending = {f for f in self._closing if not f.done()}
+            self._closing.intersection_update(pending)
+            if not pending:
+                return
+            await asyncio.wait(pending)
 
     # ---- text / stop handling ---------------------------------------------------------------
     def _scan_stop(self, st: _SeqState, final: bool) -> tuple[str, bool]:

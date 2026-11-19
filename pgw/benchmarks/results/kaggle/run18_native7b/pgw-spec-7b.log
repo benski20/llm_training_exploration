@@ -1,0 +1,371 @@
+[{"stream_name":"stdout","time":8.768015652999999,"data":"[   0.1m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869296 kB', 'MemFree:        26291484 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  1.9M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":8.97302455,"data":"[   0.1m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":23.44393285,"data":"[   0.4m] DONE pip_install rc 0 14s\n"}
+,{"stream_name":"stdout","time":23.443967697,"data":"\n"}
+,{"stream_name":"stdout","time":23.443971299,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":23.443973944,"data":"\n"}
+,{"stream_name":"stdout","time":23.443976417000002,"data":"[   0.4m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":24.516586634,"data":"[   0.4m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":24.516615061,"data":"=0.0.8\n"}
+,{"stream_name":"stdout","time":24.516619908,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":24.51662327,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":24.5166263,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":24.516629705,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":24.51663322,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":24.516636345,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":24.516639739,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":24.516643448,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":24.51664659,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":24.516649929,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":24.516654275,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":24.516658044,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":24.516661603,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":24.516665209,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":24.516668596,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.516671899,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.51667515,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":24.516679116,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":24.516682795,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.516686929,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":24.51669823,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":24.516701535,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":24.516705046,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":24.516708456,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":24.516712388,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":24.516716022,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":24.516719844,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":24.51672347,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":24.516726971,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":24.516730661,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":24.516734164,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":24.516737849,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":24.516752996,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":24.516756921,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":24.516760565,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":24.516764073,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":24.516767684,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":24.516771165,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":24.516774721,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":24.51677837,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":24.51678175,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":24.516785265,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":24.516788635,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":24.516792198,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":24.516795743,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":24.51679927,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":24.516802943,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":24.516806507,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":24.516809909,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":24.516813493,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":24.51681709,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":24.516820585,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":24.516824073,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":24.51682768,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":24.516831299,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":24.516834905,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":24.516838425,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":24.516842039,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":24.516845885,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":24.516849364,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":24.51685295,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":24.516856483,"data":"texttable==1.7.3\n"}
+,{"stream_name":"stdout","time":24.516860053,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":24.516863667,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":24.516867216,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":24.516870831,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":24.516874356,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":24.5168781,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":24.516881787,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":24.516885183,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":24.516888737,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":24.516892005,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":24.516895581,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":24.516899079,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":24.516902637,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":24.516906073,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.516909623,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":24.516913205,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.516920272,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.516923653,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":24.516927001,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":24.516930287,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":24.516933765,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":24.516936886,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":24.516939977,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":24.516943039,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":24.516946525,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":24.516949937,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":24.516953169,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":24.516956499,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":24.516960083,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":24.516963167,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":24.516966377,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":24.516969973,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":24.516973391,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":24.516977171,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":24.516980876,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":24.516984718,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":24.516988311,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":24.516992736,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":24.51699641,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":24.516999941,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":24.517003949,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":24.517007871,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":24.517011505,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":24.517017869,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":24.517022027,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":24.5170254,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":24.517029769,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":24.51703368,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":24.517037345,"data":"ujson==6.1.0\n"}
+,{"stream_name":"stdout","time":24.517041383,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":24.517044838,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":24.517048061,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":24.517051265,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":24.517056265,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":24.517064132,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":24.517068333,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":24.517070869,"data":"urwid==5.1.3\n"}
+,{"stream_name":"stdout","time":24.51707312,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":24.517075425,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":24.517077709,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":24.517080054,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":24.517082323,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":24.517088257,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":24.517090673,"data":"vtk==9.7.2\n"}
+,{"stream_name":"stdout","time":24.517093029,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":24.517095287,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":24.517097555,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":24.517099836,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":24.517102171,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":24.517104615,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":24.51710692,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":24.517109168,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":24.517111516,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":24.517113796,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":24.517116093,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":24.517118386,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":24.517120722,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":24.517123001,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":24.517160459,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":24.51716513,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":24.517168558,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":24.5171719,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":24.517176958,"data":"wrapt==2.5.1\n"}
+,{"stream_name":"stdout","time":24.517185538,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":24.517188439999998,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":24.517191777,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":24.517195848,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":24.517198139,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":24.517200416,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":24.517202696,"data":"xvfbwrapper==0.2.38\n"}
+,{"stream_name":"stdout","time":24.517204978,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":24.517207259,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":24.51720963,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":24.517211917,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":24.517214223,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":24.5172165,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":24.517218836,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":24.517221125,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":24.517223394,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":24.517225656,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":24.517227997,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":24.517230299,"data":"\n"}
+,{"stream_name":"stdout","time":24.517232562,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":24.517234859,"data":"\n"}
+,{"stream_name":"stdout","time":24.517238166,"data":"[   0.4m] RUN build_native : (command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) \u0026\u0026 . $HOME/.cargo/env \u0026\u0026 python rust/tools/build_fast.py \u0026\u0026 python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'\n"}
+,{"stream_name":"stdout","time":66.781123435,"data":"[   1.1m] DONE build_native rc 0 42s\n"}
+,{"stream_name":"stdout","time":66.781191261,"data":"fo: syncing channel updates for stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":66.78119576899999,"data":"info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)\n"}
+,{"stream_name":"stdout","time":66.781198236,"data":"info: downloading 3 components\n"}
+,{"stream_name":"stdout","time":66.781200638,"data":"info: default toolchain set to stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":66.781202918,"data":"    Updating crates.io index\n"}
+,{"stream_name":"stdout","time":66.781205107,"data":" Downloading crates ...\n"}
+,{"stream_name":"stdout","time":66.781207279,"data":"  Downloaded autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":66.781209557,"data":"  Downloaded block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":66.781211775,"data":"  Downloaded cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":66.781213955,"data":"  Downloaded chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":66.781216137,"data":"  Downloaded cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":66.781218377,"data":"  Downloaded pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781220595,"data":"  Downloaded pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781222783,"data":"  Downloaded once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":66.781225041,"data":"  Downloaded rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":66.781227323,"data":"  Downloaded rustversion v1.0.23\n"}
+,{"stream_name":"stdout","time":66.781229812,"data":"  Downloaded rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":66.781232041,"data":"  Downloaded unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":66.781234282,"data":"  Downloaded crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":66.781236722,"data":"  Downloaded generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":66.781239088,"data":"  Downloaded cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":66.781241293,"data":"  Downloaded memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":66.781243464,"data":"  Downloaded subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":66.781245639,"data":"  Downloaded inout v0.1.4\n"}
+,{"stream_name":"stdout","time":66.781247834,"data":"  Downloaded quote v1.0.47\n"}
+,{"stream_name":"stdout","time":66.78125,"data":"  Downloaded sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":66.781252192,"data":"  Downloaded unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":66.781254372,"data":"  Downloaded heck v0.5.0\n"}
+,{"stream_name":"stdout","time":66.781256532,"data":"  Downloaded digest v0.10.7\n"}
+,{"stream_name":"stdout","time":66.781258727,"data":"  Downloaded indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":66.781260936,"data":"  Downloaded version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":66.781263138,"data":"  Downloaded num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":66.781265353,"data":"  Downloaded pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781267577,"data":"  Downloaded zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":66.781269757,"data":"  Downloaded num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":66.781271931,"data":"  Downloaded num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":66.781274126,"data":"  Downloaded matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":66.781276404,"data":"  Downloaded numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":66.781278606,"data":"  Downloaded proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":66.781280822,"data":"  Downloaded target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":66.781285714,"data":"  Downloaded pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781288087,"data":"  Downloaded hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":66.781290238,"data":"  Downloaded typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":66.781292429,"data":"  Downloaded hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":66.781294616,"data":"  Downloaded ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":66.781296785,"data":"  Downloaded syn v2.0.119\n"}
+,{"stream_name":"stdout","time":66.781298954,"data":"  Downloaded libc v0.2.191\n"}
+,{"stream_name":"stdout","time":66.781301121,"data":"  Downloaded pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781303306,"data":"   Compiling target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":66.781305487,"data":"   Compiling autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":66.781307676,"data":"   Compiling version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":66.781309875,"data":"   Compiling once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":66.781312047,"data":"   Compiling typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":66.781314224,"data":"   Compiling generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":66.78131643,"data":"   Compiling proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":66.781318611,"data":"   Compiling quote v1.0.47\n"}
+,{"stream_name":"stdout","time":66.781320808,"data":"   Compiling unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":66.781322986,"data":"   Compiling num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":66.781325177,"data":"   Compiling pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781327391,"data":"   Compiling libc v0.2.191\n"}
+,{"stream_name":"stdout","time":66.78132957,"data":"   Compiling cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":66.781331764,"data":"   Compiling subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":66.78133569,"data":"   Compiling syn v2.0.119\n"}
+,{"stream_name":"stdout","time":66.781338036,"data":"   Compiling crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":66.781340251,"data":"   Compiling block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":66.781342429,"data":"   Compiling digest v0.10.7\n"}
+,{"stream_name":"stdout","time":66.781344624,"data":"   Compiling matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":66.781346798,"data":"   Compiling memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":66.78134899,"data":"   Compiling heck v0.5.0\n"}
+,{"stream_name":"stdout","time":66.781351167,"data":"   Compiling pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781353387,"data":"   Compiling pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781355565,"data":"   Compiling pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781357731,"data":"   Compiling inout v0.1.4\n"}
+,{"stream_name":"stdout","time":66.781359903,"data":"   Compiling rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":66.781362133,"data":"   Compiling cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":66.781364317,"data":"   Compiling cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":66.781366484,"data":"   Compiling num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":66.781368673,"data":"   Compiling num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":66.781370844,"data":"   Compiling hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":66.781373081,"data":"   Compiling unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":66.781375447,"data":"   Compiling indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":66.781379866,"data":"   Compiling hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":66.781382123,"data":"   Compiling ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":66.78138430999999,"data":"   Compiling chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":66.781386474,"data":"   Compiling sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":66.781388621,"data":"   Compiling rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":66.781390912,"data":"   Compiling zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":66.781393134,"data":"   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n"}
+,{"stream_name":"stdout","time":66.781395447,"data":"   Compiling pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":66.781397635,"data":"   Compiling numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":66.781399888,"data":"   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n"}
+,{"stream_name":"stdout","time":66.781402174,"data":"    Finished `release` profile [optimized] target(s) in 22.23s\n"}
+,{"stream_name":"stdout","time":66.781404431,"data":"\n"}
+,{"stream_name":"stdout","time":66.781406612,"data":"[   1.1m] RUN pytest_gpu : /usr/bin/python3 -m pytest tests -m gpu -q -rs --timeout 900 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":406.441697542,"data":"[   6.8m] DONE pytest_gpu rc 0 340s\n"}
+,{"stream_name":"stdout","time":406.441769602,"data":"..........................................                               [100%]\n"}
+,{"stream_name":"stdout","time":406.441774419,"data":"42 passed, 1867 deselected in 331.59s (0:05:31)\n"}
+,{"stream_name":"stdout","time":406.441778071,"data":"\n"}
+,{"stream_name":"stdout","time":406.441781531,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":406.441784862,"data":"\n"}
+,{"stream_name":"stdout","time":406.441788229,"data":"[   6.8m] RUN profile_gateway_cpu : python benchmarks/profile_gateway.py --preset 7b --layers 1 --steps 24 --ring K32A12C27 --profile --workdir /tmp/pgw_prof\n"}
+,{"stream_name":"stdout","time":441.361289268,"data":"[   7.3m] DONE profile_gateway_cpu rc 0 35s\n"}
+,{"stream_name":"stdout","time":441.361324616,"data":"/_core/fromnumeric.py:69(_wrapreduction)\n"}
+,{"stream_name":"stdout","time":441.361330558,"data":"       92    0.001    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/core/packing.py:45(unpack_ring)\n"}
+,{"stream_name":"stdout","time":441.361335989,"data":"\n"}
+,{"stream_name":"stdout","time":441.361341119,"data":"\n"}
+,{"stream_name":"stdout","time":441.361345929,"data":"\n"}
+,{"stream_name":"stdout","time":441.361350804,"data":"         32465 function calls (32435 primitive calls) in 2.867 seconds\n"}
+,{"stream_name":"stdout","time":441.361356067,"data":"\n"}
+,{"stream_name":"stdout","time":441.361360769,"data":"   Ordered by: internal time\n"}
+,{"stream_name":"stdout","time":441.361365722,"data":"   List reduced from 196 to 25 due to restriction \u003c25\u003e\n"}
+,{"stream_name":"stdout","time":441.361371366,"data":"\n"}
+,{"stream_name":"stdout","time":441.36137621,"data":"   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n"}
+,{"stream_name":"stdout","time":441.361381271,"data":"       92    2.629    0.029    2.673    0.029 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:413(_mm_f64)\n"}
+,{"stream_name":"stdout","time":441.361386495,"data":"       92    0.046    0.000    2.750    0.030 /tmp/pgwsrc/pgw/benchmarks/profile_gateway.py:117(compute_sync)\n"}
+,{"stream_name":"stdout","time":441.361391401,"data":"       92    0.020    0.000    0.020    0.000 {built-in method pgw_fast.finish_chunk}\n"}
+,{"stream_name":"stdout","time":441.361396351,"data":"       92    0.012    0.000    0.021    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ring.py:303(balanced_digits)\n"}
+,{"stream_name":"stdout","time":441.361409368,"data":"      736    0.009    0.000    0.009    0.000 {method 'to' of 'torch._C.TensorBase' objects}\n"}
+,{"stream_name":"stdout","time":441.361413625,"data":"      115    0.009    0.000    0.009    0.000 {built-in method torch.where}\n"}
+,{"stream_name":"stdout","time":441.361417464,"data":"       92    0.008    0.000    0.008    0.000 {built-in method torch.isfinite}\n"}
+,{"stream_name":"stdout","time":441.361421217,"data":"       92    0.007    0.000    0.008    0.000 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:142(_combine_digit_rows)\n"}
+,{"stream_name":"stdout","time":441.361424671,"data":"       92    0.007    0.000    0.069    0.001 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:753(_prepare_native)\n"}
+,{"stream_name":"stdout","time":441.361428344,"data":"      184    0.006    0.000    0.006    0.000 {built-in method torch.cat}\n"}
+,{"stream_name":"stdout","time":441.361432434,"data":"       92    0.005    0.000    0.005    0.000 {built-in method pgw_fast.quantize_mask_pack}\n"}
+,{"stream_name":"stdout","time":441.361436931,"data":"       92    0.005    0.000    0.005    0.000 {built-in method torch.round}\n"}
+,{"stream_name":"stdout","time":441.361441166,"data":"      920    0.005    0.000    0.005    0.000 {method 'numpy' of 'torch._C.TensorBase' objects}\n"}
+,{"stream_name":"stdout","time":441.361445706,"data":"       92    0.005    0.000    2.678    0.029 /tmp/pgwsrc/pgw/src/pgw/core/ringmm.py:360(matmul)\n"}
+,{"stream_name":"stdout","time":441.361449982,"data":"       92    0.005    0.000    0.005    0.000 {method 'disable' of '_lsprof.Profiler' objects}\n"}
+,{"stream_name":"stdout","time":441.361455374,"data":"       92    0.004    0.000    0.039    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:907(_finish)\n"}
+,{"stream_name":"stdout","time":441.361459273,"data":"       92    0.004    0.000    2.704    0.029 /tmp/pgwsrc/pgw/src/pgw/engine/local.py:95(compute_sync)\n"}
+,{"stream_name":"stdout","time":441.361464427,"data":"      207    0.003    0.000    0.003    0.000 {method 'astype' of 'numpy.ndarray' objects}\n"}
+,{"stream_name":"stdout","time":441.361468653,"data":"      552    0.003    0.000    0.003    0.000 {built-in method torch.from_numpy}\n"}
+,{"stream_name":"stdout","time":441.361472701,"data":"      184    0.003    0.000    0.003    0.000 {method 'reduce' of 'numpy.ufunc' objects}\n"}
+,{"stream_name":"stdout","time":441.36147643,"data":"      276    0.003    0.000    0.003    0.000 {method 'zero_' of 'torch._C.TensorBase' objects}\n"}
+,{"stream_name":"stdout","time":441.361480511,"data":"       92    0.003    0.000    0.026    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1001(_finish_chunk_native)\n"}
+,{"stream_name":"stdout","time":441.361484071,"data":"       69    0.003    0.000    0.003    0.000 {built-in method pgw_fast.mask_rows}\n"}
+,{"stream_name":"stdout","time":441.361487489,"data":"       92    0.003    0.000    0.011    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:702(_precheck)\n"}
+,{"stream_name":"stdout","time":441.361491172,"data":"       92    0.002    0.000    0.002    0.000 {built-in method pgw_fast.unpack_rows}\n"}
+,{"stream_name":"stdout","time":441.361495216,"data":"\n"}
+,{"stream_name":"stdout","time":441.361498457,"data":"\n"}
+,{"stream_name":"stdout","time":441.361501894,"data":"\n"}
+,{"stream_name":"stdout","time":441.361505235,"data":"\n"}
+,{"stream_name":"stdout","time":441.361508387,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":441.361511749,"data":"\n"}
+,{"stream_name":"stdout","time":441.36151626,"data":"Writing model shards:   0%|          | 0/1 [00:00\u003c?, ?it/s]\n"}
+,{"stream_name":"stdout","time":441.361526107,"data":"Writing model shards: 100%|██████████| 1/1 [00:00\u003c00:00,  6.59it/s]\n"}
+,{"stream_name":"stdout","time":441.361531874,"data":"Writing model shards: 100%|██████████| 1/1 [00:00\u003c00:00,  6.58it/s]\n"}
+,{"stream_name":"stdout","time":441.361535673,"data":"mask inventory low: 9f72ce779c34 K32A12C27 has 28 slots (\u003c 4096)\n"}
+,{"stream_name":"stdout","time":441.361539351,"data":"\n"}
+,{"stream_name":"stdout","time":441.361542979,"data":"[   7.3m] RUN pytest_spec_ringmm : /usr/bin/python3 -m pytest tests/engine/test_speculative.py tests/core/test_ringmm.py tests/wire/test_stream.py -q -rs --timeout 900 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":480.86329263,"data":"[   8.0m] DONE pytest_spec_ringmm rc 0 40s\n"}
+,{"stream_name":"stdout","time":480.863321857,"data":"........................................................................ [ 30%]\n"}
+,{"stream_name":"stdout","time":480.863327671,"data":"........................................................................ [ 61%]\n"}
+,{"stream_name":"stdout","time":480.863334067,"data":"........................................................................ [ 91%]\n"}
+,{"stream_name":"stdout","time":480.863342495,"data":"...................                                                      [100%]\n"}
+,{"stream_name":"stdout","time":480.863345705,"data":"235 passed in 33.56s\n"}
+,{"stream_name":"stdout","time":480.863365068,"data":"\n"}
+,{"stream_name":"stdout","time":480.86336786,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":480.86337066,"data":"\n"}
+,{"stream_name":"stdout","time":480.863376224,"data":"[   8.0m] RUN validate_qwen7b : /usr/bin/python3 /tmp/pgwsrc/pgw/benchmarks/gpu_validate.py --out /kaggle/working/validate --model Qwen/Qwen2.5-7B-Instruct --label qwen7b --device cuda --ref-device cuda --ring K32A12C27 --plain-dtype float16 --delete-hf --max-tokens 64 --concurrent 4 --draft-model Qwen/Qwen2.5-0.5B-Instruct --spec-tokens 8 --draft-device cpu cuda:1 --loadtest 1x1 1x5 4x1 --loadtest-tokens 4 --factory-bench-slots 64\n"}
+,{"stream_name":"stdout","time":2096.950104488,"data":"[  34.9m] DONE validate_qwen7b rc 0 1616s\n"}
+,{"stream_name":"stdout","time":2096.953547502,"data":": 0.7288, 'decode_tokens_per_s': 1.372, 'wall_s': 49.88, 'gateway_cpu_s': 54.68, 'backend_delta': {'calls': 3920, 'rows': 18816, 'round_trips': 3920, 'bytes_up': 558759936, 'bytes_down': 934477824, 'freivalds_checked': 3920, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 15.809885233991054, 'local_seconds': 12.071944557984807}, 'gateway_local_engine_s_per_token': 0.1161, 'remote_s_per_token': 0.152}\n"}
+,{"stream_name":"stdout","time":2096.953560329,"data":"[gpu_validate 05:00:49] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 158.25, 'generated_tokens_per_s': 1.618, 'all_tokens_per_s': 2.629, 'gateway_cpu_s_per_token': 0.4718}\n"}
+,{"stream_name":"stdout","time":2096.953564675,"data":"[gpu_validate 05:02:51] spec_cuda1_chat: \"The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or\" identical: True True\n"}
+,{"stream_name":"stdout","time":2096.953571531,"data":"[gpu_validate 05:03:33] spec_cuda1_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 3.815, 'prefill_s_per_prompt_token': 0.0954, 'decode_s_per_token': 0.6094, 'decode_tokens_per_s': 1.641, 'wall_s': 42.24, 'gateway_cpu_s': 37.64, 'backend_delta': {'calls': 3920, 'rows': 18816, 'round_trips': 3920, 'bytes_up': 558759936, 'bytes_down': 934477824, 'freivalds_checked': 3920, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 16.283939824001664, 'local_seconds': 12.206265786985114}, 'gateway_local_engine_s_per_token': 0.1174, 'remote_s_per_token': 0.1566}\n"}
+,{"stream_name":"stdout","time":2096.953584589,"data":"[gpu_validate 05:05:47] spec_cuda1_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 133.53, 'generated_tokens_per_s': 1.917, 'all_tokens_per_s': 3.115, 'gateway_cpu_s_per_token': 0.3442}\n"}
+,{"stream_name":"stdout","time":2096.953587836,"data":"[gpu_validate 05:05:51] loadtest sessions=1 rows=1: 3.4923029673159456 token-rows/s\n"}
+,{"stream_name":"stdout","time":2096.953593576,"data":"[gpu_validate 05:05:55] loadtest sessions=1 rows=5: 10.210990206286835 token-rows/s\n"}
+,{"stream_name":"stdout","time":2096.953596295,"data":"[gpu_validate 05:06:01] loadtest sessions=4 rows=1: 5.1130146713477345 token-rows/s\n"}
+,{"stream_name":"stdout","time":2096.953598922,"data":"\n"}
+,{"stream_name":"stdout","time":2096.953601355,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":2096.953603856,"data":"\n"}
+,{"stream_name":"stdout","time":2096.953606482,"data":"Fetching 11 files:   0%|          | 0/11 [00:00\u003c?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n"}
+,{"stream_name":"stdout","time":2096.953614826,"data":"\n"}
+,{"stream_name":"stdout","time":2096.953617328,"data":"Fetching 11 files:   9%|▉         | 1/11 [00:00\u003c00:01,  6.41it/s]\n"}
+,{"stream_name":"stdout","time":2096.953620911,"data":"Fetching 11 files:  45%|████▌     | 5/11 [00:00\u003c00:00, 21.26it/s]\n"}
+,{"stream_name":"stdout","time":2096.953624427,"data":"Fetching 11 files:  64%|██████▎   | 7/11 [00:20\u003c00:00, 21.26it/s]\n"}
+,{"stream_name":"stdout","time":2096.953643468,"data":"Fetching 11 files:  73%|███████▎  | 8/11 [01:11\u003c00:34, 11.35s/it]\n"}
+,{"stream_name":"stdout","time":2096.953648022,"data":"Fetching 11 files: 100%|██████████| 11/11 [01:11\u003c00:00,  6.50s/it]\n"}
+,{"stream_name":"stdout","time":2096.953653033,"data":"\n"}
+,{"stream_name":"stdout","time":2096.953656888,"data":"Fetching 7 files:   0%|          | 0/7 [00:00\u003c?, ?it/s]\n"}
+,{"stream_name":"stdout","time":2096.953661587,"data":"Fetching 7 files:  29%|██▊       | 2/7 [00:00\u003c00:00, 17.62it/s]\n"}
+,{"stream_name":"stdout","time":2096.953665701,"data":"Fetching 7 files:  57%|█████▋    | 4/7 [00:00\u003c00:00, 17.96it/s]\n"}
+,{"stream_name":"stdout","time":2096.953669637,"data":"Fetching 7 files: 100%|██████████| 7/7 [00:06\u003c00:00,  1.23s/it]\n"}
+,{"stream_name":"stdout","time":2096.953673654,"data":"Fetching 7 files: 100%|██████████| 7/7 [00:06\u003c00:00,  1.04it/s]\n"}
+,{"stream_name":"stdout","time":2096.953677728,"data":"\n"}
+,{"stream_name":"stdout","time":2096.953681359,"data":"[  34.9m] ALL DONE\n"}
+,{"stream_name":"stderr","time":2099.61807069,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":2099.618099591,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":2099.877651739,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":2099.87770596,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":2100.765415742,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":2101.875098782,"data":"[NbConvertApp] Writing 1432893 bytes to __results__.html\n"}
+]

@@ -245,7 +245,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     n_requests = 2 + args.concurrent  # non-streaming, streaming, concurrent batch
     slots = per_req * n_requests + 16
     if args.draft_model:  # the same requests again, with room for speculation rows
-        slots += (n_prompt + args.max_tokens * 2) * n_requests * len(args.draft_device or ["cpu"])  # spec_row_budget 2
+        slots += (n_prompt + args.max_tokens * 3) * n_requests * len(args.draft_device or ["cpu"])  # spec_row_budget 3
     store, kek = work / "masks", work / "secrets" / "kek"
     kek.parent.mkdir(mode=0o700, exist_ok=True)
     if not (store / "state.sqlite").exists():
