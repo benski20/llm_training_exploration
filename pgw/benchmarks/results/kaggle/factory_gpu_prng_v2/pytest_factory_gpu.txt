@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /tmp/pgwsrc/pgw
+configfile: pyproject.toml
+plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 331 items / 322 deselected / 9 selected
+
+tests/factory/test_gpu_prng.py::test_gpu_self_test_passes PASSED         [ 11%]
+tests/factory/test_gpu_prng.py::test_gpu_rows_and_planes_byte_identical PASSED [ 22%]
+tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring0] PASSED [ 33%]
+tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring1] PASSED [ 44%]
+tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring2] PASSED [ 55%]
+tests/factory/test_gpu_prng.py::test_gpu_matmul_planes_equals_matmul PASSED [ 66%]
+tests/factory/test_kernels.py::test_cuda_kernel_exact[K32A8] PASSED      [ 77%]
+tests/factory/test_kernels.py::test_cuda_kernel_exact[K40A12] PASSED     [ 88%]
+tests/factory/test_kernels.py::test_cuda_kernel_exact[K48A20] PASSED     [100%]
+
+================ 9 passed, 322 deselected in 144.55s (0:02:24) =================
+
+---stderr---

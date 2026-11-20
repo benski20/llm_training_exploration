@@ -1,0 +1,31 @@
+{
+ "model": "qwen2.5-7b",
+ "mode": "preset",
+ "ring": "K32A12C27",
+ "device": "cuda",
+ "backend": "cuda_int8",
+ "slots_measured": 1024,
+ "seconds": 12.587861202999989,
+ "slots_per_second": 121.78779637954865,
+ "tokens_per_hour": 438436.06696637516,
+ "seconds_per_token": 0.008211003316650256,
+ "gemm_fraction": 0.11492191919423951,
+ "bytes_per_token": 5562368,
+ "price_per_hour": 0.2,
+ "usd_per_million_tokens": 0.45616685092501424,
+ "storage_tb_per_million_tokens": 5.562368,
+ "layers_measured": 28,
+ "layers_total": 28,
+ "gpu_name": "Tesla T4",
+ "gpu_prng": false,
+ "native_rng": true,
+ "chunk_slots": 256,
+ "rng_seconds": 8.692038253999499,
+ "gemm_seconds": 1.4466211679994672,
+ "check_seconds": 5.5730584090001685,
+ "write_seconds": 0.0
+}
+
+---stderr---
+2026-11-20 18:27:02,998 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+2026-11-20 18:27:02,998 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot

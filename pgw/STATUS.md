@@ -95,6 +95,22 @@ current extent; `MaskReservation.take_checked` (boundary + checks + take under o
 LM head (`benchmarks/lm_head_bench.py`, 7B float32): 47 ms per sequence, so 0.19 s per step with 4
 sequences; the opt-in `batch_lm_head` (default off, changes logprob bits, not quality) takes 0.11 s.
 
+## Update 2026-11-20: mask factory speed (GPU ChaCha20, native writer, encrypted factory)
+
+Merged, each reviewed (outputs byte-identical, privacy unchanged):
+- **GPU ChaCha20 + digit split** (`PGW_FACTORY_GPU_PRNG`, on for CUDA factories after a byte-identity self-test
+  against the CPU path; the factory falls back to the CPU otherwise). Runs only on the customer's own factory GPU.
+- **Factory quick wins:** native ChaCha on the CPU path, byte-gather digit split, in-place combine, auto chunk size,
+  pinned copy-back on CUDA, per-stage stats.
+- **Native segment writer** (Rust AES-GCM, same at-rest format): write stage about 30 -> 5 ms per 7B slot (local).
+- **Encrypted factory, customer side:** native noise/secret sampling, more groups per pass, requests in flight.
+- **Encrypted factory, provider side:** faster maskgen (about 2.1-2.6x on CPU locally), cached row sums, no global lock.
+
+Kaggle T4, Qwen2.5-7B K32A12C27, all 28 layers, generation only (no store writes), 1024 slots:
+**122 -> 356 slots/s (about 438k -> 1.28M slots/h) with the GPU PRNG**; rng time 8.7 s -> 0.07 s; GPU tests incl.
+byte-identity pass on the T4 (`benchmarks/results/kaggle/factory_gpu_prng_v2`). The first attempt
+(`factory_gpu_prng`) correctly fell back to the CPU path because of a cuda vs cuda:0 device comparison, since fixed.
+
 ## Update 2026-11-20: phase 2 of the speed plan (Kaggle run 27)
 
 Four packages, each reviewed (no blocking issues): lean wire lane (service frame lane, client

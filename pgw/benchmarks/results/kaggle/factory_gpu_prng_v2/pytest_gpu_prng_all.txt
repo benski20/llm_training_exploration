@@ -1,0 +1,7 @@
+..................................................................s..... [ 62%]
+...........................................                              [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/factory/test_gpu_prng.py:235: needs the Triton interpreter
+114 passed, 1 skipped in 38.18s
+
+---stderr---

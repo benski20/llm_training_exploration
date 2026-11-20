@@ -1,0 +1,567 @@
+[{"stream_name":"stdout","time":10.08801092,"data":"[   0.1m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869292 kB', 'MemFree:        26226880 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":10.229288693,"data":"[   0.2m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":22.828575624,"data":"[   0.4m] DONE pip_install rc 0 13s\n"}
+,{"stream_name":"stdout","time":22.828604795,"data":"\n"}
+,{"stream_name":"stdout","time":22.828609393,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":22.828613726,"data":"\n"}
+,{"stream_name":"stdout","time":22.828617464,"data":"[   0.4m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":23.824342235,"data":"[   0.4m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":23.824369252,"data":"=0.0.8\n"}
+,{"stream_name":"stdout","time":23.824373647,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":23.824376983,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":23.824380195,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":23.824383495,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":23.824386716,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":23.82439154,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":23.824399239999998,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":23.824402352,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":23.824404572,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":23.824406871,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":23.824409023,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":23.824411183,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":23.824413494,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":23.82441581,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":23.824417999,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":23.824420204,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":23.824422428,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":23.824424668,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":23.824426835,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":23.824429768,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":23.82445462,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":23.824458125,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":23.824461829,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":23.824465466,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":23.824469198,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":23.824472923,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":23.824476185,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":23.82447944,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":23.824482555,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":23.824485769,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":23.82448901,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":23.824492198,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":23.82450579,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":23.824509294,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":23.824512468,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":23.824517386,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":23.824524936,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":23.824527362,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":23.824529532,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":23.824531693,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":23.824533835,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":23.82453619,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":23.824550798,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":23.824554867,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":23.824558613,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":23.824562435,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":23.824566177,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":23.82456984,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":23.824573062,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":23.824576288,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":23.824579507,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":23.824582793,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":23.82458595,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":23.824589175,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":23.824592365,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":23.824595589,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":23.824598713,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":23.824601963,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":23.824605158,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":23.824608324,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":23.82461153,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":23.824614753,"data":"texttable==1.7.3\n"}
+,{"stream_name":"stdout","time":23.824618319,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":23.824621532,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":23.824626272,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":23.824633204,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":23.82463619,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":23.824649818,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":23.82465357,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":23.824657153,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":23.82466092,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":23.824664262,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":23.824667423,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":23.824670624,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":23.824673825,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":23.824677012,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":23.824680203,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":23.82468341,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":23.824690297,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":23.824710548,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":23.824716737,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":23.824720022,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":23.824723194,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":23.824726377,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":23.824729549,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":23.824732731,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":23.824735909,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":23.824739002,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":23.824742148,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":23.824745335,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":23.82474854,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":23.824751754,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":23.82475496,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":23.824758173,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":23.824761314,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":23.824764563,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":23.82477713,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":23.824780432,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":23.824785423,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":23.824788527,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":23.82479231,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":23.824796077,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":23.824799887,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":23.824803867,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":23.824807349,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":23.824811769,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":23.824814918,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":23.824818143,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":23.824821211,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":23.824824397,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":23.824827596,"data":"ujson==6.1.0\n"}
+,{"stream_name":"stdout","time":23.82483082,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":23.824833946,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":23.824837068,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":23.824840228,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":23.824843413,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":23.824846643,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":23.824849839,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":23.824853013,"data":"urwid==5.1.3\n"}
+,{"stream_name":"stdout","time":23.824856218,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":23.82486127,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":23.824868049,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":23.82487085,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":23.824890973,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":23.824899567,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":23.824903577,"data":"vtk==9.7.2\n"}
+,{"stream_name":"stdout","time":23.824906684,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":23.824909872,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":23.824913043,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":23.824916222,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":23.824919439,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":23.824922633,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":23.824925766,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":23.82492919,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":23.824932268,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":23.824935454,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":23.82493863,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":23.824941886,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":23.824944999,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":23.824948217,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":23.824951388,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":23.824954596,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":23.824957718,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":23.824966305,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":23.824969356,"data":"wrapt==2.5.1\n"}
+,{"stream_name":"stdout","time":23.824989638,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":23.824993356,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":23.824997422,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":23.825000723,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":23.825003872,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":23.825007014,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":23.82501013,"data":"xvfbwrapper==0.2.38\n"}
+,{"stream_name":"stdout","time":23.825013331,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":23.825016484,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":23.825019658,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":23.825022795,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":23.82502596,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":23.825029089,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":23.825032157,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":23.825035255,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":23.825038466,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":23.825041608,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":23.825044757,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":23.825047932,"data":"\n"}
+,{"stream_name":"stdout","time":23.825051012,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":23.825055839,"data":"\n"}
+,{"stream_name":"stdout","time":23.825062735,"data":"[   0.4m] RUN build_native : { [ -f $HOME/.cargo/env ] \u0026\u0026 . $HOME/.cargo/env; true; } \u0026\u0026 (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) \u0026\u0026 { [ -f $HOME/.cargo/env ] \u0026\u0026 . $HOME/.cargo/env; true; } \u0026\u0026 cargo --version \u0026\u0026 python rust/tools/build_fast.py \u0026\u0026 python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())'\n"}
+,{"stream_name":"stdout","time":65.231043901,"data":"[   1.1m] DONE build_native rc 0 41s\n"}
+,{"stream_name":"stdout","time":65.231090837,"data":"fo: syncing channel updates for stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":65.23109657,"data":"info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)\n"}
+,{"stream_name":"stdout","time":65.231101071,"data":"info: downloading 3 components\n"}
+,{"stream_name":"stdout","time":65.231105287,"data":"info: default toolchain set to stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":65.231109597,"data":"    Updating crates.io index\n"}
+,{"stream_name":"stdout","time":65.231115428,"data":" Downloading crates ...\n"}
+,{"stream_name":"stdout","time":65.23112348,"data":"  Downloaded block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":65.231126257,"data":"  Downloaded cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":65.231128942,"data":"  Downloaded cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":65.231131617,"data":"  Downloaded autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":65.231134405,"data":"  Downloaded chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":65.231137086,"data":"  Downloaded unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":65.231139786,"data":"  Downloaded pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231142467,"data":"  Downloaded inout v0.1.4\n"}
+,{"stream_name":"stdout","time":65.231145222,"data":"  Downloaded version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":65.231147932,"data":"  Downloaded crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":65.231150594,"data":"  Downloaded generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":65.231153381,"data":"  Downloaded proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":65.231156157,"data":"  Downloaded rustversion v1.0.23\n"}
+,{"stream_name":"stdout","time":65.231159199,"data":"  Downloaded heck v0.5.0\n"}
+,{"stream_name":"stdout","time":65.231161881,"data":"  Downloaded subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":65.231164617,"data":"  Downloaded cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":65.231167289,"data":"  Downloaded rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":65.231169975,"data":"  Downloaded rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":65.23117267,"data":"  Downloaded memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":65.231175366,"data":"  Downloaded zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":65.231178076,"data":"  Downloaded target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":65.231180794,"data":"  Downloaded num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":65.231183739,"data":"  Downloaded num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":65.231186453,"data":"  Downloaded matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":65.231189167,"data":"  Downloaded once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":65.231191869,"data":"  Downloaded unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":65.231194591,"data":"  Downloaded hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":65.231197276,"data":"  Downloaded indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":65.231199959,"data":"  Downloaded sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":65.231202636,"data":"  Downloaded digest v0.10.7\n"}
+,{"stream_name":"stdout","time":65.231205345,"data":"  Downloaded num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":65.231208056,"data":"  Downloaded quote v1.0.47\n"}
+,{"stream_name":"stdout","time":65.231226242,"data":"  Downloaded numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":65.231228693,"data":"  Downloaded pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231230931,"data":"  Downloaded pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231233121,"data":"  Downloaded typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":65.231235316,"data":"  Downloaded pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231237528,"data":"  Downloaded hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":65.231239697,"data":"  Downloaded ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":65.231241879,"data":"  Downloaded syn v2.0.119\n"}
+,{"stream_name":"stdout","time":65.231244051,"data":"  Downloaded pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231246219,"data":"  Downloaded libc v0.2.191\n"}
+,{"stream_name":"stdout","time":65.231248497,"data":"   Compiling target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":65.231250711,"data":"   Compiling autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":65.231252913,"data":"   Compiling version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":65.231255119,"data":"   Compiling once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":65.231257399,"data":"   Compiling typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":65.231259596,"data":"   Compiling generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":65.23126181,"data":"   Compiling proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":65.231263999,"data":"   Compiling quote v1.0.47\n"}
+,{"stream_name":"stdout","time":65.231266274,"data":"   Compiling unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":65.231268517,"data":"   Compiling num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":65.231270739,"data":"   Compiling pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231272964,"data":"   Compiling subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":65.23127526,"data":"   Compiling libc v0.2.191\n"}
+,{"stream_name":"stdout","time":65.231277465,"data":"   Compiling cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":65.231280437,"data":"   Compiling syn v2.0.119\n"}
+,{"stream_name":"stdout","time":65.231282859,"data":"   Compiling crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":65.231285157,"data":"   Compiling block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":65.231287336,"data":"   Compiling digest v0.10.7\n"}
+,{"stream_name":"stdout","time":65.231289523,"data":"   Compiling memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":65.23129173,"data":"   Compiling matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":65.231293924,"data":"   Compiling heck v0.5.0\n"}
+,{"stream_name":"stdout","time":65.231296096,"data":"   Compiling inout v0.1.4\n"}
+,{"stream_name":"stdout","time":65.231298264,"data":"   Compiling pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231300479,"data":"   Compiling pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":65.2313027,"data":"   Compiling pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231304866,"data":"   Compiling rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":65.231307076,"data":"   Compiling cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":65.231309272,"data":"   Compiling cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":65.231311473,"data":"   Compiling num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":65.231313646,"data":"   Compiling num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":65.231321551,"data":"   Compiling hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":65.231323906,"data":"   Compiling unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":65.231326119,"data":"   Compiling indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":65.231328286,"data":"   Compiling hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":65.231330461,"data":"   Compiling ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":65.231332728,"data":"   Compiling chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":65.231335091,"data":"   Compiling sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":65.231337252,"data":"   Compiling zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":65.231339535,"data":"   Compiling rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":65.231341781,"data":"   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n"}
+,{"stream_name":"stdout","time":65.231344179,"data":"   Compiling pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":65.231346392,"data":"   Compiling numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":65.231348584,"data":"   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n"}
+,{"stream_name":"stdout","time":65.231350848,"data":"    Finished `release` profile [optimized] target(s) in 22.98s\n"}
+,{"stream_name":"stdout","time":65.231353105,"data":"\n"}
+,{"stream_name":"stdout","time":65.231355254,"data":"[   1.1m] RUN cpu_info : lscpu; nproc; nvidia-smi || true\n"}
+,{"stream_name":"stdout","time":65.636986589,"data":"[   1.1m] DONE cpu_info rc 0 0s\n"}
+,{"stream_name":"stdout","time":65.637012137,"data":"     Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown\n"}
+,{"stream_name":"stdout","time":65.637016389,"data":"Vulnerability Old microcode:             Not affected\n"}
+,{"stream_name":"stdout","time":65.637019971,"data":"Vulnerability Reg file data sampling:    Not affected\n"}
+,{"stream_name":"stdout","time":65.637023466,"data":"Vulnerability Retbleed:                  Mitigation; IBRS\n"}
+,{"stream_name":"stdout","time":65.63702701,"data":"Vulnerability Spec rstack overflow:      Not affected\n"}
+,{"stream_name":"stdout","time":65.637030597,"data":"Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\n"}
+,{"stream_name":"stdout","time":65.637034082,"data":"Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\n"}
+,{"stream_name":"stdout","time":65.637037716,"data":"Vulnerability Spectre v2:                Mitigation; IBRS; IBPB conditional; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop\n"}
+,{"stream_name":"stdout","time":65.637041583,"data":"Vulnerability Srbds:                     Not affected\n"}
+,{"stream_name":"stdout","time":65.637045015,"data":"Vulnerability Tsa:                       Not affected\n"}
+,{"stream_name":"stdout","time":65.63704839,"data":"Vulnerability Tsx async abort:           Mitigation; Clear CPU buffers; SMT Host state unknown\n"}
+,{"stream_name":"stdout","time":65.637052106,"data":"Vulnerability Vmscape:                   Not affected\n"}
+,{"stream_name":"stdout","time":65.637061919,"data":"4\n"}
+,{"stream_name":"stdout","time":65.637065258,"data":"Fri Nov 20 18:23:07 2026       \n"}
+,{"stream_name":"stdout","time":65.637068562,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":65.637072525,"data":"| NVIDIA-SMI 580.178.04             Driver Version: 580.178.04     CUDA Version: 13.0     |\n"}
+,{"stream_name":"stdout","time":65.637076072,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":65.637089072,"data":"| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n"}
+,{"stream_name":"stdout","time":65.637092573,"data":"| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n"}
+,{"stream_name":"stdout","time":65.637095759,"data":"|                                         |                        |               MIG M. |\n"}
+,{"stream_name":"stdout","time":65.637098929,"data":"|=========================================+========================+======================|\n"}
+,{"stream_name":"stdout","time":65.637102704,"data":"|   0  Tesla T4                       Off |   00000000:00:04.0 Off |                    0 |\n"}
+,{"stream_name":"stdout","time":65.637105823,"data":"| N/A   52C    P8             10W /   70W |       3MiB /  15360MiB |      0%      Default |\n"}
+,{"stream_name":"stdout","time":65.637108827,"data":"|                                         |                        |                  N/A |\n"}
+,{"stream_name":"stdout","time":65.637112256,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":65.637116845,"data":"|   1  Tesla T4                       Off |   00000000:00:05.0 Off |                    0 |\n"}
+,{"stream_name":"stdout","time":65.637120426,"data":"| N/A   46C    P8             10W /   70W |       3MiB /  15360MiB |      0%      Default |\n"}
+,{"stream_name":"stdout","time":65.637123897,"data":"|                                         |                        |                  N/A |\n"}
+,{"stream_name":"stdout","time":65.637127302,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":65.637131186,"data":"\n"}
+,{"stream_name":"stdout","time":65.637134593,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":65.637137686,"data":"| Processes:                                                                              |\n"}
+,{"stream_name":"stdout","time":65.637141242,"data":"|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n"}
+,{"stream_name":"stdout","time":65.637145016,"data":"|        ID   ID                                                               Usage      |\n"}
+,{"stream_name":"stdout","time":65.637148607,"data":"|=========================================================================================|\n"}
+,{"stream_name":"stdout","time":65.637151909,"data":"|  No running processes found                                                             |\n"}
+,{"stream_name":"stdout","time":65.637155554,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":65.637158596,"data":"\n"}
+,{"stream_name":"stdout","time":65.637161504,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":65.637164386,"data":"\n"}
+,{"stream_name":"stdout","time":65.637167411,"data":"[   1.1m] RUN pytest_factory_gpu : /usr/bin/python3 -m pytest tests/factory -m gpu --ignore tests/factory/test_runtime_he_mtls.py -v -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":215.41735566,"data":"[   3.6m] DONE pytest_factory_gpu rc 0 150s\n"}
+,{"stream_name":"stdout","time":215.417386779,"data":"============================= test session starts ==============================\n"}
+,{"stream_name":"stdout","time":215.417392003,"data":"platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3\n"}
+,{"stream_name":"stdout","time":215.417404417,"data":"rootdir: /tmp/pgwsrc/pgw\n"}
+,{"stream_name":"stdout","time":215.417407962,"data":"configfile: pyproject.toml\n"}
+,{"stream_name":"stdout","time":215.417411413,"data":"plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0\n"}
+,{"stream_name":"stdout","time":215.417415182,"data":"asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function\n"}
+,{"stream_name":"stdout","time":215.417418706,"data":"timeout: 1800.0s\n"}
+,{"stream_name":"stdout","time":215.417422007,"data":"timeout method: signal\n"}
+,{"stream_name":"stdout","time":215.417425332,"data":"timeout func_only: False\n"}
+,{"stream_name":"stdout","time":215.417428772,"data":"collecting ... collected 331 items / 322 deselected / 9 selected\n"}
+,{"stream_name":"stdout","time":215.417432123,"data":"\n"}
+,{"stream_name":"stdout","time":215.417435367,"data":"tests/factory/test_gpu_prng.py::test_gpu_self_test_passes PASSED         [ 11%]\n"}
+,{"stream_name":"stdout","time":215.417438916,"data":"tests/factory/test_gpu_prng.py::test_gpu_rows_and_planes_byte_identical PASSED [ 22%]\n"}
+,{"stream_name":"stdout","time":215.417442437,"data":"tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring0] PASSED [ 33%]\n"}
+,{"stream_name":"stdout","time":215.417445951,"data":"tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring1] PASSED [ 44%]\n"}
+,{"stream_name":"stdout","time":215.417449599,"data":"tests/factory/test_gpu_prng.py::test_gpu_generator_identical_with_and_without_gpu_prng[ring2] PASSED [ 55%]\n"}
+,{"stream_name":"stdout","time":215.417453172,"data":"tests/factory/test_gpu_prng.py::test_gpu_matmul_planes_equals_matmul PASSED [ 66%]\n"}
+,{"stream_name":"stdout","time":215.417456832,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K32A8] PASSED      [ 77%]\n"}
+,{"stream_name":"stdout","time":215.417465915,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K40A12] PASSED     [ 88%]\n"}
+,{"stream_name":"stdout","time":215.417469263,"data":"tests/factory/test_kernels.py::test_cuda_kernel_exact[K48A20] PASSED     [100%]\n"}
+,{"stream_name":"stdout","time":215.41747258,"data":"\n"}
+,{"stream_name":"stdout","time":215.417475739,"data":"================ 9 passed, 322 deselected in 144.55s (0:02:24) =================\n"}
+,{"stream_name":"stdout","time":215.417479291,"data":"\n"}
+,{"stream_name":"stdout","time":215.417482491,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":215.417485657,"data":"\n"}
+,{"stream_name":"stdout","time":215.417489226,"data":"[   3.6m] RUN pytest_gpu_prng_all : /usr/bin/python3 -m pytest tests/factory/test_gpu_prng.py tests/factory/test_generator.py tests/factory/test_self_check.py -q -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":258.744895092,"data":"[   4.3m] DONE pytest_gpu_prng_all rc 0 43s\n"}
+,{"stream_name":"stdout","time":258.744960498,"data":"..................................................................s..... [ 62%]\n"}
+,{"stream_name":"stdout","time":258.744971658,"data":"...........................................                              [100%]\n"}
+,{"stream_name":"stdout","time":258.744975456,"data":"=========================== short test summary info ============================\n"}
+,{"stream_name":"stdout","time":258.744978433,"data":"SKIPPED [1] tests/factory/test_gpu_prng.py:235: needs the Triton interpreter\n"}
+,{"stream_name":"stdout","time":258.744981916,"data":"114 passed, 1 skipped in 38.18s\n"}
+,{"stream_name":"stdout","time":258.744984884,"data":"\n"}
+,{"stream_name":"stdout","time":258.744996705,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":258.744999121,"data":"\n"}
+,{"stream_name":"stdout","time":258.745001427,"data":"[   4.3m] RUN bench_factory_7b_k32_l2_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":267.102768868,"data":"[   4.4m] DONE bench_factory_7b_k32_l2_gpu_prng1 rc 0 8s\n"}
+,{"stream_name":"stdout","time":267.102795637,"data":"{\n"}
+,{"stream_name":"stdout","time":267.102801312,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":267.102805075,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":267.102810129,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":267.10281427,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":267.102817966,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":267.102821999,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":267.102825753,"data":" \"seconds\": 0.6185480909999796,\n"}
+,{"stream_name":"stdout","time":267.102829901,"data":" \"slots_per_second\": 218.9088043786334,\n"}
+,{"stream_name":"stdout","time":267.102833432,"data":" \"tokens_per_hour\": 788071.6957630803,\n"}
+,{"stream_name":"stdout","time":267.102836779,"data":" \"seconds_per_token\": 0.004568112291501808,\n"}
+,{"stream_name":"stdout","time":267.102840059,"data":" \"gemm_fraction\": 0.37376769464521886,\n"}
+,{"stream_name":"stdout","time":267.102843398,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":267.102846661,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":267.102849878,"data":" \"usd_per_million_tokens\": 0.2537840161945449,\n"}
+,{"stream_name":"stdout","time":267.102853238,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":267.102856596,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":267.102859876,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":267.102863115,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":267.102866385,"data":" \"gpu_prng\": true,\n"}
+,{"stream_name":"stdout","time":267.102869678,"data":" \"native_rng\": false,\n"}
+,{"stream_name":"stdout","time":267.102872911,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":267.102877927,"data":" \"rng_seconds\": 0.005323549999786792,\n"}
+,{"stream_name":"stdout","time":267.102884758,"data":" \"gemm_seconds\": 0.23119329400026345,\n"}
+,{"stream_name":"stdout","time":267.102887034,"data":" \"check_seconds\": 0.3792310750001775,\n"}
+,{"stream_name":"stdout","time":267.10288934,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":267.102891552,"data":"}\n"}
+,{"stream_name":"stdout","time":267.102893693,"data":"\n"}
+,{"stream_name":"stdout","time":267.10289582,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":267.102898891,"data":"2026-11-20 18:26:26,478 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":267.102914433,"data":"2026-11-20 18:26:26,478 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n"}
+,{"stream_name":"stdout","time":267.102918766,"data":"2026-11-20 18:26:27,824 INFO pgw.factory.gpu_prng: GPU mask PRNG self-test passed on cuda (triton, K in (32, 40, 48))\n"}
+,{"stream_name":"stdout","time":267.102923195,"data":"2026-11-20 18:26:27,824 INFO pgw.factory.generator: mask generator: r expansion and digit split on cuda (triton)\n"}
+,{"stream_name":"stdout","time":267.102937039,"data":"\n"}
+,{"stream_name":"stdout","time":267.102940469,"data":"[   4.4m] RUN bench_factory_7b_k32_l2_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":274.591628657,"data":"[   4.6m] DONE bench_factory_7b_k32_l2_gpu_prng0 rc 0 7s\n"}
+,{"stream_name":"stdout","time":274.591655173,"data":"{\n"}
+,{"stream_name":"stdout","time":274.591659103,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":274.591662667,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":274.591666171,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":274.591670264,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":274.591673788,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":274.591677566,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":274.591680959,"data":" \"seconds\": 1.041024268000001,\n"}
+,{"stream_name":"stdout","time":274.591684474,"data":" \"slots_per_second\": 96.8172173016804,\n"}
+,{"stream_name":"stdout","time":274.591706621,"data":" \"tokens_per_hour\": 348541.98228604946,\n"}
+,{"stream_name":"stdout","time":274.591710846,"data":" \"seconds_per_token\": 0.0103287413940438,\n"}
+,{"stream_name":"stdout","time":274.591714414,"data":" \"gemm_fraction\": 0.22683693863702617,\n"}
+,{"stream_name":"stdout","time":274.591717953,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":274.591721451,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":274.591725096,"data":" \"usd_per_million_tokens\": 0.5738189663357668,\n"}
+,{"stream_name":"stdout","time":274.591728812,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":274.591732379,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":274.591735869,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":274.591739161,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":274.591742756,"data":" \"gpu_prng\": false,\n"}
+,{"stream_name":"stdout","time":274.591746058,"data":" \"native_rng\": true,\n"}
+,{"stream_name":"stdout","time":274.591749614,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":274.591753143,"data":" \"rng_seconds\": 0.7892806980003115,\n"}
+,{"stream_name":"stdout","time":274.591756609,"data":" \"gemm_seconds\": 0.2361427579999713,\n"}
+,{"stream_name":"stdout","time":274.591760083,"data":" \"check_seconds\": 0.3807341489999203,\n"}
+,{"stream_name":"stdout","time":274.59176362,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":274.59176706,"data":"}\n"}
+,{"stream_name":"stdout","time":274.591770253,"data":"\n"}
+,{"stream_name":"stdout","time":274.591773549,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":274.591776984,"data":"2026-11-20 18:26:34,802 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":274.591780879,"data":"2026-11-20 18:26:34,802 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n"}
+,{"stream_name":"stdout","time":274.591784969,"data":"\n"}
+,{"stream_name":"stdout","time":274.59187601,"data":"[   4.6m] RUN bench_factory_7b_k32_l28_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":295.382972929,"data":"[   4.9m] DONE bench_factory_7b_k32_l28_gpu_prng1 rc 0 21s\n"}
+,{"stream_name":"stdout","time":295.383007428,"data":"{\n"}
+,{"stream_name":"stdout","time":295.383012921,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":295.38301826,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":295.383023186,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":295.383027377,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":295.383032202,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":295.383036465,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":295.38304104,"data":" \"seconds\": 7.103069292000043,\n"}
+,{"stream_name":"stdout","time":295.383045885,"data":" \"slots_per_second\": 356.3975176828158,\n"}
+,{"stream_name":"stdout","time":295.383051045,"data":" \"tokens_per_hour\": 1283031.0636581369,\n"}
+,{"stream_name":"stdout","time":295.383056028,"data":" \"seconds_per_token\": 0.0028058556818848918,\n"}
+,{"stream_name":"stdout","time":295.383060574,"data":" \"gemm_fraction\": 0.19179815231916217,\n"}
+,{"stream_name":"stdout","time":295.383065383,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":295.383070961,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":295.383075694,"data":" \"usd_per_million_tokens\": 0.15588087121582736,\n"}
+,{"stream_name":"stdout","time":295.38308095,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":295.383085846,"data":" \"layers_measured\": 28,\n"}
+,{"stream_name":"stdout","time":295.383091041,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":295.383095955,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":295.383100541,"data":" \"gpu_prng\": true,\n"}
+,{"stream_name":"stdout","time":295.383104466,"data":" \"native_rng\": false,\n"}
+,{"stream_name":"stdout","time":295.383108499,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":295.383112879,"data":" \"rng_seconds\": 0.06766844899999569,\n"}
+,{"stream_name":"stdout","time":295.383117253,"data":" \"gemm_seconds\": 1.3623555660005877,\n"}
+,{"stream_name":"stdout","time":295.383121552,"data":" \"check_seconds\": 5.639830764999886,\n"}
+,{"stream_name":"stdout","time":295.383125767,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":295.383131259,"data":"}\n"}
+,{"stream_name":"stdout","time":295.383136248,"data":"\n"}
+,{"stream_name":"stdout","time":295.38314062,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":295.383145118,"data":"2026-11-20 18:26:42,204 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":295.383150267,"data":"2026-11-20 18:26:42,204 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n"}
+,{"stream_name":"stdout","time":295.383155606,"data":"2026-11-20 18:26:43,548 INFO pgw.factory.gpu_prng: GPU mask PRNG self-test passed on cuda (triton, K in (32, 40, 48))\n"}
+,{"stream_name":"stdout","time":295.383165913,"data":"2026-11-20 18:26:43,548 INFO pgw.factory.generator: mask generator: r expansion and digit split on cuda (triton)\n"}
+,{"stream_name":"stdout","time":295.383170957,"data":"\n"}
+,{"stream_name":"stdout","time":295.383175209,"data":"[   4.9m] RUN bench_factory_7b_k32_l28_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":321.336191922,"data":"[   5.3m] DONE bench_factory_7b_k32_l28_gpu_prng0 rc 0 26s\n"}
+,{"stream_name":"stdout","time":321.336219844,"data":"{\n"}
+,{"stream_name":"stdout","time":321.336224695,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":321.3362288,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":321.336231992,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":321.336235258,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":321.336239298,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":321.336242585,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":321.336245825,"data":" \"seconds\": 12.587861202999989,\n"}
+,{"stream_name":"stdout","time":321.336248885,"data":" \"slots_per_second\": 121.78779637954865,\n"}
+,{"stream_name":"stdout","time":321.33625238,"data":" \"tokens_per_hour\": 438436.06696637516,\n"}
+,{"stream_name":"stdout","time":321.336256172,"data":" \"seconds_per_token\": 0.008211003316650256,\n"}
+,{"stream_name":"stdout","time":321.336259517,"data":" \"gemm_fraction\": 0.11492191919423951,\n"}
+,{"stream_name":"stdout","time":321.336262833,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":321.336265952,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":321.336268982,"data":" \"usd_per_million_tokens\": 0.45616685092501424,\n"}
+,{"stream_name":"stdout","time":321.336272173,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":321.336275764,"data":" \"layers_measured\": 28,\n"}
+,{"stream_name":"stdout","time":321.336279083,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":321.336282522,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":321.336285975,"data":" \"gpu_prng\": false,\n"}
+,{"stream_name":"stdout","time":321.336289193,"data":" \"native_rng\": true,\n"}
+,{"stream_name":"stdout","time":321.336292733,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":321.336296119,"data":" \"rng_seconds\": 8.692038253999499,\n"}
+,{"stream_name":"stdout","time":321.33629979,"data":" \"gemm_seconds\": 1.4466211679994672,\n"}
+,{"stream_name":"stdout","time":321.336303067,"data":" \"check_seconds\": 5.5730584090001685,\n"}
+,{"stream_name":"stdout","time":321.336306498,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":321.336310599,"data":"}\n"}
+,{"stream_name":"stdout","time":321.33631401,"data":"\n"}
+,{"stream_name":"stdout","time":321.33631758,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":321.336321562,"data":"2026-11-20 18:27:02,998 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":321.336325652,"data":"2026-11-20 18:27:02,998 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n"}
+,{"stream_name":"stdout","time":321.336329968,"data":"\n"}
+,{"stream_name":"stdout","time":321.336333606,"data":"[   5.3m] RUN bench_factory_7b_k40_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":330.29027737,"data":"[   5.5m] DONE bench_factory_7b_k40_gpu_prng1 rc 0 9s\n"}
+,{"stream_name":"stdout","time":330.29030409,"data":"{\n"}
+,{"stream_name":"stdout","time":330.29031687,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":330.290320892,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":330.290324547,"data":" \"ring\": \"K40A12\",\n"}
+,{"stream_name":"stdout","time":330.290328144,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":330.290331646,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":330.290335157,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":330.290338723,"data":" \"seconds\": 0.9395857240000396,\n"}
+,{"stream_name":"stdout","time":330.290342275,"data":" \"slots_per_second\": 170.24557367463245,\n"}
+,{"stream_name":"stdout","time":330.290345797,"data":" \"tokens_per_hour\": 612884.0652286769,\n"}
+,{"stream_name":"stdout","time":330.290349219,"data":" \"seconds_per_token\": 0.005873867839355201,\n"}
+,{"stream_name":"stdout","time":330.290352842,"data":" \"gemm_fraction\": 0.2673086282439884,\n"}
+,{"stream_name":"stdout","time":330.290356357,"data":" \"bytes_per_token\": 6952960,\n"}
+,{"stream_name":"stdout","time":330.290359749,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":330.290363138,"data":" \"usd_per_million_tokens\": 0.3263259910752889,\n"}
+,{"stream_name":"stdout","time":330.290366811,"data":" \"storage_tb_per_million_tokens\": 6.95296,\n"}
+,{"stream_name":"stdout","time":330.29037027,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":330.290373724,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":330.290377174,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":330.290380926,"data":" \"gpu_prng\": true,\n"}
+,{"stream_name":"stdout","time":330.290384022,"data":" \"native_rng\": false,\n"}
+,{"stream_name":"stdout","time":330.290387173,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":330.29039034,"data":" \"rng_seconds\": 0.005508136000173636,\n"}
+,{"stream_name":"stdout","time":330.290393578,"data":" \"gemm_seconds\": 0.25115937100008523,\n"}
+,{"stream_name":"stdout","time":330.290397209,"data":" \"check_seconds\": 0.6799389970000789,\n"}
+,{"stream_name":"stdout","time":330.29040052,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":330.290403905,"data":"}\n"}
+,{"stream_name":"stdout","time":330.290406883,"data":"\n"}
+,{"stream_name":"stdout","time":330.290410167,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":330.290413628,"data":"2026-11-20 18:27:29,031 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":330.290417378,"data":"2026-11-20 18:27:29,032 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n"}
+,{"stream_name":"stdout","time":330.290421127,"data":"2026-11-20 18:27:30,371 INFO pgw.factory.gpu_prng: GPU mask PRNG self-test passed on cuda (triton, K in (32, 40, 48))\n"}
+,{"stream_name":"stdout","time":330.290425167,"data":"2026-11-20 18:27:30,371 INFO pgw.factory.generator: mask generator: r expansion and digit split on cuda (triton)\n"}
+,{"stream_name":"stdout","time":330.290429082,"data":"\n"}
+,{"stream_name":"stdout","time":330.290437207,"data":"[   5.5m] RUN bench_factory_7b_k40_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":338.467968709,"data":"[   5.6m] DONE bench_factory_7b_k40_gpu_prng0 rc 0 8s\n"}
+,{"stream_name":"stdout","time":338.467993571,"data":"{\n"}
+,{"stream_name":"stdout","time":338.468011999,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":338.468016179,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":338.468034941,"data":" \"ring\": \"K40A12\",\n"}
+,{"stream_name":"stdout","time":338.468038663,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":338.468042933,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":338.468046811,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":338.468051021,"data":" \"seconds\": 1.342407836999996,\n"}
+,{"stream_name":"stdout","time":338.468055194,"data":" \"slots_per_second\": 86.94221844110643,\n"}
+,{"stream_name":"stdout","time":338.468058974,"data":" \"tokens_per_hour\": 312991.98638798314,\n"}
+,{"stream_name":"stdout","time":338.468062599,"data":" \"seconds_per_token\": 0.011501891922362062,\n"}
+,{"stream_name":"stdout","time":338.46806617,"data":" \"gemm_fraction\": 0.18878155283021825,\n"}
+,{"stream_name":"stdout","time":338.468069731,"data":" \"bytes_per_token\": 6952960,\n"}
+,{"stream_name":"stdout","time":338.468073257,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":338.468076671,"data":" \"usd_per_million_tokens\": 0.6389939956867813,\n"}
+,{"stream_name":"stdout","time":338.468080293,"data":" \"storage_tb_per_million_tokens\": 6.95296,\n"}
+,{"stream_name":"stdout","time":338.468083869,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":338.468087334,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":338.468090821,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":338.46809438,"data":" \"gpu_prng\": false,\n"}
+,{"stream_name":"stdout","time":338.46810713,"data":" \"native_rng\": true,\n"}
+,{"stream_name":"stdout","time":338.468114591,"data":" \"chunk_slots\": 256,\n"}
+,{"stream_name":"stdout","time":338.468117141,"data":" \"rng_seconds\": 0.8081418949999488,\n"}
+,{"stream_name":"stdout","time":338.468120376,"data":" \"gemm_seconds\": 0.25342183600031376,\n"}
+,{"stream_name":"stdout","time":338.468135757,"data":" \"check_seconds\": 0.6681687990001137,\n"}
+,{"stream_name":"stdout","time":338.468140034,"data":" \"write_seconds\": 0.0\n"}
+,{"stream_name":"stdout","time":338.468144399,"data":"}\n"}
+,{"stream_name":"stdout","time":338.468148388,"data":"\n"}
+,{"stream_name":"stdout","time":338.468152531,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":338.468156093,"data":"2026-11-20 18:27:37,991 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":338.468159968,"data":"2026-11-20 18:27:37,991 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n"}
+,{"stream_name":"stdout","time":338.468163842,"data":"\n"}
+,{"stream_name":"stdout","time":338.468938226,"data":"[   5.6m] ALL DONE\n"}
+,{"stream_name":"stderr","time":340.908384704,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":340.908411805,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":341.150187429,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":341.150215925,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":341.93743641,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":342.992987979,"data":"[NbConvertApp] Writing 1508672 bytes to __results__.html\n"}
+]

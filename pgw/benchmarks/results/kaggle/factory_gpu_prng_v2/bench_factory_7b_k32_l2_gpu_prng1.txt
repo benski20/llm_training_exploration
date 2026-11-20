@@ -1,0 +1,33 @@
+{
+ "model": "qwen2.5-7b",
+ "mode": "preset",
+ "ring": "K32A12C27",
+ "device": "cuda",
+ "backend": "cuda_int8",
+ "slots_measured": 1024,
+ "seconds": 0.6185480909999796,
+ "slots_per_second": 218.9088043786334,
+ "tokens_per_hour": 788071.6957630803,
+ "seconds_per_token": 0.004568112291501808,
+ "gemm_fraction": 0.37376769464521886,
+ "bytes_per_token": 5562368,
+ "price_per_hour": 0.2,
+ "usd_per_million_tokens": 0.2537840161945449,
+ "storage_tb_per_million_tokens": 5.562368,
+ "layers_measured": 2,
+ "layers_total": 28,
+ "gpu_name": "Tesla T4",
+ "gpu_prng": true,
+ "native_rng": false,
+ "chunk_slots": 256,
+ "rng_seconds": 0.005323549999786792,
+ "gemm_seconds": 0.23119329400026345,
+ "check_seconds": 0.3792310750001775,
+ "write_seconds": 0.0
+}
+
+---stderr---
+2026-11-20 18:26:26,478 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda
+2026-11-20 18:26:26,478 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot
+2026-11-20 18:26:27,824 INFO pgw.factory.gpu_prng: GPU mask PRNG self-test passed on cuda (triton, K in (32, 40, 48))
+2026-11-20 18:26:27,824 INFO pgw.factory.generator: mask generator: r expansion and digit split on cuda (triton)
