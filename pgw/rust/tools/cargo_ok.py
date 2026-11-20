@@ -13,7 +13,7 @@ def main() -> int:
     if exe is None:
         print("cargo not found")
         return 1
-    out = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False).stdout.split()
+    out = subprocess.run([exe, "--version"], capture_output=True, text=True, check=False).stdout.split()  # noqa: S603
     try:
         have = tuple(int(x) for x in out[1].split("-")[0].split(".")[: len(want)])
     except (IndexError, ValueError):

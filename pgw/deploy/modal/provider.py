@@ -40,6 +40,15 @@ image = (
     .add_local_file(PGW / "README.md", "/opt/pgw-src/README.md", copy=True)
     .add_local_file(PGW / "deploy/hf-space/constraints.txt", "/opt/pgw-src/constraints.txt", copy=True)
     .run_commands("pip install --no-cache-dir -c /opt/pgw-src/constraints.txt '/opt/pgw-src[service,pack]'")
+    # native gateway kernels (pgw_fast); without them pgw runs its much slower pure-Python path
+    .apt_install("curl", "build-essential")
+    .add_local_dir(PGW / "rust", "/opt/pgw-src/rust", copy=True, ignore=["target/**", "**/target/**"])
+    .run_commands(
+        "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable",
+        "cd /opt/pgw-src && . $HOME/.cargo/env && python rust/tools/build_fast.py --site && "
+        "rm -rf rust/target $HOME/.cargo/registry",
+        "cd / && python -c 'from pgw.core import native; assert native.fast is not None; print(native.fast.version())'",
+    )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
     .env({"PYTHONUNBUFFERED": "1"})

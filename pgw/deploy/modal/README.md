@@ -24,6 +24,8 @@ python pgw/deploy/modal/launch.py            # deploy both apps, start a fresh p
 python pgw/deploy/modal/launch.py --show     # print the live details again (not the setup token)
 python pgw/deploy/modal/launch.py --stop     # stop both apps now and clear the details
 python pgw/deploy/modal/launch.py --e2e --ttl-min 40   # scripted test (below), then stop
+python pgw/deploy/modal/launch.py --deploy-only        # build images and deploy, start nothing
+python pgw/deploy/modal/launch.py --no-deploy          # start a pair on the already-deployed apps
 ```
 
 `launch.py` prints the console URL, the one-time setup token and the enrollment code. The setup token

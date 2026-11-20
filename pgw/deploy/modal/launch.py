@@ -104,7 +104,13 @@ def main() -> None:
     ap.add_argument("--stop", action="store_true")
     ap.add_argument("--show", action="store_true")
     ap.add_argument("--no-deploy", action="store_true", help="reuse the deployed apps")
+    ap.add_argument("--deploy-only", action="store_true",
+                    help="build the images and deploy both apps, start nothing (no running cost)")
     args = ap.parse_args()
+    if args.deploy_only:
+        deploy()
+        print("deployed; start a pair later with --no-deploy")
+        return
     if args.stop:
         stop()
         return

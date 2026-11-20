@@ -2,6 +2,7 @@
 """Build the native hot path (``pgw_fast``) and install it next to the ``pgw`` package.
 
     python rust/tools/build_fast.py            # release build -> src/pgw_fast.abi3.so
+    python rust/tools/build_fast.py --site     # ... and also into site-packages (non-editable installs)
 
 Needs a Rust toolchain (``rustup``) and the Python headers of the interpreter running this script.
 ``pgw`` works without it (pure Python fallback); ``PGW_NATIVE=0`` disables it at runtime.
@@ -29,6 +30,12 @@ def main() -> int:
     shutil.copy2(lib, tmp)
     os.replace(tmp, dst)  # atomic: a running process keeps its mapped copy
     print(f"installed {dst}")
+    if "--site" in sys.argv[1:]:  # a regular (non-editable) install imports from site-packages
+        import sysconfig
+
+        site = Path(sysconfig.get_paths()["purelib"]) / dst.name
+        shutil.copy2(dst, site)
+        print(f"installed {site}")
     return 0
 
 
