@@ -15,6 +15,30 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-20 (measurement and telemetry for run 26)
+
+Run 26 (after the phase-1 merge) will be measured with corrected accounting; no new speed numbers yet.
+
+- **Decode-only accounting** in `benchmarks/gpu_validate.py`. The run-25 "round trips 0.114 s/token"
+  divided whole-request remote time (prefill included) by prompt + generated tokens, so it understated
+  decode. The streaming phase now reports `decode_remote_s_per_token`, `decode_local_s_per_token`,
+  `decode_remote_ms_per_trip` and `decode_round_trips_per_token` (from the backend's decode counters when
+  the gateway has them, else from the stats delta after the first token), and how much of the measured
+  s/token they account for. The old fields are kept as `*_incl_prefill`.
+- **Per-trip split**: `/admin/status` now has `client_timing` (per rows-per-request class: client RTT,
+  service queue and compute, and the rest = network, framing, Python), reported as `decode_trip_split`.
+  The compute client wrapper now also times (and breaker-gates) the blocking `compute_sync` path that
+  small decode calls use; before, those trips were untimed.
+- **Metrics**: `pgw_gateway_round_trip_seconds` uses sub-ms buckets (0.25-25 ms plus a tail).
+  `pgw_gateway_network_seconds`, `pgw_gateway_service_seconds` and `pgw_client_cert_expiry_seconds`
+  are implemented but emit only once they are added to the metric contract
+  (`pgw.observability.metrics.METRIC_NAMES`) and the gateway API metrics table.
+- **Benches**: `benchmarks/net_floor_bench.py` (TCP ping-pong floor; loopback in this 4-vCPU container:
+  p50 39 us at 64 B, 75 us at 80 KB, i.e. under 0.01 s/token over 112 trips). `profile_gateway.py`
+  warms every layer. Kaggle jobs `pgw-run26-7b` (4/8/16 streams, net floor, profile) and
+  `pgw-spec-sweep-7b` (k = 1, 2, 3 on cpu and cuda:1, `--spec-max-batch 1`) replace `pgw-spec-7b`
+  (`--spec-tokens 8`).
+
 ## Update 2026-11-20 (two-party deployment on Modal)
 
 `deploy/modal/` runs a real provider/customer pair as two Modal apps (one command: `launch.py`). The

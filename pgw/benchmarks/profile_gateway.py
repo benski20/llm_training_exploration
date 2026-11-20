@@ -118,8 +118,8 @@ def main() -> None:
         from pgw.maskstore.counters import FileMonotonicCounter
 
         store_kw["counter"] = FileMonotonicCounter(counter, fsync=False)
-    except Exception:  # noqa: BLE001 - fall back to whatever the store's dev default is
-        pass
+    except Exception as exc:  # fall back to whatever the store's dev default is
+        print(f"no file counter ({type(exc).__name__}); using the store default")
     store = MaskStore.open(work / f"store-{time.time_ns()}", kp, **store_kw)
     t0 = time.perf_counter()
     MaskGenerator(pack, ring).generate_into_store(store, slots * nses, chunk_slots=16, factory_id="prof")
@@ -170,9 +170,11 @@ def main() -> None:
     def calls_for(lid: Any) -> list[Any]:
         return [LinearCall(lid, torch.randn(args.rows, in_dim[lid.kind.value]), session=r) for r in sessions]
 
-    # warm up (weight caches, chunk caches)
-    for g in groups:
-        be.forward_many(calls_for(LinearId(0, g)))
+    # warm up every layer (weight norms, chunk and stream-key caches are per linear), i.e. one full step:
+    # warming only layer 0 left the first measured step paying the other layers' first-call costs
+    for layer in range(args.layers):
+        for g in groups:
+            be.forward_many(calls_for(LinearId(layer, g)))
     per_group = {g: 0.0 for g in groups}
     t_prep = t_fin = 0.0
     prof = cProfile.Profile() if args.profile else None
