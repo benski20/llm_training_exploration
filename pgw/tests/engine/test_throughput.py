@@ -88,26 +88,32 @@ async def test_inline_hops_change_nothing(tiny_pack: Any, store: Any) -> None:
             assert a.token_ids == b.token_ids and a.logprobs == b.logprobs
 
 
-def test_batched_lm_head_is_opt_in(tiny_pack: Any) -> None:
+def test_batched_lm_head_is_exact(tiny_pack: Any) -> None:
+    from pgw.engine.lm_head import native_lm_head
+
     model = TransformerModel(tiny_pack, PlainBackend(tiny_pack, RING))
-    assert model.batch_lm_head is False
+    assert model.batch_lm_head is native_lm_head()  # automatic: on with the native kernel
     prompts = PROMPTS[:3]
 
-    def run(batched: bool) -> list[torch.Tensor]:
+    def run(batched: bool, verify: int = 0) -> list[Any]:
         model.batch_lm_head = batched
         caches = [model.new_cache(64) for _ in prompts]
-        return model.forward_batch([SequenceInput(p, c) for p, c in zip(prompts, caches, strict=True)])
+        return model.forward_batch([SequenceInput(p, c, last_logits=verify if i == 1 else 0, serial_tail=0)
+                                    for i, (p, c) in enumerate(zip(prompts, caches, strict=True))])
 
     alone = [model.forward(p, model.new_cache(64)) for p in prompts]
-    default = run(False)
-    batched = run(True)
-    for a, d, b in zip(alone, default, batched, strict=True):
-        assert torch.equal(a, d)  # default: identical to running alone
-        assert b.shape == a.shape and torch.allclose(a, b, rtol=0, atol=1e-4)  # opt-in: last bits only
-        assert int(a.argmax()) == int(b.argmax())
-    # One sequence, or sequences that need all positions / row logits, take the unbatched path.
-    model.batch_lm_head = True
-    assert torch.equal(model.forward(prompts[0], model.new_cache(64)), alone[0])
+    for batched in (False, True):
+        got = run(batched)
+        for a, b in zip(alone, got, strict=True):
+            assert torch.equal(a, b)  # one pass for all sequences or one per sequence: same bits
+        # A sequence's verify rows (RowLogits) in the shared pass match its rows computed alone.
+        got = run(batched, verify=3)
+        rows = got[1]
+        assert len(rows) == 3 and torch.equal(rows[-1], alone[1])
+        assert torch.equal(got[0], alone[0]) and torch.equal(got[2], alone[2])
+        full = model.forward(prompts[1], model.new_cache(64), all_logits=True)
+        for i in range(3):
+            assert torch.equal(rows[i], full[len(prompts[1]) - 3 + i])
     model.close()
 
 

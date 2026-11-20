@@ -653,7 +653,8 @@ class ModelRuntime:
     def _finish_engine(self, pack: Any, tokenizer: ChatTokenizer) -> None:
         self.model = TransformerModel(pack, self.backend, device=self.config.device)
         self.model.inline_max_rows = self.config.inline_max_rows
-        self.model.batch_lm_head = self.config.batch_lm_head
+        if self.config.batch_lm_head is not None:
+            self.model.batch_lm_head = self.config.batch_lm_head
         self.draft_model = self._load_draft()
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,

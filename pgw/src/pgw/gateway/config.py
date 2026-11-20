@@ -124,12 +124,12 @@ class GatewayModelConfig(BaseModel):
         "worker thread is idle, saving two thread switches per round trip (about 0.3 ms each measured on a busy "
         "4-vCPU host). Steps with the LM head always use the worker thread. 0 = always use the worker thread",
     )
-    batch_lm_head: bool = Field(
-        False, description="Opt-in: one LM-head matrix product for all sequences of a batched decode step (reads "
-        "the float32 head weights once per step instead of once per sequence: with N concurrent requests about N "
-        "times less LM-head time). Logits then change in the last float32 bits (summation order), so logprobs of a "
-        "request depend on which requests shared its steps; quality is unchanged. Off: outputs are bit-identical "
-        "whatever the batch",
+    batch_lm_head: bool | None = Field(
+        None, description="One LM-head pass for all rows of a decode step (every concurrent sequence's last "
+        "position and all rows of speculative verify passes): the float32 head weights are read once per step "
+        "instead of once per row. Outputs are bit-identical either way (the LM head uses a fixed summation order, "
+        "so a row's logits do not depend on the rows it shares a pass with); this only trades speed. None = "
+        "automatic: on with the native kernel (pgw_fast), off with the slower torch fallback",
     )
 
     @field_validator("ring")

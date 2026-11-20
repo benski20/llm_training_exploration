@@ -15,6 +15,26 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-20 (deterministic multi-row LM head)
+
+The float32 LM head (`norm(h) @ lm_head^T`) is now `pgw.engine.lm_head.lm_head_logits`: a fixed
+summation order (16 partial sums over the hidden dim, fixed tree, no FMA), so a row's logits do not
+depend on how many rows share the pass, the thread count or the CPU. Native kernel `pgw_fast.lm_head`
+(SSE2/AVX, multi-threaded, streams the head once for all rows); pure-torch fallback with the same
+order (bit-identical, tested; slower: about 0.45 s per row at 7B). Both the gateway's masked model and
+the plaintext reference use it, so they still agree bit for bit; **the reference logits themselves
+moved by ~1e-6 vs torch's old GEMV** (different but fixed order). Because batching is now exact,
+`batch_lm_head` defaults on with the native kernel: one pass per step for every sequence's last row and
+all rows of speculative verify passes (`RowLogits`); off (lazy per row) with the fallback.
+Measured here (4 vCPUs, `benchmarks/lm_head_bench.py`, 152064 x 3584 fp32):
+
+| rows per step | torch per row (old) | torch one GEMM (inexact) | deterministic, one pass |
+|---|---|---|---|
+| 1 | 0.050 s | 0.051 s | 0.043-0.054 s |
+| 4 | 0.18-0.19 s | 0.09-0.11 s | 0.07-0.08 s |
+| 8 | 0.39-0.42 s | 0.16-0.18 s | 0.10-0.11 s |
+| 16 | 0.75 s | 0.11-0.12 s | 0.17 s |
+
 ## Update 2026-11-20 (gateway CPU per call, multi-session throughput)
 
 Measured here (4 shared vCPUs, A/B interleaved, medians of 3; `benchmarks/profile_gateway.py --preset 7b

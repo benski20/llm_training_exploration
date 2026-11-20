@@ -19,6 +19,7 @@ from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.types import LinearId, LinearKind, ModelArch
 from pgw.engine.backends import LinearBackend, LinearCall
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
+from pgw.engine.lm_head import lm_head_logits, native_lm_head
 from pgw.engine.pack import linear_split_sizes
 from pgw.engine.rope import RotaryEmbedding, apply_rope
 
@@ -65,16 +66,28 @@ class SequenceInput:
     serial_tail: int = 0
 
 
-class RowLogits:
-    """Logits of a verify pass, computed per row on first access (each a 1-row ``lm_head`` product,
-    the same operation as plain decoding). Rows after a rejected draft are never computed, so the
-    ``lm_head`` costs one product per emitted token, as without speculation."""
+def _norm_rows(h: torch.Tensor, norm: torch.Tensor, eps: float) -> torch.Tensor:
+    """Final norm of each row on its own (as a 1-row decode step would), float32."""
+    return torch.cat([rms_norm(h[i : i + 1], norm, eps) for i in range(int(h.shape[0]))]).to(torch.float32)
 
-    def __init__(self, h: torch.Tensor, norm: torch.Tensor, eps: float, lm_head: torch.Tensor):
+
+class RowLogits:
+    """Logits of a verify pass; row ``i`` is bit-identical to plain decoding of that position.
+
+    Given ``logits`` (all rows computed in the step's shared LM-head pass, see
+    :attr:`TransformerModel.batch_lm_head`) it only indexes them; otherwise each row is computed on
+    first access (rows after a rejected draft are never computed). Either way a row is the
+    deterministic product of :func:`pgw.engine.lm_head.lm_head_logits`, whose rows do not depend on
+    how many rows share a pass.
+    """
+
+    def __init__(self, h: torch.Tensor, norm: torch.Tensor, eps: float, lm_head: torch.Tensor,
+                 logits: torch.Tensor | None = None):
         self._h = h
         self._norm = norm
         self._eps = eps
         self._lm_head = lm_head
+        self._logits = logits
         self._rows: dict[int, torch.Tensor] = {}
 
     def __len__(self) -> int:
@@ -82,10 +95,12 @@ class RowLogits:
 
     def __getitem__(self, i: int) -> torch.Tensor:
         i = int(i) if i >= 0 else len(self) + int(i)
+        if self._logits is not None:
+            return self._logits[i]
         hit = self._rows.get(i)
         if hit is None:
-            hn = rms_norm(self._h[i : i + 1], self._norm, self._eps).to(torch.float32)
-            hit = self._rows[i] = (hn @ self._lm_head.t())[0]
+            hn = _norm_rows(self._h[i : i + 1], self._norm, self._eps)
+            hit = self._rows[i] = lm_head_logits(hn, self._lm_head)[0]
         return hit
 
 
@@ -137,15 +152,18 @@ class TransformerModel:
             self.lm_head = self.embed_tokens if dtype == torch.float32 else load("lm_head", torch.float32, self.device)
         else:
             self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
+        self.lm_head = self.lm_head.contiguous()  # no-op normally; the native LM head reads it in place
         #: Optional replacement for ``h @ lm_head^T`` (draft models only: e.g. an int8 product).
+        #: Without it the float32 head is :func:`pgw.engine.lm_head.lm_head_logits`: a fixed
+        #: summation order, so each row's logits are bit-identical however rows are grouped.
         self.lm_head_fn: Callable[[torch.Tensor], torch.Tensor] | None = None
-        #: Opt-in: one LM-head product for the last positions of all sequences of a batched step
-        #: (the float32 head weights are read once per step instead of once per sequence). The
-        #: logits then differ from the per-sequence product in the last float32 bits (summation
-        #: order of a multi-row GEMM), so a sequence's logprobs depend on the batch it ran in; the
-        #: distribution, and hence quality, is the same. Off by default: outputs are bit-identical
-        #: across batch sizes (and to the plaintext reference run alone).
-        self.batch_lm_head = False
+        #: One LM-head pass for all rows of a step (the last positions of every sequence and all
+        #: rows of speculative verify passes): the float32 head is read once per step instead of
+        #: once per row. Exact either way (the deterministic product's rows do not depend on the
+        #: batch), so this is only a speed choice: on by default with the native kernel (one pass
+        #: costs about one row); off with the torch fallback, whose cost grows with the rows (verify
+        #: rows then stay lazy: rows after a rejected draft are never computed).
+        self.batch_lm_head = native_lm_head()
         layers = range(a.num_layers)
         self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in layers]
         self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
@@ -274,28 +292,48 @@ class TransformerModel:
             hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
         for t, c in zip(ids, caches, strict=True):
             c.advance(t.numel())
+        return self._logits(seqs, hs)
+
+    def _logits(self, seqs: Sequence[SequenceInput], hs: list[torch.Tensor]) -> list[Any]:
+        """Final norm and LM head of a step: per sequence the last row's logits ``(vocab,)``, all rows'
+        ``(T, vocab)`` (``all_logits``) or :class:`RowLogits` (``last_logits``)."""
         out: list[Any] = []
-        batched: dict[int, torch.Tensor] = {}
-        if self.batch_lm_head and self.lm_head_fn is None:
-            idx = [i for i, s in enumerate(seqs) if s.last_logits <= 0 and not s.all_logits]
-            if len(idx) > 1:
-                # norms per row (as unbatched); only the product is shared
-                hn = torch.cat([rms_norm(hs[i][-1:], self.final_norm, self.eps).to(torch.float32) for i in idx])
-                rows = hn @ self.lm_head.t()
-                batched = {i: rows[j] for j, i in enumerate(idx)}
-        for si, (s, h) in enumerate(zip(seqs, hs, strict=True)):
-            hit = batched.get(si)
-            if hit is not None:
-                out.append(hit)
-                continue
+        if self.lm_head_fn is not None:  # approximate head (draft models): one product per sequence
+            for s, h in zip(seqs, hs, strict=True):
+                if s.last_logits > 0:
+                    out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head))
+                    continue
+                hn = rms_norm(h if s.all_logits else h[-1:], self.final_norm, self.eps).to(torch.float32)
+                logits = self.lm_head_fn(hn)
+                out.append(logits if s.all_logits else logits[0])
+            return out
+        # Normalized rows per sequence (rows that plain decoding computes alone are normed alone);
+        # None: verify rows left to RowLogits (computed lazily when the pass is not shared).
+        shared = self.batch_lm_head
+        hns: list[torch.Tensor | None] = []
+        for s, h in zip(seqs, hs, strict=True):
             if s.last_logits > 0:
-                out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head))
-                continue
-            many = s.all_logits
-            hsel = h if s.all_logits else h[-1:]
-            hn = rms_norm(hsel, self.final_norm, self.eps).to(torch.float32)
-            logits = hn @ self.lm_head.t() if self.lm_head_fn is None else self.lm_head_fn(hn)
-            out.append(logits if many else logits[0])
+                hns.append(_norm_rows(h[-s.last_logits :], self.final_norm, self.eps) if shared else None)
+            else:
+                hns.append(rms_norm(h if s.all_logits else h[-1:], self.final_norm, self.eps).to(torch.float32))
+        given = [x for x in hns if x is not None]
+        logits_of: list[torch.Tensor | None] = []
+        if shared and len(given) > 1:  # one pass over the head for every row of the step
+            flat = lm_head_logits(torch.cat(given), self.lm_head)
+            at = 0
+            for x in hns:
+                n = 0 if x is None else int(x.shape[0])
+                logits_of.append(None if x is None else flat[at : at + n])
+                at += n
+        else:
+            logits_of = [None if x is None else lm_head_logits(x, self.lm_head) for x in hns]
+        for s, h, lg in zip(seqs, hs, logits_of, strict=True):
+            if s.last_logits > 0:
+                out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head, lg))
+            elif lg is None:  # pragma: no cover - every other sequence has normalized rows
+                raise AssertionError("missing logits")
+            else:
+                out.append(lg if s.all_logits else lg[0])
         return out
 
     @staticmethod
