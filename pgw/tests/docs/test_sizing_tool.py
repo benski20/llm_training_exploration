@@ -14,7 +14,7 @@ from tests.docs.conftest import DOCS
 TOOL = DOCS / "tools" / "pgw_sizing.py"
 
 
-@pytest.mark.parametrize("ring", ["K32A8", "K40A12", "K48A20"])
+@pytest.mark.parametrize("ring", ["K32A8", "K32A12C27", "K40A12", "K48A20"])
 def test_ring_math_matches_core(ring: str, sizing: ModuleType) -> None:
     from pgw.core.freivalds import soundness_bits
     from pgw.core.ring import RingParams
@@ -60,7 +60,7 @@ def test_wire_and_mask_bytes_match_core_packing(sizing: ModuleType) -> None:
     from pgw.core.packing import pack_ring
     from pgw.core.ring import RingParams
 
-    for ring in ("K32A8", "K40A12", "K48A20"):
+    for ring in ("K32A8", "K32A12C27", "K40A12", "K48A20"):
         p = RingParams.from_name(ring)
         buf = pack_ring(np.zeros((3, 7), dtype=np.int64), p)
         assert len(buf) == 21 * sizing.RINGS[ring].bytes_per_element
@@ -187,3 +187,62 @@ def test_cli_rejects_bad_input_without_traceback(argv: list[str], needle: str) -
     r = subprocess.run([sys.executable, str(TOOL), *argv], capture_output=True, text=True, timeout=60)  # noqa: S603
     assert r.returncode == 2, r.stderr
     assert r.stderr.startswith("error:") and needle in r.stderr and "Traceback" not in r.stderr
+
+
+def test_default_ring_matches_core(sizing: ModuleType) -> None:
+    from pgw.core.ring import DEFAULT_RING
+    from pgw.hemask.lwe import HEParams
+
+    assert sizing.DEFAULT_RING == DEFAULT_RING.name
+    for name, ring in sizing.RINGS.items():
+        if ring.k <= 40:
+            assert ring.he_q_bits == HEParams(k=ring.k).q, name
+    f = sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K32A12C27"]).figures
+    assert f["mask_storage_per_slot"].value == pytest.approx(5.56, abs=0.01)  # 5.56 MB per slot for 7B
+    k40 = sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K40A12"]).figures
+    assert k40["mask_storage_per_slot"].value > f["mask_storage_per_slot"].value  # K40 rows over-size
+
+
+def test_encrypted_figures_match_hemask(sizing: ModuleType) -> None:
+    """Supply traffic and hint size agree with the documented measurements and pgw.hemask's wire sizes."""
+    from pgw.hemask.lwe import HEParams
+
+    f = sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K32A12C27"], encrypted=True).figures
+    assert f["he_supply_up_per_slot"].value == pytest.approx(5.8, abs=0.05)
+    assert f["he_supply_down_per_slot"].value == pytest.approx(7.0, abs=0.05)
+    assert f["he_hint_size"].value == pytest.approx(34.2, abs=0.05)
+    assert f["he_gateway_cpu_s_per_slot"].kind == "derived"
+    k40 = sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K40A12"], encrypted=True).figures
+    assert k40["he_supply_up_per_slot"].value == pytest.approx(6.7, abs=0.05)
+    assert k40["he_supply_down_per_slot"].value == pytest.approx(8.3, abs=0.05)
+    assert k40["he_hint_size"].value == pytest.approx(39.9, abs=0.05)
+    assert HEParams(k=32).q == 56 and HEParams(k=40).q == 64
+    slow = sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K32A12C27"], encrypted=True,
+                       link_mb_per_s=1.5).figures
+    assert slow["he_supply_slots_per_hour"].value == pytest.approx(3600 / (12.773 / 1.5), rel=0.01)
+    assert slow["he_supply_slots_per_hour"].value < 3600 / 0.365  # cannot feed one 7B decode stream
+    with pytest.raises(ValueError, match="K40"):
+        sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K48A20"], encrypted=True)
+    with pytest.raises(ValueError, match="link"):
+        sizing.size(sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K32A12C27"], encrypted=True, link_mb_per_s=0)
+
+
+def test_spec_row_budget_scales_mask_use(sizing: ModuleType) -> None:
+    m, r = sizing.MODELS["qwen2.5-7b"], sizing.RINGS["K32A12C27"]
+    base = sizing.size(m, r, tokens_per_day=1e6).figures
+    spec = sizing.size(m, r, tokens_per_day=1e6, spec_row_budget=3).figures
+    assert "mask_slots_per_token_worst" not in base and spec["mask_slots_per_token_worst"].value == 3
+    assert spec["mask_storage_per_day"].value == pytest.approx(3 * base["mask_storage_per_day"].value)
+    assert spec["factory_t4_gpus_needed"].value == pytest.approx(3 * base["factory_t4_gpus_needed"].value)
+    assert spec["wire_per_day"].value == base["wire_per_day"].value  # the online wire volume does not change
+    with pytest.raises(ValueError, match="spec_row_budget"):
+        sizing.size(m, r, spec_row_budget=0.5)
+
+
+def test_cli_encrypted_and_spec_flags() -> None:
+    r = subprocess.run([sys.executable, str(TOOL), "--model", "qwen2.5-7b", "--encrypted", "--spec-row-budget",  # noqa: S603
+                        "--json"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+    assert d["ring"] == "K32A12C27" and d["figures"]["mask_slots_per_token_worst"]["value"] == 3.0
+    assert "he_hint_size" in d["figures"]

@@ -1,0 +1,72 @@
+{{- if and .Values.serviceMonitor.enabled .Values.alerts.enabled }}
+{{- /* Same rules as deploy/monitoring/pgw-alerts.yml (groups pgw-mask-supply and pgw-gateway). */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pgw-gateway.fullname" . }}
+  labels:
+    {{- include "pgw-gateway.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: pgw-mask-supply
+      rules:
+        - alert: PGWMaskRunwayLow
+          expr: min by (fingerprint, ring) (pgw_masks_available_slots / (rate(pgw_masks_consumed_slots_total[30m]) > 0)) < {{ int .Values.alerts.runwayMinSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ printf "PGW mask runway below %v s" (int .Values.alerts.runwayMinSeconds) | quote }}
+            description: "At the current consumption rate the mask store runs out soon. Check the factory (pgw factory status) and the mask supply (pgw doctor)."
+        - alert: PGWMaskStoreEmpty
+          expr: min by (fingerprint, ring) (pgw_masks_available_slots) == 0
+          for: 5m
+          labels:
+            severity: page
+          annotations:
+            summary: "PGW mask store empty"
+            description: "Requests for this model fail with mask exhaustion until the factory delivers a segment."
+        - alert: PGWMaskStoreBelowLowWater
+          expr: max by (fingerprint, ring) (pgw_masks_low_water) == 1
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PGW mask store below low water for 30 m"
+            description: "The factory is not catching up with consumption. See docs/operations/sizing.md."
+        - alert: PGWMaskBurnRatioHigh
+          expr: sum by (fingerprint, ring) (rate(pgw_masks_burned_slots_total[1h])) / (sum by (fingerprint, ring) (rate(pgw_masks_consumed_slots_total[1h])) > 0) > {{ .Values.alerts.burnRatioMax }}
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "A large share of the consumed mask slots is burned"
+            description: "Lower config.maskWindowTokens or the max_tokens defaults, or look for clients that disconnect early."
+    - name: pgw-gateway
+      rules:
+        - alert: PGWIntegrityCheckFailed
+          expr: sum by (model, check) (increase(pgw_gateway_integrity_failures_total[10m])) > 0
+          labels:
+            severity: page
+          annotations:
+            summary: "PGW integrity check failed"
+            description: "A Freivalds or range check rejected a compute-service result. The gateway stops using the model until an admin resets the circuit breaker. Treat as a security incident."
+        - alert: PGWNoiseAlarm
+          expr: max by (model) (pgw_gateway_noise_alarm) == 1
+          labels:
+            severity: page
+          annotations:
+            summary: "PGW outbound-noise monitor alarm"
+            description: "Outbound masked data failed the uniformity check. With noiseMonitorFailClosed the model stops serving. Treat as a security incident."
+        - alert: PGWModelNotReady
+          expr: max by (model) (pgw_gateway_model_ready) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PGW model not ready for 10 m"
+            description: "The model cannot take requests (no masks, service unreachable, or a tripped circuit breaker). See /readyz."
+{{- end }}

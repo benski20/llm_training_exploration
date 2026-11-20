@@ -97,7 +97,10 @@ def _settings_classes() -> dict[str, type[BaseModel]]:
 
 
 #: Env names that are documented but are not settings fields.
-_NON_FIELD_ENV = {"PGW_MASKSTORE_KEK"}  # default value of MaskStoreSettings.key_env_var
+_NON_FIELD_ENV = {
+    "PGW_MASKSTORE_KEK",  # default value of MaskStoreSettings.key_env_var
+    "PGW_DOCTOR_EXPECTED_TOKENS_PER_S",  # input of `pgw doctor`'s mask-supply check (pgw.cli.doctor), not a setting
+}
 
 
 def _field_path_exists(model: type[BaseModel], parts: list[str]) -> bool:

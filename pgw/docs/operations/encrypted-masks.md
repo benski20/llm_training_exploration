@@ -82,5 +82,17 @@ At 1M tokens/day of 7B, the gateway needs about 1.3 AMX cores, or a share of one
 Network is the remaining cost at volume. On the 32-bit ring it is about 12.8 MB per 7B token for
 mask supply plus 8.9 MB for the masked calls themselves.
 
+**Network caveat: the supply is link-bound on slow links.** Every slot crosses the link once for
+supply (12.8 MB for 7B) before it crosses it again in the masked calls. Over the public Modal tunnel
+of the two-party demo (`deploy/modal`, about 1.5 MB/s measured) that is about 420 slots per hour for
+7B and about 1,900 for Qwen2.5-0.5B (derived): enough to fill a 256-slot first segment for a demo, but
+**the encrypted supply cannot keep up with even one decoding stream over that tunnel** (one 7B stream
+at 0.365 s/token consumes about 9.9k slots per hour). For sustained load, put the factory and the
+service on a private link of 1 Gbit/s or more (about 35k 7B slots per hour, estimate), or run a local
+factory. `pgw doctor --role factory --pack <pack>` times one encrypted chunk over the real link and
+compares the rate with `PGW_DOCTOR_EXPECTED_TOKENS_PER_S`. Offline, the calculator gives the same
+figures: `python docs/tools/pgw_sizing.py --model qwen2.5-7b --encrypted --link-mb-per-s 1.5`. See also
+[sizing.md](sizing.md#one-model-one-ring-qwen25-7b-at-k32a12c27).
+
 Planned: the K32 ring (less network and hint), a smaller rank once the lattice estimate allows it,
 and moving hint building to the provider with Freivalds verification (faster setup for 70B).

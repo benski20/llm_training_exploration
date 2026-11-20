@@ -35,6 +35,15 @@ priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
+# Spread replicas across zones so one zone outage keeps the service up (gateways should still call a
+# replica in their own zone: zonal endpoint DNS, see deploy/marketplace/aws/README.md). Example:
+#   topologySpreadConstraints:
+#     - maxSkew: 1
+#       topologyKey: topology.kubernetes.io/zone
+#       whenUnsatisfiable: ScheduleAnyway
+#       labelSelector:
+#         matchLabels:
+#           app.kubernetes.io/name: pgw-service
 topologySpreadConstraints: []
 terminationGracePeriodSeconds: 60   # > config.drainTimeoutSeconds: in-flight work finishes on SIGTERM
 
@@ -115,6 +124,17 @@ metrics:
     enabled: false
     interval: 15s
     labels: {}
+
+# PrometheusRule with the service alerts (rendered when metrics.serviceMonitor.enabled and
+# alerts.enabled; the same rules as deploy/monitoring/pgw-alerts.yml).
+alerts:
+  enabled: true
+  labels: {}                 # e.g. {release: kube-prometheus-stack}
+  errorRatioMax: 0.05        # share of compute requests that end with an error code (10 m window)
+
+# CIDRs of reverse proxies / load balancers whose X-Forwarded-For header is trusted for the client IP
+# (rate limits, audit). Empty (default) trusts no proxy. Sets PGW_TRUSTED_PROXY_CIDRS.
+trustedProxyCidrs: []
 
 podDisruptionBudget:
   enabled: true

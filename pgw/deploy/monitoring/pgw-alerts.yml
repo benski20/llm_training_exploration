@@ -1,0 +1,115 @@
+# Prometheus alerting rules for PGW (plain Prometheus rule file: `rule_files: [pgw-alerts.yml]`).
+#
+# The Helm charts ship the same rules as PrometheusRule objects (templates/prometheusrule.yaml,
+# rendered when the chart's ServiceMonitor is enabled) with the thresholds taken from `alerts.*` in
+# values.yaml. Keep the two in step: tests/deploy/test_alert_rules.py checks that every metric used
+# here exists in pgw.observability.metrics.METRIC_NAMES and that the Helm rules match these.
+#
+# Mask-supply alerts aggregate by (fingerprint, ring): one alert per model pack and ring, whichever
+# component (gateway store or factory) exports the series. Severity "page" means wake someone up:
+# a failed integrity check or an outbound-noise alarm means the masked protocol detected something
+# it must not ignore (the gateway already fails closed; a human has to look).
+#
+# Thresholds (defaults; edit here, or `alerts.*` in the Helm values):
+#   runway          7200 s   alerts.runwayMinSeconds: masks left at the current consumption rate
+#   low water       30 m     store below the low-water mark for this long
+#   factory stalled 3600 s   no successful factory plan/segment for this long (alerts.factoryStallSeconds)
+#   burn ratio      0.5      burned / consumed slots over 1 h (alerts.burnRatioMax)
+#   service errors  0.05     failed / all compute requests over 10 m (alerts.errorRatioMax)
+groups:
+  - name: pgw-mask-supply
+    rules:
+      - alert: PGWMaskRunwayLow
+        # Seconds of masks left = available / consumption rate, per store; worst store per (fingerprint, ring).
+        expr: min by (fingerprint, ring) (pgw_masks_available_slots / (rate(pgw_masks_consumed_slots_total[30m]) > 0)) < 7200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW mask runway below 7200 s for {{ $labels.fingerprint }}/{{ $labels.ring }}"
+          description: "At the current consumption rate the mask store runs out in {{ $value | humanizeDuration }}. Check the factory (pgw factory status) and the mask supply (pgw doctor)."
+      - alert: PGWMaskStoreEmpty
+        expr: min by (fingerprint, ring) (pgw_masks_available_slots) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "PGW mask store empty for {{ $labels.fingerprint }}/{{ $labels.ring }}"
+          description: "Requests for this model fail with mask exhaustion until the factory delivers a segment."
+      - alert: PGWMaskStoreBelowLowWater
+        expr: max by (fingerprint, ring) (pgw_masks_low_water) == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW mask store below low water for 30 m ({{ $labels.fingerprint }}/{{ $labels.ring }})"
+          description: "The factory is not catching up with consumption. See docs/operations/sizing.md."
+      - alert: PGWMaskBurnRatioHigh
+        # Burned = reserved but never used (early stops, disconnects). Consumed includes burned.
+        expr: sum by (fingerprint, ring) (rate(pgw_masks_burned_slots_total[1h])) / (sum by (fingerprint, ring) (rate(pgw_masks_consumed_slots_total[1h])) > 0) > 0.5
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over half of the consumed mask slots are burned ({{ $labels.fingerprint }}/{{ $labels.ring }})"
+          description: "Lower config.maskWindowTokens or the max_tokens defaults, or look for clients that disconnect early."
+  - name: pgw-factory
+    rules:
+      - alert: PGWFactoryStalled
+        expr: time() - max by (namespace, job) (pgw_factory_last_success_timestamp) > 3600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW mask factory made no progress for over 3600 s"
+          description: "No scheduler plan or segment completed. Check pgw factory status and the factory logs."
+      - alert: PGWFactoryNotRefilling
+        # Below low water, but no slots generated for that (fingerprint, ring) in the last hour.
+        expr: max by (fingerprint, ring) (pgw_masks_low_water) == 1 unless on (fingerprint, ring) (sum by (fingerprint, ring) (increase(pgw_factory_slots_generated_total[1h])) > 0)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW store below low water and no new masks for {{ $labels.fingerprint }}/{{ $labels.ring }}"
+          description: "Check the disk budget (disk_limited in pgw factory status), the encrypted-mask link and the factory errors."
+      - alert: PGWFactoryErrors
+        expr: sum by (namespace, job) (increase(pgw_factory_errors_total[30m])) > 2
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW mask factory runs are failing"
+          description: "{{ $value }} failed factory runs in 30 m. The factory backs off; see its logs."
+  - name: pgw-gateway
+    rules:
+      - alert: PGWIntegrityCheckFailed
+        expr: sum by (model, check) (increase(pgw_gateway_integrity_failures_total[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "PGW integrity check ({{ $labels.check }}) failed for model {{ $labels.model }}"
+          description: "A Freivalds or range check rejected a compute-service result. The gateway stops using the model until an admin resets the circuit breaker. Treat as a security incident."
+      - alert: PGWNoiseAlarm
+        expr: max by (model) (pgw_gateway_noise_alarm) == 1
+        labels:
+          severity: page
+        annotations:
+          summary: "PGW outbound-noise monitor alarm for model {{ $labels.model }}"
+          description: "Outbound masked data failed the uniformity check. With noiseMonitorFailClosed the model stops serving. Treat as a security incident."
+      - alert: PGWModelNotReady
+        expr: max by (model) (pgw_gateway_model_ready) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PGW model {{ $labels.model }} not ready for 10 m"
+          description: "The model cannot take requests (no masks, service unreachable, or a tripped circuit breaker). See /readyz."
+  - name: pgw-service
+    rules:
+      - alert: PGWServiceErrorRatioHigh
+        expr: sum by (namespace, job) (rate(pgw_service_requests_total{code!="ok"}[10m])) / (sum by (namespace, job) (rate(pgw_service_requests_total[10m])) > 0) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of PGW compute requests fail"
+          description: "Check the service logs (the code label of pgw_service_requests_total) and the GPU."

@@ -17,6 +17,13 @@ Checks (run when relevant to ``--role`` and the given options):
 * ``maskstore``: KEK file permissions, store integrity/inventory, free disk space.
 * ``service``: the compute service answers ``/readyz`` and ``/pgw/v1/models`` and serves the
   pack's fingerprint and ring.
+* ``mask_supply``: times one mask chunk end to end into a temporary store (encrypted generation over
+  the network when ``PGW_FACTORY_HE_SERVICE_URL`` is set and the hint is built, else local GEMMs),
+  so the rate is bounded by the measured link throughput; compares it with the expected load
+  (``expected_tokens_per_second`` / ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``) and checks that the store
+  volume holds ``target_slots``. Runs for ``--role factory|gateway`` with ``--pack``.
+* ``tls_certs``: certificate files from the role's settings and the given CA file; warns when one
+  expires within :data:`CERT_WARN_DAYS` days, fails when one has expired.
 """
 
 from __future__ import annotations
@@ -53,6 +60,12 @@ ROLE_EXTRAS: dict[str, tuple[str, ...]] = {
 CORE_MODULES = ("numpy", "torch", "cryptography", "pydantic", "pydantic_settings", "msgpack", "safetensors", "click")
 MIN_FREE_DISK_BYTES = 1 << 30
 MIN_AVAILABLE_RAM_BYTES = 1 << 30
+#: Certificates expiring within this many days are reported as a warning.
+CERT_WARN_DAYS = 7
+#: Env fallback for the expected mask consumption (tokens per second) of the mask-supply check.
+EXPECTED_TPS_ENV = "PGW_DOCTOR_EXPECTED_TOKENS_PER_S"
+#: Supply must exceed the expected load by this factor to pass without a warning.
+SUPPLY_MARGIN = 1.2
 
 
 @dataclass
@@ -421,6 +434,215 @@ def _check_service(url: str, token_file: Path | None, ca_file: Path | None, fing
     return "ok", f"ready; serves {len(served)} model(s)", data
 
 
+def _expected_tps(value: float | None) -> float | None:
+    if value is not None:
+        return float(value)
+    raw = os.environ.get(EXPECTED_TPS_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning("%s=%r is not a number; ignored", EXPECTED_TPS_ENV, raw)
+        return None
+
+
+def _factory_settings_for(pack_path: Path) -> Any:
+    """``FactorySettings`` from ``PGW_FACTORY_*`` with the given pack (``None`` when they do not parse)."""
+    from pgw.factory.config import FactorySettings
+
+    try:
+        return FactorySettings(pack_path=pack_path)
+    except Exception as exc:  # invalid settings are reported by settings.factory
+        log.debug("factory settings do not parse (%s); timing local generation", type(exc).__name__)
+        return None
+
+
+def _mask_supply_backend(fs: Any, pack: Any, ring: str) -> tuple[Any, str]:
+    """``(remote backend or None, mode)``. Encrypted mode only when the factory uses it and its hint
+    exists: building the hint is a one-time factory job, far too heavy for the doctor."""
+    if fs is None or not getattr(fs, "he_service_url", None):
+        return None, "local"
+    from pgw.core.ring import RingParams
+    from pgw.factory.runtime import build_he_backend
+    from pgw.hemask.backend import HintStore
+    from pgw.hemask.lwe import HEParams
+
+    q_bits = HEParams(k=RingParams.from_name(ring).k, rank=fs.he_rank).q
+    hint_root = Path(fs.he_hint_dir or Path(fs.state_dir or ".") / "hemask")
+    if HintStore.open(hint_root, pack.fingerprint, fs.he_rank, q_bits) is None:
+        return None, "encrypted (hint not built)"
+    return build_he_backend(fs, pack, ring), "encrypted"
+
+
+def _check_mask_supply(pack_path: Path, ring: str | None, maskstore_root: Path | None,
+                       expected_tps: float | None, slots: int | None = None) -> tuple[Status, str, dict[str, Any]]:
+    """Time one mask chunk into a temporary store and compare the supply rate with the expected load."""
+    import tempfile
+
+    from pgw.factory.bench import _time_generation
+    from pgw.factory.generator import MaskGenerator
+    from pgw.maskstore import FileKeyProvider, MaskStore
+    from pgw.maskstore.config import MaskStoreSettings
+    from pgw.modelpack import ModelPack
+
+    fs = _factory_settings_for(pack_path)
+    ring_name = ring or (fs.ring_names[0] if fs is not None else "K32A12C27")
+    link = {"bytes": 0, "seconds": 0.0}
+    with ModelPack.open(pack_path, verify="fingerprint", components=("linears",)) as pack:
+        remote, mode = _mask_supply_backend(fs, pack, ring_name)
+        if remote is None and mode != "local":
+            return "warn", ("encrypted mask generation is configured but its one-time hint is not built yet; "
+                            "start the factory once (it builds the hint), then re-run the doctor"), {"mode": mode}
+        gen = MaskGenerator(pack, ring_name, device=fs.device if fs is not None else "auto",
+                            backend=fs.backend if fs is not None else "auto", remote=remote)
+        if remote is not None:
+            inner = remote.remote
+
+            def counted(linear: str, b: Any) -> Any:
+                t0 = time.perf_counter()
+                y = inner(linear, b)
+                link["seconds"] += time.perf_counter() - t0
+                link["bytes"] += int(getattr(b, "nbytes", 0)) + int(getattr(y, "nbytes", 0))
+                return y
+
+            remote.remote = counted
+        # One chunk: 256 slots (one encrypted group) or 32 locally (keeps a CPU timing of 7B short).
+        n = int(slots or (256 if remote is not None else 32))
+        bps = int(gen.bytes_per_slot)
+        tmp_root = Path(tempfile.gettempdir())
+        need_tmp = n * bps + (64 << 20)
+        if shutil.disk_usage(tmp_root).free < 2 * need_tmp:
+            return "warn", (f"not enough free space in {tmp_root} for a {n}-slot test chunk "
+                            f"({need_tmp / 1e9:.2f} GB); set TMPDIR to a larger volume"), {"mode": mode}
+        with tempfile.TemporaryDirectory(prefix="pgw-doctor-") as tmp:
+            # Never the production counter or free-space floor: a throw-away store in a temporary directory.
+            store = MaskStore.open(Path(tmp) / "store", FileKeyProvider(Path(tmp) / "kek", create=True),
+                                   counter="none", min_free_bytes=0)
+            try:
+                seconds, _gemm, _chk = _time_generation(gen, n, min(n, 256), 2, store, warmup=False)
+            finally:
+                store.close()
+    rate = n / seconds if seconds > 0 else 0.0
+    data: dict[str, Any] = {
+        "mode": mode, "ring": ring_name, "slots_timed": n, "seconds": round(seconds, 3),
+        "measured_slots_per_second": round(rate, 3), "bytes_per_slot": bps,
+    }
+    if link["seconds"] > 0:
+        # The provider round trips alone bound the rate (pipelined: local work overlaps them).
+        data["link_bytes"] = link["bytes"]
+        data["link_mb_per_s"] = round(link["bytes"] / link["seconds"] / 1e6, 2)
+        data["link_bound_slots_per_second"] = round(n / link["seconds"], 3)
+        rate = min(rate, n / link["seconds"])
+    data["slots_per_second"] = round(rate, 3)
+    data["slots_per_hour"] = round(rate * 3600)
+    problems: list[str] = []
+    notes: list[str] = []
+    seg = int(fs.segment_slots) if fs is not None else 4096
+    first = int(fs.first_segment_slots or 0) if fs is not None else 0
+    if rate > 0:
+        data["seconds_per_segment"] = round(seg / rate, 1)
+        if first:
+            data["seconds_to_first_segment"] = round(min(first, seg) / rate, 1)
+    exp = _expected_tps(expected_tps)
+    if exp is not None:
+        data["expected_tokens_per_second"] = exp
+        if rate < exp:
+            problems.append(f"supply {rate:.2f} slots/s is below the expected load {exp:.2f} tokens/s: the store "
+                            "drains (add factory capacity or a faster link)")
+        elif rate < SUPPLY_MARGIN * exp:
+            notes.append(f"supply {rate:.2f} slots/s is within {round((SUPPLY_MARGIN - 1) * 100)}% of the "
+                         f"expected load {exp:.2f} tokens/s")
+    if maskstore_root is not None:
+        try:
+            ms = MaskStoreSettings(root=maskstore_root)
+            target, min_free = int(ms.target_slots), int(ms.min_free_bytes)
+        except Exception:  # invalid store settings are reported by the maskstore check
+            target, min_free = 0, 0
+        if target:
+            total = shutil.disk_usage(maskstore_root).total
+            need = target * bps + min_free
+            data.update(disk_total=total, disk_needed_for_target=need)
+            if total < need:
+                problems.append(f"the store volume ({total / 1e9:.1f} GB) cannot hold target_slots={target} x "
+                                f"{bps / 1e6:.2f} MB + min_free_bytes ({need / 1e9:.1f} GB)")
+    summary = f"{mode}: {rate:.2f} slots/s ({rate * 3600:,.0f}/h, {bps / 1e6:.2f} MB/slot, {ring_name})"
+    if problems:
+        return "fail", "; ".join([summary, *problems, *notes]), data
+    if notes:
+        return "warn", "; ".join([summary, *notes]), data
+    return "ok", summary, data
+
+
+def _cert_files_from_settings(role: str) -> list[Path]:
+    """Certificate files named by the role's ``PGW_*`` settings (best effort; invalid settings give none)."""
+    out: list[Any] = []
+    if role in ("gateway", "all"):
+        try:
+            from pgw.gateway.config import GatewaySettings
+
+            g = GatewaySettings()
+            out += [g.tls.cert_file, g.tls.ca_file]
+            for m in g.all_models():  # per model: CA of the compute service and the mTLS client certificate
+                out += [m.service_ca_file, m.client_cert_file]
+        except Exception:
+            log.debug("gateway settings do not parse; no certificate files from them")
+    if role in ("service", "all"):
+        try:
+            from pgw.service.config import ServiceSettings
+
+            sv = ServiceSettings()
+            out += [sv.tls.cert_file, sv.tls.ca_file, sv.client_issuing_ca_cert_file, sv.enrollment_ca_file]
+        except Exception:
+            log.debug("service settings do not parse; no certificate files from them")
+    if role in ("factory", "all"):
+        raw = os.environ.get("PGW_FACTORY_HE_CA_FILE", "").strip()
+        if raw:
+            out.append(Path(raw))
+    return [Path(p) for p in out if p]
+
+
+def _check_cert_files(paths: Iterable[Path], *, now: float | None = None,
+                      warn_days: int = CERT_WARN_DAYS) -> tuple[Status, str, dict[str, Any]]:
+    """Expiry of every certificate in the given PEM files (bundles included)."""
+    import datetime as dt
+
+    from cryptography import x509
+
+    now_dt = dt.datetime.fromtimestamp(time.time() if now is None else now, tz=dt.UTC)
+    seen: set[Path] = set()
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for raw in paths:
+        p = Path(raw)
+        if p in seen:
+            continue
+        seen.add(p)
+        try:
+            certs = x509.load_pem_x509_certificates(p.read_bytes())
+        except (OSError, ValueError) as exc:
+            errors.append(f"{p.name} ({type(exc).__name__})")
+            continue
+        for c in certs:
+            end = c.not_valid_after_utc
+            rows.append({"file": str(p), "subject": c.subject.rfc4514_string()[:120], "not_after": end.isoformat(),
+                         "days_left": round((end - now_dt).total_seconds() / 86400, 1)})
+    data: dict[str, Any] = {"certificates": rows, "warn_days": warn_days}
+    if errors:
+        data["unreadable"] = errors
+    if not rows and not errors:
+        return "skip", "no certificate files configured", data
+    expired = [r for r in rows if r["days_left"] <= 0]
+    if expired:
+        return "fail", "expired: " + ", ".join(f"{Path(r['file']).name} ({r['subject']})" for r in expired), data
+    soon = [f"{Path(r['file']).name} expires in {r['days_left']:.1f} days" for r in rows if r["days_left"] < warn_days]
+    if soon or errors:
+        return "warn", "; ".join(soon + [f"unreadable: {e}" for e in errors]), data
+    nxt = min(rows, key=lambda r: r["days_left"])
+    detail = f"{len(rows)} certificate(s); next expiry in {nxt['days_left']:.0f} days ({Path(nxt['file']).name})"
+    return "ok", detail, data
+
+
 # ---- orchestration ------------------------------------------------------------------------------
 def run_doctor(
     *,
@@ -435,6 +657,9 @@ def run_doctor(
     include_gpu: bool = True,
     check_settings: bool = False,
     strict: bool = False,
+    mask_supply: bool | None = None,
+    expected_tokens_per_second: float | None = None,
+    cert_files: Iterable[Path] = (),
 ) -> DoctorReport:
     """Run all checks relevant to ``role`` and the given options.
 
@@ -448,6 +673,11 @@ def run_doctor(
         include_gpu: Include ``cuda_int8`` in the arithmetic self test when available.
         check_settings: Also validate the role's ``PGW_*`` settings (implied for a specific role).
         strict: Treat warnings as failures.
+        mask_supply: Time one mask chunk (``None``: when ``pack`` is given and the role is ``factory``
+            or ``gateway``).
+        expected_tokens_per_second: Expected mask consumption for the supply check (default from
+            ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``; unset = report the rate only).
+        cert_files: Extra PEM certificate files whose expiry is checked (plus those in the settings).
     """
     if role not in ROLES:
         raise ValueError(f"role must be one of {ROLES}")
@@ -475,6 +705,17 @@ def run_doctor(
     if service_url is not None:
         _run(report, "service", lambda: _check_service(service_url, service_token_file, service_ca_file,
                                                         fingerprint, ring))
+    if mask_supply is None:
+        mask_supply = pack is not None and role in ("factory", "gateway")
+    if mask_supply and pack is not None:
+        _run(report, "mask_supply", lambda: _check_mask_supply(pack, ring, maskstore_root,
+                                                                expected_tokens_per_second))
+    certs = [*cert_files, *([service_ca_file] if service_ca_file is not None else [])]
+    if role != "pack":
+        certs += _cert_files_from_settings(role)
+    c = _run(report, "tls_certs", lambda: _check_cert_files(certs))
+    if c.status == "skip":
+        report.checks.remove(c)  # nothing configured: keep the report short
     return report
 
 

@@ -37,12 +37,24 @@ securityContext:
   capabilities:
     drop: [ALL]
 
+# Hard CPU limit: the factory runs next to the gateway (output=store needs the same node) and must
+# never take the cores the gateway's masking work needs. Keep requests.cpu == limits.cpu.
 resources:
   requests:
     cpu: "2"
     memory: 4Gi
   limits:
+    cpu: "2"
     memory: 16Gi
+
+# Node separation from the gateway (output=export only; output=store must share the gateway's node
+# because the mask store volume is ReadWriteOnce, so there the separation is the hard CPU limit above
+# plus the gateway's Guaranteed QoS with the static CPU manager).
+#   preferred - podAntiAffinity (preferred) against pgw-gateway pods
+#   required  - podAntiAffinity (required); the pod stays Pending if no other node fits
+#   none      - no rule (default)
+# Ignored when `affinity` is set.
+separateFromGateway: none
 
 gpu:
   enabled: false
@@ -120,6 +132,13 @@ metrics:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: monitoring
+
+# PrometheusRule with the factory alerts (rendered when metrics.enabled, metrics.serviceMonitor.enabled
+# and alerts.enabled; the same rules as deploy/monitoring/pgw-alerts.yml).
+alerts:
+  enabled: true
+  labels: {}                 # e.g. {release: kube-prometheus-stack}
+  factoryStallSeconds: 3600  # no successful scheduler plan or segment for this long
 
 secrets:
   existingSecret: ""           # REQUIRED for output=store with keyProvider=env

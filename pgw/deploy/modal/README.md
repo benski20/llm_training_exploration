@@ -21,12 +21,16 @@ Needs the Modal CLI with a configured token (`modal token set ...`) and Python w
 
 ```bash
 python pgw/deploy/modal/launch.py            # deploy both apps, start a fresh pair (80 min), print the details
-python pgw/deploy/modal/launch.py --show     # print the live details again
+python pgw/deploy/modal/launch.py --show     # print the live details again (not the setup token)
 python pgw/deploy/modal/launch.py --stop     # stop both apps now and clear the details
 python pgw/deploy/modal/launch.py --e2e --ttl-min 40   # scripted test (below), then stop
 ```
 
-`launch.py` prints the console URL, the one-time setup token and the enrollment code. Open the URL,
+`launch.py` prints the console URL, the one-time setup token and the enrollment code. The setup token
+is printed **once**: right after printing, the launcher replaces it with `(shown)` in the `pgw-live`
+Dict, so `--show` cannot print it again; if it is lost, `--stop` and start a new pair. If either
+container dies after it has come up (crash, OOM, function timeout), the launcher notices from the
+call's status, stops the other one and exits; on its 20-minute start timeout it stops both. Open the URL,
 sign in with the setup token and follow the six steps of
 [the onboarding guide](../../docs/operations/onboarding.md): paste the enrollment code, choose
 `qwen2.5-0.5b-instruct`, accept the default mask store, save the admin token, run the checks (the
@@ -85,9 +89,15 @@ about 50-57 s.
   that hop**, and the gateway (which holds the plaintext) runs on Modal's infrastructure. In a real
   deployment the gateway runs inside the customer's own network; only masked traffic reaches the
   provider. The gateway-to-service hop here is TLS end to end and carries only masked data.
-* The setup token, enrollment code and service URL are kept in the Modal Dict `pgw-live` so that
-  `launch.py` can print them; anyone with access to the Modal workspace can read them while the pair
-  runs. `--stop` clears them.
+* The enrollment code and service URL are kept in the Modal Dict `pgw-live` so that `launch.py` can
+  print them; anyone with access to the Modal workspace can read them while the pair runs. The setup
+  token is there only until `launch.py` has printed it once. `--stop` clears them.
+* Encrypted mask generation runs over the public Modal tunnel (about 1.5 MB/s here), which supplies
+  far fewer masks per hour than a decoding gateway consumes: fine for a demo with a 256-slot first
+  segment, not for sustained load. See
+  [docs/operations/encrypted-masks.md](../../docs/operations/encrypted-masks.md).
+* There is no co-located latency benchmark yet: the two apps run wherever Modal places them, so
+  round-trip times here are not representative of a same-zone deployment.
 * Both PKIs are generated in the containers for each run and live for two days at most.
 
 ## Files

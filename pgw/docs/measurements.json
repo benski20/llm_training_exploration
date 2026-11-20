@@ -5,7 +5,9 @@
     "otp-cost": "Kaggle kernel kaggle/onprem_otp_cost/run.py, log results/kaggle/onprem-otp-cost (Tesla T4, 4 vCPU Xeon 2.0 GHz avx512f, no VNNI), 2026-11-16",
     "factory-box": "pgw.factory cpu_int8 benchmark on the 4-core development container (INTERFACE_NOTES.md, 2026-11-17)",
     "spec": "pgw/SPEC.md and the shapes of the public model configs",
-    "pricing": "Public cloud list prices used in otp-cost (AWS g4dn.xlarge on-demand, approximate T4 spot)"
+    "pricing": "Public cloud list prices used in otp-cost (AWS g4dn.xlarge on-demand, approximate T4 spot)",
+    "hemask-k32": "Encrypted mask generation on Kaggle (Tesla T4 provider, 4 vCPU AMX gateway), benchmarks/results/kaggle/run11_k32, see docs/operations/encrypted-masks.md",
+    "modal-2026-11-20": "Two-party Modal deployment (deploy/modal, STATUS.md update of 2026-11-20): encrypted mask supply over the public Modal tunnel"
   },
   "entries": [
     {"id": "server_8b_t4_batch1", "value": 0.452, "unit": "s/token", "kind": "measured", "source": "otp-cost", "display": "0.45 s/token", "conditions": "Llama-3-8B shapes, K=48 (6 int8 limb GEMMs), T4, batch 1, 128 linear groups"},
@@ -41,6 +43,10 @@
     {"id": "wire_total_8b_k40", "value": 11.1, "unit": "MB/token", "kind": "analytic", "source": "spec", "display": "11.1 MB", "conditions": "4.26 up + 6.88 down"},
     {"id": "rounds_8b", "value": 128, "unit": "round trips/token", "kind": "analytic", "source": "spec", "display": "128 round trips", "conditions": "4 groups x 32 layers"},
     {"id": "rounds_70b", "value": 320, "unit": "round trips/token", "kind": "analytic", "source": "spec", "display": "320 round trips", "conditions": "4 groups x 80 layers"},
+    {"id": "mask_store_7b_k32c27", "value": 5.56, "unit": "MB/slot", "kind": "analytic", "source": "spec", "display": "5.56 MB", "conditions": "Qwen2.5-7B at the default ring K32A12C27: 49664 x 28 x 4 bytes"},
+    {"id": "he_gateway_7b_s_per_token", "value": 0.116, "unit": "s/slot", "kind": "measured", "source": "hemask-k32", "display": "0.116 s", "conditions": "Qwen2.5-7B, gateway encrypt + decrypt per slot, 4 vCPU with AMX (cpu_int8 engine)"},
+    {"id": "he_provider_7b_t4_s_per_token", "value": 0.019, "unit": "s/slot", "kind": "measured", "source": "hemask-k32", "display": "0.019 s", "conditions": "Qwen2.5-7B, provider T4 work per slot (exact mod 2^q products)"},
+    {"id": "modal_tunnel_mb_per_s", "value": 1.5, "unit": "MB/s", "kind": "measured", "source": "modal-2026-11-20", "display": "1.5 MB/s", "conditions": "encrypted mask supply between two Modal apps over the public tunnel (Qwen2.5-0.5B)"},
     {"id": "rtt_floor_privatelink", "value": 0.13, "unit": "s/token", "kind": "estimate", "source": "spec", "display": "0.13 s/token", "conditions": "128 rounds x ~1 ms RTT (same region, PrivateLink/PSC)"},
     {"id": "rtt_floor_internet", "value": "1.3-4", "unit": "s/token", "kind": "estimate", "source": "spec", "display": "1.3-4 s/token", "conditions": "128 rounds x 10-30 ms RTT, batch 1"},
 

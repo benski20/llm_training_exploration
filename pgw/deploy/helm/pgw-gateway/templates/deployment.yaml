@@ -210,6 +210,10 @@ spec:
               value: "true"
             {{- end }}
             {{- end }}
+            {{- with .Values.trustedProxyCidrs }}
+            - name: PGW_TRUSTED_PROXY_CIDRS
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.config.extraEnv }}
             - name: {{ $k }}
               value: {{ $v | quote }}
