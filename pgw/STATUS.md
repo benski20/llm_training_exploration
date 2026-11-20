@@ -449,3 +449,7 @@ final padding fix (bug 3) was not done. No real model shape is affected by that 
 - Fused GPU ring kernel, SmoothQuant so that K32A8 becomes lossless, a gateway-GPU "self-factory"
   mode, speculative decoding and prefix caching to cut round trips, and tools/structured output in
   the API.
+
+### Phase A wiring check (2026-11-20)
+- Commit 450b788 (marked WIP by a forced hook commit) is complete: full suite 3615 passed / 122 skipped, tests/e2e 32 passed.
+- Modal e2e (CPU provider, tunnel, 0.5B): exact (first_mismatch null); local_linears auto chose qkv+o on the gateway, 49.5 round trips per token (was ~100). That placement had a 26 ms median trip, so the warm 32-token chat took 47 s; trip latency, not compute, dominates on Modal.
