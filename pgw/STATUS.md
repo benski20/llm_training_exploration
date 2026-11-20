@@ -88,6 +88,15 @@ share round trips (7392 trips for 4 x 65 tokens), but each 4-session step takes 
 0.7 s in round trips (gateway, service and mask factory share the VM's 4 vCPUs), about 0.5 s of gateway
 crypto, and about 0.5 s of float32 LM heads computed one row at a time (2.2 GB of weights read per row).
 
+**Fused Triton ring GEMV for one-row calls** (`pgw.core.triton_gemv`, on by default after a device
+self-check, `PGW_SERVICE_TRITON_GEMV=false` turns it off). One kernel, int8 weight streamed once, wrapping
+uint32 multiply-adds, bit-identical to the digit-GEMM path. Kaggle T4, 7B shapes, K32A12C27, rows=1
+(`benchmarks/results/kaggle/triton_gemv/`): service call per layer 2.92 -> 1.92 ms (qkv 0.51 -> 0.33,
+o 0.56 -> 0.28, gate_up 1.17 -> 0.81, down 0.68 -> 0.51); device time per layer 1.85 -> 1.26 ms (180-220
+GB/s). Several rows stay on the digit-GEMM path on the T4: the CUDA-core kernel is compute-bound there
+(4-8x slower) and the int8 `tl.dot` variant does not compile with Triton 3.6 on sm_75 (the self-check
+detects it and limits the fused kernel to one row; GPUs where it compiles and passes get up to 16 rows).
+
 **CUDA graphs are off by default** (`PGW_SERVICE_CUDA_GRAPHS=true` turns them on). On torch 2.11 with
 a T4 most captures fail inside PyTorch's caching allocator and the service falls back to eager, and
 where capture worked the gain was about 6% per layer (run 20). The graph tests skip when capture is

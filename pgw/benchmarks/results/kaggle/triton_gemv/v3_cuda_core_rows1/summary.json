@@ -1,0 +1,87 @@
+{
+ "job": {
+  "exclude": [
+   "rust",
+   "deploy",
+   "scripts",
+   "tests/vectors",
+   "tests/gateway",
+   "tests/cli",
+   "tests/maskstore",
+   "tests/factory",
+   "tests/docs",
+   "tests/wire"
+  ],
+  "steps": [
+   {
+    "kind": "pytest",
+    "name": "pytest_triton_gemv",
+    "args": [
+     "tests/core/test_triton_gemv.py",
+     "tests/core/test_ringmm.py",
+     "tests/service/test_kernels.py",
+     "tests/service/test_gpu_exec.py",
+     "tests/service/test_gpu_graphs.py",
+     "-v",
+     "-rs",
+     "--timeout",
+     "1800"
+    ],
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "triton_gemv_bench",
+    "cmd": "python benchmarks/triton_gemv_bench.py --iters 300 --sweep --json /kaggle/working/triton_gemv_bench.json",
+    "timeout": 3600
+   },
+   {
+    "kind": "shell",
+    "name": "gpu_kernel_bench",
+    "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300",
+    "timeout": 1800
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 12.8,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "pytest_triton_gemv": {
+   "rc": 1,
+   "seconds": 55.2,
+   "tail": "operation]: reproducer generated at `std::errs, please share the reproducer above with Triton project.`\n------------------------------ Captured log call -------------------------------\nWARNING  pgw.core.triton_gemv:triton_gemv.py:354 fused ring GEMV (tensor-core variant) failed its self-check on cuda:0 (RuntimeError: PassManager::run failed); retrying with the CUDA-core variant for one-row calls\n=========================== short test summary info ============================\nSKIPPED [12] tests/core/test_triton_gemv.py:107: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [6] tests/core/test_triton_gemv.py:120: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [24] tests/core/test_triton_gemv.py:144: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [1] tests/core/test_triton_gemv.py:162: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [1] tests/core/test_triton_gemv.py:181: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [3] tests/core/test_triton_gemv.py:187: Triton interpreter not enabled (CUDA host: see the gpu tests)\nSKIPPED [19] tests/service/test_gpu_graphs.py:113: CUDA graph capture unsupported in this torch build; eager results verified exact\nSKIPPED [1] tests/service/test_gpu_graphs.py:141: CUDA graph capture unsupported in this torch build; eager results verified exact\n================== 9 failed, 353 passed, 67 skipped in 44.90s ==================\n\n---stderr---\n"
+  },
+  "triton_gemv_bench": {
+   "rc": 0,
+   "seconds": 142.7,
+   "tail": "arp=32}, tritongpu-coalesce, tritongpu-F32DotTC{emu-tf32=false}, triton-nvidia-gpu-plan-cta, tritongpu-remove-layout-conversions, tritongpu-optimize-thread-locality, tritongpu-accelerate-matmul, tritongpu-remove-layout-conversions, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, triton-nvidia-optimize-descriptor-encoding, triton-loop-aware-cse, triton-licm, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}, triton-loop-aware-cse, tritongpu-prefetch, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, tritongpu-coalesce-async-copy, triton-nvidia-optimize-tmem-layouts, tritongpu-remove-layout-conversions, triton-nvidia-interleave-tmem, tritongpu-reduce-data-duplication, tritongpu-reorder-instructions, triton-loop-aware-cse, symbol-dce, triton-nvidia-gpu-fence-insertion{compute-capability=75}, triton-nvidia-mma-lowering, sccp, cse, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true})\",\n      disable_threading: true,\n      verify_each: true\n    }\n  }\n#-}\n/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:50:0: error: Failures have been detected while processing an MLIR pass pipeline\n/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:50:0: note: Pipeline failed while executing [`TritonGPUAccelerateMatmul` on 'builtin.module' operation]: reproducer generated at `std::errs, please share the reproducer above with Triton project.`\n"
+  },
+  "gpu_kernel_bench": {
+   "rc": 0,
+   "seconds": 11.2,
+   "tail": "device=cuda ring=K32A12C27 iters=300 torch=2.11.0+cu130 gpu=Tesla T4\nlinear           m x n rows  eager ms  graph ms  speedup\nqkv          4608x3584    1     0.468     0.295    1.59x\nqkv          4608x3584    5     0.494     0.291    1.70x\nqkv          4608x3584    8     0.511     0.295    1.73x\no            3584x3584    1     0.469     0.466    1.01x\no            3584x3584    5     0.491     0.492    1.00x\no            3584x3584    8     0.507     0.532    0.95x\ngate_up     37888x3584    1     1.142     1.037    1.10x\ngate_up     37888x3584    5     1.309     1.314    1.00x\ngate_up     37888x3584    8     1.519     1.519    1.00x\ndown        3584x18944    1     0.650     0.649    1.00x\ndown        3584x18944    5     0.703     0.707    0.99x\ndown        3584x18944    8     0.737     0.736    1.00x\nlayer      (4 linears)    1     2.729     2.447    1.12x (avg/call eager 0.682 graph 0.612)\nlayer      (4 linears)    5     2.997     2.804    1.07x (avg/call eager 0.749 graph 0.701)\nlayer      (4 linears)    8     3.273     3.082    1.06x (avg/call eager 0.818 graph 0.770)\nexecutor stats: ExecutorStats(replays=912, eager=6384, captures=1, capture_failures=3, pinned_copies=7299, gemv=0)\n\n---stderr---\nCUDA graph capture failed on cuda:0 (K=32, rows<=8, n=3584, m=3584): RuntimeError: it->second->use_count > 0 INTERNAL ASSERT FAILED at \"/pytorch/c10/cuda/CUDACachingAllocator.cpp\":2799, please report a bug to PyTorch. ; running eagerly\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        26272616 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  1.5M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 4.0
+}

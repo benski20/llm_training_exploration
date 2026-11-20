@@ -144,7 +144,7 @@ def _build_state(
         registry = ModelRegistry(
             s.device, s.backend, devices=s.devices or None, placement=s.placement, rings=s.rings,
             verify=s.verify_packs, cache_float=s.cache_float_weights, warmup=s.warmup,
-            cuda_graphs=s.cuda_graphs, cuda_graph_buckets=s.cuda_graph_buckets,
+            cuda_graphs=s.cuda_graphs, cuda_graph_buckets=s.cuda_graph_buckets, triton_gemv=s.triton_gemv,
         )
     has_creds = s.tokens_file is not None or s.mtls_tenants_file is not None
     if authenticator is None and (has_creds or not s.allow_unauthenticated):

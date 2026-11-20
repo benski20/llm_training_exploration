@@ -34,8 +34,9 @@ def _kernels(m: int, n: int, seed: int, extreme: bool = False) -> tuple[torch.Te
         w[::2] = -128
         w[1::2] = 127
     spec = LinearSpec(LinearId(0, LinearKind.O), m, n)
-    graph = ComputeKernel(spec, w, device="cuda", cuda_graphs=True)
-    eager = ComputeKernel(spec, w, device="cuda", cuda_graphs=False)
+    # the fused Triton GEMV would take the K=32 small calls; these tests are about graphs vs eager
+    graph = ComputeKernel(spec, w, device="cuda", cuda_graphs=True, triton_gemv=False)
+    eager = ComputeKernel(spec, w, device="cuda", cuda_graphs=False, triton_gemv=False)
     return w, graph, eager
 
 

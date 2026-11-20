@@ -436,6 +436,13 @@ segment-extent boundaries. If the store has too few slots, the request fails fas
   K ≤ 32 on the request path. Replays share per-device static buffers and a graph memory pool, so calls
   are serialized per device by a lock (the batcher already runs one GPU batch per device). Bit-exact.
   `PGW_SERVICE_CUDA_GRAPHS=false` disables graphs.
+- Fused ring GEMV (`pgw.core.triton_gemv`): CUDA calls with K ≤ 32 and at most 16 rows run as one Triton
+  kernel that streams the int8 weight once and computes `Σ u32(x)·u32(sext(W8)) mod 2^32` with unsigned
+  32-bit wrapping arithmetic (no digits, no floats; any reduction order gives the same bits), then masks
+  to `2^K`. Only the low 32 bits of `x̂` are copied to the device. Enabled per device only if triton imports
+  and a startup self-check against the digit-GEMM path passes (random and extreme operands, rows 1–16,
+  K ∈ {16, 24, 32}); the first call per (linear, K, rows) is cross-checked too, and any mismatch switches the
+  device back to the digit-GEMM path. `PGW_SERVICE_TRITON_GEMV=false` disables it.
 - Admission control: `max_inflight_requests` (beyond it, `unavailable` with `Retry-After`) and per-tenant quotas.
 - Graceful drain on SIGTERM: `/readyz` returns 503, in-flight work finishes, then exit.
 - Scaling: horizontally behind an L7 LB. Any replica can serve any request because the service is stateless.

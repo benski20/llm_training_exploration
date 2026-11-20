@@ -165,6 +165,8 @@ class ModelRegistry:
             the CUDA graphs of every row bucket for the first served ring).
         cuda_graphs: CUDA kernels replay captured graphs for small calls (see :class:`ComputeKernel`).
         cuda_graph_buckets: Padded GEMM row counts with a graph.
+        triton_gemv: CUDA kernels serve small ``K <= 32`` calls with the fused Triton ring GEMV once
+            its device self-check passed (see :class:`ComputeKernel`).
     """
 
     def __init__(
@@ -180,6 +182,7 @@ class ModelRegistry:
         warmup: bool = False,
         cuda_graphs: bool = True,
         cuda_graph_buckets: Sequence[int] = GRAPH_BUCKETS,
+        triton_gemv: bool = True,
     ):
         if placement not in ("single", "by_layer"):
             raise ConfigError(f"unknown placement {placement!r}; use 'single' or 'by_layer'")
@@ -204,6 +207,7 @@ class ModelRegistry:
         self.warmup = warmup
         self.cuda_graphs = cuda_graphs
         self.cuda_graph_buckets = validate_buckets(cuda_graph_buckets)
+        self.triton_gemv = triton_gemv
         self._models: dict[str, RegisteredModel] = {}
         self._lock = threading.RLock()
 
@@ -244,6 +248,7 @@ class ModelRegistry:
                 kernels[spec.id.key] = ComputeKernel(
                     spec, lw.w8, device=placement[spec.id.layer], backend=self.backend, cache_float=self.cache_float,
                     cuda_graphs=self.cuda_graphs, graph_buckets=self.cuda_graph_buckets,
+                    triton_gemv=self.triton_gemv,
                 )
                 del lw
             entry = RegisteredModel(

@@ -1,0 +1,1886 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.16, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /tmp/pgwsrc/pgw
+configfile: pyproject.toml
+plugins: asyncio-1.5.0, timeout-2.4.0, anyio-4.15.1, langsmith-0.14.12, platformdirs-4.13.5, typeguard-4.6.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+timeout: 1800.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 428 items
+
+tests/core/test_triton_gemv.py::test_low32_matches_mod_2_32 PASSED       [  0%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-1] PASSED [  0%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-2] PASSED [  0%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-3] PASSED [  0%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-4] PASSED [  1%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-5] PASSED [  1%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-6] PASSED [  1%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-7] PASSED [  1%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-8] PASSED [  2%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-9] PASSED [  2%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-10] PASSED [  2%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-11] PASSED [  2%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-12] PASSED [  3%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-13] PASSED [  3%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-14] PASSED [  3%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-15] PASSED [  3%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[4608-3584-16] PASSED [  3%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-1] PASSED [  4%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-2] PASSED [  4%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-3] PASSED [  4%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-4] PASSED [  4%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-5] PASSED [  5%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-6] PASSED [  5%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-7] PASSED [  5%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-8] PASSED [  5%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-9] PASSED [  6%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-10] PASSED [  6%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-11] PASSED [  6%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-12] PASSED [  6%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-13] PASSED [  7%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-14] PASSED [  7%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-15] PASSED [  7%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[37888-3584-16] PASSED [  7%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-1] PASSED [  7%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-2] PASSED [  8%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-3] PASSED [  8%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-4] PASSED [  8%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-5] PASSED [  8%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-6] PASSED [  9%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-7] PASSED [  9%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-8] PASSED [  9%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-9] PASSED [  9%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-10] PASSED [ 10%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-11] PASSED [ 10%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-12] PASSED [ 10%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-13] PASSED [ 10%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-14] PASSED [ 10%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-15] PASSED [ 11%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3584-18944-16] PASSED [ 11%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-1] PASSED    [ 11%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-2] PASSED    [ 11%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-3] PASSED    [ 12%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-4] PASSED    [ 12%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-5] PASSED    [ 12%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-6] PASSED    [ 12%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-7] PASSED    [ 13%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-8] PASSED    [ 13%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-9] PASSED    [ 13%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-10] PASSED   [ 13%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-11] PASSED   [ 14%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-12] PASSED   [ 14%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-13] PASSED   [ 14%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-14] PASSED   [ 14%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-15] PASSED   [ 14%]
+tests/core/test_triton_gemv.py::test_gemv_config_shapes[3-5-16] PASSED   [ 15%]
+tests/core/test_triton_gemv.py::test_ring_gemv_rejects_bad_arguments PASSED [ 15%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[1-1-16] SKIPPED [ 15%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[1-1-24] SKIPPED [ 15%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[1-1-32] SKIPPED [ 16%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[5-7-16] SKIPPED [ 16%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[5-7-24] SKIPPED [ 16%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[5-7-32] SKIPPED [ 16%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[37-129-16] SKIPPED [ 17%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[37-129-24] SKIPPED [ 17%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[37-129-32] SKIPPED [ 17%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[33-700-16] SKIPPED [ 17%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[33-700-24] SKIPPED [ 17%]
+tests/core/test_triton_gemv.py::test_random_exact_all_rows[33-700-32] SKIPPED [ 18%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[-128-16] SKIPPED [ 18%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[-128-24] SKIPPED [ 18%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[-128-32] SKIPPED [ 18%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[127-16] SKIPPED [ 19%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[127-24] SKIPPED [ 19%]
+tests/core/test_triton_gemv.py::test_extreme_operands_wrap_exactly[127-32] SKIPPED [ 19%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg0-16] SKIPPED [ 19%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg0-24] SKIPPED [ 20%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg0-32] SKIPPED [ 20%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg1-16] SKIPPED [ 20%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg1-24] SKIPPED [ 20%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg1-32] SKIPPED [ 21%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg2-16] SKIPPED [ 21%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg2-24] SKIPPED [ 21%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg2-32] SKIPPED [ 21%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg3-16] SKIPPED [ 21%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg3-24] SKIPPED [ 22%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg3-32] SKIPPED [ 22%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg4-16] SKIPPED [ 22%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg4-24] SKIPPED [ 22%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg4-32] SKIPPED [ 23%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg5-16] SKIPPED [ 23%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg5-24] SKIPPED [ 23%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg5-32] SKIPPED [ 23%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg6-16] SKIPPED [ 24%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg6-24] SKIPPED [ 24%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg6-32] SKIPPED [ 24%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg7-16] SKIPPED [ 24%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg7-24] SKIPPED [ 25%]
+tests/core/test_triton_gemv.py::test_split_k_and_tiles_any_order_is_exact[cfg7-32] SKIPPED [ 25%]
+tests/core/test_triton_gemv.py::test_padded_weight_and_any_int64_input SKIPPED [ 25%]
+tests/core/test_triton_gemv.py::test_self_check_cases_pass_in_interpreter SKIPPED [ 25%]
+tests/core/test_triton_gemv.py::test_executor_run_gemv_compact_contract[16] SKIPPED [ 25%]
+tests/core/test_triton_gemv.py::test_executor_run_gemv_compact_contract[24] SKIPPED [ 26%]
+tests/core/test_triton_gemv.py::test_executor_run_gemv_compact_contract[32] SKIPPED [ 26%]
+tests/core/test_triton_gemv.py::test_settings_flag PASSED                [ 26%]
+tests/core/test_triton_gemv.py::test_cpu_kernels_never_use_triton PASSED [ 26%]
+tests/core/test_triton_gemv.py::test_gpu_self_check FAILED               [ 27%]
+tests/core/test_triton_gemv.py::test_gpu_7b_shapes_all_rows[qkv] FAILED  [ 27%]
+tests/core/test_triton_gemv.py::test_gpu_7b_shapes_all_rows[o] FAILED    [ 27%]
+tests/core/test_triton_gemv.py::test_gpu_7b_shapes_all_rows[gate_up] FAILED [ 27%]
+tests/core/test_triton_gemv.py::test_gpu_7b_shapes_all_rows[down] FAILED [ 28%]
+tests/core/test_triton_gemv.py::test_gpu_extreme_and_odd_shapes[16] FAILED [ 28%]
+tests/core/test_triton_gemv.py::test_gpu_extreme_and_odd_shapes[24] FAILED [ 28%]
+tests/core/test_triton_gemv.py::test_gpu_extreme_and_odd_shapes[32] FAILED [ 28%]
+tests/core/test_triton_gemv.py::test_gpu_compute_kernel_uses_gemv_and_falls_back FAILED [ 28%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f64-p0] PASSED [ 29%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f64-p1] PASSED [ 29%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f64-p2] PASSED [ 29%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f32-p0] PASSED [ 29%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f32-p1] PASSED [ 30%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[1-8-8-cpu_f32-p2] PASSED [ 30%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f64-p0] PASSED [ 30%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f64-p1] PASSED [ 30%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f64-p2] PASSED [ 31%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f32-p0] PASSED [ 31%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f32-p1] PASSED [ 31%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[3-17-29-cpu_f32-p2] PASSED [ 31%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f64-p0] PASSED [ 32%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f64-p1] PASSED [ 32%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f64-p2] PASSED [ 32%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f32-p0] PASSED [ 32%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f32-p1] PASSED [ 32%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[40-64-96-cpu_f32-p2] PASSED [ 33%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f64-p0] PASSED [ 33%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f64-p1] PASSED [ 33%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f64-p2] PASSED [ 33%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f32-p0] PASSED [ 34%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f32-p1] PASSED [ 34%]
+tests/core/test_ringmm.py::test_exact_vs_bigint_reference[5-33-1500-cpu_f32-p2] PASSED [ 34%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f64-p0] PASSED        [ 34%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f64-p1] PASSED        [ 35%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f64-p2] PASSED        [ 35%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f32-p0] PASSED        [ 35%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f32-p1] PASSED        [ 35%]
+tests/core/test_ringmm.py::test_extreme_values[cpu_f32-p2] PASSED        [ 35%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f64-p0] PASSED [ 36%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f64-p1] PASSED [ 36%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f64-p2] PASSED [ 36%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f32-p0] PASSED [ 36%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f32-p1] PASSED [ 37%]
+tests/core/test_ringmm.py::test_masked_product_matches_float64_reference[cpu_f32-p2] PASSED [ 37%]
+tests/core/test_ringmm.py::test_large_inner_dim_f64_digits PASSED        [ 37%]
+tests/core/test_ringmm.py::test_oneshot_and_integer_k PASSED             [ 37%]
+tests/core/test_ringmm.py::test_empty_batch_and_shape_errors PASSED      [ 38%]
+tests/core/test_ringmm.py::test_backend_selection PASSED                 [ 38%]
+tests/core/test_ringmm.py::test_uncached_float_weight PASSED             [ 38%]
+tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p0] PASSED              [ 38%]
+tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p1] PASSED              [ 39%]
+tests/core/test_ringmm.py::test_cuda_exact[1-8-8-p2] PASSED              [ 39%]
+tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p0] PASSED            [ 39%]
+tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p1] PASSED            [ 39%]
+tests/core/test_ringmm.py::test_cuda_exact[3-17-29-p2] PASSED            [ 39%]
+tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p0] PASSED           [ 40%]
+tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p1] PASSED           [ 40%]
+tests/core/test_ringmm.py::test_cuda_exact[40-64-96-p2] PASSED           [ 40%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-8] PASSED [ 40%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-16] PASSED [ 41%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-24] PASSED [ 41%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-32] PASSED [ 41%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-40] PASSED [ 41%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-48] PASSED [ 42%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-1-37-70-56] PASSED [ 42%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-8] PASSED [ 42%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-16] PASSED [ 42%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-24] PASSED [ 42%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-32] PASSED [ 43%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-40] PASSED [ 43%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-48] PASSED [ 43%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-5-64-3584-56] PASSED [ 43%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-8] PASSED [ 44%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-16] PASSED [ 44%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-24] PASSED [ 44%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-32] PASSED [ 44%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-40] PASSED [ 45%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-48] PASSED [ 45%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-8-40-18944-56] PASSED [ 45%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-8] PASSED [ 45%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-16] PASSED [ 46%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-24] PASSED [ 46%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-32] PASSED [ 46%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-40] PASSED [ 46%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-48] PASSED [ 46%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-3-7-33-56] PASSED [ 47%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-8] PASSED [ 47%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-16] PASSED [ 47%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-24] PASSED [ 47%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-32] PASSED [ 48%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-40] PASSED [ 48%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-48] PASSED [ 48%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[rand-33-5-9-56] PASSED [ 48%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-8] PASSED [ 49%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-16] PASSED [ 49%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-24] PASSED [ 49%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-32] PASSED [ 49%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-40] PASSED [ 50%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-48] PASSED [ 50%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-1-37-70-56] PASSED [ 50%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-8] PASSED [ 50%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-16] PASSED [ 50%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-24] PASSED [ 51%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-32] PASSED [ 51%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-40] PASSED [ 51%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-48] PASSED [ 51%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-5-64-3584-56] PASSED [ 52%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-8] PASSED [ 52%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-16] PASSED [ 52%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-24] PASSED [ 52%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-32] PASSED [ 53%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-40] PASSED [ 53%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-48] PASSED [ 53%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-8-40-18944-56] PASSED [ 53%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-8] PASSED [ 53%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-16] PASSED [ 54%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-24] PASSED [ 54%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-32] PASSED [ 54%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-40] PASSED [ 54%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-48] PASSED [ 55%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-3-7-33-56] PASSED [ 55%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-8] PASSED [ 55%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-16] PASSED [ 55%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-24] PASSED [ 56%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-32] PASSED [ 56%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-40] PASSED [ 56%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-48] PASSED [ 56%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[max-33-5-9-56] PASSED [ 57%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-8] PASSED [ 57%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-16] PASSED [ 57%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-24] PASSED [ 57%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-32] PASSED [ 57%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-40] PASSED [ 58%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-48] PASSED [ 58%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-1-37-70-56] PASSED [ 58%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-8] PASSED [ 58%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-16] PASSED [ 59%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-24] PASSED [ 59%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-32] PASSED [ 59%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-40] PASSED [ 59%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-48] PASSED [ 60%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-5-64-3584-56] PASSED [ 60%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-8] PASSED [ 60%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-16] PASSED [ 60%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-24] PASSED [ 60%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-32] PASSED [ 61%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-40] PASSED [ 61%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-48] PASSED [ 61%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-8-40-18944-56] PASSED [ 61%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-8] PASSED [ 62%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-16] PASSED [ 62%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-24] PASSED [ 62%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-32] PASSED [ 62%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-40] PASSED [ 63%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-48] PASSED [ 63%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-3-7-33-56] PASSED [ 63%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-8] PASSED [ 63%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-16] PASSED [ 64%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-24] PASSED [ 64%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-32] PASSED [ 64%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-40] PASSED [ 64%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-48] PASSED [ 64%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[min-33-5-9-56] PASSED [ 65%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-8] PASSED [ 65%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-16] PASSED [ 65%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-24] PASSED [ 65%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-32] PASSED [ 66%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-40] PASSED [ 66%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-48] PASSED [ 66%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-1-37-70-56] PASSED [ 66%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-8] PASSED [ 67%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-16] PASSED [ 67%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-24] PASSED [ 67%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-32] PASSED [ 67%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-40] PASSED [ 67%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-48] PASSED [ 68%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-5-64-3584-56] PASSED [ 68%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-8] PASSED [ 68%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-16] PASSED [ 68%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-24] PASSED [ 69%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-32] PASSED [ 69%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-40] PASSED [ 69%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-48] PASSED [ 69%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-8-40-18944-56] PASSED [ 70%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-8] PASSED [ 70%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-16] PASSED [ 70%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-24] PASSED [ 70%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-32] PASSED [ 71%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-40] PASSED [ 71%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-48] PASSED [ 71%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-3-7-33-56] PASSED [ 71%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-8] PASSED [ 71%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-16] PASSED [ 72%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-24] PASSED [ 72%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-32] PASSED [ 72%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-40] PASSED [ 72%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-48] PASSED [ 73%]
+tests/core/test_ringmm.py::test_offset_byte_mm_exact[zero-33-5-9-56] PASSED [ 73%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape0-cpu_f64] PASSED [ 73%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape0-cpu_f32] PASSED [ 73%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape0-cpu_int8] PASSED [ 74%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape0-auto] PASSED [ 74%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape1-cpu_f64] PASSED [ 74%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape1-cpu_f32] PASSED [ 74%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape1-cpu_int8] PASSED [ 75%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape1-auto] PASSED [ 75%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape2-cpu_f64] PASSED [ 75%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape2-cpu_f32] PASSED [ 75%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape2-cpu_int8] PASSED [ 75%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape2-auto] PASSED [ 76%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape3-cpu_f64] PASSED [ 76%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape3-cpu_f32] PASSED [ 76%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape3-cpu_int8] PASSED [ 76%]
+tests/service/test_kernels.py::test_exact_against_reference[K32A8-shape3-auto] PASSED [ 77%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape0-cpu_f64] PASSED [ 77%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape0-cpu_f32] PASSED [ 77%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape0-cpu_int8] PASSED [ 77%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape0-auto] PASSED [ 78%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape1-cpu_f64] PASSED [ 78%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape1-cpu_f32] PASSED [ 78%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape1-cpu_int8] PASSED [ 78%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape1-auto] PASSED [ 78%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape2-cpu_f64] PASSED [ 79%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape2-cpu_f32] PASSED [ 79%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape2-cpu_int8] PASSED [ 79%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape2-auto] PASSED [ 79%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape3-cpu_f64] PASSED [ 80%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape3-cpu_f32] PASSED [ 80%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape3-cpu_int8] PASSED [ 80%]
+tests/service/test_kernels.py::test_exact_against_reference[K40A12-shape3-auto] PASSED [ 80%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape0-cpu_f64] PASSED [ 81%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape0-cpu_f32] PASSED [ 81%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape0-cpu_int8] PASSED [ 81%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape0-auto] PASSED [ 81%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape1-cpu_f64] PASSED [ 82%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape1-cpu_f32] PASSED [ 82%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape1-cpu_int8] PASSED [ 82%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape1-auto] PASSED [ 82%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape2-cpu_f64] PASSED [ 82%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape2-cpu_f32] PASSED [ 83%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape2-cpu_int8] PASSED [ 83%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape2-auto] PASSED [ 83%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape3-cpu_f64] PASSED [ 83%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape3-cpu_f32] PASSED [ 84%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape3-cpu_int8] PASSED [ 84%]
+tests/service/test_kernels.py::test_exact_against_reference[K48A20-shape3-auto] PASSED [ 84%]
+tests/service/test_kernels.py::test_extreme_values_including_minus_128[cpu_f64] PASSED [ 84%]
+tests/service/test_kernels.py::test_extreme_values_including_minus_128[cpu_f32] PASSED [ 85%]
+tests/service/test_kernels.py::test_extreme_values_including_minus_128[cpu_int8] PASSED [ 85%]
+tests/service/test_kernels.py::test_any_int64_input_is_reduced_mod_2k PASSED [ 85%]
+tests/service/test_kernels.py::test_zero_rows_and_shape_errors PASSED    [ 85%]
+tests/service/test_kernels.py::test_metadata_and_device_bytes PASSED     [ 85%]
+tests/service/test_kernels.py::test_kernel_owns_weight_memory PASSED     [ 86%]
+tests/service/test_kernels.py::test_resolve_backend_and_device_errors PASSED [ 86%]
+tests/service/test_kernels.py::test_int8_ring_matmul_long_inner_dimension_chunks PASSED [ 86%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-1] PASSED      [ 86%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-17] PASSED     [ 87%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K32A8-33] PASSED     [ 87%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-1] PASSED     [ 87%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-17] PASSED    [ 87%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K40A12-33] PASSED    [ 88%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-1] PASSED     [ 88%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-17] PASSED    [ 88%]
+tests/service/test_kernels.py::test_cuda_int8_exact[K48A20-33] PASSED    [ 88%]
+tests/service/test_gpu_exec.py::test_bucket_for[32-fits0] PASSED         [ 89%]
+tests/service/test_gpu_exec.py::test_bucket_for[40-fits1] PASSED         [ 89%]
+tests/service/test_gpu_exec.py::test_bucket_for[48-fits2] PASSED         [ 89%]
+tests/service/test_gpu_exec.py::test_bucket_for[16-fits3] PASSED         [ 89%]
+tests/service/test_gpu_exec.py::test_validate_buckets PASSED             [ 89%]
+tests/service/test_gpu_exec.py::test_settings PASSED                     [ 90%]
+tests/service/test_gpu_exec.py::test_compact_matches_pack_ring[16] PASSED [ 90%]
+tests/service/test_gpu_exec.py::test_compact_matches_pack_ring[24] PASSED [ 90%]
+tests/service/test_gpu_exec.py::test_compact_matches_pack_ring[32] PASSED [ 90%]
+tests/service/test_gpu_exec.py::test_compact_matches_pack_ring[40] PASSED [ 91%]
+tests/service/test_gpu_exec.py::test_compact_matches_pack_ring[48] PASSED [ 91%]
+tests/service/test_gpu_exec.py::test_pack_ring_rejects_32bit_for_wide_rings PASSED [ 91%]
+tests/service/test_gpu_exec.py::test_cpu_kernel_run_compact_is_int64 PASSED [ 91%]
+tests/service/test_gpu_exec.py::test_executor_graph_path_exact[32] PASSED [ 92%]
+tests/service/test_gpu_exec.py::test_executor_graph_path_exact[40] PASSED [ 92%]
+tests/service/test_gpu_exec.py::test_executor_graph_path_exact[48] PASSED [ 92%]
+tests/service/test_gpu_exec.py::test_executor_eager_when_no_bucket_or_no_graphs PASSED [ 92%]
+tests/service/test_gpu_exec.py::test_executor_interleaved_linears_share_buffers PASSED [ 92%]
+tests/service/test_gpu_exec.py::test_capture_failure_falls_back_and_logs_once PASSED [ 93%]
+tests/service/test_gpu_exec.py::test_wrong_replay_disables_graphs PASSED [ 93%]
+tests/service/test_gpu_exec.py::test_executor_without_capturer_on_cpu_runs_eagerly PASSED [ 93%]
+tests/service/test_gpu_exec.py::test_batcher_compact_and_int64_callers_share_a_batch PASSED [ 93%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[576x448-32] SKIPPED [ 94%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[576x448-40] SKIPPED [ 94%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[576x448-48] SKIPPED [ 94%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x448-32] SKIPPED [ 94%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x448-40] SKIPPED [ 95%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x448-48] SKIPPED [ 95%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[4736x448-32] SKIPPED [ 95%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[4736x448-40] SKIPPED [ 95%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[4736x448-48] SKIPPED [ 96%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-32] SKIPPED [ 96%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-40] SKIPPED [ 96%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-48] SKIPPED [ 96%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-32] SKIPPED [ 96%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-40] SKIPPED [ 97%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-48] SKIPPED [ 97%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-32] SKIPPED [ 97%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-40] SKIPPED [ 97%]
+tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-48] SKIPPED [ 98%]
+tests/service/test_gpu_graphs.py::test_extreme_operands[32] PASSED       [ 98%]
+tests/service/test_gpu_graphs.py::test_extreme_operands[48] PASSED       [ 98%]
+tests/service/test_gpu_graphs.py::test_full_size_7b_shape[o] PASSED      [ 98%]
+tests/service/test_gpu_graphs.py::test_full_size_7b_shape[qkv] PASSED    [ 99%]
+tests/service/test_gpu_graphs.py::test_warmup_captures_every_bucket_and_rows_beyond_run_eagerly SKIPPED [ 99%]
+tests/service/test_gpu_graphs.py::test_randomized_stress_interleaved_linears SKIPPED [ 99%]
+tests/service/test_gpu_graphs.py::test_concurrent_threads_are_serialized PASSED [ 99%]
+tests/service/test_gpu_graphs.py::test_private_executor_capture_and_pinned_staging PASSED [100%]
+
+=================================== FAILURES ===================================
+_____________________________ test_gpu_self_check ______________________________
+
+args = (<triton.language.core.tensor object at 0x7d102e4e87c0>, <triton.language.core.tensor object at 0x7d102e4e8a60>, <triton.language.core.tensor object at 0x7d102e70f700>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e6ebe10>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e6ebe10>
+lhs = <triton.language.core.tensor object at 0x7d102e4e87c0>
+rhs = <triton.language.core.tensor object at 0x7d102e4e8a60>
+acc = <triton.language.core.tensor object at 0x7d102e70f700>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    def test_gpu_self_check() -> None:  # pragma: no cover - GPU only
+        assert triton_available()
+>       assert check_against_reference("cuda") == []
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:234: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/pgw/core/triton_gemv.py:301: in check_against_reference
+    got = ring_gemv(low32(x).to(dev), wpad, k, n=int(x.shape[1]), m=int(w8.shape[0]))
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e6ca490>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d1036a23ce0>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e48ab70>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_______________________ test_gpu_7b_shapes_all_rows[qkv] _______________________
+
+args = (<triton.language.core.tensor object at 0x7d102e57a510>, <triton.language.core.tensor object at 0x7d102e57a7b0>, <triton.language.core.tensor object at 0x7d102e5789f0>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e4dd310>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e4dd310>
+lhs = <triton.language.core.tensor object at 0x7d102e57a510>
+rhs = <triton.language.core.tensor object at 0x7d102e57a7b0>
+acc = <triton.language.core.tensor object at 0x7d102e5789f0>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+name = 'qkv'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", list(SHAPES_7B))
+    def test_gpu_7b_shapes_all_rows(name: str) -> None:  # pragma: no cover - GPU only
+        m, n = SHAPES_7B[name]
+        g = torch.Generator().manual_seed(len(name))
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
+        wpad = pad_weight_cuda(w8, "cuda")
+        for k in TRITON_GEMV_KS:
+            for b in range(1, TRITON_GEMV_MAX_ROWS + 1):
+                x = torch.randint(0, 1 << k, (b, n), dtype=torch.int64, generator=g)
+>               np.testing.assert_array_equal(_gemv64(x, wpad, k, n=n, m=m), _cuda_ref(x, w8, k), err_msg=f"{k} {b}")
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e300b00>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e564680>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e325630>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+________________________ test_gpu_7b_shapes_all_rows[o] ________________________
+
+args = (<triton.language.core.tensor object at 0x7d102e51d9b0>, <triton.language.core.tensor object at 0x7d102e51dc50>, <triton.language.core.tensor object at 0x7d102e578bb0>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e55dfd0>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e55dfd0>
+lhs = <triton.language.core.tensor object at 0x7d102e51d9b0>
+rhs = <triton.language.core.tensor object at 0x7d102e51dc50>
+acc = <triton.language.core.tensor object at 0x7d102e578bb0>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+name = 'o'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", list(SHAPES_7B))
+    def test_gpu_7b_shapes_all_rows(name: str) -> None:  # pragma: no cover - GPU only
+        m, n = SHAPES_7B[name]
+        g = torch.Generator().manual_seed(len(name))
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
+        wpad = pad_weight_cuda(w8, "cuda")
+        for k in TRITON_GEMV_KS:
+            for b in range(1, TRITON_GEMV_MAX_ROWS + 1):
+                x = torch.randint(0, 1 << k, (b, n), dtype=torch.int64, generator=g)
+>               np.testing.assert_array_equal(_gemv64(x, wpad, k, n=n, m=m), _cuda_ref(x, w8, k), err_msg=f"{k} {b}")
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e3010f0>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e5631a0>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d10213dac30>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_____________________ test_gpu_7b_shapes_all_rows[gate_up] _____________________
+
+args = (<triton.language.core.tensor object at 0x7d102e57ac80>, <triton.language.core.tensor object at 0x7d103fc43bd0>, <triton.language.core.tensor object at 0x7d102e4e8910>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e554890>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e554890>
+lhs = <triton.language.core.tensor object at 0x7d102e57ac80>
+rhs = <triton.language.core.tensor object at 0x7d103fc43bd0>
+acc = <triton.language.core.tensor object at 0x7d102e4e8910>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+name = 'gate_up'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", list(SHAPES_7B))
+    def test_gpu_7b_shapes_all_rows(name: str) -> None:  # pragma: no cover - GPU only
+        m, n = SHAPES_7B[name]
+        g = torch.Generator().manual_seed(len(name))
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
+        wpad = pad_weight_cuda(w8, "cuda")
+        for k in TRITON_GEMV_KS:
+            for b in range(1, TRITON_GEMV_MAX_ROWS + 1):
+                x = torch.randint(0, 1 << k, (b, n), dtype=torch.int64, generator=g)
+>               np.testing.assert_array_equal(_gemv64(x, wpad, k, n=n, m=m), _cuda_ref(x, w8, k), err_msg=f"{k} {b}")
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e4e09e0>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e5ac9a0>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d103fa39c30>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+______________________ test_gpu_7b_shapes_all_rows[down] _______________________
+
+args = (<triton.language.core.tensor object at 0x7d102e70d160>, <triton.language.core.tensor object at 0x7d103fc9e200>, <triton.language.core.tensor object at 0x7d102e578670>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e561bd0>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e561bd0>
+lhs = <triton.language.core.tensor object at 0x7d102e70d160>
+rhs = <triton.language.core.tensor object at 0x7d103fc9e200>
+acc = <triton.language.core.tensor object at 0x7d102e578670>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+name = 'down'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", list(SHAPES_7B))
+    def test_gpu_7b_shapes_all_rows(name: str) -> None:  # pragma: no cover - GPU only
+        m, n = SHAPES_7B[name]
+        g = torch.Generator().manual_seed(len(name))
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
+        wpad = pad_weight_cuda(w8, "cuda")
+        for k in TRITON_GEMV_KS:
+            for b in range(1, TRITON_GEMV_MAX_ROWS + 1):
+                x = torch.randint(0, 1 << k, (b, n), dtype=torch.int64, generator=g)
+>               np.testing.assert_array_equal(_gemv64(x, wpad, k, n=n, m=m), _cuda_ref(x, w8, k), err_msg=f"{k} {b}")
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:248: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e4e3240>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e561940>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e44a0f0>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_____________________ test_gpu_extreme_and_odd_shapes[16] ______________________
+
+args = (<triton.language.core.tensor object at 0x7d102e51fd90>, <triton.language.core.tensor object at 0x7d102e51f2a0>, <triton.language.core.tensor object at 0x7d102e70cc90>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e4db850>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e4db850>
+lhs = <triton.language.core.tensor object at 0x7d102e51fd90>
+rhs = <triton.language.core.tensor object at 0x7d102e51f2a0>
+acc = <triton.language.core.tensor object at 0x7d102e70cc90>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+k = 16
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("k", TRITON_GEMV_KS)
+    def test_gpu_extreme_and_odd_shapes(k: int) -> None:  # pragma: no cover - GPU only
+        top = (1 << k) - 1
+        for m, n in [(1, 1), (7, 13), (33, 3585), (3584, 18943), (130, 18944)]:
+            for wv in (-128, 127):
+                w8 = torch.full((m, n), wv, dtype=torch.int8)
+                for xv in (top, 1 << (k - 1), (1 << (k - 1)) - 1):
+                    x = torch.full((TRITON_GEMV_MAX_ROWS, n), xv, dtype=torch.int64)
+                    want = ringmm_reference(x[:2], w8[:3], k)
+>                   got = _gemv64(x, pad_weight_cuda(w8, "cuda"), k, n=n, m=m)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e742250>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e562b60>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e3fd730>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_____________________ test_gpu_extreme_and_odd_shapes[24] ______________________
+
+args = (<triton.language.core.tensor object at 0x7d102e53ca60>, <triton.language.core.tensor object at 0x7d102e53cd00>, <triton.language.core.tensor object at 0x7d102e51f5b0>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e51ee40>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e51ee40>
+lhs = <triton.language.core.tensor object at 0x7d102e53ca60>
+rhs = <triton.language.core.tensor object at 0x7d102e53cd00>
+acc = <triton.language.core.tensor object at 0x7d102e51f5b0>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+k = 24
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("k", TRITON_GEMV_KS)
+    def test_gpu_extreme_and_odd_shapes(k: int) -> None:  # pragma: no cover - GPU only
+        top = (1 << k) - 1
+        for m, n in [(1, 1), (7, 13), (33, 3585), (3584, 18943), (130, 18944)]:
+            for wv in (-128, 127):
+                w8 = torch.full((m, n), wv, dtype=torch.int8)
+                for xv in (top, 1 << (k - 1), (1 << (k - 1)) - 1):
+                    x = torch.full((TRITON_GEMV_MAX_ROWS, n), xv, dtype=torch.int64)
+                    want = ringmm_reference(x[:2], w8[:3], k)
+>                   got = _gemv64(x, pad_weight_cuda(w8, "cuda"), k, n=n, m=m)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e742b50>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e561a80>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e4f11f0>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_____________________ test_gpu_extreme_and_odd_shapes[32] ______________________
+
+args = (<triton.language.core.tensor object at 0x7d102e1bc210>, <triton.language.core.tensor object at 0x7d102e1bc4b0>, <triton.language.core.tensor object at 0x7d102e53d710>)
+kwargs = {'_semantic': <triton.language.semantic.TritonSemantic object at 0x7d102e513f50>}
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_semantic" not in kwargs or kwargs["_semantic"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_semantic` argument must be provided outside of JIT functions.)")
+>       return fn(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^
+
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/local/lib/python3.13/dist-packages/triton/language/core.py:2054: in dot
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.language.semantic.TritonSemantic object at 0x7d102e513f50>
+lhs = <triton.language.core.tensor object at 0x7d102e1bc210>
+rhs = <triton.language.core.tensor object at 0x7d102e1bc4b0>
+acc = <triton.language.core.tensor object at 0x7d102e53d710>
+input_precision = <INPUT_PRECISION.TF32: 0>, max_num_imprecise_acc = None
+out_dtype = triton.language.float32
+
+    def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
+            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+        assert lhs.type.is_block() and rhs.type.is_block()
+    
+        if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
+            # All combinations of supported fp8 x fp8 are permitted
+            pass
+        else:
+            assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported lhs dtype {lhs.dtype}"
+            assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16, tl.float32,
+                                 tl.float64), f"Unsupported rhs dtype {rhs.dtype}"
+            assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+    
+        if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+            if "fp8e4b15" in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                warnings.warn(
+                    "the use of fp8e4b15 is deprecated on Hopper and later architectures and can cause significant slow down. It will be removed in a future triton release"
+                )
+            # We upcast because there's no fp8e4b15 type in MLIR
+            lhs = self.cast(lhs, tl.float16)
+            rhs = self.cast(rhs, tl.float16)
+    
+        uses_fp8e4b8 = lhs.dtype.is_fp8e4b8() or rhs.dtype.is_fp8e4b8()
+        uses_fp8e5b16 = lhs.dtype.is_fp8e5b16() or rhs.dtype.is_fp8e5b16()
+        if uses_fp8e4b8 or uses_fp8e5b16:
+            type_name = "fp8e4b8" if uses_fp8e4b8 else "fp8e5b16"
+            if type_name in self.builder.options.deprecated_fp8_dot_operand_dtypes:
+                arch = self.builder.options.arch
+                warnings.warn(
+                    f"{type_name} is AMD gfx942 specific and not supported on {arch} so it's upcasted to fp16 and can cause significant slow down. "
+                    f"Please use OCP fp8 variants on {arch} for performance")
+                lhs = self.cast(lhs, tl.float16)
+                rhs = self.cast(rhs, tl.float16)
+    
+        if input_precision is None:
+            input_precision = self.builder.options.default_dot_input_precision
+    
+        input_precision = self._str_to_dot_input_precision(input_precision)
+    
+        lhs_rank = len(lhs.shape)
+        rhs_rank = len(rhs.shape)
+        assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+        assert lhs.shape[-1].value == rhs.shape[
+            -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+        assert self.builder.codegen_fns.get(
+            "min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
+        min_dot_size = self.builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
+        assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+            and rhs.shape[-1].value >= min_dot_size[1], \
+                f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+        if lhs.type.scalar.is_int():
+            assert lhs.type.scalar == tl.int8, "only int8 supported!"
+            _0 = self.builder.get_int32(0)
+            ret_scalar_ty = tl.int32
+        elif out_dtype.is_bf16():
+            raise ValueError(
+                "out_dtype=bfloat16 is unsupported. Please use out_dtype=float32/float16 and cast with `.to(tl.bfloat16)`"
+            )
+        elif lhs.type.scalar.is_fp32() or lhs.type.scalar.is_bf16():
+            _0 = self.builder.get_fp32(0)
+            ret_scalar_ty = tl.float32
+        elif lhs.type.scalar.is_fp64():
+            _0 = self.builder.get_fp64(0)
+            ret_scalar_ty = tl.float64
+        else:
+            _0 = self.builder.get_fp16(0) if out_dtype.is_fp16() else self.builder.get_fp32(0)
+            ret_scalar_ty = out_dtype
+    
+        M = lhs.type.shape[-2]
+        N = rhs.type.shape[-1]
+        K = lhs.type.shape[-1]
+        B = lhs.type.shape[0] if lhs_rank == 3 else None
+        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+        if acc is None:
+            acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
+        else:
+            acc_handle = acc.handle
+>           assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           AssertionError
+
+/usr/local/lib/python3.13/dist-packages/triton/language/semantic.py:1558: AssertionError
+
+The above exception was the direct cause of the following exception:
+
+k = 32
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("k", TRITON_GEMV_KS)
+    def test_gpu_extreme_and_odd_shapes(k: int) -> None:  # pragma: no cover - GPU only
+        top = (1 << k) - 1
+        for m, n in [(1, 1), (7, 13), (33, 3585), (3584, 18943), (130, 18944)]:
+            for wv in (-128, 127):
+                w8 = torch.full((m, n), wv, dtype=torch.int8)
+                for xv in (top, 1 << (k - 1), (1 << (k - 1)) - 1):
+                    x = torch.full((TRITON_GEMV_MAX_ROWS, n), xv, dtype=torch.int64)
+                    want = ringmm_reference(x[:2], w8[:3], k)
+>                   got = _gemv64(x, pad_weight_cuda(w8, "cuda"), k, n=n, m=m)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/core/test_triton_gemv.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/core/test_triton_gemv.py:51: in _gemv64
+    y = ring_gemv(low32(x).to(w.device), w, k, **kw)  # type: ignore[arg-type]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pgw/core/triton_gemv.py:228: in ring_gemv
+    _kernel(_interpret(), cfg.dot)[grid](
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:370: in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:720: in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/runtime/jit.py:849: in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:304: in compile
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <triton.compiler.compiler.ASTSource object at 0x7d102e4dd040>
+target = GPUTarget(backend='cuda', arch=75, warp_size=32)
+options = CUDAOptions(num_warps=4, num_ctas=1, num_stages=3, warp_size=32, maxnreg=None, ptx_version=None, ptx_options=None, ir_...ib/libdevice.10.bc'),), debug=False, backend_name='cuda', sanitize_overflow=True, arch='sm75', instrumentation_mode='')
+codegen_fns = {'convert_custom_types': <function convert_custom_float8_sm70 at 0x7d103fb06840>, 'min_dot_size': <function min_dot_size.<locals>.check_dot_compatibility at 0x7d102e5ac9a0>}
+module_map = {'triton.language.extra.libdevice': <module 'triton.language.extra.cuda.libdevice' from '/usr/local/lib/python3.13/dist-packages/triton/language/extra/cuda/libdevice.py'>}
+context = <triton._C.libtriton.ir.context object at 0x7d102e26b8b0>
+
+    def make_ir(self, target: GPUTarget, options, codegen_fns, module_map, context):
+        from .code_generator import ast_to_ttir
+>       return ast_to_ttir(self.fn, self, context=context, options=options, codegen_fns=codegen_fns,
+                           module_map=module_map)
+E       triton.compiler.errors.CompilationError: at 38:15:
+E           acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+E           for n0 in range(k_lo, k_hi, BLOCK_N):
+E               offs_n = n0 + offs_n0
+E               w = tl.load(w_rows + offs_n[None, :], mask=m_ok[:, None] & (offs_n < k_hi)[None, :], other=0)
+E               wt = tl.trans(w)
+E               v = tl.load(x_rows + offs_n[None, :], mask=r_ok[:, None] & (offs_n < N)[None, :], other=0)
+E               v = v.to(tl.uint32, bitcast=True)
+E               d = ((v & 0xFF).to(tl.int32, bitcast=True) ^ 0x80) - 0x80  # balanced digit in [-128, 127]
+E               acc0 = tl.dot(d.to(tl.int8), wt, acc0)
+E                      ^
+
+/usr/local/lib/python3.13/dist-packages/triton/compiler/compiler.py:80: CompilationError
+_______________ test_gpu_compute_kernel_uses_gemv_and_falls_back _______________
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    def test_gpu_compute_kernel_uses_gemv_and_falls_back() -> None:  # pragma: no cover - GPU only
+        from pgw.service.gpu_exec import device_executor
+        from pgw.service.kernels import ComputeKernel
+    
+        m, n = 300, 1000
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=torch.Generator().manual_seed(9))
+        spec = LinearSpec(LinearId(0, LinearKind.O), m, n)
+        kern = ComputeKernel(spec, w8, device="cuda", cuda_graphs=False)
+        off = ComputeKernel(spec, w8, device="cuda", cuda_graphs=False, triton_gemv=False)
+>       assert kern.triton_gemv and not off.triton_gemv
+E       assert (False)
+E        +  where False = ComputeKernel(0.o, m=300, n=1000, device=cuda:0, backend=cuda_int8).triton_gemv
+
+tests/core/test_triton_gemv.py:288: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  pgw.core.triton_gemv:triton_gemv.py:331 fused ring GEMV unavailable on cuda:0 (CompilationError: at 38:15:
+    acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    for n0 in range(k_lo, k_hi, BLOCK_N):
+        offs_n = n0 + of); using the digit-GEMM path
+=========================== short test summary info ============================
+SKIPPED [12] tests/core/test_triton_gemv.py:107: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [6] tests/core/test_triton_gemv.py:120: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [24] tests/core/test_triton_gemv.py:144: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv.py:162: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv.py:181: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [3] tests/core/test_triton_gemv.py:187: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [19] tests/service/test_gpu_graphs.py:113: CUDA graph capture unsupported in this torch build; eager results verified exact
+SKIPPED [1] tests/service/test_gpu_graphs.py:141: CUDA graph capture unsupported in this torch build; eager results verified exact
+================== 9 failed, 352 passed, 67 skipped in 42.69s ==================
+
+---stderr---

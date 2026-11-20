@@ -23,6 +23,12 @@ On CUDA, :meth:`ComputeKernel.run` goes through the device's
 decode-sized calls, pinned staging and non-blocking copies, and (:meth:`ComputeKernel.run_compact`)
 32-bit results for ``K <= 32``. Results are bit-identical to the eager path.
 
+Decode-sized CUDA calls (``K <= 32``, at most :data:`pgw.core.triton_gemv.TRITON_GEMV_MAX_ROWS`
+rows) use the fused Triton ring GEMV (:mod:`pgw.core.triton_gemv`: one kernel, int8 weight streamed
+once, wrapping 32-bit integer arithmetic) when ``triton_gemv`` is on and its self-check passed on
+the device; the first call per ``(K, rows)`` of each linear is also compared with the digit-GEMM
+path, and any disagreement switches the device back to it. Everything else is unchanged.
+
 Measured: Llama-3-8B, T4, K=48: 0.45 s/token at batch 1, 0.014 s/token amortized at batch 32.
 Future: fused CUDA/Triton kernel doing digit split + K/8 GEMMs + shift-accumulate in one pass.
 """
@@ -133,6 +139,8 @@ class ComputeKernel:
         cuda_graphs: On CUDA, replay captured CUDA graphs for calls that fit a row bucket
             (``rows * K/8 <= p``); other calls run eagerly. Ignored on CPU.
         graph_buckets: Padded GEMM row counts that get a graph (multiples of 32).
+        triton_gemv: On CUDA, serve small ``K <= 32`` calls with the fused Triton kernel once its
+            device self-check passed (run here, once per device). Ignored on CPU.
 
     Thread-safety: :meth:`run` may be called from several threads (weights are read-only). On CUDA
     every call holds its device executor's lock (graphs share per-device static buffers), and the
@@ -149,6 +157,7 @@ class ComputeKernel:
         cache_float: bool = True,
         cuda_graphs: bool = True,
         graph_buckets: tuple[int, ...] | list[int] = GRAPH_BUCKETS,
+        triton_gemv: bool = True,
     ):
         if w8.dtype != torch.int8 or w8.ndim != 2:
             raise ShapeError(f"{spec.id}: weight must be 2-D int8, got {w8.dtype} {tuple(w8.shape)}")
@@ -165,6 +174,8 @@ class ComputeKernel:
         self._exec: DeviceExecutor | None = None
         self._graphs: KernelGraphs | None = None
         self._buckets = validate_buckets(graph_buckets)
+        self._gemv = False
+        self._gemv_checked: set[tuple[int, int]] = set()
         # Own the memory: a pack's tensors may be memory-mapped views of files.
         wd = w8.detach().to(self.device)
         if wd.data_ptr() == w8.data_ptr():
@@ -181,6 +192,7 @@ class ComputeKernel:
             self._exec = device_executor(self.device)
             self._exec.reserve(self.in_features, self.out_features, self._buckets)
             self._graphs = KernelGraphs() if cuda_graphs else None
+            self._gemv = bool(triton_gemv) and self._exec.gemv_ready()  # startup self-check (once per device)
 
     # ---- metadata ------------------------------------------------------------------------
     @property
@@ -265,8 +277,24 @@ class ComputeKernel:
     def _run_exec(self, x_hat: torch.Tensor, k: int) -> torch.Tensor:  # pragma: no cover - GPU only
         assert self._exec is not None and self._pw is not None and self._pw._w_dev is not None
         x = x_hat if x_hat.device.type == "cpu" else x_hat.cpu()
+        rows = int(x.shape[0])
+        if self._gemv and self._exec.gemv_eligible(rows, k):
+            y = self._exec.run_gemv(x, k, self._pw._w_dev, self.in_features, self.out_features)
+            if (k, rows) in self._gemv_checked:
+                return y
+            ref = self._exec.run(x, k, self._pw._w_dev, self._pw._rowsum(), self.out_features, graphs=None)
+            if torch.equal(from_compact(y, k), from_compact(ref, k)):
+                self._gemv_checked.add((k, rows))
+                return y
+            self._exec.disable_gemv(f"{self.linear} K={k} rows={rows}: result differs from the digit-GEMM path")
+            return ref
         return self._exec.run(x, k, self._pw._w_dev, self._pw._rowsum(), self.out_features,
                               graphs=self._graphs, buckets=self._buckets)
+
+    @property
+    def triton_gemv(self) -> bool:
+        """True if this kernel serves eligible calls with the fused Triton GEMV (CUDA, self-check passed)."""
+        return self._gemv and self._exec is not None and self._exec.gemv_ready()
 
     @property
     def cuda_graphs(self) -> int:
