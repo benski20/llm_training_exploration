@@ -30,6 +30,9 @@ import torch
 PRESETS: dict[str, dict[str, int]] = {
     "small": {"hidden_size": 896, "intermediate_size": 4864, "num_attention_heads": 14,
               "num_key_value_heads": 2, "layers": 4, "vocab": 2048},
+    # 7B layer and vocabulary shapes with 4 of 28 layers: per-layer costs scale by 7, the LM head does not.
+    "7b4": {"hidden_size": 3584, "intermediate_size": 18944, "num_attention_heads": 28,
+            "num_key_value_heads": 4, "layers": 4, "vocab": 152064},
     "mid": {"hidden_size": 1536, "intermediate_size": 8960, "num_attention_heads": 12,
             "num_key_value_heads": 2, "layers": 2, "vocab": 4096},
 }

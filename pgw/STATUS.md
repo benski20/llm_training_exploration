@@ -57,6 +57,15 @@ current extent; `MaskReservation.take_checked` (boundary + checks + take under o
 LM head (`benchmarks/lm_head_bench.py`, 7B float32): 47 ms per sequence, so 0.19 s per step with 4
 sequences; the opt-in `batch_lm_head` (default off, changes logprob bits, not quality) takes 0.11 s.
 
+## Update 2026-11-20: bfloat16 LM head (exact)
+
+Open checkpoints ship in bfloat16, so the float32 LM head's values are all exactly bfloat16. The
+gateway now keeps the head in bfloat16 when that is lossless (checked at load) and the deterministic
+kernel widens each weight to float32 on load (exact), so logits are bit-identical to the float32 head
+while half the bytes are read per token (1.1 GB instead of 2.2 GB for Qwen2.5-7B, and 1.1 GB less
+gateway memory). Local measurement, 7B shapes with 4 layers and a stub service (`benchmarks/e2e_local.py
+--preset 7b4 --null-service`): 56 ms -> 42 ms per decode step.
+
 ## Update 2026-11-19
 
 **Speed (Qwen2.5-7B, one Kaggle T4, default ring K32A12C27, output bit-identical to the plaintext

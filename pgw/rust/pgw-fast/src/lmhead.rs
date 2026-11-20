@@ -42,6 +42,7 @@ const WORK_PER_THREAD: usize = 1 << 22;
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lm_head, m)?)?;
+    m.add_function(wrap_pyfunction!(lm_head_bf16, m)?)?;
     m.add("LM_HEAD_LANES", LANES)?;
     Ok(())
 }
@@ -71,15 +72,73 @@ unsafe impl Sync for OutPtr {}
 /// 16 float32 lanes: the partial sums of one dot product. Implementations only differ in how the
 /// lanes are laid out in registers; every lane sees the same IEEE operations (`a + b * c` with two
 /// roundings, never an FMA).
-trait Lanes: Copy {
+pub trait Lanes: Copy {
     /// All lanes `+0.0`.
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
     unsafe fn zero() -> Self;
     /// Load 16 consecutive values (unaligned).
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
     unsafe fn load(p: *const f32) -> Self;
+    /// Load 16 consecutive bfloat16 values widened to f32 (exact).
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
+    unsafe fn load_bf16(p: *const u16) -> Self;
     /// `self + a * b` lane-wise (product rounded, then the sum).
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
     unsafe fn mul_add(self, a: Self, b: Self) -> Self;
     /// The lanes as an array.
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
     unsafe fn lanes(self) -> [f32; LANES];
+}
+
+/// Element type of the weight matrix. `f32` weights are used as stored; `Bf16` weights (bfloat16
+/// bits, as Qwen and most open checkpoints ship them) are widened to f32 on load, which is exact
+/// (`f32::from_bits((b as u32) << 16)`), so a bfloat16 head gives exactly the bits of its float32
+/// copy while reading half the memory.
+pub trait WElem: Copy + Send + Sync {
+    /// Load 16 consecutive weights as f32 lanes.
+    ///
+    /// # Safety
+    /// Pointers must cover 16 readable values and the CPU must support the implementation's instructions.
+    unsafe fn load<L: Lanes>(p: *const Self) -> L;
+    /// One weight as f32 (exact).
+    fn f32(self) -> f32;
+}
+
+impl WElem for f32 {
+    #[inline(always)]
+    unsafe fn load<L: Lanes>(p: *const Self) -> L {
+        L::load(p)
+    }
+    #[inline(always)]
+    fn f32(self) -> f32 {
+        self
+    }
+}
+
+/// bfloat16 bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct Bf16(pub u16);
+
+impl WElem for Bf16 {
+    #[inline(always)]
+    unsafe fn load<L: Lanes>(p: *const Self) -> L {
+        L::load_bf16(p as *const u16)
+    }
+    #[inline(always)]
+    fn f32(self) -> f32 {
+        f32::from_bits((self.0 as u32) << 16)
+    }
 }
 
 /// Portable lanes (any target; LLVM may vectorise it, the result is the same).
@@ -94,6 +153,11 @@ impl Lanes for Scalar {
     #[inline(always)]
     unsafe fn load(p: *const f32) -> Self {
         Scalar(std::ptr::read_unaligned(p as *const [f32; LANES]))
+    }
+    #[inline(always)]
+    unsafe fn load_bf16(p: *const u16) -> Self {
+        let b = std::ptr::read_unaligned(p as *const [u16; LANES]);
+        Scalar(b.map(|x| f32::from_bits((x as u32) << 16)))
     }
     #[inline(always)]
     unsafe fn mul_add(self, a: Self, b: Self) -> Self {
@@ -114,6 +178,21 @@ mod x86 {
     use super::{Lanes, LANES};
     use std::arch::x86_64::*;
 
+    /// 16 bfloat16 values widened to f32 in four `__m128` (lanes 0-3, 4-7, 8-11, 12-15): each u16
+    /// interleaved below a zero u16 is exactly its f32 bit pattern (SSE2 only).
+    #[inline(always)]
+    unsafe fn bf16x16(p: *const u16) -> [__m128; 4] {
+        let z = _mm_setzero_si128();
+        let a = _mm_loadu_si128(p as *const __m128i);
+        let b = _mm_loadu_si128(p.add(8) as *const __m128i);
+        [
+            _mm_castsi128_ps(_mm_unpacklo_epi16(z, a)),
+            _mm_castsi128_ps(_mm_unpackhi_epi16(z, a)),
+            _mm_castsi128_ps(_mm_unpacklo_epi16(z, b)),
+            _mm_castsi128_ps(_mm_unpackhi_epi16(z, b)),
+        ]
+    }
+
     /// SSE2 (x86_64 baseline): four `__m128`.
     #[derive(Clone, Copy)]
     pub struct Sse([__m128; 4]);
@@ -126,6 +205,10 @@ mod x86 {
         #[inline(always)]
         unsafe fn load(p: *const f32) -> Self {
             Sse([_mm_loadu_ps(p), _mm_loadu_ps(p.add(4)), _mm_loadu_ps(p.add(8)), _mm_loadu_ps(p.add(12))])
+        }
+        #[inline(always)]
+        unsafe fn load_bf16(p: *const u16) -> Self {
+            Sse(bf16x16(p))
         }
         #[inline(always)]
         unsafe fn mul_add(self, a: Self, b: Self) -> Self {
@@ -155,6 +238,11 @@ mod x86 {
             Avx([_mm256_loadu_ps(p), _mm256_loadu_ps(p.add(8))])
         }
         #[inline(always)]
+        unsafe fn load_bf16(p: *const u16) -> Self {
+            let q = bf16x16(p);
+            Avx([_mm256_set_m128(q[1], q[0]), _mm256_set_m128(q[3], q[2])])
+        }
+        #[inline(always)]
         unsafe fn mul_add(self, a: Self, b: Self) -> Self {
             Avx([
                 _mm256_add_ps(self.0[0], _mm256_mul_ps(a.0[0], b.0[0])),
@@ -176,7 +264,7 @@ const PREFETCH: usize = 512;
 
 /// Hint that `p`'s cache line is needed soon (no effect on results; may point past the data).
 #[inline(always)]
-fn prefetch(p: *const f32) {
+fn prefetch<T>(p: *const T) {
     #[cfg(target_arch = "x86_64")]
     // SAFETY: a prefetch never faults, whatever the address.
     unsafe {
@@ -191,7 +279,7 @@ fn prefetch(p: *const f32) {
 /// # Safety
 /// `h` must hold `d` values and `w` `NV * d` values; `L`'s instructions must be available.
 #[inline(always)]
-unsafe fn dots<L: Lanes, const NV: usize>(h: *const f32, w: *const f32, d: usize) -> [f32; NV] {
+unsafe fn dots<L: Lanes, W: WElem, const NV: usize>(h: *const f32, w: *const W, d: usize) -> [f32; NV] {
     let full = d / LANES * LANES;
     let mut acc = [L::zero(); NV];
     let mut k = 0;
@@ -199,7 +287,7 @@ unsafe fn dots<L: Lanes, const NV: usize>(h: *const f32, w: *const f32, d: usize
         let hv = L::load(h.add(k));
         for (j, a) in acc.iter_mut().enumerate() {
             prefetch(w.wrapping_add(j * d + k + PREFETCH));
-            *a = a.mul_add(hv, L::load(w.add(j * d + k)));
+            *a = a.mul_add(hv, W::load::<L>(w.add(j * d + k)));
         }
         k += LANES;
     }
@@ -207,7 +295,7 @@ unsafe fn dots<L: Lanes, const NV: usize>(h: *const f32, w: *const f32, d: usize
     for (j, a) in acc.iter().enumerate() {
         let mut s = a.lanes();
         for (l, sl) in s.iter_mut().enumerate().take(d - full) {
-            *sl += *h.add(full + l) * *w.add(j * d + full + l);
+            *sl += *h.add(full + l) * (*w.add(j * d + full + l)).f32();
         }
         out[j] = tree(&s);
     }
@@ -221,9 +309,9 @@ unsafe fn dots<L: Lanes, const NV: usize>(h: *const f32, w: *const f32, d: usize
 /// these outputs.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-unsafe fn work_with<L: Lanes, const NV: usize>(
+unsafe fn work_with<L: Lanes, W: WElem, const NV: usize>(
     h: &[f32],
-    w: &[f32],
+    w: &[W],
     r: usize,
     d: usize,
     v: usize,
@@ -239,7 +327,7 @@ unsafe fn work_with<L: Lanes, const NV: usize>(
         let mut j = va;
         while j + NV <= vb {
             for ri in r0..r1 {
-                let o = dots::<L, NV>(hp.add(ri * d), wp.add(j * d), d);
+                let o = dots::<L, W, NV>(hp.add(ri * d), wp.add(j * d), d);
                 for (q, val) in o.iter().enumerate() {
                     *out.0.add(ri * v + j + q) = *val;
                 }
@@ -248,7 +336,7 @@ unsafe fn work_with<L: Lanes, const NV: usize>(
         }
         while j < vb {
             for ri in r0..r1 {
-                *out.0.add(ri * v + j) = dots::<L, 1>(hp.add(ri * d), wp.add(j * d), d)[0];
+                *out.0.add(ri * v + j) = dots::<L, W, 1>(hp.add(ri * d), wp.add(j * d), d)[0];
             }
             j += 1;
         }
@@ -259,8 +347,8 @@ unsafe fn work_with<L: Lanes, const NV: usize>(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx")]
 #[allow(clippy::too_many_arguments)]
-unsafe fn work_avx(h: &[f32], w: &[f32], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
-    work_with::<x86::Avx, 4>(h, w, r, d, v, va, vb, out)
+unsafe fn work_avx<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
+    work_with::<x86::Avx, W, 4>(h, w, r, d, v, va, vb, out)
 }
 
 /// Instruction set used by [`lm_head_run`] (tests force each one to compare the bits).
@@ -277,7 +365,7 @@ pub enum Isa {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn work(isa: Isa, h: &[f32], w: &[f32], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
+fn work<W: WElem>(isa: Isa, h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
     // SAFETY (all arms): shapes were checked by lm_head_run, each worker owns its output columns,
     // and an instruction set is only used when the CPU has it.
     #[cfg(target_arch = "x86_64")]
@@ -286,13 +374,13 @@ fn work(isa: Isa, h: &[f32], w: &[f32], r: usize, d: usize, v: usize, va: usize,
         match isa {
             Isa::Auto | Isa::Avx if avx => return unsafe { work_avx(h, w, r, d, v, va, vb, out) },
             Isa::Auto | Isa::Avx | Isa::Sse => {
-                return unsafe { work_with::<x86::Sse, 2>(h, w, r, d, v, va, vb, out) };
+                return unsafe { work_with::<x86::Sse, W, 2>(h, w, r, d, v, va, vb, out) };
             }
             Isa::Scalar => {}
         }
     }
     let _ = isa;
-    unsafe { work_with::<Scalar, 2>(h, w, r, d, v, va, vb, out) }
+    unsafe { work_with::<Scalar, W, 2>(h, w, r, d, v, va, vb, out) }
 }
 
 /// Automatic worker count: the available parallelism (queried once).
@@ -304,7 +392,7 @@ fn default_threads() -> usize {
 /// `h (r, d) @ w (v, d)^T -> (r, v)` row-major, in the fixed summation order (`threads = 0`:
 /// automatic). The result does not depend on `threads`, `isa` or `r` (row `i` of the output only
 /// depends on row `i` of `h`).
-pub fn lm_head_run(h: &[f32], w: &[f32], r: usize, d: usize, v: usize, threads: usize, isa: Isa) -> Vec<f32> {
+pub fn lm_head_run<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, threads: usize, isa: Isa) -> Vec<f32> {
     assert_eq!(h.len(), r * d, "h has the wrong length");
     assert_eq!(w.len(), v * d, "w has the wrong length");
     let mut out: Vec<f32> = Vec::with_capacity(r * v);
@@ -373,6 +461,37 @@ fn lm_head<'py>(
     let hs = ha.as_slice().map_err(|_| verr("h must be C-contiguous"))?;
     let ws = wa.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
     let out = py.allow_threads(|| lm_head_run(hs, ws, r, d, v, threads, Isa::Auto));
+    let a = Array2::from_shape_vec((r, v), out).map_err(|e| verr(e.to_string()))?;
+    Ok(a.into_pyarray(py))
+}
+
+/// [`lm_head`] with a bfloat16 head given as its raw bits (``uint16``/``int16`` ``(V, D)``): each
+/// weight is widened to float32 exactly, so the result equals ``lm_head(h, w.astype(float32))`` bit
+/// for bit while reading half the memory.
+#[pyfunction]
+#[pyo3(signature = (h, w, threads = 0))]
+fn lm_head_bf16<'py>(
+    py: Python<'py>,
+    h: &Bound<'py, PyAny>,
+    w: &Bound<'py, PyAny>,
+    threads: usize,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let ha: PyReadonlyArray2<'py, f32> = h.extract().map_err(|_| verr("h must be a 2-D float32 array"))?;
+    let wa: PyReadonlyArray2<'py, u16> =
+        w.extract().map_err(|_| verr("w must be a 2-D uint16 array (bfloat16 bits)"))?;
+    let (r, d) = (ha.shape()[0], ha.shape()[1]);
+    let (v, d2) = (wa.shape()[0], wa.shape()[1]);
+    if d != d2 {
+        return Err(verr(format!("h has {d} columns but w has {d2}")));
+    }
+    if !ha.is_c_contiguous() || !wa.is_c_contiguous() {
+        return Err(verr("h and w must be C-contiguous"));
+    }
+    let hs = ha.as_slice().map_err(|_| verr("h must be C-contiguous"))?;
+    let ws = wa.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
+    // SAFETY: `Bf16` is a `repr(transparent)` u16.
+    let wb: &[Bf16] = unsafe { std::slice::from_raw_parts(ws.as_ptr() as *const Bf16, ws.len()) };
+    let out = py.allow_threads(|| lm_head_run(hs, wb, r, d, v, threads, Isa::Auto));
     let a = Array2::from_shape_vec((r, v), out).map_err(|e| verr(e.to_string()))?;
     Ok(a.into_pyarray(py))
 }
@@ -472,13 +591,39 @@ mod tests {
                     std::hint::black_box(lm_head_run(&h[..r * d], &w, r, d, v, 1, isa));
                 }
                 eprintln!("{isa:?} r={r}: {:?} per 152064 x {d} head", t.elapsed() * (152064 / v / reps) as u32);
+                let wb: Vec<Bf16> = w.iter().map(|x| Bf16((x.to_bits() >> 16) as u16)).collect();
+                let t = std::time::Instant::now();
+                for _ in 0..reps {
+                    std::hint::black_box(lm_head_run(&h[..r * d], &wb, r, d, v, 1, isa));
+                }
+                eprintln!("{isa:?} r={r} bf16: {:?}", t.elapsed() * (152064 / v / reps) as u32);
+            }
+        }
+    }
+
+    #[test]
+    fn bf16_head_equals_its_f32_copy_for_every_isa() {
+        let mut s = 0x51u64;
+        for &(d, v) in &[(1usize, 3usize), (16, 4), (17, 13), (100, 70), (515, 33)] {
+            let wf: Vec<f32> =
+                randf(&mut s, v * d, 0.1).iter().map(|x| f32::from_bits(x.to_bits() & 0xFFFF_0000)).collect();
+            let wb: Vec<Bf16> = wf.iter().map(|x| Bf16((x.to_bits() >> 16) as u16)).collect();
+            let h = randf(&mut s, 9 * d, 4.0);
+            let want = reference(&h, &wf, 9, d, v);
+            for isa in [Isa::Auto, Isa::Scalar, Isa::Sse, Isa::Avx] {
+                for threads in [1usize, 3] {
+                    for r in [1usize, 4, 9] {
+                        let got = lm_head_run(&h[..r * d], &wb, r, d, v, threads, isa);
+                        assert_eq!(bits(&got), bits(&want[..r * v]), "d={d} v={v} r={r} t={threads} {isa:?}");
+                    }
+                }
             }
         }
     }
 
     #[test]
     fn empty_shapes() {
-        assert!(lm_head_run(&[], &[1.0, 2.0], 0, 2, 1, 0, Isa::Auto).is_empty());
-        assert_eq!(lm_head_run(&[], &[], 2, 0, 3, 0, Isa::Auto), vec![0.0; 6]);
+        assert!(lm_head_run(&[], &[1.0f32, 2.0], 0, 2, 1, 0, Isa::Auto).is_empty());
+        assert_eq!(lm_head_run::<f32>(&[], &[], 2, 0, 3, 0, Isa::Auto), vec![0.0; 6]);
     }
 }

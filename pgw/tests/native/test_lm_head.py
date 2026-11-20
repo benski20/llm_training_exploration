@@ -110,3 +110,60 @@ def test_logits_entry_point_handles_views() -> None:
     assert not wt.is_contiguous()
     assert torch.equal(lm_head_logits(h, wt), want)
     assert torch.equal(lm_head_logits(h[:, :].t().contiguous().t(), w), want)
+
+
+# ---- bfloat16 heads (lossless compaction) ------------------------------------------------------------
+def _bf16_valued(w: torch.Tensor) -> torch.Tensor:
+    """float32 values that are exactly bfloat16 (as in a head loaded from a bfloat16 checkpoint)."""
+    return w.to(torch.bfloat16).to(torch.float32)
+
+
+def test_compact_head_is_lossless_or_a_no_op() -> None:
+    from pgw.engine.lm_head import compact_head
+
+    _, w = _data(64, 50, seed=3)
+    assert compact_head(w) is w  # float32 values with low bits set: kept
+    wb = _bf16_valued(w)
+    c = compact_head(wb, chunk_rows=7)
+    assert c.dtype == torch.bfloat16 and torch.equal(c.to(torch.float32), wb)
+    wb[49, 3] = 1.0 + 2.0**-20  # one value needing more than bfloat16 precision, in the last chunk
+    assert compact_head(wb, chunk_rows=7) is wb
+    assert compact_head(torch.zeros(3, 4, dtype=torch.float64)).dtype == torch.float64
+
+
+@pytest.mark.parametrize(("d", "v"), [(1, 1), (17, 33), (100, 257), (896, 300)])
+def test_bf16_head_gives_the_float32_bits(d: int, v: int) -> None:
+    h, w = _data(d, v, seed=d + v)
+    wf = _bf16_valued(w)
+    wb = wf.to(torch.bfloat16)
+    want = lm_head_reference(h, wf)
+    assert torch.equal(lm_head_reference(h, wb), want)  # fallback widens exactly
+    assert torch.equal(lm_head_logits(h, wb), want)  # native bfloat16 kernel (or the fallback)
+    for r in (1, 4, 9):
+        assert torch.equal(lm_head_logits(h[:r], wb), want[:r])
+
+
+@pytest.mark.skipif(not native.native_available("lm_head_bf16"), reason="pgw_fast.lm_head_bf16 not built")
+def test_native_bf16_threads_and_bad_inputs() -> None:
+    h, w = _data(515, 70, seed=11)
+    wb = _bf16_valued(w).to(torch.bfloat16)
+    bits = wb.view(torch.int16).numpy().view("uint16")
+    want = lm_head_reference(h, wb).numpy()
+    for t in (0, 1, 3, 8):
+        assert np.array_equal(native.fast.lm_head_bf16(h.numpy(), bits, threads=t), want)
+    with pytest.raises(ValueError):
+        native.fast.lm_head_bf16(h.numpy(), bits[:, :10])
+    with pytest.raises(ValueError):
+        native.fast.lm_head_bf16(h.numpy(), np.asfortranarray(bits))
+
+
+def test_model_bf16_head_same_logits_as_float32_head() -> None:
+    """The model's bfloat16 head (compacted at load) gives the float32 head's logits, bit for bit."""
+    from pgw.engine.lm_head import compact_head
+
+    g = torch.Generator().manual_seed(5)
+    hidden = torch.randn(6, 896, generator=g)
+    w = _bf16_valued(torch.randn(1000, 896, generator=g) * 0.02)
+    c = compact_head(w)
+    assert c.dtype == torch.bfloat16 and c.untyped_storage().nbytes() == w.untyped_storage().nbytes() // 2
+    assert torch.equal(lm_head_logits(hidden, c), lm_head_logits(hidden, w))

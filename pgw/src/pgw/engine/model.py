@@ -19,7 +19,7 @@ from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.types import LinearId, LinearKind, ModelArch
 from pgw.engine.backends import LinearBackend, LinearCall
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
-from pgw.engine.lm_head import lm_head_logits, native_lm_head
+from pgw.engine.lm_head import compact_head, lm_head_logits, native_lm_head
 from pgw.engine.pack import linear_split_sizes
 from pgw.engine.rope import RotaryEmbedding, apply_rope
 
@@ -153,6 +153,9 @@ class TransformerModel:
         else:
             self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
         self.lm_head = self.lm_head.contiguous()  # no-op normally; the native LM head reads it in place
+        # bfloat16 checkpoints: keep the head in bfloat16 when that is lossless (same logits, bit for
+        # bit; half the bytes read per token). A tied head keeps its float32 embedding for lookups.
+        self.lm_head = compact_head(self.lm_head)
         #: Optional replacement for ``h @ lm_head^T`` (draft models only: e.g. an int8 product).
         #: Without it the float32 head is :func:`pgw.engine.lm_head.lm_head_logits`: a fixed
         #: summation order, so each row's logits are bit-identical however rows are grouped.
