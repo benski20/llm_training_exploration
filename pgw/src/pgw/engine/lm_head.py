@@ -15,6 +15,12 @@ computed together, the thread count and the CPU:
 all rows, multi-threaded) when it is built, else :func:`lm_head_reference`, the same order in torch
 (slower; bit-identical, see ``tests/native/test_lm_head.py``).
 
+**Instruction set.** The native kernel picks the widest SIMD the CPU has (AVX-512F, AVX2, AVX, SSE2)
+and register-blocks several rows of a step against each weight chunk; every choice performs the same
+float32 operations per output, so the logits do not depend on it. ``PGW_LM_HEAD_ISA`` (``auto``
+default, ``avx512``, ``avx2``, ``avx``, ``sse``, ``scalar``) forces one for A/B measurements; one the
+CPU lacks falls back to the best available below it.
+
 **bfloat16 heads.** Open checkpoints (Qwen, Llama, ...) ship their weights in bfloat16, so every
 float32 value of the head is exactly a bfloat16 value. :func:`compact_head` then keeps the head in
 bfloat16 (half the memory, half the bytes read per token) and both paths widen each weight back to
@@ -23,14 +29,40 @@ float32 on load, which is exact: the logits are bit-identical to those of the fl
 
 from __future__ import annotations
 
+import logging
+import os
+
 import torch
 
 from pgw.core import native
 
-__all__ = ["LANES", "compact_head", "lm_head_logits", "lm_head_reference", "native_lm_head"]
+__all__ = ["LANES", "compact_head", "lm_head_isa", "lm_head_logits", "lm_head_reference", "native_lm_head"]
+
+log = logging.getLogger(__name__)
 
 #: Partial sums per dot product (part of the fixed order; the native kernel uses the same).
 LANES = 16
+
+_ISAS = ("auto", "avx512", "avx2", "avx", "sse", "scalar")
+
+
+def _isa_setting() -> str:
+    """``PGW_LM_HEAD_ISA`` (validated; an unknown value means ``auto``)."""
+    raw = os.environ.get("PGW_LM_HEAD_ISA", "auto").strip().lower() or "auto"
+    if raw not in _ISAS:
+        log.warning("PGW_LM_HEAD_ISA=%r is not one of %s; using auto", raw, ", ".join(_ISAS))
+        return "auto"
+    return raw
+
+
+#: Requested instruction set of the native kernel (read once at import; tests may override).
+ISA = _isa_setting()
+
+
+def lm_head_isa() -> str | None:
+    """The instruction set the native kernel uses here (``None`` without it or with an older build)."""
+    fn = getattr(native.fast, "lm_head_isa", None) if native.fast is not None else None
+    return str(fn(ISA)) if callable(fn) else None
 
 
 def native_lm_head() -> bool:
@@ -103,10 +135,11 @@ def lm_head_logits(h: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         h = h.detach().to("cpu")
     if native_lm_head() and h.device.type == "cpu" and w.device.type == "cpu" and h.dtype == torch.float32:
         hn = h.detach().contiguous().numpy()
+        kw = {"isa": ISA} if ISA != "auto" else {}  # older builds take no isa (and pick AVX at best)
         if w.dtype == torch.float32:
             wn = w.detach().contiguous().numpy()  # no copy for a contiguous head (the model keeps it so)
-            return torch.from_numpy(native.fast.lm_head(hn, wn))
+            return torch.from_numpy(native.fast.lm_head(hn, wn, **kw))
         if w.dtype == torch.bfloat16 and native.native_available("lm_head_bf16"):
             wb = w.detach().contiguous().view(torch.int16).numpy().view("uint16")  # the raw bits, no copy
-            return torch.from_numpy(native.fast.lm_head_bf16(hn, wb))
+            return torch.from_numpy(native.fast.lm_head_bf16(hn, wb, **kw))
     return lm_head_reference(h.detach(), w.detach())

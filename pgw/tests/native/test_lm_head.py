@@ -167,3 +167,80 @@ def test_model_bf16_head_same_logits_as_float32_head() -> None:
     c = compact_head(w)
     assert c.dtype == torch.bfloat16 and c.untyped_storage().nbytes() == w.untyped_storage().nbytes() // 2
     assert torch.equal(lm_head_logits(hidden, c), lm_head_logits(hidden, w))
+
+
+# ---- instruction sets and register blocking (phase 2, package D) ----------------------------------
+needs_isa = pytest.mark.skipif(not native.native_available("lm_head_isa"),
+                               reason="pgw_fast.lm_head_isa not built (rust/tools/build_fast.py)")
+ISAS = ("auto", "avx512", "avx2", "avx", "sse", "scalar")
+
+
+@needs_isa
+@pytest.mark.parametrize(("d", "v"), [(1, 1), (15, 20), (17, 33), (100, 257), (515, 70), (3584, 67)])
+def test_every_isa_and_row_count_gives_the_reference_bits(d: int, v: int) -> None:
+    """Every instruction set and every row count (register blocks of 1/2/4 rows plus remainders,
+    weight blocks of 1/2/4/8 rows plus remainders) gives the fallback's bits, f32 and bf16 heads."""
+    h, w = _data(d, v, seed=7 * d + v, rows=11)
+    wf = _bf16_valued(w)
+    bits = wf.to(torch.bfloat16).view(torch.int16).numpy().view("uint16")
+    want = lm_head_reference(h, wf).numpy()
+    want32 = lm_head_reference(h, w).numpy()
+    for isa in ISAS:
+        for r in range(1, 12):
+            hn = np.ascontiguousarray(h[:r].numpy())
+            for t in (1, 3):
+                got = native.fast.lm_head_bf16(hn, bits, threads=t, isa=isa)
+                assert np.array_equal(got.view(np.uint32), want[:r].view(np.uint32)), (isa, r, t)
+            got32 = native.fast.lm_head(hn, w.numpy(), isa=isa)
+            assert np.array_equal(got32.view(np.uint32), want32[:r].view(np.uint32)), (isa, r)
+
+
+@needs_isa
+def test_isa_resolution_and_errors() -> None:
+    best = native.fast.lm_head_isa()
+    assert best in ISAS[1:]
+    assert native.fast.lm_head_isa("auto") == best
+    assert native.fast.lm_head_isa("scalar") == "scalar"
+    order = ["avx512", "avx2", "avx", "sse"]
+    if best != "scalar":  # x86_64: a request never resolves to something wider than itself
+        for isa in order:
+            assert order.index(native.fast.lm_head_isa(isa)) >= order.index(isa)
+    with pytest.raises(ValueError, match="isa"):
+        native.fast.lm_head_isa("avx1024")
+    with pytest.raises(ValueError, match="isa"):
+        native.fast.lm_head(np.zeros((1, 4), np.float32), np.zeros((2, 4), np.float32), isa="neon")
+
+
+@needs_isa
+def test_logits_entry_point_honours_the_isa_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pgw.engine.lm_head as mod
+
+    h, w = _data(100, 257, seed=4)
+    wb = _bf16_valued(w).to(torch.bfloat16)
+    want = lm_head_reference(h, wb)
+    for isa in ISAS:
+        monkeypatch.setattr(mod, "ISA", isa)
+        assert torch.equal(mod.lm_head_logits(h, wb), want), isa
+        assert torch.equal(mod.lm_head_logits(h, _bf16_valued(w)), want), isa
+        assert mod.lm_head_isa() == native.fast.lm_head_isa(isa)
+    monkeypatch.setenv("PGW_LM_HEAD_ISA", "bogus")
+    assert mod._isa_setting() == "auto"
+    monkeypatch.setenv("PGW_LM_HEAD_ISA", " AVX2 ")
+    assert mod._isa_setting() == "avx2"
+
+
+@needs_isa
+def test_wide_rows_mixed_magnitudes_7b_width() -> None:
+    """7B hidden size, 16 rows (four 4-row blocks), extreme magnitudes and signed zeros."""
+    g = torch.Generator().manual_seed(77)
+    h = torch.randn(16, 3584, generator=g) * 4.0
+    h[:, ::11] *= 1e4
+    h[3] = -0.0
+    w = torch.randn(203, 3584, generator=g) * 0.02
+    w[::5, ::7] *= 1e-6
+    w = _bf16_valued(w)
+    want = lm_head_reference(h, w)
+    bits = w.to(torch.bfloat16).view(torch.int16).numpy().view("uint16")
+    for isa in ISAS:
+        got = native.fast.lm_head_bf16(h.numpy(), bits, isa=isa)
+        assert torch.equal(torch.from_numpy(got), want), isa

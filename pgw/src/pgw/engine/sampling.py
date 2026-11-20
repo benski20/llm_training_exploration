@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections import Counter
 from collections.abc import Sequence
@@ -9,7 +10,41 @@ from collections.abc import Sequence
 import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-__all__ = ["Sampler", "SamplingParams"]
+from pgw.core import native
+
+__all__ = ["Sampler", "SamplingParams", "fast_argmax", "fast_topk"]
+
+
+def fast_argmax(x: torch.Tensor) -> int:
+    """``int(torch.argmax(x))`` for a 1-D tensor, cheaper on the CPU.
+
+    ``torch.argmax`` over a 152k vocabulary costs about 0.4 ms on the CPU; numpy's ``argmax`` has the
+    same contract (the index of the *first* maximal element; ``-0.0 == +0.0``) and takes about 10 us.
+    A NaN anywhere makes numpy return a NaN's index; then torch decides (same result as before).
+    """
+    if x.ndim == 1 and x.numel() > 0 and x.dtype == torch.float32 and x.device.type == "cpu":
+        a = x.detach().numpy()
+        i = int(a.argmax())
+        if not math.isnan(float(a[i])):
+            return i
+    return int(torch.argmax(x))
+
+
+def fast_topk(x: torch.Tensor, k: int) -> list[tuple[int, float]]:
+    """``[(index, value)]`` of ``torch.topk(x, k)`` (descending) for a 1-D tensor, cheaper on the CPU.
+
+    The native helper answers only when the result is unique (no NaN; the ``k + 1`` largest values
+    strictly decreasing), so it cannot differ from ``torch.topk``, whose order among equal values is
+    implementation-defined; otherwise (ties, NaN, no native module) this is ``torch.topk`` itself.
+    """
+    if (x.ndim == 1 and x.dtype == torch.float32 and x.device.type == "cpu" and 0 < k <= x.numel()
+            and native.native_available("top_k_strict")):
+        got = native.fast.top_k_strict(x.detach().numpy(), int(k))
+        if got is not None:
+            idx, vals = got
+            return [(int(i), float(v)) for i, v in zip(idx, vals, strict=True)]
+    top = torch.topk(x, k)
+    return [(int(i), float(v)) for v, i in zip(top.values, top.indices, strict=True)]
 
 
 class SamplingParams(BaseModel):
@@ -93,10 +128,10 @@ class Sampler:
         work = self._penalize(logits.detach().to(torch.float32).cpu().clone(), generated)
         p = self.params
         if p.greedy:
-            return int(torch.argmax(work))
+            return fast_argmax(work)
         probs = torch.softmax(self._filter(work / p.temperature), dim=-1)
         if not torch.isfinite(probs).all() or float(probs.sum()) <= 0:
-            return int(torch.argmax(work))
+            return fast_argmax(work)
         return int(torch.multinomial(probs, 1, generator=self._gen))
 
     def _penalize(self, logits: torch.Tensor, generated: Sequence[int]) -> torch.Tensor:
@@ -149,12 +184,12 @@ class Sampler:
         work = self._penalize(raw.clone(), generated)
         p = self.params
         if p.greedy:
-            token = int(torch.argmax(work))
+            token = fast_argmax(work)
         else:
             scaled = self._filter(work / p.temperature)
             probs = torch.softmax(scaled, dim=-1)
             if not torch.isfinite(probs).all() or float(probs.sum()) <= 0:
-                token = int(torch.argmax(work))
+                token = fast_argmax(work)
             else:
                 token = int(torch.multinomial(probs, 1, generator=self._gen))
         logprob: float | None = None
@@ -163,6 +198,5 @@ class Sampler:
             lsm = torch.log_softmax(raw, dim=-1)
             logprob = float(lsm[token])
             if p.logprobs > 0:
-                top = torch.topk(lsm, min(p.logprobs, lsm.numel()))
-                self.last_top_logprobs = [(int(i), float(v)) for v, i in zip(top.values, top.indices, strict=True)]
+                self.last_top_logprobs = fast_topk(lsm, min(p.logprobs, lsm.numel()))
         return token, logprob
