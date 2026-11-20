@@ -29,7 +29,7 @@ from pgw.core.errors import ConfigError
 from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings, TLSConfig
 
-__all__ = ["GatewayModelConfig", "GatewaySettings", "load_models_file", "origin_of"]
+__all__ = ["PENDING_SPEED_SETTINGS", "GatewayModelConfig", "GatewaySettings", "load_models_file", "origin_of"]
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,30 @@ DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
 
 #: Shortest accepted admin token (guessable tokens would expose /admin/*).
 _MIN_ADMIN_TOKEN_LEN = 16
+
+#: Chat-speed settings of :class:`GatewayModelConfig` whose implementation has not landed yet, with the
+#: work package that builds it. A value other than the field's default (today's behaviour) is refused
+#: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
+#: speculation) that silently does not happen. The implementing package removes its entry.
+PENDING_SPEED_SETTINGS: dict[str, str] = {
+    "lane": "WP-A3/A4b (native trip lane client)",
+    "local_linears": "WP-A4b/A5 (exact local linears)",
+    "spec_rows": "WP-A4b/A7 (fixed-row speculation)",
+    "spec_strict_passes": "WP-A7 (strict-pass speculation)",
+    "float_ops": "WP-B1 (native deterministic float path)",
+    "head_mode": "WP-B2 (provider int8 LM head)",
+    "schedule": "WP-B4 (fused2 schedule)",
+    "prefix_cache": "WP-B3 (prefix cache)",
+}
+
+
+def _refuse_pending_speed_settings(cfg: BaseModel, pending: dict[str, str], where: str = "") -> None:
+    """Raise ``ValueError`` if a field listed in ``pending`` is set to anything but its default."""
+    for name, package in pending.items():
+        value = getattr(cfg, name)
+        if value != type(cfg).model_fields[name].default:
+            raise ValueError(f"{where}{name}={value!r} is not available in this build (pending {package}); "
+                             "leave it at its default")
 
 
 def origin_of(url: str) -> tuple[str, str, int]:
@@ -156,6 +180,49 @@ class GatewayModelConfig(BaseModel):
         5, ge=2, le=1024, description="Smallest engine step (sequences) that ping-pong splits (default: more than 4)",
     )
 
+    # ---- chat-speed plan (WP-A0 scaffold). Every default is today's behaviour; a value other than the
+    # default is refused while its package is listed in PENDING_SPEED_SETTINGS (not built yet).
+    lane: Literal["off", "auto", "required"] = Field(
+        "off", description="Native trip lane to the service (binary header over UDS or TCP+TLS; the provider sees the "
+        "same masked bytes as on the stream channel). 'off' (default) = the WebSocket stream channel only; 'auto' = "
+        "the lane when the service offers it, else the stream channel (byte-identical request bodies); 'required' = "
+        "refuse to serve without it",
+    )
+    local_linears: Literal["off", "attention", "auto"] = Field(
+        "off", description="Exact local linears: 'off' (default) = every linear goes to the service; 'attention' = "
+        "qkv and o are computed exactly on the gateway from the int8 pack (same integers, so the same bits) and only "
+        "gate_up/down are sent; 'auto' = decided once at start-up from a calibration (public configuration, never "
+        "per token). Pays off only on high-latency links",
+    )
+    spec_rows: int | None = Field(
+        None, ge=2, le=8, description="Speculation with a fixed row count: every verify pass sends exactly this many "
+        "rows (the real row, draft rows, then uniform random padding rows that take no masks), so the provider never "
+        "sees how many drafts were proposed. None (default) = today's behaviour (1 + the drafts of that pass)",
+    )
+    spec_strict_passes: bool = Field(
+        False, description="Strict-pass speculation (needs spec_rows): after the answer, mask-free dummy passes run "
+        "the real code path on random data until the provider has seen as many passes as tokens generated, so the "
+        "pass count reveals nothing beyond the length L it already sees. False (default) = today's behaviour",
+    )
+    float_ops: Literal["torch", "native"] = Field(
+        "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
+        "reference); 'native' = the deterministic native path with row-deterministic attention (a new reference: "
+        "logits differ from 'torch' in the last bits)",
+    )
+    head_mode: Literal["gateway", "provider_int8"] = Field(
+        "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "
+        "'provider_int8' = an int8 head as one more masked linear on the service (a new reference)",
+    )
+    schedule: Literal["standard", "fused2"] = Field(
+        "standard", description="Masked linear schedule per layer: 'standard' (default, 4 round trips: qkv, o, "
+        "gate_up, down); 'fused2' = two composite round trips (a new reference, gated on a 7B quality check)",
+    )
+    prefix_cache: Literal["off", "conversation"] = Field(
+        "off", description="Reuse the KV cache of earlier turns: 'off' (default); 'conversation' = within one "
+        "conversation only (the provider then sees prefill rows = the uncached suffix length, a function of public "
+        "token counts)",
+    )
+
     @field_validator("ring")
     @classmethod
     def _ring(cls, v: str) -> str:
@@ -194,6 +261,9 @@ class GatewayModelConfig(BaseModel):
             raise ValueError("client_cert_file and client_key_file must be set together")
         if self.service_token is not None and self.service_token_file is not None:
             raise ValueError("service_token and service_token_file are mutually exclusive")
+        _refuse_pending_speed_settings(self, PENDING_SPEED_SETTINGS, f"model {self.name!r}: ")
+        if self.spec_strict_passes and self.spec_rows is None:
+            raise ValueError(f"model {self.name!r}: spec_strict_passes needs spec_rows (a fixed row count per pass)")
         return self
 
     def resolved_service_token(self) -> SecretStr | None:
