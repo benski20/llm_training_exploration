@@ -94,7 +94,8 @@ export function handleSetup(method: string, p: string, headers: Headers, body: u
   if (p === "/console/api/setup/status") return json({ setup_mode: active, signed_in: active && csrf !== null });
   if (!active) return err(404, "the gateway is not in setup mode");
   if (p === "/console/api/setup/login" && method === "POST") {
-    if ((body as { token?: string })?.token !== "setup") return err(401, "invalid setup token");
+    // Demo: any non-empty token is accepted (the real gateway checks the one it printed at start-up).
+    if (!String((body as { token?: string })?.token ?? "").trim()) return err(401, "invalid setup token");
     csrf = Math.random().toString(16).slice(2);
     return json({ csrf });
   }

@@ -66,6 +66,10 @@ function SetupLogin({ client, onDone }: { client: SetupApi; onDone: () => void }
       setError("Enter the setup token from the gateway's log.");
       return;
     }
+    if (/^\s*PGW1/i.test(token)) {
+      setError("That is the enrollment code from your provider; you paste it in the next step. Here, enter the setup token the gateway printed when it started.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {

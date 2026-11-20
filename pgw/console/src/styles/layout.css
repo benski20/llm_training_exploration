@@ -352,3 +352,12 @@
   margin: 12px auto 0;
   width: fit-content;
 }
+.demo-banner-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.demo-banner-row code { display: inline; margin-top: 0; min-width: 0; }

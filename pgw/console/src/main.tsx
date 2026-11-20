@@ -37,10 +37,28 @@ if (__MOCK__) {
           tag.replaceChildren();
           if (setup.setupActive()) {
             tag.classList.add("is-inline");
-            tag.append(`Demo of first-run setup. Setup token: "setup". Enrollment code: `);
-            const code = document.createElement("code");
-            code.textContent = setup.SAMPLE_CODE;
-            tag.append(code);
+            const row = (label: string, value: string) => {
+              const line = document.createElement("div");
+              line.className = "demo-banner-row";
+              const l = document.createElement("span");
+              l.textContent = label;
+              const code = document.createElement("code");
+              code.textContent = value;
+              const copy = document.createElement("button");
+              copy.type = "button";
+              copy.className = "demo-banner-link";
+              copy.textContent = "Copy";
+              copy.onclick = () => {
+                navigator.clipboard?.writeText(value).then(
+                  () => (copy.textContent = "Copied"),
+                  () => window.getSelection()?.selectAllChildren(code),
+                );
+              };
+              line.append(l, code, copy);
+              return line;
+            };
+            tag.append("Demo of first-run setup (sample data). ");
+            tag.append(row("Step 1, setup token:", "setup"), row("Step 2, enrollment code:", setup.SAMPLE_CODE));
           } else {
             tag.classList.remove("is-inline");
             tag.append(`Demo with sample data. Sign in with the token "admin" (or "viewer"). `);
