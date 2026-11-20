@@ -1,0 +1,31 @@
+2026-11-20 02:19:46,036 INFO pgw.service.server: starting pgw-service on 127.0.0.1:56865 (tls=False, mtls=False, packs=1)
+2026-11-20 02:19:46,376 INFO pgw.service.auth: tenant auth: 1 token(s), 0 certificate subject(s)
+2026-11-20 02:19:46,518 INFO uvicorn.error: Started server process [1520]
+2026-11-20 02:19:46,518 INFO uvicorn.error: Waiting for application startup.
+2026-11-20 02:19:55,319 INFO pgw.modelpack.loader: verified 4 file(s) of model pack qwen7b (linears)
+2026-11-20 02:19:55,319 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears verify=full
+2026-11-20 02:19:57,902 INFO pgw.service.registry: loaded model qwen7b fp=41a5b3a483ae linears=112 rings=K32A12C27 devices=cuda:0 backend=cuda_int8 bytes=6525288448 in 11.37s
+2026-11-20 02:19:57,903 INFO pgw.service.app: serving qwen7b fp=41a5b3a483ae
+2026-11-20 02:19:57,910 INFO pgw.service.app: compute service ready: 1 model(s), devices=['cuda:0'], startup 11.39s
+2026-11-20 02:19:57,910 INFO uvicorn.error: Application startup complete.
+2026-11-20 02:19:57,911 INFO uvicorn.error: Uvicorn running on http://127.0.0.1:56865 (Press CTRL+C to quit)
+2026-11-20 02:20:28,497 INFO uvicorn.error: 127.0.0.1:41940 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:20:28,497 INFO uvicorn.error: connection open
+2026-11-20 02:24:16,822 INFO uvicorn.error: 127.0.0.1:56964 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:24:16,823 INFO uvicorn.error: connection open
+2026-11-20 02:29:13,423 INFO uvicorn.error: 127.0.0.1:50734 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:29:13,424 INFO uvicorn.error: connection open
+2026-11-20 02:33:00,225 INFO uvicorn.error: 127.0.0.1:40716 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:33:00,226 INFO uvicorn.error: connection open
+2026-11-20 02:33:03,857 INFO uvicorn.error: 127.0.0.1:40744 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:33:03,857 INFO uvicorn.error: connection open
+2026-11-20 02:33:07,631 INFO uvicorn.error: 127.0.0.1:40764 - "WebSocket /pgw/v1/stream" [accepted]
+2026-11-20 02:33:07,631 INFO uvicorn.error: connection open
+2026-11-20 02:33:10,495 INFO pgw.service.app: compute service draining: no new requests admitted
+2026-11-20 02:33:10,495 INFO pgw.service.server: shutdown requested; draining
+2026-11-20 02:33:10,506 INFO uvicorn.error: Shutting down
+2026-11-20 02:33:10,606 INFO uvicorn.error: Waiting for application shutdown.
+2026-11-20 02:33:10,607 INFO pgw.service.batcher: batch scheduler stopped (drain=True, batches=95424, mean_rows=3.3)
+2026-11-20 02:33:10,607 INFO pgw.service.app: compute service stopped
+2026-11-20 02:33:10,607 INFO uvicorn.error: Application shutdown complete.
+2026-11-20 02:33:10,607 INFO uvicorn.error: Finished server process [1520]

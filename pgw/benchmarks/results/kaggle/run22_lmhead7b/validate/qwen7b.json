@@ -1,0 +1,613 @@
+{
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "label": "qwen7b",
+ "device": "cuda",
+ "ring": "K32A12C27",
+ "max_tokens": 64,
+ "prompt": "Explain in three sentences why the sky is blue.",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "cpu_count": 4,
+ "download_s": 70.9,
+ "pack_s": 273.8,
+ "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+ "pack_bytes": 8723796019,
+ "pack_info": {
+  "arch": "qwen2",
+  "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+  "hidden_size": 3584,
+  "layers": 28,
+  "max_in_features": 18944,
+  "name": "qwen7b",
+  "per_token": {
+   "K32A8": {
+    "download_bytes": 5562368,
+    "mask_bytes": 5562368,
+    "round_trips": 112,
+    "upload_bytes": 3325952
+   },
+   "K40A12": {
+    "download_bytes": 6952960,
+    "mask_bytes": 6952960,
+    "round_trips": 112,
+    "upload_bytes": 4157440
+   },
+   "K48A20": {
+    "download_bytes": 8343552,
+    "mask_bytes": 8343552,
+    "round_trips": 112,
+    "upload_bytes": 4988928
+   }
+  },
+  "supported_rings": [
+   "K32A8",
+   "K40A12",
+   "K48A20"
+  ],
+  "verified": "fingerprint",
+  "vocab_size": 152064
+ },
+ "draft": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "spec_tokens": 8,
+  "devices": [
+   "cpu",
+   "cuda:1"
+  ],
+  "pack_bytes": 915469648
+ },
+ "reference": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "prompt_tokens": 40,
+  "seconds": 81.32,
+  "device": "cuda",
+  "wall_s": 93.2
+ },
+ "factory_generate": {
+  "slots": 3424,
+  "wall_s": 161.19,
+  "tokens_per_hour_wall_incl_startup": 76470,
+  "store_bytes": 19069859673,
+  "store_MB_per_token": 5.569,
+  "output": "41a5b3a483ae K32A12C27 segment 1/1: ed5b42e78e50411eab418c014cb771f7 (3424 slots, 23.2 slots/s)\n"
+ },
+ "factory_bench": {
+  "model": "qwen7b",
+  "mode": "pack",
+  "ring": "K32A12C27",
+  "device": "cuda",
+  "backend": "cuda_int8",
+  "slots_measured": 64,
+  "seconds": 4.937055187999931,
+  "slots_per_second": 92.93154198535467,
+  "tokens_per_hour": 334553.5511472768,
+  "seconds_per_token": 0.010760609139118693,
+  "gemm_fraction": 0.11637236593918489,
+  "bytes_per_token": 5562368,
+  "price_per_hour": 0.2,
+  "usd_per_million_tokens": 0.5978116188399274,
+  "storage_tb_per_million_tokens": 5.562368,
+  "layers_measured": 1,
+  "layers_total": 1,
+  "gpu_name": "Tesla T4"
+ },
+ "service_startup_s": 14.6,
+ "gpu_mem_MB_service_loaded": [
+  13963,
+  3
+ ],
+ "gateway_startup_s": 29.4,
+ "chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 64,
+   "total_tokens": 104
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 80.28,
+  "backend_delta": {
+   "calls": 7280,
+   "rows": 11536,
+   "round_trips": 7280,
+   "bytes_up": 342573056,
+   "bytes_down": 572923904,
+   "freivalds_checked": 7280,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 14.74453880000874,
+   "local_seconds": 9.1798918040015
+  },
+  "gateway_cpu_s": 125.26,
+  "service_cpu_s": 11.88,
+  "slots_used": 104,
+  "wire_bytes_per_token": 8802855,
+  "wire_up_bytes_per_token": 3293972,
+  "wire_down_bytes_per_token": 5508884,
+  "round_trips_per_token_decode": null,
+  "gateway_cpu_s_per_token": 1.2044,
+  "status_after": {
+   "name": "qwen7b",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+   "fingerprint_short": "41a5b3a483ae",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 4,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:56865",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 3320,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 4840960,
+    "windows": 57,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 7280,
+    "attempts": 7281,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 343853892,
+    "bytes_received": 572926508,
+    "last_rtt_s": 0.0016593400000601832,
+    "stream_requests": 7280,
+    "stream_opens": 1,
+    "stream_open_failures": 0
+   }
+  }
+ },
+ "stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 3.047,
+  "prefill_s_per_prompt_token": 0.0762,
+  "decode_s_per_token": 0.4377,
+  "decode_tokens_per_s": 2.285,
+  "wall_s": 30.67,
+  "gateway_cpu_s": 35.09,
+  "backend_delta": {
+   "calls": 7280,
+   "rows": 11536,
+   "round_trips": 7280,
+   "bytes_up": 342573056,
+   "bytes_down": 572923904,
+   "freivalds_checked": 7280,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 14.522775111997817,
+   "local_seconds": 8.495295548998229
+  },
+  "gateway_local_engine_s_per_token": 0.0817,
+  "remote_s_per_token": 0.1396
+ },
+ "concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 90.95,
+  "generated_tokens_per_s": 2.815,
+  "all_tokens_per_s": 4.574,
+  "gateway_cpu_s_per_token": 0.1925,
+  "backend_delta": {
+   "calls": 28784,
+   "rows": 46144,
+   "round_trips": 7392,
+   "bytes_up": 1370292224,
+   "bytes_down": 2291695616,
+   "freivalds_checked": 28784,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 42.87895588200195,
+   "local_seconds": 29.71785092400569
+  }
+ },
+ "spec_gateway_startup_s": 25.5,
+ "spec_chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 64,
+   "total_tokens": 104
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 91.08,
+  "backend_delta": {
+   "calls": 2800,
+   "rows": 20384,
+   "round_trips": 2800,
+   "bytes_up": 605323264,
+   "bytes_down": 1012350976,
+   "freivalds_checked": 2800,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 8.86390777200404,
+   "local_seconds": 9.907333703986069
+  },
+  "gateway_cpu_s": 160.07,
+  "service_cpu_s": 7.19,
+  "slots_used": 104,
+  "wire_bytes_per_token": 15554560,
+  "wire_up_bytes_per_token": 5820416,
+  "wire_down_bytes_per_token": 9734144,
+  "round_trips_per_token_decode": null,
+  "gateway_cpu_s_per_token": 1.5391,
+  "status_after": {
+   "name": "qwen7b",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+   "fingerprint_short": "41a5b3a483ae",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 4,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:56865",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 2568,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 5342720,
+    "windows": 53,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 2800,
+    "attempts": 2801,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 605819292,
+    "bytes_received": 1012353580,
+    "last_rtt_s": 0.00249354100014898,
+    "stream_requests": 2800,
+    "stream_opens": 1,
+    "stream_open_failures": 0
+   }
+  }
+ },
+ "spec_stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 3.511,
+  "prefill_s_per_prompt_token": 0.0878,
+  "decode_s_per_token": 0.5878,
+  "decode_tokens_per_s": 1.701,
+  "wall_s": 40.59,
+  "gateway_cpu_s": 62.69,
+  "backend_delta": {
+   "calls": 2800,
+   "rows": 20384,
+   "round_trips": 2800,
+   "bytes_up": 605323264,
+   "bytes_down": 1012350976,
+   "freivalds_checked": 2800,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 8.762688007995393,
+   "local_seconds": 9.689747540004419
+  },
+  "gateway_local_engine_s_per_token": 0.0932,
+  "remote_s_per_token": 0.0843
+ },
+ "spec_concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 138.46,
+  "generated_tokens_per_s": 1.849,
+  "all_tokens_per_s": 3.004,
+  "gateway_cpu_s_per_token": 0.4809,
+  "backend_delta": {
+   "calls": 19376,
+   "rows": 81536,
+   "round_trips": 5040,
+   "bytes_up": 2421293056,
+   "bytes_down": 4049403904,
+   "freivalds_checked": 19376,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 42.78662122001015,
+   "local_seconds": 48.12800642900788
+  }
+ },
+ "spec_cuda1_gateway_startup_s": 25.4,
+ "spec_cuda1_chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 64,
+   "total_tokens": 104
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 79.95,
+  "backend_delta": {
+   "calls": 2800,
+   "rows": 20384,
+   "round_trips": 2800,
+   "bytes_up": 605323264,
+   "bytes_down": 1012350976,
+   "freivalds_checked": 2800,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 8.817435960996363,
+   "local_seconds": 10.4173069030046
+  },
+  "gateway_cpu_s": 130.59,
+  "service_cpu_s": 7.12,
+  "slots_used": 104,
+  "wire_bytes_per_token": 15554560,
+  "wire_up_bytes_per_token": 5820416,
+  "wire_down_bytes_per_token": 9734144,
+  "round_trips_per_token_decode": null,
+  "gateway_cpu_s_per_token": 1.2557,
+  "status_after": {
+   "name": "qwen7b",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "41a5b3a483aef7b61959f89ab6cc97ecb3a14771994cd3f5652f147ce3323424",
+   "fingerprint_short": "41a5b3a483ae",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 4,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:56865",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 1176,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 5670400,
+    "windows": 58,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 2800,
+    "attempts": 2801,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 605819292,
+    "bytes_received": 1012353580,
+    "last_rtt_s": 0.0024344149999251385,
+    "stream_requests": 2800,
+    "stream_opens": 1,
+    "stream_open_failures": 0
+   }
+  }
+ },
+ "spec_cuda1_stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 3.405,
+  "prefill_s_per_prompt_token": 0.0851,
+  "decode_s_per_token": 0.4286,
+  "decode_tokens_per_s": 2.333,
+  "wall_s": 30.46,
+  "gateway_cpu_s": 36.87,
+  "backend_delta": {
+   "calls": 2800,
+   "rows": 20384,
+   "round_trips": 2800,
+   "bytes_up": 605323264,
+   "bytes_down": 1012350976,
+   "freivalds_checked": 2800,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 8.870562111999789,
+   "local_seconds": 9.709894010994049
+  },
+  "gateway_local_engine_s_per_token": 0.0934,
+  "remote_s_per_token": 0.0853
+ },
+ "spec_cuda1_concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 114.19,
+  "generated_tokens_per_s": 2.242,
+  "all_tokens_per_s": 3.643,
+  "gateway_cpu_s_per_token": 0.3316,
+  "backend_delta": {
+   "calls": 19376,
+   "rows": 81536,
+   "round_trips": 5040,
+   "bytes_up": 2421293056,
+   "bytes_down": 4049403904,
+   "freivalds_checked": 19376,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 42.66700504898472,
+   "local_seconds": 48.02517324300493
+  }
+ },
+ "service_loadtest": {
+  "1x1": {
+   "bytes_down": 22249472,
+   "bytes_up": 13303808,
+   "calls": 448,
+   "calls_per_s": 515.1038580797069,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 1.7121340001722274,
+   "latency_ms_p95": 2.312685000106285,
+   "latency_ms_p99": 2.37398299987035,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 515.1038580797069,
+   "seconds": 0.869727518000218,
+   "server_batch_rows_max": 1,
+   "server_batch_rows_mean": 1.0,
+   "server_compute_ms_mean": 0.8530491071428571,
+   "server_queue_ms_mean": 0.010404017857142858,
+   "sessions": 1,
+   "tokens_per_s": 4.599141589997383,
+   "tokens_per_session": 4,
+   "s_per_decode_step": 0.2174,
+   "s_per_token_amortized": 0.21743
+  },
+  "1x5": {
+   "bytes_down": 111247360,
+   "bytes_up": 66519040,
+   "calls": 448,
+   "calls_per_s": 331.5403147150442,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 2.5376789999427274,
+   "latency_ms_p95": 4.458157000044594,
+   "latency_ms_p99": 4.732944999886968,
+   "mismatches": 0,
+   "rows_per_call": 5,
+   "rows_per_s": 1657.701573575221,
+   "seconds": 1.3512685489999967,
+   "server_batch_rows_max": 5,
+   "server_batch_rows_mean": 5.0,
+   "server_compute_ms_mean": 0.9684464285714285,
+   "server_queue_ms_mean": 0.011084821428571428,
+   "sessions": 1,
+   "tokens_per_s": 14.800906906921615,
+   "tokens_per_session": 4,
+   "s_per_decode_step": 0.3378,
+   "s_per_token_amortized": 0.06756
+  },
+  "4x1": {
+   "bytes_down": 88997888,
+   "bytes_up": 53215232,
+   "calls": 1792,
+   "calls_per_s": 732.9600477699825,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 5.128065999997489,
+   "latency_ms_p95": 7.28530900005353,
+   "latency_ms_p99": 8.026882000194746,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 732.9600477699825,
+   "seconds": 2.4448808709998957,
+   "server_batch_rows_max": 1,
+   "server_batch_rows_mean": 1.0,
+   "server_compute_ms_mean": 0.8612483258928572,
+   "server_queue_ms_mean": 0.011843191964285713,
+   "sessions": 4,
+   "tokens_per_s": 6.544286140803416,
+   "tokens_per_session": 4,
+   "s_per_decode_step": 0.6112,
+   "s_per_token_amortized": 0.15281
+  }
+ },
+ "gpu_mem_MB_end": [
+  13981,
+  1431
+ ],
+ "ok": true
+}
