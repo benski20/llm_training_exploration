@@ -17,6 +17,8 @@ __all__ = [
     "ATTEMPT_HEADER",
     "COMPUTE_PATH",
     "DEADLINE_HEADER",
+    "LANE_OPEN_PATH",
+    "LANE_TRANSPORTS",
     "MODELS_PATH",
     "PROTOCOL_HEADER",
     "PROTOCOL_VERSION",
@@ -29,6 +31,8 @@ __all__ = [
     "ComputeResponse",
     "ComputeResult",
     "ErrorResponse",
+    "LaneOpenRequest",
+    "LaneTicket",
     "LinearInfo",
     "ModelInfo",
     "ModelsResponse",
@@ -53,6 +57,13 @@ COMPUTE_PATH = "/pgw/v1/compute"
 MODELS_PATH = "/pgw/v1/models"
 #: Persistent WebSocket channel for compute calls (one msgpack ComputeRequest per binary frame).
 STREAM_PATH = "/pgw/v1/stream"
+#: ``lane_open``: ask for a ticket to the binary trip lane (chat-speed WP-A3; format in :mod:`pgw.wire.lane`).
+#: Sent with the regular client (same TLS, authentication, retries); the service answers a
+#: :class:`LaneTicket` or an :class:`ErrorResponse` (``unavailable`` when it offers no lane).
+LANE_OPEN_PATH = "/pgw/v1/lane_open"
+#: Lane transports: a Unix domain socket (co-located; the service checks peer credentials) or TCP, which
+#: is **always** TLS (there is no plaintext TCP lane, on either side).
+LANE_TRANSPORTS: tuple[str, ...] = ("uds", "tcp")
 
 
 @dataclass(frozen=True)
@@ -210,3 +221,61 @@ class ModelsResponse:
             if m.fingerprint == fingerprint:
                 return m
         return None
+
+
+@dataclass(frozen=True)
+class LaneOpenRequest:
+    """``POST /pgw/v1/lane_open`` body: ask for a lane ticket for one model and ring.
+
+    msgpack: ``{"v": 1, "type": "lane_open", "id": str, "fp": str, "ring": str, "transports": [str],
+    "lane_versions": [int]}``. ``transports`` lists what the client can use (subset of
+    :data:`LANE_TRANSPORTS`), ``lane_versions`` the lane wire versions it speaks. Nothing here is new to
+    the service: the fingerprint and ring are in every compute request already.
+    """
+
+    request_id: str
+    fingerprint: str
+    ring: str
+    transports: tuple[str, ...] = LANE_TRANSPORTS
+    lane_versions: tuple[int, ...] = (1,)
+    version: int = PROTOCOL_VERSION
+    type: str = "lane_open"
+
+
+@dataclass(frozen=True)
+class LaneTicket:
+    """Answer to :class:`LaneOpenRequest`: where the lane is and the one-time credential to open it.
+
+    msgpack: ``{"v": 1, "type": "lane_ticket", "id": str, "lane_version": int, "transport": "uds"|"tcp",
+    "path": str?, "port": int?, "ticket": bin(32), "ttl_ms": int, "max_connections": int, "max_rows": int,
+    "fp": str, "rings": [str], "linears": [{"id", "m", "n"}]}``.
+
+    * ``path`` (``uds``) or ``port`` (``tcp``; the host is the service host of the client's base URL and
+      the connection is TLS, verified like the regular channel).
+    * ``ticket``: 32 random bytes, sent once per lane connection in its hello. It binds the connection to
+      the tenant, ``fp`` and ``rings``; valid for ``ttl_ms`` to open at most ``max_connections``
+      connections. A secret: never logged.
+    * ``rings`` / ``linears``: the tables the binary header indexes (``ring`` byte, ``linear`` u16), in
+      this order. ``max_rows``: largest rows per trip; bigger calls use the regular channel.
+    """
+
+    request_id: str
+    lane_version: int
+    transport: str
+    ticket: bytes
+    ttl_ms: int
+    max_connections: int
+    max_rows: int
+    fingerprint: str
+    rings: tuple[str, ...]
+    linears: tuple[LinearInfo, ...]
+    path: str | None = None
+    port: int | None = None
+    version: int = PROTOCOL_VERSION
+    type: str = "lane_ticket"
+
+    def __repr__(self) -> str:  # the ticket is a credential: keep it out of logs and tracebacks
+        return (f"LaneTicket(request_id={self.request_id!r}, lane_version={self.lane_version}, "
+                f"transport={self.transport!r}, path={self.path!r}, port={self.port!r}, ticket=<redacted>, "
+                f"ttl_ms={self.ttl_ms}, max_connections={self.max_connections}, max_rows={self.max_rows}, "
+                f"fingerprint={self.fingerprint!r}, rings={self.rings!r}, linears=<{len(self.linears)}>)")

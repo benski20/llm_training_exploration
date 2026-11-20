@@ -27,12 +27,15 @@ from pgw.core.errors import (
 )
 from pgw.core.ring import RingParams
 from pgw.wire.messages import (
+    LANE_TRANSPORTS,
     SUPPORTED_VERSIONS,
     ComputeItem,
     ComputeRequest,
     ComputeResponse,
     ComputeResult,
     ErrorResponse,
+    LaneOpenRequest,
+    LaneTicket,
     LinearInfo,
     ModelInfo,
     ModelsResponse,
@@ -153,6 +156,36 @@ def message_to_dict(msg: object) -> dict[str, Any]:
         }
         if msg.request_id is not None:
             d["id"] = msg.request_id
+        return d
+    if isinstance(msg, LaneOpenRequest):
+        return {
+            "v": int(msg.version),
+            "type": "lane_open",
+            "id": msg.request_id,
+            "fp": msg.fingerprint,
+            "ring": msg.ring,
+            "transports": [str(t) for t in msg.transports],
+            "lane_versions": [int(x) for x in msg.lane_versions],
+        }
+    if isinstance(msg, LaneTicket):
+        d = {
+            "v": int(msg.version),
+            "type": "lane_ticket",
+            "id": msg.request_id,
+            "lane_version": int(msg.lane_version),
+            "transport": str(msg.transport),
+            "ticket": bytes(msg.ticket),
+            "ttl_ms": int(msg.ttl_ms),
+            "max_connections": int(msg.max_connections),
+            "max_rows": int(msg.max_rows),
+            "fp": msg.fingerprint,
+            "rings": [str(r) for r in msg.rings],
+            "linears": [_linear_to_dict(li) for li in msg.linears],
+        }
+        if msg.path is not None:
+            d["path"] = str(msg.path)
+        if msg.port is not None:
+            d["port"] = int(msg.port)
         return d
     if isinstance(msg, ModelsResponse):
         return {
@@ -656,11 +689,93 @@ def _parse_models(d: dict[str, Any], v: int) -> ModelsResponse:
     )
 
 
+#: Lane ticket bounds (SPEC 6 lane section; :mod:`pgw.wire.lane`).
+LANE_TICKET_BYTES = 32
+_MAX_LANE_PATH = 4096
+_MAX_LANE_ROWS = 65535
+_MAX_LANE_LINEARS = 65535
+_MAX_LANE_RINGS = 255
+
+
+def _parse_lane_open(d: dict[str, Any], v: int) -> LaneOpenRequest:
+    transports = tuple(_str(t, "transports[]", max_len=16) for t in _list(_req(d, "transports", ""), "transports"))
+    if not transports or len(transports) > 8 or any(t not in LANE_TRANSPORTS for t in transports):
+        raise ProtocolError(f"transports must be a non-empty subset of {list(LANE_TRANSPORTS)}")
+    versions = tuple(_int(x, "lane_versions[]", lo=1, hi=0xFFFF)
+                     for x in _list(_req(d, "lane_versions", ""), "lane_versions"))
+    if not versions or len(versions) > 16:
+        raise ProtocolError("lane_versions must list 1 to 16 versions")
+    return LaneOpenRequest(
+        request_id=validate_request_id(_req(d, "id", "")),
+        fingerprint=_fp(_req(d, "fp", ""), "fp"),
+        ring=_ring(_req(d, "ring", ""), "ring"),
+        transports=transports,
+        lane_versions=versions,
+        version=v,
+    )
+
+
+def _parse_lane_ticket(d: dict[str, Any], v: int) -> LaneTicket:
+    transport = _str(_req(d, "transport", ""), "transport", max_len=16)
+    if transport not in LANE_TRANSPORTS:
+        raise ProtocolError(f"transport must be one of {list(LANE_TRANSPORTS)}")
+    ticket = _bin(_req(d, "ticket", ""), "ticket")
+    if len(ticket) != LANE_TICKET_BYTES:
+        raise ProtocolError(f"ticket must be {LANE_TICKET_BYTES} bytes")
+    path = d.get("path")
+    port = d.get("port")
+    if transport == "uds":
+        path = _str(_req(d, "path", ""), "path", max_len=_MAX_LANE_PATH)
+        if not path or "\x00" in path:
+            raise ProtocolError("path must be a non-empty socket path")
+        port = None
+    else:
+        port = _int(_req(d, "port", ""), "port", lo=1, hi=65535)
+        path = None
+    rings = tuple(_ring(r, "rings[]") for r in _list(_req(d, "rings", ""), "rings"))
+    if not rings or len(rings) > _MAX_LANE_RINGS:
+        raise ProtocolError(f"rings must list 1 to {_MAX_LANE_RINGS} rings")
+    linears: list[LinearInfo] = []
+    seen: set[str] = set()
+    raw_linears = _list(_req(d, "linears", ""), "linears")
+    if not raw_linears or len(raw_linears) > _MAX_LANE_LINEARS:
+        raise ProtocolError(f"linears must list 1 to {_MAX_LANE_LINEARS} linears")
+    for j, lraw in enumerate(raw_linears):
+        ctx = f"linears[{j}]"
+        li = _map(lraw, ctx)
+        info = LinearInfo(
+            id=_linear(_req(li, "id", ctx), f"{ctx}.id"),
+            out_features=_int(_req(li, "m", ctx), f"{ctx}.m", lo=1),
+            in_features=_int(_req(li, "n", ctx), f"{ctx}.n", lo=1),
+        )
+        if info.id in seen:
+            raise ProtocolError(f"{ctx}.id duplicates linear {info.id!r}")
+        seen.add(info.id)
+        linears.append(info)
+    return LaneTicket(
+        request_id=validate_request_id(_req(d, "id", "")),
+        lane_version=_int(_req(d, "lane_version", ""), "lane_version", lo=1, hi=0xFFFF),
+        transport=transport,
+        ticket=ticket,
+        ttl_ms=_int(_req(d, "ttl_ms", ""), "ttl_ms", lo=1, hi=_MAX_DEADLINE_MS),
+        max_connections=_int(_req(d, "max_connections", ""), "max_connections", lo=1, hi=1024),
+        max_rows=_int(_req(d, "max_rows", ""), "max_rows", lo=1, hi=_MAX_LANE_ROWS),
+        fingerprint=_fp(_req(d, "fp", ""), "fp"),
+        rings=rings,
+        linears=tuple(linears),
+        path=path,
+        port=port,
+        version=v,
+    )
+
+
 _PARSERS: dict[str, tuple[type[Any], Callable[[dict[str, Any], int], Any]]] = {
     "compute": (ComputeRequest, _parse_compute_request),
     "compute_result": (ComputeResponse, _parse_compute_response),
     "error": (ErrorResponse, _parse_error),
     "models": (ModelsResponse, _parse_models),
+    "lane_open": (LaneOpenRequest, _parse_lane_open),
+    "lane_ticket": (LaneTicket, _parse_lane_ticket),
 }
 
 #: ``{"type" value: message class}``.
