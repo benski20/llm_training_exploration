@@ -102,7 +102,8 @@ class FactorySettings(PGWSettings):
         "auto",
         description="Expand mask rows r (ChaCha20 + digit split) on the factory GPU instead of the CPU: 'auto' = on "
         "for CUDA factories once the kernel's self-test against the CPU expander passed, false = always CPU, "
-        "true = on (still self-tested; never used when the test fails). Same derivation and output",
+        "true = on (still self-tested; never used when the test fails). Needs self_check_rows != 0 (the output "
+        "self-check re-derives sampled r rows on the CPU). Same derivation and output",
     )
     # ---- encrypted mask generation (pgw.hemask) -----------------------------------------------
     he_service_url: str | None = Field(

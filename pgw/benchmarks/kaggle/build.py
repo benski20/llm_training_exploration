@@ -139,7 +139,9 @@ JOBS: dict[str, dict] = {
         BUILD_NATIVE,
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
         {"kind": "pytest", "name": "pytest_factory_gpu",
-         "args": ["tests/factory", "-m", "gpu", "-v", "-rs", "--timeout", "1800"], "timeout": 2400},
+         # test_runtime_he_mtls imports tests.wire, which this bundle leaves out
+         "args": ["tests/factory", "-m", "gpu", "--ignore", "tests/factory/test_runtime_he_mtls.py",
+                  "-v", "-rs", "--timeout", "1800"], "timeout": 2400},
         {"kind": "pytest", "name": "pytest_gpu_prng_all",
          "args": ["tests/factory/test_gpu_prng.py", "tests/factory/test_generator.py",
                   "tests/factory/test_self_check.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},

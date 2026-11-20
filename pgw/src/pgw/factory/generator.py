@@ -267,6 +267,12 @@ class MaskGenerator:
         want = self.gpu_prng_requested
         if want is False or self.remote is not None:
             return None
+        if self.self_check_rows == 0:
+            # the per-chunk output self-check is what re-derives sampled r rows on the CPU; without it
+            # the startup self-test alone would guard the keystream at production shapes
+            (log.warning if want else log.info)(
+                "GPU mask PRNG needs the output self-check (self_check_rows != 0); using CPU ChaCha20")
+            return None
         impl = self.gpu_prng_impl
         if self.backend == "cuda_int8":
             impl = "triton" if impl == "auto" else impl
@@ -421,10 +427,16 @@ class MaskGenerator:
                         t0 = time.perf_counter()
                         p, np_ = kern.plane_shape(task[2])
                         d8 = torch.zeros((n_limbs * p, np_), dtype=torch.int8, device=w.device)
-                        stream.digit_planes(start, task[2], d8)
-                        rng_time[0] += time.perf_counter() - t0
-                        t0 = time.perf_counter()
                         try:
+                            try:
+                                stream.digit_planes(start, task[2], d8)
+                            except Exception as exc:
+                                # a launch/compile fault at production shapes: this segment fails, later
+                                # segments of this generator use the CPU path
+                                self._disable_device_prng(f"an error in the GPU mask PRNG ({type(exc).__name__})")
+                                raise
+                            rng_time[0] += time.perf_counter() - t0
+                            t0 = time.perf_counter()
                             wr = kern.matmul_planes(d8, task[2], self.ring)
                         finally:
                             d8.zero_()

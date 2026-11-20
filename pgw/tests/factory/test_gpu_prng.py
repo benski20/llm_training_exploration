@@ -139,7 +139,7 @@ def test_stream_layout_and_range_checks() -> None:
     with pytest.raises(ConfigError):
         gp.stream_layout(8, 40, 1 << 32, 1)  # first block beyond the counter
     with pytest.raises(ConfigError):
-        gp.stream_layout(8, 40, (1 << 32) - 1, 2)  # runs past the last block (the CPU path refuses too)
+        gp.stream_layout(8, 40, (1 << 32) - 1, 2)  # runs past the last block (stricter than the CPU path, which checks the start only)
     with pytest.raises(ConfigError):
         gp.stream_layout(0, 40, 0, 1)
     with pytest.raises(ConfigError):
@@ -162,11 +162,14 @@ def test_stream_wipes_device_key() -> None:
     key = os.urandom(32)
     st = gp.DeviceRingStream(key, 5, 40, "cpu", "torch")
     kt = st._key_t
+    hk = st._key
     assert kt is not None and bool(kt.ne(0).any())
+    assert hk is not None and bytes(hk) == key
     assert "redacted" in repr(st) and key.hex() not in repr(st)
     with st:
         st.rows(0, 2)
     assert int(kt.abs().sum()) == 0 and st._key_t is None
+    assert hk == bytearray(32) and st._key is None  # host copy zeroed too
     with pytest.raises(ConfigError):
         st.rows(0, 1)
     with pytest.raises(ConfigError):
@@ -303,6 +306,41 @@ def test_device_path_fault_aborts_segment_and_disables(monkeypatch: pytest.Monke
     assert gen.device_prng() is None  # never emits masks from the failed GPU path again
     seg = gen.generate_into_store(store, 4, checks=2, chunk_slots=4, seed=SEED)
     assert seg in store.segments and gen.last_stats.extra["gpu_prng"] is False
+
+
+@needs_int8
+def test_device_prng_error_aborts_segment_and_disables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A kernel launch/compile error (not only a failed check) switches the generator to the CPU path."""
+    pack = FakePack(layers=1)
+    store = FakeMaskStore()
+    assert gp.self_test("cpu", "torch", (40,))
+
+    def boom(self: gp.DeviceRingStream, row_start: int, row_count: int, out: torch.Tensor) -> torch.Tensor:
+        out[0, 0] = 7  # partial write before the fault
+        raise RuntimeError("launch failed")
+
+    monkeypatch.setattr(gp.DeviceRingStream, "digit_planes", boom)
+    gen = MaskGenerator(pack, RING_K40_A12, backend="cpu_int8", gpu_prng=True, gpu_prng_impl="torch")
+    with pytest.raises(RuntimeError, match="launch failed"):
+        gen.generate_into_store(store, 4, checks=2, chunk_slots=4)
+    assert store.aborted == 1 and not store.segments
+    assert gen.device_prng() is None
+    seg = gen.generate_into_store(store, 4, checks=2, chunk_slots=4, seed=SEED)
+    assert seg in store.segments and gen.last_stats.extra["gpu_prng"] is False
+
+
+@needs_int8
+def test_device_prng_needs_output_self_check() -> None:
+    """Without the per-chunk self-check nothing would re-derive r on the CPU: the GPU path is refused."""
+    pack = FakePack(layers=1)
+    gen = MaskGenerator(pack, RING_K40_A12, backend="cpu_int8", gpu_prng=True, gpu_prng_impl="torch",
+                        self_check_rows=0)
+    assert gen.device_prng() is None
+    items = list(gen.generate(SEED, 4, checks=2, chunk_slots=4))
+    assert gen.last_stats.extra["gpu_prng"] is False
+    ref = reference_segment(pack, RING_K40_A12, SEED, 4, 2)
+    for spec in pack.linear_specs():
+        assert torch.equal(torch.cat([i.wr for i in items if i.id == spec.id]), ref[spec.id.key][0])
 
 
 @needs_int8

@@ -133,9 +133,12 @@ def _emit(
         row = e // cols
         col = e - row * cols
         base = d_ptr + row * row_stride + col
+        # int64 plane stride: (LIMBS - 1) * plane_stride can exceed 2^31 even when plane_stride does not
+        # (Triton passes ints below 2^31 as i32); row is int64, so this promotes
+        ps = row * 0 + plane_stride
         cur = v
         for i in tl.static_range(LIMBS):
             dg = cur & 255
             dg = tl.where(dg >= 128, dg - 256, dg)
-            tl.store(base + i * plane_stride, dg.to(tl.int8), mask=ok)
+            tl.store(base + i * ps, dg.to(tl.int8), mask=ok)
             cur = (cur - dg) >> 8

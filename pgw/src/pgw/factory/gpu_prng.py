@@ -24,7 +24,9 @@ Safety rails:
   used; the generator falls back to the CPU path if it fails (:class:`pgw.factory.MaskGenerator`).
 * The generator's output self-check re-derives the sampled rows of ``r`` with the CPU expander, so a GPU
   keystream fault (not only a GEMM fault) fails the segment.
-* The device key tensor and the digit planes are zeroed after use (as the CPU path zeroes ``r``).
+* The device key tensor, the stream's host copy of the key and the digit planes are zeroed after use
+  (as the CPU path zeroes ``r``). The ``bytes`` key returned by ``SeedExpander.stream_key`` is immutable
+  and is only dropped, exactly as on the CPU path.
 
 :func:`chacha20_blocks_torch`, :func:`ring_rows_torch` and :func:`digit_planes_torch` are a plain-torch
 emulation of the same algorithm (unsigned 32-bit arithmetic in int64 tensors, the kernel's index math).
@@ -112,8 +114,10 @@ def stream_layout(cols: int, k: int, row_start: int, row_count: int) -> tuple[in
     block before the slice, ``total``: ring elements, ``nblk``: blocks to compute.
 
     Raises:
-        ConfigError: bad arguments, or the slice runs past the 2^32-block counter range (the CPU path
-            refuses it too).
+        ConfigError: bad arguments, or the slice runs past the 2^32-block counter range. This is
+            stricter than the CPU path, which only refuses a slice that *starts* at block ``>= 2^32``
+            (one that runs across the end would carry into the nonce word there); ``max_stream_rows``
+            keeps factory streams inside the range, so the two agree on every slice the factory uses.
     """
     if cols <= 0 or row_start < 0 or row_count < 0:
         raise ConfigError("cols must be > 0 and row_start/row_count >= 0")
@@ -132,7 +136,8 @@ def key_words(key: bytes | bytearray) -> torch.Tensor:
     """The 32-byte ChaCha20 key as eight little-endian words: int32 bit patterns on the CPU (caller zeroes)."""
     if len(key) != 32:
         raise ConfigError("ChaCha20 key must be 32 bytes")
-    return torch.from_numpy(np.frombuffer(bytes(key), dtype="<i4").astype(np.int32))
+    # one copy (astype), owned by the returned tensor so the caller can zero it
+    return torch.from_numpy(np.frombuffer(key, dtype="<i4").astype(np.int32))
 
 
 # ---- plain-torch emulation (reference; any device) ---------------------------------------------------
@@ -328,7 +333,8 @@ class DeviceRingStream:
         self.k = int(k)
         self.device = torch.device(device)
         self.impl: PrngImpl = impl
-        self._key = bytes(key)  # for CPU re-derivation of sampled rows (self-check)
+        # for CPU re-derivation of sampled rows (self-check); a bytearray so wipe() can zero it
+        self._key: bytearray | None = bytearray(key)
         staging = key_words(key)
         try:
             self._key_t: torch.Tensor | None = staging.to(self.device, copy=True)
@@ -350,11 +356,16 @@ class DeviceRingStream:
         return self._key_t
 
     def wipe(self) -> None:
-        """Zero the device key (idempotent)."""
+        """Zero the device key and this object's host copy of it (idempotent).
+
+        The caller's ``key`` argument is not touched (the CPU path holds stream keys as ``bytes`` too).
+        """
         if self._key_t is not None:
             self._key_t.zero_()
             self._key_t = None
-        self._key = b""
+        if self._key is not None:
+            self._key[:] = bytes(len(self._key))
+            self._key = None
 
     def rows(self, row_start: int, row_count: int) -> torch.Tensor:
         """int64 ``(row_count, cols)`` ring elements on the device (== ``ring_uniform_rows`` of the stream)."""
@@ -382,7 +393,7 @@ class DeviceRingStream:
 
     def cpu_rows(self, row_start: int, idx: torch.Tensor) -> torch.Tensor:
         """Rows ``row_start + idx`` re-derived by the CPU expander (int64 ``(len(idx), cols)``, caller zeroes)."""
-        if not self._key:
+        if self._key is None:
             raise ConfigError("stream key already wiped")
         parts = [SeedExpander.ring_uniform_rows_with_key(self._key, self.cols, self.k, row_start + int(i), 1)
                  for i in idx.tolist()]
