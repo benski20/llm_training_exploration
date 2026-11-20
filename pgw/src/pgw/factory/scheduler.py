@@ -341,6 +341,12 @@ class FactoryScheduler:
                 self._refilling.discard(key)
             if key not in self._refilling:
                 continue
+            first = int(self.settings.first_segment_slots or seg)
+            if avail == 0 and first < seg:
+                # Nothing to serve with yet: one small segment first (re-planned after it is stored).
+                plans.append(RefillPlan(fp, ring, 1, first, f"no masks yet: a first segment of {first} slots",
+                                        avail, self.low_water_slots, self.target_slots))
+                continue
             deficit = max(self.target_slots - avail, 1)
             n = max(1, math.ceil(deficit / seg))
             if self.settings.max_segments_per_run:

@@ -39,6 +39,12 @@ class FactorySettings(PGWSettings):
     device: str = Field("auto", description="'auto', 'cpu', 'cuda', 'cuda:1'")
     backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"
     segment_slots: int = Field(4096, gt=0, description="Token positions per segment")
+    first_segment_slots: int | None = Field(
+        None, gt=0,
+        description="When a (model, ring) has no masks at all (a new store), produce one segment of this many slots "
+        "first, then continue with segment_slots: a new gateway can serve after a small segment instead of waiting "
+        "for a full one (minutes with encrypted generation over a slow link). Unset = segment_slots",
+    )
     chunk_slots: int = Field(
         256, gt=0, description="Rows per GEMM batch (factory throughput; not the stored chunk size)"
     )
