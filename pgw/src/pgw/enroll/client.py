@@ -333,7 +333,8 @@ def renew_client_cert(
         kw["transport"] = transport
     elif service_url.startswith("https://"):
         kw["verify"] = build_ssl_context(ClientConfig(base_url=service_url, ca_file=ca_file,
-                                                      client_cert_file=cert_file, client_key_file=key_file))
+                                                      client_cert_file=cert_file, client_key_file=key_file),
+                                       register=False)
     key_pem, csr_pem = _key_and_csr("renew")
     try:
         with httpx.Client(base_url=service_url, **kw) as h:

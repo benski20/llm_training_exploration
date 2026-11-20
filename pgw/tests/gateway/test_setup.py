@@ -265,6 +265,9 @@ async def test_wizard_happy_path(svc: EnrollService, tmp_path: Path, tiny_hf_dir
             env = (tmp_path / "etc" / "gateway.env").read_text()
             assert stat.S_IMODE((tmp_path / "etc" / "gateway.env").stat().st_mode) == 0o600
             assert "ALLOW_DEV" not in env and admin_token not in env and "PGW_MASKSTORE_COUNTER=file" in env
+            # the factory presents the gateway's enrolled client certificate (mTLS-only compute services)
+            fenv = (tmp_path / "etc" / "factory.env").read_text()
+            assert "PGW_FACTORY_HE_CLIENT_CERT_FILE=" in fenv and "PGW_FACTORY_HE_CLIENT_KEY_FILE=" in fenv
             assert load_setup_state(tmp_path / "etc")["finished"] is True  # type: ignore[index]
             # normal mode: setup routes are gone, admin token works, a masked request succeeds
             assert (await c.get("/console/api/setup/state")).status_code == 404

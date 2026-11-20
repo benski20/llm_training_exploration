@@ -127,14 +127,26 @@ def test_settings_default_and_validation(tmp_path: Path) -> None:
 
     pki = make_pki(tmp_path / "pki")
     base = dict(client_issuing_ca_cert_file=pki["client_ca"], client_issuing_ca_key_file=pki["client_ca_key"])
-    assert not ServiceSettings().compute_requires_client_cert
-    assert ServiceSettings(**base, trusted_client_cert_header="x-cert").compute_requires_client_cert
     tls = {"cert_file": pki["server"], "key_file": pki["server_key"], "ca_file": pki["client_ca"]}
-    assert ServiceSettings(**base, tls=tls).compute_requires_client_cert
-    assert not ServiceSettings(**base).compute_requires_client_cert  # certificates cannot be verified
+    m = tmp_path / "mtls"
+    m.write_text("")
+    # never on implicitly, not even with a client-issuing CA and verifiable certificates
+    assert not ServiceSettings().compute_requires_client_cert
+    assert not ServiceSettings(**base, trusted_client_cert_header="x-cert").compute_requires_client_cert
+    assert not ServiceSettings(**base, tls=tls, mtls_tenants_file=m).compute_requires_client_cert
     assert not ServiceSettings(**base, tls=tls, require_client_cert_for_compute=False).compute_requires_client_cert
+    on = ServiceSettings(**base, tls=tls, mtls_tenants_file=m, require_client_cert_for_compute=True)
+    assert on.compute_requires_client_cert
+    assert ServiceSettings(trusted_client_cert_header="x-cert", mtls_tenants_file=m,
+                           require_client_cert_for_compute=True).compute_requires_client_cert
     with pytest.raises(ValueError, match="require_client_cert_for_compute"):
-        ServiceSettings(require_client_cert_for_compute=True)
+        ServiceSettings(require_client_cert_for_compute=True)  # certificates cannot be verified
+    with pytest.raises(ValueError, match="needs mtls_tenants_file"):  # mappings would not survive a restart
+        ServiceSettings(**base, tls=tls, require_client_cert_for_compute=True)
+    with pytest.raises(ValueError, match="needs mtls_tenants_file"):
+        ServiceSettings(trusted_client_cert_header="x-cert", require_client_cert_for_compute=True)
+    with pytest.raises(ValueError, match="trusted_client_cert_pem_header"):
+        ServiceSettings(trusted_client_cert_pem_header="x-cert-pem")
 
 
 async def test_flag_on_routes(tmp_path: Path, tiny_pack_dir: Path) -> None:
@@ -153,7 +165,7 @@ async def test_flag_on_routes(tmp_path: Path, tiny_pack_dir: Path) -> None:
                         trusted_client_cert_header="x-client-cert", enrollment_file=tmp_path / "e.json",
                         public_url="http://127.0.0.1:9", enrollment_ca_file=pki["ca"],
                         client_issuing_ca_cert_file=pki["client_ca"], client_issuing_ca_key_file=pki["client_ca_key"],
-                        rings=["K32A12C27"])
+                        require_client_cert_for_compute=True, rings=["K32A12C27"])
     assert s.compute_requires_client_cert
     hdr = {"authorization": f"Bearer {tok}", "x-pgw-protocol": "1"}
     async with running_app(s) as app, httpx.AsyncClient(transport=httpx.ASGITransport(app=app),

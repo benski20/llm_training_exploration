@@ -148,8 +148,16 @@ class ServiceSettings(PGWSettings):
         description="Compute and model calls need a verified client certificate mapped to the token's tenant; a "
         "token alone gets 403 unless it was issued token-only (enrolled without a CSR, or 'pgw service token create "
         "--token-only'). The TLS layer keeps client certificates optional so enrollment, renewal and probes work "
-        "without one. None (default) = on when client_issuing_ca_cert_file is set (enrolled gateways get "
-        "certificates) and client certificates can be verified (tls.ca_file or trusted_client_cert_header), else off",
+        "without one. Off unless set to true (None = off; it never turns on implicitly). When on, needs verifiable "
+        "client certificates (tls.ca_file or trusted_client_cert_header) and mtls_tenants_file (so the "
+        "certificate-to-tenant mappings written at enrollment survive restarts)",
+    )
+    trusted_client_cert_pem_header: str | None = Field(
+        None,
+        description="Header carrying the verified client certificate itself (URL-encoded PEM, e.g. nginx "
+        "$ssl_client_escaped_cert) from the TLS-terminating proxy that sets trusted_client_cert_header. Certificate "
+        "renewal behind such a proxy needs it (the renewed certificate must be the one presented in the handshake). "
+        "Only set when every request passes through that proxy.",
     )
     tokens_reload_interval_s: float = Field(
         2.0, gt=0, description="How often (at most) tokens_file is checked for changes (revocations take effect "
@@ -237,6 +245,12 @@ class ServiceSettings(PGWSettings):
         ):
             raise ValueError("require_client_cert_for_compute needs verified client certificates: set "
                              "tls.cert_file, tls.key_file and tls.ca_file, or trusted_client_cert_header")
+        if self.require_client_cert_for_compute and self.mtls_tenants_file is None:
+            raise ValueError("require_client_cert_for_compute needs mtls_tenants_file: without it the "
+                             "certificate-to-tenant mappings made at enrollment are lost on restart and every "
+                             "enrolled gateway's compute calls are refused")
+        if self.trusted_client_cert_pem_header and not self.trusted_client_cert_header:
+            raise ValueError("trusted_client_cert_pem_header needs trusted_client_cert_header (the same proxy)")
         if (self.client_issuing_ca_cert_file is None) != (self.client_issuing_ca_key_file is None):
             raise ValueError("client_issuing_ca_cert_file and client_issuing_ca_key_file must be set together")
         if self.public_url is not None:
@@ -260,11 +274,8 @@ class ServiceSettings(PGWSettings):
 
     @property
     def compute_requires_client_cert(self) -> bool:
-        """Effective ``require_client_cert_for_compute`` (default: on with a client-issuing CA)."""
-        if self.require_client_cert_for_compute is not None:
-            return self.require_client_cert_for_compute
-        verifiable = bool(self.trusted_client_cert_header) or (self.tls.enabled and self.tls.ca_file is not None)
-        return self.client_issuing_ca_cert_file is not None and verifiable
+        """Effective ``require_client_cert_for_compute``: on only when explicitly set to true."""
+        return bool(self.require_client_cert_for_compute)
 
     @property
     def ring_params(self) -> list[RingParams]:

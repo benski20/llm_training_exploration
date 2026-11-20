@@ -366,6 +366,10 @@ class SetupController:
         }
         if files.get("ca"):
             env["PGW_FACTORY_HE_CA_FILE"] = files["ca"]
+        if files.get("client_cert") and files.get("client_key"):
+            # the gateway's enrolled client certificate: needed when the service requires mTLS for compute
+            env["PGW_FACTORY_HE_CLIENT_CERT_FILE"] = files["client_cert"]
+            env["PGW_FACTORY_HE_CLIENT_KEY_FILE"] = files["client_key"]
         ms = self.state["maskstore"]
         env.update({"PGW_MASKSTORE_ROOT": ms["root"], "PGW_MASKSTORE_KEY_PROVIDER": "file",
                     "PGW_MASKSTORE_KEY_FILE": ms["key_file"], "PGW_MASKSTORE_COUNTER": "file",
@@ -732,12 +736,12 @@ def create_setup_app(
     @app.post("/console/api/setup/login")
     async def setup_login(request: Request) -> Any:
         client = _client(request)
-        limiter.blocked(client)  # only failed sign-ins count
-        body = _parse(LoginBody, await _json(request))
-        if sessions.authenticate(body.token) != "admin":
-            limiter.failure(client)
-            log.warning("setup: wrong setup token from %s", client)
-            raise AuthError("that setup token was not accepted; copy it from the gateway's log")
+        with limiter.attempt(client) as att:  # only failed sign-ins count; in-flight ones until settled
+            body = _parse(LoginBody, await _json(request))
+            if sessions.authenticate(body.token) != "admin":
+                att.fail()
+                log.warning("setup: wrong setup token from %s", client)
+                raise AuthError("that setup token was not accepted; copy it from the gateway's log")
         sid, sess = sessions.create("admin")
         log.info("setup: signed in from %s", client)
         resp = JSONResponse({"role": "admin", "csrf": sess.csrf, "setup": True})
