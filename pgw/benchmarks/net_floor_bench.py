@@ -24,6 +24,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import platform
 import socket
@@ -124,6 +125,16 @@ def ping_pong(host: str, port: int, size: int, iters: int, warmup: int) -> dict[
     }
 
 
+def _is_loopback(host: str) -> bool:
+    """Whether ``host`` names this machine's loopback interface (only then may the client start its own server)."""
+    if host.lower() in ("localhost", "localhost.", "ip6-localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
@@ -136,6 +147,9 @@ def main() -> int:
     args = ap.parse_args()
     if any(s <= 0 or s > (1 << 20) for s in args.sizes):
         ap.error("--sizes must be between 1 and 1048576 bytes")
+    if not args.server and args.port == 0 and not _is_loopback(args.host):
+        ap.error(f"--port is required when --host is not loopback ({args.host!r}): start "
+                 "'--server --port N' on that host and pass the same --port here")
 
     if args.server:
         ls = serve(args.host, args.port)

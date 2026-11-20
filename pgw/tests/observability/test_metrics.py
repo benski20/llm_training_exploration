@@ -36,7 +36,7 @@ def reg() -> CollectorRegistry:
 
 
 def test_contract_shape() -> None:
-    name_re = re.compile(r"^pgw_(service|gateway|masks|factory)_[a-z0-9_]+$")
+    name_re = re.compile(r"^pgw_(service|gateway|masks|factory|client)_[a-z0-9_]+$")
     for name, (kind, labels, help_) in METRIC_NAMES.items():
         assert name_re.match(name), name
         assert kind in {"counter", "gauge", "histogram"}
@@ -237,3 +237,18 @@ def test_factory_metrics_use_pgw_metrics(reg: CollectorRegistry) -> None:
 
 def test_module_exports() -> None:
     assert set(m.__all__) >= {"METRIC_NAMES", "PGWMetrics", "default_registry", "safe_label"}
+
+
+def test_gateway_extension_metrics_are_in_the_contract() -> None:
+    """The round-trip split and cert-expiry telemetry are listed, so the gateway emits them (not no-ops)."""
+    from pathlib import Path
+
+    from pgw.gateway.metrics import EXTENSION_METRICS, GatewayMetrics
+
+    doc = (Path(__file__).resolve().parents[2] / "docs/api/gateway-api.md").read_text(encoding="utf-8")
+    gm = GatewayMetrics()
+    for name, spec in EXTENSION_METRICS.items():
+        assert METRIC_NAMES.get(name) == spec, name
+        assert f"`{name}`" in doc, name
+        if gm.enabled:
+            assert gm.get(name) is gm._collectors[name], name
