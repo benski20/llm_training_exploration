@@ -1,0 +1,50 @@
+{
+  "preset": "7b",
+  "layers": 28,
+  "rows": 1,
+  "context": 48,
+  "torch": "2.11.0+cpu",
+  "torch_threads": 2,
+  "omp_wait_policy": "PASSIVE",
+  "native_lm_head": true,
+  "lm_head_dtype": "torch.bfloat16",
+  "cpu": "x86_64",
+  "load_s": 7.31,
+  "step_ms": 84.983,
+  "step_async_ms": 95.79,
+  "async_matches_sync": true,
+  "hop_overhead_ms": 10.807,
+  "instrumented_step_ms": 83.32,
+  "components_ms": {
+    "lm_head": 51.555,
+    "attention": 17.546,
+    "glue": 5.869,
+    "rms_norm": 3.675,
+    "rope_apply": 3.36,
+    "kv_append": 1.288,
+    "rope_tables": 0.027
+  },
+  "component_calls_per_step": {
+    "rope_tables": 1,
+    "rms_norm": 57,
+    "rope_apply": 56,
+    "kv_append": 28,
+    "attention": 28,
+    "lm_head": 1
+  },
+  "layers_only_ms": 28.931,
+  "lm_head_alone_ms": 51.65,
+  "sample_ms": 1.602,
+  "token_ms": 97.392,
+  "micro_us": {
+    "rms_norm": 36.78,
+    "residual_add": 3.74,
+    "silu_gate": 45.57,
+    "rope_q": 40.44,
+    "tensor_to_same_dtype": 1.19
+  },
+  "lm_head_isa": "avx",
+  "reference_paths": true
+}
+
+---stderr---

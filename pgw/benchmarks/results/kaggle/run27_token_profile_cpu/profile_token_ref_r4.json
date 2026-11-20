@@ -1,0 +1,48 @@
+{
+  "preset": "7b",
+  "layers": 28,
+  "rows": 4,
+  "context": 48,
+  "torch": "2.11.0+cpu",
+  "torch_threads": 2,
+  "omp_wait_policy": "PASSIVE",
+  "native_lm_head": true,
+  "lm_head_dtype": "torch.bfloat16",
+  "cpu": "x86_64",
+  "load_s": 7.84,
+  "step_ms": 239.575,
+  "step_async_ms": 241.836,
+  "async_matches_sync": true,
+  "hop_overhead_ms": 2.261,
+  "instrumented_step_ms": 238.389,
+  "components_ms": {
+    "lm_head": 110.953,
+    "attention": 73.88,
+    "glue": 20.231,
+    "rope_apply": 15.337,
+    "rms_norm": 12.609,
+    "kv_append": 5.331,
+    "rope_tables": 0.048
+  },
+  "component_calls_per_step": {
+    "rope_tables": 4,
+    "rms_norm": 228,
+    "rope_apply": 224,
+    "kv_append": 112,
+    "attention": 112,
+    "lm_head": 1
+  },
+  "layers_only_ms": 143.574,
+  "lm_head_alone_ms": 111.56,
+  "sample_ms": 6.768,
+  "token_ms": 248.604,
+  "micro_us": {
+    "rms_norm": 39.7,
+    "residual_add": 3.93,
+    "silu_gate": 46.04,
+    "rope_q": 40.8,
+    "tensor_to_same_dtype": 1.18
+  },
+  "lm_head_isa": "avx",
+  "reference_paths": true
+}

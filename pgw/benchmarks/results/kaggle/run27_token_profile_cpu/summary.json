@@ -1,0 +1,193 @@
+{
+ "job": {
+  "gpu": false,
+  "exclude": [
+   "deploy",
+   "scripts",
+   "tests"
+  ],
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "build_native",
+    "required": true,
+    "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && { [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())'",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "cpu_info",
+    "cmd": "lscpu; nproc; cat /sys/fs/cgroup/cpu.max || true",
+    "timeout": 60
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_new_r1",
+    "cmd": " python benchmarks/profile_token.py --steps 30 --rows 1  --json /kaggle/working/profile_token_new_r1.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_ref_r1",
+    "cmd": "PGW_LM_HEAD_ISA=avx python benchmarks/profile_token.py --steps 30 --rows 1 --reference-paths --json /kaggle/working/profile_token_ref_r1.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_avx2_r1",
+    "cmd": "PGW_LM_HEAD_ISA=avx2 python benchmarks/profile_token.py --steps 30 --rows 1  --json /kaggle/working/profile_token_avx2_r1.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_omp_active_r1",
+    "cmd": "OMP_WAIT_POLICY=ACTIVE python benchmarks/profile_token.py --steps 30 --rows 1  --json /kaggle/working/profile_token_omp_active_r1.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_new_r4",
+    "cmd": " python benchmarks/profile_token.py --steps 30 --rows 4  --json /kaggle/working/profile_token_new_r4.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_ref_r4",
+    "cmd": "PGW_LM_HEAD_ISA=avx python benchmarks/profile_token.py --steps 30 --rows 4 --reference-paths --json /kaggle/working/profile_token_ref_r4.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_avx2_r4",
+    "cmd": "PGW_LM_HEAD_ISA=avx2 python benchmarks/profile_token.py --steps 30 --rows 4  --json /kaggle/working/profile_token_avx2_r4.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_omp_active_r4",
+    "cmd": "OMP_WAIT_POLICY=ACTIVE python benchmarks/profile_token.py --steps 30 --rows 4  --json /kaggle/working/profile_token_omp_active_r4.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_new_r16",
+    "cmd": " python benchmarks/profile_token.py --steps 30 --rows 16  --json /kaggle/working/profile_token_new_r16.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_ref_r16",
+    "cmd": "PGW_LM_HEAD_ISA=avx python benchmarks/profile_token.py --steps 30 --rows 16 --reference-paths --json /kaggle/working/profile_token_ref_r16.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_avx2_r16",
+    "cmd": "PGW_LM_HEAD_ISA=avx2 python benchmarks/profile_token.py --steps 30 --rows 16  --json /kaggle/working/profile_token_avx2_r16.json",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "profile_token_omp_active_r16",
+    "cmd": "OMP_WAIT_POLICY=ACTIVE python benchmarks/profile_token.py --steps 30 --rows 16  --json /kaggle/working/profile_token_omp_active_r16.json",
+    "timeout": 1200
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 19.6,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.4,
+   "tail": "o==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision @ https://download.pytorch.org/whl/cpu/torchvision-0.26.0%2Bcpu-cp313-cp313-manylinux_2_28_x86_64.whl\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreescope==0.1.10\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "build_native": {
+   "rc": 0,
+   "seconds": 52.1,
+   "tail": "yn v2.0.119\n  Downloaded libc v0.2.191\n  Downloaded pyo3 v0.23.5\n   Compiling target-lexicon v0.12.16\n   Compiling autocfg v1.5.1\n   Compiling version_check v0.9.5\n   Compiling once_cell v1.21.4\n   Compiling typenum v1.20.1\n   Compiling generic-array v0.14.7\n   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.27\n   Compiling quote v1.0.47\n   Compiling num-traits v0.2.19\n   Compiling pyo3-build-config v0.23.5\n   Compiling libc v0.2.191\n   Compiling cfg-if v1.0.5\n   Compiling subtle v2.6.1\n   Compiling syn v2.0.119\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling digest v0.10.7\n   Compiling matrixmultiply v0.3.11\n   Compiling memoffset v0.9.1\n   Compiling heck v0.5.0\n   Compiling inout v0.1.4\n   Compiling cpufeatures v0.2.17\n   Compiling rawpointer v0.2.1\n   Compiling pyo3-ffi v0.23.5\n   Compiling pyo3-macros-backend v0.23.5\n   Compiling pyo3 v0.23.5\n   Compiling cipher v0.4.4\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling hmac v0.12.1\n   Compiling indoc v2.0.8\n   Compiling unindent v0.2.4\n   Compiling ndarray v0.16.1\n   Compiling hkdf v0.12.4\n   Compiling chacha20 v0.9.1\n   Compiling sha2 v0.10.9\n   Compiling rustc-hash v2.1.3\n   Compiling zeroize v1.9.1\n   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n   Compiling pyo3-macros v0.23.5\n   Compiling numpy v0.23.0\n   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n    Finished `release` profile [optimized] target(s) in 31.37s\n"
+  },
+  "cpu_info": {
+   "rc": 0,
+   "seconds": 0.0,
+   "tail": "UMA node0 CPU(s):                       0-3\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Mitigation; Aligned branch/return thunks\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Mitigation; PTE Inversion\nVulnerability Mds:                       Mitigation; Clear CPU buffers; SMT Host state unknown\nVulnerability Meltdown:                  Mitigation; PTI\nVulnerability Mmio stale data:           Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; IBRS\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; IBRS; IBPB conditional; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Mitigation; Clear CPU buffers; SMT Host state unknown\nVulnerability Vmscape:                   Not affected\n4\n400000 100000\n\n---stderr---\n"
+  },
+  "profile_token_new_r1": {
+   "rc": 0,
+   "seconds": 20.4,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 1,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.5,\n  \"step_ms\": 79.127,\n  \"step_async_ms\": 81.853,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 2.726,\n  \"instrumented_step_ms\": 77.204,\n  \"components_ms\": {\n    \"lm_head\": 43.842,\n    \"attention\": 18.141,\n    \"glue\": 6.693,\n    \"rms_norm\": 3.884,\n    \"rope_apply\": 3.315,\n    \"kv_append\": 1.301,\n    \"rope_tables\": 0.028\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 1,\n    \"rms_norm\": 57,\n    \"rope_apply\": 56,\n    \"kv_append\": 28,\n    \"attention\": 28,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 29.145,\n  \"lm_head_alone_ms\": 43.706,\n  \"sample_ms\": 0.649,\n  \"token_ms\": 82.502,\n  \"micro_us\": {\n    \"rms_norm\": 38.32,\n    \"residual_add\": 3.76,\n    \"silu_gate\": 45.9,\n    \"rope_q\": 40.97,\n    \"tensor_to_same_dtype\": 1.22\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_ref_r1": {
+   "rc": 0,
+   "seconds": 20.8,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 1,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.31,\n  \"step_ms\": 84.983,\n  \"step_async_ms\": 95.79,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 10.807,\n  \"instrumented_step_ms\": 83.32,\n  \"components_ms\": {\n    \"lm_head\": 51.555,\n    \"attention\": 17.546,\n    \"glue\": 5.869,\n    \"rms_norm\": 3.675,\n    \"rope_apply\": 3.36,\n    \"kv_append\": 1.288,\n    \"rope_tables\": 0.027\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 1,\n    \"rms_norm\": 57,\n    \"rope_apply\": 56,\n    \"kv_append\": 28,\n    \"attention\": 28,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 28.931,\n  \"lm_head_alone_ms\": 51.65,\n  \"sample_ms\": 1.602,\n  \"token_ms\": 97.392,\n  \"micro_us\": {\n    \"rms_norm\": 36.78,\n    \"residual_add\": 3.74,\n    \"silu_gate\": 45.57,\n    \"rope_q\": 40.44,\n    \"tensor_to_same_dtype\": 1.19\n  },\n  \"lm_head_isa\": \"avx\",\n  \"reference_paths\": true\n}\n\n---stderr---\n"
+  },
+  "profile_token_avx2_r1": {
+   "rc": 0,
+   "seconds": 19.6,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 1,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.26,\n  \"step_ms\": 75.202,\n  \"step_async_ms\": 78.449,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 3.247,\n  \"instrumented_step_ms\": 76.105,\n  \"components_ms\": {\n    \"lm_head\": 43.828,\n    \"attention\": 18.162,\n    \"glue\": 5.651,\n    \"rms_norm\": 3.838,\n    \"rope_apply\": 3.303,\n    \"kv_append\": 1.294,\n    \"rope_tables\": 0.029\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 1,\n    \"rms_norm\": 57,\n    \"rope_apply\": 56,\n    \"kv_append\": 28,\n    \"attention\": 28,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 31.086,\n  \"lm_head_alone_ms\": 45.006,\n  \"sample_ms\": 0.666,\n  \"token_ms\": 79.115,\n  \"micro_us\": {\n    \"rms_norm\": 36.21,\n    \"residual_add\": 3.55,\n    \"silu_gate\": 45.92,\n    \"rope_q\": 38.78,\n    \"tensor_to_same_dtype\": 1.31\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_omp_active_r1": {
+   "rc": 0,
+   "seconds": 18.9,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 1,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"ACTIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.24,\n  \"step_ms\": 72.303,\n  \"step_async_ms\": 73.677,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 1.374,\n  \"instrumented_step_ms\": 73.174,\n  \"components_ms\": {\n    \"lm_head\": 50.707,\n    \"attention\": 8.827,\n    \"glue\": 5.873,\n    \"rms_norm\": 3.483,\n    \"rope_apply\": 3.026,\n    \"kv_append\": 1.23,\n    \"rope_tables\": 0.028\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 1,\n    \"rms_norm\": 57,\n    \"rope_apply\": 56,\n    \"kv_append\": 28,\n    \"attention\": 28,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 19.776,\n  \"lm_head_alone_ms\": 49.836,\n  \"sample_ms\": 0.585,\n  \"token_ms\": 74.262,\n  \"micro_us\": {\n    \"rms_norm\": 36.57,\n    \"residual_add\": 3.69,\n    \"silu_gate\": 44.56,\n    \"rope_q\": 39.05,\n    \"tensor_to_same_dtype\": 1.18\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_new_r4": {
+   "rc": 0,
+   "seconds": 38.7,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 4,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.16,\n  \"step_ms\": 227.497,\n  \"step_async_ms\": 224.693,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": -2.804,\n  \"instrumented_step_ms\": 224.431,\n  \"components_ms\": {\n    \"lm_head\": 102.679,\n    \"attention\": 70.668,\n    \"glue\": 20.031,\n    \"rope_apply\": 13.861,\n    \"rms_norm\": 11.987,\n    \"kv_append\": 5.157,\n    \"rope_tables\": 0.048\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 4,\n    \"rms_norm\": 228,\n    \"rope_apply\": 224,\n    \"kv_append\": 112,\n    \"attention\": 112,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 121.73,\n  \"lm_head_alone_ms\": 102.912,\n  \"sample_ms\": 2.725,\n  \"token_ms\": 227.419,\n  \"micro_us\": {\n    \"rms_norm\": 37.28,\n    \"residual_add\": 3.64,\n    \"silu_gate\": 45.78,\n    \"rope_q\": 39.17,\n    \"tensor_to_same_dtype\": 1.16\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_ref_r4": {
+   "rc": 0,
+   "seconds": 41.9,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 4,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.84,\n  \"step_ms\": 239.575,\n  \"step_async_ms\": 241.836,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 2.261,\n  \"instrumented_step_ms\": 238.389,\n  \"components_ms\": {\n    \"lm_head\": 110.953,\n    \"attention\": 73.88,\n    \"glue\": 20.231,\n    \"rope_apply\": 15.337,\n    \"rms_norm\": 12.609,\n    \"kv_append\": 5.331,\n    \"rope_tables\": 0.048\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 4,\n    \"rms_norm\": 228,\n    \"rope_apply\": 224,\n    \"kv_append\": 112,\n    \"attention\": 112,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 143.574,\n  \"lm_head_alone_ms\": 111.56,\n  \"sample_ms\": 6.768,\n  \"token_ms\": 248.604,\n  \"micro_us\": {\n    \"rms_norm\": 39.7,\n    \"residual_add\": 3.93,\n    \"silu_gate\": 46.04,\n    \"rope_q\": 40.8,\n    \"tensor_to_same_dtype\": 1.18\n  },\n  \"lm_head_isa\": \"avx\",\n  \"reference_paths\": true\n}\n\n---stderr---\n"
+  },
+  "profile_token_avx2_r4": {
+   "rc": 0,
+   "seconds": 38.1,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 4,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.27,\n  \"step_ms\": 212.035,\n  \"step_async_ms\": 226.577,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 14.542,\n  \"instrumented_step_ms\": 213.099,\n  \"components_ms\": {\n    \"lm_head\": 101.575,\n    \"attention\": 62.929,\n    \"glue\": 18.507,\n    \"rope_apply\": 13.29,\n    \"rms_norm\": 11.675,\n    \"kv_append\": 5.075,\n    \"rope_tables\": 0.048\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 4,\n    \"rms_norm\": 228,\n    \"rope_apply\": 224,\n    \"kv_append\": 112,\n    \"attention\": 112,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 109.907,\n  \"lm_head_alone_ms\": 102.229,\n  \"sample_ms\": 2.712,\n  \"token_ms\": 229.289,\n  \"micro_us\": {\n    \"rms_norm\": 36.9,\n    \"residual_add\": 3.75,\n    \"silu_gate\": 46.31,\n    \"rope_q\": 39.03,\n    \"tensor_to_same_dtype\": 1.2\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_omp_active_r4": {
+   "rc": 0,
+   "seconds": 35.3,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 4,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"ACTIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.32,\n  \"step_ms\": 199.312,\n  \"step_async_ms\": 200.169,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 0.857,\n  \"instrumented_step_ms\": 203.78,\n  \"components_ms\": {\n    \"lm_head\": 121.601,\n    \"attention\": 34.039,\n    \"glue\": 18.704,\n    \"rope_apply\": 12.884,\n    \"rms_norm\": 11.603,\n    \"kv_append\": 4.902,\n    \"rope_tables\": 0.047\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 4,\n    \"rms_norm\": 228,\n    \"rope_apply\": 224,\n    \"kv_append\": 112,\n    \"attention\": 112,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 75.119,\n  \"lm_head_alone_ms\": 121.103,\n  \"sample_ms\": 2.333,\n  \"token_ms\": 202.502,\n  \"micro_us\": {\n    \"rms_norm\": 37.98,\n    \"residual_add\": 3.83,\n    \"silu_gate\": 47.64,\n    \"rope_q\": 39.83,\n    \"tensor_to_same_dtype\": 1.18\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_new_r16": {
+   "rc": 0,
+   "seconds": 119.8,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 16,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.2,\n  \"step_ms\": 847.022,\n  \"step_async_ms\": 889.62,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 42.598,\n  \"instrumented_step_ms\": 855.716,\n  \"components_ms\": {\n    \"lm_head\": 403.034,\n    \"attention\": 262.025,\n    \"glue\": 72.003,\n    \"rope_apply\": 55.786,\n    \"rms_norm\": 42.02,\n    \"kv_append\": 20.694,\n    \"rope_tables\": 0.154\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 16,\n    \"rms_norm\": 912,\n    \"rope_apply\": 896,\n    \"kv_append\": 448,\n    \"attention\": 448,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 420.023,\n  \"lm_head_alone_ms\": 402.382,\n  \"sample_ms\": 11.082,\n  \"token_ms\": 900.702,\n  \"micro_us\": {\n    \"rms_norm\": 37.22,\n    \"residual_add\": 3.75,\n    \"silu_gate\": 47.2,\n    \"rope_q\": 39.44,\n    \"tensor_to_same_dtype\": 1.21\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_ref_r16": {
+   "rc": 0,
+   "seconds": 123.5,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 16,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.1,\n  \"step_ms\": 862.872,\n  \"step_async_ms\": 940.134,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 77.262,\n  \"instrumented_step_ms\": 875.971,\n  \"components_ms\": {\n    \"lm_head\": 435.394,\n    \"attention\": 244.674,\n    \"glue\": 75.698,\n    \"rope_apply\": 57.909,\n    \"rms_norm\": 41.473,\n    \"kv_append\": 20.672,\n    \"rope_tables\": 0.151\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 16,\n    \"rms_norm\": 912,\n    \"rope_apply\": 896,\n    \"kv_append\": 448,\n    \"attention\": 448,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 430.581,\n  \"lm_head_alone_ms\": 436.713,\n  \"sample_ms\": 26.611,\n  \"token_ms\": 966.745,\n  \"micro_us\": {\n    \"rms_norm\": 36.5,\n    \"residual_add\": 3.86,\n    \"silu_gate\": 48.0,\n    \"rope_q\": 38.98,\n    \"tensor_to_same_dtype\": 1.23\n  },\n  \"lm_head_isa\": \"avx\",\n  \"reference_paths\": true\n}\n\n---stderr---\n"
+  },
+  "profile_token_avx2_r16": {
+   "rc": 0,
+   "seconds": 117.9,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 16,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"PASSIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.14,\n  \"step_ms\": 834.268,\n  \"step_async_ms\": 889.945,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 55.677,\n  \"instrumented_step_ms\": 844.558,\n  \"components_ms\": {\n    \"lm_head\": 400.759,\n    \"attention\": 248.327,\n    \"glue\": 79.571,\n    \"rope_apply\": 54.521,\n    \"rms_norm\": 41.306,\n    \"kv_append\": 19.924,\n    \"rope_tables\": 0.15\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 16,\n    \"rms_norm\": 912,\n    \"rope_apply\": 896,\n    \"kv_append\": 448,\n    \"attention\": 448,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 429.01,\n  \"lm_head_alone_ms\": 400.385,\n  \"sample_ms\": 11.117,\n  \"token_ms\": 901.062,\n  \"micro_us\": {\n    \"rms_norm\": 36.7,\n    \"residual_add\": 3.81,\n    \"silu_gate\": 44.5,\n    \"rope_q\": 39.1,\n    \"tensor_to_same_dtype\": 1.2\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  },
+  "profile_token_omp_active_r16": {
+   "rc": 0,
+   "seconds": 117.9,
+   "tail": "{\n  \"preset\": \"7b\",\n  \"layers\": 28,\n  \"rows\": 16,\n  \"context\": 48,\n  \"torch\": \"2.11.0+cpu\",\n  \"torch_threads\": 2,\n  \"omp_wait_policy\": \"ACTIVE\",\n  \"native_lm_head\": true,\n  \"lm_head_dtype\": \"torch.bfloat16\",\n  \"cpu\": \"x86_64\",\n  \"load_s\": 7.19,\n  \"step_ms\": 902.01,\n  \"step_async_ms\": 923.785,\n  \"async_matches_sync\": true,\n  \"hop_overhead_ms\": 21.776,\n  \"instrumented_step_ms\": 836.408,\n  \"components_ms\": {\n    \"lm_head\": 510.146,\n    \"attention\": 129.274,\n    \"glue\": 83.039,\n    \"rope_apply\": 51.475,\n    \"rms_norm\": 42.568,\n    \"kv_append\": 19.734,\n    \"rope_tables\": 0.172\n  },\n  \"component_calls_per_step\": {\n    \"rope_tables\": 16,\n    \"rms_norm\": 912,\n    \"rope_apply\": 896,\n    \"kv_append\": 448,\n    \"attention\": 448,\n    \"lm_head\": 1\n  },\n  \"layers_only_ms\": 297.079,\n  \"lm_head_alone_ms\": 510.226,\n  \"sample_ms\": 9.57,\n  \"token_ms\": 933.355,\n  \"micro_us\": {\n    \"rms_norm\": 36.53,\n    \"residual_add\": 4.01,\n    \"silu_gate\": 46.2,\n    \"rope_q\": 39.25,\n    \"tensor_to_same_dtype\": 1.21\n  },\n  \"lm_head_isa\": \"avx2\",\n  \"reference_paths\": false\n}\n\n---stderr---\n"
+  }
+ },
+ "env": {
+  "python": "3.13.18 (main, Oct 26 2026, 15:28:15) [GCC 13.3.0]",
+  "torch": "2.11.0+cpu",
+  "cuda": null,
+  "gpu": null,
+  "gpu_count": 0,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869288 kB",
+   "MemFree:        27219784 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  1.6M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 13.2
+}

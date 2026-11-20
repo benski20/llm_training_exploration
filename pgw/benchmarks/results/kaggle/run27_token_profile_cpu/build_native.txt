@@ -1,0 +1,143 @@
+cargo not found
+
+  stable-x86_64-unknown-linux-gnu installed - rustc 1.100.0 (0ef1bc386 2026-11-09)
+
+
+Rust is installed now. Great!
+
+To get started you may need to restart your current shell.
+This would reload your PATH environment variable to include
+Cargo's bin directory ($HOME/.cargo/bin).
+
+To configure your current shell, you need to source the
+corresponding env file under $HOME/.cargo.
+
+Consider running the right command for your shell (note the leading DOT):
+. "$HOME/.cargo/env" # For sh/ash/dash/pdksh/bash
+cargo:rerun-if-env-changed=CC_x86_64-unknown-linux-gnu
+CC_x86_64-unknown-linux-gnu = None
+cargo:rerun-if-env-changed=CC_x86_64_unknown_linux_gnu
+CC_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+cargo:rerun-if-env-changed=CPATH
+cargo:rerun-if-env-changed=C_INCLUDE_PATH
+cargo:rerun-if-env-changed=CPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJC_INCLUDE_PATH
+cargo:rerun-if-env-changed=OBJCPLUS_INCLUDE_PATH
+cargo:rerun-if-env-changed=COMPILER_PATH
+cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH
+cargo:rerun-if-env-changed=GCC_EXEC_PREFIX
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_unknown_linux_gnu
+CFLAGS_x86_64_unknown_linux_gnu = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-unknown-linux-gnu
+CFLAGS_x86_64-unknown-linux-gnu = None
+cargo 1.100.0 (3acc79c0c 2026-11-05)
+installed /tmp/pgwsrc/pgw/src/pgw_fast.abi3.so
+pgw_fast 0.1.0
+
+---stderr---
+info: downloading installer
+info: profile set to minimal
+info: default host tuple is x86_64-unknown-linux-gnu
+info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)
+info: downloading 3 components
+info: default toolchain set to stable-x86_64-unknown-linux-gnu
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded block-buffer v0.10.4
+  Downloaded autocfg v1.5.1
+  Downloaded chacha20 v0.9.1
+  Downloaded cipher v0.4.4
+  Downloaded cfg-if v1.0.5
+  Downloaded cpufeatures v0.2.17
+  Downloaded hkdf v0.12.4
+  Downloaded heck v0.5.0
+  Downloaded memoffset v0.9.1
+  Downloaded rustc-hash v2.1.3
+  Downloaded crypto-common v0.1.7
+  Downloaded generic-array v0.14.7
+  Downloaded unindent v0.2.4
+  Downloaded version_check v0.9.5
+  Downloaded rawpointer v0.2.1
+  Downloaded pyo3-macros v0.23.5
+  Downloaded subtle v2.6.1
+  Downloaded inout v0.1.4
+  Downloaded num-complex v0.4.6
+  Downloaded target-lexicon v0.12.16
+  Downloaded zeroize v1.9.1
+  Downloaded digest v0.10.7
+  Downloaded indoc v2.0.8
+  Downloaded quote v1.0.47
+  Downloaded rustversion v1.0.23
+  Downloaded sha2 v0.10.9
+  Downloaded hmac v0.12.1
+  Downloaded num-integer v0.1.47
+  Downloaded pyo3-build-config v0.23.5
+  Downloaded num-traits v0.2.19
+  Downloaded once_cell v1.21.4
+  Downloaded unicode-ident v1.0.27
+  Downloaded pyo3-macros-backend v0.23.5
+  Downloaded matrixmultiply v0.3.11
+  Downloaded numpy v0.23.0
+  Downloaded proc-macro2 v1.0.107
+  Downloaded pyo3-ffi v0.23.5
+  Downloaded typenum v1.20.1
+  Downloaded ndarray v0.16.1
+  Downloaded syn v2.0.119
+  Downloaded libc v0.2.191
+  Downloaded pyo3 v0.23.5
+   Compiling target-lexicon v0.12.16
+   Compiling autocfg v1.5.1
+   Compiling version_check v0.9.5
+   Compiling once_cell v1.21.4
+   Compiling typenum v1.20.1
+   Compiling generic-array v0.14.7
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling num-traits v0.2.19
+   Compiling pyo3-build-config v0.23.5
+   Compiling libc v0.2.191
+   Compiling cfg-if v1.0.5
+   Compiling subtle v2.6.1
+   Compiling syn v2.0.119
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling matrixmultiply v0.3.11
+   Compiling memoffset v0.9.1
+   Compiling heck v0.5.0
+   Compiling inout v0.1.4
+   Compiling cpufeatures v0.2.17
+   Compiling rawpointer v0.2.1
+   Compiling pyo3-ffi v0.23.5
+   Compiling pyo3-macros-backend v0.23.5
+   Compiling pyo3 v0.23.5
+   Compiling cipher v0.4.4
+   Compiling num-integer v0.1.47
+   Compiling num-complex v0.4.6
+   Compiling hmac v0.12.1
+   Compiling indoc v2.0.8
+   Compiling unindent v0.2.4
+   Compiling ndarray v0.16.1
+   Compiling hkdf v0.12.4
+   Compiling chacha20 v0.9.1
+   Compiling sha2 v0.10.9
+   Compiling rustc-hash v2.1.3
+   Compiling zeroize v1.9.1
+   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)
+   Compiling pyo3-macros v0.23.5
+   Compiling numpy v0.23.0
+   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)
+    Finished `release` profile [optimized] target(s) in 31.37s
