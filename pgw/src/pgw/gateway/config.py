@@ -84,21 +84,36 @@ class GatewayModelConfig(BaseModel):
         None, description="Speculative decoding: a small model pack with the same tokenizer (e.g. Qwen2.5-0.5B for "
         "Qwen2.5-7B), run locally in plaintext on the gateway to propose tokens the target checks in one masked pass",
     )
-    spec_tokens: int = Field(8, ge=0, le=16, description="Most draft tokens proposed per step (0 disables speculation)")
+    spec_tokens: int = Field(
+        2, ge=0, le=16, description="Draft tokens proposed per speculative pass (0 disables speculation). Speculation "
+        "runs only with a draft model (draft_pack_path) or prompt lookup (spec_lookup), both off by default. A "
+        "draft model on a CPU-only gateway does not pay off (the draft passes cost more than the round trips "
+        "saved); use a gateway GPU (draft_device) or prompt lookup",
+    )
     spec_min_tokens: int = Field(
-        4, ge=0, le=16, description="Draft tokens always proposed; more (up to spec_tokens) only while the draft is "
-        "confident (spec_confidence). Two fixed sizes per pass",
+        2, ge=0, le=16, description="Adaptive draft length (draft model only): draft tokens always proposed; the "
+        "full spec_tokens only while the draft is confident (spec_confidence). Equal to spec_tokens (the default): "
+        "one fixed size, and no per-token confidence check",
     )
     spec_confidence: float = Field(0.3, ge=0.0, lt=1.0, description="Draft top-probability needed to extend a draft")
     spec_row_budget: float = Field(
-        3.0, ge=1.0, le=17.0, description="Mask rows reserved per requested token when speculating (speculation "
-        "only ever uses rows the request already holds; unused rows are burned when the request ends). 2.0 starved "
-        "a 0.5B->7B draft in tests (35 vs 29 passes per 64 tokens); 3.0 is the default",
+        2.0, ge=1.0, le=17.0, description="Mask rows reserved per requested token when speculating (speculation "
+        "only ever uses rows the request already holds; unused rows are burned when the request ends). Rejected "
+        "drafts use rows; when the spare rows run out the request finishes without speculation. 2.0 suits "
+        "spec_tokens=2; raise it with longer drafts",
+    )
+    spec_max_batch: int = Field(
+        1, ge=1, le=1024, description="Speculate only in engine steps with at most this many sequences. Verify rows "
+        "of one sequence slow every linear of a shared step, so concurrent streams lose more than they gain",
     )
     spec_lookup: int = Field(
         0, ge=0, le=8, description="Prompt-lookup drafting: propose what followed the latest earlier match of the "
-        "last N (down to 1) context tokens, before (or without) a draft model; free to compute, strong on RAG, code "
-        "and summaries. Rejected proposals use mask rows. 0 disables; 3 is a good value",
+        "last N (down to spec_lookup_min_n) context tokens, before (or without) a draft model; free to compute, "
+        "strong on RAG, code and summaries. Rejected proposals use mask rows. 0 disables; 3 is a good value",
+    )
+    spec_lookup_min_n: int = Field(
+        3, ge=2, le=8, description="Shortest context match prompt lookup accepts (no 1-gram coincidences). A "
+        "proposal is always spec_tokens long: a shorter match is completed by the draft model, or dropped",
     )
     draft_device: str | None = Field(None, description="Device of the draft model (default: the model's device)")
     service_url: str | None = None
