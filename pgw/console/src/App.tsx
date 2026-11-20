@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "./api/client";
 import { GatewayProvider } from "./app/gateway";
@@ -13,6 +13,8 @@ import { ModelsPage } from "./pages/Models";
 import { OverviewPage } from "./pages/Overview";
 import { PlaygroundPage } from "./pages/Playground";
 import { SecurityPage } from "./pages/Security";
+import { SetupPage } from "./pages/Setup";
+import { setupApi } from "./api/setup";
 import { Loading, ToastProvider, useToast } from "./ui";
 
 /** Global API error -> toast (403 viewer, 429/503 retry hints, network). Polling repeats are de-duplicated by key. */
@@ -68,14 +70,34 @@ export function AppRoutes() {
   );
 }
 
+/** A gateway started without a model runs the first-run setup wizard instead of the console. */
+function SetupGate({ children }: { children: ReactNode }) {
+  const [mode, setMode] = useState<"loading" | "setup" | "normal">("loading");
+  useEffect(() => {
+    let alive = true;
+    setupApi
+      .status()
+      .then((s) => alive && setMode(s.setup_mode ? "setup" : "normal"))
+      .catch(() => alive && setMode("normal"));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  if (mode === "loading") return <div className="boot"><Loading label="Connecting to gateway" /></div>;
+  if (mode === "setup") return <SetupPage />;
+  return <>{children}</>;
+}
+
 export function App() {
   return (
     <Router>
       <ToastProvider>
-        <SessionProvider>
-          <ApiToasts />
-          <AppRoutes />
-        </SessionProvider>
+        <SetupGate>
+          <SessionProvider>
+            <ApiToasts />
+            <AppRoutes />
+          </SessionProvider>
+        </SetupGate>
       </ToastProvider>
     </Router>
   );

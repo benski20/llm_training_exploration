@@ -8,7 +8,8 @@
     pgw inspect PACK                      manifest summary, rings, mask bytes per slot
     pgw factory generate|run|status|benchmark      (pgw.factory.cli)
     pgw maskstore init|status|import|gc|rotate-key
-    pgw service serve | service token create|hash
+    pgw service serve | service token create|hash | service enroll create|list|revoke
+    pgw gateway enroll CODE --config-dir DIR   (pgw.gateway.cli)
     pgw gateway serve | gateway keys create|list|revoke  (pgw.gateway.cli)
     pgw bench ring|factory|service
     pgw config show ROLE | config render TEMPLATE OUT
@@ -442,11 +443,9 @@ def service_token() -> None:
 @handle_errors
 def service_token_create(tenant: str, tokens_file: Path | None, out_file: Path | None) -> None:
     """Create a tenant token; the plaintext is shown once (give it to the customer's gateway)."""
-    import re
+    from pgw.service.auth import hash_token, valid_tenant_id
 
-    from pgw.service.auth import hash_token
-
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", tenant):
+    if not valid_tenant_id(tenant):
         raise ConfigError("tenant id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     if tokens_file is None:
         env = os.environ.get("PGW_SERVICE_TOKENS_FILE")
@@ -466,21 +465,104 @@ def service_token_create(tenant: str, tokens_file: Path | None, out_file: Path |
 
 def _write_private(path: Path, text: str, *, append: bool) -> None:
     """Write ``text`` to ``path`` with mode 0600, refusing symlinks and tightening a looser existing mode."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(path, flags, 0o600)
-    except OSError as exc:
-        raise ConfigError(f"cannot write {path}: {exc.strerror}") from exc
-    try:
-        os.fchmod(fd, 0o600)
-    except OSError:
-        os.close(fd)
-        raise
-    with os.fdopen(fd, "a" if append else "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
+    from pgw.core.fileio import write_private
+
+    write_private(path, text, append=append)
+
+
+@service.group("enroll")
+def service_enroll() -> None:
+    """Single-use enrollment codes for new customer gateways (POST /pgw/v1/enroll)."""
+
+
+def _enroll_store(enrollment_file: Path | None) -> Any:
+    from pgw.enroll.store import EnrollmentStore
+
+    path = enrollment_file or (Path(os.environ["PGW_SERVICE_ENROLLMENT_FILE"])
+                               if os.environ.get("PGW_SERVICE_ENROLLMENT_FILE") else None)
+    if path is None:
+        raise ConfigError("no enrollment file: pass --enrollment-file or set PGW_SERVICE_ENROLLMENT_FILE")
+    return EnrollmentStore(path)
+
+
+_enroll_file_opt = click.option("--enrollment-file", type=click.Path(path_type=Path, dir_okay=False), default=None,
+                                help="Enrollment records (default PGW_SERVICE_ENROLLMENT_FILE)")
+
+
+@service_enroll.command("create")
+@click.option("--tenant", required=True, help="Tenant id the gateway will belong to ([A-Za-z0-9._-], max 64)")
+@click.option("--ttl", default="24h", show_default=True, help="Validity: e.g. 30m, 24h, 7d (max 30d)")
+@click.option("--models", default="", help="Comma-separated model names the code grants (default: all served)")
+@click.option("--note", default=None, help="Free-text note shown by 'enroll list' (e.g. the customer's name)")
+@click.option("--service-url", default=None, help="Public service URL in the code (default PGW_SERVICE_PUBLIC_URL)")
+@click.option("--ca-file", type=click.Path(path_type=Path, exists=True, dir_okay=False), default=None,
+              help="Service CA certificate to pin (default PGW_SERVICE_ENROLLMENT_CA_FILE)")
+@_enroll_file_opt
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
+@handle_errors
+def service_enroll_create(tenant: str, ttl: str, models: str, note: str | None, service_url: str | None,
+                          ca_file: Path | None, enrollment_file: Path | None, as_json: bool) -> None:
+    """Create a single-use enrollment code (shown once; only a hash of its secret is stored)."""
+    import datetime as dt
+
+    from pgw.enroll.code import EnrollmentCode, validate_service_url
+    from pgw.enroll.service import ca_fingerprint, load_ca_pem
+    from pgw.enroll.store import parse_ttl
+
+    url = service_url or os.environ.get("PGW_SERVICE_PUBLIC_URL")
+    if not url:
+        raise ConfigError("no service URL: pass --service-url or set PGW_SERVICE_PUBLIC_URL")
+    url = validate_service_url(url)
+    ca = ca_file or (Path(os.environ["PGW_SERVICE_ENROLLMENT_CA_FILE"])
+                     if os.environ.get("PGW_SERVICE_ENROLLMENT_CA_FILE") else None)
+    fp = ca_fingerprint(load_ca_pem(ca)) if ca is not None else None
+    if fp is None and url.startswith("https://"):
+        raise ConfigError("an https service URL needs the service CA to pin: pass --ca-file or set "
+                          "PGW_SERVICE_ENROLLMENT_CA_FILE")
+    store = _enroll_store(enrollment_file)
+    rec, secret = store.create(tenant, parse_ttl(ttl), [m for m in models.split(",") if m.strip()], note=note)
+    code = EnrollmentCode(url, fp or bytes(32), secret).encode()
+    if as_json:
+        echo_json({"id": rec.id, "tenant": rec.tenant, "expires_at": rec.expires_at, "models": rec.models,
+                   "code": code})
+        return
+    exp = dt.datetime.fromtimestamp(rec.expires_at, dt.UTC).strftime("%Y-%m-%d %H:%M UTC")
+    click.echo(code)
+    click.echo(f"\nid {rec.id}, tenant {rec.tenant}, single use, valid until {exp}"
+               + (f", models {', '.join(rec.models)}" if rec.models else ", all served models"), err=True)
+    click.echo("Send the code to the customer's administrator over a trusted channel. It is shown only once; "
+               "revoke it with 'pgw service enroll revoke ID' if it leaks.", err=True)
+
+
+@service_enroll.command("list")
+@_enroll_file_opt
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
+@handle_errors
+def service_enroll_list(enrollment_file: Path | None, as_json: bool) -> None:
+    """List enrollment codes and their state (no secrets)."""
+    import datetime as dt
+
+    recs = [r.public() for r in _enroll_store(enrollment_file).list()]
+    if as_json:
+        echo_json(recs)
+        return
+    if not recs:
+        click.echo("(no enrollment codes)")
+    for r in recs:
+        exp = dt.datetime.fromtimestamp(r["expires_at"], dt.UTC).strftime("%Y-%m-%d %H:%M")
+        used = f" by {r['used_by']}" if r.get("used_by") else ""
+        click.echo(f"{r['id']}  {r['tenant']:<20} {r['state']:<8}{used}  expires {exp} UTC  "
+                   f"models={','.join(r['models']) or '*'}" + (f"  note={r['note']}" if r.get("note") else ""))
+
+
+@service_enroll.command("revoke")
+@click.argument("record_id")
+@_enroll_file_opt
+@handle_errors
+def service_enroll_revoke(record_id: str, enrollment_file: Path | None) -> None:
+    """Revoke an unused enrollment code (takes effect immediately, also in a running service)."""
+    rec = _enroll_store(enrollment_file).revoke(record_id)
+    click.echo(json.dumps({"revoked": rec.id, "tenant": rec.tenant, "state": rec.state()}))
 
 
 @service_token.command("hash")

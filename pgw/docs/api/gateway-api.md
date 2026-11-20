@@ -44,6 +44,7 @@ and is refused under the production policy.
 | POST | `/console/api/logout` | console session | sign out |
 | GET | `/console/api/me` | console session | role, CSRF token and expiry of the current session, sign-in method and SSO user |
 | GET | `/console/api/auth-methods` | none | sign-in methods the console offers (token, single sign-on) |
+| GET | `/console/api/setup/status` | none | `setup_mode: false` on a configured gateway; in first-run setup mode the gateway serves only the setup wizard ([onboarding.md](../operations/onboarding.md)) |
 | GET | `/console/api/oidc/login` | none | start single sign-on: redirect to the identity provider ([console-sso.md](../operations/console-sso.md)) |
 | GET | `/console/api/oidc/callback` | none (OIDC state) | single sign-on redirect URI: creates the console session |
 | POST | `/console/api/playground/chat` | console admin | `/v1/chat/completions` as the built-in key `console-playground` |

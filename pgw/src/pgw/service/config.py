@@ -137,6 +137,36 @@ class ServiceSettings(PGWSettings):
     )
     allow_unauthenticated: bool = Field(False, description="Dev only")
 
+    # ---- enrollment (pgw service enroll ..., POST /pgw/v1/enroll) --------------------------
+    enrollment_file: Path | None = Field(
+        None, description="Enrollment records (JSON, 0600; only hashes of the code secrets). Setting it enables "
+        "POST /pgw/v1/enroll; needs tokens_file and public_url",
+    )
+    public_url: str | None = Field(
+        None, description="Base URL gateways use to reach this service (https), written into enrollment codes",
+    )
+    enrollment_ca_file: Path | None = Field(
+        None, description="PEM certificate of the CA that issued this service's TLS certificate. Its SHA-256 goes "
+        "into enrollment codes (gateways pin it on first contact) and enrolled gateways receive it as service CA",
+    )
+    enrollment_audit_file: Path | None = Field(
+        None, description="Append-only JSON-lines audit of enrollment attempts (never secrets or tokens; default: "
+        "<enrollment_file>.audit.jsonl)",
+    )
+    enrollment_rate_limit_per_minute: int = Field(
+        10, ge=1, description="Enrollment attempts per client IP per minute (failed or not)",
+    )
+    client_issuing_ca_cert_file: Path | None = Field(
+        None, description="Optional CA certificate (PEM) used to sign gateway client certificates at enrollment "
+        "(when the gateway sends a CSR). Needs client_issuing_ca_key_file",
+    )
+    client_issuing_ca_key_file: Path | None = Field(
+        None, description="Private key (PEM, 0600) of client_issuing_ca_cert_file",
+    )
+    client_cert_validity_days: float = Field(
+        30.0, gt=0, le=397, description="Lifetime of client certificates signed at enrollment",
+    )
+
     # ---- lifecycle / misc ----------------------------------------------------------------
     drain_timeout_s: float = Field(30.0, ge=0, description="Max wait for in-flight work on shutdown")
     metrics_enabled: bool = True
@@ -180,6 +210,23 @@ class ServiceSettings(PGWSettings):
                 "mtls_tenants_file needs verified client certificates: set tls.cert_file, tls.key_file and "
                 "tls.ca_file (native mTLS) or trusted_client_cert_header (TLS-terminating proxy)"
             )
+        if (self.client_issuing_ca_cert_file is None) != (self.client_issuing_ca_key_file is None):
+            raise ValueError("client_issuing_ca_cert_file and client_issuing_ca_key_file must be set together")
+        if self.public_url is not None:
+            from pgw.enroll.code import validate_service_url
+
+            try:
+                validate_service_url(self.public_url)
+            except PGWError as exc:
+                raise ValueError(f"public_url: {exc.message}") from exc
+        if self.enrollment_file is not None:
+            if self.tokens_file is None:
+                raise ValueError("enrollment_file needs tokens_file (enrolled gateways get a tenant token)")
+            if self.public_url is None:
+                raise ValueError("enrollment_file needs public_url (the URL written into enrollment codes)")
+            if self.public_url.startswith("https://") and self.enrollment_ca_file is None:
+                raise ValueError("enrollment_file with an https public_url needs enrollment_ca_file (the CA "
+                                 "gateways pin on first contact)")
         if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
             raise ValueError("metrics_port must differ from port")
         return self

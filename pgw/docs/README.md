@@ -11,6 +11,7 @@ reviewers, operators, developers and compliance teams.
 |---|---|---|
 | Security architects, auditors | [Security whitepaper](security/whitepaper.md) | scheme, proof sketch of perfect secrecy per one-time use, Freivalds integrity bound, what is and is not protected, collusion and supply-chain risks |
 | Security architects | [Threat model (STRIDE)](security/threat-model.md) | assets, trust boundaries, data flows, STRIDE tables, residual risks |
+| Customer administrators | [Getting started with an enrollment code](operations/onboarding.md) | plain-language setup: one enrollment code and the console setup wizard; for operators: issuing enrollment codes |
 | Operators | [On-prem gateway](operations/install-on-prem.md) | topology A: install, configure, verify, operate |
 | Operators | [Gateway in your cloud account](operations/install-customer-cloud.md) | topology B: private link, Helm, KMS, cloud storage |
 | Operators | [Mask factory air-gapped from us](operations/air-gapped-factory.md) | offline factory, partner delivery with HPKE, media handling |

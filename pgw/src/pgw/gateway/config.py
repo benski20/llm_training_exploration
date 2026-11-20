@@ -299,6 +299,23 @@ class GatewaySettings(PGWSettings):
         True, description="Allow console sign-in with the admin or a viewer token. Set false when SSO is mandatory "
         "(needs console OIDC; the admin token keeps working as a Bearer token for /admin/* scripts)",
     )
+    # ---- first-run setup (pgw gateway enroll, console setup wizard) ---------------------------------------
+    setup_mode: bool = Field(
+        False, description="Start the first-run setup wizard (/console/) instead of serving models. Also used "
+        "automatically when no model is configured or a wizard run under config_dir is unfinished",
+    )
+    config_dir: Path = Field(
+        Path("/etc/pgw"), description="Configuration directory the enrollment and setup wizard write to "
+        "(credentials, models.json, gateway.env, setup state)",
+    )
+    data_dir: Path = Field(
+        Path("/var/lib/pgw"), description="Data directory the setup wizard uses for model packs, the mask "
+        "store and gateway state",
+    )
+    factory_env_file: Path | None = Field(
+        None, description="Run the encrypted mask factory as a supervised child process of the gateway with the "
+        "PGW_FACTORY_* / PGW_MASKSTORE_* settings in this file (written by the setup wizard)",
+    )
     # ---- console single sign-on (OpenID Connect, authorization code flow + PKCE; off unless issuer + client id) --
     console_oidc_issuer: str | None = Field(
         None, description="OIDC issuer URL (https), exactly as the provider's discovery document states it",
