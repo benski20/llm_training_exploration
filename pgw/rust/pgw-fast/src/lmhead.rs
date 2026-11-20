@@ -13,7 +13,8 @@
 //! 3. the last `D mod 16` columns: `acc[l] = acc[l] + h[16C+l] * w[16C+l]` for `l < D mod 16`;
 //! 4. a fixed tree: `acc[l] + acc[l+8]` (8 sums), then `+4`, `+2`, `+1`.
 //!
-//! The lanes live in vector registers (SSE2 `4 x __m128`, AVX `2 x __m256`, or a plain array):
+//! The lanes live in vector registers (SSE2 `4 x __m128`, AVX/AVX2 `2 x __m256`, AVX-512F one
+//! `__m512`, or a plain array; the best one the CPU has is picked at run time, `Isa`):
 //! lane `l` is the same element of the same accumulator on every path, and only separate multiply
 //! and add instructions are used (Rust never contracts `a + b * c` into an FMA nor reassociates
 //! float operations), so every path gives identical bits; the tests compare them with a scalar
@@ -23,7 +24,10 @@
 //! Work split: worker threads take dynamic chunks of weight rows; each worker reads a few weight
 //! rows (`NV`, kept in L1/L2) and computes their dot products with every row of `h` (a block of
 //! rows small enough to stay in L2), so the head is streamed from memory once per call for up to
-//! `H_BLOCK_BYTES / (4 D)` rows (36 at `D = 3584`).
+//! `H_BLOCK_BYTES / (4 D)` rows (36 at `D = 3584`). Inside that, outputs are register-blocked
+//! (`RB` rows of `h` by `NV` weight rows, see [`block`]): each weight chunk is loaded and widened
+//! once for `RB` rows, which matters for multi-session steps (one row per stream). Blocking only
+//! chooses which outputs are computed side by side, never the order of an output's own operations.
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
@@ -43,6 +47,8 @@ const WORK_PER_THREAD: usize = 1 << 22;
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lm_head, m)?)?;
     m.add_function(wrap_pyfunction!(lm_head_bf16, m)?)?;
+    m.add_function(wrap_pyfunction!(lm_head_isa, m)?)?;
+    m.add_function(wrap_pyfunction!(top_k_strict, m)?)?;
     m.add("LM_HEAD_LANES", LANES)?;
     Ok(())
 }
@@ -257,6 +263,73 @@ mod x86 {
             o
         }
     }
+
+    /// AVX2: two `__m256` like [`Avx`], with a cheaper bfloat16 widening (zero-extend each u16 to
+    /// u32 and shift it into the high half: exactly its f32 bit pattern).
+    #[derive(Clone, Copy)]
+    pub struct Avx2([__m256; 2]);
+
+    impl Lanes for Avx2 {
+        #[inline(always)]
+        unsafe fn zero() -> Self {
+            Avx2([_mm256_setzero_ps(); 2])
+        }
+        #[inline(always)]
+        unsafe fn load(p: *const f32) -> Self {
+            Avx2([_mm256_loadu_ps(p), _mm256_loadu_ps(p.add(8))])
+        }
+        #[inline(always)]
+        unsafe fn load_bf16(p: *const u16) -> Self {
+            let a = _mm256_cvtepu16_epi32(_mm_loadu_si128(p as *const __m128i));
+            let b = _mm256_cvtepu16_epi32(_mm_loadu_si128(p.add(8) as *const __m128i));
+            Avx2([_mm256_castsi256_ps(_mm256_slli_epi32::<16>(a)), _mm256_castsi256_ps(_mm256_slli_epi32::<16>(b))])
+        }
+        #[inline(always)]
+        unsafe fn mul_add(self, a: Self, b: Self) -> Self {
+            Avx2([
+                _mm256_add_ps(self.0[0], _mm256_mul_ps(a.0[0], b.0[0])),
+                _mm256_add_ps(self.0[1], _mm256_mul_ps(a.0[1], b.0[1])),
+            ])
+        }
+        #[inline(always)]
+        unsafe fn lanes(self) -> [f32; LANES] {
+            let mut o = [0f32; LANES];
+            _mm256_storeu_ps(o.as_mut_ptr(), self.0[0]);
+            _mm256_storeu_ps(o.as_mut_ptr().add(8), self.0[1]);
+            o
+        }
+    }
+
+    /// AVX-512F: all 16 lanes in one `__m512` (lane `l` is element `l`, as on every other path;
+    /// separate multiply and add instructions, never an FMA).
+    #[derive(Clone, Copy)]
+    pub struct Avx512(__m512);
+
+    impl Lanes for Avx512 {
+        #[inline(always)]
+        unsafe fn zero() -> Self {
+            Avx512(_mm512_setzero_ps())
+        }
+        #[inline(always)]
+        unsafe fn load(p: *const f32) -> Self {
+            Avx512(_mm512_loadu_ps(p))
+        }
+        #[inline(always)]
+        unsafe fn load_bf16(p: *const u16) -> Self {
+            let a = _mm512_cvtepu16_epi32(_mm256_loadu_si256(p as *const __m256i));
+            Avx512(_mm512_castsi512_ps(_mm512_slli_epi32::<16>(a)))
+        }
+        #[inline(always)]
+        unsafe fn mul_add(self, a: Self, b: Self) -> Self {
+            Avx512(_mm512_add_ps(self.0, _mm512_mul_ps(a.0, b.0)))
+        }
+        #[inline(always)]
+        unsafe fn lanes(self) -> [f32; LANES] {
+            let mut o = [0f32; LANES];
+            _mm512_storeu_ps(o.as_mut_ptr(), self.0);
+            o
+        }
+    }
 }
 
 /// Software prefetch distance along a weight row (floats); the head is streamed from memory.
@@ -274,42 +347,62 @@ fn prefetch<T>(p: *const T) {
     let _ = p;
 }
 
-/// `NV` dot products of `h` (`d` values) with the weight rows starting at `w`, `w + d`, ...
+/// The `RB x NV` dot products of `RB` rows of `h` (row `i` at `h + i * d`) with `NV` weight rows
+/// (row `j` at `w + j * d`), written to `out[i * v + j]` (row and column offsets already applied).
+///
+/// Register blocking only decides which outputs are computed side by side: every output still sees
+/// its own 16 lanes updated over the columns in increasing order, then its tail and the tree, so
+/// the bits do not depend on `RB` or `NV`. Each weight chunk is loaded (and widened) once for the
+/// `RB` rows.
 ///
 /// # Safety
-/// `h` must hold `d` values and `w` `NV * d` values; `L`'s instructions must be available.
+/// `h` must hold `RB * d` values, `w` `NV * d` values, `out` must be writable at the offsets above;
+/// `L`'s instructions must be available.
 #[inline(always)]
-unsafe fn dots<L: Lanes, W: WElem, const NV: usize>(h: *const f32, w: *const W, d: usize) -> [f32; NV] {
+unsafe fn block<L: Lanes, W: WElem, const RB: usize, const NV: usize>(
+    h: *const f32,
+    w: *const W,
+    d: usize,
+    out: *mut f32,
+    v: usize,
+) {
     let full = d / LANES * LANES;
-    let mut acc = [L::zero(); NV];
+    let mut acc = [[L::zero(); NV]; RB];
     let mut k = 0;
     while k < full {
-        let hv = L::load(h.add(k));
-        for (j, a) in acc.iter_mut().enumerate() {
+        let mut wv = [L::zero(); NV];
+        for (j, x) in wv.iter_mut().enumerate() {
             prefetch(w.wrapping_add(j * d + k + PREFETCH));
-            *a = a.mul_add(hv, W::load::<L>(w.add(j * d + k)));
+            *x = W::load::<L>(w.add(j * d + k));
+        }
+        for (i, row) in acc.iter_mut().enumerate() {
+            let hv = L::load(h.add(i * d + k));
+            for (a, x) in row.iter_mut().zip(wv.iter()) {
+                *a = a.mul_add(hv, *x);
+            }
         }
         k += LANES;
     }
-    let mut out = [0f32; NV];
-    for (j, a) in acc.iter().enumerate() {
-        let mut s = a.lanes();
-        for (l, sl) in s.iter_mut().enumerate().take(d - full) {
-            *sl += *h.add(full + l) * (*w.add(j * d + full + l)).f32();
+    for (i, row) in acc.iter().enumerate() {
+        for (j, a) in row.iter().enumerate() {
+            let mut s = a.lanes();
+            for (l, sl) in s.iter_mut().enumerate().take(d - full) {
+                *sl += *h.add(i * d + full + l) * (*w.add(j * d + full + l)).f32();
+            }
+            *out.add(i * v + j) = tree(&s);
         }
-        out[j] = tree(&s);
     }
-    out
 }
 
-/// Outputs `out[r, v]` for all `r` and `v` in `[va, vb)`, `NV` weight rows at a time.
+/// Outputs `out[r, v]` for all `r` and `v` in `[va, vb)`: blocks of `RB` rows by `NV` weight rows,
+/// then the remainders one row / one weight row at a time.
 ///
 /// # Safety
 /// Shapes as in [`lm_head_run`]; `L`'s instructions must be available; no other thread writes
 /// these outputs.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
-unsafe fn work_with<L: Lanes, W: WElem, const NV: usize>(
+unsafe fn work_with<L: Lanes, W: WElem, const RB: usize, const NV: usize>(
     h: &[f32],
     w: &[W],
     r: usize,
@@ -326,17 +419,20 @@ unsafe fn work_with<L: Lanes, W: WElem, const NV: usize>(
         let r1 = (r0 + rb).min(r);
         let mut j = va;
         while j + NV <= vb {
-            for ri in r0..r1 {
-                let o = dots::<L, W, NV>(hp.add(ri * d), wp.add(j * d), d);
-                for (q, val) in o.iter().enumerate() {
-                    *out.0.add(ri * v + j + q) = *val;
-                }
+            let mut ri = r0;
+            while ri + RB <= r1 {
+                block::<L, W, RB, NV>(hp.add(ri * d), wp.add(j * d), d, out.0.add(ri * v + j), v);
+                ri += RB;
+            }
+            while ri < r1 {
+                block::<L, W, 1, NV>(hp.add(ri * d), wp.add(j * d), d, out.0.add(ri * v + j), v);
+                ri += 1;
             }
             j += NV;
         }
         while j < vb {
             for ri in r0..r1 {
-                *out.0.add(ri * v + j) = dots::<L, W, 1>(hp.add(ri * d), wp.add(j * d), d)[0];
+                block::<L, W, 1, 1>(hp.add(ri * d), wp.add(j * d), d, out.0.add(ri * v + j), v);
             }
             j += 1;
         }
@@ -348,10 +444,37 @@ unsafe fn work_with<L: Lanes, W: WElem, const NV: usize>(
 #[target_feature(enable = "avx")]
 #[allow(clippy::too_many_arguments)]
 unsafe fn work_avx<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
-    work_with::<x86::Avx, W, 4>(h, w, r, d, v, va, vb, out)
+    if r == 1 {
+        work_with::<x86::Avx, W, 1, 4>(h, w, r, d, v, va, vb, out)
+    } else {
+        work_with::<x86::Avx, W, 2, 2>(h, w, r, d, v, va, vb, out)
+    }
 }
 
-/// Instruction set used by [`lm_head_run`] (tests force each one to compare the bits).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn work_avx2<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
+    if r == 1 {
+        work_with::<x86::Avx2, W, 1, 4>(h, w, r, d, v, va, vb, out)
+    } else {
+        work_with::<x86::Avx2, W, 2, 2>(h, w, r, d, v, va, vb, out)
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn work_avx512<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
+    if r == 1 {
+        work_with::<x86::Avx512, W, 1, 8>(h, w, r, d, v, va, vb, out)
+    } else {
+        work_with::<x86::Avx512, W, 4, 4>(h, w, r, d, v, va, vb, out)
+    }
+}
+
+/// Instruction set used by [`lm_head_run`] (tests force each one to compare the bits). Every
+/// choice gives the same bits; only the speed differs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Isa {
     /// Best available at run time.
@@ -362,25 +485,81 @@ pub enum Isa {
     Sse,
     /// AVX (256-bit; multiply and add, no FMA).
     Avx,
+    /// AVX2 (as AVX, with integer bfloat16 widening).
+    Avx2,
+    /// AVX-512F (one 512-bit register per dot product).
+    Avx512,
+}
+
+impl Isa {
+    /// Parse a name (`auto`, `scalar`, `sse`, `avx`, `avx2`, `avx512`).
+    pub fn parse(name: &str) -> Option<Isa> {
+        Some(match name.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Isa::Auto,
+            "scalar" => Isa::Scalar,
+            "sse" | "sse2" => Isa::Sse,
+            "avx" => Isa::Avx,
+            "avx2" => Isa::Avx2,
+            "avx512" | "avx512f" => Isa::Avx512,
+            _ => return None,
+        })
+    }
+
+    /// Lower-case name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Isa::Auto => "auto",
+            Isa::Scalar => "scalar",
+            Isa::Sse => "sse",
+            Isa::Avx => "avx",
+            Isa::Avx2 => "avx2",
+            Isa::Avx512 => "avx512",
+        }
+    }
+
+    /// The instruction set actually used for a request: the request if this CPU has it, else the
+    /// best available one below it (`Auto`: the best available).
+    pub fn resolve(self) -> Isa {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut want = self;
+            if want == Isa::Auto {
+                want = Isa::Avx512;
+            }
+            if want == Isa::Avx512 && !std::is_x86_feature_detected!("avx512f") {
+                want = Isa::Avx2;
+            }
+            if want == Isa::Avx2 && !std::is_x86_feature_detected!("avx2") {
+                want = Isa::Avx;
+            }
+            if want == Isa::Avx && !std::is_x86_feature_detected!("avx") {
+                want = Isa::Sse;
+            }
+            want
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            Isa::Scalar
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn work<W: WElem>(isa: Isa, h: &[f32], w: &[W], r: usize, d: usize, v: usize, va: usize, vb: usize, out: OutPtr) {
     // SAFETY (all arms): shapes were checked by lm_head_run, each worker owns its output columns,
-    // and an instruction set is only used when the CPU has it.
+    // and `resolve` only returns an instruction set the CPU has.
     #[cfg(target_arch = "x86_64")]
     {
-        let avx = std::is_x86_feature_detected!("avx");
-        match isa {
-            Isa::Auto | Isa::Avx if avx => return unsafe { work_avx(h, w, r, d, v, va, vb, out) },
-            Isa::Auto | Isa::Avx | Isa::Sse => {
-                return unsafe { work_with::<x86::Sse, W, 2>(h, w, r, d, v, va, vb, out) };
-            }
-            Isa::Scalar => {}
+        match isa.resolve() {
+            Isa::Avx512 => return unsafe { work_avx512(h, w, r, d, v, va, vb, out) },
+            Isa::Avx2 => return unsafe { work_avx2(h, w, r, d, v, va, vb, out) },
+            Isa::Avx => return unsafe { work_avx(h, w, r, d, v, va, vb, out) },
+            Isa::Sse => return unsafe { work_with::<x86::Sse, W, 1, 2>(h, w, r, d, v, va, vb, out) },
+            Isa::Scalar | Isa::Auto => {}
         }
     }
     let _ = isa;
-    unsafe { work_with::<Scalar, W, 2>(h, w, r, d, v, va, vb, out) }
+    unsafe { work_with::<Scalar, W, 1, 2>(h, w, r, d, v, va, vb, out) }
 }
 
 /// Automatic worker count: the available parallelism (queried once).
@@ -427,6 +606,79 @@ pub fn lm_head_run<W: WElem>(h: &[f32], w: &[W], r: usize, d: usize, v: usize, t
     out
 }
 
+/// The instruction set :func:`lm_head` uses for ``isa`` on this CPU (e.g. ``"avx512"`` for ``"auto"``).
+#[pyfunction]
+#[pyo3(signature = (isa = "auto"))]
+fn lm_head_isa(isa: &str) -> PyResult<&'static str> {
+    Ok(Isa::parse(isa).ok_or_else(|| verr(format!("unknown isa {isa:?}")))?.resolve().name())
+}
+
+/// The `k` largest values of `a` with their indices, in descending order, **only when that answer
+/// is unique**: no NaN anywhere, and the `k + 1` largest values strictly decreasing (so no tie
+/// inside the top `k` nor across its boundary; `-0.0` and `+0.0` count as a tie). Then every
+/// correct top-k (e.g. `torch.topk(a, k)`, whose order among equal values is
+/// implementation-defined) returns exactly these pairs. `None` otherwise (the caller falls back to
+/// its reference) and for `k > a.len()`. Comparisons only: no arithmetic on the values.
+pub fn top_k_strict_run(a: &[f32], k: usize) -> Option<Vec<(usize, f32)>> {
+    if k > a.len() {
+        return None;
+    }
+    if k == 0 {
+        return if a.iter().any(|x| x.is_nan()) { None } else { Some(Vec::new()) };
+    }
+    let m = (k + 1).min(a.len());
+    // the m largest so far, descending; equal values in index order
+    let mut best: Vec<(f32, usize)> = Vec::with_capacity(m + 1);
+    const CHUNK: usize = 32;
+    for (c, chunk) in a.chunks(CHUNK).enumerate() {
+        if best.len() == m {
+            // Skip a chunk with no NaN and nothing above the current m-th value (a branch-free max
+            // that the compiler vectorizes; `x != x` is the NaN test).
+            let thr = best[m - 1].0;
+            let (mut mx, mut nan) = (f32::NEG_INFINITY, false);
+            for &x in chunk {
+                nan |= x != x;
+                mx = if x > mx { x } else { mx };
+            }
+            if !nan && mx <= thr {
+                continue;
+            }
+        }
+        for (o, &x) in chunk.iter().enumerate() {
+            if x.is_nan() {
+                return None;
+            }
+            if best.len() == m && x <= best[m - 1].0 {
+                continue;
+            }
+            let pos = best.iter().position(|b| x > b.0).unwrap_or(best.len());
+            best.insert(pos, (x, c * CHUNK + o));
+            best.truncate(m);
+        }
+    }
+    if best.windows(2).any(|p| p[0].0 <= p[1].0) {
+        return None;
+    }
+    Some(best.into_iter().take(k).map(|(x, i)| (i, x)).collect())
+}
+
+/// :func:`top_k_strict_run` for a 1-D float32 array: ``(indices, values)`` lists, or ``None`` when
+/// the top ``k`` is not unique (ties at or above the ``k``-th value, or a NaN).
+#[pyfunction]
+fn top_k_strict<'py>(
+    py: Python<'py>,
+    a: numpy::PyReadonlyArray1<'py, f32>,
+    k: usize,
+) -> PyResult<Option<(Vec<usize>, Vec<f32>)>> {
+    let got = if let Ok(s) = a.as_slice() {
+        py.allow_threads(|| top_k_strict_run(s, k))
+    } else {
+        let v: Vec<f32> = a.as_array().iter().copied().collect();
+        py.allow_threads(|| top_k_strict_run(&v, k))
+    };
+    Ok(got.map(|pairs| pairs.into_iter().unzip()))
+}
+
 fn verr(msg: impl Into<String>) -> PyErr {
     PyValueError::new_err(msg.into())
 }
@@ -437,16 +689,20 @@ fn verr(msg: impl Into<String>) -> PyErr {
 ///     h: float32 ``(R, D)``, C-contiguous.
 ///     w: float32 ``(V, D)``, C-contiguous (read once for all ``R`` rows).
 ///     threads: worker threads (0 = automatic); the result does not depend on it.
+///     isa: instruction set (``auto``, ``avx512``, ``avx2``, ``avx``, ``sse``, ``scalar``; one this
+///         CPU lacks falls back to the best available below it); the result does not depend on it.
 ///
 /// Returns float32 ``(R, V)``; row ``i`` only depends on row ``i`` of ``h`` (bit for bit).
 #[pyfunction]
-#[pyo3(signature = (h, w, threads = 0))]
+#[pyo3(signature = (h, w, threads = 0, isa = "auto"))]
 fn lm_head<'py>(
     py: Python<'py>,
     h: &Bound<'py, PyAny>,
     w: &Bound<'py, PyAny>,
     threads: usize,
+    isa: &str,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let isa = Isa::parse(isa).ok_or_else(|| verr(format!("unknown isa {isa:?}")))?;
     let ha: PyReadonlyArray2<'py, f32> = h.extract().map_err(|_| verr("h must be a 2-D float32 array"))?;
     let wa: PyReadonlyArray2<'py, f32> = w.extract().map_err(|_| verr("w must be a 2-D float32 array"))?;
     let (r, d) = (ha.shape()[0], ha.shape()[1]);
@@ -460,7 +716,7 @@ fn lm_head<'py>(
     }
     let hs = ha.as_slice().map_err(|_| verr("h must be C-contiguous"))?;
     let ws = wa.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
-    let out = py.allow_threads(|| lm_head_run(hs, ws, r, d, v, threads, Isa::Auto));
+    let out = py.allow_threads(|| lm_head_run(hs, ws, r, d, v, threads, isa));
     let a = Array2::from_shape_vec((r, v), out).map_err(|e| verr(e.to_string()))?;
     Ok(a.into_pyarray(py))
 }
@@ -469,13 +725,15 @@ fn lm_head<'py>(
 /// weight is widened to float32 exactly, so the result equals ``lm_head(h, w.astype(float32))`` bit
 /// for bit while reading half the memory.
 #[pyfunction]
-#[pyo3(signature = (h, w, threads = 0))]
+#[pyo3(signature = (h, w, threads = 0, isa = "auto"))]
 fn lm_head_bf16<'py>(
     py: Python<'py>,
     h: &Bound<'py, PyAny>,
     w: &Bound<'py, PyAny>,
     threads: usize,
+    isa: &str,
 ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let isa = Isa::parse(isa).ok_or_else(|| verr(format!("unknown isa {isa:?}")))?;
     let ha: PyReadonlyArray2<'py, f32> = h.extract().map_err(|_| verr("h must be a 2-D float32 array"))?;
     let wa: PyReadonlyArray2<'py, u16> =
         w.extract().map_err(|_| verr("w must be a 2-D uint16 array (bfloat16 bits)"))?;
@@ -491,7 +749,7 @@ fn lm_head_bf16<'py>(
     let ws = wa.as_slice().map_err(|_| verr("w must be C-contiguous"))?;
     // SAFETY: `Bf16` is a `repr(transparent)` u16.
     let wb: &[Bf16] = unsafe { std::slice::from_raw_parts(ws.as_ptr() as *const Bf16, ws.len()) };
-    let out = py.allow_threads(|| lm_head_run(hs, wb, r, d, v, threads, Isa::Auto));
+    let out = py.allow_threads(|| lm_head_run(hs, wb, r, d, v, threads, isa));
     let a = Array2::from_shape_vec((r, v), out).map_err(|e| verr(e.to_string()))?;
     Ok(a.into_pyarray(py))
 }
@@ -533,6 +791,8 @@ mod tests {
         out
     }
 
+    const ALL_ISAS: [Isa; 6] = [Isa::Auto, Isa::Scalar, Isa::Sse, Isa::Avx, Isa::Avx2, Isa::Avx512];
+
     fn bits(x: &[f32]) -> Vec<u32> {
         x.iter().map(|v| v.to_bits()).collect()
     }
@@ -544,7 +804,7 @@ mod tests {
             let w = randf(&mut s, v * d, 0.1);
             let h = randf(&mut s, 9 * d, 4.0);
             let want = reference(&h, &w, 9, d, v);
-            for isa in [Isa::Auto, Isa::Scalar, Isa::Sse, Isa::Avx] {
+            for isa in ALL_ISAS {
                 for threads in [1usize, 2, 3, 7] {
                     for r in 1..=9 {
                         let got = lm_head_run(&h[..r * d], &w, r, d, v, threads, isa);
@@ -582,7 +842,7 @@ mod tests {
         let mut s = 3u64;
         let w = randf(&mut s, v * d, 0.05);
         let h = randf(&mut s, 8 * d, 2.0);
-        for isa in [Isa::Scalar, Isa::Sse, Isa::Avx] {
+        for isa in [Isa::Scalar, Isa::Sse, Isa::Avx, Isa::Avx2, Isa::Avx512] {
             for r in [1usize, 4, 8] {
                 let reps = (152064 / v).max(1);
                 let _ = lm_head_run(&h[..r * d], &w, r, d, v, 1, isa);
@@ -610,7 +870,7 @@ mod tests {
             let wb: Vec<Bf16> = wf.iter().map(|x| Bf16((x.to_bits() >> 16) as u16)).collect();
             let h = randf(&mut s, 9 * d, 4.0);
             let want = reference(&h, &wf, 9, d, v);
-            for isa in [Isa::Auto, Isa::Scalar, Isa::Sse, Isa::Avx] {
+            for isa in ALL_ISAS {
                 for threads in [1usize, 3] {
                     for r in [1usize, 4, 9] {
                         let got = lm_head_run(&h[..r * d], &wb, r, d, v, threads, isa);
@@ -619,6 +879,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn top_k_strict_matches_a_full_sort_or_declines() {
+        let mut s = 0x7031u64;
+        for n in [1usize, 2, 3, 5, 17, 100, 1000] {
+            for trial in 0..40 {
+                // few distinct values in some trials: ties are common there
+                let levels = if trial % 2 == 0 { 7.0 } else { 1e6 };
+                let mut a: Vec<f32> = randf(&mut s, n, 2.0).iter().map(|x| (x * levels).round() / levels).collect();
+                if trial % 5 == 0 {
+                    a[(rng(&mut s) as usize) % n] = f32::NEG_INFINITY;
+                }
+                if trial % 7 == 0 {
+                    a[(rng(&mut s) as usize) % n] = -0.0;
+                }
+                let mut sorted: Vec<(f32, usize)> = a.iter().copied().zip(0..).collect();
+                sorted.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap().then(x.1.cmp(&y.1)));
+                for k in [0usize, 1, 2, 3, 5, 20] {
+                    let got = top_k_strict_run(&a, k);
+                    if k > n {
+                        assert!(got.is_none());
+                        continue;
+                    }
+                    let m = (k + 1).min(n);
+                    let unique = sorted[..m].windows(2).all(|p| p[0].0 > p[1].0);
+                    match got {
+                        None => assert!(!unique, "declined a unique top-{k} (n={n})"),
+                        Some(g) => {
+                            assert!(unique, "answered a tied top-{k} (n={n})");
+                            let want: Vec<(usize, u32)> = sorted[..k].iter().map(|x| (x.1, x.0.to_bits())).collect();
+                            let got: Vec<(usize, u32)> = g.iter().map(|x| (x.0, x.1.to_bits())).collect();
+                            assert_eq!(got, want);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(top_k_strict_run(&[1.0, f32::NAN, 0.5], 1).is_none());
+        // a NaN far behind the top values (in a chunk the pre-filter would otherwise skip)
+        let mut far: Vec<f32> = (0..1000).map(|i| -(i as f32)).collect();
+        assert_eq!(top_k_strict_run(&far, 2), Some(vec![(0, 0.0), (1, -1.0)]));
+        far[900] = f32::NAN;
+        assert!(top_k_strict_run(&far, 2).is_none());
+        assert!(top_k_strict_run(&[0.0, -0.0, -1.0], 1).is_none());
+        assert_eq!(top_k_strict_run(&[0.0, -1.0, -1.0], 1), Some(vec![(0, 0.0)]));
     }
 
     #[test]

@@ -7,13 +7,14 @@ Only the frequency computation differs between variants; application is the usua
 from __future__ import annotations
 
 import math
+import weakref
 from typing import Any
 
 import torch
 
 from pgw.core.errors import ConfigError
 
-__all__ = ["RotaryEmbedding", "apply_rope", "rope_inv_freq", "rotate_half"]
+__all__ = ["RotaryEmbedding", "apply_rope", "apply_rope_reference", "rope_inv_freq", "rotate_half"]
 
 SUPPORTED_ROPE_TYPES = ("default", "linear", "llama3", "yarn")
 
@@ -103,11 +104,54 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x[..., h:], x[..., :h]), dim=-1)
 
 
-def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """Rotate ``x (T, heads, hd)`` with ``cos/sin (T, hd)``."""
+def apply_rope_reference(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate ``x (T, heads, hd)`` with ``cos/sin (T, hd)``: ``x * cos + rotate_half(x) * sin`` (HF form)."""
     c = cos[:, None, :]
     s = sin[:, None, :]
     return x * c + rotate_half(x) * s
+
+
+#: ``id(sin)`` -> (weak reference to ``sin``, its version counter, ``cat(-sin1, sin2)``). A step calls
+#: :func:`apply_rope` twice per layer with the same ``sin`` table, so the signed copy is built once.
+_signed_sin_cache: dict[int, tuple[weakref.ref[torch.Tensor], int, torch.Tensor]] = {}
+_SIGNED_SIN_MAX = 64
+
+
+def _signed_sin(sin: torch.Tensor) -> torch.Tensor:
+    """``cat(-sin[..., :h], sin[..., h:])`` for this very tensor (cached while it lives, unmodified)."""
+    key = id(sin)
+    hit = _signed_sin_cache.get(key)
+    if hit is not None and hit[0]() is sin and hit[1] == sin._version:
+        return hit[2]
+    h = sin.shape[-1] // 2
+    signed = torch.cat((-sin[..., :h], sin[..., h:]), dim=-1)
+    if len(_signed_sin_cache) >= _SIGNED_SIN_MAX:
+        _signed_sin_cache.clear()
+    def _drop(_ref: weakref.ref[torch.Tensor], k: int = key) -> None:
+        _signed_sin_cache.pop(k, None)
+
+    try:
+        ref = weakref.ref(sin, _drop)
+    except TypeError:  # pragma: no cover - tensors support weak references
+        return signed
+    _signed_sin_cache[key] = (ref, sin._version, signed)
+    return signed
+
+
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """Rotate ``x (T, heads, hd)`` with ``cos/sin (T, hd)``; the bits of :func:`apply_rope_reference`.
+
+    ``rotate_half(x) * sin`` is ``cat(-x2, x1) * cat(sin1, sin2)``. Here the sign moves to the table:
+    ``cat(x2, x1) * cat(-sin1, sin2)``, and ``(-a) * b == a * (-b)`` exactly in IEEE arithmetic (the
+    magnitude is the same correctly rounded product, the sign is the XOR of the signs, zeros
+    included), so every output element gets the same float operations on the same values: one
+    product rounded, another product rounded, one sum. The swap is a single copy (a flip of the two
+    halves) instead of a negation, two slices and a concatenation, and the signed table is built once
+    per step. (Only NaN inputs could differ, in the sign bit of a NaN.)
+    """
+    h = x.shape[-1] // 2
+    swapped = x.reshape(*x.shape[:-1], 2, h).flip(-2).reshape(x.shape)  # cat(x2, x1)
+    return x * cos[:, None, :] + swapped * _signed_sin(sin)[:, None, :]
 
 
 class RotaryEmbedding:

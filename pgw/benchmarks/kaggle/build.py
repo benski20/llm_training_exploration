@@ -80,6 +80,23 @@ JOBS: dict[str, dict] = {
             "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
+    # phase 2 package D: the gateway's plaintext work per decode token (LM head, norms, RoPE, attention,
+    # sampling, hops) at 7B shapes with all 28 layers and a stub service (CPU only, about 2 GB). A/B on the
+    # Kaggle CPU: new paths (AVX-512 / register-blocked LM head, fast RoPE and sampler helpers) vs the
+    # reference forms (PGW_LM_HEAD_ISA=avx + --reference-paths), at 1, 4 and 16 rows; plus spinning OpenMP
+    # workers (OMP_WAIT_POLICY=ACTIVE) to size their effect. Outputs are bit-identical in every variant.
+    "pgw-token-profile-7b": {"exclude": ["deploy", "scripts", "tests"], "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; cat /sys/fs/cgroup/cpu.max || true", "timeout": 60},
+        *[{"kind": "shell", "name": f"profile_token_{tag}_r{rows}",
+           "cmd": f"{env} python benchmarks/profile_token.py --steps 30 --rows {rows} {flags} "
+                  f"--json /kaggle/working/profile_token_{tag}_r{rows}.json",
+           "timeout": 1200}
+          for rows in (1, 4, 16)
+          for tag, env, flags in (("new", "", ""), ("ref", "PGW_LM_HEAD_ISA=avx", "--reference-paths"),
+                                  ("avx2", "PGW_LM_HEAD_ISA=avx2", ""),
+                                  ("omp_active", "OMP_WAIT_POLICY=ACTIVE", ""))],
+    ]},
     # speculation sweep: k = 1, 2, 3 with a 0.5B draft on the gateway CPU and on the second T4 (cuda:1), one
     # fixed draft size per run (spec_min_tokens capped at k), spec_max_batch 1; single stream for every run and
     # 4 streams for no-spec and k=2 on cuda:1 (spec at 4 streams should equal no-spec). 48 tokens keep the
