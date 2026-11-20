@@ -25,9 +25,12 @@ calls per 7B token, i.e. well under 1 ms per token).
 Snapshots: on ``SIGUSR2`` the probe writes ``{"seq", "counters": {name: [seconds, calls]},
 "missing": [...]}`` atomically to ``--probe-file``; :func:`snapshot` sends the signal and waits for
 the new ``seq``. A wrapped name that no longer exists (a refactor) is listed under ``missing`` and
-simply not timed; the gateway itself always starts.
+simply not timed; the gateway itself always starts. Only the module attributes listed below are
+wrapped: a caller that bound one of the functions earlier under another name (e.g. ``rms_norm`` as
+re-exported by ``pgw.engine``) calls the unwrapped function and is not timed. Renaming a wrapped engine
+function shows up under ``missing`` (and fails ``tests/benchmarks``), so the list must follow renames.
 
-Usage (gpu_validate does this when ``--attribute`` is on, the default)::
+Usage (gpu_validate does this with ``--attribute``; off by default)::
 
     python benchmarks/gateway_probe.py --probe-file /tmp/probe.json -- gateway serve
 """

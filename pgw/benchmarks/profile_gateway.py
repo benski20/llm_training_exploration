@@ -15,8 +15,9 @@ numbers are then per round trip (all sessions), and ``gateway_ms_per_session_cal
 
 Speculation-shaped sweep (chat-speed plan WP-A0): ``--sessions 1 --rows 1,2,4,8`` measures one session's
 verify pass at each row count R (the same masks, checks and unmasking a fixed-R pass does) and adds
-``per_extra_row`` (gateway ms per full-model pass per extra row, against R = 1). With one ``--rows``
-value the output is the single result as before.
+``per_extra_row`` (gateway ms per full-model pass per extra row, against the first ``--rows`` value, given
+as ``per_extra_row_baseline_rows``; start the list with 1 to measure against decode). With one ``--rows``
+value the output is the single result as before. ``--profile`` tables print after the JSON, as before.
 """
 
 from __future__ import annotations
@@ -172,9 +173,11 @@ def main() -> None:
     in_dim = {sp.id.kind.value: sp.in_features
               for sp in pack.linear_specs() if sp.id.layer == 0}
 
-    results = [_measure(args, rows, be, client, sessions, in_dim, preset, nses, TimedClient) for rows in rows_list]
+    measured = [_measure(args, rows, be, client, sessions, in_dim, preset, nses, TimedClient) for rows in rows_list]
+    results = [m[0] for m in measured]
     out = results[0] if len(results) == 1 else {
         "preset": args.preset, "ring": args.ring, "sessions": nses, "sweep": results,
+        "per_extra_row_baseline_rows": results[0]["rows"],
         "per_extra_row": {
             str(r["rows"]): {
                 "gateway_ms_per_step_full_model": round(
@@ -185,14 +188,18 @@ def main() -> None:
     print(json.dumps(out, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(out, indent=2))
+    for _, tables in measured:
+        if tables:
+            print(tables)
     for r in sessions:
         r.close()
     store.close()
 
 
 def _measure(args: Any, rows: int, be: Any, client: Any, sessions: list[Any], in_dim: dict[str, int],
-             preset: dict[str, int], nses: int, TimedClient: Any) -> dict[str, Any]:
-    """Gateway ms per call at ``rows`` rows per session call (warm-up step + ``steps - 1`` measured)."""
+             preset: dict[str, int], nses: int, TimedClient: Any) -> tuple[dict[str, Any], str]:
+    """Gateway ms per call at ``rows`` rows per session call (warm-up step + ``steps - 1`` measured), and the
+    ``--profile`` tables as text (empty without ``--profile``); the caller prints them after the JSON."""
     from pgw.core.types import LinearId
     from pgw.engine.backends import LinearCall
 
@@ -256,14 +263,15 @@ def _measure(args: Any, rows: int, be: Any, client: Any, sessions: list[Any], in
         "wall_s": wall,
         "wall_ms_per_call": 1000 * wall / ncalls,
     }
+    tables = ""
     if prof:
         s = io.StringIO()
         pstats.Stats(prof, stream=s).sort_stats("cumulative").print_stats(35)
-        print(s.getvalue())
+        tables += s.getvalue() + "\n"
         s = io.StringIO()
         pstats.Stats(prof, stream=s).sort_stats("tottime").print_stats(25)
-        print(s.getvalue())
-    return out
+        tables += s.getvalue()
+    return out, tables
 
 
 if __name__ == "__main__":

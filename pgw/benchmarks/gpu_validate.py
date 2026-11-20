@@ -22,14 +22,23 @@ older whole-request averages (prefill included, divided by prompt + generated to
 compute time, and the rest (``wire_ms`` = RTT - queue - compute, clamped at 0: network, framing, Python),
 by rows per request; for multi-item requests the service reports compute as a sum and queue as a max.
 
-Attribution of the rest (``--attribute``, on by default): the gateway runs under
-``benchmarks/gateway_probe.py``, which times the engine's plaintext work in the live process.
+Attribution of the rest (``--attribute``, off by default so headline numbers stay comparable with earlier
+runs): the gateway runs under ``benchmarks/gateway_probe.py``, which times the engine's plaintext work in the
+live process. The probe adds a little wrapper overhead (well under 1 ms per 7B token) and, after the first
+token, the SSE reader pauses while it waits for a probe snapshot, so decode s/token from an ``--attribute``
+run is not strictly comparable with a run without it.
 ``decode_unaccounted_split`` divides ``decode_unaccounted_s_per_token`` (decode s/token minus the
 remote and local trip counters) into ``float_ops_ms`` (attention, norms, RoPE, KV append),
 ``head_ms`` (final norm + exact LM head), ``consume_ms`` (sampling, logprobs, stop scan,
 detokenization), ``draft_ms`` (speculation drafts), ``step_glue_ms`` (the rest of an engine step:
 layer glue, generator machinery, thread hops) and ``loop_ms`` (outside engine steps: batching loop,
-asyncio, SSE and HTTP streaming). The parts sum to the unaccounted time by construction.
+asyncio, SSE and HTTP streaming). The parts sum to the unaccounted time by construction, which is an
+identity, not evidence that the split is right. Known misattributions (none affect the default
+single-stream, non-speculative run): (a) with ``batch_lm_head`` off, a verify pass leaves head rows to the
+lazy row logits, which then run inside ``_consume_batch`` and count under ``consume_ms``, not ``head_ms``;
+(b) the draft model's prefill runs in a thread concurrently with the step, so its attention/norm time lands
+in ``float_ops_ms`` and can push ``step_glue_ms`` below zero; (c) ping-pong cohorts run engine steps
+concurrently, so step time can exceed wall time and ``loop_ms`` goes negative.
 
 Writes ``<out>/<label>.json``. Usage::
 
@@ -247,7 +256,8 @@ def attribute_unaccounted(p_first: dict[str, Any] | None, p_end: dict[str, Any] 
         "loop_ms": round(dec_s * 1e3 - step, 3),
         "steps_per_token": round(calls("step") / n_dec, 3),
         "note": "ms per decode token from the gateway probe; float+head+consume+draft+step_glue+loop = unaccounted "
-                "(step_glue = engine step minus the trip counters and the timed parts; loop = outside engine steps)",
+                "(step_glue = engine step minus the trip counters and the timed parts; loop = outside engine steps); "
+                "exact only for single-stream non-speculative runs (see gpu_validate docstring)",
     }
     if p_end.get("missing"):
         out["probe_missing"] = p_end["missing"]
@@ -762,9 +772,10 @@ def main() -> int:
                          "ping-pong (model config engine_pingpong; results under 'pingpong_*')")
     ap.add_argument("--pingpong-min-sessions", type=int, default=None,
                     help="model config engine_pingpong_min_sessions for the --pingpong run (default: the gateway's, 5)")
-    ap.add_argument("--attribute", action=argparse.BooleanOptionalAction, default=True,
+    ap.add_argument("--attribute", action=argparse.BooleanOptionalAction, default=False,
                     help="run each gateway under benchmarks/gateway_probe.py and split the decode 'unaccounted' time "
-                         "(float ops, LM head, sampling, step glue, loop) in the streaming phase")
+                         "(float ops, LM head, sampling, step glue, loop) in the streaming phase; off by default "
+                         "because the probe perturbs decode s/token slightly")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")  # noqa: S108 - scratch space of a throwaway VM
     ap.add_argument("--out", default="results")

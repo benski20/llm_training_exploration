@@ -1,7 +1,8 @@
 //! # pgw-lane
 //!
 //! Service side of the PGW trip lane (chat-speed plan WP-A1; this crate was created as a stub by
-//! WP-A0 and is owned by WP-A1). Planned scope:
+//! WP-A0 and is owned by WP-A1: WP-A1 takes it over and overwrites these files rather than creating
+//! them; the workspace member line in `rust/Cargo.toml` already exists). Planned scope:
 //!
 //! * a listener on a Unix domain socket (SO_PEERCRED checked) or TCP with TLS, opened by a ticket the
 //!   regular stream channel issues (`lane_open`);
