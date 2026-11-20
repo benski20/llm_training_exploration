@@ -22,6 +22,24 @@ older whole-request averages (prefill included, divided by prompt + generated to
 compute time, and the rest (``wire_ms`` = RTT - queue - compute, clamped at 0: network, framing, Python),
 by rows per request; for multi-item requests the service reports compute as a sum and queue as a max.
 
+Attribution of the rest (``--attribute``, off by default so headline numbers stay comparable with earlier
+runs): the gateway runs under ``benchmarks/gateway_probe.py``, which times the engine's plaintext work in the
+live process. The probe adds a little wrapper overhead (well under 1 ms per 7B token) and, after the first
+token, the SSE reader pauses while it waits for a probe snapshot, so decode s/token from an ``--attribute``
+run is not strictly comparable with a run without it.
+``decode_unaccounted_split`` divides ``decode_unaccounted_s_per_token`` (decode s/token minus the
+remote and local trip counters) into ``float_ops_ms`` (attention, norms, RoPE, KV append),
+``head_ms`` (final norm + exact LM head), ``consume_ms`` (sampling, logprobs, stop scan,
+detokenization), ``draft_ms`` (speculation drafts), ``step_glue_ms`` (the rest of an engine step:
+layer glue, generator machinery, thread hops) and ``loop_ms`` (outside engine steps: batching loop,
+asyncio, SSE and HTTP streaming). The parts sum to the unaccounted time by construction, which is an
+identity, not evidence that the split is right. Known misattributions (none affect the default
+single-stream, non-speculative run): (a) with ``batch_lm_head`` off, a verify pass leaves head rows to the
+lazy row logits, which then run inside ``_consume_batch`` and count under ``consume_ms``, not ``head_ms``;
+(b) the draft model's prefill runs in a thread concurrently with the step, so its attention/norm time lands
+in ``float_ops_ms`` and can push ``step_glue_ms`` below zero; (c) ping-pong cohorts run engine steps
+concurrently, so step time can exceed wall time and ``loop_ms`` goes negative.
+
 Writes ``<out>/<label>.json``. Usage::
 
     python benchmarks/gpu_validate.py --model Qwen/Qwen2.5-0.5B-Instruct --label qwen0.5b \
@@ -44,6 +62,9 @@ from pathlib import Path
 from typing import Any
 
 PROMPT = "Explain in three sentences why the sky is blue."
+PROBE = Path(__file__).resolve().parent / "gateway_probe.py"
+#: gateway_probe components that make up the gateway's plaintext float ops between trips
+FLOAT_PARTS = ("attention", "norm", "rope", "kv")
 ADMIN = "bench-admin-token-0123456789abcdef"
 
 
@@ -190,6 +211,59 @@ def decode_accounting(b_first: dict[str, Any], b_end: dict[str, Any], db: dict[s
     return out
 
 
+def probe_snapshot(pid: int, probe_file: Path | None) -> dict[str, Any] | None:
+    """Counters of the gateway probe (None without ``--attribute`` or if the probe does not answer)."""
+    if probe_file is None:
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pgw_bench_gateway_probe", PROBE)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.snapshot(pid, probe_file)  # type: ignore[no-any-return]
+
+
+def attribute_unaccounted(p_first: dict[str, Any] | None, p_end: dict[str, Any] | None, n_dec: int,
+                          dec_s: float | None, acc: dict[str, Any]) -> dict[str, Any]:
+    """Split ``decode_unaccounted_s_per_token`` with the probe counters (ms per decode token, see the module
+    docstring). ``acc`` is :func:`decode_accounting`'s output for the same window."""
+    if not p_first or not p_end or n_dec <= 0 or not dec_s or "decode_unaccounted_s_per_token" not in acc:
+        return {}
+    c0, c1 = p_first.get("counters", {}), p_end.get("counters", {})
+
+    def ms(name: str) -> float:
+        return (c1.get(name, [0.0, 0])[0] - c0.get(name, [0.0, 0])[0]) / n_dec * 1e3
+
+    def calls(name: str) -> int:
+        return int(c1.get(name, [0.0, 0])[1] - c0.get(name, [0.0, 0])[1])
+
+    remote = acc["decode_remote_s_per_token"] * 1e3
+    local = acc["decode_local_s_per_token"] * 1e3
+    split = {k: round(ms(k), 3) for k in FLOAT_PARTS}
+    flt = sum(ms(k) for k in FLOAT_PARTS)
+    head, consume, draft, step = ms("head"), ms("consume"), ms("draft"), ms("step")
+    out: dict[str, Any] = {
+        "unaccounted_ms": round(acc["decode_unaccounted_s_per_token"] * 1e3, 3),
+        "float_ops_ms": round(flt, 3),
+        "float_ops_split_ms": split,
+        "head_ms": round(head, 3),
+        "consume_ms": round(consume, 3),
+        "draft_ms": round(draft, 3),
+        "step_ms": round(step, 3),
+        "step_glue_ms": round(step - remote - local - flt - head - consume - draft, 3),
+        "loop_ms": round(dec_s * 1e3 - step, 3),
+        "steps_per_token": round(calls("step") / n_dec, 3),
+        "note": "ms per decode token from the gateway probe; float+head+consume+draft+step_glue+loop = unaccounted "
+                "(step_glue = engine step minus the trip counters and the timed parts; loop = outside engine steps); "
+                "exact only for single-stream non-speculative runs (see gpu_validate docstring)",
+    }
+    if p_end.get("missing"):
+        out["probe_missing"] = p_end["missing"]
+    return out
+
+
 def dir_bytes(p: Path) -> int:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
 
@@ -234,9 +308,11 @@ class Stack:
         self.work = work
         self.procs: list[subprocess.Popen[bytes]] = []
 
-    def start(self, name: str, args: list[str], env: dict[str, str]) -> subprocess.Popen[bytes]:
+    def start(self, name: str, args: list[str], env: dict[str, str],
+              probe_file: Path | None = None) -> subprocess.Popen[bytes]:
         fh = (self.work / "logs" / f"{name}.log").open("ab")
-        p = subprocess.Popen([sys.executable, "-m", "pgw.cli", *args], env=env, stdout=fh,  # noqa: S603
+        launcher = ["-m", "pgw.cli"] if probe_file is None else [str(PROBE), "--probe-file", str(probe_file), "--"]
+        p = subprocess.Popen([sys.executable, *launcher, *args], env=env, stdout=fh,  # noqa: S603
                              stderr=subprocess.STDOUT)
         self.procs.append(p)
         return p
@@ -437,7 +513,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # gateway setting (plan interface C3), only when given and only for the speculative runs
             if "draft_pack_path" in extra and args.spec_max_batch is not None:
                 gw_env["PGW_GATEWAY_SPEC_MAX_BATCH"] = str(args.spec_max_batch)
-            gw = stack.start(f"gateway{prefix}", ["gateway", "serve"], gw_env)
+            probe = (work / "state" / f"probe{prefix}.json") if args.attribute else None
+            gw = stack.start(f"gateway{prefix}", ["gateway", "serve"], gw_env, probe_file=probe)
             ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
             R[prefix + "gateway_startup_s"] = round(ready_s, 1)
             gw_url = f"http://127.0.0.1:{gw_port}"
@@ -499,6 +576,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             # 5b. streaming: TTFT (prefill) and decode s/token
             s0, c0 = status(), proc_cpu_seconds(gw.pid)
             s_first: dict[str, Any] | None = None  # status right after the first token: decode-only deltas
+            p_first: dict[str, Any] | None = None  # gateway probe counters at the same moment
             times: list[float] = []
             text: list[str] = []
             lps: list[float] = []
@@ -521,9 +599,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                 times.append(time.perf_counter() - t0)
                             if s_first is None and times:
                                 s_first = status()
+                                p_first = probe_snapshot(gw.pid, probe)
                         if piece:
                             text.append(piece)
             c1, s1 = proc_cpu_seconds(gw.pid), status()
+            p_end = probe_snapshot(gw.pid, probe) if p_first is not None else None
             db = num_delta(s0["backend"], s1["backend"])
             dec = (times[-1] - times[0]) / (len(times) - 1) if len(times) > 1 else None
             R[prefix + "stream"] = {
@@ -543,8 +623,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     db.get("local_seconds", 0) / ntok, 4)
                 R[prefix + "stream"]["remote_s_per_token_incl_prefill"] = round(db.get("remote_seconds", 0) / ntok, 4)
             if s_first is not None:
-                R[prefix + "stream"].update(decode_accounting(s_first["backend"], s1["backend"], db,
-                                                              len(times) - 1, dec))
+                acc = decode_accounting(s_first["backend"], s1["backend"], db, len(times) - 1, dec)
+                R[prefix + "stream"].update(acc)
+                split = attribute_unaccounted(p_first, p_end, len(times) - 1, dec, acc)
+                if split:
+                    R[prefix + "stream"]["decode_unaccounted_split"] = split
                 R[prefix + "stream"]["decode_trip_split"] = trip_split(s_first.get("client_timing"),
                                                                        s1.get("client_timing"))
             R[prefix + "stream"]["prefill_trip_split"] = trip_split(s0.get("client_timing"),
@@ -689,6 +772,10 @@ def main() -> int:
                          "ping-pong (model config engine_pingpong; results under 'pingpong_*')")
     ap.add_argument("--pingpong-min-sessions", type=int, default=None,
                     help="model config engine_pingpong_min_sessions for the --pingpong run (default: the gateway's, 5)")
+    ap.add_argument("--attribute", action=argparse.BooleanOptionalAction, default=False,
+                    help="run each gateway under benchmarks/gateway_probe.py and split the decode 'unaccounted' time "
+                         "(float ops, LM head, sampling, step glue, loop) in the streaming phase; off by default "
+                         "because the probe perturbs decode s/token slightly")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")  # noqa: S108 - scratch space of a throwaway VM
     ap.add_argument("--out", default="results")

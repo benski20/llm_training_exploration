@@ -21,7 +21,14 @@ from pgw.core.errors import PGWError
 from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings, TLSConfig
 
-__all__ = ["ServiceSettings"]
+__all__ = ["PENDING_SPEED_SETTINGS", "ServiceSettings"]
+
+#: Chat-speed settings of :class:`ServiceSettings` whose implementation has not landed yet, with the
+#: work package that builds it. A value other than the default (today's behaviour) is refused while the
+#: field is listed; the implementing package removes its entry.
+PENDING_SPEED_SETTINGS: dict[str, str] = {
+    "lane": "WP-A1 (service trip lane, rust/pgw-lane)",
+}
 
 
 class ServiceSettings(PGWSettings):
@@ -195,6 +202,20 @@ class ServiceSettings(PGWSettings):
         30.0, gt=0, le=397, description="Lifetime of client certificates signed at enrollment",
     )
 
+    # ---- trip lane (chat-speed plan; WP-A0 scaffold) ----------------------------------------
+    # Every default is today's behaviour; a value other than the default is refused while the field is
+    # listed in PENDING_SPEED_SETTINGS (not built yet).
+    lane: Literal["off", "uds", "tcp"] = Field(
+        "off", description="Native trip lane next to the stream channel (binary header, same masked bytes, CUDA-graph "
+        "replay for rows 1..lane_max_rows). 'off' (default) = no lane; 'uds' = a Unix domain socket at lane_socket "
+        "(peer credentials checked); 'tcp' = lane_port, TLS required",
+    )
+    lane_socket: Path | None = Field(None, description="Unix domain socket path of the lane (lane = 'uds')")
+    lane_port: int | None = Field(None, ge=0, le=65535, description="TCP port of the lane (lane = 'tcp')")
+    lane_max_rows: int = Field(
+        8, ge=1, le=8, description="Largest rows per item the lane serves; bigger calls use the stream channel",
+    )
+
     # ---- lifecycle / misc ----------------------------------------------------------------
     drain_timeout_s: float = Field(30.0, ge=0, description="Max wait for in-flight work on shutdown")
     metrics_enabled: bool = True
@@ -270,6 +291,20 @@ class ServiceSettings(PGWSettings):
                                  "gateways pin on first contact)")
         if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
             raise ValueError("metrics_port must differ from port")
+        for name, package in PENDING_SPEED_SETTINGS.items():
+            value = getattr(self, name)
+            if value != type(self).model_fields[name].default:
+                raise ValueError(f"{name}={value!r} is not available in this build (pending {package}); "
+                                 "leave it at its default")
+        if self.lane == "uds" and self.lane_socket is None:
+            raise ValueError("lane = 'uds' needs lane_socket")
+        if self.lane == "tcp":
+            if self.lane_port is None:
+                raise ValueError("lane = 'tcp' needs lane_port")
+            if not self.tls.enabled:
+                raise ValueError("lane = 'tcp' needs TLS (tls.cert_file and tls.key_file): the lane is never plain TCP")
+            if self.lane_port == self.port and self.port != 0:
+                raise ValueError("lane_port must differ from port")
         return self
 
     @property
