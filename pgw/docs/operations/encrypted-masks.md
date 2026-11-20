@@ -192,7 +192,7 @@ On a T4 provider, the v2 numpy work is therefore larger than the GEMM itself (2-
 where the link is the limit, which is any link of 1 Gbit/s or less: about 100 ms per slot on the
 wire. The service serves v2 by default and the client has no link-speed setting, so on a
 co-located link of 10 Gbit/s or more, keep v1 by turning v2 off on the service
-(`PGW_SERVICE_MASKGEN_V2=false`); otherwise the provider CPU becomes the bottleneck. The
+(the service's maskgen v2 environment switch, SPEC 7.9); otherwise the provider CPU becomes the bottleneck. The
 other option is to move the v2 unpack and pack into the device kernel (`ComputeKernel`) or
 `pgw_fast`. That is a follow-up: the format is plain field casts, so it maps directly to a GPU
 kernel.
