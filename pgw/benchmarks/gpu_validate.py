@@ -355,6 +355,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     spec_variants = _spec_variants(args, draft_pack)
     for _, _, spec_conc in spec_variants:  # room for speculation rows (spec_row_budget <= 3 per token)
         slots += (n_prompt + args.max_tokens * 3) * (2 + sum(spec_conc))
+    # A/B: the same concurrency levels again on a gateway with two-cohort ping-pong (model config engine_pingpong)
+    pingpong_variants: list[tuple[str, dict[str, Any], list[int]]] = []
+    if args.pingpong:
+        pp: dict[str, Any] = {"engine_pingpong": True}
+        if args.pingpong_min_sessions is not None:
+            pp["engine_pingpong_min_sessions"] = args.pingpong_min_sessions
+        pingpong_variants.append(("pingpong_", pp, concurrent))
+        slots += per_req * (2 + sum(concurrent))
     store, kek = work / "masks", work / "secrets" / "kek"
     kek.parent.mkdir(mode=0o700, exist_ok=True)
     if not (store / "state.sqlite").exists():
@@ -404,7 +412,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_service_loaded"] = gpu_mem_mb()
         svc_url = f"http://127.0.0.1:{svc_port}"
         models = sec / "models.json"
-        variants: list[tuple[str, dict[str, Any], list[int]]] = [("", {}, concurrent), *spec_variants]
+        variants: list[tuple[str, dict[str, Any], list[int]]] = [("", {}, concurrent), *pingpong_variants,
+                                                                 *spec_variants]
         gw: subprocess.Popen[bytes] | None = None
         for prefix, extra, conc_list in variants:
             if gw is not None:  # the next gateway reuses the store; stop the previous one first
@@ -425,7 +434,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                       "PGW_GATEWAY_TOKENS_PER_MINUTE": "10000000", "PGW_GATEWAY_REQUESTS_PER_MINUTE": "10000",
                       "PGW_MASKSTORE_ROOT": str(store), "PGW_MASKSTORE_KEY_FILE": str(kek),
                       "PGW_MASKSTORE_LOW_WATER_SLOTS": "1"}
-            if extra and args.spec_max_batch is not None:  # gateway setting (plan interface C3), only when given
+            # gateway setting (plan interface C3), only when given and only for the speculative runs
+            if "draft_pack_path" in extra and args.spec_max_batch is not None:
                 gw_env["PGW_GATEWAY_SPEC_MAX_BATCH"] = str(args.spec_max_batch)
             gw = stack.start(f"gateway{prefix}", ["gateway", "serve"], gw_env)
             ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
@@ -569,6 +579,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "gateway_cpu_s_per_token_incl_prefill": round((c1 - c0) / max(1, len(ok) * ntok), 4),
                     "backend_delta": db,
                     "trip_split_incl_prefill": trip_split(s0.get("client_timing"), s1.get("client_timing")),
+                    # engine steps and how many were split in two cohorts (ping-pong); empty on older gateways
+                    "engine_delta": num_delta(s0.get("engine"), s1.get("engine")),
                 }
                 # "<prefix>concurrent" keeps the first level (the field older runs have); every level is
                 # also under "<prefix>concurrent_<n>"
@@ -576,7 +588,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     R[prefix + "concurrent"] = rc
                 R[f"{prefix}concurrent_{n_conc}"] = rc
                 log(f"{prefix}concurrent {n_conc}:", {k: v for k, v in rc.items()
-                                                     if k not in ("backend_delta", "trip_split_incl_prefill")})
+                                                     if k not in ("backend_delta", "trip_split_incl_prefill",
+                                                                  "engine_delta")})
                 save()
 
         # 7. service load test (decode rows, all layers), batch 1 and batched
@@ -671,6 +684,11 @@ def main() -> int:
                     help="only these speculative runs do the concurrent batch, as K@DEVICE (e.g. 2@cuda:1)")
     ap.add_argument("--draft-device", nargs="+", default=None,
                     help="draft model device(s) on the gateway; one speculative run each (default cpu)")
+    ap.add_argument("--pingpong", action="store_true",
+                    help="A/B: also run the single-stream and --concurrent levels on a second gateway with two-cohort "
+                         "ping-pong (model config engine_pingpong; results under 'pingpong_*')")
+    ap.add_argument("--pingpong-min-sessions", type=int, default=None,
+                    help="model config engine_pingpong_min_sessions for the --pingpong run (default: the gateway's, 5)")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
     ap.add_argument("--work", default="/tmp/pgw_bench")  # noqa: S108 - scratch space of a throwaway VM
     ap.add_argument("--out", default="results")

@@ -177,6 +177,16 @@ class Generator:
         spec_max_batch: Speculate only in steps with at most this many sequences. A verify pass adds
             ``k`` rows per sequence to every linear of a step that the other sequences must wait for; with
             several sequences sharing a step the extra rows cost more than the passes they save.
+        pingpong: Two-cohort ping-pong for the async batching loop (off by default). A step with at least
+            ``pingpong_min_sessions`` sequences is split into two cohorts (the first and second half of the
+            step's sequences, in round-robin order) whose forward passes run concurrently: while one cohort's
+            round trip is with the compute service, the gateway verifies, unmasks, runs the plaintext step
+            and masks the next calls of the other. Both cohorts finish before the next step is picked, so the
+            round-robin order, ``max_batch`` and per-sequence results are unchanged (each sequence's logits do
+            not depend on the sequences it shares a pass with). Each cohort keeps the MaskExhaustedError
+            isolation of a plain step. Used only when every sequence of the step has its own mask reservation
+            (rows of one reservation are never taken by two passes at once) and there is no draft model.
+        pingpong_min_sessions: Smallest step (sequences) that is split (at least 2; default 5: more than 4).
 
     Privacy of speculation: the compute service sees how many rows each pass carries. Every pass of a
     sequence carries 1 or ``1 + k`` rows, ``k`` one fixed size (or, with the adaptive draft length, one of
@@ -201,9 +211,13 @@ class Generator:
         draft_confidence: float = 0.0,
         lookup_min_n: int = 3,
         spec_max_batch: int = 1,
+        pingpong: bool = False,
+        pingpong_min_sessions: int = 5,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
+        if pingpong_min_sessions < 2:
+            raise ConfigError("pingpong_min_sessions must be >= 2")
         if spec_tokens < 0 or spec_tokens > 16:
             raise ConfigError("spec_tokens must be in [0, 16]")
         # The draft must share the target's tokenizer; its embedding table may be padded to another
@@ -256,6 +270,11 @@ class Generator:
         self.spec_stats: dict[str, float] = {
             "spec_passes": 0.0, "spec_rows": 0.0, "spec_accepted": 0.0, "draft_calls": 0.0, "draft_ms": 0.0,
         }
+        self.pingpong = bool(pingpong)
+        self.pingpong_min_sessions = int(pingpong_min_sessions)
+        #: Batching-loop counters (read by the gateway status and benchmarks): ``steps`` engine steps,
+        #: ``pingpong_steps`` of them split in two cohorts, ``step_sequences`` sequences over all steps.
+        self.sched_stats: dict[str, float] = {"steps": 0.0, "pingpong_steps": 0.0, "step_sequences": 0.0}
 
     # ---- state management ---------------------------------------------------------------------
     def _new_state(
@@ -849,8 +868,8 @@ class Generator:
         self._rr += self.max_batch
         return (live[start:] + live[:start])[: self.max_batch]
 
-    async def _run_step(self, batch: list[_SeqState]) -> None:
-        if self.spec_tokens:
+    async def _run_step(self, batch: list[_SeqState], plan: bool = True) -> None:
+        if self.spec_tokens and plan:
             await self._run_plain(self._plan_drafts, batch)
         warm = [st for st in batch if self._needs_draft_prefill(st)]
         logits = await self._forward_with_draft_prefill(batch, warm)
@@ -888,28 +907,14 @@ class Generator:
                 if not batch:
                     await asyncio.sleep(0)
                     continue
-                try:
-                    await self._run_step(batch)
-                except MaskExhaustedError as exc:
-                    if len(batch) == 1:
-                        self._fail(batch[0], exc)
-                        continue
-                    # Nothing was consumed (the backend pre-checks); isolate the exhausted session.
-                    for st in batch:
-                        if st.done or st.cancelled:
-                            continue
-                        try:
-                            await self._run_step([st])
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as one:
-                            self._fail(st, one)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    log.error("batched step failed for %d sessions: %s", len(batch), type(exc).__name__)
-                    for st in batch:
-                        self._fail(st, exc)
+                self.sched_stats["steps"] += 1
+                self.sched_stats["step_sequences"] += len(batch)
+                cohorts = self._cohorts(batch)
+                if cohorts is None:
+                    await self._step_isolated(batch)
+                else:
+                    self.sched_stats["pingpong_steps"] += 1
+                    await self._run_pingpong(batch, cohorts)
                 await asyncio.sleep(0)  # let consumers run between steps
         except asyncio.CancelledError:
             for st in self._active:
@@ -927,6 +932,85 @@ class Generator:
         finally:
             if not self._active:
                 self._task = None
+
+    async def _step_isolated(self, batch: list[_SeqState], plan: bool = True) -> None:
+        """One step of ``batch``; a failure ends only the sequences it concerns.
+
+        A :class:`MaskExhaustedError` consumed nothing (the backend pre-checks every reservation before
+        taking rows), so each sequence is retried alone and only the exhausted one fails. Any other error
+        fails every sequence of the batch. Cancellation propagates.
+        """
+        try:
+            await self._run_step(batch, plan)
+        except MaskExhaustedError as exc:
+            if len(batch) == 1:
+                self._fail(batch[0], exc)
+                return
+            # Nothing was consumed (the backend pre-checks); isolate the exhausted session.
+            for st in batch:
+                if st.done or st.cancelled:
+                    continue
+                try:
+                    await self._run_step([st])
+                except asyncio.CancelledError:
+                    raise
+                except Exception as one:
+                    self._fail(st, one)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("batched step failed for %d sessions: %s", len(batch), type(exc).__name__)
+            for st in batch:
+                self._fail(st, exc)
+
+    def _cohorts(self, batch: Sequence[_SeqState]) -> tuple[list[_SeqState], list[_SeqState]] | None:
+        """The two cohorts of a ping-pong step, or ``None`` for a plain step.
+
+        Split only with the flag on, at least ``pingpong_min_sessions`` sequences, no draft model (its
+        prompt prefill runs in a thread of its own per pass) and a distinct, explicit mask reservation per
+        sequence: a shared default reservation would hand rows to two concurrent passes in an order that
+        depends on timing. The split is positional (first and second half of the round-robin order), so
+        which cohort a sequence is in depends only on how many sequences are live, never on data.
+        """
+        n = len(batch)
+        if not self.pingpong or n < self.pingpong_min_sessions or self.draft is not None:
+            return None
+        sessions = [st.session for st in batch]
+        if any(s is None for s in sessions) or len({id(s) for s in sessions}) != n:
+            return None
+        half = (n + 1) // 2
+        return list(batch[:half]), list(batch[half:])
+
+    async def _run_pingpong(self, batch: list[_SeqState],
+                            cohorts: tuple[list[_SeqState], list[_SeqState]]) -> None:
+        """Run both cohorts of a step concurrently (see ``pingpong``) and wait for both.
+
+        Drafts (prompt lookup only: there is no draft model here) are planned once for the whole step, so
+        whether a step speculates depends on the step's size exactly as without ping-pong. Each cohort
+        handles its own failures (:meth:`_step_isolated`). Neither cohort is left running when this returns
+        or raises: on cancellation both are cancelled and awaited (their passes wipe prepared requests and
+        finish any plaintext work on their KV caches first).
+        """
+        if self.spec_tokens:
+            await self._run_plain(self._plan_drafts, batch)
+        tasks = [asyncio.ensure_future(self._step_isolated(c, plan=False)) for c in cohorts]
+        cancelled = False
+        while True:
+            pending = [t for t in tasks if not t.done()]
+            if not pending:
+                break
+            try:
+                await asyncio.wait(pending)
+            except asyncio.CancelledError:
+                cancelled = True
+                for t in pending:
+                    t.cancel()
+        for t in tasks:  # retrieve every outcome (no "exception never retrieved" warnings)
+            err = None if t.cancelled() else t.exception()
+            if err is not None and not cancelled:
+                raise err  # only BaseExceptions get here: _step_isolated handles every Exception
+        if cancelled or any(t.cancelled() for t in tasks):
+            raise asyncio.CancelledError
 
     async def aclose(self) -> None:
         """Cancel the batching loop and fail outstanding streams."""
