@@ -331,7 +331,7 @@ class DeviceRingStream:
         _check_k(k)
         self.cols = int(cols)
         self.k = int(k)
-        self.device = torch.device(device)
+        self.device = _canonical_device(device)
         self.impl: PrngImpl = impl
         # for CPU re-derivation of sampled rows (self-check); a bytearray so wipe() can zero it
         self._key: bytearray | None = bytearray(key)
@@ -384,7 +384,7 @@ class DeviceRingStream:
         Positions outside the ``row_count x cols`` block are not written (pass a zeroed buffer).
         """
         p, np_ = _check_planes(out, self.cols, self.k, row_count)
-        if out.device != self.device:
+        if _canonical_device(out.device) != self.device:
             raise ShapeError(f"digit planes on {out.device}, stream on {self.device}")
         if self.impl == "torch":
             return digit_planes_torch(self._kt(), self.cols, self.k, row_start, row_count, out)
@@ -411,6 +411,14 @@ def _cases(ks: tuple[int, ...], quick: bool) -> list[tuple[int, int, int, int]]:
     out = [(k, c, s, r) for k in ks for (c, s, r) in shapes]
     out.append((max(ks), 8, (1 << 32) - 3, 2))  # counters above 2^31, last blocks of the counter range
     return out
+
+
+def _canonical_device(device: torch.device | str) -> torch.device:
+    """``cuda`` -> ``cuda:<current index>`` so that device comparisons do not depend on how a device was named."""
+    dev = torch.device(device)
+    if dev.type == "cuda" and dev.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return dev
 
 
 def check_against_cpu(device: torch.device | str, impl: PrngImpl = "triton", *, ks: tuple[int, ...] = (32, 40, 48),

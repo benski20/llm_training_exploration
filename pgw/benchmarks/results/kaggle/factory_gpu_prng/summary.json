@@ -1,0 +1,171 @@
+{
+ "job": {
+  "exclude": [
+   "scripts",
+   "tests/gateway",
+   "tests/e2e",
+   "tests/maskstore",
+   "tests/enroll",
+   "tests/wire",
+   "tests/service",
+   "tests/console"
+  ],
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "build_native",
+    "required": true,
+    "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && { [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())'",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "cpu_info",
+    "cmd": "lscpu; nproc; nvidia-smi || true",
+    "timeout": 60
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_factory_gpu",
+    "args": [
+     "tests/factory",
+     "-m",
+     "gpu",
+     "--ignore",
+     "tests/factory/test_runtime_he_mtls.py",
+     "-v",
+     "-rs",
+     "--timeout",
+     "1800"
+    ],
+    "timeout": 2400
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_gpu_prng_all",
+    "args": [
+     "tests/factory/test_gpu_prng.py",
+     "tests/factory/test_generator.py",
+     "tests/factory/test_self_check.py",
+     "-q",
+     "-rs",
+     "--timeout",
+     "1800"
+    ],
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k32_l2_gpu_prng1",
+    "cmd": "PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k32_l2_gpu_prng0",
+    "cmd": "PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k32_l28_gpu_prng1",
+    "cmd": "PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k32_l28_gpu_prng0",
+    "cmd": "PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k40_gpu_prng1",
+    "cmd": "PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   },
+   {
+    "kind": "shell",
+    "name": "bench_factory_7b_k40_gpu_prng0",
+    "cmd": "PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json",
+    "timeout": 2400
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 13.4,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.1,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "build_native": {
+   "rc": 0,
+   "seconds": 43.0,
+   "tail": "mpy v0.23.0\n  Downloaded pyo3 v0.23.5\n  Downloaded libc v0.2.191\n   Compiling target-lexicon v0.12.16\n   Compiling autocfg v1.5.1\n   Compiling version_check v0.9.5\n   Compiling once_cell v1.21.4\n   Compiling typenum v1.20.1\n   Compiling generic-array v0.14.7\n   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.27\n   Compiling num-traits v0.2.19\n   Compiling pyo3-build-config v0.23.5\n   Compiling subtle v2.6.1\n   Compiling cfg-if v1.0.5\n   Compiling libc v0.2.191\n   Compiling syn v2.0.119\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling digest v0.10.7\n   Compiling memoffset v0.9.1\n   Compiling matrixmultiply v0.3.11\n   Compiling heck v0.5.0\n   Compiling inout v0.1.4\n   Compiling rawpointer v0.2.1\n   Compiling pyo3-macros-backend v0.23.5\n   Compiling pyo3-ffi v0.23.5\n   Compiling pyo3 v0.23.5\n   Compiling cpufeatures v0.2.17\n   Compiling cipher v0.4.4\n   Compiling num-complex v0.4.6\n   Compiling num-integer v0.1.47\n   Compiling hmac v0.12.1\n   Compiling unindent v0.2.4\n   Compiling indoc v2.0.8\n   Compiling hkdf v0.12.4\n   Compiling ndarray v0.16.1\n   Compiling chacha20 v0.9.1\n   Compiling sha2 v0.10.9\n   Compiling rustc-hash v2.1.3\n   Compiling zeroize v1.9.1\n   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n   Compiling pyo3-macros v0.23.5\n   Compiling numpy v0.23.0\n   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n    Finished `release` profile [optimized] target(s) in 24.26s\n"
+  },
+  "cpu_info": {
+   "rc": 0,
+   "seconds": 0.4,
+   "tail": "    MIG M. |\n|=========================================+========================+======================|\n|   0  Tesla T4                       Off |   00000000:00:04.0 Off |                    0 |\n| N/A   47C    P8             10W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n|   1  Tesla T4                       Off |   00000000:00:05.0 Off |                    0 |\n| N/A   49C    P8             11W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n\n---stderr---\n"
+  },
+  "pytest_factory_gpu": {
+   "rc": 1,
+   "seconds": 16.1,
+   "tail": "5, rows, d8)\n\ntests/factory/test_gpu_prng.py:459: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = DeviceRingStream(<redacted>, cols=130, k=32, device=cuda, impl=triton)\nrow_start = 5, row_count = 1\nout = tensor([[0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        ...,\n   ... ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0]], device='cuda:0', dtype=torch.int8)\n\n    def digit_planes(self, row_start: int, row_count: int, out: torch.Tensor) -> torch.Tensor:\n        \"\"\"Write the balanced int8 digit planes of the rows into ``out`` and return it.\n    \n        ``out`` is int8 ``(limbs * P, NP)`` with ``P >= row_count`` and ``NP >= cols``: plane ``i`` is\n        ``out[i*P:(i+1)*P]``, element ``(t, j)`` at ``[i*P + t, j]`` -- exactly the stacked operand\n        :func:`pgw.core.ringmm.int8_ring_matmul` builds from a zero-padded ``(P, NP)`` copy of ``r``.\n        Positions outside the ``row_count x cols`` block are not written (pass a zeroed buffer).\n        \"\"\"\n        p, np_ = _check_planes(out, self.cols, self.k, row_count)\n        if out.device != self.device:\n>           raise ShapeError(f\"digit planes on {out.device}, stream on {self.device}\")\nE           pgw.core.errors.ShapeError: digit planes on cuda:0, stream on cuda\n\nsrc/pgw/factory/gpu_prng.py:388: ShapeError\n================= 6 failed, 3 passed, 262 deselected in 11.06s =================\n\n---stderr---\n"
+  },
+  "pytest_gpu_prng_all": {
+   "rc": 1,
+   "seconds": 50.4,
+   "tail": "_ _ _ _ _ _ \n\nself = DeviceRingStream(<redacted>, cols=130, k=32, device=cuda, impl=triton)\nrow_start = 5, row_count = 1\nout = tensor([[0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        ...,\n   ... ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0],\n        [0, 0, 0,  ..., 0, 0, 0]], device='cuda:0', dtype=torch.int8)\n\n    def digit_planes(self, row_start: int, row_count: int, out: torch.Tensor) -> torch.Tensor:\n        \"\"\"Write the balanced int8 digit planes of the rows into ``out`` and return it.\n    \n        ``out`` is int8 ``(limbs * P, NP)`` with ``P >= row_count`` and ``NP >= cols``: plane ``i`` is\n        ``out[i*P:(i+1)*P]``, element ``(t, j)`` at ``[i*P + t, j]`` -- exactly the stacked operand\n        :func:`pgw.core.ringmm.int8_ring_matmul` builds from a zero-padded ``(P, NP)`` copy of ``r``.\n        Positions outside the ``row_count x cols`` block are not written (pass a zeroed buffer).\n        \"\"\"\n        p, np_ = _check_planes(out, self.cols, self.k, row_count)\n        if out.device != self.device:\n>           raise ShapeError(f\"digit planes on {out.device}, stream on {self.device}\")\nE           pgw.core.errors.ShapeError: digit planes on cuda:0, stream on cuda\n\nsrc/pgw/factory/gpu_prng.py:388: ShapeError\n=========================== short test summary info ============================\nSKIPPED [1] tests/factory/test_gpu_prng.py:235: needs the Triton interpreter\n9 failed, 105 passed, 1 skipped in 44.57s\n\n---stderr---\n"
+  },
+  "bench_factory_7b_k32_l2_gpu_prng1": {
+   "rc": 0,
+   "seconds": 10.1,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K32A12C27\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 1.881127633999995,\n \"slots_per_second\": 45.11155209238612,\n \"tokens_per_hour\": 162401.58753259003,\n \"seconds_per_token\": 0.022167270989746746,\n \"gemm_fraction\": 0.6661056359773299,\n \"bytes_per_token\": 5562368,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.2315150549859306,\n \"storage_tb_per_million_tokens\": 5.562368,\n \"layers_measured\": 2,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:32:02,360 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n2026-11-20 17:32:02,360 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n2026-11-20 17:32:03,713 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"
+  },
+  "bench_factory_7b_k32_l2_gpu_prng0": {
+   "rc": 0,
+   "seconds": 8.7,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K32A12C27\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 1.95507936599995,\n \"slots_per_second\": 43.17445627464029,\n \"tokens_per_hour\": 155428.04258870505,\n \"seconds_per_token\": 0.023161843513183455,\n \"gemm_fraction\": 0.6743610325639181,\n \"bytes_per_token\": 5562368,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.2867690840657477,\n \"storage_tb_per_million_tokens\": 5.562368,\n \"layers_measured\": 2,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:32:12,382 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n2026-11-20 17:32:12,382 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n"
+  },
+  "bench_factory_7b_k32_l28_gpu_prng1": {
+   "rc": 0,
+   "seconds": 44.3,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K32A12C27\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 26.429358261000004,\n \"slots_per_second\": 44.94232869625299,\n \"tokens_per_hour\": 161792.38330651078,\n \"seconds_per_token\": 0.022250738424316976,\n \"gemm_fraction\": 0.6668264610498031,\n \"bytes_per_token\": 5562368,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.2361521346842765,\n \"storage_tb_per_million_tokens\": 5.562368,\n \"layers_measured\": 28,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:32:21,124 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n2026-11-20 17:32:21,125 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n2026-11-20 17:32:22,442 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"
+  },
+  "bench_factory_7b_k32_l28_gpu_prng0": {
+   "rc": 0,
+   "seconds": 43.3,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K32A12C27\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 26.722751708999965,\n \"slots_per_second\": 44.36245202769705,\n \"tokens_per_hour\": 159704.8272997094,\n \"seconds_per_token\": 0.02254158537890702,\n \"gemm_fraction\": 0.6653552221200053,\n \"bytes_per_token\": 5562368,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.2523102988281678,\n \"storage_tb_per_million_tokens\": 5.562368,\n \"layers_measured\": 28,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:33:05,461 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n2026-11-20 17:33:05,462 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n"
+  },
+  "bench_factory_7b_k40_gpu_prng1": {
+   "rc": 0,
+   "seconds": 10.8,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K40A12\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 2.216681762999997,\n \"slots_per_second\": 41.83252763179337,\n \"tokens_per_hour\": 150597.09947445613,\n \"seconds_per_token\": 0.023904842872558923,\n \"gemm_fraction\": 0.6003320509114737,\n \"bytes_per_token\": 6952960,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.3280468262532736,\n \"storage_tb_per_million_tokens\": 6.95296,\n \"layers_measured\": 2,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:33:48,706 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n2026-11-20 17:33:48,706 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n2026-11-20 17:33:50,021 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"
+  },
+  "bench_factory_7b_k40_gpu_prng0": {
+   "rc": 0,
+   "seconds": 9.4,
+   "tail": "{\n \"model\": \"qwen2.5-7b\",\n \"mode\": \"preset\",\n \"ring\": \"K40A12\",\n \"device\": \"cuda\",\n \"backend\": \"cuda_int8\",\n \"slots_measured\": 1024,\n \"seconds\": 2.248178314000029,\n \"slots_per_second\": 41.09950252154732,\n \"tokens_per_hour\": 147958.20907757035,\n \"seconds_per_token\": 0.02433119475048945,\n \"gemm_fraction\": 0.6065272084997309,\n \"bytes_per_token\": 6952960,\n \"price_per_hour\": 0.2,\n \"usd_per_million_tokens\": 1.3517330416938584,\n \"storage_tb_per_million_tokens\": 6.95296,\n \"layers_measured\": 2,\n \"layers_total\": 28,\n \"gpu_name\": \"Tesla T4\",\n \"gpu_prng\": false\n}\n\n---stderr---\n2026-11-20 17:33:59,425 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n2026-11-20 17:33:59,425 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        26242936 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 4.3
+}

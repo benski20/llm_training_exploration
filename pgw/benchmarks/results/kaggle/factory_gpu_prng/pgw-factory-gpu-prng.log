@@ -1,0 +1,616 @@
+[{"stream_name":"stdout","time":10.258017184,"data":"[   0.2m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869296 kB', 'MemFree:        26242936 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":10.408500346,"data":"[   0.2m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":23.805539526,"data":"[   0.4m] DONE pip_install rc 0 13s\n"}
+,{"stream_name":"stdout","time":23.805600526,"data":"\n"}
+,{"stream_name":"stdout","time":23.805609512,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":23.805613771,"data":"\n"}
+,{"stream_name":"stdout","time":23.805617439,"data":"[   0.4m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":24.866332536,"data":"[   0.4m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":24.866360799,"data":"=0.0.8\n"}
+,{"stream_name":"stdout","time":24.866365713,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":24.866371575,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":24.866379776,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":24.866382764,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":24.86638533,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":24.866387904,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":24.866390409,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":24.866392899,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":24.866395421,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":24.866398032,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":24.866400532,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":24.866403026,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":24.866405592,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":24.866408148,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":24.866410667,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.866413203,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.866415723,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":24.866418343,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":24.866420878,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":24.866423408,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":24.866426016,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":24.866428512,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":24.866430977,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":24.866433446,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":24.866435955,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":24.866438449,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":24.866440945,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":24.866443458,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":24.866445953,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":24.866448427,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":24.866450934,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":24.866453431,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":24.866465332,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":24.866468282,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":24.866470836,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":24.866473354,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":24.866475841,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":24.866478321,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":24.866480821,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":24.866483313,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":24.866485817,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":24.866488296,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":24.866490776,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":24.866493259,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":24.866495737,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":24.866498216,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":24.866500705,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":24.866503214,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":24.866505727,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":24.866508279,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":24.866510785,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":24.866513294,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":24.866516093,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":24.866518623,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":24.866521152,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":24.866523752,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":24.866526258,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":24.866528742,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":24.86653124,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":24.866533814,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":24.866536323,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":24.866538809,"data":"texttable==1.7.3\n"}
+,{"stream_name":"stdout","time":24.866541302999998,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":24.86654385,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":24.86654632,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":24.86654881,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":24.866551322,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":24.866554103,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":24.866556578,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":24.866559083,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":24.866561561,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":24.866564111,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":24.866598306,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":24.866602526,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":24.86660672,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":24.866610925,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.8666152,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":24.866619242,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.866628557,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":24.866632545,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":24.866636226,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":24.866642158,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":24.86665006,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":24.866652598,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":24.866655072,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":24.866657657,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":24.8666601,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":24.866662543,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":24.866665014,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":24.866667552,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":24.866670017,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":24.866672495,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":24.866674959,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":24.866677503,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":24.866680209,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":24.866682683,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":24.866685135,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":24.866687655,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":24.866690106,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":24.866692586,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":24.866695049,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":24.866697512000002,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":24.866700024,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":24.866702575,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":24.866705106,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":24.866709066,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":24.86671163,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":24.866714132,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":24.866716584,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":24.866719046,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":24.866721523,"data":"ujson==6.1.0\n"}
+,{"stream_name":"stdout","time":24.866724,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":24.866726466,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":24.866728944,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":24.866731446,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":24.866733927,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":24.866736506,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":24.866739103,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":24.866741581,"data":"urwid==5.1.3\n"}
+,{"stream_name":"stdout","time":24.866744116,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":24.866746606,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":24.866749093,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":24.866751549,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":24.866754085,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":24.866759471,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":24.86676218,"data":"vtk==9.7.2\n"}
+,{"stream_name":"stdout","time":24.866764606,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":24.866767134,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":24.866769558,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":24.866772006,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":24.866774456999998,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":24.866776977,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":24.866779432,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":24.866782041,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":24.866784486,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":24.866786965,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":24.866789438,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":24.866791911,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":24.866794403,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":24.866796866,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":24.86679932,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":24.866801768,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":24.866804271,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":24.866806726,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":24.866809181,"data":"wrapt==2.5.1\n"}
+,{"stream_name":"stdout","time":24.866811618,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":24.866814061,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":24.866816515,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":24.866818974,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":24.866821407,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":24.866823843,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":24.866826308,"data":"xvfbwrapper==0.2.38\n"}
+,{"stream_name":"stdout","time":24.86682876,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":24.866831205,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":24.866833673,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":24.866836111,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":24.866838586,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":24.866841033,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":24.866843465,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":24.866845911,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":24.86684836,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":24.866850805,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":24.86685325,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":24.86685571,"data":"\n"}
+,{"stream_name":"stdout","time":24.86685812,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":24.866860554,"data":"\n"}
+,{"stream_name":"stdout","time":24.866863478,"data":"[   0.4m] RUN build_native : { [ -f $HOME/.cargo/env ] \u0026\u0026 . $HOME/.cargo/env; true; } \u0026\u0026 (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) \u0026\u0026 { [ -f $HOME/.cargo/env ] \u0026\u0026 . $HOME/.cargo/env; true; } \u0026\u0026 cargo --version \u0026\u0026 python rust/tools/build_fast.py \u0026\u0026 python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())'\n"}
+,{"stream_name":"stdout","time":67.822417351,"data":"[   1.1m] DONE build_native rc 0 43s\n"}
+,{"stream_name":"stdout","time":67.822477459,"data":"fo: syncing channel updates for stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":67.822485005,"data":"info: latest update on 2026-11-12 for version 1.100.0 (0ef1bc386 2026-11-09)\n"}
+,{"stream_name":"stdout","time":67.822491109,"data":"info: downloading 3 components\n"}
+,{"stream_name":"stdout","time":67.822496013,"data":"info: default toolchain set to stable-x86_64-unknown-linux-gnu\n"}
+,{"stream_name":"stdout","time":67.822500939,"data":"    Updating crates.io index\n"}
+,{"stream_name":"stdout","time":67.822505591,"data":" Downloading crates ...\n"}
+,{"stream_name":"stdout","time":67.822510181,"data":"  Downloaded block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":67.822514956,"data":"  Downloaded unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":67.822519675,"data":"  Downloaded autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":67.822524181,"data":"  Downloaded inout v0.1.4\n"}
+,{"stream_name":"stdout","time":67.822528696,"data":"  Downloaded hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":67.822533279,"data":"  Downloaded cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":67.822538059,"data":"  Downloaded crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":67.822549636,"data":"  Downloaded memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":67.822553583,"data":"  Downloaded cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":67.822573081,"data":"  Downloaded rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":67.822594761,"data":"  Downloaded indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":67.822600501,"data":"  Downloaded sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":67.822605293,"data":"  Downloaded pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822609954,"data":"  Downloaded pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822614639,"data":"  Downloaded matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":67.822619272,"data":"  Downloaded proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":67.822624011,"data":"  Downloaded target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":67.82262858,"data":"  Downloaded generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":67.822633256,"data":"  Downloaded pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822637927,"data":"  Downloaded typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":67.822642604,"data":"  Downloaded digest v0.10.7\n"}
+,{"stream_name":"stdout","time":67.822679266,"data":"  Downloaded num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":67.822684421,"data":"  Downloaded unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":67.822689204,"data":"  Downloaded num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":67.82269468,"data":"  Downloaded rustversion v1.0.23\n"}
+,{"stream_name":"stdout","time":67.822699622,"data":"  Downloaded cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":67.8227039,"data":"  Downloaded ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":67.822708092,"data":"  Downloaded num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":67.822712432,"data":"  Downloaded pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":67.82271665,"data":"  Downloaded syn v2.0.119\n"}
+,{"stream_name":"stdout","time":67.822720862,"data":"  Downloaded chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":67.822725065,"data":"  Downloaded heck v0.5.0\n"}
+,{"stream_name":"stdout","time":67.822742373,"data":"  Downloaded zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":67.822745993,"data":"  Downloaded subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":67.822749424,"data":"  Downloaded version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":67.822752784,"data":"  Downloaded once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":67.822761638,"data":"  Downloaded quote v1.0.47\n"}
+,{"stream_name":"stdout","time":67.822765102,"data":"  Downloaded hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":67.822781928,"data":"  Downloaded rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":67.822786048,"data":"  Downloaded numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":67.822789957,"data":"  Downloaded pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822793655,"data":"  Downloaded libc v0.2.191\n"}
+,{"stream_name":"stdout","time":67.822797699,"data":"   Compiling target-lexicon v0.12.16\n"}
+,{"stream_name":"stdout","time":67.822801443,"data":"   Compiling autocfg v1.5.1\n"}
+,{"stream_name":"stdout","time":67.822804785,"data":"   Compiling version_check v0.9.5\n"}
+,{"stream_name":"stdout","time":67.822808422,"data":"   Compiling once_cell v1.21.4\n"}
+,{"stream_name":"stdout","time":67.822812101,"data":"   Compiling typenum v1.20.1\n"}
+,{"stream_name":"stdout","time":67.822815468,"data":"   Compiling generic-array v0.14.7\n"}
+,{"stream_name":"stdout","time":67.822818928,"data":"   Compiling proc-macro2 v1.0.107\n"}
+,{"stream_name":"stdout","time":67.822822275,"data":"   Compiling quote v1.0.47\n"}
+,{"stream_name":"stdout","time":67.82282565,"data":"   Compiling unicode-ident v1.0.27\n"}
+,{"stream_name":"stdout","time":67.822828924,"data":"   Compiling num-traits v0.2.19\n"}
+,{"stream_name":"stdout","time":67.82283231,"data":"   Compiling pyo3-build-config v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822835695,"data":"   Compiling subtle v2.6.1\n"}
+,{"stream_name":"stdout","time":67.822838981,"data":"   Compiling cfg-if v1.0.5\n"}
+,{"stream_name":"stdout","time":67.822842341,"data":"   Compiling libc v0.2.191\n"}
+,{"stream_name":"stdout","time":67.822847221,"data":"   Compiling syn v2.0.119\n"}
+,{"stream_name":"stdout","time":67.82285059,"data":"   Compiling crypto-common v0.1.7\n"}
+,{"stream_name":"stdout","time":67.822854093,"data":"   Compiling block-buffer v0.10.4\n"}
+,{"stream_name":"stdout","time":67.822863703,"data":"   Compiling digest v0.10.7\n"}
+,{"stream_name":"stdout","time":67.822879231,"data":"   Compiling memoffset v0.9.1\n"}
+,{"stream_name":"stdout","time":67.8228832,"data":"   Compiling matrixmultiply v0.3.11\n"}
+,{"stream_name":"stdout","time":67.822887222,"data":"   Compiling heck v0.5.0\n"}
+,{"stream_name":"stdout","time":67.822890675,"data":"   Compiling inout v0.1.4\n"}
+,{"stream_name":"stdout","time":67.822894642,"data":"   Compiling rawpointer v0.2.1\n"}
+,{"stream_name":"stdout","time":67.822898431,"data":"   Compiling pyo3-macros-backend v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822901775,"data":"   Compiling pyo3-ffi v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822905119,"data":"   Compiling pyo3 v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822908463,"data":"   Compiling cpufeatures v0.2.17\n"}
+,{"stream_name":"stdout","time":67.822911843,"data":"   Compiling cipher v0.4.4\n"}
+,{"stream_name":"stdout","time":67.822915088,"data":"   Compiling num-complex v0.4.6\n"}
+,{"stream_name":"stdout","time":67.822918416,"data":"   Compiling num-integer v0.1.47\n"}
+,{"stream_name":"stdout","time":67.82292179,"data":"   Compiling hmac v0.12.1\n"}
+,{"stream_name":"stdout","time":67.822929801,"data":"   Compiling unindent v0.2.4\n"}
+,{"stream_name":"stdout","time":67.82293333,"data":"   Compiling indoc v2.0.8\n"}
+,{"stream_name":"stdout","time":67.822936727,"data":"   Compiling hkdf v0.12.4\n"}
+,{"stream_name":"stdout","time":67.822940078,"data":"   Compiling ndarray v0.16.1\n"}
+,{"stream_name":"stdout","time":67.822943473,"data":"   Compiling chacha20 v0.9.1\n"}
+,{"stream_name":"stdout","time":67.822946841,"data":"   Compiling sha2 v0.10.9\n"}
+,{"stream_name":"stdout","time":67.822950536,"data":"   Compiling rustc-hash v2.1.3\n"}
+,{"stream_name":"stdout","time":67.822955526,"data":"   Compiling zeroize v1.9.1\n"}
+,{"stream_name":"stdout","time":67.822962994,"data":"   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n"}
+,{"stream_name":"stdout","time":67.822979241,"data":"   Compiling pyo3-macros v0.23.5\n"}
+,{"stream_name":"stdout","time":67.822983185,"data":"   Compiling numpy v0.23.0\n"}
+,{"stream_name":"stdout","time":67.822987196,"data":"   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n"}
+,{"stream_name":"stdout","time":67.822991372,"data":"    Finished `release` profile [optimized] target(s) in 24.26s\n"}
+,{"stream_name":"stdout","time":67.822995437,"data":"\n"}
+,{"stream_name":"stdout","time":67.822998726,"data":"[   1.1m] RUN cpu_info : lscpu; nproc; nvidia-smi || true\n"}
+,{"stream_name":"stdout","time":68.220271932,"data":"[   1.1m] DONE cpu_info rc 0 0s\n"}
+,{"stream_name":"stdout","time":68.220308115,"data":"     Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown\n"}
+,{"stream_name":"stdout","time":68.220311865,"data":"Vulnerability Old microcode:             Not affected\n"}
+,{"stream_name":"stdout","time":68.220314658,"data":"Vulnerability Reg file data sampling:    Not affected\n"}
+,{"stream_name":"stdout","time":68.220317412,"data":"Vulnerability Retbleed:                  Mitigation; IBRS\n"}
+,{"stream_name":"stdout","time":68.220320098,"data":"Vulnerability Spec rstack overflow:      Not affected\n"}
+,{"stream_name":"stdout","time":68.220322786,"data":"Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\n"}
+,{"stream_name":"stdout","time":68.220325548,"data":"Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\n"}
+,{"stream_name":"stdout","time":68.220328276,"data":"Vulnerability Spectre v2:                Mitigation; IBRS; IBPB conditional; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop\n"}
+,{"stream_name":"stdout","time":68.220331065,"data":"Vulnerability Srbds:                     Not affected\n"}
+,{"stream_name":"stdout","time":68.220333726,"data":"Vulnerability Tsa:                       Not affected\n"}
+,{"stream_name":"stdout","time":68.220336329,"data":"Vulnerability Tsx async abort:           Mitigation; Clear CPU buffers; SMT Host state unknown\n"}
+,{"stream_name":"stdout","time":68.220338999,"data":"Vulnerability Vmscape:                   Not affected\n"}
+,{"stream_name":"stdout","time":68.220341576,"data":"4\n"}
+,{"stream_name":"stdout","time":68.220344256,"data":"Fri Nov 20 17:30:50 2026       \n"}
+,{"stream_name":"stdout","time":68.220346838,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":68.22034952,"data":"| NVIDIA-SMI 580.178.04             Driver Version: 580.178.04     CUDA Version: 13.0     |\n"}
+,{"stream_name":"stdout","time":68.220352181,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":68.220363557,"data":"| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n"}
+,{"stream_name":"stdout","time":68.220366539,"data":"| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n"}
+,{"stream_name":"stdout","time":68.220369177,"data":"|                                         |                        |               MIG M. |\n"}
+,{"stream_name":"stdout","time":68.220371751,"data":"|=========================================+========================+======================|\n"}
+,{"stream_name":"stdout","time":68.220374303,"data":"|   0  Tesla T4                       Off |   00000000:00:04.0 Off |                    0 |\n"}
+,{"stream_name":"stdout","time":68.220376869,"data":"| N/A   47C    P8             10W /   70W |       3MiB /  15360MiB |      0%      Default |\n"}
+,{"stream_name":"stdout","time":68.22037943,"data":"|                                         |                        |                  N/A |\n"}
+,{"stream_name":"stdout","time":68.220381989,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":68.220386055,"data":"|   1  Tesla T4                       Off |   00000000:00:05.0 Off |                    0 |\n"}
+,{"stream_name":"stdout","time":68.220388653,"data":"| N/A   49C    P8             11W /   70W |       3MiB /  15360MiB |      0%      Default |\n"}
+,{"stream_name":"stdout","time":68.220391218,"data":"|                                         |                        |                  N/A |\n"}
+,{"stream_name":"stdout","time":68.220393774,"data":"+-----------------------------------------+------------------------+----------------------+\n"}
+,{"stream_name":"stdout","time":68.220396425,"data":"\n"}
+,{"stream_name":"stdout","time":68.220398844,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":68.220401431,"data":"| Processes:                                                                              |\n"}
+,{"stream_name":"stdout","time":68.22040399,"data":"|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n"}
+,{"stream_name":"stdout","time":68.220412024,"data":"|        ID   ID                                                               Usage      |\n"}
+,{"stream_name":"stdout","time":68.220414704,"data":"|=========================================================================================|\n"}
+,{"stream_name":"stdout","time":68.220417272,"data":"|  No running processes found                                                             |\n"}
+,{"stream_name":"stdout","time":68.220419847,"data":"+-----------------------------------------------------------------------------------------+\n"}
+,{"stream_name":"stdout","time":68.220422523,"data":"\n"}
+,{"stream_name":"stdout","time":68.220424939,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":68.220427385,"data":"\n"}
+,{"stream_name":"stdout","time":68.220429851,"data":"[   1.1m] RUN pytest_factory_gpu : /usr/bin/python3 -m pytest tests/factory -m gpu --ignore tests/factory/test_runtime_he_mtls.py -v -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":84.28542796,"data":"[   1.4m] DONE pytest_factory_gpu rc 1 16s\n"}
+,{"stream_name":"stdout","time":84.285465311,"data":"ng: object) -\u003e None:  # pragma: no cover - GPU only\n"}
+,{"stream_name":"stdout","time":84.285469779,"data":"        pack = FakePack()\n"}
+,{"stream_name":"stdout","time":84.28547261,"data":"        outs = {}\n"}
+,{"stream_name":"stdout","time":84.285482573,"data":"        for flag in (True, False):\n"}
+,{"stream_name":"stdout","time":84.285485432,"data":"            gen = MaskGenerator(pack, ring, device=\"cuda\", gpu_prng=flag)\n"}
+,{"stream_name":"stdout","time":84.285488194,"data":"            items = list(gen.generate(SEED, 37, checks=2, chunk_slots=16))\n"}
+,{"stream_name":"stdout","time":84.285490833,"data":"\u003e           assert gen.last_stats.extra[\"gpu_prng\"] is flag\n"}
+,{"stream_name":"stdout","time":84.285493619,"data":"E           assert False is True\n"}
+,{"stream_name":"stdout","time":84.285496152,"data":"\n"}
+,{"stream_name":"stdout","time":84.285498549,"data":"tests/factory/test_gpu_prng.py:438: AssertionError\n"}
+,{"stream_name":"stdout","time":84.28550116,"data":"------------------------------ Captured log call -------------------------------\n"}
+,{"stream_name":"stdout","time":84.285503894,"data":"ERROR    pgw.factory.gpu_prng:gpu_prng.py:476 GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"}
+,{"stream_name":"stdout","time":84.285506669,"data":"_____________________ test_gpu_matmul_planes_equals_matmul _____________________\n"}
+,{"stream_name":"stdout","time":84.285509243,"data":"\n"}
+,{"stream_name":"stdout","time":84.285511701,"data":"    @pytest.mark.gpu\n"}
+,{"stream_name":"stdout","time":84.285514154,"data":"    def test_gpu_matmul_planes_equals_matmul() -\u003e None:  # pragma: no cover - GPU only\n"}
+,{"stream_name":"stdout","time":84.285516823,"data":"        from pgw.core.ring import RingParams\n"}
+,{"stream_name":"stdout","time":84.285519313,"data":"    \n"}
+,{"stream_name":"stdout","time":84.285521813,"data":"        gen = torch.Generator().manual_seed(3)\n"}
+,{"stream_name":"stdout","time":84.285524306,"data":"        w = torch.randint(-128, 128, (100, 130), dtype=torch.int8, generator=gen).cuda()\n"}
+,{"stream_name":"stdout","time":84.28552698,"data":"        kern = RingKernel(w, \"cuda_int8\")\n"}
+,{"stream_name":"stdout","time":84.285529586,"data":"        key = os.urandom(32)\n"}
+,{"stream_name":"stdout","time":84.285532175,"data":"        for k in KS:\n"}
+,{"stream_name":"stdout","time":84.285534629,"data":"            params = RingParams(k, 8)\n"}
+,{"stream_name":"stdout","time":84.285537137,"data":"            for rows in (1, 7, 33, 256):\n"}
+,{"stream_name":"stdout","time":84.28553959,"data":"                with gp.DeviceRingStream(key, 130, k, \"cuda\", \"triton\") as st:\n"}
+,{"stream_name":"stdout","time":84.285542372,"data":"                    p, np_ = kern.plane_shape(rows)\n"}
+,{"stream_name":"stdout","time":84.285544891,"data":"                    d8 = torch.zeros((gp.limbs(k) * p, np_), dtype=torch.int8, device=\"cuda\")\n"}
+,{"stream_name":"stdout","time":84.285547575,"data":"\u003e                   st.digit_planes(5, rows, d8)\n"}
+,{"stream_name":"stdout","time":84.28555013,"data":"\n"}
+,{"stream_name":"stdout","time":84.285552495,"data":"tests/factory/test_gpu_prng.py:459: \n"}
+,{"stream_name":"stdout","time":84.285554987,"data":"_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n"}
+,{"stream_name":"stdout","time":84.285557542,"data":"\n"}
+,{"stream_name":"stdout","time":84.285559917,"data":"self = DeviceRingStream(\u003credacted\u003e, cols=130, k=32, device=cuda, impl=triton)\n"}
+,{"stream_name":"stdout","time":84.285562602,"data":"row_start = 5, row_count = 1\n"}
+,{"stream_name":"stdout","time":84.285598031,"data":"out = tensor([[0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":84.28560296,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":84.285612091,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":84.285616784,"data":"        ...,\n"}
+,{"stream_name":"stdout","time":84.28562045,"data":"   ... ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":84.285624071,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":84.28562776,"data":"        [0, 0, 0,  ..., 0, 0, 0]], device='cuda:0', dtype=torch.int8)\n"}
+,{"stream_name":"stdout","time":84.285631541,"data":"\n"}
+,{"stream_name":"stdout","time":84.285636697,"data":"    def digit_planes(self, row_start: int, row_count: int, out: torch.Tensor) -\u003e torch.Tensor:\n"}
+,{"stream_name":"stdout","time":84.285640974,"data":"        \"\"\"Write the balanced int8 digit planes of the rows into ``out`` and return it.\n"}
+,{"stream_name":"stdout","time":84.285651315,"data":"    \n"}
+,{"stream_name":"stdout","time":84.285653817,"data":"        ``out`` is int8 ``(limbs * P, NP)`` with ``P \u003e= row_count`` and ``NP \u003e= cols``: plane ``i`` is\n"}
+,{"stream_name":"stdout","time":84.285656545,"data":"        ``out[i*P:(i+1)*P]``, element ``(t, j)`` at ``[i*P + t, j]`` -- exactly the stacked operand\n"}
+,{"stream_name":"stdout","time":84.285659205,"data":"        :func:`pgw.core.ringmm.int8_ring_matmul` builds from a zero-padded ``(P, NP)`` copy of ``r``.\n"}
+,{"stream_name":"stdout","time":84.285662113,"data":"        Positions outside the ``row_count x cols`` block are not written (pass a zeroed buffer).\n"}
+,{"stream_name":"stdout","time":84.285664709,"data":"        \"\"\"\n"}
+,{"stream_name":"stdout","time":84.285667188,"data":"        p, np_ = _check_planes(out, self.cols, self.k, row_count)\n"}
+,{"stream_name":"stdout","time":84.285669741,"data":"        if out.device != self.device:\n"}
+,{"stream_name":"stdout","time":84.285672213,"data":"\u003e           raise ShapeError(f\"digit planes on {out.device}, stream on {self.device}\")\n"}
+,{"stream_name":"stdout","time":84.285674906,"data":"E           pgw.core.errors.ShapeError: digit planes on cuda:0, stream on cuda\n"}
+,{"stream_name":"stdout","time":84.285677476,"data":"\n"}
+,{"stream_name":"stdout","time":84.285679896,"data":"src/pgw/factory/gpu_prng.py:388: ShapeError\n"}
+,{"stream_name":"stdout","time":84.28568236,"data":"================= 6 failed, 3 passed, 262 deselected in 11.06s =================\n"}
+,{"stream_name":"stdout","time":84.285684922,"data":"\n"}
+,{"stream_name":"stdout","time":84.285687291,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":84.285689796,"data":"\n"}
+,{"stream_name":"stdout","time":84.285692204,"data":"[   1.4m] RUN pytest_gpu_prng_all : /usr/bin/python3 -m pytest tests/factory/test_gpu_prng.py tests/factory/test_generator.py tests/factory/test_self_check.py -q -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":134.728558698,"data":"[   2.2m] DONE pytest_gpu_prng_all rc 1 50s\n"}
+,{"stream_name":"stdout","time":134.728607772,"data":"ue, False):\n"}
+,{"stream_name":"stdout","time":134.728613224,"data":"            gen = MaskGenerator(pack, ring, device=\"cuda\", gpu_prng=flag)\n"}
+,{"stream_name":"stdout","time":134.728618345,"data":"            items = list(gen.generate(SEED, 37, checks=2, chunk_slots=16))\n"}
+,{"stream_name":"stdout","time":134.72862309,"data":"\u003e           assert gen.last_stats.extra[\"gpu_prng\"] is flag\n"}
+,{"stream_name":"stdout","time":134.72862817,"data":"E           assert False is True\n"}
+,{"stream_name":"stdout","time":134.728632524,"data":"\n"}
+,{"stream_name":"stdout","time":134.728636835,"data":"tests/factory/test_gpu_prng.py:438: AssertionError\n"}
+,{"stream_name":"stdout","time":134.728650232,"data":"------------------------------ Captured log call -------------------------------\n"}
+,{"stream_name":"stdout","time":134.728654251,"data":"ERROR    pgw.factory.gpu_prng:gpu_prng.py:476 GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"}
+,{"stream_name":"stdout","time":134.728658229,"data":"_____________________ test_gpu_matmul_planes_equals_matmul _____________________\n"}
+,{"stream_name":"stdout","time":134.728662001,"data":"\n"}
+,{"stream_name":"stdout","time":134.728665593,"data":"    @pytest.mark.gpu\n"}
+,{"stream_name":"stdout","time":134.728669117,"data":"    def test_gpu_matmul_planes_equals_matmul() -\u003e None:  # pragma: no cover - GPU only\n"}
+,{"stream_name":"stdout","time":134.728673223,"data":"        from pgw.core.ring import RingParams\n"}
+,{"stream_name":"stdout","time":134.728676802,"data":"    \n"}
+,{"stream_name":"stdout","time":134.728681035,"data":"        gen = torch.Generator().manual_seed(3)\n"}
+,{"stream_name":"stdout","time":134.728684803,"data":"        w = torch.randint(-128, 128, (100, 130), dtype=torch.int8, generator=gen).cuda()\n"}
+,{"stream_name":"stdout","time":134.728688587,"data":"        kern = RingKernel(w, \"cuda_int8\")\n"}
+,{"stream_name":"stdout","time":134.728692607,"data":"        key = os.urandom(32)\n"}
+,{"stream_name":"stdout","time":134.728696382,"data":"        for k in KS:\n"}
+,{"stream_name":"stdout","time":134.728700021,"data":"            params = RingParams(k, 8)\n"}
+,{"stream_name":"stdout","time":134.728703982,"data":"            for rows in (1, 7, 33, 256):\n"}
+,{"stream_name":"stdout","time":134.728707777,"data":"                with gp.DeviceRingStream(key, 130, k, \"cuda\", \"triton\") as st:\n"}
+,{"stream_name":"stdout","time":134.728711663,"data":"                    p, np_ = kern.plane_shape(rows)\n"}
+,{"stream_name":"stdout","time":134.728715359,"data":"                    d8 = torch.zeros((gp.limbs(k) * p, np_), dtype=torch.int8, device=\"cuda\")\n"}
+,{"stream_name":"stdout","time":134.728719373,"data":"\u003e                   st.digit_planes(5, rows, d8)\n"}
+,{"stream_name":"stdout","time":134.728722965,"data":"\n"}
+,{"stream_name":"stdout","time":134.728726171,"data":"tests/factory/test_gpu_prng.py:459: \n"}
+,{"stream_name":"stdout","time":134.728729805,"data":"_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n"}
+,{"stream_name":"stdout","time":134.728733665,"data":"\n"}
+,{"stream_name":"stdout","time":134.728737025,"data":"self = DeviceRingStream(\u003credacted\u003e, cols=130, k=32, device=cuda, impl=triton)\n"}
+,{"stream_name":"stdout","time":134.728740932,"data":"row_start = 5, row_count = 1\n"}
+,{"stream_name":"stdout","time":134.728744489,"data":"out = tensor([[0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":134.728748072,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":134.728751693,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":134.728755257,"data":"        ...,\n"}
+,{"stream_name":"stdout","time":134.728758643,"data":"   ... ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":134.728762179,"data":"        [0, 0, 0,  ..., 0, 0, 0],\n"}
+,{"stream_name":"stdout","time":134.728765879,"data":"        [0, 0, 0,  ..., 0, 0, 0]], device='cuda:0', dtype=torch.int8)\n"}
+,{"stream_name":"stdout","time":134.728770125,"data":"\n"}
+,{"stream_name":"stdout","time":134.728773439,"data":"    def digit_planes(self, row_start: int, row_count: int, out: torch.Tensor) -\u003e torch.Tensor:\n"}
+,{"stream_name":"stdout","time":134.728783183,"data":"        \"\"\"Write the balanced int8 digit planes of the rows into ``out`` and return it.\n"}
+,{"stream_name":"stdout","time":134.728787347,"data":"    \n"}
+,{"stream_name":"stdout","time":134.728790883,"data":"        ``out`` is int8 ``(limbs * P, NP)`` with ``P \u003e= row_count`` and ``NP \u003e= cols``: plane ``i`` is\n"}
+,{"stream_name":"stdout","time":134.728794869,"data":"        ``out[i*P:(i+1)*P]``, element ``(t, j)`` at ``[i*P + t, j]`` -- exactly the stacked operand\n"}
+,{"stream_name":"stdout","time":134.728798749,"data":"        :func:`pgw.core.ringmm.int8_ring_matmul` builds from a zero-padded ``(P, NP)`` copy of ``r``.\n"}
+,{"stream_name":"stdout","time":134.728802469,"data":"        Positions outside the ``row_count x cols`` block are not written (pass a zeroed buffer).\n"}
+,{"stream_name":"stdout","time":134.728806221,"data":"        \"\"\"\n"}
+,{"stream_name":"stdout","time":134.728809671,"data":"        p, np_ = _check_planes(out, self.cols, self.k, row_count)\n"}
+,{"stream_name":"stdout","time":134.728813387,"data":"        if out.device != self.device:\n"}
+,{"stream_name":"stdout","time":134.728816838,"data":"\u003e           raise ShapeError(f\"digit planes on {out.device}, stream on {self.device}\")\n"}
+,{"stream_name":"stdout","time":134.728820729,"data":"E           pgw.core.errors.ShapeError: digit planes on cuda:0, stream on cuda\n"}
+,{"stream_name":"stdout","time":134.728824103,"data":"\n"}
+,{"stream_name":"stdout","time":134.728827459,"data":"src/pgw/factory/gpu_prng.py:388: ShapeError\n"}
+,{"stream_name":"stdout","time":134.728830797,"data":"=========================== short test summary info ============================\n"}
+,{"stream_name":"stdout","time":134.728834549,"data":"SKIPPED [1] tests/factory/test_gpu_prng.py:235: needs the Triton interpreter\n"}
+,{"stream_name":"stdout","time":134.72883807,"data":"9 failed, 105 passed, 1 skipped in 44.57s\n"}
+,{"stream_name":"stdout","time":134.728841573,"data":"\n"}
+,{"stream_name":"stdout","time":134.728844981,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":134.728848331,"data":"\n"}
+,{"stream_name":"stdout","time":134.728851411,"data":"[   2.2m] RUN bench_factory_7b_k32_l2_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":144.832640088,"data":"[   2.4m] DONE bench_factory_7b_k32_l2_gpu_prng1 rc 0 10s\n"}
+,{"stream_name":"stdout","time":144.832671919,"data":"{\n"}
+,{"stream_name":"stdout","time":144.832678665,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":144.832686681,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":144.832704434,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":144.832708914,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":144.832712908,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":144.832717773,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":144.83272208,"data":" \"seconds\": 1.881127633999995,\n"}
+,{"stream_name":"stdout","time":144.832726331,"data":" \"slots_per_second\": 45.11155209238612,\n"}
+,{"stream_name":"stdout","time":144.832730501,"data":" \"tokens_per_hour\": 162401.58753259003,\n"}
+,{"stream_name":"stdout","time":144.832734256,"data":" \"seconds_per_token\": 0.022167270989746746,\n"}
+,{"stream_name":"stdout","time":144.832738455,"data":" \"gemm_fraction\": 0.6661056359773299,\n"}
+,{"stream_name":"stdout","time":144.832742531,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":144.8327566,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":144.832760484,"data":" \"usd_per_million_tokens\": 1.2315150549859306,\n"}
+,{"stream_name":"stdout","time":144.832764106,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":144.832769411,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":144.832776249,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":144.832778664,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":144.832781011,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":144.832783374,"data":"}\n"}
+,{"stream_name":"stdout","time":144.832785566,"data":"\n"}
+,{"stream_name":"stdout","time":144.832787848,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":144.832790167,"data":"2026-11-20 17:32:02,360 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":144.832792685,"data":"2026-11-20 17:32:02,360 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n"}
+,{"stream_name":"stdout","time":144.832796274,"data":"2026-11-20 17:32:03,713 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"}
+,{"stream_name":"stdout","time":144.8328126,"data":"\n"}
+,{"stream_name":"stdout","time":144.832822387,"data":"[   2.4m] RUN bench_factory_7b_k32_l2_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":153.53197871,"data":"[   2.5m] DONE bench_factory_7b_k32_l2_gpu_prng0 rc 0 9s\n"}
+,{"stream_name":"stdout","time":153.53200421,"data":"{\n"}
+,{"stream_name":"stdout","time":153.532008456,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":153.53201245,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":153.532016216,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":153.532019909,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":153.532023394,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":153.532027133,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":153.532030826,"data":" \"seconds\": 1.95507936599995,\n"}
+,{"stream_name":"stdout","time":153.532034561,"data":" \"slots_per_second\": 43.17445627464029,\n"}
+,{"stream_name":"stdout","time":153.532038248,"data":" \"tokens_per_hour\": 155428.04258870505,\n"}
+,{"stream_name":"stdout","time":153.53204171,"data":" \"seconds_per_token\": 0.023161843513183455,\n"}
+,{"stream_name":"stdout","time":153.532045053,"data":" \"gemm_fraction\": 0.6743610325639181,\n"}
+,{"stream_name":"stdout","time":153.532048824,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":153.532052206,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":153.532055517,"data":" \"usd_per_million_tokens\": 1.2867690840657477,\n"}
+,{"stream_name":"stdout","time":153.53205908,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":153.532062644,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":153.532065974,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":153.532069259,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":153.53207282,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":153.532085977,"data":"}\n"}
+,{"stream_name":"stdout","time":153.532089774,"data":"\n"}
+,{"stream_name":"stdout","time":153.532093602,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":153.532096988,"data":"2026-11-20 17:32:12,382 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":153.532100558,"data":"2026-11-20 17:32:12,382 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot\n"}
+,{"stream_name":"stdout","time":153.53210445,"data":"\n"}
+,{"stream_name":"stdout","time":153.532108382,"data":"[   2.5m] RUN bench_factory_7b_k32_l28_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":197.816582179,"data":"[   3.3m] DONE bench_factory_7b_k32_l28_gpu_prng1 rc 0 44s\n"}
+,{"stream_name":"stdout","time":197.816619428,"data":"{\n"}
+,{"stream_name":"stdout","time":197.81663257,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":197.816637392,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":197.816640926,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":197.816644414,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":197.816647846,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":197.816651194,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":197.816654651,"data":" \"seconds\": 26.429358261000004,\n"}
+,{"stream_name":"stdout","time":197.816658095,"data":" \"slots_per_second\": 44.94232869625299,\n"}
+,{"stream_name":"stdout","time":197.816661376,"data":" \"tokens_per_hour\": 161792.38330651078,\n"}
+,{"stream_name":"stdout","time":197.816664986,"data":" \"seconds_per_token\": 0.022250738424316976,\n"}
+,{"stream_name":"stdout","time":197.816668366,"data":" \"gemm_fraction\": 0.6668264610498031,\n"}
+,{"stream_name":"stdout","time":197.816673047,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":197.816693695,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":197.816699167,"data":" \"usd_per_million_tokens\": 1.2361521346842765,\n"}
+,{"stream_name":"stdout","time":197.816704716,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":197.816710474,"data":" \"layers_measured\": 28,\n"}
+,{"stream_name":"stdout","time":197.816715777,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":197.816724991,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":197.816729848,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":197.816734775,"data":"}\n"}
+,{"stream_name":"stdout","time":197.816746935,"data":"\n"}
+,{"stream_name":"stdout","time":197.816750686,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":197.816754028,"data":"2026-11-20 17:32:21,124 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":197.816757694,"data":"2026-11-20 17:32:21,125 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n"}
+,{"stream_name":"stdout","time":197.816761322,"data":"2026-11-20 17:32:22,442 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"}
+,{"stream_name":"stdout","time":197.816764911,"data":"\n"}
+,{"stream_name":"stdout","time":197.816775988,"data":"[   3.3m] RUN bench_factory_7b_k32_l28_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 --device cuda --layers 28 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":241.084463793,"data":"[   4.0m] DONE bench_factory_7b_k32_l28_gpu_prng0 rc 0 43s\n"}
+,{"stream_name":"stdout","time":241.084514444,"data":"{\n"}
+,{"stream_name":"stdout","time":241.084521094,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":241.084526841,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":241.084532335,"data":" \"ring\": \"K32A12C27\",\n"}
+,{"stream_name":"stdout","time":241.084537841,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":241.084542324,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":241.084546965,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":241.084551661,"data":" \"seconds\": 26.722751708999965,\n"}
+,{"stream_name":"stdout","time":241.084556193,"data":" \"slots_per_second\": 44.36245202769705,\n"}
+,{"stream_name":"stdout","time":241.084590421,"data":" \"tokens_per_hour\": 159704.8272997094,\n"}
+,{"stream_name":"stdout","time":241.084597936,"data":" \"seconds_per_token\": 0.02254158537890702,\n"}
+,{"stream_name":"stdout","time":241.084603732,"data":" \"gemm_fraction\": 0.6653552221200053,\n"}
+,{"stream_name":"stdout","time":241.084608468,"data":" \"bytes_per_token\": 5562368,\n"}
+,{"stream_name":"stdout","time":241.084612803,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":241.084617234,"data":" \"usd_per_million_tokens\": 1.2523102988281678,\n"}
+,{"stream_name":"stdout","time":241.084621667,"data":" \"storage_tb_per_million_tokens\": 5.562368,\n"}
+,{"stream_name":"stdout","time":241.084626214,"data":" \"layers_measured\": 28,\n"}
+,{"stream_name":"stdout","time":241.084630629,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":241.084634915,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":241.084639396,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":241.084643748,"data":"}\n"}
+,{"stream_name":"stdout","time":241.08464795,"data":"\n"}
+,{"stream_name":"stdout","time":241.084657883,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":241.084661338,"data":"2026-11-20 17:33:05,461 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":241.084664503,"data":"2026-11-20 17:33:05,462 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot\n"}
+,{"stream_name":"stdout","time":241.084667681,"data":"\n"}
+,{"stream_name":"stdout","time":241.084671311,"data":"[   4.0m] RUN bench_factory_7b_k40_gpu_prng1 : PGW_FACTORY_GPU_PRNG=1 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":251.851406301,"data":"[   4.2m] DONE bench_factory_7b_k40_gpu_prng1 rc 0 11s\n"}
+,{"stream_name":"stdout","time":251.851436949,"data":"{\n"}
+,{"stream_name":"stdout","time":251.851442626,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":251.851447711,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":251.851452496,"data":" \"ring\": \"K40A12\",\n"}
+,{"stream_name":"stdout","time":251.851456857,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":251.851462618,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":251.85147892,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":251.851481383,"data":" \"seconds\": 2.216681762999997,\n"}
+,{"stream_name":"stdout","time":251.851483758,"data":" \"slots_per_second\": 41.83252763179337,\n"}
+,{"stream_name":"stdout","time":251.851485974,"data":" \"tokens_per_hour\": 150597.09947445613,\n"}
+,{"stream_name":"stdout","time":251.851488153,"data":" \"seconds_per_token\": 0.023904842872558923,\n"}
+,{"stream_name":"stdout","time":251.851490458,"data":" \"gemm_fraction\": 0.6003320509114737,\n"}
+,{"stream_name":"stdout","time":251.851492634,"data":" \"bytes_per_token\": 6952960,\n"}
+,{"stream_name":"stdout","time":251.851494832,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":251.851496997,"data":" \"usd_per_million_tokens\": 1.3280468262532736,\n"}
+,{"stream_name":"stdout","time":251.851499287,"data":" \"storage_tb_per_million_tokens\": 6.95296,\n"}
+,{"stream_name":"stdout","time":251.851501518,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":251.851503692,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":251.851506353,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":251.851508654,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":251.851510806,"data":"}\n"}
+,{"stream_name":"stdout","time":251.851512883,"data":"\n"}
+,{"stream_name":"stdout","time":251.851514982,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":251.85151727,"data":"2026-11-20 17:33:48,706 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":251.85151971,"data":"2026-11-20 17:33:48,706 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n"}
+,{"stream_name":"stdout","time":251.851522153,"data":"2026-11-20 17:33:50,021 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path\n"}
+,{"stream_name":"stdout","time":251.851524577,"data":"\n"}
+,{"stream_name":"stdout","time":251.851526684,"data":"[   4.2m] RUN bench_factory_7b_k40_gpu_prng0 : PGW_FACTORY_GPU_PRNG=0 python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 --device cuda --layers 2 --slots 1024 --chunk-slots 256 --json\n"}
+,{"stream_name":"stdout","time":261.210633274,"data":"[   4.3m] DONE bench_factory_7b_k40_gpu_prng0 rc 0 9s\n"}
+,{"stream_name":"stdout","time":261.210664079,"data":"{\n"}
+,{"stream_name":"stdout","time":261.210667426,"data":" \"model\": \"qwen2.5-7b\",\n"}
+,{"stream_name":"stdout","time":261.210670167,"data":" \"mode\": \"preset\",\n"}
+,{"stream_name":"stdout","time":261.210672707,"data":" \"ring\": \"K40A12\",\n"}
+,{"stream_name":"stdout","time":261.210675474,"data":" \"device\": \"cuda\",\n"}
+,{"stream_name":"stdout","time":261.210678815,"data":" \"backend\": \"cuda_int8\",\n"}
+,{"stream_name":"stdout","time":261.210696654,"data":" \"slots_measured\": 1024,\n"}
+,{"stream_name":"stdout","time":261.210701015,"data":" \"seconds\": 2.248178314000029,\n"}
+,{"stream_name":"stdout","time":261.210705128,"data":" \"slots_per_second\": 41.09950252154732,\n"}
+,{"stream_name":"stdout","time":261.210709492,"data":" \"tokens_per_hour\": 147958.20907757035,\n"}
+,{"stream_name":"stdout","time":261.210713711,"data":" \"seconds_per_token\": 0.02433119475048945,\n"}
+,{"stream_name":"stdout","time":261.210717987,"data":" \"gemm_fraction\": 0.6065272084997309,\n"}
+,{"stream_name":"stdout","time":261.210721574,"data":" \"bytes_per_token\": 6952960,\n"}
+,{"stream_name":"stdout","time":261.210736752,"data":" \"price_per_hour\": 0.2,\n"}
+,{"stream_name":"stdout","time":261.210740379,"data":" \"usd_per_million_tokens\": 1.3517330416938584,\n"}
+,{"stream_name":"stdout","time":261.210744102,"data":" \"storage_tb_per_million_tokens\": 6.95296,\n"}
+,{"stream_name":"stdout","time":261.210753568,"data":" \"layers_measured\": 2,\n"}
+,{"stream_name":"stdout","time":261.210756326,"data":" \"layers_total\": 28,\n"}
+,{"stream_name":"stdout","time":261.210758696,"data":" \"gpu_name\": \"Tesla T4\",\n"}
+,{"stream_name":"stdout","time":261.210761196,"data":" \"gpu_prng\": false\n"}
+,{"stream_name":"stdout","time":261.210763624,"data":"}\n"}
+,{"stream_name":"stdout","time":261.210765868,"data":"\n"}
+,{"stream_name":"stdout","time":261.210768092,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":261.210770559,"data":"2026-11-20 17:33:59,425 INFO pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda\n"}
+,{"stream_name":"stdout","time":261.210773208,"data":"2026-11-20 17:33:59,425 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K40A12 on cuda/cuda_int8, 8 linears, 0.50 MB/slot\n"}
+,{"stream_name":"stdout","time":261.210775824,"data":"\n"}
+,{"stream_name":"stdout","time":261.211176697,"data":"[   4.3m] ALL DONE\n"}
+,{"stream_name":"stderr","time":263.896851831,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":263.89688211,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":264.151707821,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":264.15173306,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":264.991745045,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":266.118194404,"data":"[NbConvertApp] Writing 1496398 bytes to __results__.html\n"}
+]

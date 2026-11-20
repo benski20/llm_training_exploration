@@ -1,0 +1,26 @@
+{
+ "model": "qwen2.5-7b",
+ "mode": "preset",
+ "ring": "K32A12C27",
+ "device": "cuda",
+ "backend": "cuda_int8",
+ "slots_measured": 1024,
+ "seconds": 26.429358261000004,
+ "slots_per_second": 44.94232869625299,
+ "tokens_per_hour": 161792.38330651078,
+ "seconds_per_token": 0.022250738424316976,
+ "gemm_fraction": 0.6668264610498031,
+ "bytes_per_token": 5562368,
+ "price_per_hour": 0.2,
+ "usd_per_million_tokens": 1.2361521346842765,
+ "storage_tb_per_million_tokens": 5.562368,
+ "layers_measured": 28,
+ "layers_total": 28,
+ "gpu_name": "Tesla T4",
+ "gpu_prng": false
+}
+
+---stderr---
+2026-11-20 17:32:21,124 INFO pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+2026-11-20 17:32:21,125 INFO pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+2026-11-20 17:32:22,442 ERROR pgw.factory.gpu_prng: GPU mask PRNG self-test FAILED on cuda (triton): ShapeError: digit planes on cuda:0, stream on cuda; the factory uses the CPU ChaCha20 path
