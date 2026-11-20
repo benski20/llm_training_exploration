@@ -1,0 +1,21 @@
+[package]
+name = "pgw-ntt"
+version = "0.1.0"
+description = "Exact negacyclic ring products for the encrypted mask factory (Python extension `pgw_ntt`): big (64-bit) x small (ternary) products over Z[X]/(X^256+1), computed with NTTs over three 29-bit primes and CRT, then reduced mod 2^64. Bit-identical to the dense int8/float64 GEMM path of pgw.hemask."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "pgw_ntt"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["python"]
+# Python bindings. `cargo test -p pgw-ntt --no-default-features` tests the kernels alone.
+python = ["dep:pyo3", "dep:numpy"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"], optional = true }
+numpy = { version = "0.23", optional = true }
