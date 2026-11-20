@@ -20,6 +20,14 @@ The factory computes ``W8 r mod 2^K`` for huge numbers of mask rows ``r``, so it
 
 All kernels return canonical int64 ring elements in ``[0, 2^K)``.
 
+The int8 backends split ``r`` into its balanced base-256 digit planes with one offset add and a byte
+gather (:func:`ring_digit_planes`: the balanced digits of ``v`` are the little-endian bytes of
+``v + 128 * sum_i 256^i``, each minus 128) instead of a compare/select/shift loop per digit, and combine
+the per-plane int32 GEMM outputs in place (:func:`combine_digit_planes`). Both are bit-identical to
+:func:`pgw.core.ringmm.int8_ring_matmul` (the canonical result is unique); on 4 CPU cores they made the
+factory's "GEMM" stage about 3x faster, because the digit split and the int64 combine, not
+``torch._int_mm``, dominated it.
+
 :func:`ring_vecmat` computes the Freivalds precomputation ``u W8 mod 2^K`` (``c`` tiny, inner
 dimension ``m``) on any device with float64 GEMMs over row chunks, without materialising a
 transposed or float copy of the whole weight.
@@ -29,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -38,21 +47,23 @@ from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams, balanced_digits
 from pgw.core.ringmm import (
     PreparedWeight,
-    _combine_digit_rows,
     _shift_mod,
     cpu_int8_available,
     cpu_int8_fast,
     int8_digit_gemm,
     int8_ring_matmul,
+    int_mm_max_inner,
 )
 
 __all__ = [
     "FACTORY_BACKENDS",
     "FactoryBackend",
     "RingKernel",
+    "combine_digit_planes",
     "cpu_int8_available",
     "resolve_backend",
     "resolve_device",
+    "ring_digit_planes",
     "ring_vecmat",
 ]
 
@@ -66,6 +77,91 @@ _CUDA_MIN_ROWS = 32
 _CUDA_ALIGN = 32
 #: Elements of a float64 weight chunk materialised at once by :func:`ring_vecmat` (128 MiB).
 _VECMAT_CHUNK_ELEMS = 1 << 24
+#: CPU digit-plane combine works on row blocks of about this many output bytes (stays in cache: ~2x faster
+#: than whole-tensor passes for wide linears on 4 vCPUs).
+_COMBINE_BLOCK_BYTES = 4 << 20
+_LITTLE_ENDIAN = sys.byteorder == "little"
+
+
+def _offset(k: int) -> int:
+    """``128 * sum_i 256^i`` over the ``ceil(K/8)`` digit planes."""
+    return 128 * sum(1 << (8 * i) for i in range(-(-k // 8)))
+
+
+def ring_digit_planes(r: torch.Tensor, k: int, out: torch.Tensor, p: int | None = None) -> torch.Tensor:
+    """Write the balanced base-256 digit planes of ``r`` into the stacked int8 operand ``out``; return ``out``.
+
+    ``r`` is int64 ``(B, n)`` on ``out``'s device, read modulo ``2^K``. ``out`` is int8 ``(L * P, NP)`` with
+    ``L = ceil(K/8)``, ``P >= B`` (default ``P = len(out) / L``) and ``NP >= n``; plane ``i`` lands in
+    ``out[i*P : i*P + B, :n]`` and nothing else is written (zero the padding first when ``P > B`` or
+    ``NP > n``). The planes equal ``balanced_digits(r & mask, K, 8)`` cast to int8 for canonical ``r``
+    (the factory's ``r`` is canonical by construction, so no range scan or mask pass is made; for other
+    values they equal those of ``r mod 2^(8L)``, which give the same product mod ``2^K``).
+
+    Balanced digits ``d_i`` in ``[-128, 128)`` with ``sum d_i 256^i == v`` are the bytes ``e_i`` of
+    ``v + C`` (``C = 128 * sum_i 256^i``) minus 128, and ``e_i - 128`` as int8 is ``e_i ^ 0x80``. The int64
+    temporary ``r + C`` is zeroed before it is released.
+    """
+    b, n = (int(x) for x in r.shape)
+    n_l = -(-k // 8)
+    p = int(out.shape[0]) // n_l if p is None else int(p)
+    if out.dtype != torch.int8 or out.ndim != 2 or not out.is_contiguous() or out.shape[0] < n_l * p or p < b \
+            or out.shape[1] < n or out.device != r.device:
+        raise ShapeError(f"digit planes must be contiguous int8 ({n_l} x >= {b}, >= {n}) on {r.device}, "
+                         f"got {out.dtype} {tuple(out.shape)} on {out.device}")
+    if r.dtype != torch.int64:
+        raise ShapeError(f"r must be int64, got {r.dtype}")
+    if b == 0:
+        return out
+    region = out[: n_l * p].view(n_l, p, int(out.shape[1]))[:, :b, :n]
+    if not _LITTLE_ENDIAN or k > 56:  # pragma: no cover - big-endian hosts; K > 56 has no int8 path
+        for i, d in enumerate(balanced_digits(r & ((1 << k) - 1), k, 8)):
+            region[i].copy_(d)
+        return out
+    t = torch.empty((b, n), dtype=torch.int64, device=r.device)  # contiguous whatever r's strides
+    torch.add(r, _offset(k), out=t)  # canonical r < 2^56: no int64 overflow
+    try:
+        ru = region.view(torch.uint8)
+        ru.copy_(t.view(torch.uint8).view(b, n, 8)[:, :, :n_l].permute(2, 0, 1))
+        ru.bitwise_xor_(0x80)
+    finally:
+        t.zero_()
+    return out
+
+
+def combine_digit_planes(y: torch.Tensor, rows: int, p: int, n_l: int, k: int, m: int, inner: int) -> torch.Tensor:
+    """``sum_i 256^i y_i mod 2^K`` for the stacked per-plane products ``y`` (``(n_l * p, >= m)``, int32 or int64).
+
+    Returns a new contiguous int64 ``(rows, m)`` in ``[0, 2^K)`` (rows ``[0, rows)`` and columns ``[0, m)`` of
+    each plane; the rest is padding). ``inner`` bounds the GEMM's inner dimension: ``|y_i| <= 2^14 * inner``.
+    When ``sum_i |y_i| 256^i`` provably fits in int64 (K = 32 for any width, K = 40 for ``inner < 2^16``) the
+    planes are summed with in-place ``add_(alpha=256^i)`` and masked once; otherwise each partial sum is
+    reduced before it is shifted (Horner from the top plane), so no intermediate overflows. Either way the
+    result is the unique canonical value, identical to :func:`pgw.core.ringmm._combine_digit_rows`.
+    """
+    mp = int(y.shape[1])
+    yv = y.view(n_l, p, mp)
+    out = torch.empty((rows, m), dtype=torch.int64, device=y.device)
+    if rows == 0:
+        return out
+    fast = (1 << 15) * max(1, inner) * (1 << (8 * (n_l - 1))) < (1 << 63)  # 2x margin covers sum 256^i/256^(L-1)
+    blk = rows if y.device.type != "cpu" else max(16, _COMBINE_BLOCK_BYTES // max(1, 8 * m))
+    for r0 in range(0, rows, blk):
+        r1 = min(rows, r0 + blk)
+        a = out[r0:r1]
+        if fast:
+            a.copy_(yv[0, r0:r1, :m])
+            for i in range(1, n_l):
+                a.add_(yv[i, r0:r1, :m], alpha=1 << (8 * i))
+            a.bitwise_and_((1 << k) - 1)
+        else:
+            a.copy_(yv[n_l - 1, r0:r1, :m])
+            a.bitwise_and_((1 << max(0, k - 8 * (n_l - 1))) - 1)
+            for i in range(n_l - 2, -1, -1):
+                a.mul_(256)  # a < 2^(K - 8(i+1)): no overflow
+                a.add_(yv[i, r0:r1, :m])
+                a.bitwise_and_((1 << (k - 8 * i)) - 1)
+    return out
 
 
 def resolve_device(device: str | torch.device) -> torch.device:
@@ -169,18 +265,23 @@ class RingKernel:
             return self._fallback.matmul(r.to("cpu"), params)
         assert self._w is not None
         dev = self._w.device
-        if self.backend == "cpu_int8":
-            return int8_ring_matmul(r.to(dev), self._w, params.k)
-        # cuda_int8: pad rows and inner dimension
-        n = self.in_features
-        p = max(_CUDA_MIN_ROWS, -(-b // 8) * 8)
-        np_ = int(self._w.shape[1])
-        if p == b and np_ == n:
-            xp = r.to(dev, non_blocking=True)
-        else:
-            xp = torch.zeros((p, np_), dtype=torch.int64, device=dev)
-            xp[:b, :n] = r.to(dev, non_blocking=True)
-        return int8_ring_matmul(xp, self._w, params.k)[:b, : self.out_features]
+        k = params.k
+        if k % 8 != 0 or not 8 <= k <= 56:
+            raise ConfigError(f"ring width must be a multiple of 8 in [8, 56], got {k}")
+        # digit planes straight into the (padded on CUDA) GEMM operand; same operand and result as
+        # int8_ring_matmul on a zero-padded copy of r
+        p, np_ = self.plane_shape(b)
+        n_l = k // 8
+        alloc = torch.empty if (p, np_) == (b, self.in_features) else torch.zeros
+        d8 = alloc((n_l * p, np_), dtype=torch.int8, device=dev)
+        x = r if r.device == dev else r.to(dev, non_blocking=True)
+        try:
+            ring_digit_planes(x, k, d8, p)
+            return self._gemm_planes(d8, b, p, np_, params)
+        finally:
+            d8.zero_()
+            if x is not r:
+                x.zero_()  # device copy of r (stream-ordered after the GEMM)
 
     __call__ = matmul
 
@@ -208,8 +309,9 @@ class RingKernel:
 
         ``d8`` is the stacked balanced base-256 digit operand of :meth:`plane_shape` (built on the device
         by :class:`pgw.factory.gpu_prng.DeviceRingStream`, so ``r`` never crosses the host bus). Bit-identical
-        to :meth:`matmul` on the same ``r``: it is the second half of :func:`pgw.core.ringmm.int8_ring_matmul`.
-        The int64 digit products are zeroed after they are combined.
+        to :meth:`matmul` on the same ``r`` and to :func:`pgw.core.ringmm.int8_ring_matmul` (whose second half
+        it is, with the combine of :func:`combine_digit_planes`). The digit products are zeroed after they are
+        combined.
         """
         if not self.supports_planes:
             raise ConfigError(f"digit-plane GEMM needs an int8 backend, not {self.backend}")
@@ -221,14 +323,17 @@ class RingKernel:
                              f"{tuple(d8.shape)} on {d8.device}")
         if rows == 0:
             return torch.zeros((0, self.out_features), dtype=torch.int64, device=self._w.device)
-        y = int8_digit_gemm(d8, self._w)
+        return self._gemm_planes(d8, rows, p, np_, params)
+
+    def _gemm_planes(self, d8: torch.Tensor, rows: int, p: int, np_: int, params: RingParams) -> torch.Tensor:
+        assert self._w is not None
+        n_l = -(-params.k // 8)
+        # one exact int32 GEMM when the inner dimension allows it (no int64 copy of the products)
+        y = torch._int_mm(d8, self._w.t()) if np_ <= int_mm_max_inner(d8.device) else int8_digit_gemm(d8, self._w)
         try:
-            acc = _combine_digit_rows(y, p, n_l, 8, params.k)
+            return combine_digit_planes(y, rows, p, n_l, params.k, self.out_features, np_)
         finally:
             y.zero_()
-        if p == rows and int(acc.shape[1]) == self.out_features:
-            return acc
-        return acc[:rows, : self.out_features].contiguous()
 
 
 def _vecmat_digit_bits(inner: int, k: int) -> int:

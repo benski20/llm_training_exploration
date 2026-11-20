@@ -115,6 +115,16 @@ class BenchmarkResult:
     gpu_name: str | None = None
     #: ``r`` expanded on the GPU (:mod:`pgw.factory.gpu_prng`; ``PGW_FACTORY_GPU_PRNG``)
     gpu_prng: bool = False
+    #: ``r`` expanded on the CPU by the native ChaCha20 (``pgw_fast``) rather than the Python expander
+    native_rng: bool = False
+    #: GEMM batch used (``chunk_slots``; auto-sized when not given)
+    chunk_slots: int = 0
+    #: Per-stage seconds of the timed run (see :func:`pgw.factory.generator.format_stats`); rng and write
+    #: overlap the GEMMs when pipelined
+    rng_seconds: float = 0.0
+    gemm_seconds: float = 0.0
+    check_seconds: float = 0.0
+    write_seconds: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -140,6 +150,16 @@ def _finish(model: str, mode: str, ring: RingParams, device: torch.device, backe
         usd_per_million_tokens=usd, storage_tb_per_million_tokens=bytes_per_token * 1e6 / 1e12,
         layers_measured=layers_measured, layers_total=layers_total, gpu_name=gpu,
     )
+
+
+def _stage_stats(res: BenchmarkResult, gen: Any) -> BenchmarkResult:
+    st = gen.last_stats
+    res.gpu_prng = bool(st.extra.get("gpu_prng", False))
+    res.native_rng = bool(st.extra.get("native_rng", False))
+    res.chunk_slots = int(st.extra.get("chunk_slots", 0))
+    res.rng_seconds, res.gemm_seconds = st.rng_seconds, st.gemm_seconds
+    res.check_seconds, res.write_seconds = st.check_seconds, st.write_seconds
+    return res
 
 
 class _SyntheticPack:
@@ -171,13 +191,14 @@ class _SyntheticPack:
         return SimpleNamespace(w8=self._w[(spec.out_features, spec.in_features)].to(device))
 
 
-def _time_generation(gen: Any, slots: int, chunk_slots: int, checks: int, store: Any | None,
+def _time_generation(gen: Any, slots: int, chunk_slots: int | None, checks: int, store: Any | None,
                      warmup: bool) -> tuple[float, float, float]:
     """Return ``(seconds, gemm_seconds, check_seconds)`` for one segment."""
     def sync() -> None:
         if gen.device.type == "cuda":  # pragma: no cover - GPU only
             torch.cuda.synchronize(gen.device)
 
+    chunk_slots = gen.chunk_slots_for(chunk_slots)
     if warmup:
         for _ in gen.generate(new_seed(), min(slots, chunk_slots), checks=checks, chunk_slots=chunk_slots):
             pass
@@ -199,14 +220,18 @@ def benchmark_preset(
     device: str = "auto",
     backend: str = "auto",
     slots: int = 256,
-    chunk_slots: int = 256,
+    chunk_slots: int | None = 256,
     checks: int = 2,
     layers: int = 1,
     segment_slots: int = 4096,
     price_per_hour: float | None = None,
     warmup: bool = True,
+    store: Any | None = None,
 ) -> BenchmarkResult:
-    """Benchmark ``layers`` synthetic layers of a preset architecture and extrapolate to the full model."""
+    """Benchmark ``layers`` synthetic layers of a preset architecture and extrapolate to the full model.
+
+    ``chunk_slots=None`` uses the factory's auto size; ``store`` also times encryption and writing into it.
+    """
     from pgw.factory.generator import MaskGenerator, slot_bytes
 
     shape = MODEL_PRESETS.get(preset.lower())
@@ -217,12 +242,12 @@ def benchmark_preset(
     rp = ring_from_setting(ring)
     pack = _SyntheticPack(shape, layers)
     gen = MaskGenerator(pack, rp, device=device, backend=backend)
-    seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, None, warmup)
+    seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, store, warmup)
     full_specs = [s for i in range(shape.layers) for s in shape.layer_specs(i)]
-    res = _finish(shape.name, "preset", rp, gen.device, gen.backend, slots, seconds, gemm, check, segment_slots,
-                  slot_bytes(full_specs, rp), price_per_hour, layers, shape.layers)
-    res.gpu_prng = bool(gen.last_stats.extra.get("gpu_prng", False))
-    return res
+    res = _finish(shape.name, "preset+store" if store is not None else "preset", rp, gen.device, gen.backend,
+                  slots, seconds, gemm, check, segment_slots, slot_bytes(full_specs, rp), price_per_hour, layers,
+                  shape.layers)
+    return _stage_stats(res, gen)
 
 
 def benchmark_pack(
@@ -232,7 +257,7 @@ def benchmark_pack(
     device: str = "auto",
     backend: str = "auto",
     slots: int = 256,
-    chunk_slots: int = 256,
+    chunk_slots: int | None = 256,
     checks: int = 2,
     store: Any | None = None,
     segment_slots: int = 4096,
@@ -247,8 +272,7 @@ def benchmark_pack(
     seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, store, warmup)
     res = _finish(getattr(pack, "name", "pack"), "pack+store" if store is not None else "pack", rp, gen.device,
                   gen.backend, slots, seconds, gemm, check, segment_slots, gen.bytes_per_slot, price_per_hour, 1, 1)
-    res.gpu_prng = bool(gen.last_stats.extra.get("gpu_prng", False))
-    return res
+    return _stage_stats(res, gen)
 
 
 def format_report(r: BenchmarkResult) -> str:
@@ -257,11 +281,14 @@ def format_report(r: BenchmarkResult) -> str:
     if r.layers_measured != r.layers_total:
         extrap = f" (measured {r.layers_measured}/{r.layers_total} layers, extrapolated)"
     dev = f"{r.device} [{r.gpu_name}]" if r.gpu_name else r.device
+    rng_src = "gpu" if r.gpu_prng else ("native" if r.native_rng else "python")
     lines = [
         f"model            {r.model}{extrap}",
         f"ring / device    {r.ring} on {dev} via {r.backend}"
         f"{' (r expanded on the GPU)' if r.gpu_prng else ''}",
         f"measured         {r.slots_measured} slots in {r.seconds:.3f}s (GEMM {100 * r.gemm_fraction:.0f}%)",
+        f"stages           rng {r.rng_seconds:.3f}s [{rng_src}], gemm {r.gemm_seconds:.3f}s, "
+        f"check {r.check_seconds:.3f}s, write {r.write_seconds:.3f}s (chunk {r.chunk_slots} slots)",
         f"throughput       {r.slots_per_second:,.1f} tokens/s = {r.tokens_per_hour:,.0f} tokens/hour",
         f"per token        {1e3 * r.seconds_per_token:.3f} ms, {r.bytes_per_token / 1e6:.2f} MB of masks",
         f"cost             ${r.usd_per_million_tokens:,.3f} per million tokens at ${r.price_per_hour:.3f}/h",

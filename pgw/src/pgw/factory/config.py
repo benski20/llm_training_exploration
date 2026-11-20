@@ -45,8 +45,12 @@ class FactorySettings(PGWSettings):
         "first, then continue with segment_slots: a new gateway can serve after a small segment instead of waiting "
         "for a full one (minutes with encrypted generation over a slow link). Unset = segment_slots",
     )
-    chunk_slots: int = Field(
-        256, gt=0, description="Rows per GEMM batch (factory throughput; not the stored chunk size)"
+    chunk_slots: int | None = Field(
+        None, gt=0,
+        description="Rows per GEMM batch (factory throughput and memory; not the stored chunk size). Unset = "
+        "1024 on CUDA when the per-chunk working set of the widest linear fits half of the device memory left "
+        "outside gpu_memory_fraction plus 1 GiB (halved down to 256 otherwise), 256 on the CPU and for "
+        "encrypted generation",
     )
     segment_chunk_slots: int | None = Field(
         None, gt=0,

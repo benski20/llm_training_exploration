@@ -13,6 +13,12 @@ device at a time, which is what makes weight streaming for 70B-class models poss
 ``pipeline=True`` three stages overlap: ChaCha20 expansion of the next ``r`` chunk (thread), the
 ring GEMMs (caller thread; torch releases the GIL) and encryption/writing (writer thread).
 
+On the CPU path ``r`` comes from the native ChaCha20 (``pgw_fast.mask_rows_with_key``: GIL released,
+multithreaded, bit-identical to :class:`SeedExpander`), with the Python expander as the fallback when the
+extension is absent (``PGW_NATIVE=0``). On CUDA ``W r`` is copied back into pinned host memory on a
+separate copy stream while the next chunk's GEMMs run; a chunk is handed on only after its copy event
+completed. Chunks default to 1024 slots on CUDA when the working set fits (:meth:`MaskGenerator.chunk_slots_for`).
+
 On CUDA the ChaCha20 expansion and the digit split run on the GPU instead
 (:mod:`pgw.factory.gpu_prng`, ``PGW_FACTORY_GPU_PRNG``): the stream key is derived on the CPU by the
 same HKDF code, the keystream is computed straight into the int8 digit planes of the GEMM operand, and
@@ -22,6 +28,7 @@ and the output self-check re-derives its sampled rows on the CPU.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
@@ -34,6 +41,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from pgw.core import native
 from pgw.core.errors import ConfigError, IntegrityError, PGWError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows, new_seed
@@ -46,12 +54,18 @@ from pgw.factory.kernels import RingKernel, resolve_backend, resolve_device, rin
 from pgw.factory.streaming import WeightStreamer, auto_resident_bytes
 from pgw.maskstore.format import DEFAULT_CHUNK_BYTES, auto_chunk_slots
 
-__all__ = ["GeneratedLinear", "GenerationStats", "MaskGenerator", "slot_bytes"]
+__all__ = ["GeneratedLinear", "GenerationStats", "MaskGenerator", "format_stats", "slot_bytes"]
 
 log = logging.getLogger(__name__)
 
 #: Default rows per chunk verified by the output self-check (see :class:`MaskGenerator`).
 DEFAULT_SELF_CHECK_ROWS = 8
+#: GEMM batch (slots per chunk) when none is given: CPU / encrypted backends, and the CUDA target when its
+#: working set fits the chunk budget (:meth:`MaskGenerator.chunk_slots_for`).
+DEFAULT_CHUNK_SLOTS = 256
+CUDA_CHUNK_SLOTS = 1024
+#: ``pgw_fast.mask_rows_with_key`` is importable (checked once; ``PGW_NATIVE=0`` disables it).
+_NATIVE_RNG = native.native_available("mask_rows_with_key")
 
 
 @dataclass
@@ -96,6 +110,29 @@ class GenerationStats:
         return self.slots / self.seconds if self.seconds > 0 else 0.0
 
 
+def format_stats(stats: GenerationStats) -> str:
+    """One-line per-stage summary of a run (the segment log line).
+
+    Stages: ``rng`` (r expansion: CPU worker thread, or GPU PRNG launches), ``gemm`` (ring GEMMs incl. the
+    copy back; for encrypted generation the provider round trips), ``check`` (Freivalds precomputation and
+    output self-check), ``write`` (encryption and I/O in the writer thread) and ``throttle`` (sleeps). The
+    rng and write stages overlap the GEMMs when pipelined. Encrypted generation adds the
+    :class:`pgw.hemask.HEMaskBackend` counters of this run (``he``: encrypt, provider, decrypt seconds).
+    """
+    x = stats.extra
+    rng_src = "gpu" if x.get("gpu_prng") else ("native" if x.get("native_rng") else "python")
+    s = (f"{stats.slots} slots in {stats.seconds:.2f}s ({stats.slots_per_second:.1f} slots/s = "
+         f"{3600 * stats.slots_per_second:,.0f}/h; rng {stats.rng_seconds:.2f}s [{rng_src}], "
+         f"gemm {stats.gemm_seconds:.2f}s, check {stats.check_seconds:.2f}s, write {stats.write_seconds:.2f}s, "
+         f"throttle {stats.throttle_seconds:.2f}s; chunk {x.get('chunk_slots', '?')})")
+    he = x.get("he")
+    if isinstance(he, dict) and he:
+        s += (f"; he: {int(he.get('groups', 0))} groups, encrypt {he.get('encrypt_s', 0.0):.2f}s, "
+              f"provider {he.get('remote_s', 0.0):.2f}s, decrypt {he.get('decrypt_s', 0.0):.2f}s, "
+              f"wall {he.get('wall_s', 0.0):.2f}s")
+    return s
+
+
 def slot_bytes(specs: list[LinearSpec], ring: RingParams) -> int:
     """Stored ``W r`` bytes per slot: ``sum(m) * K/8``."""
     return sum(s.out_features for s in specs) * ring.bytes_per_element
@@ -120,6 +157,76 @@ class _RemoteKernel:
 
 class _Stop:
     """Writer-queue sentinel."""
+
+
+class _CpuRing:
+    """``r`` rows of one segment on the CPU: ``SeedExpander(seed).ring_uniform_rows(n, K, slot, rows, "r", linear)``.
+
+    The stream key of each linear is derived once (HKDF, unchanged) and held as a zeroable ``bytearray``;
+    rows come from the native ChaCha20 (releases the GIL, uses all cores) or, without the extension, from
+    the Python expander. Both are bit-identical (``tests/native``, ``tests/factory/test_generator_speed.py``).
+    Used from one thread at a time (the rng worker), linears in order: a key is wiped when the next
+    linear's first rows are requested and in :meth:`wipe`.
+    """
+
+    def __init__(self, exp: SeedExpander, use_native: bool):
+        self._exp = exp
+        self.native = bool(use_native)
+        self._keys: dict[str, bytearray] = {}
+
+    def rows(self, linear: str, cols: int, k: int, row_start: int, row_count: int) -> torch.Tensor:
+        key = self._keys.get(linear)
+        if key is None:
+            self.wipe()  # earlier linears are finished (tasks run in order)
+            key = self._keys[linear] = bytearray(self._exp.stream_key("r", linear))
+        if self.native:
+            return torch.from_numpy(native.fast.mask_rows_with_key(key, cols, k, row_start, row_count))
+        return SeedExpander.ring_uniform_rows_with_key(key, cols, k, row_start, row_count)
+
+    def wipe(self) -> None:
+        for key in self._keys.values():
+            key[:] = bytes(len(key))
+        self._keys.clear()
+
+
+class _HostCopy:
+    """Device ``W r`` -> pinned host memory on a side stream (CUDA), overlapping the next chunk's GEMMs.
+
+    :meth:`start` orders the copy after the work queued so far on the current stream, zeroes the device
+    tensor after the copy (on the copy stream) and returns the host tensor plus an event; the host
+    tensor must not be read before ``event.synchronize()``. Pinned blocks come from torch's caching
+    host allocator, so steady-state chunks reuse them.
+    """
+
+    def __init__(self, device: torch.device):  # pragma: no cover - GPU only
+        self.stream = torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+
+    def start(self, wr: torch.Tensor) -> tuple[torch.Tensor, Any]:  # pragma: no cover - GPU only
+        if wr.device.type != "cuda":
+            return wr, None
+        host = torch.empty(tuple(wr.shape), dtype=wr.dtype, pin_memory=True)
+        self.stream.wait_stream(torch.cuda.current_stream(wr.device))
+        with torch.cuda.stream(self.stream):
+            host.copy_(wr, non_blocking=True)
+            wr.zero_()
+            ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
+            ev.record(self.stream)
+        wr.record_stream(self.stream)  # the allocator must not reuse wr before the copy stream is done
+        return host, ev
+
+
+@dataclass
+class _Chunk:
+    """One chunk between GEMM launch and hand-off (host ``wr`` valid once ``event`` completed)."""
+
+    lid: LinearId
+    start: int
+    rows: int
+    r: torch.Tensor | None
+    wr: torch.Tensor
+    event: Any
+    seconds: float
+    stream: Any
 
 
 class MaskGenerator:
@@ -159,6 +266,8 @@ class MaskGenerator:
         gpu_prng_impl: ``auto`` (the Triton kernel on CUDA). Tests may pass ``triton`` or ``torch`` with
             ``gpu_prng=True`` to run the device path on a ``cpu_int8`` generator (Triton interpreter or
             the torch emulation).
+        native_rng: CPU ``r`` expansion with the native ChaCha20 (``pgw_fast``; GIL released, multithreaded):
+            ``None`` = when the extension is available, ``False`` = the Python expander. Same output.
     """
 
     def __init__(
@@ -176,6 +285,7 @@ class MaskGenerator:
         remote: Any = None,
         gpu_prng: bool | str | None = None,
         gpu_prng_impl: str = "auto",
+        native_rng: bool | None = None,
     ):
         self.pack = pack
         # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
@@ -204,6 +314,13 @@ class MaskGenerator:
         elif torch.device(streamer.device) != self.device:
             raise ConfigError(f"streamer device {streamer.device} != generator device {self.device}")
         self.streamer = streamer
+        self.memory_fraction = float(memory_fraction)
+        if native_rng and not _NATIVE_RNG:
+            raise ConfigError("native_rng=True but pgw_fast.mask_rows_with_key is not available")
+        self.native_rng = _NATIVE_RNG if native_rng is None else bool(native_rng)
+        #: Chunks whose host ``W r`` is handed on one chunk late, so the D2H copy overlaps the next GEMMs
+        #: (CUDA). Tests set it on CPU generators to exercise the same ordering.
+        self._output_lag = 1 if self.device.type == "cuda" else 0
         self.throttle = throttle
         self.pipeline = pipeline
         if self_check_rows < -1:
@@ -238,6 +355,34 @@ class MaskGenerator:
     def store_chunk_slots(self, target_bytes: int = DEFAULT_CHUNK_BYTES) -> int:
         """Encrypted-chunk size (slots) giving about ``target_bytes`` for the widest linear."""
         return auto_chunk_slots([s.out_features for s in self.specs], self.ring, target_bytes)
+
+    def chunk_slots_for(self, requested: int | None = None) -> int:
+        """GEMM batch for a segment: ``requested``, else :data:`CUDA_CHUNK_SLOTS` on CUDA when it fits, else 256.
+
+        On CUDA the per-chunk device working set of the widest linear (digit planes, int32 products,
+        the int64 output and the next chunk's, plus ``r`` on the CPU-PRNG path) must fit half of the
+        memory the weight budget leaves free (``(1 - memory_fraction)`` of the device plus the 1 GiB
+        reserve); the batch is halved down to 256 until it does. Encrypted generation keeps 256 (the
+        provider round trips are sized by ``he_groups_per_call``).
+        """
+        if requested is not None:
+            return int(requested)
+        if self.device.type != "cuda" or self.remote is not None:
+            return DEFAULT_CHUNK_SLOTS
+        try:  # pragma: no cover - GPU only
+            total = int(torch.cuda.get_device_properties(self.device).total_memory)
+        except Exception:  # pragma: no cover - GPU only
+            return DEFAULT_CHUNK_SLOTS
+        return self._chunk_for_budget(0.5 * ((1.0 - self.memory_fraction) * total + (1 << 30)))
+
+    def _chunk_for_budget(self, budget: float) -> int:
+        n_l = -(-self.ring.k // 8)
+        per_row = max(n_l * s.in_features + 4 * n_l * s.out_features + 16 * s.out_features + 16 * s.in_features
+                      for s in self.specs)
+        rows = CUDA_CHUNK_SLOTS
+        while rows > DEFAULT_CHUNK_SLOTS and rows * per_row > budget:
+            rows //= 2
+        return rows
 
     def max_segment_slots(self) -> int:
         """Largest segment the PRNG stream range allows for this model (see ``max_stream_rows``)."""
@@ -301,14 +446,14 @@ class MaskGenerator:
 
     # ---- generation --------------------------------------------------------------------------
     @staticmethod
-    def _validate(seed: bytes, slots: int, checks: int, chunk_slots: int) -> None:
+    def _validate(seed: bytes, slots: int, checks: int, chunk_slots: int | None) -> None:
         if not isinstance(seed, bytes | bytearray) or len(seed) != SEED_BYTES:
             raise ConfigError(f"seed must be exactly {SEED_BYTES} bytes")
         if slots <= 0:
             raise ConfigError(f"slots must be positive, got {slots}")
         if not 0 <= checks <= 8:
             raise ConfigError(f"checks must be in [0, 8], got {checks}")
-        if chunk_slots <= 0:
+        if chunk_slots is not None and chunk_slots <= 0:
             raise ConfigError(f"chunk_slots must be positive, got {chunk_slots}")
 
     #: Target bits of Freivalds soundness per call (range check + check vectors). ``checks=None``
@@ -346,13 +491,16 @@ class MaskGenerator:
             )
 
     def generate(
-        self, seed: bytes, slots: int, *, checks: int = 2, chunk_slots: int = 256, throttle: Throttle | None = None
+        self, seed: bytes, slots: int, *, checks: int = 2, chunk_slots: int | None = None,
+        throttle: Throttle | None = None,
     ) -> Iterator[GeneratedLinear]:
         """Yield chunks for every linear (canonical order, then slot order) of one segment.
 
-        The ``r`` buffers are zeroized after use; ``wr`` tensors belong to the caller.
+        ``chunk_slots=None`` picks :meth:`chunk_slots_for`. The ``r`` buffers are zeroized after use;
+        ``wr`` tensors belong to the caller.
         """
         self._validate(seed, slots, checks, chunk_slots)
+        chunk_slots = self.chunk_slots_for(chunk_slots)
         thr = throttle or self.throttle
         exp = SeedExpander(bytes(seed))
         k = self.ring.k
@@ -369,13 +517,19 @@ class MaskGenerator:
         rng_time = [0.0]
         dev_prng = self.device_prng() if self.remote is None else None
         stats.extra["gpu_prng"] = dev_prng is not None
+        stats.extra["native_rng"] = dev_prng is None and self.native_rng
+        stats.extra["chunk_slots"] = chunk_slots
+        he_stats = getattr(self.remote, "stats", None)
+        he0 = dict(he_stats) if isinstance(he_stats, dict) else None
         n_limbs = _gp.limbs(k)
+        cpu_ring = _CpuRing(exp, self.native_rng)
+        copier = _HostCopy(self.device) if cuda else None
+        lag = max(0, int(self._output_lag))
 
         def make_r(task: tuple[int, int, int]) -> torch.Tensor:
             i, start, rows = task
             t0 = time.perf_counter()
-            key = specs[i].id.key
-            r = exp.ring_uniform_rows(specs[i].in_features, k, start, rows, "r", key)
+            r = cpu_ring.rows(specs[i].id.key, specs[i].in_features, k, start, rows)
             if cuda:  # pragma: no cover - GPU only
                 pinned = r.pin_memory()
                 r.zero_()
@@ -387,8 +541,81 @@ class MaskGenerator:
                 if self.pipeline and dev_prng is None else None)
         stream: _gp.DeviceRingStream | None = None
         pending: Future[torch.Tensor] | None = None
+        inflight: list[_Chunk] = []
         t_start = time.perf_counter()
         ti = 0
+
+        def launch(kern: Any, lid: LinearId, w: torch.Tensor, task: tuple[int, int, int]) -> _Chunk:
+            """Queue the GEMMs of one chunk (and on CUDA its copy back); returns before they finish on a GPU."""
+            nonlocal pending
+            _, start, rows = task
+            r: torch.Tensor | None = None
+            if stream is not None:
+                t0 = time.perf_counter()
+                p, np_ = kern.plane_shape(rows)
+                d8 = torch.zeros((n_limbs * p, np_), dtype=torch.int8, device=w.device)
+                try:
+                    try:
+                        stream.digit_planes(start, rows, d8)
+                    except Exception as exc:
+                        # a launch/compile fault at production shapes: this segment fails, later
+                        # segments of this generator use the CPU path
+                        self._disable_device_prng(f"an error in the GPU mask PRNG ({type(exc).__name__})")
+                        raise
+                    rng_time[0] += time.perf_counter() - t0
+                    t0 = time.perf_counter()
+                    wr = kern.matmul_planes(d8, rows, self.ring)
+                finally:
+                    d8.zero_()
+                    del d8
+            else:
+                if pending is not None:
+                    r = pending.result()
+                    pending = pool.submit(make_r, tasks[ti]) if pool is not None and ti < len(tasks) else None
+                else:
+                    r = make_r(task)
+                t0 = time.perf_counter()
+                try:
+                    wr = kern.matmul(r, self.ring)
+                except BaseException:
+                    r.zero_()
+                    raise
+            ev = None
+            if copier is not None:  # pragma: no cover - GPU only
+                wr, ev = copier.start(wr)
+            return _Chunk(lid, start, rows, r, wr, ev, time.perf_counter() - t0, stream)
+
+        def finish(c: _Chunk, spec: LinearSpec, uw: torch.Tensor, cu: np.ndarray | None,
+                   cw: np.ndarray | None) -> GeneratedLinear:
+            """Wait for the chunk's copy, self-check it and account it; returns the item to hand on."""
+            t0 = time.perf_counter()
+            try:
+                if c.event is not None:  # pragma: no cover - GPU only
+                    c.event.synchronize()
+                dt = c.seconds + time.perf_counter() - t0
+                if cu is not None and cw is not None:
+                    t1 = time.perf_counter()
+                    try:
+                        stats.self_checked_rows += self._self_check(c.lid, c.r, c.wr, cu, cw, stream=c.stream,
+                                                                    row0=c.start)
+                    except BaseException as exc:
+                        c.wr.zero_()
+                        if c.stream is not None and isinstance(exc, IntegrityError):
+                            self._disable_device_prng("a failed output self-check")
+                        raise
+                    stats.check_seconds += time.perf_counter() - t1
+            finally:
+                if c.r is not None:
+                    c.r.zero_()
+                    c.r = None
+            stats.gemm_seconds += dt
+            stats.wr_bytes += c.wr.numel() * self.ring.bytes_per_element
+            if thr is not None:
+                before = thr.slept_s
+                thr.account(dt, c.rows * spec.out_features * spec.in_features / total_mn)
+                stats.throttle_seconds += thr.slept_s - before
+            return GeneratedLinear(c.lid, c.start, c.wr, uw if c.start == 0 else None)
+
         try:
             if pool is not None:
                 pending = pool.submit(make_r, tasks[0])
@@ -419,65 +646,28 @@ class MaskGenerator:
                     # stream key derived on the CPU (SPEC 7.3, unchanged); expansion on the device
                     stream = _gp.DeviceRingStream(exp.stream_key("r", lid.key), spec.in_features, k, w.device,
                                                   dev_prng)  # type: ignore[arg-type]
-                for start in range(0, slots, chunk_slots):
+                for _start in range(0, slots, chunk_slots):
                     task = tasks[ti]
                     ti += 1
-                    r: torch.Tensor | None = None
-                    if stream is not None:
-                        t0 = time.perf_counter()
-                        p, np_ = kern.plane_shape(task[2])
-                        d8 = torch.zeros((n_limbs * p, np_), dtype=torch.int8, device=w.device)
-                        try:
-                            try:
-                                stream.digit_planes(start, task[2], d8)
-                            except Exception as exc:
-                                # a launch/compile fault at production shapes: this segment fails, later
-                                # segments of this generator use the CPU path
-                                self._disable_device_prng(f"an error in the GPU mask PRNG ({type(exc).__name__})")
-                                raise
-                            rng_time[0] += time.perf_counter() - t0
-                            t0 = time.perf_counter()
-                            wr = kern.matmul_planes(d8, task[2], self.ring)
-                        finally:
-                            d8.zero_()
-                            del d8
-                    else:
-                        if pending is not None:
-                            r = pending.result()
-                            pending = pool.submit(make_r, tasks[ti]) if pool is not None and ti < len(tasks) else None
-                        else:
-                            r = make_r(task)
-                        t0 = time.perf_counter()
-                        wr = kern.matmul(r, self.ring)
-                    wr = wr.cpu() if cuda else wr
-                    dt = time.perf_counter() - t0
-                    if cu is not None and cw is not None:
-                        t1 = time.perf_counter()
-                        try:
-                            stats.self_checked_rows += self._self_check(lid, r, wr, cu, cw, stream=stream, row0=start)
-                        except BaseException as exc:
-                            if r is not None:
-                                r.zero_()
-                            wr.zero_()
-                            if stream is not None and isinstance(exc, IntegrityError):
-                                self._disable_device_prng("a failed output self-check")
-                            raise
-                        stats.check_seconds += time.perf_counter() - t1
-                    if r is not None:
-                        r.zero_()
-                    del r
-                    stats.gemm_seconds += dt
-                    stats.wr_bytes += wr.numel() * self.ring.bytes_per_element
-                    if thr is not None:
-                        before = thr.slept_s
-                        thr.account(dt, task[2] * spec.out_features * spec.in_features / total_mn)
-                        stats.throttle_seconds += thr.slept_s - before
-                    yield GeneratedLinear(lid, start, wr, uw if start == 0 else None)
+                    inflight.append(launch(kern, lid, w, task))
+                    if len(inflight) > lag:
+                        yield finish(inflight.pop(0), spec, uw, cu, cw)
+                while inflight:  # the stream key and the kernel are needed until the linear's last chunk
+                    yield finish(inflight.pop(0), spec, uw, cu, cw)
                 if stream is not None:
                     stream.wipe()
                     stream = None
                 del kern, w
         finally:
+            if inflight:  # an error or an abandoned generator: drop chunks that were never handed on
+                if cuda:  # pragma: no cover - GPU only
+                    with contextlib.suppress(Exception):
+                        torch.cuda.synchronize(self.device)  # no copy may still read r or write wr
+                for c in inflight:
+                    if c.r is not None:
+                        c.r.zero_()
+                    c.wr.zero_()
+                inflight.clear()
             if stream is not None:
                 stream.wipe()
             if pending is not None:
@@ -486,8 +676,12 @@ class MaskGenerator:
                 pool.shutdown(wait=True, cancel_futures=True)
             if pending is not None and pending.done() and not pending.cancelled() and pending.exception() is None:
                 pending.result().zero_()  # prefetched r of a chunk that was never used
+            cpu_ring.wipe()
             stats.rng_seconds = rng_time[0]
             stats.seconds = time.perf_counter() - t_start
+            if he0 is not None and isinstance(he_stats, dict):
+                stats.extra["he"] = {key: he_stats.get(key, 0) - v for key, v in he0.items()
+                                     if isinstance(v, int | float)}
 
     def _self_check(self, lid: LinearId, r: torch.Tensor | None, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray,
                     *, stream: _gp.DeviceRingStream | None = None, row0: int = 0) -> int:
@@ -538,7 +732,7 @@ class MaskGenerator:
         slots: int,
         *,
         checks: int | None = None,
-        chunk_slots: int = 256,
+        chunk_slots: int | None = None,
         factory_id: str = "local",
         seed: bytes | None = None,
         throttle: Throttle | None = None,
@@ -554,7 +748,7 @@ class MaskGenerator:
             checks: Freivalds vectors per linear; ``None`` (default) = :meth:`checks_for` (meets
                 :attr:`MIN_SOUNDNESS_BITS` for this ring and model where possible).
             seed: For tests only; production always uses a fresh ``os.urandom`` seed per segment.
-            chunk_slots: Rows per GEMM batch (throughput only).
+            chunk_slots: Rows per GEMM batch (throughput only); ``None`` = :meth:`chunk_slots_for`.
             store_chunk_slots: Slots per encrypted chunk in the segment file; default sized by
                 ``store_chunk_bytes`` (bounds the decrypted masks a gateway caches per session).
         """
@@ -594,13 +788,8 @@ class MaskGenerator:
             stats.seconds = time.perf_counter() - t0
             stats.write_seconds = write_time[0]
             stats.segment_id = seg_id
-            log.info(
-                "segment %s: %s %s, %d slots in %.2fs (%.1f slots/s; gemm %.2fs, rng %.2fs, write %.2fs, "
-                "throttle %.2fs)",
-                seg_id, short_fingerprint(self.fingerprint), self.ring.name, slots, stats.seconds,
-                stats.slots_per_second, stats.gemm_seconds, stats.rng_seconds, stats.write_seconds,
-                stats.throttle_seconds,
-            )
+            log.info("segment %s: %s %s, %s", seg_id, short_fingerprint(self.fingerprint), self.ring.name,
+                     format_stats(stats))
             return seg_id
 
     def _drive(self, writer: Any, chunks: Iterator[GeneratedLinear], write_time: list[float]) -> None:
