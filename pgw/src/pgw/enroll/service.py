@@ -166,26 +166,55 @@ def check_csr(csr_pem: str) -> Any:
 
 # ---- rate limiting and audit -------------------------------------------------------------------------
 class _IPRateLimiter:
-    def __init__(self, per_minute: int, *, max_clients: int = 10_000, clock: Callable[[], float] = time.monotonic):
+    """Failed attempts per client address per minute, plus a global ceiling on failures from all addresses
+    (so rotating addresses does not buy unlimited code guesses). Successful calls are not counted."""
+
+    def __init__(self, per_minute: int, *, global_per_minute: int = 300, max_clients: int = 10_000,
+                 clock: Callable[[], float] = time.monotonic):
         self.per_minute = per_minute
+        self.global_per_minute = global_per_minute
         self.max_clients = max_clients
         self.clock = clock
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
+        self._global: deque[float] = deque()
         self._lock = threading.Lock()
 
+    def _queue(self, client: str, now: float) -> deque[float]:
+        q = self._hits.pop(client, None) or deque()
+        while q and q[0] <= now - 60.0:
+            q.popleft()
+        self._hits[client] = q
+        while len(self._hits) > self.max_clients:
+            self._hits.popitem(last=False)
+        return q
+
     def check(self, client: str) -> None:
+        """Raise :class:`RateLimitedError` if ``client`` (or everyone together) failed too often."""
         now = self.clock()
         with self._lock:
-            q = self._hits.pop(client, None) or deque()
-            while q and q[0] <= now - 60.0:
-                q.popleft()
-            self._hits[client] = q
-            while len(self._hits) > self.max_clients:
-                self._hits.popitem(last=False)
-            if len(q) >= self.per_minute:
-                raise RateLimitedError("too many enrollment attempts from this address; try again later",
-                                       details={"retry_after_s": max(1.0, q[0] + 60.0 - now), "limit": "enroll"})
-            q.append(now)
+            g = self._global
+            while g and g[0] <= now - 60.0:
+                g.popleft()
+            q = self._queue(client, now)
+            for queue, limit in ((g, self.global_per_minute), (q, self.per_minute)):
+                if len(queue) >= limit:
+                    raise RateLimitedError("too many failed enrollment attempts; try again later",
+                                           details={"retry_after_s": max(1.0, queue[0] + 60.0 - now),
+                                                    "limit": "enroll"})
+
+    def failure(self, client: str) -> None:
+        """Count one failed attempt by ``client``."""
+        now = self.clock()
+        with self._lock:
+            self._queue(client, now).append(now)
+            self._global.append(now)
+            while len(self._global) > self.global_per_minute:
+                self._global.popleft()
+
+
+#: Errors that count as a failed attempt for the limiter (a refused code or credential, a malformed body);
+#: not "service busy" or internal errors, which are not the caller's doing.
+_FAILURE_CODES = frozenset({ErrorCode.UNAUTHENTICATED, ErrorCode.PERMISSION_DENIED, ErrorCode.PROTOCOL})
 
 
 class _Audit:
@@ -260,6 +289,14 @@ class EnrollmentService:
             RateLimitedError, PGWError(protocol), EnrollmentRejectedError, PGWError(unavailable).
         """
         self.limiter.check(client)
+        try:
+            return self._enroll(body, client)
+        except PGWError as exc:
+            if exc.code in _FAILURE_CODES:
+                self.limiter.failure(client)
+            raise
+
+    def _enroll(self, body: Any, client: str) -> dict[str, Any]:
         if not isinstance(body, dict):
             raise PGWError("body must be a JSON object", code=ErrorCode.PROTOCOL)
         secret_hex, name, csr = body.get("secret"), body.get("gateway_name"), body.get("csr_pem")
@@ -329,13 +366,22 @@ class EnrollmentService:
         Raises:
             RateLimitedError, AuthError (401), PGWError(permission_denied / protocol / unavailable).
         """
+        self.limiter.check(client)
+        try:
+            return self._renew(body, client, authorization, cert_subject)
+        except PGWError as exc:
+            if exc.code in _FAILURE_CODES:
+                self.limiter.failure(client)
+            raise
+
+    def _renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None,
+               ) -> dict[str, Any]:
         from cryptography import x509
         from cryptography.x509.oid import NameOID
 
         from pgw.core.errors import AuthError
         from pgw.service.auth import parse_subject_cn
 
-        self.limiter.check(client)
         s = self.settings
         if s.client_issuing_ca_cert_file is None or s.client_issuing_ca_key_file is None:
             raise PGWError("this service does not issue client certificates", code=ErrorCode.UNAVAILABLE)
@@ -420,6 +466,8 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
     from starlette.requests import Request
     from starlette.responses import JSONResponse, PlainTextResponse, Response
 
+    from pgw.core.client_ip import client_ip
+
     svc = EnrollmentService(settings, authenticator, models)
 
     def _err(exc: PGWError) -> Response:
@@ -439,7 +487,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
         return PlainTextResponse(svc.ca_pem, media_type="application/x-pem-file")
 
     async def post_enroll(request: Request) -> Response:
-        client = request.client.host if request.client is not None else "unknown"
+        client = client_ip(request)
         try:
             length = request.headers.get("content-length")
             if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):
@@ -462,7 +510,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
     async def post_renew(request: Request) -> Response:
         from pgw.wire.server import client_cert_subject
 
-        client = request.client.host if request.client is not None else "unknown"
+        client = client_ip(request)
         try:
             length = request.headers.get("content-length")
             if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):

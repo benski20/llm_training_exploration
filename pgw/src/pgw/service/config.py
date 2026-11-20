@@ -173,7 +173,8 @@ class ServiceSettings(PGWSettings):
         "<enrollment_file>.audit.jsonl)",
     )
     enrollment_rate_limit_per_minute: int = Field(
-        10, ge=1, description="Enrollment attempts per client IP per minute (failed or not)",
+        10, ge=1, description="Failed enrollment and certificate-renewal attempts per client IP per minute (behind a "
+        "reverse proxy set PGW_TRUSTED_PROXY_CIDRS); at most 300 failures per minute from all addresses together",
     )
     client_issuing_ca_cert_file: Path | None = Field(
         None, description="Optional CA certificate (PEM) used to sign gateway client certificates at enrollment "

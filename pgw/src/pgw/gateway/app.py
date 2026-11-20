@@ -139,6 +139,8 @@ class GatewayState:
     oidc: Any = None
     #: Limits SSO sign-in starts per client (bounds the pending sign-in store).
     oidc_start_limiter: LoginRateLimiter = field(default_factory=lambda: LoginRateLimiter(attempts=30))
+    #: global cap on SSO callbacks (key "*"): each one costs a token request to the identity provider
+    oidc_callback_limiter: LoginRateLimiter = field(default_factory=lambda: LoginRateLimiter(attempts=600))
     audit_reader: Any = None
     #: Streaming API requests since start-up.
     stream_requests: int = 0
@@ -574,7 +576,9 @@ def create_app(
         return tok.strip()
 
     def _client(request: Request) -> str | None:
-        return request.client.host if request.client is not None else None
+        from pgw.core.client_ip import client_ip
+
+        return client_ip(request) if request.client is not None else None
 
     def _auth_failed(request: Request, exc: PGWError, endpoint: str) -> None:
         state.audit.event(

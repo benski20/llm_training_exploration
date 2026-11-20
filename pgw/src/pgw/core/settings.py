@@ -59,11 +59,30 @@ class CommonSettings(PGWSettings):
         "GPU, else CPU int8 with AMX/VNNI, else exact float64). Read from PGW_HEMASK_ENGINE.",
     )
 
+    trusted_proxy_cidrs: list[str] = Field(
+        default_factory=list,
+        description="Reverse proxies whose X-Forwarded-For header is believed (CIDRs, e.g. [\"10.0.0.0/8\"]); used for "
+        "rate limits and audit records. Default: trust nothing (the TCP peer is the client). Read from "
+        "PGW_TRUSTED_PROXY_CIDRS.",
+    )
+
     @field_validator("ring")
     @classmethod
     def _valid_ring(cls, v: str) -> str:
         RingParams.from_name(v)
         return v.upper()
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def _valid_cidrs(cls, v: list[str]) -> list[str]:
+        from pgw.core.client_ip import parse_cidrs
+        from pgw.core.errors import ConfigError
+
+        try:
+            parse_cidrs(v)
+        except ConfigError as exc:
+            raise ValueError(exc.message) from exc
+        return [c.strip() for c in v if c.strip()]
 
     @property
     def ring_params(self) -> RingParams:

@@ -186,6 +186,25 @@ def test_renew_client_cert_rejects_cert_for_another_key(tmp_path: Path) -> None:
     assert not [p for p in os.listdir(env.dir) if ".tmp" in p]
 
 
+def test_enroll_limiter_counts_failures_only(tmp_path: Path) -> None:
+    from pgw.core.errors import RateLimitedError
+    from pgw.enroll.service import _IPRateLimiter
+
+    env = Env(tmp_path)
+    env.svc.limiter = _IPRateLimiter(1, global_per_minute=3)
+    for i in range(3):
+        env.enroll(name=f"gw-{i}")  # successes from one address never count
+    with pytest.raises(PGWError):
+        env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.1")
+    with pytest.raises(RateLimitedError):
+        env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.1")
+    for ip in ("10.0.0.2", "10.0.0.3"):
+        with pytest.raises(PGWError):
+            env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, ip)
+    with pytest.raises(RateLimitedError):  # global ceiling: rotating addresses does not help
+        env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.4")
+
+
 async def test_renew_route(tmp_path: Path) -> None:
     from starlette.applications import Starlette
 

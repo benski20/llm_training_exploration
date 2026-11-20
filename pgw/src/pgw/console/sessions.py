@@ -83,38 +83,77 @@ class ConsoleSession:
 
 
 class LoginRateLimiter:
-    """Sliding-window limit on login attempts per client address.
+    """Sliding-window limits on login attempts per client address.
+
+    Two ways to use it:
+
+    * :meth:`blocked` before checking a credential and :meth:`failure` when it was wrong: only failures
+      count, per client and globally (``global_failures`` per window across all clients, so rotating
+      addresses does not buy unlimited guesses), and a correct sign-in is never slowed down.
+    * :meth:`check`: counts every attempt (cheap caps on endpoints that start a flow, e.g. SSO).
 
     Args:
-        attempts: Attempts allowed per ``window_s``.
+        attempts: Failures (or, for :meth:`check`, attempts) allowed per client per ``window_s``.
         window_s: Window length.
         max_clients: Addresses tracked at once (least recently seen are dropped beyond this).
+        global_failures: Failures allowed per ``window_s`` across all clients.
     """
 
     def __init__(self, attempts: int = 10, window_s: float = 60.0, *, max_clients: int = 10_000,
-                 clock: Callable[[], float] = time.monotonic):
+                 global_failures: int = 300, clock: Callable[[], float] = time.monotonic):
         self.attempts = attempts
         self.window_s = window_s
         self.max_clients = max_clients
+        self.global_failures = global_failures
         self.clock = clock
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
+        self._global: deque[float] = deque()
         self._lock = threading.Lock()
+
+    def _queue(self, client: str, now: float) -> deque[float]:
+        q = self._hits.pop(client, None) or deque()
+        while q and q[0] <= now - self.window_s:
+            q.popleft()
+        self._hits[client] = q
+        while len(self._hits) > self.max_clients:
+            self._hits.popitem(last=False)
+        return q
+
+    def _limited(self, first: float, now: float, what: str) -> RateLimitedError:
+        retry = max(1.0, first + self.window_s - now)
+        return RateLimitedError(f"too many {what}; try again later",
+                                details={"retry_after_s": retry, "limit": "console_login"})
 
     def check(self, client: str) -> None:
         """Count one attempt by ``client``; raises :class:`RateLimitedError` above the limit."""
         now = self.clock()
         with self._lock:
-            q = self._hits.pop(client, None) or deque()
-            while q and q[0] <= now - self.window_s:
-                q.popleft()
-            self._hits[client] = q
-            while len(self._hits) > self.max_clients:
-                self._hits.popitem(last=False)
+            q = self._queue(client, now)
             if len(q) >= self.attempts:
-                retry = max(1.0, q[0] + self.window_s - now)
-                raise RateLimitedError("too many console login attempts; try again later",
-                                       details={"retry_after_s": retry, "limit": "console_login"})
+                raise self._limited(q[0], now, "console login attempts")
             q.append(now)
+
+    def blocked(self, client: str) -> None:
+        """Raise :class:`RateLimitedError` if ``client`` (or everyone together) failed too often recently."""
+        now = self.clock()
+        with self._lock:
+            g = self._global
+            while g and g[0] <= now - self.window_s:
+                g.popleft()
+            if len(g) >= self.global_failures:
+                raise self._limited(g[0], now, "failed sign-in attempts on this gateway")
+            q = self._queue(client, now)
+            if len(q) >= self.attempts:
+                raise self._limited(q[0], now, "failed sign-in attempts")
+
+    def failure(self, client: str) -> None:
+        """Record one failed attempt by ``client``."""
+        now = self.clock()
+        with self._lock:
+            self._queue(client, now).append(now)
+            self._global.append(now)
+            while len(self._global) > self.global_failures:
+                self._global.popleft()
 
 
 class ConsoleSessions:
