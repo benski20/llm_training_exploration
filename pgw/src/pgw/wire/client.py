@@ -263,6 +263,7 @@ def reload_client_cert(cert_file: Path, key_file: Path, *, password: str | None 
     return len(contexts)
 
 
+@dataclass
 class ClientStats:
     """Counters (cumulative, process-local). Payloads are never recorded."""
 
