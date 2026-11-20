@@ -371,6 +371,38 @@ JSON.stringify(await r.json(),null,2)}catch(e){document.getElementById('r').text
 f();setInterval(f,5000);</script></body></html>"""
 
 
+def _cert_renewers(runtime: Any) -> list[Any]:
+    """One :class:`pgw.enroll.client.CertRenewer` per distinct client certificate of the masked models
+    (renewed at 2/3 of its lifetime; the live TLS contexts and compute channels pick up the new pair)."""
+    import functools
+
+    from pgw.enroll.client import CertRenewer, renew_client_cert
+
+    out: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+    for rt in getattr(runtime, "runtimes", {}).values():
+        c = getattr(rt, "config", None)
+        if (c is None or getattr(c, "mode", None) != "masked" or c.client_cert_file is None
+                or c.client_key_file is None or not str(c.service_url or "").startswith("https://")):
+            continue
+        pair = (str(Path(c.client_cert_file).resolve()), str(Path(c.client_key_file).resolve()))
+        if pair in seen:
+            continue
+        try:
+            token = c.resolved_service_token()
+        except PGWError as exc:
+            log.error("model %s: no client certificate renewal (%s)", c.name, exc.message)
+            continue
+        if token is None:
+            log.error("model %s: no client certificate renewal (renewal needs the service token)", c.name)
+            continue
+        seen.add(pair)
+        out.append(CertRenewer(Path(c.client_cert_file), functools.partial(
+            renew_client_cert, str(c.service_url), token.get_secret_value(), Path(c.client_cert_file),
+            Path(c.client_key_file), ca_file=c.service_ca_file)))
+    return out
+
+
 def _dashboard_html() -> str:
     try:
         from pgw.observability.dashboard import dashboard_html
@@ -461,14 +493,18 @@ def create_app(
         except BaseException:
             await runtime.stop()
             raise
-        flusher = asyncio.get_running_loop().create_task(_quota_flusher(), name="pgw-quota-flush")
+        loop = asyncio.get_running_loop()
+        background = [loop.create_task(_quota_flusher(), name="pgw-quota-flush")]
+        background += [loop.create_task(r.run(), name="pgw-cert-renew") for r in _cert_renewers(runtime)]
         try:
             yield
         finally:
             runtime.begin_drain()
-            flusher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await flusher
+            for task in background:
+                task.cancel()
+            for task in background:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             try:
                 await runtime.stop()
             finally:

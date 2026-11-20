@@ -12,6 +12,14 @@
     the gateway's locally generated key. Rate-limited per client IP. Every attempt is audited
     (JSON lines) without secrets, tokens or certificates.
 
+``POST /pgw/v1/enroll/renew``  (JSON ``{"csr_pem": str, "cert_pem": str}``)
+    Renews an enrolled gateway's client certificate before it expires. Needs the tenant bearer token,
+    the current client certificate presented in the TLS handshake (proof that the caller holds its key)
+    and the same certificate in ``cert_pem``: issued by this service's client CA, not expired, its CN
+    the TLS-verified one and belonging to the token's tenant. The new certificate keeps the CN. Audited
+    as ``enroll.renewed`` with the old and new serials. An expired certificate is never accepted (the
+    gateway then has to enroll again).
+
 Failures of the code itself (unknown, used, revoked, expired) all return the same 401.
 """
 
@@ -34,14 +42,15 @@ from pgw.core.errors import ConfigError, ErrorCode, PGWError, RateLimitedError
 from pgw.enroll.store import EnrollmentRecord, EnrollmentRejectedError, EnrollmentStore
 
 __all__ = [
-    "ENROLL_CA_PATH", "ENROLL_PATH", "EnrollmentService", "add_enroll_routes", "ca_fingerprint", "load_ca_pem",
-    "sign_client_csr",
+    "ENROLL_CA_PATH", "ENROLL_PATH", "ENROLL_RENEW_PATH", "EnrollmentService", "add_enroll_routes", "ca_fingerprint",
+    "load_ca_pem", "sign_client_csr",
 ]
 
 log = logging.getLogger(__name__)
 
 ENROLL_PATH = "/pgw/v1/enroll"
 ENROLL_CA_PATH = "/pgw/v1/enroll/ca"
+ENROLL_RENEW_PATH = "/pgw/v1/enroll/renew"
 _MAX_BODY = 64 << 10
 _GATEWAY_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -111,7 +120,8 @@ def sign_client_csr(csr_pem: str, ca_cert_file: Path, ca_key_file: Path, common_
         .issuer_name(ca_cert.subject)
         .public_key(pub)
         .serial_number(serial)
-        .not_valid_before(now - dt.timedelta(minutes=5))
+        # backdated for clock skew: 5 minutes, or a tenth of a short lifetime (so 2/3-lifetime renewal still works)
+        .not_valid_before(now - min(dt.timedelta(minutes=5), dt.timedelta(days=validity_days) / 10))
         .not_valid_after(now + dt.timedelta(days=validity_days))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.KeyUsage(digital_signature=True, key_encipherment=isinstance(pub, rsa.RSAPublicKey),
@@ -182,7 +192,7 @@ class _Audit:
     """JSON-lines audit of enrollment attempts. Fields are fixed; no secret ever reaches them."""
 
     FIELDS = ("ts", "event", "enrollment_id", "tenant", "gateway_name", "client", "reason", "cert_serial",
-              "models")
+              "prev_cert_serial", "models")
 
     def __init__(self, path: Path | None):
         self.path = path
@@ -309,6 +319,74 @@ class EnrollmentService:
         return out
 
 
+    def renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None) -> dict[str, Any]:
+        """Renew a gateway client certificate (blocking: run it in a worker thread). See the module docstring.
+
+        Raises:
+            RateLimitedError, AuthError (401), PGWError(permission_denied / protocol / unavailable).
+        """
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+
+        from pgw.core.errors import AuthError
+        from pgw.service.auth import parse_subject_cn
+
+        self.limiter.check(client)
+        s = self.settings
+        if s.client_issuing_ca_cert_file is None or s.client_issuing_ca_key_file is None:
+            raise PGWError("this service does not issue client certificates", code=ErrorCode.UNAVAILABLE)
+
+        def deny(reason: str, msg: str, tenant: str | None = None, code: ErrorCode = ErrorCode.PERMISSION_DENIED,
+                 ) -> PGWError:
+            self.audit.event("enroll.renew_failed", client=client, reason=reason, tenant=tenant)
+            return PGWError(msg, code=code)
+
+        if self.authenticator is None or not authorization:
+            self.audit.event("enroll.renew_failed", client=client, reason="no_token")
+            raise AuthError("certificate renewal needs the tenant bearer token")
+        if not cert_subject:
+            raise deny("no_client_cert", "certificate renewal needs the current client certificate in the TLS "
+                       "handshake; an expired certificate cannot be renewed (enroll the gateway again)")
+        try:
+            ident = self.authenticator.authenticate(authorization, cert_subject)
+        except PGWError as exc:
+            self.audit.event("enroll.renew_failed", client=client, reason=str(exc.code))
+            raise
+        tenant = ident.tenant_id
+        if not isinstance(body, dict):
+            raise PGWError("body must be a JSON object", code=ErrorCode.PROTOCOL)
+        csr, cert_pem = body.get("csr_pem"), body.get("cert_pem")
+        for v, what in ((csr, "csr_pem"), (cert_pem, "cert_pem")):
+            if not isinstance(v, str) or not v or len(v) > 16 << 10:
+                raise PGWError(f"{what} must be a PEM string", code=ErrorCode.PROTOCOL)
+        check_csr(str(csr))
+        try:
+            cur = x509.load_pem_x509_certificate(str(cert_pem).encode("ascii"))
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise PGWError("cert_pem is not a PEM certificate", code=ErrorCode.PROTOCOL) from exc
+        ca_cert = x509.load_pem_x509_certificate(Path(s.client_issuing_ca_cert_file).read_bytes())
+        try:
+            cur.verify_directly_issued_by(ca_cert)
+        except Exception as exc:
+            raise deny("foreign_cert", "the certificate was not issued by this service", tenant) from exc
+        now = dt.datetime.now(dt.UTC)
+        if not cur.not_valid_before_utc <= now < cur.not_valid_after_utc:
+            raise deny("expired_cert", "the client certificate has expired (or is not yet valid); enroll the "
+                       "gateway again", tenant)
+        cns = cur.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        cn = str(cns[0].value) if cns else ""
+        mapped = getattr(self.authenticator, "tenant_for_subject", lambda _s: None)(cert_subject)
+        if (not cn or cn != parse_subject_cn(cert_subject) or not cn.startswith(f"pgw-gw.{tenant}.")
+                or mapped != tenant):
+            raise deny("cert_mismatch", "the certificate does not match the TLS client certificate or the tenant",
+                       tenant)
+        new_pem, serial = sign_client_csr(str(csr), s.client_issuing_ca_cert_file, s.client_issuing_ca_key_file,
+                                          cn, s.client_cert_validity_days)
+        self.audit.event("enroll.renewed", client=client, tenant=tenant, gateway_name=cn,
+                         cert_serial=f"{serial:x}", prev_cert_serial=f"{cur.serial_number:x}")
+        return {"client_cert_pem": new_pem, "client_cert_cn": cn}
+
+
 def _issue_token(tenant: str, tokens_file: Path) -> tuple[str, str]:
     from pgw.service.auth import issue_tenant_token
 
@@ -376,7 +454,32 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
             return _err(PGWError("internal error"))
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
+    async def post_renew(request: Request) -> Response:
+        from pgw.wire.server import client_cert_subject
+
+        client = request.client.host if request.client is not None else "unknown"
+        try:
+            length = request.headers.get("content-length")
+            if length is not None and (not length.isdigit() or int(length) > _MAX_BODY):
+                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+            raw = await request.body()
+            if len(raw) > _MAX_BODY:
+                raise PGWError("request body too large", code=ErrorCode.PAYLOAD_TOO_LARGE)
+            try:
+                body = json.loads(raw)
+            except ValueError as exc:
+                raise PGWError("body must be JSON", code=ErrorCode.PROTOCOL) from exc
+            out = await asyncio.to_thread(svc.renew, body, client, request.headers.get("authorization"),
+                                          client_cert_subject(request.scope))
+        except PGWError as exc:
+            return _err(exc)
+        except Exception as exc:  # never leak details
+            log.error("certificate renewal failed: %s", type(exc).__name__)
+            return _err(PGWError("internal error"))
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
     app.add_route(ENROLL_CA_PATH, get_ca, methods=["GET"], include_in_schema=False)
+    app.add_route(ENROLL_RENEW_PATH, post_renew, methods=["POST"], include_in_schema=False)
     app.add_route(ENROLL_PATH, post_enroll, methods=["POST"], include_in_schema=False)
     app.state.pgw_enroll = svc
     return svc

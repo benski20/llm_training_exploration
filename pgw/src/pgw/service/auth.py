@@ -201,6 +201,10 @@ class TenantAuthenticator:
                 t = self._subjects.get(cn)
         return t
 
+    def tenant_for_subject(self, subject: str) -> str | None:
+        """Tenant a client-certificate subject (or its CN) is mapped to, if any."""
+        return self._match_subject(subject)
+
     def authenticate(self, authorization: str | None, client_cert_subject: str | None = None) -> TenantIdentity:
         """Return the identity or raise :class:`pgw.core.AuthError`.
 

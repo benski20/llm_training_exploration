@@ -352,6 +352,11 @@ def _wants_json(accept: str | None) -> bool:
     return "json" in a and "msgpack" not in a
 
 
+def client_cert_subject(scope: Mapping[str, Any]) -> str | None:
+    """Verified client-certificate subject the server (or a trusted proxy) put into the ASGI TLS extension."""
+    return _client_cert_subject(scope)
+
+
 def _client_cert_subject(scope: Mapping[str, Any]) -> str | None:
     ext = scope.get("extensions") or {}
     tls = ext.get("tls") or {}

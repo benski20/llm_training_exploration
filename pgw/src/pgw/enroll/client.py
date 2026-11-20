@@ -14,14 +14,16 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
+import random
 import re
 import socket
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,7 +32,10 @@ from pgw.core.errors import ConfigError, ErrorCode, PGWError
 from pgw.core.fileio import atomic_write_text
 from pgw.enroll.code import EnrollmentCode
 
-__all__ = ["ENROLLMENT_FILES", "EnrollResult", "EnrollmentError", "enroll_gateway", "enrollment_paths"]
+__all__ = [
+    "ENROLLMENT_FILES", "CertRenewer", "EnrollResult", "EnrollmentError", "enroll_gateway", "enrollment_paths",
+    "renew_client_cert",
+]
 
 log = logging.getLogger(__name__)
 
@@ -283,3 +288,155 @@ def model_entry(m: dict[str, Any], pack_path: Path, service_url: str, files: dic
         e["client_cert_file"], e["client_key_file"] = str(files["client_cert"]), str(files["client_key"])
     GatewayModelConfig(**e)  # raises on anything invalid
     return e
+
+
+# ---- client certificate renewal -----------------------------------------------------------------------
+def renew_client_cert(
+    service_url: str,
+    token: str,
+    cert_file: Path,
+    key_file: Path,
+    *,
+    ca_file: Path | None = None,
+    transport: Any = None,
+    timeout_s: float = 30.0,
+    reload: bool = True,
+) -> int:
+    """Renew the gateway's client certificate with ``POST /pgw/v1/enroll/renew`` (blocking).
+
+    The request is authenticated with the tenant ``token`` and the *current* certificate (presented in the
+    TLS handshake and sent in the body). A fresh key is generated locally; the new pair is written
+    atomically (key 0600, certificate 0644) and, with ``reload``, loaded into the live TLS contexts of the
+    compute clients (:func:`pgw.wire.client.reload_client_cert`: new handshakes present it and the compute
+    stream channels are rebuilt between calls).
+
+    Returns:
+        The new certificate's serial number.
+
+    Raises:
+        EnrollmentError: the service refused or could not be reached; nothing was changed.
+    """
+    import httpx
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    from pgw.wire.client import ClientConfig, build_ssl_context, reload_client_cert
+
+    cert_file, key_file = Path(cert_file), Path(key_file)
+    try:
+        current = cert_file.read_text(encoding="ascii")
+    except OSError as exc:
+        raise EnrollmentError(f"cannot read the client certificate {cert_file}: {exc.strerror}",
+                              code=ErrorCode.CONFIG) from exc
+    kw: dict[str, Any] = {"timeout": timeout_s, "follow_redirects": False, "trust_env": False}
+    if transport is not None:
+        kw["transport"] = transport
+    elif service_url.startswith("https://"):
+        kw["verify"] = build_ssl_context(ClientConfig(base_url=service_url, ca_file=ca_file,
+                                                      client_cert_file=cert_file, client_key_file=key_file))
+    key_pem, csr_pem = _key_and_csr("renew")
+    try:
+        with httpx.Client(base_url=service_url, **kw) as h:
+            r = h.post("/pgw/v1/enroll/renew", json={"csr_pem": csr_pem, "cert_pem": current},
+                       headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        raise EnrollmentError(f"certificate renewal request failed ({type(exc).__name__})",
+                              code=ErrorCode.BACKEND_UNAVAILABLE) from exc
+    if r.status_code != 200:
+        try:
+            msg = r.json()["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            msg = f"HTTP {r.status_code}"
+        code = ErrorCode.RATE_LIMITED if r.status_code == 429 else (
+            ErrorCode.UNAUTHENTICATED if r.status_code in (401, 403) else ErrorCode.BACKEND_UNAVAILABLE)
+        raise EnrollmentError(f"certificate renewal refused: {msg}", code=code)
+    try:
+        new_pem = str(r.json()["client_cert_pem"])
+        new_cert = x509.load_pem_x509_certificate(new_pem.encode("ascii"))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise EnrollmentError("the compute service sent an invalid renewal response", code=ErrorCode.PROTOCOL) from exc
+    key = serialization.load_pem_private_key(key_pem, password=None)
+    spki = serialization.PublicFormat.SubjectPublicKeyInfo
+    if (new_cert.public_key().public_bytes(serialization.Encoding.DER, spki)
+            != key.public_key().public_bytes(serialization.Encoding.DER, spki)):
+        raise EnrollmentError("the renewed certificate is not for this gateway's new key", code=ErrorCode.INTEGRITY)
+    # Both files are replaced atomically, the key first: a reader between the two renames fails to load a
+    # mismatched pair and retries, it never gets a certificate without its key.
+    atomic_write_text(key_file, key_pem.decode("ascii"), mode=0o600)
+    atomic_write_text(cert_file, new_pem, mode=0o644)
+    if reload:
+        reload_client_cert(cert_file, key_file)
+    log.info("renewed the client certificate %s (serial %x, valid until %s)", cert_file, new_cert.serial_number,
+             new_cert.not_valid_after_utc.isoformat(timespec="seconds"))
+    return int(new_cert.serial_number)
+
+
+class CertRenewer:
+    """Renews a client certificate at 2/3 of its lifetime, retrying failures with jittered backoff.
+
+    Args:
+        cert_file: The certificate being renewed (its validity is re-read after every renewal).
+        renew: Blocking renewal (e.g. :func:`renew_client_cert` bound to the service); run in a thread.
+        clock: Wall clock (unix seconds; injectable for tests).
+        sleep: Async sleep (injectable for tests).
+        retry_min_s / retry_max_s: Backoff bounds after a failed attempt (each retry is jittered and never
+            later than shortly before expiry).
+    """
+
+    def __init__(self, cert_file: Path, renew: Callable[[], Any], *, clock: Callable[[], float] = time.time,
+                 sleep: Callable[[float], Awaitable[None]] | None = None, retry_min_s: float = 30.0,
+                 retry_max_s: float = 3600.0, rng: random.Random | None = None):
+        self.cert_file = Path(cert_file)
+        self._renew = renew
+        self._clock = clock
+        self._sleep = sleep or asyncio.sleep
+        self.retry_min_s = retry_min_s
+        self.retry_max_s = retry_max_s
+        self._rng = rng or random.Random()  # noqa: S311 - jitter, not security
+        self.renewals = 0
+        self.failures = 0
+
+    def renew_at(self) -> float | None:
+        """When the current certificate is due (2/3 of its lifetime); ``None`` if it cannot be read."""
+        from pgw.wire.client import client_cert_validity
+
+        w = client_cert_validity(self.cert_file)
+        if w is None:
+            return None
+        return w[0] + (w[1] - w[0]) * 2.0 / 3.0
+
+    async def run_once(self) -> bool:
+        """Wait until the certificate is due and renew it (retrying until success); False if unreadable."""
+        due = self.renew_at()
+        if due is None:
+            log.error("cannot read the client certificate %s; automatic renewal is off", self.cert_file)
+            return False
+        wait = due - self._clock()
+        if wait > 0:
+            await self._sleep(wait)
+        attempt = 0
+        while True:
+            try:
+                await asyncio.to_thread(self._renew)
+            except Exception as exc:
+                self.failures += 1
+                attempt += 1
+                from pgw.wire.client import client_cert_validity
+
+                w = client_cert_validity(self.cert_file)
+                left = (w[1] - self._clock()) if w is not None else 0.0
+                msg = exc.message if isinstance(exc, PGWError) else type(exc).__name__
+                log.error("client certificate renewal failed (attempt %d, %.0fs before expiry): %s", attempt,
+                          left, msg)
+                backoff = min(self.retry_max_s, self.retry_min_s * 2.0 ** (attempt - 1))
+                if left > 0:
+                    backoff = min(backoff, max(left / 4.0, 0.05))
+                await self._sleep(backoff * (0.5 + self._rng.random()))
+                continue
+            self.renewals += 1
+            return True
+
+    async def run(self) -> None:
+        """Renew forever (cancel to stop)."""
+        while await self.run_once():
+            pass
