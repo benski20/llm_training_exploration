@@ -24,7 +24,7 @@ PGW = HERE.parents[1]
 EXCLUDE_DIRS = {"node_modules", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", "target", "results", "build", "dist"}
 #: Top-level folders the GPU jobs never use (Kaggle rejects scripts above about 1 MB).
 #: Paths (relative to pgw/) the GPU jobs never use: the console UI and its tests.
-EXCLUDE_PATHS = ("tests/console", "src/pgw/console/static")
+EXCLUDE_PATHS = ("tests/console", "src/pgw/console/static", "tests/cli", "tests/docs", "tests/deploy")
 EXCLUDE_TOP = {"docs", "requirements", ".github", "ci", "research", "console", "deploy"}
 
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
