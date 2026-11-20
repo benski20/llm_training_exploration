@@ -17,6 +17,12 @@ Checks (run when relevant to ``--role`` and the given options):
   ``--deep`` also the weight-row norms (manifest ``row_norm_sq_max`` and any ``wnorm`` sidecar) against
   the int8 weights.
 * ``maskstore``: KEK file permissions, store integrity/inventory, free disk space.
+* ``maskstore.read_rate``: writes a :data:`MASKSTORE_PROBE_BYTES` probe file next to the store, drops it
+  from the page cache and reads it back in 1 MiB blocks in shuffled order (the gateway reads each slot's
+  ``W r`` chunks); reports MB/s and, with ``--pack``, the tokens/s that rate can feed. Fails below the
+  expected load (``expected_tokens_per_second`` x mask bytes per slot), warns within
+  :data:`SUPPLY_MARGIN` of it, and without an expected load warns below :data:`MASKSTORE_MIN_READ_MB_S`
+  (one chat-speed 7B stream; a gp3 volume at its 125 MB/s baseline is below it: masks need NVMe or RAM).
 * ``service``: the compute service answers ``/readyz`` and ``/pgw/v1/models`` and serves the
   pack's fingerprint and ring.
 * ``mask_supply``: times one mask chunk end to end into a temporary store (encrypted generation over
@@ -68,6 +74,13 @@ CERT_WARN_DAYS = 7
 EXPECTED_TPS_ENV = "PGW_DOCTOR_EXPECTED_TOKENS_PER_S"
 #: Supply must exceed the expected load by this factor to pass without a warning.
 SUPPLY_MARGIN = 1.2
+#: Size of the mask-store read probe (``maskstore.read_rate``; written next to the store, then deleted).
+MASKSTORE_PROBE_BYTES = 64 << 20
+#: Block size of the probe's reads (the order of a slot's per-linear ``W r`` chunks).
+MASKSTORE_PROBE_BLOCK = 1 << 20
+#: Without an expected load, read rates below this warn: one chat-speed Qwen2.5-7B stream needs about
+#: 5.56 MB/slot x 45 tokens/s = 250 MB/s (docs/operations/sizing.md, section 4).
+MASKSTORE_MIN_READ_MB_S = 250.0
 
 
 @dataclass
@@ -438,6 +451,93 @@ def _check_maskstore(root: Path, key_file: Path | None) -> tuple[Status, str, di
     return "ok", f"store opened and verified; {usage.free / 2**30:.1f} GiB free", data
 
 
+def _measure_read_rate(directory: Path, nbytes: int, block: int = MASKSTORE_PROBE_BLOCK) -> dict[str, Any]:
+    """Write ``nbytes`` of random data to a hidden probe file in ``directory``, drop it from the page cache
+    and time reading it back in ``block``-sized reads in shuffled order. The file is always deleted.
+
+    Random data, so a compressing or deduplicating filesystem cannot make the reads look faster. The
+    store never lists the probe (it is a dot file at the store root, not under ``*/*/segments/``)."""
+    import random
+    import secrets
+
+    nblocks = max(1, -(-int(nbytes) // block))
+    path = Path(directory) / f".pgw-doctor-readprobe-{secrets.token_hex(6)}"
+    cache_dropped = False
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            for _ in range(nblocks):
+                os.write(fd, os.urandom(block))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            if hasattr(os, "posix_fadvise"):
+                os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                cache_dropped = True
+            order = list(range(nblocks))
+            random.Random(nblocks).shuffle(order)  # noqa: S311 - a fixed, non-sequential read order, not a secret
+            buf = bytearray(block)
+            preadv = getattr(os, "preadv", None)
+            t0 = time.perf_counter()
+            done = 0
+            for i in order:
+                if preadv is not None:
+                    done += preadv(fd, [buf], i * block)
+                else:  # pragma: no cover - platforms without preadv
+                    done += len(os.pread(fd, block, i * block))
+            seconds = time.perf_counter() - t0
+        finally:
+            os.close(fd)
+    finally:
+        path.unlink(missing_ok=True)
+    return {"bytes": done, "seconds": seconds, "block_bytes": block, "cache_dropped": cache_dropped,
+            "mb_per_s": done / seconds / 1e6 if seconds > 0 else float("inf")}
+
+
+def _check_maskstore_read_rate(root: Path, bytes_per_slot: int | None, expected_tps: float | None,
+                               probe_bytes: int = MASKSTORE_PROBE_BYTES) -> tuple[Status, str, dict[str, Any]]:
+    """Read throughput of the mask-store volume against the mask bytes the expected load reads."""
+    free = shutil.disk_usage(root).free
+    if free < 2 * probe_bytes + MIN_FREE_DISK_BYTES:
+        return "warn", (f"not enough free space at {root} for a {probe_bytes / 2**20:.0f} MiB read probe; "
+                        "read rate not measured"), {"disk_free": free}
+    try:
+        m = _measure_read_rate(root, probe_bytes)
+    except OSError as exc:
+        return "warn", f"cannot write a read probe next to the store ({type(exc).__name__}: {exc})", {}
+    rate_mb = float(m["mb_per_s"])
+    data: dict[str, Any] = {**{k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()},
+                            "min_mb_per_s_without_load": MASKSTORE_MIN_READ_MB_S}
+    parts = [f"{rate_mb:,.0f} MB/s ({m['bytes'] / 2**20:.0f} MiB in {m['block_bytes'] >> 10} KiB shuffled reads)"]
+    notes: list[str] = []
+    if not m["cache_dropped"]:
+        notes.append("the page cache could not be dropped on this platform, so the rate may be optimistic")
+    if bytes_per_slot:
+        data["bytes_per_slot"] = int(bytes_per_slot)
+        data["supported_tokens_per_second"] = round(rate_mb * 1e6 / bytes_per_slot, 1)
+        parts.append(f"feeds {rate_mb * 1e6 / bytes_per_slot:,.1f} tokens/s at {bytes_per_slot / 1e6:.2f} MB/slot")
+    exp = _expected_tps(expected_tps)
+    if exp is not None and bytes_per_slot:
+        need_mb = exp * bytes_per_slot / 1e6
+        data.update(expected_tokens_per_second=exp, needed_mb_per_s=round(need_mb, 1))
+        if rate_mb < need_mb:
+            return "fail", "; ".join([*parts, f"below the {need_mb:,.0f} MB/s that {exp:g} tokens/s read: put the "
+                                      "mask store on local NVMe or RAM (docs/operations/sizing.md, section 4)",
+                                      *notes]), data
+        if rate_mb < SUPPLY_MARGIN * need_mb:
+            return "warn", "; ".join([*parts, f"within {round((SUPPLY_MARGIN - 1) * 100)}% of the {need_mb:,.0f} "
+                                      f"MB/s that {exp:g} tokens/s read", *notes]), data
+    elif exp is not None:
+        notes.append("give --pack to compare with the expected load (mask bytes per slot)")
+    elif rate_mb < MASKSTORE_MIN_READ_MB_S:
+        return "warn", "; ".join([*parts, f"below {MASKSTORE_MIN_READ_MB_S:.0f} MB/s, about one chat-speed 7B stream: "
+                                  "use local NVMe or RAM for the mask store (docs/operations/sizing.md, section 4)",
+                                  *notes]), data
+    return "ok", "; ".join([*parts, *notes]), data
+
+
 def _check_service(url: str, token_file: Path | None, ca_file: Path | None, fingerprint: str | None,
                    ring: str | None) -> tuple[Status, str, dict[str, Any]]:
     from pydantic import SecretStr
@@ -714,6 +814,7 @@ def run_doctor(
     deep: bool = False,
     expected_tokens_per_second: float | None = None,
     cert_files: Iterable[Path] = (),
+    maskstore_read_bytes: int | None = None,
 ) -> DoctorReport:
     """Run all checks relevant to ``role`` and the given options.
 
@@ -731,8 +832,10 @@ def run_doctor(
             compare it with the manifest and any weight-norm sidecar (reads every weight; install time).
         mask_supply: Time one mask chunk (opt-in, ``--mask-supply``; needs ``pack``). Off by default:
             it runs real mask generation, far too heavy for a gateway pod's start-up check.
-        expected_tokens_per_second: Expected mask consumption for the supply check (default from
-            ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``; unset = report the rate only).
+        expected_tokens_per_second: Expected mask consumption for the supply check and the mask-store
+            read-rate check (default from ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``; unset = report the rate only).
+        maskstore_read_bytes: Size of the ``maskstore.read_rate`` probe (default
+            :data:`MASKSTORE_PROBE_BYTES`; 0 skips the check). Runs whenever ``maskstore_root`` is given.
         cert_files: Extra PEM certificate files whose expiry is checked (plus those in the settings).
     """
     if role not in ROLES:
@@ -751,13 +854,22 @@ def run_doctor(
     if role != "all" and (check_settings or role in ("gateway", "service", "factory")):
         _run(report, f"settings.{role}", lambda: _check_role_settings(role))
     fingerprint: str | None = None
+    slot_bytes: int | None = None
     if pack is not None:
         c = _run(report, "pack", lambda: _check_pack(pack, ring, deep))
         fingerprint = c.data.get("fingerprint")
+        per_ring = c.data.get("mask_bytes_per_slot") or {}
+        rings = list(per_ring)
+        pick = ring if ring in per_ring else ("K32A12C27" if "K32A12C27" in per_ring else (rings[0] if rings else None))
+        slot_bytes = int(per_ring[pick]) if pick is not None else None
     if key_file is not None:
         _run(report, "maskstore.key_file", lambda: _check_key_file(key_file))
     if maskstore_root is not None:
         _run(report, "maskstore", lambda: _check_maskstore(maskstore_root, key_file))
+        probe = MASKSTORE_PROBE_BYTES if maskstore_read_bytes is None else int(maskstore_read_bytes)
+        if probe > 0:
+            _run(report, "maskstore.read_rate", lambda: _check_maskstore_read_rate(
+                maskstore_root, slot_bytes, expected_tokens_per_second, probe))
     if service_url is not None:
         _run(report, "service", lambda: _check_service(service_url, service_token_file, service_ca_file,
                                                         fingerprint, ring))

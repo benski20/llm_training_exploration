@@ -147,6 +147,25 @@ def admin_get(base_url: str, admin_token: str, path: str) -> Any:
         return _check(c.get(path, headers={"Authorization": f"Bearer {admin_token}"}), path)
 
 
+def metrics_text(base_url: str, admin_token: str | None = None) -> str:
+    """The gateway's Prometheus exposition (``/metrics``; the admin token is sent in case
+    ``metrics_require_admin`` is on)."""
+    h = {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
+    with httpx.Client(base_url=base_url, timeout=60.0, trust_env=False) as c:
+        r = c.get("/metrics", headers=h)
+        if r.status_code >= 400:
+            raise WizardError(f"/metrics: HTTP {r.status_code}: {r.text[:300]}")
+        return r.text
+
+
+def client_timing(status: dict[str, Any], model: str | None = None) -> dict[str, Any]:
+    """One model's cumulative ``client_timing`` from an ``/admin/status`` body (``{}`` if absent)."""
+    for m in status.get("models") or []:
+        if model is None or m.get("name") == model:
+            return dict(m.get("client_timing") or {})
+    return {}
+
+
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process)."""
     import asyncio

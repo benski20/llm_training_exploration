@@ -9,7 +9,16 @@ encrypted-mask hint and runs the encrypted mask factory, all inside this contain
 
 With ``e2e=True`` the function also plays the administrator: it drives the wizard through the public
 URL with the provider's enrollment code (``wizard_client.py``), sends a greedy chat completion, recomputes
-it with the plaintext reference backend on the same pack and stores the comparison in the Dict.
+it with the plaintext reference backend on the same pack and stores the comparison in the Dict. It also
+reports the gateway's client-reported round-trip latency over the chats (``trip_latency``, read from the
+gateway's own ``/metrics`` and ``/admin/status`` on loopback; see ``trip_gate.py``), which ``launch.py
+--max-trip-ms`` gates on.
+
+Two functions run the same code: ``gateway`` reaches the provider through its public TCP tunnel and
+``gateway_i6pn`` joins Modal's private IPv6 network (i6pn) so that it can reach a provider started with
+``serve_i6pn`` directly. ``launch.py`` picks the pair (tunnel by default). The function's first action
+is to write ``customer_boot`` to the Dict, so the launcher can tell a container that Modal has not
+scheduled yet from one that is still starting up.
 
 Config, secrets, packs and the mask store live on the container's local disk, not on a ``modal.Volume``:
 the mask store must never sit on network or snapshotted storage (a restored copy could hand out masks
@@ -34,7 +43,6 @@ DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
-I6PN = os.environ.get("PGW_MODAL_I6PN", "0") == "1"  # private network to the provider (see provider.py)
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -59,6 +67,7 @@ image = (
     .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", "OMP_WAIT_POLICY": "PASSIVE"})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
+    .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
 )
 
 app = modal.App("pgw-customer", image=image)
@@ -66,8 +75,9 @@ app = modal.App("pgw-customer", image=image)
 PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pads are secure."}]
 
 
-def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float) -> dict:
+def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, local_url: str) -> dict:
     import pgw_modal_boot as boot
+    import trip_gate
     import wizard_client as wiz
 
     while True:
@@ -80,8 +90,30 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float) -
     res = wiz.run_wizard(url, token, prov["code"], boot.MODEL_NAME, timeout_s=max(60, deadline - time.time()))
     wiz.wait_gateway_ready(url)
     key = wiz.create_api_key(url, res["admin_token"])
+    adm = res["admin_token"]
+
+    snap_errors: list[str] = []
+
+    def snap() -> tuple[str, dict]:
+        # The gateway's own counters, read on loopback (not through Modal's edge). A failed read leaves
+        # the latency unmeasured (the gate then reports "no round trips measured"), never the exactness check.
+        try:
+            return (wiz.metrics_text(local_url, adm),
+                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), boot.MODEL_NAME))
+        except Exception as exc:
+            snap_errors.append(f"{type(exc).__name__}: {str(exc)[:200]}")
+            return "", {}
+
+    s0 = snap()
     out = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)
+    s1 = snap()
     out2 = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)  # second run: determinism + warm timing
+    s2 = snap()
+    # The warm chat (the second one) decides launch.py's --max-trip-ms gate; both chats are reported too.
+    trips = {"warm": trip_gate.trip_latency(s1[0], s2[0], s1[1], s2[1]),
+             "both_chats": trip_gate.trip_latency(s0[0], s2[0], s0[1], s2[1])}
+    if snap_errors:
+        trips["errors"] = snap_errors
     st = json.loads(Path("/srv/pgw/config/setup/state.json").read_text())
     t = time.time()
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32)
@@ -98,20 +130,37 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float) -
         and [x["logprob"] for x in out["choices"][0]["logprobs"]["content"]]
         == [x["logprob"] for x in out2["choices"][0]["logprobs"]["content"]],
         "reference_text": ref["text"], "reference_s": ref_s, "compare": cmp,
-        "admin_status": status, "admin_masks": masks,
+        "admin_status": status, "admin_masks": masks, "trip_latency": trips,
     }
 
 
-@app.function(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0,
-              region=REGION, i6pn=I6PN)
+_FN: dict = dict(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0,
+                 region=REGION)
+
+
+@app.function(**_FN, i6pn=False)
 def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
+    """The customer gateway; reaches the provider through its public TCP tunnel."""
+    return _gateway(run_id, ttl_s, e2e, i6pn=False)
+
+
+@app.function(**_FN, i6pn=True)
+def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
+    """The same gateway on Modal's private IPv6 network (pairs with the provider's ``serve_i6pn``)."""
+    return _gateway(run_id, ttl_s, e2e, i6pn=True)
+
+
+def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool) -> dict:
     import sys
 
+    t_boot = time.time()
+    live = modal.Dict.from_name(DICT_NAME, create_if_missing=True)
+    # First action once Modal has scheduled this container (launch.py's i6pn scheduling fallback watches it).
+    live["customer_boot"] = {"run_id": run_id, "at": t_boot, "i6pn": i6pn}
     sys.path.insert(0, "/opt/pgw-modal")
     import pgw_modal_boot as boot
 
-    deadline = time.time() + min(ttl_s, MAX_LIFETIME_S - 120)
-    live = modal.Dict.from_name(DICT_NAME, create_if_missing=True)
+    deadline = t_boot + min(ttl_s, MAX_LIFETIME_S - 120)
     root = Path("/srv/pgw")
     port = 8080
     result: dict = {"run_id": run_id}
@@ -121,13 +170,14 @@ def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
         gw, token = boot.start_gateway(env, root / "gateway.log")
         boot.wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
         info = {"run_id": run_id, "console_url": url.rstrip("/") + "/console/", "base_url": url,
-                "setup_token": token, "started_at": time.time(), "expires_at": deadline}
+                "setup_token": token, "started_at": time.time(), "expires_at": deadline,
+                "network": "i6pn" if i6pn else "tunnel"}
         live["customer"] = info
         boot.log(f"gateway in setup mode at {info['console_url']} (setup token published to Dict {DICT_NAME!r})")
         reason = "ttl"
         try:
             if e2e:
-                result["e2e"] = _e2e(live, run_id, url, token, deadline)
+                result["e2e"] = _e2e(live, run_id, url, token, deadline, f"http://127.0.0.1:{port}")
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"
