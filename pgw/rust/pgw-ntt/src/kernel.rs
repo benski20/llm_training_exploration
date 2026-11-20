@@ -374,8 +374,10 @@ fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: 
     let o0 = g * N;
     let o1 = (gp + g) * N;
     let o2 = (2 * gp + g) * N;
-    for j in 0..N {
-        let mut x = [0u64; L];
+    // results of all 16 rows first, then each row's 256 words written contiguously (a lane-major
+    // scatter would touch 16 output pages per coefficient)
+    let mut buf = [[0u64; L]; N];
+    for (j, x) in buf.iter_mut().enumerate() {
         let (v0, v1, v2) = (r[o0 + j], r[o1 + j], r[o2 + j]);
         for i in 0..L {
             let a0 = red(v0[i], p0);
@@ -389,9 +391,12 @@ fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: 
             let t2s = if t2 > half2 { (t2 as u64).wrapping_sub(p2 as u64) } else { t2 as u64 };
             x[i] = (a0 as u64).wrapping_add((p0 as u64).wrapping_mul(t1 as u64)).wrapping_add(c.p01.wrapping_mul(t2s));
         }
-        for (i, &xv) in x.iter().enumerate().take(nrows) {
-            // SAFETY: (row0 + i, col0 + j) is inside the output and owned by this block.
-            unsafe { *out.0.add((row0 + i) * stride + col0 + j) = xv };
+    }
+    for i in 0..nrows {
+        // SAFETY: row row0 + i, columns col0 .. col0 + 256 are inside the output and owned by this block.
+        let row = unsafe { std::slice::from_raw_parts_mut(out.0.add((row0 + i) * stride + col0), N) };
+        for (o, x) in row.iter_mut().zip(buf.iter()) {
+            *o = x[i];
         }
     }
 }
