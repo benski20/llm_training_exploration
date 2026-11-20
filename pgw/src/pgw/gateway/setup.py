@@ -831,7 +831,9 @@ def create_setup_app(
                         f"serving yet ({msg}). {restart}", "notes": notes}
             log.info("setup finished: gateway switched to normal mode")
             return {"mode": "normal", "message": "Setup is complete. The gateway now serves your model. Sign in "
-                    "to the console with the admin token you saved. After a restart the gateway keeps this "
+                    "to the console with the admin token you saved. Until the first batch of privacy masks is "
+                    "ready (a few minutes after setup), the model shows as 'preparing privacy masks' and then "
+                    "becomes ready by itself. After a restart the gateway keeps this "
                     f"configuration: start it with PGW_GATEWAY_CONFIG_DIR={cfg} and it reads {env_file} by itself.",
                     "notes": notes}
 

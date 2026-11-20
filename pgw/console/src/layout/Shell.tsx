@@ -1,3 +1,4 @@
+import { explainReason } from "../lib/readiness";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useGateway } from "../app/gateway";
 import { useSession } from "../app/session";
@@ -95,7 +96,7 @@ export function Shell() {
         <div className="sidebar-foot">
           <div className="sidebar-models" aria-label="Model health">
             {gw.models.map((m) => (
-              <div className="sidebar-model" key={m.name} title={`${m.name}: ${m.ready ? "ready" : m.reason || m.state}`}>
+              <div className="sidebar-model" key={m.name} title={`${m.name}: ${m.ready ? "ready" : m.reason ? explainReason(m.reason).short : m.state}`}>
                 <StatusDot tone={modelTone(m.ready, m.state)} />
                 <span className="sidebar-model-name">{m.name}</span>
               </div>

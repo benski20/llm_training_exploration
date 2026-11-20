@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Overview, OverviewModel, UsageWindow } from "../api/types";
 import { fmtAxisTime, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPercent } from "../lib/format";
+import { explainReason } from "../lib/readiness";
 import { useResource } from "../lib/useResource";
 import { usageColumns } from "../lib/usage";
 import {
@@ -12,6 +13,7 @@ import {
   Callout,
   ErrorState,
   IconAlert,
+  IconInfo,
   IconCheck,
   Meter,
   PageHeader,
@@ -40,16 +42,19 @@ export function runwayTone(s: number | null | undefined): "ok" | "warn" | "bad" 
 function Alerts({ o }: { o: Overview }) {
   const notReady = o.models.filter((m) => !m.ready);
   const noise = o.privacy.noise_monitor;
-  const items: { tone: "warn" | "bad"; text: string }[] = [];
+  const items: { tone: "info" | "warn" | "bad"; text: string }[] = [];
   if (o.integrity_failures_total > 0)
     items.push({ tone: "bad", text: `${fmtInt(o.integrity_failures_total)} integrity failure(s) recorded since start. Investigate before resetting the breaker.` });
   if (noise?.alarm) items.push({ tone: "bad", text: "The outbound-noise monitor is alarming: masked traffic is blocked (fail-closed)." });
-  for (const m of notReady) items.push({ tone: "warn", text: `${m.name} is not ready${m.reason ? `: ${m.reason}` : ""}.` });
+  for (const m of notReady) {
+    const r = explainReason(m.reason);
+    items.push({ tone: r.tone, text: `${m.name} ${r.detail}` });
+  }
   if (!items.length) return null;
   return (
     <div className="stack-sm">
       {items.map((it, i) => (
-        <Callout key={i} tone={it.tone} icon={<IconAlert />}>
+        <Callout key={i} tone={it.tone === "info" ? "accent" : it.tone} icon={it.tone === "info" ? <IconInfo /> : <IconAlert />}>
           {it.text}
         </Callout>
       ))}
@@ -100,7 +105,7 @@ export function OverviewPage() {
       render: (m) => (
         <span className="cell-stack">
           <span>{m.state}</span>
-          {!m.ready && m.reason ? <span className="cell-sub">{m.reason}</span> : null}
+          {!m.ready && m.reason ? <span className="cell-sub">{explainReason(m.reason).short}</span> : null}
         </span>
       ),
     },

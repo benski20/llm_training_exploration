@@ -1,3 +1,4 @@
+import { explainReason } from "../lib/readiness";
 import { useState } from "react";
 import { api } from "../api/client";
 import type { ModelStatus } from "../api/types";
@@ -80,8 +81,8 @@ function ModelDetail({ m, onChanged }: { m: ModelStatus; onChanged: () => void }
           ) : null}
         </div>
         {!m.ready && m.reason ? (
-          <Callout tone="warn" icon={<IconAlert />} className="mt-3">
-            Not ready: {m.reason}
+          <Callout tone={explainReason(m.reason).tone === "info" ? "accent" : "warn"} icon={<IconAlert />} className="mt-3">
+            {m.name} {explainReason(m.reason).detail}
             {m.last_error ? <span className="muted"> · last error: {m.last_error}</span> : null}
           </Callout>
         ) : null}
@@ -209,7 +210,7 @@ export function ModelsPage() {
                 <span className="model-item-text">
                   <span className="model-item-name">{m.name}</span>
                   <span className="model-item-sub">
-                    {m.ready ? "ready" : m.reason || m.state} · {m.ring}
+                    {m.ready ? "ready" : m.reason ? explainReason(m.reason).short : m.state} · {m.ring}
                   </span>
                 </span>
               </button>
