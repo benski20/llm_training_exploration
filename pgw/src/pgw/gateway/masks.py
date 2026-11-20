@@ -9,6 +9,11 @@ further reservations while generating, so an early stop burns at most one window
 The engine's masked backend calls :meth:`WindowedReservation.ensure` before it takes any row of a
 step (in its worker thread), so an extension that fails (store exhausted) raises
 :class:`pgw.core.MaskExhaustedError` before any mask of the batch is consumed.
+
+Parts every linear is done with are closed eagerly, at the start of the next token step (the
+:meth:`ensure` call for the model's first linear), never mid-step: closing zeroes a part's check
+vectors. A long session therefore holds open only the parts it still reads, so it never pins every
+slab of an in-memory mask ring (:mod:`pgw.maskstore.ringbuf`) until it ends.
 """
 
 from __future__ import annotations
@@ -50,9 +55,12 @@ class WindowedReservation:
         reserve: Makes a further reservation of ``n`` slots (blocking; runs in a worker thread).
         cap: Total slots the request may use (``len(prompt) + max_tokens``).
         window: Slots added per extension.
+        ahead: Reserve the next window in a background thread once fewer than ``window / 2`` reserved
+            rows are left (at the start of a step), so a fail-fast extension (in-memory mask ring)
+            rarely has to happen inside a batch step.
     """
 
-    def __init__(self, first: Any, reserve: Reserve, *, cap: int, window: int):
+    def __init__(self, first: Any, reserve: Reserve, *, cap: int, window: int, ahead: bool = False):
         if window < 1:
             raise ValueError("window must be >= 1")
         self._parts: list[Any] = [first]
@@ -67,6 +75,16 @@ class WindowedReservation:
         self._cur: dict[str, int] = {}
         self.ring = getattr(first, "ring", None)
         self.fingerprint = getattr(first, "fingerprint", None)
+        keys = getattr(first, "linear_keys", None)
+        #: The first linear of a forward pass: its ensure() marks the start of a token step.
+        self._step_key: str | None = keys[0] if keys else None
+        #: Parts before this index are closed (retired).
+        self._live = 0
+        self.retired = 0
+        self.ahead = bool(ahead)
+        self._pending = 0  #: slots being reserved ahead in the background
+        self._ahead_thread: threading.Thread | None = None
+        self.ahead_reservations = 0
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -134,10 +152,26 @@ class WindowedReservation:
         with self._lock:
             if self._closed:
                 raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            step_start = self._step_key is not None and self._k(lid) == self._step_key
+            if step_start:
+                self._retire_locked()
+            have = self._reserved_left(lid)
+            if have >= rows:
+                if step_start and self.ahead and have - rows < max(1, self.window // 2):
+                    self._start_ahead_locked()
+                return
+            pending = self._ahead_thread
+        if pending is not None:  # a background extension is in flight: use it (one bounded reserve call)
+            pending.join()
+        with self._lock:
+            if self._closed:
+                raise MaskReuseError("mask reservation is closed; its unused rows were burned")
             have = self._reserved_left(lid)
             if have >= rows:
                 return
-            room = self.cap - self.slots
+            # Slots a background extension is still reserving count against the cap too (only one
+            # thread calls ensure() per session today, so _pending is 0 here; this keeps it exact).
+            room = self.cap - self.slots - self._pending
             missing = rows - have
             if missing > room:
                 raise MaskExhaustedError(
@@ -149,6 +183,55 @@ class WindowedReservation:
             self._parts.append(part)
             self.extensions += 1
             log.debug("extended mask reservation by %d slots (%d parts)", n, len(self._parts))
+
+    def _start_ahead_locked(self) -> None:
+        room = self.cap - self.slots - self._pending
+        if self._ahead_thread is not None or room <= 0:
+            return
+        n = min(room, self.window)
+        self._pending = n
+
+        def run() -> None:
+            part = None
+            try:
+                part = self._reserve(n)
+            except Exception as exc:  # the step's own (synchronous) extension reports exhaustion
+                log.debug("background mask extension failed: %s", getattr(exc, "message", type(exc).__name__))
+            with self._lock:
+                self._pending = 0
+                self._ahead_thread = None
+                if part is not None and not self._closed:
+                    self._parts.append(part)
+                    self.extensions += 1
+                    self.ahead_reservations += 1
+                    part = None
+            if part is not None:  # the session closed meanwhile: burn it
+                part.close()
+
+        t = threading.Thread(target=run, name="pgw-mask-ahead", daemon=True)
+        self._ahead_thread = t
+        t.start()
+
+    def _retire_locked(self) -> None:
+        """Close leading parts (never the last) whose every linear is fully taken; chained parts retire
+        their own exhausted pieces. Called only at the start of a token step (see module docstring)."""
+        parts = self._parts
+        last = len(parts) - 1
+        while self._live < last:
+            p = parts[self._live]
+            keys = getattr(p, "linear_keys", None)
+            if not keys or any(int(p.remaining(k)) > 0 for k in keys):
+                break
+            try:
+                p.close()
+            except Exception:  # pragma: no cover - close() burns; never fail a step for it
+                log.exception("closing an exhausted mask reservation part failed")
+            self._live += 1
+            self.retired += 1
+        p = parts[min(self._live, last)]
+        retire = getattr(p, "retire_exhausted", None)
+        if retire is not None:
+            retire()
 
     def rows_until_boundary(self, lid: LinearId | str) -> int:
         """Rows of ``lid`` left in the current part's current extent."""
@@ -227,6 +310,9 @@ class WindowedReservation:
                 return
             self._closed = True
             parts = list(self._parts)
+            pending = self._ahead_thread
+        if pending is not None:
+            pending.join()  # its result is burned by the thread itself (closed)
         errors: list[BaseException] = []
         for p in parts:
             try:

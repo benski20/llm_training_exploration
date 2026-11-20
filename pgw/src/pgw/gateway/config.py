@@ -220,6 +220,50 @@ class GatewayModelConfig(BaseModel):
         return RingParams.from_name(self.ring)
 
 
+class MaskRingSettings(BaseModel):
+    """In-memory mask ring (``PGW_GATEWAY_MASK_RING__*``; design ``research/plans/mask-ringbuffer-design.md``).
+
+    Off by default. When enabled, masks from an embedded (in-process) factory are handed to the gateway
+    through locked RAM instead of the disk store; the store stays as fallback/overflow tier unless
+    ``ring_only``. Enabling it makes the gateway process non-dumpable and checks swap at start-up.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = Field(False, description="Build per-model RAM rings and the tiered mask source")
+    capacity_bytes: int | None = Field(
+        None, gt=0, description="Locked RAM for all rings (split evenly across masked models unless per_model_bytes). "
+        "Sizing: burst_s x slots/s x slot_bytes, e.g. 10 s x 100 slots/s x 5.56 MB = 5.6 GB for 7B at K32",
+    )
+    per_model_bytes: dict[str, int] = Field(default_factory=dict, description="{model name: bytes} override")
+    segment_slots: int | None = Field(None, gt=0, description="Slots per RAM segment (default: ~8 slabs, 16..256)")
+    prefer: Literal["ring", "store"] = Field("ring", description="Tier reserve() tries first")
+    ring_only: bool = Field(False, description="No disk store at all (needs embed_factory)")
+    ring_only_wait_s: float = Field(
+        2.0, ge=0, description="ring_only: a first reservation waits this long for the factory (never extensions)"
+    )
+    max_session_fraction: float = Field(
+        0.5, gt=0, le=1, description="ring_only: max_context + mask_window_tokens must fit in this fraction of the "
+        "ring's capacity (else start-up fails)",
+    )
+    ring_low_fraction: float = Field(0.5, gt=0, le=1, description="Factory priority threshold")
+    embed_factory: bool = Field(False, description="Run the mask factory in-process (v1)")
+    factory_process: bool = Field(
+        False, description="Run the mask factory as a supervised child filling shared-memory slabs (v2: one sealed "
+        "memfd per slab over a private socketpair; separate process and CPU budget). Excludes embed_factory",
+    )
+    run_dir: Path | None = Field(None, description="Factory state/lock directory in ring_only mode "
+                                 "(default <data_dir>/maskring)")
+    swap_policy: Literal["refuse", "warn"] = Field(
+        "refuse", description="Unencrypted disk swap at start-up: refuse to start, or only warn"
+    )
+    init_on_free_policy: Literal["refuse", "warn"] = Field(
+        "warn", description="factory_process (v2) when the kernel does not zero freed pages (init_on_free=1): "
+        "consumed sealed slabs are dropped unzeroed; refuse to start, or only warn"
+    )
+    allow_unlocked: bool = Field(False, description="DEV ONLY (needs allow_dev_modes): run when mlock/madvise fail")
+
+
 class GatewaySettings(PGWSettings):
     """Gateway configuration."""
 
@@ -353,6 +397,9 @@ class GatewaySettings(PGWSettings):
         None, description="Run the encrypted mask factory as a supervised child process of the gateway with the "
         "PGW_FACTORY_* / PGW_MASKSTORE_* settings in this file (written by the setup wizard)",
     )
+    mask_ring: MaskRingSettings = Field(
+        default_factory=MaskRingSettings, description="In-memory mask ring (off by default; PGW_GATEWAY_MASK_RING__*)",
+    )
     # ---- console single sign-on (OpenID Connect, authorization code flow + PKCE; off unless issuer + client id) --
     console_oidc_issuer: str | None = Field(
         None, description="OIDC issuer URL (https), exactly as the provider's discovery document states it",
@@ -417,7 +464,27 @@ class GatewaySettings(PGWSettings):
             except ConfigError as exc:
                 raise ValueError(exc.message) from exc
         self._check_console_oidc()
+        self._check_mask_ring()
         return self
+
+    def _check_mask_ring(self) -> None:
+        mr = self.mask_ring
+        if not mr.enabled:
+            return
+        if mr.capacity_bytes is None and not mr.per_model_bytes:
+            raise ValueError("mask_ring.enabled needs mask_ring.capacity_bytes (or per_model_bytes)")
+        if mr.embed_factory and self.factory_env_file is not None:
+            raise ValueError("mask_ring.embed_factory and factory_env_file are mutually exclusive "
+                             "(one GPU must never run two factories)")
+        if mr.embed_factory and mr.factory_process:
+            raise ValueError("mask_ring.embed_factory and mask_ring.factory_process are mutually exclusive")
+        if mr.factory_process and self.factory_env_file is not None:
+            raise ValueError("mask_ring.factory_process and factory_env_file are mutually exclusive "
+                             "(one GPU must never run two factories)")
+        if mr.ring_only and not (mr.embed_factory or mr.factory_process):
+            raise ValueError("mask_ring.ring_only needs embed_factory or factory_process (nothing else fills the ring)")
+        if mr.allow_unlocked and not self.allow_dev_modes:
+            raise ValueError("mask_ring.allow_unlocked is a dev-only setting (needs allow_dev_modes)")
 
     @property
     def console_oidc_enabled(self) -> bool:
