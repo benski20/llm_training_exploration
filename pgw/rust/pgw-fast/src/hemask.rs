@@ -112,6 +112,13 @@ fn keystream(key: &[u8; 32], offset: u64, out: &mut [u8]) -> Result<(), String> 
 /// `ctr` draws `2 * missing + 64` bytes of stream `("s", ctr)`, keeps bytes `< 252` and maps them to
 /// `b % 3 - 1`, until `count` values are collected.
 pub fn ternary(seed: &[u8], count: usize) -> Result<Vec<i8>, String> {
+    ternary_rounds(seed, count, |need| 2 * need + 64)
+}
+
+/// [`ternary`] with round `ctr` drawing `draw(missing)` bytes (`>= 1`). Stops at exactly `count`
+/// values, so the output buffer never reallocates (a reallocation would free an unwiped copy of the
+/// secret); Python keeps only the first `count` values, so the result is the same.
+fn ternary_rounds(seed: &[u8], count: usize, draw: impl Fn(usize) -> usize) -> Result<Vec<i8>, String> {
     let sx = expander(seed)?;
     let mut out: Vec<i8> = Vec::with_capacity(count);
     let mut ctr: i64 = 0;
@@ -119,16 +126,17 @@ pub fn ternary(seed: &[u8], count: usize) -> Result<Vec<i8>, String> {
         let need = count - out.len();
         let key = sx.key(&[Label::from("s"), Label::Int(ctr)]).map_err(|e| e.to_string())?;
         ctr += 1;
-        let mut raw = Zeroizing::new(vec![0u8; 2 * need + 64]);
+        let mut raw = Zeroizing::new(vec![0u8; draw(need).max(1)]);
         keystream(&key, 0, &mut raw)?;
         for &b in raw.iter() {
             if b < 252 {
                 out.push((b % 3) as i8 - 1);
+                if out.len() == count {
+                    break;
+                }
             }
         }
     }
-    out[count..].zeroize();
-    out.truncate(count);
     Ok(out)
 }
 
@@ -348,6 +356,7 @@ pub fn check_rows(
             }
             *flag = u8::from(l.iter().zip(&rr).any(|(&x, &y)| (x & mask) != (y & mask)));
         }
+        l.zeroize();
         rr.zeroize();
     };
     if threads <= 1 {
@@ -373,6 +382,24 @@ pub fn check_rows(
 fn he_ternary<'py>(py: Python<'py>, seed: &Bound<'py, PyAny>, count: usize) -> PyResult<Bound<'py, PyArray1<i8>>> {
     let seed = secret_bytes(seed)?;
     let mut v = py.allow_threads(|| ternary(&seed, count)).map_err(verr)?;
+    let arr = PyArray1::<i8>::from_slice(py, &v);
+    v.zeroize();
+    Ok(arr)
+}
+
+/// Test hook: [`he_ternary`] with every rejection round drawing a fixed ``draw`` bytes, so the
+/// later rounds (stream labels ``("s", 1)``, ``("s", 2)``, ...) are exercised; the production draw
+/// (``2 * missing + 64``) almost never needs a second round.
+#[pyfunction]
+#[pyo3(name = "_he_ternary_fixed_draw", signature = (seed, count, draw))]
+fn he_ternary_fixed_draw<'py>(
+    py: Python<'py>,
+    seed: &Bound<'py, PyAny>,
+    count: usize,
+    draw: usize,
+) -> PyResult<Bound<'py, PyArray1<i8>>> {
+    let seed = secret_bytes(seed)?;
+    let mut v = py.allow_threads(|| ternary_rounds(&seed, count, |_| draw)).map_err(verr)?;
     let arr = PyArray1::<i8>::from_slice(py, &v);
     v.zeroize();
     Ok(arr)
@@ -652,6 +679,7 @@ fn he_check_rows<'py>(
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(he_ternary, m)?)?;
+    m.add_function(wrap_pyfunction!(he_ternary_fixed_draw, m)?)?;
     m.add_function(wrap_pyfunction!(he_secret_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(he_cbd, m)?)?;
     m.add_function(wrap_pyfunction!(he_encrypt_combine, m)?)?;
@@ -684,6 +712,19 @@ mod tests {
         for v in [-1, 0, 1] {
             assert!((cnt(v) - 1.0 / 3.0).abs() < 0.02);
         }
+    }
+
+    #[test]
+    fn ternary_never_reallocates_and_short_draws_continue() {
+        let seed: Vec<u8> = (0u8..32).collect();
+        let a = ternary(&seed, 5000).unwrap();
+        assert_eq!((a.len(), a.capacity()), (5000, 5000));
+        // Round 0 of a short draw is a prefix of round 0 of the full draw (same stream).
+        let short = ternary_rounds(&seed, 5000, |_| 100).unwrap();
+        let first = short.iter().zip(&a).take_while(|(x, y)| x == y).count();
+        assert!((90..=100).contains(&first), "{first}");
+        assert_eq!(short.len(), 5000);
+        assert_ne!(short, a);
     }
 
     #[test]

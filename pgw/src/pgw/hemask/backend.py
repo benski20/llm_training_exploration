@@ -50,6 +50,12 @@ _HINT_VERSION = 2  # v2: int8 byte planes 1..(q/8 - 1) of H mod 2^q (byte 0 is n
 _BUILD_COLS = 512  # hint columns per GEMM block (bounds temporary memory)
 _DEC_BLOCK_BYTES = 128 << 20  # int32 GEMM output per hint-row block of the native decryption
 
+# torch.from_numpy warns on the read-only memory-mapped hints; torch only reads them. Filtered once
+# here (only for this module's calls) instead of per call: warnings.catch_warnings() swaps the
+# process-wide filters, which is not thread-safe while the request threads run.
+warnings.filterwarnings("ignore", message="The given NumPy array is not writable", category=UserWarning,
+                        module=__name__)
+
 
 class HintStore:
     """One-time hints ``W8 A`` for a model pack, keyed by ``(fingerprint, rank)``.
@@ -188,15 +194,18 @@ class HEMaskBackend:
         ring: Mask ring.
         hints: :class:`HintStore` of this pack.
         remote: ``remote(linear, b) -> y`` computing ``W8 b mod 2^64`` on the provider (e.g.
-            :class:`pgw.hemask.client.RemoteMulmod64`). Called from up to ``max_inflight`` threads at once.
+            :class:`pgw.hemask.client.RemoteMulmod64`). Called from up to ``max_inflight`` threads at
+            once, so it must be thread-safe.
         groups_per_call: 256-slot groups sent per request (fewer round trips, larger messages).
-        max_inflight: Requests in flight at once (1-4): while the provider works on some, the next
-            groups are encrypted; on a high-latency link several requests keep it busy.
+        max_inflight: Requests with the provider at once (1-4). Encryption of the next request always
+            overlaps the ones in flight: with 1, request ``k`` is remote while ``k + 1`` is encrypted
+            (the pre-E6 behaviour); with more, several requests keep a high-latency link busy.
         groups_per_pass: Most groups (of one ``matmul`` call, possibly from several replies) decrypted
-            in one pass over the linear's hint (1-16): the hint (``m x dim`` byte planes, usually
-            memory-mapped) is streamed once per pass, so larger passes read it less often.
+            in one pass over the linear's hint (1-16, a hard cap: a reply is split across passes when
+            needed). The hint (``m x dim`` byte planes, usually memory-mapped) is streamed once per
+            pass, so larger passes read it less often.
         pass_bytes: Memory budget of one decryption pass's replies (caps ``groups_per_pass`` for very
-            wide linears).
+            wide linears; hard, except that a pass holds at least one group).
     """
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
@@ -275,15 +284,20 @@ class HEMaskBackend:
             corr = big_planes_mm_small(hint, smat, first_byte=1)
         finally:
             smat.fill(0)
-        half = np.uint64(1 << (self.params.delta_bits - 1))
-        c0 = 0
-        for y, cts, s0 in items:
-            v = y - corr[:, c0:c0 + y.shape[1]]
-            wr = ((v + half) >> np.uint64(self.params.delta_bits)) & np.uint64(self.ring.mask)
-            rows = sum(ct.rows for ct in cts)
-            out[s0:s0 + rows] = np.concatenate([wr[:, gi * DEGREE:gi * DEGREE + ct.rows]
-                                                for gi, ct in enumerate(cts)], axis=1).T
-            c0 += y.shape[1]
+        try:
+            half = np.uint64(1 << (self.params.delta_bits - 1))
+            c0 = 0
+            for y, cts, s0 in items:
+                v = y - corr[:, c0:c0 + y.shape[1]]
+                wr = ((v + half) >> np.uint64(self.params.delta_bits)) & np.uint64(self.ring.mask)
+                v.fill(0)
+                rows = sum(ct.rows for ct in cts)
+                out[s0:s0 + rows] = np.concatenate([wr[:, gi * DEGREE:gi * DEGREE + ct.rows]
+                                                    for gi, ct in enumerate(cts)], axis=1).T
+                wr.fill(0)
+                c0 += y.shape[1]
+        finally:
+            corr.fill(0)  # H S: with y it gives W8 r
 
     def _decrypt_native(self, nat: Any, hint: np.ndarray, smat: np.ndarray,
                         items: list[tuple[np.ndarray, list[MaskCiphertext], int]], out: np.ndarray) -> None:
@@ -304,16 +318,20 @@ class HEMaskBackend:
             maps.append((np.ascontiguousarray(y, dtype=np.uint64), c0, slots))
             c0 += y.shape[1]
         block = max(16, min(2048, _DEC_BLOCK_BYTES // (npl * cols * 4)))
-        for r0 in range(0, m, block):
-            blk = np.ascontiguousarray(hint[r0:r0 + block])
-            nb = blk.shape[0]
-            with warnings.catch_warnings():  # read-only memory-mapped hints: torch only reads them
-                warnings.simplefilter("ignore", UserWarning)
-                lhs = torch.from_numpy(blk.reshape(nb * npl, dim))
-            part = torch._int_mm(lhs, rhs).numpy().reshape(nb, npl, cols)
-            for y, pc0, slots in maps:
-                nat.he_decrypt_combine(part, offset, 1, pc0, y, r0, slots, self.params.delta_bits,
-                                       self.ring.k, out)
+        try:
+            for r0 in range(0, m, block):
+                blk = np.ascontiguousarray(hint[r0:r0 + block])
+                nb = blk.shape[0]
+                lhs = torch.from_numpy(blk.reshape(nb * npl, dim))  # read-only hint: warning filtered above
+                part = torch._int_mm(lhs, rhs).numpy().reshape(nb, npl, cols)
+                try:
+                    for y, pc0, slots in maps:
+                        nat.he_decrypt_combine(part, offset, 1, pc0, y, r0, slots, self.params.delta_bits,
+                                               self.ring.k, out)
+                finally:
+                    part.fill(0)  # partial H S (the decryption correction)
+        finally:
+            offset.fill(0)  # 128 * column sums of S
 
     def _pass_groups(self, m: int) -> int:
         """Groups per decryption pass: ``groups_per_pass`` within ``pass_bytes`` of replies (>= 1)."""
@@ -322,8 +340,8 @@ class HEMaskBackend:
     def matmul(self, linear: str, r: torch.Tensor) -> torch.Tensor:
         """``(rows, n)`` masks -> ``(rows, m)`` ``W8 r mod 2^K`` (int64 CPU tensor).
 
-        Pipelined: up to ``max_inflight`` requests are with the provider while the next groups are
-        encrypted; replies are decrypted in passes of up to ``groups_per_pass`` groups (one hint read
+        Pipelined: up to ``max_inflight`` requests are with the provider while the next group batch is
+        encrypted; replies are decrypted in passes of at most ``groups_per_pass`` groups (one hint read
         per pass). Int8 GEMMs and native kernels release the GIL.
         """
         spec = self.specs[linear]
@@ -338,29 +356,41 @@ class HEMaskBackend:
         pass_groups = self._pass_groups(m)
         t_wall = time.perf_counter()
         inflight: deque[tuple[int, list[MaskCiphertext], Future[np.ndarray], float]] = deque()
-        ready: list[tuple[np.ndarray, list[MaskCiphertext], int]] = []
+        ready: deque[tuple[np.ndarray, list[MaskCiphertext], int]] = deque()
 
         def collect() -> None:
             s0, cts, fut, t_sent = inflight[0]
             y = fut.result()
+            self._check_reply(linear, y, cts, m)  # on failure the finally below still wipes cts
             inflight.popleft()
             ready.append((y, cts, s0))  # wiped by flush() or the finally below
             self.stats["remote_s"] += time.perf_counter() - t_sent
-            self._check_reply(linear, y, cts, m)
 
         def ready_groups() -> int:
             return sum(len(cts) for _, cts, _ in ready)
 
         def flush() -> None:
+            """Decrypt the oldest ``pass_groups`` ready groups (fewer at the end), splitting a reply
+            across passes when it does not fit."""
             t1 = time.perf_counter()
-            groups = ready_groups()
+            take: list[tuple[np.ndarray, list[MaskCiphertext], int]] = []
+            groups = 0
+            while ready and groups < pass_groups:
+                y, cts, s0 = ready[0]
+                k = min(len(cts), pass_groups - groups)
+                if k == len(cts):
+                    take.append(ready.popleft())
+                else:
+                    head_rows = sum(ct.rows for ct in cts[:k])
+                    take.append((y[:, :k * DEGREE], cts[:k], s0))
+                    ready[0] = (y[:, k * DEGREE:], cts[k:], s0 + head_rows)
+                groups += k
             try:
-                self._decrypt_into(linear, ready, out, m)
+                self._decrypt_into(linear, take, out, m)
             finally:
-                for _, cts, _ in ready:
+                for _, cts, _ in take:
                     for ct in cts:
                         ct.wipe()
-                ready.clear()
             self.stats["decrypt_s"] += time.perf_counter() - t1
             self.stats["groups"] += groups
             self.stats["passes"] += 1
@@ -368,23 +398,28 @@ class HEMaskBackend:
         try:
             for s0, s1 in batches:
                 t0 = time.perf_counter()
-                cts = self._encrypt(rn[s0:s1], n)
+                cts = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
                 b = np.concatenate([ct.b for ct in cts], axis=1)
                 for ct in cts:
                     ct.b = _NO_B  # the request owns the ciphertext now
                 self.stats["encrypt_s"] += time.perf_counter() - t0
+                if len(inflight) >= self.max_inflight:  # wait for the oldest before sending more
+                    try:
+                        collect()
+                    except BaseException:
+                        for ct in cts:
+                            ct.wipe()
+                        raise
                 inflight.append((s0, cts, self._pool.submit(self.remote, linear, b), time.perf_counter()))
                 del b
                 self.stats["max_inflight"] = max(self.stats["max_inflight"], len(inflight))
-                while len(inflight) >= self.max_inflight:  # wait for the oldest; decrypt full passes
-                    collect()
-                    if ready_groups() >= pass_groups:
-                        flush()
+                while ready_groups() >= pass_groups:  # decrypt full passes while the provider works
+                    flush()
             while inflight:
                 collect()
-                if ready_groups() >= pass_groups:
+                while ready_groups() >= pass_groups:
                     flush()
-            if ready:
+            while ready:
                 flush()
         finally:
             for _, cts, fut, _ in inflight:

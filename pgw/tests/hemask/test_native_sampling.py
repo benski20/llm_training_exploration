@@ -175,6 +175,26 @@ def test_native_ternary_matches_python(count: int) -> None:
 
 
 @needs_native
+@pytest.mark.parametrize("draw", [1, 7, 64, 300])
+@pytest.mark.parametrize("count", [300, 1000])
+def test_native_ternary_later_rounds_match_python(draw: int, count: int) -> None:
+    """Rounds ``ctr >= 1`` (stream labels ``("s", 1)``, ...) with a forced short draw per round."""
+    if not hasattr(native.fast, "_he_ternary_fixed_draw"):
+        pytest.skip("pgw_fast without the ternary test hook")
+    seed = bytes(range(9, 41))
+    sx = SeedExpander(seed)
+    ref = np.empty(0, dtype=np.int64)
+    ctr = 0
+    while ref.size < count:
+        raw = np.frombuffer(sx.random_bytes(draw, "s", ctr), dtype=np.uint8)
+        ctr += 1
+        ref = np.concatenate([ref, raw[raw < 252].astype(np.int64) % 3 - 1])
+    assert ctr > 1  # several rounds really ran
+    got = native.fast._he_ternary_fixed_draw(seed, count, draw)
+    assert got.dtype == np.int8 and np.array_equal(got.astype(np.int64), ref[:count])
+
+
+@needs_native
 @pytest.mark.parametrize("rank", [8, 16])
 def test_native_secret_matrix_matches_python(rank: int) -> None:
     seed = bytes(range(3, 35))
@@ -237,7 +257,7 @@ def test_encrypt_bit_identical_to_old_code(engine_name: str, use_native: bool, q
         planes8 = to_planes(a)
         for kw in ({"a_planes": planes8}, {"a_planes": np.ascontiguousarray(planes8[:, :a_plane_count(params)])},
                    {}):
-            ct = encrypt_masks(r, None if kw else a, params, seed=seed, **kw)
+            ct = encrypt_masks(r, None if kw else a, params, _seed=seed, **kw)
             assert np.array_equal(ct.b, ref_b), (engine_name, use_native, list(kw))
             assert np.array_equal(ct.secret, ref_s)
             assert ct.rows == rows
@@ -305,11 +325,62 @@ def test_backend_matmul_exact_for_every_schedule(engine_name: str, use_native: b
     if inflight > 1:
         assert provider.peak > 1 and be.stats["max_inflight"] == min(inflight, -(-6 // gpc))
     requests = -(-6 // gpc) + 1
-    if per_pass >= 6:  # every group of a call decrypted in one hint pass
-        assert be.stats["passes"] == 2
-    elif per_pass <= gpc:  # every reply fills a pass
-        assert be.stats["passes"] == requests
+    assert be.stats["passes"] == -(-6 // per_pass) + 1  # full passes of exactly per_pass groups, then the rest
     assert provider.calls == requests
+
+
+@pytest.mark.parametrize(("gpc", "per_pass"), [(12, 16), (5, 3), (16, 16)])
+def test_backend_pass_size_is_a_hard_cap(use_native: bool, gpc: int, per_pass: int) -> None:
+    """Replies are split across passes: no pass holds more than ``groups_per_pass`` groups."""
+    rng = np.random.default_rng(gpc * per_pass)
+    weights = {"x": rng.integers(-127, 128, size=(8, 16)).astype(np.int8)}
+    be = HEMaskBackend(_Pack(weights), _ring_for(56), _Hints(weights, 56), _Provider(weights, 56),
+                       groups_per_call=gpc, max_inflight=2, groups_per_pass=per_pass)
+    sizes: list[int] = []
+    orig = be._decrypt_into
+
+    def spy(linear: str, items: Any, out: np.ndarray, m: int) -> None:
+        sizes.append(sum(len(cts) for _, cts, _ in items))
+        orig(linear, items, out, m)
+
+    be._decrypt_into = spy  # type: ignore[method-assign]
+    r = rng.integers(0, 1 << 32, size=(30 * DEGREE - 5, 16), dtype=np.int64)
+    got = be.matmul("x", torch.from_numpy(r))
+    assert np.array_equal(got.numpy(), _ref_wr(weights["x"].astype(np.int64), r, 32))
+    assert sum(sizes) == 30 and max(sizes) <= per_pass
+    assert sizes == [per_pass] * (30 // per_pass) + ([30 % per_pass] if 30 % per_pass else [])
+
+
+def test_backend_one_inflight_still_overlaps_encryption() -> None:
+    """``max_inflight=1``: batch ``k + 1`` is encrypted while request ``k`` is with the provider."""
+    weights = {"x": np.ones((8, 16), dtype=np.int8)}
+    encrypted = threading.Semaphore(0)
+    overlapped: list[bool] = []
+    inner = _Provider(weights, 56)
+
+    def provider(linear: str, b: np.ndarray) -> np.ndarray:
+        overlapped.append(encrypted.acquire(timeout=5.0))  # the next batch is encrypted meanwhile
+        return inner(linear, b)
+
+    be = HEMaskBackend(_Pack(weights), _ring_for(56), _Hints(weights, 56), provider, groups_per_call=1,
+                       max_inflight=1)
+    orig = be._encrypt
+    calls = [0]
+
+    def spy(rn: np.ndarray, n: int) -> Any:
+        cts = orig(rn, n)
+        calls[0] += 1
+        if calls[0] > 1:
+            encrypted.release()
+        if calls[0] == 4:  # the last request has no next batch to wait for
+            encrypted.release()
+        return cts
+
+    be._encrypt = spy  # type: ignore[method-assign]
+    r = np.random.default_rng(1).integers(0, 1 << 32, size=(4 * DEGREE, 16), dtype=np.int64)
+    got = be.matmul("x", torch.from_numpy(r))
+    assert np.array_equal(got.numpy(), _ref_wr(weights["x"].astype(np.int64), r, 32))
+    assert overlapped[:3] == [True, True, True] and inner.peak == 1
 
 
 def test_backend_pass_budget_caps_groups() -> None:

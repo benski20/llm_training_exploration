@@ -310,7 +310,7 @@ _ENC_BLOCK_BYTES = 32 << 20
 
 
 def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
-                  a_planes: np.ndarray | None = None, seed: bytes | None = None) -> MaskCiphertext:
+                  a_planes: np.ndarray | None = None, _seed: bytes | None = None) -> MaskCiphertext:
     """Encrypt the masks of up to 256 slots of one linear.
 
     Args:
@@ -320,8 +320,10 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
         a_planes: The same rows as int8 byte planes (``n x P x dim``, :func:`pgw.hemask.fastmm.to_planes`,
             bytes ``0 .. P-1``); used instead of ``a`` (faster: int8 GEMM, no per-call conversion).
             ``P = 8``, or ``P = a_plane_count(params)`` (7 at ``q = 2^56``: same ciphertexts).
-        seed: Randomness of the secret and the noise. Default (always in production): a fresh
-            ``os.urandom`` seed, never stored. Passing one is for reproducibility tests only.
+        _seed: Test hook only (private on purpose): fixes the randomness of the secret and the noise
+            for reproducibility tests. A fixed seed reuses the MLWE secret and noise across calls,
+            which exposes the masks; production always takes the default, a fresh ``os.urandom``
+            seed per call that is never stored.
     """
     rows, n = r.shape
     if rows > DEGREE:
@@ -333,8 +335,7 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
         want = (n, npl if npl in (8, a_plane_count(params)) else 8, params.dim)
     if shape != want:
         raise ConfigError(f"public matrix shape {shape} != {want}")
-    if seed is None:
-        seed = new_seed()  # fresh secret and noise from the OS CSPRNG; never stored
+    seed = new_seed() if _seed is None else _seed  # fresh secret and noise from the OS CSPRNG; never stored
     smat = sample_secret(seed, params.rank)
     if a_planes is not None:
         from pgw.hemask.fastmm import engine
@@ -354,6 +355,7 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
         assert a is not None
         pad = matmul_mod64(smat, a, small_left=False)
     b = (pad + e.astype(_U64) + (msg << _U64(params.delta_bits))) & params.q_mask
+    pad.fill(0)  # A s is as secret as the masks (b - A s = e + Delta r)
     e.fill(0)
     msg.fill(0)
     return MaskCiphertext(b=b, secret=smat, rows=rows)
@@ -372,13 +374,18 @@ def _encrypt_native(nat: Any, r: np.ndarray, a_planes: np.ndarray, smat: np.ndar
     offset = (128 * smat.sum(0, dtype=np.int64)).astype(np.int32)
     b = np.empty((n, DEGREE), dtype=_U64)
     block = max(1, _ENC_BLOCK_BYTES // (npl * DEGREE * 4))
-    for r0 in range(0, n, block):
-        blk = planes[r0:r0 + block]
-        nb = blk.shape[0]
-        part = torch._int_mm(torch.from_numpy(blk.reshape(nb * npl, dim)), rhs).numpy()
-        nat.he_encrypt_combine(part.reshape(nb, npl, DEGREE), offset, 0, seed, params.eta, r64, r0,
-                               params.delta_bits, params.q, b)
-        part.fill(0)  # A s is as secret as the masks (b - A s = e + Delta r)
+    try:
+        for r0 in range(0, n, block):
+            blk = planes[r0:r0 + block]
+            nb = blk.shape[0]
+            part = torch._int_mm(torch.from_numpy(blk.reshape(nb * npl, dim)), rhs).numpy()
+            try:
+                nat.he_encrypt_combine(part.reshape(nb, npl, DEGREE), offset, 0, seed, params.eta, r64, r0,
+                                       params.delta_bits, params.q, b)
+            finally:
+                part.fill(0)  # A s is as secret as the masks (b - A s = e + Delta r)
+    finally:
+        offset.fill(0)  # 128 * column sums of S
     return b
 
 
@@ -399,9 +406,12 @@ def decrypt_wr(y: np.ndarray, hint: np.ndarray, ct: MaskCiphertext, params: HEPa
         else:
             corr = matmul_mod64(ct.secret, np.asarray(hint, dtype=_U64), small_left=False)
         v = (np.asarray(y, dtype=_U64) - corr) & params.q_mask
+        corr.fill(0)  # H s: with y it gives W8 r
         half = _U64(1 << (params.delta_bits - 1))
         m = ((v + half) >> _U64(params.delta_bits)) & _U64((1 << params.k) - 1)
+        v.fill(0)
         out: np.ndarray = m[:, : ct.rows].T.astype(np.int64)
+        m.fill(0)
         return out
     finally:
         ct.wipe()
