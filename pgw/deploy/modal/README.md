@@ -80,8 +80,10 @@ took 321 s: every token makes about 100 sequential round trips, so the two parti
 worker, one for its network loop); without it the provider runs the exact CPU int8 backend on 4 cores.
 The GPU is fixed when the app is deployed (`launch.py` passes it to `modal deploy` as `PGW_MODAL_GPU`,
 which also sets the default of `--gpu`), so `--no-deploy` uses whatever was deployed last; the live
-details (`--show`) name the GPU the provider actually got. Results are bit-identical on every backend.
-`PGW_MODAL_PROVIDER_CPUS` at deploy time overrides the provider's core count.
+details (`--show`) name the GPU and core count the provider actually got, and the printed cost estimate
+uses those. Results are bit-identical on every backend. `--gpu` and `PGW_MODAL_GPU` are
+case-insensitive and checked the same way before anything is deployed (one GPU only: no `T4:2`; never
+L4). `PGW_MODAL_PROVIDER_CPUS` at deploy time overrides the provider's core count.
 
 | GPU | list price (provider, with 2 cores) | when |
 |---|---|---|
@@ -108,9 +110,12 @@ second whatever the provider runs.
 containers join Modal's private IPv6 network and the enrollment code points the gateway at the
 provider's i6pn address (TLS still end to end; the provider's certificate names that address). It is
 **off by default**: on 2026-11-20 Modal did not schedule an i6pn CPU container in `us-east` for 25
-minutes. The launcher therefore waits at most `--i6pn-schedule-timeout-min` minutes (default 6) for both
-functions to start (each writes a `*_boot` marker to the Dict as its first action); if one has not
-started, it cancels the pair and relaunches it on the tunnel, and says so. Both networks carry the
+minutes. The launcher therefore waits at most `--i6pn-schedule-timeout-min` minutes for both functions
+to start (each writes a `*_boot` marker to the Dict as its first action); if one has not started, it
+cancels the pair and relaunches it on the tunnel, and says so. The window ends at that marker, so it
+also covers the image pull and container cold start, not only Modal's scheduling: the default is 6
+minutes without a GPU and 10 with one (larger CUDA image, scarcer machines); raise it if a GPU pair
+falls back although Modal did schedule it. Both networks carry the
 same masked bytes; the provider learns nothing new from either.
 
 The i6pn round-trip time has not been measured yet (*estimate*: 0.1-1 ms). Per the chat-speed plan's
@@ -135,7 +140,10 @@ loopback inside the customer container, as deltas over each chat:
 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5 and 10 ms, so a limit on a bucket bound such as 1 ms is decided from the
 counts without interpolation. Exit codes: 0 = exact and within the limit; 1 = the masked answer was not
 bit-identical (never retried); 2 = still above the limit after the last try, or nothing measured. A
-1 ms limit can pass only on i6pn (the tunnel alone adds about 5 ms); the launcher prints that hint.
+1 ms limit can pass only on i6pn (the tunnel alone adds about 5 ms): for a limit below 3 ms the launcher
+does not relaunch a tunnel pair unless `--i6pn` was asked (each relaunch is a full paid run), and says
+why. The window counts every trip of the warm chat, all linear kinds and prefill trips included; the
+`rows_1_*` split covers single-row (decode) trips only.
 The measurement is local to the gateway: nothing new reaches the provider.
 
 ## Exact local linears (E2): placeholder

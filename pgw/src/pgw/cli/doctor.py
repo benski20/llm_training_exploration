@@ -499,6 +499,8 @@ def _measure_read_rate(directory: Path, nbytes: int, block: int = MASKSTORE_PROB
 def _check_maskstore_read_rate(root: Path, bytes_per_slot: int | None, expected_tps: float | None,
                                probe_bytes: int = MASKSTORE_PROBE_BYTES) -> tuple[Status, str, dict[str, Any]]:
     """Read throughput of the mask-store volume against the mask bytes the expected load reads."""
+    if not Path(root).is_dir():  # the ``maskstore`` check already reports it; no probe to write
+        return "skip", f"store root missing ({root}); read rate not measured", {}
     free = shutil.disk_usage(root).free
     if free < 2 * probe_bytes + MIN_FREE_DISK_BYTES:
         return "warn", (f"not enough free space at {root} for a {probe_bytes / 2**20:.0f} MiB read probe; "

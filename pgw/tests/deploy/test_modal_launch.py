@@ -77,7 +77,51 @@ def test_args_gate_needs_e2e_and_gpu_choices(monkeypatch: pytest.MonkeyPatch) ->
     assert a.gpu == "T4" and a.i6pn is True
 
 
-def test_cost_per_gpu_tier() -> None:
+@pytest.mark.parametrize("env", ["a10g", "T4:2", "L4", "l4", "B200"])
+def test_gpu_env_default_is_normalized_and_validated(monkeypatch: pytest.MonkeyPatch, env: str) -> None:
+    """argparse never checks a default against ``choices``: PGW_MODAL_GPU goes through the same check."""
+    monkeypatch.setenv("PGW_MODAL_GPU", env)
+    if env == "a10g":
+        assert launch.parse_args([]).gpu == "A10G"
+        return
+    with pytest.raises(SystemExit):
+        launch.parse_args([])
+
+
+def test_normalize_gpu_and_device_tier() -> None:
+    assert launch.normalize_gpu(None) is None and launch.normalize_gpu(" none ") is None
+    assert launch.normalize_gpu("l40s") == "L40S" and launch.normalize_gpu("h100") == "H100"
+    for bad in ("L4", "T4:2", "A100"):
+        with pytest.raises(ValueError):
+            launch.normalize_gpu(bad)
+    assert launch.gpu_tier_of_device("none") is None
+    assert launch.gpu_tier_of_device("Tesla T4") == "T4"
+    assert launch.gpu_tier_of_device("NVIDIA A10G") == "A10G"
+    assert launch.gpu_tier_of_device("NVIDIA L40S") == "L40S"
+    assert launch.gpu_tier_of_device("NVIDIA H100 80GB HBM3") == "H100"
+    with pytest.raises(KeyError):
+        launch.gpu_tier_of_device("NVIDIA L4")
+
+
+def test_i6pn_schedule_timeout_default_is_longer_with_a_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_GPU", raising=False)
+    assert launch.parse_args([]).i6pn_schedule_timeout_min == 6.0
+    assert launch.parse_args(["--gpu", "T4"]).i6pn_schedule_timeout_min == 10.0
+    assert launch.parse_args(["--gpu", "T4", "--i6pn-schedule-timeout-min", "3"]).i6pn_schedule_timeout_min == 3.0
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--i6pn-schedule-timeout-min", "0"])
+
+
+def test_cost_follows_the_provider_core_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PGW_MODAL_PROVIDER_CPUS", "8")
+    assert launch.cost_per_h("T4")["pgw-provider"] == pytest.approx(0.59 + 8 * 0.0473 + 6 * 0.008)
+    assert launch.cost_per_h(None)["pgw-provider"] == pytest.approx(8 * 0.0473 + 6 * 0.008)
+    # the cores the provider reports (what is deployed) win over the local environment
+    assert launch.cost_per_h("A10G", 2.0)["pgw-provider"] == pytest.approx(1.10 + 2 * 0.0473 + 6 * 0.008)
+
+
+def test_cost_per_gpu_tier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_PROVIDER_CPUS", raising=False)
     cpu = launch.cost_per_h(None)
     assert cpu["pgw-provider"] == pytest.approx(4 * 0.0473 + 6 * 0.008)
     assert launch.cost_per_h("T4")["pgw-provider"] == pytest.approx(0.59 + 2 * 0.0473 + 6 * 0.008)
@@ -234,9 +278,19 @@ def test_run_e2e_relaunches_until_the_gate_passes(monkeypatch: pytest.MonkeyPatc
 
 def test_run_e2e_gives_up_after_tries(monkeypatch: pytest.MonkeyPatch) -> None:
     slow = _res(True, [5.0, 10.0], 6.8)
-    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "1"])
+    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "1", "--i6pn"])
     assert code == 2 and len(pairs) == 3
-    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "1", "--tries", "1"])
+    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "1", "--i6pn", "--tries", "1"])
+    assert code == 2 and len(pairs) == 1
+    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "20"])  # tunnel, reachable limit
+    assert code == 0 and len(pairs) == 1
+    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "5"])  # tunnel, above the bucket
+    assert code == 2 and len(pairs) == 3
+
+
+def test_run_e2e_does_not_relaunch_tunnel_pairs_below_the_tunnel_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    slow = _res(True, [5.0, 10.0], 6.8)
+    code, pairs = _run_e2e(monkeypatch, [slow] * 5, ["--max-trip-ms", "1"])  # tunnel only: no chance
     assert code == 2 and len(pairs) == 1
 
 

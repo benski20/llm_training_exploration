@@ -123,6 +123,11 @@ def test_gate_open_ended_bucket_and_no_data() -> None:
     assert tg.gate(lat, 5000.0)[0] is False  # unbounded median never passes
     assert tg.gate({"trips": 0}, 1.0) == (None, "no round trips measured")
     assert tg.gate(None, 1.0)[0] is None
+    # a count without buckets (not producible by the real exposition): unmeasured, not a failed gate
+    assert tg.gate({"trips": 3, "p50_ms": None}, 1.0)[0] is None
+    nob = tg.trip_latency("pgw_gateway_round_trip_seconds_count 0\n",
+                          "pgw_gateway_round_trip_seconds_count 4\npgw_gateway_round_trip_seconds_sum 0.01\n")
+    assert nob["trips"] == 4 and "p50_bucket_ms" not in nob and tg.gate(nob, 1.0)[0] is None
     assert tg.trip_latency("", h_text)["trips"] == 0  # a failed scrape is never a cumulative "delta"
 
 

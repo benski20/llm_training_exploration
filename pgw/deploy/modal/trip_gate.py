@@ -164,13 +164,17 @@ def trip_latency(metrics_before: str, metrics_after: str, timing_before: dict[st
 def gate(latency: dict[str, Any] | None, max_trip_ms: float) -> tuple[bool | None, str]:
     """``(passed, reason)`` for "median client-reported trip ≤ ``max_trip_ms``".
 
-    ``passed`` is ``None`` when there is no measurement (no trips). The decision uses the bucket that
+    ``passed`` is ``None`` when there is no measurement (no trips, or trips without a median bucket, e.g.
+    a histogram with a count but no buckets: a relaunch would not measure it either). The decision uses
+    the bucket that
     holds the median: entirely at or below the limit passes, entirely above fails; only when the limit
     falls strictly inside that bucket is the interpolated ``p50_ms`` compared (never for a limit on a
     bucket bound, e.g. 1 ms)."""
     if not latency or not latency.get("trips"):
         return None, "no round trips measured"
-    lo, hi = (latency.get("p50_bucket_ms") or [None, None])
+    if not latency.get("p50_bucket_ms"):
+        return None, f"{latency['trips']} round trips but no histogram buckets to place the median"
+    lo, hi = latency["p50_bucket_ms"]
     p50 = latency.get("p50_ms")
     shown = f"p50 {p50} ms (bucket {lo}-{hi} ms) over {latency['trips']} trips"
     if hi is not None and hi <= max_trip_ms:

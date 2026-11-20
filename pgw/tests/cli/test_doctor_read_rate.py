@@ -100,6 +100,15 @@ def test_unwritable_store_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert st == "warn" and "PermissionError" in detail
 
 
+def test_missing_store_root_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(*a: Any, **k: Any) -> dict[str, Any]:
+        raise AssertionError("no probe without a store root")
+
+    monkeypatch.setattr(doctor, "_measure_read_rate", never)
+    st, detail, _ = _check_maskstore_read_rate(tmp_path / "absent", None, None, 1 << 20)
+    assert st == "skip" and "store root missing" in detail
+
+
 def test_run_doctor_runs_it_with_the_store_and_can_skip_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_rate(monkeypatch, 2000.0)
     monkeypatch.setattr(doctor, "_check_maskstore", lambda root, key: ("ok", "stub", {}))

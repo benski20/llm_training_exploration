@@ -185,7 +185,8 @@ Measure the store's volume with the doctor:
 Its `maskstore.read_rate` check writes a 64 MiB probe file next to the store, drops it from the page
 cache, reads it back in 1 MiB blocks in shuffled order and reports MB/s and the tokens per second that
 rate feeds at the pack's mask bytes per slot. It fails below the expected load, warns within 20% of
-it, and without `--expected-tps` warns below 250 MB/s (one chat-speed 7B stream). On the 4-vCPU
+it, and without `--expected-tps` warns below 250 MB/s (one chat-speed 7B stream); it is skipped when the
+store root does not exist (the `maskstore` check reports that). On the 4-vCPU
 development container (virtual disk) it read 0.9-1.2 GB/s, about 160-210 tokens/s of 7B masks (*measured*,
 three runs).
 

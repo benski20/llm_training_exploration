@@ -20,12 +20,15 @@ cannot print it again (start a new pair if it is lost).
 Network: by default the gateway reaches the provider through the provider's public TCP tunnel. With
 ``--i6pn`` (or ``PGW_MODAL_I6PN=1``) both parties run on Modal's private IPv6 network instead; if Modal
 has not scheduled both containers within ``--i6pn-schedule-timeout-min`` minutes, the launcher cancels
-the pair and relaunches it on the tunnel.
+the pair and relaunches it on the tunnel. The window runs until each function writes its ``*_boot``
+marker, so it covers image pull and container cold start as well as Modal's scheduling; the default is
+therefore longer with a GPU (larger CUDA image, scarcer machines).
 
 Latency gate (``--e2e`` only): ``--max-trip-ms X`` reads the gateway's client-reported round-trip
 latency over the warm chat (median, from its ``/metrics`` histogram; see ``trip_gate.py``) and, if it is
 above ``X``, stops the pair and launches a fresh one, at most ``--tries`` pairs in all (default 3). A
-pair whose masked answer is not bit-identical to the reference is never retried.
+pair whose masked answer is not bit-identical to the reference is never retried, and a tunnel pair is
+not relaunched for a limit below :data:`TUNNEL_FLOOR_MS` (the tunnel alone adds about 5 ms per trip).
 """
 
 from __future__ import annotations
@@ -59,12 +62,52 @@ FUNCTIONS = {False: ("serve", "gateway"), True: ("serve_i6pn", "gateway_i6pn")}
 # per GiB-hour. L4 is deliberately absent (see provider.py: no faster than a T4 for the decode GEMV).
 GPU_PRICE_H = {"T4": 0.59, "A10G": 1.10, "L40S": 1.95, "H100": 3.95}
 CORE_H, GIB_H = 0.0473, 0.008
+#: A ``--max-trip-ms`` limit below this cannot pass on the public tunnel (about 5 ms per round trip, 6.8 ms
+#: measured on 2026-11-20), so a tunnel pair is not relaunched for it.
+TUNNEL_FLOOR_MS = 3.0
+#: Default ``--i6pn-schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
+I6PN_SCHEDULE_TIMEOUT_MIN = {False: 6.0, True: 10.0}
 
 
-def cost_per_h(gpu: str | None) -> dict[str, float]:
-    """Hourly list price of each party (provider: 2 cores with a GPU, 4 without; see provider.py)."""
-    prov = (GPU_PRICE_H[gpu] + 2 * CORE_H) if gpu else 4 * CORE_H
+def provider_cpus(gpu: str | None) -> float:
+    """Provider cores as ``provider.py`` sets them: ``PGW_MODAL_PROVIDER_CPUS``, else 2 with a GPU, 4 without."""
+    return float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if gpu else 4.0))
+
+
+def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
+    """Hourly list price of each party (provider cores: ``cpus``, else :func:`provider_cpus`)."""
+    cores = provider_cpus(gpu) if cpus is None else float(cpus)
+    prov = (GPU_PRICE_H[gpu] if gpu else 0.0) + cores * CORE_H
     return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": 4 * CORE_H + 8 * GIB_H}
+
+
+def normalize_gpu(value: str | None) -> str | None:
+    """``--gpu`` / ``PGW_MODAL_GPU`` to a tier of :data:`GPU_PRICE_H` (case-insensitive), ``None`` for
+    none/empty. Raises ``ValueError`` for L4, a GPU count (``T4:2``) or an unknown name."""
+    v = (value or "").strip()
+    if v.lower() in ("", "none", "cpu"):
+        return None
+    if ":" in v:
+        raise ValueError(f"{v!r}: one GPU only (no ':count'); the provider serves one device")
+    tiers = {t.upper(): t for t in GPU_PRICE_H}
+    if v.upper() == "L4":
+        raise ValueError("L4 is not supported for the provider (no faster than a T4 for the bandwidth-bound "
+                         f"decode GEMV, and dearer); use one of {', '.join(GPU_PRICE_H)}")
+    if v.upper() not in tiers:
+        raise ValueError(f"{v!r}: unknown GPU; use none or one of {', '.join(GPU_PRICE_H)}")
+    return tiers[v.upper()]
+
+
+def gpu_tier_of_device(device: str | None) -> str | None:
+    """Tier of a CUDA device name as the provider reports it (``"NVIDIA A10G"``, ``"Tesla T4"``; ``"none"``
+    for the CPU backend). ``None`` for no GPU; raises ``KeyError`` for a device outside the price table."""
+    if not device or device == "none":
+        return None
+    up = device.upper()
+    for tier in sorted(GPU_PRICE_H, key=len, reverse=True):
+        if tier in up:
+            return tier
+    raise KeyError(device)
 
 
 def _ts(t: float) -> str:
@@ -295,9 +338,11 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
         code = 2  # latency gate failed or unmeasured
         if verdict == "unmeasured" or attempt == tries:
             break
-        if not pair.i6pn and args.max_trip_ms < 3:
-            print("hint: the public tunnel adds about 5 ms per round trip; a gate this tight passes only on "
-                  "i6pn (--i6pn)", flush=True)
+        if not pair.i6pn and not args.i6pn and args.max_trip_ms < TUNNEL_FLOOR_MS:
+            # every relaunch would be another tunnel pair (a full paid e2e run) with no chance of passing
+            print(f"not relaunching: the public tunnel adds about 5 ms per round trip, so a limit below "
+                  f"{TUNNEL_FLOOR_MS:g} ms passes only on i6pn (--i6pn)", flush=True)
+            break
         cancel_pair(live, pair)  # make sure the old provider is gone: max_containers=1 would queue the new one
         print("relaunching a fresh pair (new placement)", flush=True)
     stop()
@@ -320,14 +365,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="reuse the deployed apps (their GPU is whatever was deployed)")
     ap.add_argument("--deploy-only", action="store_true",
                     help="build the images and deploy both apps, start nothing (no running cost)")
-    ap.add_argument("--gpu", choices=["none", *GPU_PRICE_H], default=os.environ.get("PGW_MODAL_GPU") or "none",
+    ap.add_argument("--gpu", default=os.environ.get("PGW_MODAL_GPU") or "none", metavar="{none," +
+                    ",".join(GPU_PRICE_H) + "}",
                     help="provider GPU, fixed at deploy time (default: none = CPU int8 backend; "
-                         "PGW_MODAL_GPU sets the default). Not L4 (see README)")
+                         "PGW_MODAL_GPU sets the default; case-insensitive). Not L4 (see README)")
     ap.add_argument("--i6pn", action="store_true", default=os.environ.get("PGW_MODAL_I6PN", "0") == "1",
                     help="run both parties on Modal's private IPv6 network (off by default; PGW_MODAL_I6PN=1)")
-    ap.add_argument("--i6pn-schedule-timeout-min", type=float, default=6.0,
-                    help="with --i6pn: relaunch on the public tunnel if Modal has not started both "
-                         "containers within this many minutes")
+    ap.add_argument("--i6pn-schedule-timeout-min", type=float, default=None,
+                    help="with --i6pn: relaunch on the public tunnel if both functions have not started "
+                         "within this many minutes (Modal scheduling + image pull + cold start; default "
+                         f"{I6PN_SCHEDULE_TIMEOUT_MIN[False]:g} without a GPU, "
+                         f"{I6PN_SCHEDULE_TIMEOUT_MIN[True]:g} with one)")
     ap.add_argument("--max-trip-ms", type=float, default=None,
                     help="with --e2e: relaunch while the median client-reported round trip of the warm chat "
                          "is above this (off by default)")
@@ -335,8 +383,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="off",
                     help="placeholder for exact local linears (E2); only 'off' until WP-A4b/A5 land")
     args = ap.parse_args(argv)
-    if args.gpu == "none":
-        args.gpu = None
+    try:  # also validates a PGW_MODAL_GPU default, which argparse would not check against choices
+        args.gpu = normalize_gpu(args.gpu)
+    except ValueError as exc:
+        ap.error(f"--gpu / PGW_MODAL_GPU: {exc}")
+    if args.i6pn_schedule_timeout_min is None:
+        args.i6pn_schedule_timeout_min = I6PN_SCHEDULE_TIMEOUT_MIN[args.gpu is not None]
+    elif args.i6pn_schedule_timeout_min <= 0:
+        ap.error("--i6pn-schedule-timeout-min must be positive")
     if args.max_trip_ms is not None and not args.e2e:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
@@ -381,7 +435,12 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit("timed out waiting for the pair to start; stopped both apps")
         time.sleep(5)
     exp = min(p["expires_at"], c["expires_at"])
-    cost = sum(cost_per_h(args.gpu).values()) * (exp - pair.t0) / 3600
+    # Price what is running (with --no-deploy the deployed GPU and cores may differ from these arguments).
+    try:
+        tier = gpu_tier_of_device(p.get("gpu")) if "gpu" in p else args.gpu
+    except KeyError:
+        tier = args.gpu
+    cost = sum(cost_per_h(tier, p.get("cpus")).values()) * (exp - pair.t0) / 3600
     note = f"\n  Note: {pair.note}" if pair.note else ""
     print(f"""
 PGW two-party demo is up (run {pair.run_id}, network {pair.network}, provider GPU {p.get('gpu', '?')}).{note}

@@ -133,7 +133,7 @@ def _serve(run_id: str, ttl_s: int, tenant: str, code_ttl: str, *, i6pn: bool) -
         info = {"run_id": run_id, "service_url": url, "code": code["code"], "code_id": code["id"],
                 "code_expires_at": code["expires_at"], "tenant": tenant, "model": MODEL_NAME,
                 "ca_sha256": ca_fingerprint(load_ca_pem(pki["service_ca"])).hex(),
-                "started_at": time.time(), "expires_at": deadline, "gpu": gpu,
+                "started_at": time.time(), "expires_at": deadline, "gpu": gpu, "cpus": CPUS,
                 "network": "i6pn" if v6 else "tunnel"}
         live["provider"] = info
         boot.log(f"published service URL and enrollment code (id {code['id']}) to Dict {DICT_NAME!r}")
