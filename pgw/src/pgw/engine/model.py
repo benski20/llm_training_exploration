@@ -39,6 +39,7 @@ from typing import Any, TypeVar
 import torch
 import torch.nn.functional as F
 
+from pgw.core import native
 from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.types import LinearId, LinearKind, ModelArch
 from pgw.engine.backends import LinearBackend, LinearCall
@@ -220,7 +221,11 @@ def _gqa_verdict(heads: int, kv_heads: int, head_dim: int, dtype: torch.dtype, d
 
 
 #: Prompt lengths the ``is_causal`` self-check covers: both sides of the CPU flash kernel's query
-#: split sizes (32 below 192 rows, 64 below 768, then 256) and of its 512-key block.
+#: split sizes (32 below 192 rows, 64 below 768, then 256) and of its 512-key block. ``is_causal`` is
+#: used for whole blocks of any length (>= ``causal_min_rows``): above 768 rows the split sizes no
+#: longer change, so longer prompts only add blocks of the shapes checked here (spot checks at 1600,
+#: 2100 and 2600 rows with 7B head shapes, float32 and bfloat16, with and without GQA, were equal;
+#: not run at load: the check's attention grows with the square of the length).
 CAUSAL_CHECK_LENGTHS = (16, 31, 33, 100, 191, 192, 300, 513, 767, 768, 1030)
 _causal_verdicts: dict[tuple[Any, ...], bool] = {}
 _causal_lock = threading.Lock()
@@ -319,6 +324,9 @@ def _find_omp_set() -> Callable[[int], None] | None:
 
 _omp_set_cache: list[Callable[[int], None] | None] = []
 _omp_lock = threading.Lock()
+#: Per thread: ``(model id, thread count before the scope)`` while a decode thread scope is active
+#: (:meth:`TransformerModel._step`), else unset; the head restores that count (``_head_threads``).
+_scope_tls = threading.local()
 
 
 def _omp_set() -> Callable[[int], None] | None:
@@ -330,6 +338,8 @@ def _omp_set() -> Callable[[int], None] | None:
 
 
 #: Cache lengths the thread-scope self-check covers (both sides of the CPU flash kernel's 512-key block).
+#: Longer caches are not checked at load (to keep it cheap); spot checks at 6000 and 12000 keys (1
+#: and 4 rows, float32 and bfloat16, with and without GQA, 1 vs 4 threads) were equal too.
 FLOAT_THREADS_CHECK_LENGTHS = (1, 37, 100, 513, 1030, 2100, 4100)
 
 
@@ -338,12 +348,13 @@ def float_threads_self_check(model: TransformerModel, threads: int, rows: int = 
     """True when the model's float ops on ``rows``-row blocks give the same bits at ``threads`` torch
     threads as at the calling thread's current count (``torch.equal`` on every output).
 
-    Runs the model's own :class:`FloatOps` at its shapes, dtype and norm weights: input/post/final
-    RMSNorm (block and row by row), RoPE at the positions, the SiLU gate, residual adds and attention
-    over cache-like views (GQA form chosen per thread count, as the model does) for every cache length
-    in ``lengths``, as a block and as a serial tail. The LM head is not covered: its kernel does not use
-    torch threads (the native kernel has its own; the torch fallback's element-wise order does not
-    depend on them).
+    Runs the model's own :class:`FloatOps` at its shapes, dtype and norm weights, on inputs cast and
+    sliced as the layer does it (float32 linear outputs ``.to(dtype)``, then column slices):
+    input/post/final RMSNorm (block and row by row), RoPE of q and k at the positions, the SiLU gate,
+    residual adds and attention over cache-like views (GQA form chosen per thread count, as the model
+    does) for every cache length in ``lengths``, as a block and as a serial tail. The LM head is not
+    covered: its kernel does not use torch threads (the native kernel has its own; the torch
+    fallback's element-wise order does not depend on them).
 
     Element-wise ops are not always thread-count invariant: torch splits a large tensor (above its
     32768-element grain) into one range per thread, and a range edge that is not a multiple of the
@@ -365,13 +376,20 @@ def float_threads_self_check(model: TransformerModel, threads: int, rows: int = 
     def rand(*shape: int, scale: float = 1.0) -> torch.Tensor:
         return (torch.randn(shape, generator=gen) * scale).to(dt)
 
+    def raw(*shape: int, scale: float = 1.0) -> torch.Tensor:
+        return torch.randn(shape, generator=gen) * scale  # float32, as the backends return linear outputs
+
     if rows < 1:
         return False
-    h, gu, res = rand(rows, a.hidden_size, scale=0.5), rand(rows, 2 * inter, scale=2.0), rand(rows, a.hidden_size)
+    nq, nk, _ = model.split_qkv
+    # the layer's float work on linear outputs as the layer gets them (float32 (rows, m)), with the
+    # same casts and slicing as :meth:`TransformerModel._layer_standard` (so the same memory layouts:
+    # strided views for a float32 model, contiguous copies otherwise)
+    h, gu, o = rand(rows, a.hidden_size, scale=0.5), raw(rows, 2 * inter, scale=2.0), raw(rows, a.hidden_size)
     caches = []
     for n in lens:
         kbuf, vbuf = rand(2, n + 3, kvh, hd), rand(2, n + 3, kvh, hd)
-        caches.append((n, kbuf[1, :n], vbuf[1, :n], {rows: rand(rows, nh, hd)} if rows <= n else {}))
+        caches.append((n, kbuf[1, :n], vbuf[1, :n], {rows: raw(rows, nq + 2 * nk, scale=2.0)} if rows <= n else {}))
     norm_w = (model.input_norms[0], model.post_norms[-1])
 
     def run() -> list[torch.Tensor]:
@@ -381,15 +399,17 @@ def float_threads_self_check(model: TransformerModel, threads: int, rows: int = 
                 out.append(ops.rms_norm(h, w, model.eps))
             out.append(ops.norm_rows(h, model.final_norm, model.eps))
             out.append(ops.rms_norm(h[-1:], model.final_norm, model.eps).to(torch.float32))
-            out.append(ops.silu_mul(gu[:, :inter], gu[:, inter:]))
-            out.append(h + gu[:, : a.hidden_size])
-            out.append(h + res)
+            out.append(ops.silu_mul(gu[:, :inter].to(dt), gu[:, inter:].to(dt)))
+            out.append(h + o.to(dt))
+            out.append(h + gu[:, : a.hidden_size].to(dt))
             for n, k, v, qs in caches:
-                for r, q in qs.items():
+                for r, y_raw in qs.items():
                     start = n - r
+                    y = y_raw.to(dt)
                     cos, sin = model.rope.cos_sin(start, r, dt)
-                    qr = ops.rope(q, cos, sin)
+                    qr = ops.rope(y[:, :nq].reshape(r, nh, hd), cos, sin)
                     out.append(qr)
+                    out.append(ops.rope(y[:, nq : nq + nk].reshape(r, kvh, hd), cos, sin))
                     out.append(ops.attention(model, qr, k, v, start))
                     for j in range(r):
                         out.append(ops.attention(model, qr[j : j + 1], k[: start + j + 1], v[: start + j + 1],
@@ -657,8 +677,9 @@ class TransformerModel:
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
         self.rope = RotaryEmbedding(a.head_dim, a.rope_theta, a.rope_scaling, a.max_position_embeddings, self.device)
         self.scale = a.head_dim**-0.5
-        self._gqa = False
-        self._gqa_threads = -1
+        # (thread count, verdict): one tuple, replaced whole, so a thread never reads a verdict that
+        # belongs to another thread's count (no lock needed; a lost update only re-reads the cache)
+        self._gqa_state: tuple[int, bool] = (-1, False)
         self._use_gqa()  # the GQA self-check runs at load (cached per process; again if threads change)
         #: Single worker thread for the plaintext parts of async forward passes (see run_plain).
         self._plain_pool: ThreadPoolExecutor | None = None
@@ -681,11 +702,12 @@ class TransformerModel:
         self._float_threads: int | None = None
         self._float_rows = 0  # passes of at most this many rows per sequence are scoped (self-checked)
         self._float_base = torch.get_num_threads()  # thread count the self-check compared against
-        self._causal = False
-        self._causal_threads = -1
-        self._causal_gqa = False
+        self._causal_state: tuple[int, bool, bool] = (-1, False, False)  # (threads, GQA form, verdict)
         if self.causal_sdpa:
-            self._use_causal()  # the is_causal self-check runs at load (cached per process and thread count)
+            # the is_causal self-check runs at load, draft models included (cached per process, shape and
+            # thread count: about 1 s for 7B shapes on 4 vCPUs); a pass at another thread count (e.g. a
+            # prefill on a thread with a different count) runs it once more, mid-pass, then it is cached
+            self._use_causal()
         self.sync_decode = _env_bool("PGW_SYNC_DECODE", type(self).sync_decode)
         env_threads = _env_int("PGW_FLOAT_THREADS")
         if env_threads is not None and env_threads > 0:
@@ -749,11 +771,12 @@ class TransformerModel:
 
     def _use_gqa(self) -> bool:
         threads = torch.get_num_threads()
-        if threads != self._gqa_threads:  # verdicts are per thread count (kernels may split by it)
-            self._gqa = bool(self.num_heads != self.num_kv_heads and _gqa_verdict(
-                self.num_heads, self.num_kv_heads, self.head_dim, self.dtype, self.device, self.scale))
-            self._gqa_threads = threads
-        return self._gqa and self.gqa_sdpa
+        state = self._gqa_state
+        if threads != state[0]:  # verdicts are per thread count (kernels may split by it)
+            state = (threads, bool(self.num_heads != self.num_kv_heads and _gqa_verdict(
+                self.num_heads, self.num_kv_heads, self.head_dim, self.dtype, self.device, self.scale)))
+            self._gqa_state = state
+        return state[1] and self.gqa_sdpa
 
     #: SDPA's ``is_causal`` for a whole prompt block from position 0 of at least ``causal_min_rows``
     #: rows (the CPU flash kernel then skips masked key blocks: about a third less attention time at
@@ -766,11 +789,13 @@ class TransformerModel:
         threads = torch.get_num_threads()
         groups = self.num_heads // self.num_kv_heads
         gqa = groups > 1 and self._use_gqa()
-        if threads != self._causal_threads or gqa != self._causal_gqa:
-            self._causal = _causal_verdict(self.num_heads, self.num_kv_heads, self.head_dim, self.dtype, self.device,
-                                           self.scale, gqa, int(self.arch.max_position_embeddings))
-            self._causal_threads, self._causal_gqa = threads, gqa
-        return self._causal
+        state = self._causal_state
+        if threads != state[0] or gqa != state[1]:
+            state = (threads, gqa, _causal_verdict(self.num_heads, self.num_kv_heads, self.head_dim, self.dtype,
+                                                   self.device, self.scale, gqa,
+                                                   int(self.arch.max_position_embeddings)))
+            self._causal_state = state
+        return state[2]
 
     def _attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, start: int) -> torch.Tensor:
         """Causal GQA attention of ``q (T, H, hd)`` over ``k, v (L, KVH, hd)``; returns ``(T, H*hd)``."""
@@ -832,18 +857,26 @@ class TransformerModel:
         return False
 
     def _step(self, gen: _Steps, value: list[torch.Tensor] | None, rows: int) -> tuple[bool, Any]:
-        """:meth:`_advance` with the decode thread count applied (``rows``: new rows per sequence)."""
+        """:meth:`_advance` with the decode thread count applied (``rows``: new rows per sequence).
+
+        Only on a thread that runs at the count the self-check compared against (``_float_base``):
+        a thread at any other count (e.g. ``torch.set_num_threads`` called after load) keeps its own
+        count, since the scoped bits were never compared with that count's.
+        """
         n = self._float_threads
         if n is None or rows > self._float_rows:
             return self._advance(gen, value)
         prev = torch.get_num_threads()
         setter = _omp_set()
-        if prev == n or setter is None:
+        if prev != self._float_base or prev == n or setter is None:
             return self._advance(gen, value)
         setter(n)
+        outer = getattr(_scope_tls, "scope", None)
+        _scope_tls.scope = (id(self), prev)
         try:
             return self._advance(gen, value)
         finally:
+            _scope_tls.scope = outer
             setter(prev)
 
     @staticmethod
@@ -1024,20 +1057,27 @@ class TransformerModel:
                 out.append(lg if s.all_logits else lg[0])
         return out
 
+    def _head_native(self) -> bool:
+        """Whether :func:`lm_head_logits` computes this model's head with the native kernel (which
+        does not use torch threads); mirrors its dispatch (a bfloat16 head on a build without
+        ``lm_head_bf16`` falls back to the torch reference)."""
+        if self.lm_head_fn is not None or not native_lm_head() or self._head.device.type != "cpu":
+            return False
+        if self._head.dtype == torch.float32:
+            return True
+        return self._head.dtype == torch.bfloat16 and native.native_available("lm_head_bf16")
+
     @contextlib.contextmanager
     def _head_threads(self) -> Iterator[None]:
-        """Inside a decode thread scope: the caller's thread count back for a torch-computed head (the
-        native head kernel does not use torch threads, so it needs nothing)."""
-        n = self._float_threads
-        setter = _omp_set() if n is not None else None
-        if setter is None or (native_lm_head() and self.lm_head_fn is None):
+        """Inside this model's decode thread scope (:meth:`_step`): the thread's count from before the
+        scope back for a torch-computed head (the native head kernel needs nothing)."""
+        scope = getattr(_scope_tls, "scope", None) if self._float_threads is not None else None
+        setter = _omp_set() if scope is not None and scope[0] == id(self) else None
+        if setter is None or scope is None or self._head_native():
             yield
             return
         cur = torch.get_num_threads()
-        if cur != n:  # not inside a scope
-            yield
-            return
-        setter(self._float_base)
+        setter(scope[1])
         try:
             yield
         finally:
@@ -1121,6 +1161,12 @@ class TransformerModel:
     #: hop per trip), when the backend says such a trip is fast (``backend.sync_trip_ok(rows)``, e.g.
     #: over the native trip lane). Same calls in the same order as the split-hop path, so the same masks
     #: and bits. Off by default (``PGW_SYNC_DECODE=1`` turns it on).
+    #: Contract for a backend that offers ``sync_trip_ok`` (WP-A4b): its ``forward_many`` is then called
+    #: from the plaintext worker thread while the event loop keeps serving other sessions, so it must
+    #: not touch the event loop (no ``asyncio.run``, no loop re-entry or loop-bound objects) and must
+    #: be safe alongside the backend's async calls of other passes.
+    #: Not thread-safe for several plaintext threads: the GQA and ``is_causal`` verdicts are cached per
+    #: model (one tuple, replaced whole); a per-session plaintext pool would make that per thread.
     sync_decode = False
     sync_decode_max_rows = 8
 

@@ -194,3 +194,108 @@ def test_torch_head_runs_at_the_base_count(qwen_pack: InMemoryPack, monkeypatch:
     m.forward_batch([SequenceInput([1, 2, 3], cache)])
     m.forward_batch([SequenceInput([4], cache)])
     assert seen == [_base(), _base()]
+
+
+@needs_omp
+def test_bf16_head_without_native_bf16_kernel_runs_at_the_base_count(qwen_pack: InMemoryPack,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bfloat16 head on a build without ``lm_head_bf16`` falls back to the torch reference inside
+    :func:`lm_head_logits`; the scope must give that head the base count back too."""
+    m = _model(qwen_pack)
+    assert m.enable_float_threads(_scope_target())
+    m._head = m._head.to(torch.bfloat16)
+    monkeypatch.setattr(model_mod, "native_lm_head", lambda: True)
+    real_avail = model_mod.native.native_available
+    monkeypatch.setattr(model_mod.native, "native_available",
+                        lambda *names: "lm_head_bf16" not in names and real_avail(*names))
+    assert not m._head_native()
+    seen: list[int] = []
+    real_ref = lm_head_mod.lm_head_reference
+
+    def spy(h: torch.Tensor, w: torch.Tensor, *a: Any, **k: Any) -> torch.Tensor:
+        seen.append(torch.get_num_threads())
+        return real_ref(h, w, *a, **k)
+
+    monkeypatch.setattr(lm_head_mod, "lm_head_reference", spy)
+    cache = m.new_cache(32)
+    m.forward_batch([SequenceInput([1, 2, 3], cache)])
+    m.forward_batch([SequenceInput([4], cache)])
+    assert seen == [_base(), _base()]
+    m._head = m._head.to(torch.float32)
+    assert m._head_native()  # a float32 head always has the native kernel when native_lm_head() is true
+
+
+@needs_omp
+def test_thread_at_another_count_is_not_scoped(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A thread running at a count other than the one the self-check compared against keeps its own
+    count for the whole pass (the scoped bits were never compared with that count's)."""
+    m = _model(qwen_pack)
+    assert m.enable_float_threads(_scope_target())
+    other = next(c for c in (2, 3, 5) if c not in (_base(), _scope_target()))
+    setter = model_mod._omp_set()
+    assert setter is not None
+    seen: list[int] = []
+    real = model_mod._attend
+
+    def spy(*a: Any, **k: Any) -> torch.Tensor:
+        seen.append(torch.get_num_threads())
+        return real(*a, **k)
+
+    monkeypatch.setattr(model_mod, "_attend", spy)
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            torch.get_num_threads()
+            setter(other)
+            cache = m.new_cache(32)
+            m.forward_batch([SequenceInput([1, 2, 3], cache)])
+            m.forward_batch([SequenceInput([4], cache)])
+            assert getattr(model_mod._scope_tls, "scope", None) is None
+        except BaseException as exc:  # re-raised on the test thread
+            errors.append(exc)
+
+    th = threading.Thread(target=work)
+    th.start()
+    th.join()
+    assert not errors, errors
+    assert seen and set(seen) == {other}
+    assert _base() == torch.get_num_threads()
+
+
+@needs_omp
+def test_self_check_sees_the_layers_memory_layout(qwen_pack: InMemoryPack) -> None:
+    """The check feeds RoPE the strided column slices the layer does (not fresh contiguous tensors):
+    an op whose bits depend on the thread count only for strided inputs is caught from 2 rows on
+    (a 1-row slice is contiguous)."""
+
+    class StridedDrift(FloatOps):
+        def rope(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+            out = super().rope(x, cos, sin)
+            return out if x.is_contiguous() else out + torch.get_num_threads() * 1e-3
+
+    m = _model(qwen_pack)
+    m.float_ops = StridedDrift()
+    assert float_threads_self_check(m, _scope_target(), 1)
+    assert not float_threads_self_check(m, _scope_target(), 2)
+    assert m.enable_float_threads(_scope_target())
+    assert m.float_threads_rows == 1
+
+
+@needs_omp
+def test_bf16_model_scopes_bitwise_equal(qwen_pack: InMemoryPack) -> None:
+    """A bfloat16 model (the casts are real copies there): scoped decode == unscoped, bit for bit."""
+
+    def run(scope: bool) -> list[torch.Tensor]:
+        m = TransformerModel(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING), dtype=torch.bfloat16)
+        if scope:
+            assert m.enable_float_threads(_scope_target()) and m.float_threads_rows >= 1
+        cache = m.new_cache(64)
+        out = m.forward_batch([SequenceInput([1, 2, 3, 4, 5], cache)])
+        for tok in (6, 7, 8):
+            out += m.forward_batch([SequenceInput([tok], cache)])
+        out += m.forward_batch([SequenceInput([9, 10], cache, all_logits=True)])
+        return out
+
+    ref, got = run(False), run(True)
+    assert all(torch.equal(a, b) for a, b in zip(ref, got, strict=True))
