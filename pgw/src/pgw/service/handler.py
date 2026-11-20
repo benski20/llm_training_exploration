@@ -161,6 +161,12 @@ class ServiceHandler:
         self.group_min_rows = max(0, int(group_min_rows)) if group_min_rows is not None else _group_min_rows_default()
         #: requests answered by :meth:`compute_inline` (the stream channel's frame lane)
         self.inline_requests = 0
+        #: the native trip lane's shared admission (``pgw_fast.LaneService``) while a lane runs: draining,
+        #: in-flight caps and tenant row buckets are then one budget for the lane and this handler
+        #: (see :mod:`pgw.service.lane`); ``None`` = this handler's own counters (no lane)
+        self.lane_admission: Any = None
+        #: lane calls served through :meth:`lane_compute` (calls without a CUDA graph)
+        self.lane_requests = 0
 
     # ---- ComputeHandler protocol -------------------------------------------------------------
     def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
@@ -187,7 +193,7 @@ class ServiceHandler:
         """Evaluate every item exactly; results in request order."""
         ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
-        self._admit(tenant, request.total_rows)
+        shared = self._admit(tenant, request.total_rows, enter=True)
         st = self._tenants.get(tenant)
         if st is None:
             st = self._tenants.setdefault(tenant, _TenantState())
@@ -200,6 +206,8 @@ class ServiceHandler:
         finally:
             self.inflight -= 1
             st.inflight -= 1
+            if shared is not None:
+                shared.exit(tenant)
             self.metrics.inflight(self.inflight)
             if self.inflight == 0:
                 self._idle.set()
@@ -226,7 +234,7 @@ class ServiceHandler:
         kernel call (inline on the idle device), metrics and response."""
         ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
-        self._admit(tenant, request.total_rows)
+        shared = self._admit(tenant, request.total_rows, enter=True)
         st = self._tenants.get(tenant)
         if st is None:
             st = self._tenants.setdefault(tenant, _TenantState())
@@ -248,6 +256,8 @@ class ServiceHandler:
         finally:
             self.inflight -= 1
             st.inflight -= 1
+            if shared is not None:
+                shared.exit(tenant)
             self.metrics.inflight(self.inflight)
             if self.inflight == 0:
                 self._idle.set()
@@ -309,16 +319,58 @@ class ServiceHandler:
         s = self.settings
         if self.draining:
             raise ServiceUnavailableError("service is draining", details={"retry_after_s": s.retry_after_s})
-        if self.inflight >= s.max_inflight_requests:
+        if self._inflight_total() >= s.max_inflight_requests:
             raise ServiceUnavailableError(
                 "too many in-flight requests", details={"retry_after_s": s.retry_after_s}
             )
 
+    def _inflight_total(self) -> int:
+        """In-flight requests counted against ``max_inflight_requests``: this handler's, or with a lane
+        the larger of this handler's and the shared count (lane calls included)."""
+        shared = self.lane_admission
+        return self.inflight if shared is None else max(self.inflight, int(shared.inflight()))
+
+    async def lane_compute(self, fingerprint: str, linear: str, ring: RingParams, rows: int, body: bytes,
+                           tenant: str) -> bytes:
+        """One lane call that has no CUDA graph, on the regular kernel path (the lane admitted it and
+        checked the header and body length; :mod:`pgw.service.lane` drains its metrics). Returns the
+        packed ``y_hat``: the same bytes :meth:`compute` returns for the same one-item request."""
+        self.inflight += 1
+        self._idle.clear()
+        try:
+            m, n = self.registry.get(fingerprint).linear_dims[linear]
+            x = unpack_ring(body, (rows, n), ring)
+            y, _bt = await self.batcher.submit_timed(fingerprint, ring, linear, x, compact=True)
+            if y.shape != (rows, m):  # pragma: no cover - kernel contract
+                raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
+            self.lane_requests += 1
+            return pack_ring(y, ring)
+        finally:
+            self.inflight -= 1
+            if self.inflight == 0:
+                self._idle.set()
+
     # ---- internals -----------------------------------------------------------------------
-    def _admit(self, tenant: str, rows: int) -> None:
+    def _admit(self, tenant: str, rows: int, *, enter: bool = False) -> Any:
+        """Admission: draining, global and tenant in-flight caps, tenant row bucket. Raises on refusal.
+
+        With a lane running the decision is the shared one (:attr:`lane_admission`); with ``enter`` the
+        request is then counted in the shared in-flight totals and the returned object's
+        ``exit(tenant)`` must be called when it finishes. Returns ``None`` without a lane (the caller's
+        own counters apply).
+        """
         s = self.settings
         if self.draining:
             raise ServiceUnavailableError("service is draining", details={"retry_after_s": s.retry_after_s})
+        shared = self.lane_admission
+        if shared is not None:
+            code, retry_ms = shared.admit(tenant, int(rows), enter)
+            if code == 0:
+                return shared if enter else None
+            retry = round(retry_ms / 1000.0, 3)
+            if code == 3:  # rate_limited: tenant concurrency cap or row bucket
+                raise RateLimitedError("tenant limit reached", details={"retry_after_s": retry})
+            raise ServiceUnavailableError("service is draining or overloaded", details={"retry_after_s": retry})
         if self.inflight >= s.max_inflight_requests:
             raise ServiceUnavailableError(
                 "too many in-flight requests", details={"retry_after_s": s.retry_after_s}
@@ -338,6 +390,7 @@ class ServiceHandler:
             wait = st.bucket.take(rows)
             if wait > 0:
                 raise RateLimitedError("tenant row rate limit exceeded", details={"retry_after_s": round(wait, 3)})
+        return None
 
     async def _compute(self, request: ComputeRequest, tenant: str) -> ComputeResponse:
         ring = RingParams.from_name(request.ring)

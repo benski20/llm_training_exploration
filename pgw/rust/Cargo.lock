@@ -245,6 +245,7 @@ dependencies = [
  "chacha20",
  "numpy",
  "pgw-core-rs",
+ "pgw-lane",
  "pyo3",
  "zeroize",
 ]
@@ -252,6 +253,9 @@ dependencies = [
 [[package]]
 name = "pgw-lane"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "portable-atomic"

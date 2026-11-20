@@ -100,8 +100,11 @@ def test_service_lane_defaults_off_and_is_gated() -> None:
     s = ServiceSettings()
     assert s.lane == "off"
     assert set(svc_config.PENDING_SPEED_SETTINGS) <= set(SERVICE_DEFAULTS)
-    with pytest.raises(ValidationError, match="not available in this build"):
-        ServiceSettings(lane="uds", lane_socket=Path("/run/pgw/lane.sock"))
+    if "lane" in svc_config.PENDING_SPEED_SETTINGS:
+        with pytest.raises(ValidationError, match="not available in this build"):
+            ServiceSettings(lane="uds", lane_socket=Path("/run/pgw/lane.sock"))
+    else:  # WP-A1 landed: the UDS lane is accepted (tests/service/test_lane_server.py)
+        assert ServiceSettings(lane="uds", lane_socket=Path("/run/pgw/lane.sock")).lane == "uds"
 
 
 def test_service_lane_validation_once_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

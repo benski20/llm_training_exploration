@@ -13,6 +13,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pgw-core-rs = { path = "../pgw-core-rs" }
+# lane_service.rs: Python bindings of the service trip lane (chat-speed WP-A1).
+pgw-lane = { path = "../pgw-lane" }
 pyo3 = { version = "0.23", features = ["abi3-py312", "extension-module"] }
 numpy = "0.23"
 # store.rs: ChaCha20 keystream written straight into the numpy output (the key comes from

@@ -42,6 +42,7 @@ import logging
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
@@ -230,6 +231,18 @@ class DeviceExecutor:
         self._h_out: torch.Tensor | None = None
         #: fused Triton ring GEMV: None = not checked yet, then the self-check verdict (False after a mismatch)
         self._gemv_ok: bool | None = None
+
+    def share_lock(self, lock: Any) -> None:
+        """Use ``lock`` (``threading.Lock``-compatible, e.g. ``pgw_fast.LaneDeviceLock``) as this device's
+        lock from now on, so the native trip lane's graph replays and this executor's calls exclude each
+        other (the one-call-per-device invariant across both paths). Call it before serving: a call
+        already waiting on the old lock is not moved to the new one.
+        """
+        old = self.lock
+        if lock is old:
+            return
+        with old:
+            self.lock = lock
 
     # ---- fused ring GEMV (pgw.core.triton_gemv) ---------------------------------------------
     def gemv_ready(self) -> bool:
