@@ -1,0 +1,14 @@
+[package]
+name = "pgw-lane"
+version = "0.1.0"
+description = "Service trip lane of the PGW compute service (chat-speed plan WP-A1): binary-header listener on UDS/TCP+TLS, per-(linear, rows) CUDA-graph replay and hybrid wait. Stub until WP-A1 lands."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "pgw_lane"
+crate-type = ["rlib"]
+
+[dependencies]
