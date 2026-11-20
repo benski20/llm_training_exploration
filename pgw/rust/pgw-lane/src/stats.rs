@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::sync::MutexExt;
+
 /// Upper bounds of the request-latency histogram (seconds); same as the Python service's buckets.
 pub const LATENCY_BOUNDS: [f64; 15] =
     [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0];
@@ -57,7 +59,7 @@ pub struct Stats {
 impl Stats {
     /// One finished call (any status).
     pub fn request(&self, tenant: &str, status: &'static str, secs: f64) {
-        let mut s = self.inner.lock().unwrap();
+        let mut s = self.inner.plock();
         s.requests.entry((tenant.to_owned(), status)).or_default().observe(secs.max(0.0));
     }
 
@@ -73,7 +75,7 @@ impl Stats {
         bytes_out: u64,
         compute_secs: f64,
     ) {
-        let mut s = self.inner.lock().unwrap();
+        let mut s = self.inner.plock();
         *s.rows.entry((tenant.to_owned(), kind.to_owned())).or_default() += rows;
         let b = s.bytes.entry(tenant.to_owned()).or_default();
         b.0 += bytes_in;
@@ -86,7 +88,7 @@ impl Stats {
 
     /// A connection was opened (`ok`) or refused at open.
     pub fn connection(&self, ok: bool) {
-        let mut s = self.inner.lock().unwrap();
+        let mut s = self.inner.plock();
         if ok {
             s.connections.0 += 1;
         } else {
@@ -96,7 +98,7 @@ impl Stats {
 
     /// Take everything counted so far.
     pub fn drain(&self) -> Snapshot {
-        std::mem::take(&mut *self.inner.lock().unwrap())
+        std::mem::take(&mut *self.inner.plock())
     }
 }
 

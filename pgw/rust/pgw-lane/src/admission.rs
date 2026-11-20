@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::proto::Status;
+use crate::sync::MutexExt;
 
 /// Admission limits (from the service settings).
 #[derive(Clone, Debug, PartialEq)]
@@ -116,15 +117,15 @@ impl Admission {
 
     /// Replace the limits (buckets are rebuilt lazily with the new rate).
     pub fn set_limits(&self, limits: Limits) {
-        *self.limits.lock().unwrap() = limits;
-        for t in self.tenants.lock().unwrap().values_mut() {
+        *self.limits.plock() = limits;
+        for t in self.tenants.plock().values_mut() {
             t.bucket = None;
         }
     }
 
     /// Current limits.
     pub fn limits(&self) -> Limits {
-        self.limits.lock().unwrap().clone()
+        self.limits.plock().clone()
     }
 
     /// Stop admitting (shutdown).
@@ -144,7 +145,7 @@ impl Admission {
 
     /// In-flight requests of one tenant.
     pub fn tenant_inflight(&self, tenant: &str) -> u64 {
-        self.tenants.lock().unwrap().get(tenant).map(|t| t.inflight).unwrap_or(0)
+        self.tenants.plock().get(tenant).map(|t| t.inflight).unwrap_or(0)
     }
 
     fn now(&self) -> f64 {
@@ -155,12 +156,12 @@ impl Admission {
     /// that order, like the Python handler). With `enter`, the request is counted in flight on
     /// success and the caller must call [`Admission::exit`] once it finishes.
     pub fn admit(&self, tenant: &str, rows: u64, enter: bool) -> Result<(), Refusal> {
-        let lim = self.limits.lock().unwrap().clone();
+        let lim = self.limits.plock().clone();
         let busy = Refusal { status: Status::Unavailable, retry_after_ms: lim.retry_after_ms };
         if self.draining() {
             return Err(busy);
         }
-        let mut tenants = self.tenants.lock().unwrap();
+        let mut tenants = self.tenants.plock();
         if self.inflight.load(Ordering::SeqCst) >= lim.max_inflight {
             return Err(busy);
         }
@@ -189,7 +190,7 @@ impl Admission {
 
     /// A request admitted with `enter` finished.
     pub fn exit(&self, tenant: &str) {
-        let mut tenants = self.tenants.lock().unwrap();
+        let mut tenants = self.tenants.plock();
         if let Some(st) = tenants.get_mut(tenant) {
             if st.inflight > 0 {
                 st.inflight -= 1;

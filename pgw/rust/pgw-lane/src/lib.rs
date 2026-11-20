@@ -28,6 +28,7 @@ pub mod exec;
 pub mod proto;
 pub mod server;
 pub mod stats;
+mod sync;
 
 /// Version of the lane wire format this crate implements.
 pub const LANE_PROTOCOL_VERSION: u16 = proto::VERSION;
@@ -373,5 +374,152 @@ mod tests {
         let s = LaneServer::start(cfg, Arc::new(Admission::new(Limits::default())), None).unwrap();
         let mut c = UnixStream::connect(s.path()).unwrap();
         assert_eq!(reply(&mut c).0.status, Status::PeerRefused);
+    }
+
+    fn start_with(cfg: impl FnOnce(&mut ServerConfig), ex: Arc<dyn Executor>) -> (LaneServer, tempdir::Dir) {
+        let dir = tempdir::Dir::new();
+        let mut c = ServerConfig {
+            path: dir.0.join("lane.sock"),
+            deadline_cap_ms: 1000,
+            poll: Duration::from_millis(20),
+            ..ServerConfig::default()
+        };
+        cfg(&mut c);
+        let s = LaneServer::start(c, Arc::new(Admission::new(Limits::default())), Some(ex)).unwrap();
+        s.set_model(0, model());
+        (s, dir)
+    }
+
+    fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < Duration::from_secs(5) {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        cond()
+    }
+
+    #[test]
+    fn connection_cap_refusal_is_fatal_busy() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO });
+        let (s, _d) = start_with(|c| c.max_connections = 1, fake);
+        let (mut c1, r) = open(&s, "t");
+        assert_eq!(r.status, Status::Ok);
+        let mut c2 = UnixStream::connect(s.path()).unwrap();
+        let (h, _) = reply(&mut c2);
+        assert_eq!((h.status, h.retry_after_ms), (Status::Busy, 1000));
+        assert!(h.status.is_fatal() && h.status.is_fallback());
+        let mut rest = Vec::new();
+        assert_eq!(c2.read_to_end(&mut rest).unwrap(), 0); // closed, as the fatal class says
+        assert_eq!(call(&mut c1, 0, 1, 4, 1).0.status, Status::Ok); // the held one is unaffected
+        drop(c1);
+        assert!(wait_for(|| s.connections() == 0));
+        assert_eq!(open(&s, "u").1.status, Status::Ok);
+    }
+
+    #[test]
+    fn open_frame_has_one_budget() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO });
+        // stall timeout far above the open budget: the ticket read must still end at open_timeout
+        let (s, _d) = start_with(
+            |c| {
+                c.open_timeout = Duration::from_millis(150);
+                c.stall_timeout = Duration::from_secs(30);
+            },
+            fake,
+        );
+        let mut c = UnixStream::connect(s.path()).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let t0 = std::time::Instant::now();
+        let h = RequestHeader {
+            kind: Kind::Open,
+            request_id: [0; 16],
+            linear: 0,
+            rows: 0,
+            ring: 0,
+            deadline_ms: 0,
+            body_len: TICKET_LEN as u32,
+        };
+        c.write_all(&h.encode()).unwrap();
+        c.write_all(&[1u8; 5]).unwrap(); // part of the ticket, then nothing
+        let mut rest = Vec::new();
+        assert_eq!(c.read_to_end(&mut rest).unwrap(), 0);
+        let took = t0.elapsed();
+        assert!(took < Duration::from_secs(2), "pre-auth hold {took:?}");
+        assert!(wait_for(|| s.connections() == 0));
+    }
+
+    #[test]
+    fn tickets_are_matched_among_many() {
+        let fake = Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO });
+        let (s, _d) = start_with(|_| {}, fake);
+        for b in 100..110u8 {
+            let mut t = [b; TICKET_LEN];
+            t[TICKET_LEN - 1] = 7; // all share a long prefix pattern with their neighbours
+            s.add_ticket(t, &format!("t{b}"), 0, Duration::from_secs(5));
+        }
+        assert_eq!(s.pending_tickets(), 10);
+        let (_c, r) = open(&s, "abc"); // ticket [4; 32]
+        assert_eq!(r.status, Status::Ok);
+        assert_eq!(s.pending_tickets(), 10);
+        let mut t = [105u8; TICKET_LEN];
+        t[TICKET_LEN - 1] = 7;
+        let mut c = UnixStream::connect(s.path()).unwrap();
+        let h = RequestHeader {
+            kind: Kind::Open,
+            request_id: [2; 16],
+            linear: 0,
+            rows: 0,
+            ring: 0,
+            deadline_ms: 0,
+            body_len: TICKET_LEN as u32,
+        };
+        c.write_all(&h.encode()).unwrap();
+        c.write_all(&t).unwrap();
+        assert_eq!(reply(&mut c).0.status, Status::Ok);
+        assert_eq!(s.pending_tickets(), 9);
+        s.revoke_tenant("t101");
+        assert_eq!(s.pending_tickets(), 8);
+    }
+
+    /// An executor that panics (a stand-in for any bug on a connection thread).
+    struct Panics;
+
+    impl Executor for Panics {
+        fn execute(&self, _call: &Call<'_>, _out: &mut Vec<u8>) -> Result<Done, Refusal> {
+            panic!("executor bug (expected in this test)");
+        }
+    }
+
+    #[test]
+    fn panic_on_a_connection_leaks_no_counts() {
+        let (s, _d) = start_with(|_| {}, Arc::new(Panics));
+        let (mut c, r) = open(&s, "t");
+        assert_eq!(r.status, Status::Ok);
+        let body = [0u8; 16];
+        let h = RequestHeader {
+            kind: Kind::Call,
+            request_id: [1; 16],
+            linear: 0,
+            rows: 1,
+            ring: 0,
+            deadline_ms: 0,
+            body_len: 16,
+        };
+        c.write_all(&h.encode()).unwrap();
+        c.write_all(&body).unwrap();
+        let mut rest = Vec::new();
+        assert_eq!(c.read_to_end(&mut rest).unwrap(), 0); // the connection ended, no reply
+        assert!(wait_for(|| s.connections() == 0));
+        assert_eq!(s.shared().admission.inflight(), 0);
+        assert_eq!(s.shared().admission.tenant_inflight("t"), 0);
+        // the lane keeps serving
+        s.set_executor(Some(Arc::new(Fake { calls: AtomicUsize::new(0), sleep: Duration::ZERO })));
+        let (mut c, r) = open(&s, "t");
+        assert_eq!(r.status, Status::Ok);
+        assert_eq!(call(&mut c, 0, 1, 4, 2).0.status, Status::Ok);
+        assert_eq!(s.shared().admission.inflight(), 0);
     }
 }

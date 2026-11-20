@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use crate::admission::Refusal;
 use crate::exec::{micros, Call, DeviceGuard, DeviceLock, Done, Executor};
 use crate::proto::Status;
+use crate::sync::{MutexExt, RwLockExt};
 
 type CuResult = c_int;
 type CuDevice = c_int;
@@ -38,6 +39,7 @@ struct Driver {
     device_get: unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult,
     primary_ctx_retain: unsafe extern "C" fn(*mut CuContext, CuDevice) -> CuResult,
     ctx_set_current: unsafe extern "C" fn(CuContext) -> CuResult,
+    ctx_get_current: unsafe extern "C" fn(*mut CuContext) -> CuResult,
     graph_launch: unsafe extern "C" fn(CuGraphExec, CuStream) -> CuResult,
     stream_query: unsafe extern "C" fn(CuStream) -> CuResult,
     stream_synchronize: unsafe extern "C" fn(CuStream) -> CuResult,
@@ -83,6 +85,7 @@ fn load_driver() -> Result<Driver, String> {
             device_get: sym(h, c"cuDeviceGet")?,
             primary_ctx_retain: sym(h, c"cuDevicePrimaryCtxRetain")?,
             ctx_set_current: sym(h, c"cuCtxSetCurrent")?,
+            ctx_get_current: sym(h, c"cuCtxGetCurrent")?,
             graph_launch: sym(h, c"cuGraphLaunch")?,
             stream_query: sym(h, c"cuStreamQuery")?,
             stream_synchronize: sym(h, c"cuStreamSynchronize")?,
@@ -146,19 +149,15 @@ impl Default for GraphExecutor {
     }
 }
 
-thread_local! {
-    static CURRENT_CTX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 impl GraphExecutor {
     /// The device lock shared with the Python path for `device` (created on first use).
     pub fn device_lock(&self, device: i32) -> Arc<DeviceLock> {
-        self.locks.lock().unwrap().entry(device).or_default().clone()
+        self.locks.plock().entry(device).or_default().clone()
     }
 
     /// Use `lock` as `device`'s lock (when Python created it first).
     pub fn set_device_lock(&self, device: i32, lock: Arc<DeviceLock>) {
-        self.locks.lock().unwrap().insert(device, lock);
+        self.locks.plock().insert(device, lock);
     }
 
     /// Spin time before blocking in `cuStreamSynchronize`.
@@ -185,13 +184,13 @@ impl GraphExecutor {
             return Err("null graph or buffer".to_owned());
         }
         self.device_lock(spec.device);
-        self.graphs.write().unwrap().insert((model, linear, ring, rows), spec);
+        self.graphs.pwrite().insert((model, linear, ring, rows), spec);
         Ok(())
     }
 
     /// Number of registered graphs.
     pub fn len(&self) -> usize {
-        self.graphs.read().unwrap().len()
+        self.graphs.pread().len()
     }
 
     /// True if no graph is registered.
@@ -201,16 +200,16 @@ impl GraphExecutor {
 
     /// Forget every graph (waits for each device's in-flight launch first).
     pub fn clear(&self) {
-        let locks: Vec<Arc<DeviceLock>> = self.locks.lock().unwrap().values().cloned().collect();
+        let locks: Vec<Arc<DeviceLock>> = self.locks.plock().values().cloned().collect();
         let guards: Vec<_> = locks.iter().map(|l| DeviceGuard::acquire(l, None)).collect();
-        self.graphs.write().unwrap().clear();
+        self.graphs.pwrite().clear();
         drop(guards);
     }
 
     /// Stop replaying graphs (every call answers `Fallback` from now on).
     pub fn disable(&self, reason: &str) {
         self.enabled.store(false, Ordering::SeqCst);
-        *self.disabled_reason.lock().unwrap() = Some(reason.to_owned());
+        *self.disabled_reason.plock() = Some(reason.to_owned());
     }
 
     /// `None` while enabled, else why it was disabled.
@@ -218,13 +217,13 @@ impl GraphExecutor {
         if self.enabled.load(Ordering::SeqCst) {
             None
         } else {
-            self.disabled_reason.lock().unwrap().clone().or_else(|| Some("disabled".to_owned()))
+            self.disabled_reason.plock().clone().or_else(|| Some("disabled".to_owned()))
         }
     }
 
     fn make_current(&self, d: &Driver, device: i32) -> Result<(), String> {
         let ctx = {
-            let mut ctxs = self.contexts.lock().unwrap();
+            let mut ctxs = self.contexts.plock();
             match ctxs.get(&device) {
                 Some(&c) => c,
                 None => {
@@ -246,13 +245,18 @@ impl GraphExecutor {
                 }
             }
         };
-        if CURRENT_CTX.with(|c| c.get()) != ctx {
+        // Ask the driver rather than caching per thread: torch may switch this thread's context
+        // between launches (the self-check runs on Python threads; multi-GPU), and a stale cache
+        // would launch in the wrong context. cuCtxGetCurrent is a thread-local read in the driver.
+        let mut cur: CuContext = std::ptr::null_mut();
+        // SAFETY: out-pointer to a local.
+        let rc = unsafe { (d.ctx_get_current)(&mut cur) };
+        if rc != CUDA_SUCCESS || cur as usize != ctx {
             // SAFETY: a context retained above (never released while the process runs).
             let rc = unsafe { (d.ctx_set_current)(ctx as CuContext) };
             if rc != CUDA_SUCCESS {
                 return Err(format!("cuCtxSetCurrent failed ({rc})"));
             }
-            CURRENT_CTX.with(|c| c.set(ctx));
         }
         Ok(())
     }
@@ -299,7 +303,7 @@ impl GraphExecutor {
         deadline: Option<Instant>,
     ) -> Result<(u32, u32), Refusal> {
         let received = Instant::now();
-        let g = match self.graphs.read().unwrap().get(&key) {
+        let g = match self.graphs.pread().get(&key) {
             Some(g) => g.clone(),
             None => return Err(Refusal::new(Status::Fallback)),
         };

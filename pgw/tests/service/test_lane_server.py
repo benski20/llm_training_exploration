@@ -329,6 +329,39 @@ async def test_revoked_token_closes_lane(tiny_pack_dir: Path, sock_dir: Path, to
         lane.close()
 
 
+class _Ident:
+    """A token identity whose validity the test controls; records the threads that check it."""
+
+    def __init__(self, tenant: str, token_id: str, threads: set[int]) -> None:
+        self.tenant_id, self.token_id, self.valid, self._threads = tenant, token_id, True, threads
+
+    def still_valid(self) -> bool:
+        import threading
+
+        self._threads.add(threading.get_ident())
+        return self.valid
+
+
+async def test_revocation_tracks_every_token_and_checks_off_the_loop(tiny_pack_dir: Path, sock_dir: Path,
+                                                                     pack_fp: str) -> None:
+    import threading
+
+    async with running_app(_settings(tiny_pack_dir, sock_dir)) as app:
+        mgr = app.state.pgw.lane
+        threads: set[int] = set()
+        many = [_Ident("tenant-x", f"tok{i}", threads) for i in range(200)]
+        for ident in many:
+            mgr.open_ticket(ident, pack_fp)
+            mgr.open_ticket(ident, pack_fp)  # repeated opens do not grow the set
+        mgr.open_ticket(_Ident("tenant-y", "toky", threads), pack_fp)
+        assert len(mgr._identities["tenant-x"]) == 200 and mgr.svc.pending_tickets() == 401
+        many[0].valid = False  # the oldest token: outside any recent-identities window
+        await mgr._check_revocations()
+        assert mgr.svc.pending_tickets() == 1  # tenant-x's tickets dropped, tenant-y's kept
+        assert "tok0" not in mgr._identities["tenant-x"] and len(mgr._identities["tenant-x"]) == 199
+        assert threading.get_ident() not in threads  # still_valid never ran on the event loop
+
+
 async def test_without_native_lane_service_runs_on_stream_channel(
         tiny_pack_dir: Path, sock_dir: Path, pack_fp: str, monkeypatch: pytest.MonkeyPatch,
         pack_weights: dict[str, torch.Tensor]) -> None:
@@ -377,7 +410,9 @@ def test_wire_mirror_matches_rust_layout() -> None:
     r = parse_reply(reply)
     assert r.status == LaneStatus.RATE_LIMITED and (r.queue_us, r.compute_us, r.retry_after_ms) == (1, 2, 3)
     assert [s.fatal for s in LaneStatus] == [s.value >= 16 for s in LaneStatus]
-    assert {s for s in LaneStatus if s.fallback} == {LaneStatus.FALLBACK, LaneStatus.UNAVAILABLE, LaneStatus.INTERNAL}
+    assert {s for s in LaneStatus if s.fallback} == {LaneStatus.FALLBACK, LaneStatus.UNAVAILABLE, LaneStatus.INTERNAL,
+                                                    LaneStatus.BUSY}
+    assert LaneStatus.BUSY.fatal  # the connection-cap refusal closes the connection
 
 
 def test_native_device_lock_is_a_lock_drop_in() -> None:

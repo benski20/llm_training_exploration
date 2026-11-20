@@ -17,13 +17,17 @@ Flow:
    in-flight caps, per-tenant row bucket: one budget with the stream channel) and executed by
    a CUDA graph replayed natively (no Python) when one was captured and passed its self-check,
    otherwise by the regular kernel path through the event loop (:meth:`LaneManager._py_execute`).
-4. Refusals ``fallback``, ``unavailable`` and ``internal`` tell the client to resend the
-   byte-identical body on the stream channel under the same request id.
+4. Refusals ``fallback``, ``unavailable``, ``internal`` and ``busy`` tell the client to resend the
+   byte-identical body on the stream channel under the same request id. ``busy`` (the service has
+   its maximum of lane connections open) is fatal: it is the only reply on that connection, which
+   the service then closes; retry the lane after ``retry_after_ms``. The whole ``open`` frame
+   (header and ticket) must arrive within 10 s of connecting.
 
 Fallbacks: no ``pgw_fast`` extension (or one without the lane) -> no lane, ``lane/open`` answers
 ``unavailable`` and gateways stay on the stream channel. No CUDA, no Triton GEMV, a ring other than
 K = 32, a torch without ``CUDAGraph.raw_cuda_graph_exec`` or a failed graph self-check -> the lane
-serves through the kernel path instead of graphs.
+serves through the kernel path instead of graphs. (A self-check mismatch disables graph replay only,
+not the lane: the kernel path it falls back to is the reference the check compares against.)
 
 The constants and helpers at the top mirror the Rust wire format (``rust/pgw-lane/src/proto.rs``)
 for tests and as the reference for the client package (WP-A3).
@@ -107,6 +111,7 @@ class LaneStatus(enum.IntEnum):
     PEER_REFUSED = 20
     VERSION = 21
     NOT_OPEN = 22
+    BUSY = 23
 
     @property
     def fatal(self) -> bool:
@@ -116,7 +121,7 @@ class LaneStatus(enum.IntEnum):
     @property
     def fallback(self) -> bool:
         """Resend the byte-identical body on the stream channel."""
-        return self in (LaneStatus.FALLBACK, LaneStatus.UNAVAILABLE, LaneStatus.INTERNAL)
+        return self in (LaneStatus.FALLBACK, LaneStatus.UNAVAILABLE, LaneStatus.INTERNAL, LaneStatus.BUSY)
 
 
 assert REQUEST_HEADER.size == 48 and REPLY_HEADER.size == 40
@@ -178,6 +183,7 @@ _METRIC_CODE = {
     "unknown_linear": str(ErrorCode.PROTOCOL), "not_open": str(ErrorCode.PROTOCOL),
     "version": str(ErrorCode.VERSION_MISMATCH), "unauthenticated": str(ErrorCode.UNAUTHENTICATED),
     "peer_refused": str(ErrorCode.PERMISSION_DENIED), "fallback": "lane_fallback",
+    "busy": str(ErrorCode.UNAVAILABLE),
 }
 
 
@@ -241,7 +247,9 @@ class LaneManager:
         self._slots: dict[str, int] = {}
         self._tables: dict[int, _Slot] = {}
         self._task: asyncio.Task[None] | None = None
-        self._identities: dict[str, list[Any]] = {}
+        # tenant -> token id -> identity, for revocation: keyed by token so a tenant's identity set
+        # is bounded by its tokens (no eviction window a revoked token could fall out of)
+        self._identities: dict[str, dict[str, Any]] = {}
         self._graphs: list[Any] = []  # torch graphs and buffers kept alive while registered
         self.graph_report = GraphReport()
         self.unavailable_reason: str | None = None
@@ -363,11 +371,9 @@ class LaneManager:
         t = self._tables[slot]
         ticket = secrets.token_bytes(TICKET_LEN)
         self.svc.add_ticket(ticket, tenant, slot, TICKET_TTL_S)
-        if identity is not None and callable(getattr(identity, "still_valid", None)):
-            ids = self._identities.setdefault(tenant, [])
-            if all(i is not identity for i in ids):
-                ids.append(identity)
-                del ids[:-64]
+        token_id = getattr(identity, "token_id", None)
+        if token_id is not None and callable(getattr(identity, "still_valid", None)):
+            self._identities.setdefault(tenant, {})[str(token_id)] = identity
         return {
             "version": LANE_VERSION,
             "transport": "uds",
@@ -412,16 +418,28 @@ class LaneManager:
             await asyncio.sleep(DRAIN_INTERVAL_S)
             try:
                 self.drain_metrics()
-                self._check_revocations()
+                await self._check_revocations()
             except Exception:  # metrics must never stop the lane
                 log.exception("lane metrics drain failed")
 
-    def _check_revocations(self) -> None:
-        for tenant, ids in list(self._identities.items()):
-            if any(not i.still_valid() for i in ids):
-                log.info("revoking lane connections of tenant %s (credentials revoked)", tenant)
-                self.svc.revoke_tenant(tenant)
-                self._identities[tenant] = [i for i in ids if i.still_valid()]
+    async def _check_revocations(self) -> None:
+        """Close the lane connections of tenants whose token was revoked. ``still_valid`` may stat or
+        reload the tokens file, so it runs off the event loop (as the stream channel's watcher does)."""
+        snapshot = [(t, tid, i) for t, ids in self._identities.items() for tid, i in ids.items()]
+        if not snapshot:
+            return
+        dead = await asyncio.to_thread(lambda: [(t, tid) for t, tid, i in snapshot if not i.still_valid()])
+        if not dead or self.svc is None:
+            return
+        for tenant in sorted({t for t, _ in dead}):
+            log.info("revoking lane connections of tenant %s (credentials revoked)", tenant)
+            self.svc.revoke_tenant(tenant)
+        for tenant, tid in dead:
+            ids = self._identities.get(tenant)
+            if ids is not None:
+                ids.pop(tid, None)
+                if not ids:
+                    del self._identities[tenant]
 
     def drain_metrics(self) -> dict[str, Any]:
         """Fold the lane's counters into the service metrics; returns the raw drain (tests)."""
@@ -593,7 +611,9 @@ def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[
                     with torch.cuda.graph(g, pool=pool, stream=stream, capture_error_mode="thread_local"):
                         body()
                     exec_ptr = _as_ptr(g.raw_cuda_graph_exec())
-                mgr._graphs.append(g)
+                # the graph reads ``w`` by address: keep the weight tensor alive with the graph, so an
+                # unload or hot reload cannot free it under a registered graph
+                mgr._graphs.extend([g, w])
                 mgr.svc.register_graph(slot, li, ri, rows, int(device.index or 0), exec_ptr, int(stream.cuda_stream),
                                        int(h_in.data_ptr()), rows * n * 4, int(h_out.data_ptr()), rows * m * 4)
                 rep.captured += 1

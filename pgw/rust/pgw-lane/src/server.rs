@@ -2,7 +2,9 @@
 //! call at a time; a gateway opens one per worker), blocking reads with periodic shutdown checks.
 //!
 //! Per connection: SO_PEERCRED uid check, then an `open` frame with a single-use ticket (bound to a
-//! tenant and a model) within `open_timeout`, then calls. Per call: header parse, table and length
+//! tenant and a model) whose header and ticket must both arrive within `open_timeout` of the accept
+//! (one budget for the whole frame), then calls. A connection beyond `max_connections` gets the
+//! fatal [`Status::Busy`] and is closed. Per call: header parse, table and length
 //! checks **before** the body is read, the tenant's revocation generation, shared admission, the
 //! executor (with the call's deadline), the reply. Refusals below [`crate::proto::FATAL_MIN`] keep the
 //! connection; fatal ones close it after the reply.
@@ -22,6 +24,7 @@ use crate::admission::{Admission, Refusal};
 use crate::exec::{Call, Executor, ModelEntry};
 use crate::proto::{Kind, ReplyHeader, RequestHeader, Status, MAX_ROWS, REQUEST_HEADER_LEN, TICKET_LEN};
 use crate::stats::Stats;
+use crate::sync::{MutexExt, RwLockExt};
 
 /// Listener configuration.
 #[derive(Clone, Debug)]
@@ -36,7 +39,7 @@ pub struct ServerConfig {
     pub deadline_cap_ms: u32,
     /// Most concurrent connections.
     pub max_connections: usize,
-    /// Time to present the ticket after connecting.
+    /// Time to send the whole `open` frame (header and ticket) after the accept.
     pub open_timeout: Duration,
     /// Longest pause inside a frame (header or body) before the connection is dropped.
     pub stall_timeout: Duration,
@@ -60,6 +63,7 @@ impl Default for ServerConfig {
 }
 
 struct Ticket {
+    key: [u8; TICKET_LEN],
     tenant: String,
     model: u32,
     expires: Instant,
@@ -73,7 +77,7 @@ pub struct Shared {
     pub stats: Arc<Stats>,
     executor: RwLock<Option<Arc<dyn Executor>>>,
     models: RwLock<HashMap<u32, Arc<ModelEntry>>>,
-    tickets: Mutex<HashMap<[u8; TICKET_LEN], Ticket>>,
+    tickets: Mutex<Vec<Ticket>>,
     generations: Mutex<HashMap<String, u64>>,
     shutdown: AtomicBool,
     connections: AtomicUsize,
@@ -81,7 +85,7 @@ pub struct Shared {
 
 impl Shared {
     fn generation(&self, tenant: &str) -> u64 {
-        self.generations.lock().unwrap().get(tenant).copied().unwrap_or(0)
+        self.generations.plock().get(tenant).copied().unwrap_or(0)
     }
 }
 
@@ -149,9 +153,24 @@ enum ReadErr {
 /// Fill `buf`. While nothing of the frame has arrived and `idle` is set, waits indefinitely
 /// (checking shutdown every poll); once a byte arrived, the frame must complete within `stall`.
 fn read_full(s: &mut UnixStream, buf: &mut [u8], sh: &Shared, idle: bool, stall: Duration) -> Result<(), ReadErr> {
+    read_until(s, buf, sh, idle, stall, None)
+}
+
+/// [`read_full`] that also fails once `by` passes, whatever has arrived (the pre-auth budget).
+fn read_until(
+    s: &mut UnixStream,
+    buf: &mut [u8],
+    sh: &Shared,
+    idle: bool,
+    stall: Duration,
+    by: Option<Instant>,
+) -> Result<(), ReadErr> {
     let mut got = 0;
     let mut since = Instant::now();
     while got < buf.len() {
+        if by.is_some_and(|b| Instant::now() >= b) {
+            return Err(ReadErr::Stalled);
+        }
         match s.read(&mut buf[got..]) {
             Ok(0) => return Err(ReadErr::Closed),
             Ok(n) => {
@@ -193,6 +212,50 @@ fn refuse(s: &mut UnixStream, status: Status, id: [u8; 16], retry_after_ms: u32)
     write_reply(s, &ReplyHeader::refusal(status, id, retry_after_ms), &[])
 }
 
+/// Constant-time equality of two tickets (no early exit on the first differing byte).
+fn ticket_eq(a: &[u8; TICKET_LEN], b: &[u8; TICKET_LEN]) -> bool {
+    let mut d = 0u8;
+    for i in 0..TICKET_LEN {
+        d |= a[i] ^ b[i];
+    }
+    // keep the accumulated difference opaque so the loop is not turned into an early-exit compare
+    std::hint::black_box(d) == 0
+}
+
+/// Take the live ticket equal to `key` out of `tickets`. Every stored ticket is compared in
+/// constant time (the scan never stops early), so timing reveals at most whether one matched.
+fn take_ticket(tickets: &mut Vec<Ticket>, key: &[u8; TICKET_LEN], now: Instant) -> Option<Ticket> {
+    tickets.retain(|t| t.expires > now);
+    let mut found = None;
+    for (i, t) in tickets.iter().enumerate() {
+        if ticket_eq(&t.key, key) {
+            found = Some(i);
+        }
+    }
+    found.map(|i| tickets.swap_remove(i))
+}
+
+/// Holds one admitted call in flight; exits the shared admission on drop (also on unwind).
+struct Admitted<'a> {
+    admission: &'a Admission,
+    tenant: &'a str,
+}
+
+impl Drop for Admitted<'_> {
+    fn drop(&mut self) {
+        self.admission.exit(self.tenant);
+    }
+}
+
+/// Counts one open connection; released on drop (also on unwind).
+struct ConnSlot(Arc<Shared>);
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.0.connections.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 struct Conn {
     tenant: String,
     model: Arc<ModelEntry>,
@@ -213,8 +276,11 @@ fn open(s: &mut UnixStream, sh: &Shared, cfg: &ServerConfig) -> Option<Conn> {
         let _ = refuse(s, Status::PeerRefused, [0; 16], 0);
         return None;
     }
+    // one budget for the whole open frame, counted from the accept: a slow peer cannot hold a
+    // connection slot unauthenticated for longer than `open_timeout`
+    let by = Some(Instant::now() + cfg.open_timeout);
     let mut hb = [0u8; REQUEST_HEADER_LEN];
-    if read_full(s, &mut hb, sh, false, cfg.open_timeout).is_err() {
+    if read_until(s, &mut hb, sh, false, cfg.open_timeout, by).is_err() {
         return None;
     }
     let h = match RequestHeader::parse(&hb) {
@@ -229,19 +295,19 @@ fn open(s: &mut UnixStream, sh: &Shared, cfg: &ServerConfig) -> Option<Conn> {
         return None;
     }
     let mut ticket = [0u8; TICKET_LEN];
-    if read_full(s, &mut ticket, sh, false, cfg.stall_timeout).is_err() {
+    if read_until(s, &mut ticket, sh, false, cfg.open_timeout, by).is_err() {
         return None;
     }
-    let entry = sh.tickets.lock().unwrap().remove(&ticket);
+    let entry = take_ticket(&mut sh.tickets.plock(), &ticket, Instant::now());
     ticket.fill(0);
     let entry = match entry {
-        Some(t) if t.expires > Instant::now() => t,
-        _ => {
+        Some(t) => t,
+        None => {
             let _ = refuse(s, Status::Unauthenticated, h.request_id, 0);
             return None;
         }
     };
-    let model = match sh.models.read().unwrap().get(&entry.model) {
+    let model = match sh.models.pread().get(&entry.model) {
         Some(m) => m.clone(),
         None => {
             let _ = refuse(s, Status::Unauthenticated, h.request_id, 0);
@@ -319,6 +385,7 @@ fn serve(mut s: UnixStream, sh: Arc<Shared>, cfg: ServerConfig) {
             match sh.admission.admit(&conn.tenant, h.rows as u64, true) {
                 Err(r) => Err(r),
                 Ok(()) => {
+                    let admitted = Admitted { admission: &sh.admission, tenant: &conn.tenant };
                     let call = Call {
                         tenant: &conn.tenant,
                         model: conn.model_id,
@@ -331,12 +398,12 @@ fn serve(mut s: UnixStream, sh: Arc<Shared>, cfg: ServerConfig) {
                         deadline,
                     };
                     out.clear();
-                    let ex = sh.executor.read().unwrap().clone();
+                    let ex = sh.executor.pread().clone();
                     let r = match ex {
                         Some(ex) => ex.execute(&call, &mut out),
                         None => Err(Refusal::new(Status::Fallback)),
                     };
-                    sh.admission.exit(&conn.tenant);
+                    drop(admitted);
                     match r {
                         Ok(d) if out.len() == out_len => Ok(d),
                         Ok(_) => Err(Refusal::new(Status::Internal)),
@@ -397,7 +464,7 @@ impl LaneServer {
             stats: Arc::new(Stats::default()),
             executor: RwLock::new(executor),
             models: RwLock::new(HashMap::new()),
-            tickets: Mutex::new(HashMap::new()),
+            tickets: Mutex::new(Vec::new()),
             generations: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             connections: AtomicUsize::new(0),
@@ -410,24 +477,23 @@ impl LaneServer {
                     Ok((mut s, _)) => {
                         let _ = s.set_nonblocking(false);
                         if sh.connections.load(Ordering::SeqCst) >= cfg2.max_connections {
-                            let _ = refuse(&mut s, Status::Unavailable, [0; 16], 1000);
+                            let _ = refuse(&mut s, Status::Busy, [0; 16], 1000);
                             continue;
                         }
                         sh.connections.fetch_add(1, Ordering::SeqCst);
+                        let slot = ConnSlot(sh.clone());
                         let (sh3, cfg3) = (sh.clone(), cfg2.clone());
+                        // a failed spawn drops the closure, and with it the slot
                         let h = std::thread::Builder::new().name("pgw-lane-conn".into()).spawn(move || {
-                            serve(s, sh3.clone(), cfg3);
-                            sh3.connections.fetch_sub(1, Ordering::SeqCst);
+                            let _slot = slot;
+                            // a panic ends this connection only: the guards release its admission
+                            // and connection counts during unwinding, locks recover from poisoning
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(s, sh3, cfg3)));
                         });
-                        match h {
-                            Ok(h) => {
-                                let mut v = c2.lock().unwrap();
-                                v.retain(|j| !j.is_finished());
-                                v.push(h);
-                            }
-                            Err(_) => {
-                                sh.connections.fetch_sub(1, Ordering::SeqCst);
-                            }
+                        if let Ok(h) = h {
+                            let mut v = c2.plock();
+                            v.retain(|j| !j.is_finished());
+                            v.push(h);
                         }
                     }
                     Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
@@ -457,38 +523,38 @@ impl LaneServer {
 
     /// Replace the executor (calls in flight finish on the old one).
     pub fn set_executor(&self, ex: Option<Arc<dyn Executor>>) {
-        *self.shared.executor.write().unwrap() = ex;
+        *self.shared.executor.pwrite() = ex;
     }
 
     /// Publish (or replace) a model under slot `id`.
     pub fn set_model(&self, id: u32, model: ModelEntry) {
-        self.shared.models.write().unwrap().insert(id, Arc::new(model));
+        self.shared.models.pwrite().insert(id, Arc::new(model));
     }
 
     /// Remove a model: tickets for it stop working; open connections keep their table until they
     /// close (the Python side unloads only after draining).
     pub fn remove_model(&self, id: u32) {
-        self.shared.models.write().unwrap().remove(&id);
+        self.shared.models.pwrite().remove(&id);
     }
 
     /// Accept `ticket` (single use) for `tenant` and model `model` until `ttl` from now.
     pub fn add_ticket(&self, ticket: [u8; TICKET_LEN], tenant: &str, model: u32, ttl: Duration) {
         let now = Instant::now();
-        let mut t = self.shared.tickets.lock().unwrap();
-        t.retain(|_, v| v.expires > now);
-        t.insert(ticket, Ticket { tenant: tenant.to_owned(), model, expires: now + ttl });
+        let mut t = self.shared.tickets.plock();
+        t.retain(|v| v.expires > now);
+        t.push(Ticket { key: ticket, tenant: tenant.to_owned(), model, expires: now + ttl });
     }
 
     /// Unused tickets.
     pub fn pending_tickets(&self) -> usize {
         let now = Instant::now();
-        self.shared.tickets.lock().unwrap().values().filter(|v| v.expires > now).count()
+        self.shared.tickets.plock().iter().filter(|v| v.expires > now).count()
     }
 
     /// Close every connection of `tenant` at its next call and drop its unused tickets.
     pub fn revoke_tenant(&self, tenant: &str) {
-        *self.shared.generations.lock().unwrap().entry(tenant.to_owned()).or_default() += 1;
-        self.shared.tickets.lock().unwrap().retain(|_, v| v.tenant != tenant);
+        *self.shared.generations.plock().entry(tenant.to_owned()).or_default() += 1;
+        self.shared.tickets.plock().retain(|v| v.tenant != tenant);
     }
 
     /// Open connections.
@@ -500,12 +566,12 @@ impl LaneServer {
     /// first) and remove the socket file. Waits up to `timeout` for connection threads.
     pub fn stop(&self, timeout: Duration) {
         self.shared.shutdown.store(true, Ordering::SeqCst);
-        if let Some(h) = self.listener.lock().unwrap().take() {
+        if let Some(h) = self.listener.plock().take() {
             let _ = h.join();
         }
         let _ = std::fs::remove_file(&self.cfg.path);
         let t0 = Instant::now();
-        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.conns.lock().unwrap());
+        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.conns.plock());
         for h in handles {
             while !h.is_finished() && t0.elapsed() < timeout {
                 std::thread::sleep(Duration::from_millis(5));

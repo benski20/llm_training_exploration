@@ -104,11 +104,15 @@ pub enum Status {
     Version = 21,
     /// A call before a successful open, or a second open. Fatal.
     NotOpen = 22,
+    /// The service has `max_connections` lane connections open: it closes this one before reading
+    /// anything. Fatal; resend the byte-identical body on the stream channel (which applies the
+    /// same admission) and retry the lane after `retry_after_ms`.
+    Busy = 23,
 }
 
 impl Status {
     /// Every status, in code order (tests, metrics tables).
-    pub const ALL: [Status; 13] = [
+    pub const ALL: [Status; 14] = [
         Status::Ok,
         Status::Fallback,
         Status::Unavailable,
@@ -122,6 +126,7 @@ impl Status {
         Status::PeerRefused,
         Status::Version,
         Status::NotOpen,
+        Status::Busy,
     ];
 
     /// Numeric code on the wire.
@@ -141,7 +146,7 @@ impl Status {
 
     /// The client should resend the byte-identical body on the stream channel.
     pub fn is_fallback(self) -> bool {
-        matches!(self, Status::Fallback | Status::Unavailable | Status::Internal)
+        matches!(self, Status::Fallback | Status::Unavailable | Status::Internal | Status::Busy)
     }
 
     /// Short snake-case name (metrics label, Python mirror).
@@ -160,6 +165,7 @@ impl Status {
             Status::PeerRefused => "peer_refused",
             Status::Version => "version",
             Status::NotOpen => "not_open",
+            Status::Busy => "busy",
         }
     }
 }
@@ -389,6 +395,7 @@ mod tests {
             assert_eq!(s.is_fatal(), s.code() >= 16);
         }
         assert!(Status::Fallback.is_fallback() && Status::Unavailable.is_fallback() && Status::Internal.is_fallback());
+        assert!(Status::Busy.is_fallback() && Status::Busy.is_fatal());
         assert!(!Status::RateLimited.is_fallback() && !Status::Ok.is_fallback());
         assert_eq!(Status::from_code(6), None);
     }

@@ -1,10 +1,11 @@
 //! What the lane serves (model, linear and ring tables) and how a call is executed.
 
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Instant;
 
 use crate::admission::Refusal;
 use crate::proto::Status;
+use crate::sync::MutexExt;
 
 /// One linear of a served model, in the order the ticket publishes (`lane_open` reply).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,16 +116,16 @@ pub struct DeviceLock {
 impl DeviceLock {
     /// Acquire, waiting until `deadline` (`None` = forever). False on timeout.
     pub fn acquire(&self, deadline: Option<Instant>) -> bool {
-        let mut held = self.held.lock().unwrap();
+        let mut held = self.held.plock();
         while *held {
             match deadline {
-                None => held = self.cv.wait(held).unwrap(),
+                None => held = self.cv.wait(held).unwrap_or_else(PoisonError::into_inner),
                 Some(d) => {
                     let now = Instant::now();
                     if now >= d {
                         return false;
                     }
-                    held = self.cv.wait_timeout(held, d - now).unwrap().0;
+                    held = self.cv.wait_timeout(held, d - now).unwrap_or_else(PoisonError::into_inner).0;
                 }
             }
         }
@@ -134,7 +135,7 @@ impl DeviceLock {
 
     /// Acquire without waiting.
     pub fn try_acquire(&self) -> bool {
-        let mut held = self.held.lock().unwrap();
+        let mut held = self.held.plock();
         if *held {
             return false;
         }
@@ -144,7 +145,7 @@ impl DeviceLock {
 
     /// Release. Returns false if it was not held.
     pub fn release(&self) -> bool {
-        let mut held = self.held.lock().unwrap();
+        let mut held = self.held.plock();
         let was = *held;
         *held = false;
         drop(held);
@@ -154,7 +155,7 @@ impl DeviceLock {
 
     /// True while held.
     pub fn locked(&self) -> bool {
-        *self.held.lock().unwrap()
+        *self.held.plock()
     }
 }
 
