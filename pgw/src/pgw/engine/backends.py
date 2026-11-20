@@ -558,6 +558,16 @@ class _Chunk:
     wr_wiped: bool = False
 
 
+def _vacuous(u: Any, status: int) -> bool:
+    """True if the Freivalds vectors ``u`` are all zero (a check against them proves nothing).
+
+    Cheap for live vectors: the first word of a uniform ``u`` is non-zero with probability
+    ``1 - 2^-K``, so the full scan runs only after a failure or for wiped vectors."""
+    if status in (1, 2) or not u.flat[0]:
+        return not bool(u.any())
+    return False
+
+
 def _wipe(t: torch.Tensor) -> None:
     """Zero a buffer in place. CPU tensors go through numpy: torch's multithreaded fill is up to
     ~10x slower for these sizes when the CPU is busy (OpenMP threads contend), same result."""
@@ -852,6 +862,9 @@ class MaskedBackend(LinearBackend):
 
     def _check_soundness(self, lid: Any, n: int, u: Any, token: Any = None) -> None:
         """Raise if the current extent's check vectors give less than ``min_soundness_bits``."""
+        if u is not None and int(getattr(u, "size", 0) or 0) > 0 and _vacuous(u, 0):
+            # Wiped vectors (a reservation closed under us): Freivalds with u = 0 accepts anything.
+            raise MaskReuseError("mask reservation check vectors are wiped (reservation closed)")
         if self.min_soundness_bits <= 0:
             return
         if token is not None and token in self._sound_ok:
@@ -1483,8 +1496,8 @@ class MaskedBackend(LinearBackend):
                 raise ProtocolError(f"compute response item is malformed: {exc}") from exc
             for i in in_place:  # the kernel zeroed every W r it was given (any returned status)
                 prep.chunks[i].wr_wiped = True
-            if status in (1, 2) and checked and first.u is not None and not first.u.any():
-                status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
+            if checked and first.u is not None and _vacuous(first.u, status):
+                status = 3  # vectors wiped (reservation closed): an all-zero u verifies nothing
             if status:
                 self._raise_status(status, bad, first.lid, sum(prep.chunks[i].rows for i in idxs), bound)
             ot = torch.from_numpy(out)
@@ -1517,8 +1530,8 @@ class MaskedBackend(LinearBackend):
             wr.fill(0)
             _wipe(ch.wr)
             ch.wr_wiped = True
-        if status in (1, 2) and checked and ch.u is not None and not ch.u.any():
-            status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
+        if checked and ch.u is not None and _vacuous(ch.u, status):
+            status = 3  # vectors wiped (reservation closed): an all-zero u verifies nothing
         self._raise_status(status, bad, ch.lid, ch.rows, bound)
         return torch.from_numpy(out)
 

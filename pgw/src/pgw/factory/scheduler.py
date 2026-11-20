@@ -20,6 +20,12 @@ Crash safety and resume:
   recovery and simply re-plans from the real inventory, which is the source of truth.
 * A ``factory.lock`` file lock prevents two factory processes from driving the same store or
   export directory at once.
+
+In-memory ring (``ring_sink``, design ``research/plans/mask-ringbuffer-design.md`` §5.2): per
+``(fingerprint, ring)`` that has a gateway ring, plans are ordered most urgent first: ring below
+``ring_low_fraction`` of its capacity, store below low water, ring not full, store below target.
+Ring plans fill free slabs (``RingFull`` just ends the plan), skip ``factory-state.json`` (nothing
+on disk to recover) and the disk budget, and a recycled slab wakes the loop at once.
 """
 
 from __future__ import annotations
@@ -43,6 +49,7 @@ from pgw.core.ring import RingParams
 from pgw.factory.governor import FactoryStopped, Throttle
 from pgw.factory.metrics import FactoryMetrics
 from pgw.factory.sinks import StoreSink
+from pgw.maskstore.ringbuf import RingFull
 
 __all__ = ["FactoryLock", "FactoryScheduler", "FactoryState", "RefillPlan", "ramp_segment_slots"]
 
@@ -67,6 +74,9 @@ class RefillPlan:
     available: int = 0
     low_water: int = 0
     target: int = 0
+    tier: str = "store"
+    #: 0 ring below its low fraction, 1 store below low water, 2 ring not full, 3 store below target.
+    priority: int = 1
 
     @property
     def slots(self) -> int:
@@ -209,6 +219,24 @@ class FactoryLock:
             self._fd = None
 
 
+class _NullSink:
+    """No disk tier (``ring_only``): never planned, never written."""
+
+    kind = "none"
+
+    def available_slots(self, fingerprint: str, ring: RingParams) -> int:
+        return 0
+
+    def writer(self, *a: Any, **kw: Any) -> Any:  # pragma: no cover - never planned
+        raise ConfigError("no mask store configured (ring only)")
+
+    def default_levels(self) -> tuple[int, int] | None:
+        return None
+
+    def state_dir(self) -> Path | None:
+        return None
+
+
 # ---- scheduler -----------------------------------------------------------------------------------
 class FactoryScheduler:
     """Polls inventory and runs the generator until each ``(fingerprint, ring)`` reaches target.
@@ -222,6 +250,9 @@ class FactoryScheduler:
         generators: ``{(fingerprint, ring_name): MaskGenerator}``.
         throttle: Shared :class:`Throttle` (default: built from the settings).
         metrics: ``PGWMetrics``-like object, ``None`` (auto) or ``False`` (disabled).
+        ring_sink: Optional :class:`pgw.factory.sinks.RingSink` (gateway in-memory rings; ``store`` may
+            then be ``None`` for ring-only operation).
+        ring_low_fraction: A ring below this fraction of its capacity beats every store plan.
     """
 
     def __init__(
@@ -232,11 +263,20 @@ class FactoryScheduler:
         *,
         throttle: Throttle | None = None,
         metrics: Any = None,
+        ring_sink: Any = None,
+        ring_low_fraction: float = 0.5,
     ):
         if not generators:
             raise ConfigError("factory scheduler needs at least one generator")
         self.settings = settings
-        self.sink: Any = store if hasattr(store, "available_slots") else StoreSink(store)
+        if store is None and ring_sink is None:
+            raise ConfigError("factory scheduler needs a store, a sink or a ring sink")
+        self.ring_sink = ring_sink
+        self.ring_low_fraction = float(ring_low_fraction)
+        if store is None:
+            self.sink: Any = _NullSink()
+        else:
+            self.sink = store if hasattr(store, "available_slots") else StoreSink(store)
         self.generators: dict[tuple[str, str], Any] = {}
         for (fp, ring), gen in generators.items():
             rname = RingParams.from_name(ring).name
@@ -281,8 +321,12 @@ class FactoryScheduler:
                 )
         self._wake = threading.Event()
         self._resumed = False
+        #: Ring segments produced by this process (not persisted: they die with the process).
+        self.ring_segments = 0
         if hasattr(self.sink, "add_low_water_listener"):
             self.sink.add_low_water_listener(self._on_low_water)
+        if ring_sink is not None and hasattr(ring_sink, "add_free_listener"):
+            ring_sink.add_free_listener(self._wake.set)  # a recycled slab wakes the loop at once
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def _on_low_water(self, inventory: Any) -> None:
@@ -352,8 +396,10 @@ class FactoryScheduler:
     def plan(self) -> list[RefillPlan]:
         """Compute refill work from the current inventory (most urgent first)."""
         seg = int(self.settings.segment_slots)
-        plans: list[RefillPlan] = []
+        plans: list[RefillPlan] = self._ring_plans()
         for (fp, ring) in self.generators:
+            if getattr(self.sink, "kind", "store") == "none":
+                continue
             avail = int(self.sink.available_slots(fp, RingParams.from_name(ring)))
             key = (fp, ring)
             below = avail < self.low_water_slots
@@ -373,7 +419,8 @@ class FactoryScheduler:
                 # ramp reaches segment_slots, the full plan below covers the whole deficit at once.
                 reason = (f"no masks yet: a first segment of {size} slots" if avail == 0 else
                           f"{avail} slots available < low water {self.low_water_slots}: ramp segment of {size} slots")
-                plans.append(RefillPlan(fp, ring, 1, size, reason, avail, self.low_water_slots, self.target_slots))
+                plans.append(RefillPlan(fp, ring, 1, size, reason, avail, self.low_water_slots, self.target_slots,
+                                        priority=1))
                 continue
             deficit = max(self.target_slots - avail, 1)
             n = max(1, math.ceil(deficit / seg))
@@ -383,10 +430,38 @@ class FactoryScheduler:
                 f"{avail} slots available < low water {self.low_water_slots}" if below
                 else f"refilling: {avail} slots available < target {self.target_slots}"
             )
-            plans.append(RefillPlan(fp, ring, n, seg, reason, avail, self.low_water_slots, self.target_slots))
-        plans.sort(key=lambda p: (p.fill_ratio, p.available))
+            plans.append(RefillPlan(fp, ring, n, seg, reason, avail, self.low_water_slots, self.target_slots,
+                                    priority=1 if below else 3))
         self._heartbeat()
-        return self._fit_to_disk(plans)
+        # Only store plans are cut by the disk budget (ring plans write no disk).
+        out = [p for p in plans if p.tier == "ring"]
+        out += self._fit_to_disk(sorted((p for p in plans if p.tier != "ring"),
+                                        key=lambda p: (p.priority, p.fill_ratio, p.available)))
+        out.sort(key=lambda p: (p.priority, p.fill_ratio, p.available))
+        return out
+
+    def _ring_plans(self) -> list[RefillPlan]:
+        """One plan per ring with free slabs: priority 0 below ``ring_low_fraction``, else 2 (not full)."""
+        rs = self.ring_sink
+        if rs is None:
+            return []
+        out: list[RefillPlan] = []
+        for (fp, ring), gen in self.generators.items():
+            lv = rs.levels(fp, RingParams.from_name(ring))
+            if lv is None:
+                continue
+            avail, cap, free, seg = lv
+            max_slots = getattr(gen, "max_segment_slots", None)
+            if callable(max_slots):
+                seg = min(seg, int(max_slots()))
+            if free <= 0 or seg <= 0 or avail >= cap:
+                continue
+            low = avail < self.ring_low_fraction * cap
+            reason = (f"ring {avail}/{cap} slots < {self.ring_low_fraction:.0%} of capacity" if low
+                      else f"ring not full ({avail}/{cap} slots)")
+            out.append(RefillPlan(fp, ring, int(free), int(seg), reason, avail, int(self.ring_low_fraction * cap),
+                                  cap, tier="ring", priority=0 if low else 2))
+        return out
 
     def _heartbeat(self) -> None:
         self.last_progress_at = time.time()
@@ -450,9 +525,11 @@ class FactoryScheduler:
     def _produce(self, plan: RefillPlan) -> str:
         gen = self.generators[(plan.fingerprint, plan.ring)]
         st = self.state
-        st.in_progress = {"fingerprint": plan.fingerprint, "ring": plan.ring, "slots": plan.slots_per_segment,
-                          "started_at": time.time(), "pid": os.getpid()}
-        self._save_state()
+        ring_tier = plan.tier == "ring"
+        if not ring_tier:  # a ring segment leaves nothing on disk to recover after a crash
+            st.in_progress = {"fingerprint": plan.fingerprint, "ring": plan.ring, "slots": plan.slots_per_segment,
+                              "started_at": time.time(), "pid": os.getpid()}
+            self._save_state()
         t0 = time.perf_counter()
         kw: dict[str, Any] = {}
         if getattr(self.settings, "segment_chunk_slots", None) is not None:
@@ -460,15 +537,18 @@ class FactoryScheduler:
         if getattr(self.settings, "segment_chunk_bytes", None) is not None:
             kw["store_chunk_bytes"] = int(self.settings.segment_chunk_bytes)
         seg_id: str = gen.generate_into_store(
-            self.sink, plan.slots_per_segment, checks=self.settings.checks, chunk_slots=self.settings.chunk_slots,
-            factory_id=self.settings.factory_id, throttle=self.throttle, **kw,
+            self.ring_sink if ring_tier else self.sink, plan.slots_per_segment, checks=self.settings.checks,
+            chunk_slots=self.settings.chunk_slots, factory_id=self.settings.factory_id, throttle=self.throttle, **kw,
         )
         dt = time.perf_counter() - t0
-        st.in_progress = None
         st.record_segment(plan.fingerprint, plan.ring, plan.slots_per_segment, dt, seg_id)
         st.last_run_at = time.time()
         st.last_error = None
-        self._save_state()
+        if ring_tier:
+            self.ring_segments += 1
+        else:
+            st.in_progress = None
+            self._save_state()
         self.metrics.segment_done(plan.fingerprint, plan.ring, str(getattr(gen, "device", "?")),
                                   plan.slots_per_segment, plan.slots_per_segment / dt if dt > 0 else 0.0)
         self._heartbeat()
@@ -488,16 +568,17 @@ class FactoryScheduler:
         if not plans:
             log.debug("all inventories at target; nothing to do")
             return []
-        remaining = {(p.fingerprint, p.ring): p for p in plans}
-        avail = {(p.fingerprint, p.ring): p.available for p in plans}
-        left = {(p.fingerprint, p.ring): p.segments for p in plans}
+        remaining = {(p.fingerprint, p.ring, p.tier): p for p in plans}
+        avail = {k: p.available for k, p in remaining.items()}
+        left = {k: p.segments for k, p in remaining.items()}
         produced: list[str] = []
         errors: list[PGWError | Exception] = []
         log.info("factory plan: %s", "; ".join(f"{short_fingerprint(p.fingerprint)}/{p.ring} x{p.segments} ({p.reason})"
                                                for p in plans))
         while left:
             self.throttle.check()
-            key = min(left, key=lambda k: (avail[k] / self.target_slots if self.target_slots else 0.0, avail[k]))
+            key = min(left, key=lambda k: (remaining[k].priority,
+                                           avail[k] / remaining[k].target if remaining[k].target else 0.0, avail[k]))
             plan = remaining[key]
             try:
                 seg_id = self._produce(plan)
@@ -505,6 +586,10 @@ class FactoryScheduler:
                 self.state.in_progress = None
                 self._save_state()
                 raise
+            except RingFull:
+                log.debug("ring %s/%s has no free slab; re-planning later", short_fingerprint(key[0]), key[1])
+                del left[key]
+                continue
             except Exception as exc:
                 self.state.in_progress = None
                 self.state.last_error = f"{type(exc).__name__}: {getattr(exc, 'message', str(exc))}"[:500]
@@ -614,11 +699,24 @@ class FactoryScheduler:
             "disk_limited": self.disk_limited,
             "disk_budget_bytes": self.disk_budget(),
             "interrupted_segment": self.state.in_progress,
+            "ring_segments": self.ring_segments,
+            "rings": self._ring_status(),
             "last_error": self.state.last_error,
             "last_segment_id": self.state.last_segment_id,
             "models": rows,
             "plan": [asdict(p) for p in self.plan()],
         }
+
+    def _ring_status(self) -> list[dict[str, Any]]:
+        if self.ring_sink is None:
+            return []
+        out = []
+        for fp, ring in self.generators:
+            lv = self.ring_sink.levels(fp, RingParams.from_name(ring))
+            if lv is not None:
+                out.append({"fingerprint": fp, "ring": ring, "available_slots": lv[0], "capacity_slots": lv[1],
+                            "free_slabs": lv[2], "segment_slots": lv[3]})
+        return out
 
     def _lock_held_elsewhere(self) -> bool:
         if self.lock.held:

@@ -27,6 +27,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -666,6 +667,12 @@ class ModelRuntime:
                 if self.mode == "masked":
                     if self.mask_store is None:
                         raise ConfigError(f"model {self.name!r}: masked mode needs a mask store")
+                    attach = getattr(self.mask_store, "attach_model", None)
+                    if attach is not None:  # in-memory mask ring (mask_ring.enabled)
+                        await asyncio.to_thread(
+                            attach, self.name, pack.fingerprint, self.ring, pack.linear_specs(),
+                            max_session_slots=self.max_context + int(self.settings.mask_window_tokens),
+                        )
                     try:
                         client, models = await self._connect()
                     except BaseException as exc:
@@ -1131,8 +1138,13 @@ class ModelRuntime:
         if first >= cap:
             return res, first
         store, fp, ring = self.mask_store, self.fingerprint, self.ring
+        # Tiered source: an extension fails fast instead of waiting for the factory (it runs inside a
+        # batch step; a wait there would stall every session of the batch).
+        reserve_ext = getattr(store, "reserve_extension", None)
 
         def extend(slots: int) -> Any:  # runs in the backend's worker thread
+            if reserve_ext is not None:
+                return reserve_ext(fp, ring, slots, session_id=rid)
             return store.reserve(fp, ring, slots, session_id=rid)
 
         return WindowedReservation(res, extend, cap=cap, window=window), first
@@ -1306,7 +1318,10 @@ class InferenceRuntime:
         models = settings.all_models()
         settings.validate_policy(models)
         self._own_store = False
-        if mask_store is None and any(m.mode == "masked" for m in models):
+        ring_cfg = settings.mask_ring
+        masked = [m for m in models if m.mode == "masked"]
+        ring_only = ring_cfg.enabled and ring_cfg.ring_only and bool(masked)
+        if mask_store is None and masked and not ring_only:
             from pgw.maskstore.admin import open_store
             from pgw.maskstore.config import MaskStoreSettings
 
@@ -1321,6 +1336,18 @@ class InferenceRuntime:
                 except Exception:
                     mask_store.close()
                     raise
+        self._base_store = mask_store
+        self.embedded_factory: Any = None
+        if ring_cfg.enabled and masked:
+            from pgw.maskstore.tiered import build_tiered_source
+
+            try:
+                mask_store = build_tiered_source(mask_store, ring_cfg, min_soundness_bits=settings.min_soundness_bits,
+                                                 masked_models=len(masked))
+            except Exception:
+                if self._own_store and mask_store is not None:
+                    mask_store.close()
+                raise
         self.mask_store = mask_store
         transports = transports or {}
         self.runtimes: dict[str, ModelRuntime] = {
@@ -1394,7 +1421,25 @@ class InferenceRuntime:
         if errors and len(errors) == len(self.runtimes):
             raise errors[0]
         self._start_housekeeping()
+        await asyncio.to_thread(self._start_embedded_factory)
         self._started = True
+
+    def _start_embedded_factory(self) -> None:
+        cfg = self.settings.mask_ring
+        if not (cfg.enabled and cfg.embed_factory) or self.embedded_factory is not None:
+            return
+        if not hasattr(self.mask_store, "attach_model"):
+            return
+        from pgw.factory.embedded import EmbeddedFactory
+
+        masked = [m for m in self.settings.all_models() if m.mode == "masked"]
+        paths = list(dict.fromkeys(m.pack_path for m in masked))
+        defaults = {"pack_path": paths[0], "extra_pack_paths": tuple(paths[1:]),
+                    "rings": tuple(dict.fromkeys(m.ring for m in masked))}
+        fac = EmbeddedFactory(self.mask_store, defaults=defaults, ring_low_fraction=cfg.ring_low_fraction,
+                              run_dir=cfg.run_dir or Path(self.settings.data_dir) / "maskring")
+        fac.start()
+        self.embedded_factory = fac
 
     # ---- mask store housekeeping ------------------------------------------------------------------
     def _start_housekeeping(self) -> None:
@@ -1446,14 +1491,19 @@ class InferenceRuntime:
 
     async def stop(self) -> None:
         """Stop all model runtimes."""
+        fac, self.embedded_factory = self.embedded_factory, None
+        if fac is not None:  # first: no factory writes while rings close
+            await asyncio.to_thread(fac.stop)
         for rt in self.runtimes.values():
             try:
                 await rt.stop()
             except Exception:
                 log.exception("stopping model %s failed", rt.name)
         await asyncio.to_thread(self._stop_housekeeping)
-        if self._own_store and self.mask_store is not None:
-            await asyncio.to_thread(self.mask_store.close)
+        if self.mask_store is not self._base_store and self.mask_store is not None:
+            await asyncio.to_thread(self.mask_store.close)  # rings: revoke, wipe, munmap
+        if self._own_store and self._base_store is not None:
+            await asyncio.to_thread(self._base_store.close)
 
     async def reload(self, model: str) -> ModelRuntime:
         """Stop and restart one model (re-verifies pack and service)."""

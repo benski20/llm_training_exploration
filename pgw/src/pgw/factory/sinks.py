@@ -3,6 +3,9 @@
 ``StoreSink``
     Customer-run factory writing straight into the customer's store. Inventory is the store's
     unconsumed slots, so consumption by the gateway drives refills.
+``RingSink``
+    Embedded factory filling the gateway's in-memory mask rings (:mod:`pgw.maskstore.ringbuf`).
+    Ring segments are never written to a file, the store or an export.
 ``ExportSink``
     Independent partner factory (SPEC 7.7). Segment DEKs are HPKE-sealed to the customer's X25519
     public key (``kek_id = "hpke:<key id>"``), so the partner cannot decrypt its own output once the
@@ -35,6 +38,7 @@ from pgw.core.types import LinearSpec
 __all__ = [
     "ExportSink",
     "RecipientWrapProvider",
+    "RingSink",
     "SegmentFileInfo",
     "SegmentSink",
     "StoreSink",
@@ -136,12 +140,20 @@ def _segment_info(path: Path) -> SegmentFileInfo:
 
 # ---- local store ---------------------------------------------------------------------------------
 class StoreSink:
-    """Adapter around a :class:`pgw.maskstore.MaskStore` (customer-run factory)."""
+    """Adapter around a :class:`pgw.maskstore.MaskStore` (customer-run factory).
+
+    Args:
+        store: The mask store.
+        seeds: Optional :class:`pgw.maskstore.ringbuf.SeedRegistry` shared with the in-memory rings:
+            every store segment's seed is claimed there first, so one seed can never land in both
+            tiers (the store's own seed table only knows store segments).
+    """
 
     kind = "store"
 
-    def __init__(self, store: Any):
+    def __init__(self, store: Any, *, seeds: Any = None):
         self.store = store
+        self.seeds = seeds
 
     def available_slots(self, fingerprint: str, ring: RingParams) -> int:
         """Unconsumed slots in the store."""
@@ -149,7 +161,12 @@ class StoreSink:
         return sum(int(i.slots_available) for i in invs if i.fingerprint == fingerprint and i.ring.upper() == ring.name)
 
     def writer(self, fingerprint: str, ring: RingParams, specs: Sequence[LinearSpec], **kw: Any) -> Any:
-        """Delegate to :meth:`MaskStore.writer`."""
+        """Delegate to :meth:`MaskStore.writer` (after claiming the seed in the shared registry, if any)."""
+        seed = kw.get("seed")
+        if self.seeds is not None and seed is not None:
+            from pgw.maskstore.ringbuf import seed_digest
+
+            self.seeds.claim(seed_digest(seed), "store")
         return self.store.writer(fingerprint, ring, specs, **kw)
 
     def add_low_water_listener(self, fn: Callable[[Any], None]) -> None:
@@ -178,6 +195,95 @@ class StoreSink:
         st = getattr(self.store, "settings", None)
         root = getattr(st, "root", None) or getattr(self.store, "root", None)
         return Path(root) if root is not None else None
+
+
+# ---- in-memory ring (embedded factory) -----------------------------------------------------------
+def store_knows_seed(store: Any, digest: str) -> bool:
+    """True if ``store``'s seed table holds ``digest`` (``SHA-256`` seed id; read-only query)."""
+    lock = getattr(store, "_lock", None)
+    conn = getattr(store, "conn", None)
+    if lock is None or conn is None or not hasattr(lock, "hold"):
+        return False
+    with lock.hold():
+        row = conn.execute("SELECT 1 FROM segments WHERE seed_hash=?", (digest,)).fetchone()
+    return row is not None
+
+
+class RingSink:
+    """Writes segments into the gateway's in-memory mask rings (design §5.1).
+
+    Args:
+        source: A :class:`pgw.maskstore.tiered.TieredMaskSource` (or anything with ``ring_for``).
+        store: Optional disk store whose seed table is checked too (seeds never repeat across tiers).
+
+    No path leads from a ring slab to a file: there is no ``export_segment``, ``recover`` or
+    ``state_dir``. :meth:`writer` raises :class:`pgw.maskstore.ringbuf.RingFull` when no slab is free,
+    which the scheduler treats as "re-plan", not as an error.
+    """
+
+    kind = "ring"
+
+    def __init__(self, source: Any, *, store: Any = None):
+        self.source = source
+        self.store = store
+
+    def ring(self, fingerprint: str, ring: RingParams) -> Any:
+        """The open :class:`MaskRing` of ``(fingerprint, ring)``, or ``None``."""
+        fn = getattr(self.source, "ring_for", None)
+        if fn is not None:
+            return fn(fingerprint, ring)
+        mr = dict(self.source).get((fingerprint, ring.name))
+        return None if mr is None or mr.closed else mr
+
+    def has_ring(self, fingerprint: str, ring: RingParams) -> bool:
+        return self.ring(fingerprint, ring) is not None
+
+    def available_slots(self, fingerprint: str, ring: RingParams) -> int:
+        """Unreserved slots in the ring (0 without a ring)."""
+        mr = self.ring(fingerprint, ring)
+        return 0 if mr is None else int(mr.available)
+
+    def levels(self, fingerprint: str, ring: RingParams) -> tuple[int, int, int, int] | None:
+        """``(available, capacity_slots, free_slabs, segment_slots)`` or ``None`` without a ring."""
+        mr = self.ring(fingerprint, ring)
+        if mr is None:
+            return None
+        c = mr.counts()
+        return int(c["available_slots"]), int(mr.capacity_slots), int(c["free_slabs"]), int(mr.segment_slots)
+
+    def writer(self, fingerprint: str, ring: RingParams, specs: Sequence[LinearSpec], **kw: Any) -> Any:
+        """A :class:`pgw.maskstore.ringbuf.RingSegmentWriter` on a free slab.
+
+        Raises:
+            ConfigError: no ring for this model (or a ``destination``, wrong specs, too many slots).
+            MaskReuseError: the seed is known to the store or was used before in this process.
+            RingFull: no free slab right now.
+        """
+        if kw.get("destination") is not None:
+            raise ConfigError("ring segments are never exported (destination is not allowed)")
+        mr = self.ring(fingerprint, ring)
+        if mr is None:
+            raise ConfigError(f"no in-memory mask ring for {fingerprint[:12]}/{ring.name}")
+        seed = kw.get("seed")
+        if seed is not None and self.store is not None:
+            from pgw.core.errors import MaskReuseError
+            from pgw.maskstore.ringbuf import seed_digest
+
+            if store_knows_seed(self.store, seed_digest(seed)):
+                raise MaskReuseError("this seed is already registered in the disk store (mask reuse)")
+        return mr.writer(fingerprint, ring, specs, **kw)
+
+    def add_free_listener(self, fn: Callable[[], None]) -> None:
+        """Call ``fn()`` whenever a slab of any (current or future) ring becomes free."""
+        add = getattr(self.source, "add_ring_listener", None)
+        if add is not None:
+            add(lambda mr: mr.add_free_listener(fn))
+            return
+        for mr in dict(self.source).values():
+            mr.add_free_listener(fn)
+
+    def default_levels(self) -> tuple[int, int] | None:
+        return None
 
 
 # ---- partner export ------------------------------------------------------------------------------

@@ -9,6 +9,11 @@ further reservations while generating, so an early stop burns at most one window
 The engine's masked backend calls :meth:`WindowedReservation.ensure` before it takes any row of a
 step (in its worker thread), so an extension that fails (store exhausted) raises
 :class:`pgw.core.MaskExhaustedError` before any mask of the batch is consumed.
+
+Parts every linear is done with are closed eagerly, at the start of the next token step (the
+:meth:`ensure` call for the model's first linear), never mid-step: closing zeroes a part's check
+vectors. A long session therefore holds open only the parts it still reads, so it never pins every
+slab of an in-memory mask ring (:mod:`pgw.maskstore.ringbuf`) until it ends.
 """
 
 from __future__ import annotations
@@ -67,6 +72,12 @@ class WindowedReservation:
         self._cur: dict[str, int] = {}
         self.ring = getattr(first, "ring", None)
         self.fingerprint = getattr(first, "fingerprint", None)
+        keys = getattr(first, "linear_keys", None)
+        #: The first linear of a forward pass: its ensure() marks the start of a token step.
+        self._step_key: str | None = keys[0] if keys else None
+        #: Parts before this index are closed (retired).
+        self._live = 0
+        self.retired = 0
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -134,6 +145,8 @@ class WindowedReservation:
         with self._lock:
             if self._closed:
                 raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            if self._step_key is not None and self._k(lid) == self._step_key:
+                self._retire_locked()
             have = self._reserved_left(lid)
             if have >= rows:
                 return
@@ -149,6 +162,27 @@ class WindowedReservation:
             self._parts.append(part)
             self.extensions += 1
             log.debug("extended mask reservation by %d slots (%d parts)", n, len(self._parts))
+
+    def _retire_locked(self) -> None:
+        """Close leading parts (never the last) whose every linear is fully taken; chained parts retire
+        their own exhausted pieces. Called only at the start of a token step (see module docstring)."""
+        parts = self._parts
+        last = len(parts) - 1
+        while self._live < last:
+            p = parts[self._live]
+            keys = getattr(p, "linear_keys", None)
+            if not keys or any(int(p.remaining(k)) > 0 for k in keys):
+                break
+            try:
+                p.close()
+            except Exception:  # pragma: no cover - close() burns; never fail a step for it
+                log.exception("closing an exhausted mask reservation part failed")
+            self._live += 1
+            self.retired += 1
+        p = parts[min(self._live, last)]
+        retire = getattr(p, "retire_exhausted", None)
+        if retire is not None:
+            retire()
 
     def rows_until_boundary(self, lid: LinearId | str) -> int:
         """Rows of ``lid`` left in the current part's current extent."""
