@@ -1,0 +1,108 @@
+pack ready in 17.1s
+factory: 28 slots in 4.3s
+{
+  "preset": "7b",
+  "ring": "K32A12C27",
+  "rows": 1,
+  "sessions": 1,
+  "gateway_ms_per_call": {
+    "qkv": 0.665718043498363,
+    "o": 0.6780786956339754,
+    "gate_up": 0.9218309565105064,
+    "down": 0.9879640434746761
+  },
+  "gateway_ms_per_call_avg": 0.8133979347793803,
+  "gateway_ms_per_session_call": 0.8133979347793803,
+  "prepare_ms_per_call": 0.5229689239122901,
+  "finish_ms_per_call": 0.2904290108670901,
+  "gateway_ms_per_layer": 3.253591739117521,
+  "gateway_s_per_step_full_model": 0.09110056869529058,
+  "service_s_per_step_full_model": 2.9674123323478576,
+  "wall_s": 2.520869242999993,
+  "wall_ms_per_call": 27.40075264130427
+}
+         14711 function calls in 0.065 seconds
+
+   Ordered by: cumulative time
+   List reduced from 113 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       92    0.000    0.000    0.041    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1280(prepare_calls)
+       92    0.001    0.000    0.041    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:814(_prepare)
+       92    0.006    0.000    0.039    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:833(_prepare_native)
+       92    0.000    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1305(finish_prepared)
+       92    0.003    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:997(_finish)
+       92    0.000    0.000    0.017    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:819(_take)
+       92    0.001    0.000    0.017    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:422(take_checked)
+       92    0.000    0.000    0.015    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:448(_take_locked)
+       92    0.002    0.000    0.013    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1131(_finish_groups_native)
+       92    0.010    0.000    0.010    0.000 {built-in method pgw_fast.finish_group}
+       92    0.000    0.000    0.008    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:466(_mask_rows_locked)
+       92    0.000    0.000    0.008    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:648(_mask_rows_keyed)
+       92    0.001    0.000    0.007    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:475(_read_wr)
+      184    0.007    0.000    0.007    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       23    0.001    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/core/prng.py:141(ring_uniform_rows_with_key)
+       92    0.005    0.000    0.005    0.000 {built-in method pgw_fast.quantize_mask_pack}
+       92    0.002    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:766(_precheck)
+       12    0.000    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:655(_decrypt_buf)
+       12    0.001    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/format.py:419(decrypt_into)
+       69    0.002    0.000    0.002    0.000 {built-in method pgw_fast.mask_rows_with_key}
+      368    0.002    0.000    0.002    0.000 {method 'numpy' of 'torch._C.TensorBase' objects}
+       92    0.000    0.000    0.002    0.000 /usr/lib/python3.13/uuid.py:714(uuid4)
+       92    0.001    0.000    0.002    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:548(_wipe)
+      276    0.002    0.000    0.002    0.000 {built-in method torch.from_numpy}
+       92    0.000    0.000    0.002    0.000 {method 'all' of 'numpy.ndarray' objects}
+       23    0.001    0.000    0.001    0.000 {method 'update' of 'cryptography.hazmat.bindings._rust.openssl.ciphers.CipherContext' objects}
+       92    0.000    0.000    0.001    0.000 /usr/local/lib/python3.13/dist-packages/numpy/_core/_methods.py:68(_all)
+       92    0.001    0.000    0.001    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+      104    0.001    0.000    0.001    0.000 {method 'fill' of 'numpy.ndarray' objects}
+       12    0.001    0.000    0.001    0.000 {method 'update_into' of 'cryptography.hazmat.bindings._rust.openssl.ciphers.AEADDecryptionContext' objects}
+       92    0.001    0.000    0.001    0.000 {built-in method pgw_fast.unpack_rows_u32}
+       23    0.000    0.000    0.001    0.000 /usr/local/lib/python3.13/dist-packages/cryptography/hazmat/primitives/ciphers/base.py:107(encryptor)
+       92    0.000    0.000    0.001    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:723(_current_checks)
+       92    0.001    0.000    0.001    0.000 /usr/lib/python3.13/uuid.py:142(__init__)
+       23    0.001    0.000    0.001    0.000 {built-in method ciphers.create_encryption_ctx}
+
+
+
+         14711 function calls in 0.065 seconds
+
+   Ordered by: internal time
+   List reduced from 113 to 25 due to restriction <25>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       92    0.010    0.000    0.010    0.000 {built-in method pgw_fast.finish_group}
+      184    0.007    0.000    0.007    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       92    0.006    0.000    0.039    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:833(_prepare_native)
+       92    0.005    0.000    0.005    0.000 {built-in method pgw_fast.quantize_mask_pack}
+       92    0.003    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:997(_finish)
+       69    0.002    0.000    0.002    0.000 {built-in method pgw_fast.mask_rows_with_key}
+      368    0.002    0.000    0.002    0.000 {method 'numpy' of 'torch._C.TensorBase' objects}
+      276    0.002    0.000    0.002    0.000 {built-in method torch.from_numpy}
+       92    0.002    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:766(_precheck)
+       92    0.002    0.000    0.013    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:1131(_finish_groups_native)
+       23    0.001    0.000    0.001    0.000 {method 'update' of 'cryptography.hazmat.bindings._rust.openssl.ciphers.CipherContext' objects}
+       92    0.001    0.000    0.001    0.000 {method 'reduce' of 'numpy.ufunc' objects}
+      104    0.001    0.000    0.001    0.000 {method 'fill' of 'numpy.ndarray' objects}
+       12    0.001    0.000    0.001    0.000 {method 'update_into' of 'cryptography.hazmat.bindings._rust.openssl.ciphers.AEADDecryptionContext' objects}
+       92    0.001    0.000    0.001    0.000 {built-in method pgw_fast.unpack_rows_u32}
+       23    0.001    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/core/prng.py:141(ring_uniform_rows_with_key)
+       92    0.001    0.000    0.007    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:475(_read_wr)
+       92    0.001    0.000    0.001    0.000 /usr/lib/python3.13/uuid.py:142(__init__)
+       92    0.001    0.000    0.017    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:422(take_checked)
+       12    0.001    0.000    0.001    0.000 {built-in method posix.pread}
+       92    0.001    0.000    0.002    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:548(_wipe)
+       23    0.001    0.000    0.001    0.000 {built-in method ciphers.create_encryption_ctx}
+       12    0.001    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/format.py:419(decrypt_into)
+       92    0.001    0.000    0.041    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:814(_prepare)
+       92    0.001    0.000    0.001    0.000 {method 'detach' of 'torch._C.TensorBase' objects}
+
+
+
+
+---stderr---
+
+Writing model shards:   0%|          | 0/1 [00:00<?, ?it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  7.04it/s]
+Writing model shards: 100%|██████████| 1/1 [00:00<00:00,  7.03it/s]
+mask inventory low: 9f72ce779c34 K32A12C27 has 28 slots (< 4096)

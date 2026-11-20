@@ -131,7 +131,7 @@ Measure your own hardware with `pgw factory benchmark --pack <pack> --ring <ring
 | resource | sizing | basis |
 |---|---|---|
 | CPU | 4 vCPU per gateway for 8B at moderate load. Mask regeneration (ChaCha20) and unmasking are about 2.2 M ring elements per token; the SPEC target is 10 ms/token on CPU | estimate (SPEC 14 target) |
-| RAM | plain weights (embeddings, LM head, norms; about 4.2 GB in fp32 for Llama-3-8B with its untied LM head, half that with `--plain-dtype float16`) + KV cache (`2·L·kv_heads·head_dim·4 bytes` per token per session; 256 KB per token for 8B in fp32) + mask buffers | analytic |
+| RAM | plain weights (embeddings, LM head, norms; about 4.2 GB in fp32 for Llama-3-8B with its untied LM head, half that with `--plain-dtype bfloat16`, which is lossless for bfloat16 checkpoints and lets the gateway read a 16-bit LM head with float32-identical logits; `float16` also halves it but rounds the weights) + KV cache (`2·L·kv_heads·head_dim·4 bytes` per token per session; 256 KB per token for 8B in fp32) + mask buffers | analytic |
 | Disk | mask store (section 4) on NVMe | analytic |
 | GPU | not needed | — |
 

@@ -1,0 +1,42 @@
+2026-11-20 03:26:28,852 INFO pgw.maskstore.store: opened mask store /tmp/pgw_bench/qwen7b/masks (store 5dc209e5, generation 6)
+2026-11-20 03:26:28,934 INFO uvicorn.error: Started server process [10361]
+2026-11-20 03:26:28,934 INFO uvicorn.error: Waiting for application startup.
+2026-11-20 03:26:28,934 INFO pgw.audit: {"action": "start", "event": "gateway.start", "ts": "2026-11-20T03:26:28.934Z"}
+2026-11-20 03:26:40,623 INFO pgw.modelpack.loader: verified 5 file(s) of model pack qwen7b (linears,plain,tokenizer)
+2026-11-20 03:26:40,624 INFO pgw.modelpack.loader: opened model pack qwen7b fp=41a5b3a483ae components=linears,plain,tokenizer verify=full
+2026-11-20 03:26:45,916 INFO numexpr.utils: NumExpr defaulting to 4 threads.
+2026-11-20 03:26:47,106 INFO pgw.wire.client: pgw wire connected
+2026-11-20 03:26:51,072 INFO pgw.engine.model: engine model ready: arch=qwen2 layers=28 hidden=3584 heads=28/4 vocab=152064 backend=MaskedBackend
+2026-11-20 03:26:54,781 INFO pgw.modelpack.loader: verified 2 file(s) of model pack qwen7b-draft (linears,plain,tokenizer)
+2026-11-20 03:26:54,781 INFO pgw.modelpack.loader: opened model pack qwen7b-draft fp=0b72ba3a69ec components=linears,plain,tokenizer verify=full
+2026-11-20 03:26:55,176 INFO pgw.engine.model: engine model ready: arch=qwen2 layers=24 hidden=896 heads=14/2 vocab=151936 backend=FloatBackend
+2026-11-20 03:26:55,176 INFO pgw.gateway.runtime: model qwen7b: speculative decoding with draft qwen7b-draft (float32 on cpu, 4-8 tokens per step)
+2026-11-20 03:26:55,176 INFO pgw.gateway.runtime: model runtime started
+2026-11-20 03:26:55,177 INFO pgw.maskstore.store: holding the mask store gateway owner lock (reservations of previous instances are dead)
+2026-11-20 03:26:55,177 INFO uvicorn.error: Application startup complete.
+2026-11-20 03:26:55,178 INFO uvicorn.error: Uvicorn running on http://127.0.0.1:36927 (Press CTRL+C to quit)
+2026-11-20 03:26:55,362 INFO uvicorn.access: 127.0.0.1:43472 - "GET /readyz HTTP/1.1" 200
+2026-11-20 03:26:55,393 INFO uvicorn.access: 127.0.0.1:43476 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:28:32,999 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 97574.7, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-b18867c280a941a3ae90013a", "ring": "K32A12C27", "status": 200, "stream": false, "ts": "2026-11-20T03:28:32.999Z", "ttft_ms": 55849.7}
+2026-11-20 03:28:33,000 INFO uvicorn.access: 127.0.0.1:43492 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:28:33,043 INFO uvicorn.access: 127.0.0.1:58204 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:28:33,082 INFO uvicorn.access: 127.0.0.1:58218 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:28:33,139 INFO uvicorn.access: 127.0.0.1:58228 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:29:17,025 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 43913.4, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-48188a3cfe8c4ac18aceff48", "ring": "K32A12C27", "status": 200, "stream": true, "ts": "2026-11-20T03:29:17.025Z", "ttft_ms": 3623.5}
+2026-11-20 03:29:17,064 INFO uvicorn.access: 127.0.0.1:39326 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:29:17,104 INFO uvicorn.access: 127.0.0.1:39328 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:31:50,816 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 153628.6, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-701a34d84b344ae8a725fd1a", "ring": "K32A12C27", "status": 200, "stream": false, "ts": "2026-11-20T03:31:50.815Z", "ttft_ms": 3419.4}
+2026-11-20 03:31:50,817 INFO uvicorn.access: 127.0.0.1:39338 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:31:55,124 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 157921.8, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-a51d0344bdbd456a9de74978", "ring": "K32A12C27", "status": 200, "stream": false, "ts": "2026-11-20T03:31:55.124Z", "ttft_ms": 15425.8}
+2026-11-20 03:31:55,124 INFO uvicorn.access: 127.0.0.1:39348 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:31:55,127 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 157922.6, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-ffb379a34bab4dc2964dee17", "ring": "K32A12C27", "status": 200, "stream": false, "ts": "2026-11-20T03:31:55.127Z", "ttft_ms": 15424.2}
+2026-11-20 03:31:55,127 INFO uvicorn.access: 127.0.0.1:39362 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:31:55,130 INFO pgw.audit: {"completion_tokens": 64, "duration_ms": 157927.4, "endpoint": "chat", "event": "inference", "finish_reason": "length", "key_id": "7158b8679d74", "masks_burned": 50, "masks_consumed": 182, "masks_reserved": 232, "mode": "masked", "model": "qwen7b", "prompt_tokens": 40, "queue_ms": 0.0, "request_id": "chatcmpl-a34b72ff2267437483414741", "ring": "K32A12C27", "status": 200, "stream": false, "ts": "2026-11-20T03:31:55.130Z", "ttft_ms": 15424.2}
+2026-11-20 03:31:55,130 INFO uvicorn.access: 127.0.0.1:39344 - "POST /v1/chat/completions HTTP/1.1" 200
+2026-11-20 03:31:55,195 INFO uvicorn.access: 127.0.0.1:54384 - "GET /admin/status HTTP/1.1" 200
+2026-11-20 03:31:55,249 INFO uvicorn.error: Shutting down
+2026-11-20 03:31:55,350 INFO uvicorn.error: Waiting for application shutdown.
+2026-11-20 03:31:55,406 INFO pgw.gateway.runtime: model runtime stopped
+2026-11-20 03:31:55,442 INFO pgw.audit: {"action": "stop", "event": "gateway.stop", "ts": "2026-11-20T03:31:55.442Z"}
+2026-11-20 03:31:55,442 INFO uvicorn.error: Application shutdown complete.
+2026-11-20 03:31:55,442 INFO uvicorn.error: Finished server process [10361]

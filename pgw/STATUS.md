@@ -78,7 +78,9 @@ gateway now keeps the head in bfloat16 when that is lossless (checked at load) a
 kernel widens each weight to float32 on load (exact), so logits are bit-identical to the float32 head
 while half the bytes are read per token (1.1 GB instead of 2.2 GB for Qwen2.5-7B, and 1.1 GB less
 gateway memory). Local measurement, 7B shapes with 4 layers and a stub service (`benchmarks/e2e_local.py
---preset 7b4 --null-service`): 56 ms -> 42 ms per decode step.
+--preset 7b4 --null-service`): 56 ms -> 42 ms per decode step. Kaggle run 23 showed no change (0.436
+s/token) because its packs used `--plain-dtype float16`, which rounds the bfloat16 weights so the
+head cannot be compacted; the Kaggle jobs now pack with `--plain-dtype bfloat16` (lossless).
 
 ## Update 2026-11-19
 

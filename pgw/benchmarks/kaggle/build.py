@@ -52,7 +52,7 @@ JOBS: dict[str, dict] = {
                                                                   "-q", "-rs", "--timeout", "900"], "timeout": 1500},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
-            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
+            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
             "--draft-model", QWEN05, "--spec-tokens", "8", "--draft-device", "cpu", "cuda:1",
             "--loadtest", "1x1", "1x5", "4x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 7800},
@@ -104,7 +104,7 @@ JOBS: dict[str, dict] = {
         {"kind": "doctor"},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda",
-            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
             "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2", "--factory-bench-slots", "256"],
          "timeout": 6600},
     ]},
@@ -125,7 +125,7 @@ JOBS: dict[str, dict] = {
          "timeout": 1800},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda",
-            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
             "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2",
             "--factory-bench-slots", "256"],
          "timeout": 6600},
@@ -134,7 +134,7 @@ JOBS: dict[str, dict] = {
     "pgw-gpu-3b": {"steps": [
         {"kind": "validate", "label": "qwen3b", "args": [
             "--model", QWEN3, "--label", "qwen3b", "--device", "cuda", "--ref-device", "cuda",
-            "--plain-dtype", "float16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
+            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "32", "--concurrent", "8",
             "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2", "--factory-bench-slots", "256"],
          "timeout": 6600},
     ]},

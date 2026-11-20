@@ -1,0 +1,36 @@
+[gpu_validate 03:17:07] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28 /tmp/pgw_bench/qwen7b/pack ... ok (269.8s)
+[gpu_validate 03:17:10] pgw inspect /tmp/pgw_bench/qwen7b/pack --json ... ok (3.8s)
+[gpu_validate 03:17:37] pgw pack /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct/snapshots/7ae557604adf67be50417f59c2c2f167def9a775 /tmp/pgw_bench/qwen7b/draft_pack ... ok (19.6s)
+[gpu_validate 03:19:13] reference: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or"
+[gpu_validate 03:19:17] pgw maskstore init --root ... ok (3.3s)
+[gpu_validate 03:21:48] pgw factory generate --pack ... ok (151.1s)
+[gpu_validate 03:22:03] pgw bench factory --pack ... ok (15.0s)
+[gpu_validate 03:22:05] pgw service token create ... ok (2.5s)
+[gpu_validate 03:22:08] pgw gateway keys create ... ok (2.8s)
+[gpu_validate 03:24:17] chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 03:24:48] stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 3.098, 'prefill_s_per_prompt_token': 0.0775, 'decode_s_per_token': 0.436, 'decode_tokens_per_s': 2.294, 'wall_s': 30.61, 'gateway_cpu_s': 28.83, 'backend_delta': {'calls': 7280, 'rows': 11536, 'round_trips': 7280, 'bytes_up': 342573056, 'bytes_down': 572923904, 'freivalds_checked': 7280, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 15.390056067991281, 'local_seconds': 9.050310093021608}, 'gateway_local_engine_s_per_token': 0.087, 'remote_s_per_token': 0.148}
+[gpu_validate 03:26:25] concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 97.5, 'generated_tokens_per_s': 2.626, 'all_tokens_per_s': 4.267, 'gateway_cpu_s_per_token': 0.2184}
+[gpu_validate 03:28:33] spec_chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 03:29:17] spec_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 3.68, 'prefill_s_per_prompt_token': 0.092, 'decode_s_per_token': 0.639, 'decode_tokens_per_s': 1.565, 'wall_s': 43.98, 'gateway_cpu_s': 68.37, 'backend_delta': {'calls': 2800, 'rows': 20384, 'round_trips': 2800, 'bytes_up': 605323264, 'bytes_down': 1012350976, 'freivalds_checked': 2800, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 9.662679540999761, 'local_seconds': 10.400215137993428}, 'gateway_local_engine_s_per_token': 0.1, 'remote_s_per_token': 0.0929}
+[gpu_validate 03:31:55] spec_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 158.04, 'generated_tokens_per_s': 1.62, 'all_tokens_per_s': 2.632, 'gateway_cpu_s_per_token': 0.6011}
+[gpu_validate 03:33:50] spec_cuda1_chat: "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller waves. This scattering, known as Rayleigh scattering, makes the sky blue during clear, sunny days. At sunrise and sunset, the sky can appear red or" identical: True True
+[gpu_validate 03:34:22] spec_cuda1_stream: {'text_identical': True, 'logprobs_identical': True, 'ttft_s': 3.31, 'prefill_s_per_prompt_token': 0.0828, 'decode_s_per_token': 0.447, 'decode_tokens_per_s': 2.237, 'wall_s': 31.51, 'gateway_cpu_s': 41.67, 'backend_delta': {'calls': 2800, 'rows': 20384, 'round_trips': 2800, 'bytes_up': 605323264, 'bytes_down': 1012350976, 'freivalds_checked': 2800, 'freivalds_skipped': 0, 'integrity_failures': 0, 'remote_seconds': 8.84127986499061, 'local_seconds': 9.569797826988179}, 'gateway_local_engine_s_per_token': 0.092, 'remote_s_per_token': 0.085}
+[gpu_validate 03:36:25] spec_cuda1_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 123.07, 'generated_tokens_per_s': 2.08, 'all_tokens_per_s': 3.38, 'gateway_cpu_s_per_token': 0.4153}
+[gpu_validate 03:36:28] loadtest sessions=1 rows=1: 4.449641061583656 token-rows/s
+[gpu_validate 03:36:32] loadtest sessions=1 rows=5: 14.677621036121343 token-rows/s
+[gpu_validate 03:36:37] loadtest sessions=4 rows=1: 6.607829260895145 token-rows/s
+
+---stderr---
+
+Fetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]
+Fetching 11 files:   9%|▉         | 1/11 [00:00<00:01,  6.20it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 11 files:  36%|███▋      | 4/11 [00:00<00:00, 13.14it/s]
+Fetching 11 files:  64%|██████▎   | 7/11 [00:20<00:00, 13.14it/s]
+Fetching 11 files:  73%|███████▎  | 8/11 [01:11<00:32, 10.76s/it]
+Fetching 11 files: 100%|██████████| 11/11 [01:11<00:00,  6.46s/it]
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]
+Fetching 7 files:  29%|██▊       | 2/7 [00:00<00:00, 15.82it/s]
+Fetching 7 files:  86%|████████▌ | 6/7 [00:00<00:00, 28.43it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.10it/s]
