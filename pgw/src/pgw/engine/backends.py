@@ -8,6 +8,16 @@
 
 All backends return float32 ``(T, m)`` including the bias, computed as
 ``y = yq * sx[t] * sw[j] + b[j]`` in float64 then cast (SPEC section 5) for the integer backends.
+
+Chat-speed integration in :class:`MaskedBackend` (WP-A4b; every option keeps the bits of the plain
+reference and sends the provider nothing new):
+
+* TripEngine: the native trip kernels (``pgw_fast.trip_*``) with constant-time width selection, prefill
+  blocks on the native pool, and a deferred Freivalds check joined before the session's next payload
+  (and never deferred for the model's last linear, so before logits leave);
+* ``sync_trip_ok``: synchronous trips for decode passes when a trip-lane client is configured;
+* E2 exact local linears (qkv and o on the gateway, decided once at start-up);
+* speculation padding rows (uniform random, no mask taken, dummy finish) and dummy calls.
 """
 
 from __future__ import annotations
@@ -56,6 +66,10 @@ from pgw.core.ringmm import INT_MM_MAX_INNER, cpu_int8_fast, int8_digit_gemm
 from pgw.core.types import LinearId
 
 __all__ = [
+    "DUMMY",
+    "LOCAL_ATTENTION_KINDS",
+    "LOCAL_LINEAR_MODES",
+    "PAD_ROWS",
     "BackendStats",
     "FloatBackend",
     "LinearBackend",
@@ -106,6 +120,14 @@ class BackendStats:
     decode_calls: int = 0
     decode_remote_seconds: float = 0.0
     decode_local_seconds: float = 0.0
+    #: Freivalds output halves run on the native helper thread and joined later (deferred checks).
+    deferred_checks: int = 0
+    #: Speculation padding rows sent (uniform random, no mask taken) and dummy (all-padding) calls.
+    pad_rows: int = 0
+    dummy_calls: int = 0
+    #: Calls and rows of linears computed exactly on the gateway (E2 local linears; no round trip).
+    local_calls: int = 0
+    local_rows: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add(self, **kw: float) -> None:
@@ -556,6 +578,34 @@ class _Chunk:
     payload: bytes | None = None  # packed x_hat
     token: Any = None  # names the check vectors (equal tokens: identical u/uw); None = unknown
     wr_wiped: bool = False
+    #: TripEngine with a deferred check: the Freivalds input half ``uw . x_hat`` (rows, c) from prepare.
+    rhs: np.ndarray | None = None
+    #: Speculation padding appended to this chunk's wire item: rows and their packed payload (uniform
+    #: random ring elements; no mask row taken, so nothing to unmask).
+    pad: int = 0
+    pad_payload: bytes | None = None
+
+
+@dataclass
+class _Filler:
+    """A wire item made only of padding rows: a ``dummy`` call (or a padded call without real rows)."""
+
+    call_index: int
+    lid: LinearId
+    rows: int
+    payload: bytes
+    checks: tuple[Any, Any] | None = None  # (u, uw) when the reservation's current vectors are known
+
+
+@dataclass
+class _PendingCheck:
+    """A Freivalds output half running on the native helper thread (deferred check)."""
+
+    reservations: tuple[Any, ...]  # strong references: their ids stay unique while this is pending
+    check: Any  # pgw_fast.TripCheck
+    lid: LinearId
+    rows: int
+    request_id: str
 
 
 def _vacuous(u: Any, status: int) -> bool:
@@ -587,6 +637,49 @@ def _env_flag(name: str, default: bool) -> bool:
     return default
 
 
+#: Native trip kernels the TripEngine needs (chat-speed WP-A4a).
+_TRIP_FUNCS = ("trip_prepare_into", "trip_finish_into", "trip_freivalds_submit")
+
+#: ``LinearCall.meta`` keys of speculation padding (fixed-R verify passes, WP-A4b / WP-A7):
+#: ``PAD_ROWS``: this many padding rows are appended to the call's wire item (uniform random ring
+#: elements, indistinguishable from ``xq + r mod 2^K``; no mask row is taken for them and their outputs
+#: are dropped after a dummy finish). ``DUMMY``: every row of the call is padding (mask-free dummy pass
+#: on the real code path: ``x`` is quantized and masked with a fresh local random ``r``); its result is
+#: all zeros.
+PAD_ROWS = "pad_rows"
+DUMMY = "dummy"
+
+#: Linear kinds of the ``attention`` local-linear policy (E2: qkv and o computed on the gateway).
+LOCAL_ATTENTION_KINDS: frozenset[str] = frozenset({"qkv", "o"})
+LOCAL_LINEAR_MODES = ("off", "attention", "auto")
+
+
+def _is_lane_client(client: Any) -> bool:
+    """True for a :class:`pgw.wire.lane.LaneComputeClient` (also behind a ``__getattr__`` wrapper)."""
+    cfg = getattr(client, "lane_config", None)
+    if cfg is None:
+        return False
+    try:
+        from pgw.wire.lane import LaneConfig
+    except ImportError:  # pragma: no cover - lane module always present
+        return False
+    return isinstance(cfg, LaneConfig)
+
+
+def _pad_rows(call: LinearCall) -> int:
+    meta = call.meta
+    if not meta:
+        return 0
+    v = meta.get(PAD_ROWS, 0)
+    if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+        raise ConfigError(f"{call.id}: meta[{PAD_ROWS!r}] must be a non-negative int, got {v!r}")
+    return v
+
+
+def _is_dummy(call: LinearCall) -> bool:
+    return bool(call.meta) and bool(call.meta.get(DUMMY, False))
+
+
 def _wr_int64(wr: torch.Tensor) -> np.ndarray:
     """``W r`` as an int64 array: the tensor's own buffer, or a copy of a uint32 one (zero it after use)."""
     a = wr.numpy()
@@ -601,6 +694,14 @@ class _Prepared:
     metas: list[_MaskedMeta]
     request: Any  # ComputeRequest, or None when every call has zero rows
     t_prepare: float
+    #: Chunks prepared by the TripEngine (native trip kernels): finished by ``trip_finish_into``.
+    trip: bool = False
+    #: Mask reservations of the calls (deferred checks are keyed by them).
+    reservations: tuple[Any, ...] = ()
+    #: Padding-only items (dummy calls), and the order of the request's items when there are any:
+    #: ``("c", chunk index)`` or ``("f", filler index)``; ``None`` = one item per chunk, in order.
+    fillers: list[_Filler] = field(default_factory=list)
+    items_map: list[tuple[str, int]] | None = None
 
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
@@ -608,6 +709,9 @@ class _Prepared:
             if not ch.wr_wiped:
                 _wipe(ch.wr)
                 ch.wr_wiped = True
+            if ch.rhs is not None:
+                ch.rhs.fill(0)
+                ch.rhs = None
 
 
 class MaskedBackend(LinearBackend):
@@ -640,6 +744,22 @@ class MaskedBackend(LinearBackend):
         min_soundness_bits: Refuse (before any mask row is taken) segments whose Freivalds vectors
             give fewer bits of soundness for a linear (:func:`pgw.core.freivalds.soundness_bits`).
             The gateway passes its ``min_soundness_bits`` setting (default 20); 0 disables.
+        trip_engine: Prepare and finish with the native trip kernels (constant-time activation width
+            selection; chat-speed WP-A4a/A4b). ``None``: on with a trip-lane client
+            (:class:`pgw.wire.lane.LaneComputeClient`), else ``PGW_TRIP_ENGINE`` (default off).
+            Bit-identical; a per-linear self-check falls back to today's kernels.
+        deferred_check: With the TripEngine, run each trip's Freivalds output half on the native
+            helper thread and join it before the session's next payload (the model's last linear is
+            always checked synchronously). ``None``: on with the TripEngine (``PGW_DEFERRED_CHECK``).
+        sync_trips: :meth:`sync_trip_ok` says yes for decode passes of at most ``sync_trip_max_rows``
+            rows (the engine's synchronous decode loop). ``None``: on with a trip-lane client and the
+            TripEngine (``PGW_SYNC_TRIPS``).
+        local_linears: E2 policy, ``off`` (default), ``attention`` or ``auto``
+            (:meth:`configure_local_linears`); ``local_rtt_s`` is the round trip ``auto`` compares with.
+
+    Speculation padding (fixed-R verify passes): ``LinearCall.meta[PAD_ROWS]`` / ``meta[DUMMY]``, see
+    :data:`PAD_ROWS`. Padding rows are uniform random ring elements, take no mask row and are dropped
+    after a dummy finish that still verifies them.
 
     Raises (from forward):
         MaskExhaustedError, IntegrityError, FingerprintMismatchError, ServiceUnavailableError.
@@ -661,6 +781,11 @@ class MaskedBackend(LinearBackend):
         min_soundness_bits: float = 0.0,
         prepare_many: bool | None = None,
         mask_prefetch: bool | None = None,
+        trip_engine: bool | None = None,
+        deferred_check: bool | None = None,
+        sync_trips: bool | None = None,
+        local_linears: str = "off",
+        local_rtt_s: float | None = None,
     ):
         if not 0.0 <= freivalds_rate <= 1.0:
             raise ConfigError("freivalds_rate must be in [0, 1]")
@@ -729,6 +854,53 @@ class MaskedBackend(LinearBackend):
         #: after :meth:`warm_weight_norms`; anything else is a cold-start penalty worth alerting on).
         self.hot_weight_loads = 0
 
+        # ---- chat-speed WP-A4b: TripEngine, deferred checks, synchronous trips, local linears ----
+        lane_client = _is_lane_client(client)
+        self._trip_native = all(native_available(f) for f in _TRIP_FUNCS)
+        #: TripEngine: prepare and finish with the native trip kernels (``pgw_fast.trip_*``, WP-A4a):
+        #: the activation bit width is selected in constant time (every row evaluates the same public
+        #: number of widths), prefill blocks run on the native pool, and the Freivalds check can be
+        #: deferred. Bit-identical to the other paths (tested, plus a per-linear self-check with
+        #: fallback). Default: on with a trip-lane client (faster trips make gateway timing more
+        #: visible), else ``PGW_TRIP_ENGINE`` (off).
+        self.trip_engine = ((_env_flag("PGW_TRIP_ENGINE", lane_client) if trip_engine is None else bool(trip_engine))
+                            and self._trip_native and ring.k % 8 == 0 and 8 <= ring.k <= 56)
+        #: Deferred Freivalds check (TripEngine only): the output half ``u . y_hat`` of a trip runs on
+        #: the native helper thread while the gateway continues with the plaintext step. It is joined
+        #: before the same session's next payload is built (so before its next send), and the last
+        #: linear of the model is always checked synchronously (so before any logits leave). A failed
+        #: check raises :class:`IntegrityError` there. Default: with the TripEngine (``PGW_DEFERRED_CHECK``).
+        self.deferred_check = self.trip_engine and (
+            _env_flag("PGW_DEFERRED_CHECK", True) if deferred_check is None else bool(deferred_check))
+        #: :meth:`sync_trip_ok` answers yes for decode-sized passes (the engine then runs a whole decode
+        #: pass on its plaintext thread over :meth:`forward_many`). Default: with a trip-lane client and
+        #: the TripEngine (``PGW_SYNC_TRIPS``).
+        self.sync_trips = self.trip_engine and (
+            _env_flag("PGW_SYNC_TRIPS", lane_client) if sync_trips is None else bool(sync_trips))
+        #: Largest pass (rows over all sequences) :meth:`sync_trip_ok` accepts (the lane's row limit).
+        self.sync_trip_max_rows = 8
+        #: Preferred blocks per pipelined prefill round trip (for ``TransformerModel.pipeline_blocks``):
+        #: the TripEngine prepares and finishes each block on the native pool, so 4 blocks overlap
+        #: masking, compute and verification better than halves. Rows are independent: same bits.
+        self.pipeline_blocks = 4
+        #: Rows x features from which a TripEngine call spreads over the native pool (prefill).
+        self.trip_pool_min_elems = 1 << 16
+        #: Deferred checks still pending above this many are all joined at the next prepare.
+        self.max_pending_checks = 256
+        #: Defer only checks of linears with at least this many outputs (public, per linear): handing
+        #: the output half to the helper thread costs ~10-20 us here, more than the half itself for
+        #: m <= 4608 (7B qkv, o, down); it pays for gate_up (m = 37888, ~36 us). 0 = every linear.
+        self.defer_min_out = 16384
+        self._trip_checked: dict[tuple[int, int, float], bool] = {}
+        self._final_ordinal: int | None = None
+        self._pending: list[_PendingCheck] = []
+        self._pending_lock = threading.Lock()
+        #: Linear kinds computed exactly on the gateway (E2): empty = every linear is remote.
+        self._local_kinds: frozenset[str] = frozenset()
+        self._local_w: _WeightCache | None = None
+        #: The local-linear decision and its calibration inputs (public configuration; logged at start).
+        self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
+
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
             n, m = int(lw.in_features), int(lw.out_features)
             ring.check_in_features(n)
@@ -747,6 +919,8 @@ class MaskedBackend(LinearBackend):
         load_meta = getattr(pack, "load_linear_meta", None)
         loader = load_meta if callable(load_meta) else None
         self._meta = _WeightCache(pack, torch.device("cpu"), conv, loader=loader)
+        if local_linears != "off":
+            self.configure_local_linears(local_linears, rtt_s=local_rtt_s)
 
     # ---- weight-row norms (capped rings) --------------------------------------------------------
     def _norm_sq_of(self, lw: Any) -> int:
@@ -816,6 +990,8 @@ class MaskedBackend(LinearBackend):
                     log.info("computed weight-row norms of %d linears in %.1f s (sidecar: %s)",
                              computed, time.perf_counter() - t0, where or "not written")
         self._meta.preload()
+        if self.trip_engine:  # TripEngine self-checks at start-up, not on the first request
+            self.warm_trip_engine()
         return computed
 
     # ---- helpers -------------------------------------------------------------------------------
@@ -948,10 +1124,574 @@ class MaskedBackend(LinearBackend):
         return True
 
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
-        prep = self._prepare_native(calls) if self._native_prepare_ok(calls) else self._prepare_python(calls)
+        # Deferred checks of these sessions are joined first: no mask row is taken and no payload
+        # is built (so nothing is sent) before the previous trip's results proved correct.
+        if self._pending:
+            self._join_pending(calls)
+        if any(c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta) for c in calls):
+            prep = self._prepare_padded(calls)
+            real = [c for c in calls if not _is_dummy(c)]
+        else:
+            prep = self._prepare_core(calls)
+            real = calls  # type: ignore[assignment]
         if self.mask_prefetch:
-            self._maybe_prefetch(calls)
+            self._maybe_prefetch(real)
         return prep
+
+    def _prepare_core(self, calls: Sequence[LinearCall]) -> _Prepared:
+        if self._use_trip(calls):
+            return self._prepare_trip(calls)
+        return self._prepare_native(calls) if self._native_prepare_ok(calls) else self._prepare_python(calls)
+
+    # ---- TripEngine (native trip kernels, WP-A4a) ---------------------------------------------------
+    def _use_trip(self, calls: Sequence[LinearCall]) -> bool:
+        """The TripEngine serves these calls (enabled, every linear's self-check passed)."""
+        if not self.trip_engine:
+            return False
+        for c in calls:
+            meta: _MaskedMeta = self._meta.get(c.id)
+            if self.ring.cap and meta.wnorm is None:  # pragma: no cover - capped metas always carry it
+                return False
+            if not self._trip_self_check(meta):
+                return False
+        return True
+
+    def _trip_self_check(self, meta: _MaskedMeta) -> bool:
+        """Once per linear shape: the trip kernels reproduce the reference bit for bit on public test
+        data (prepare: payload and scales; finish: outputs), else the TripEngine is switched off for
+        this backend (every path falls back to today's kernels) and an error is logged."""
+        key = (meta.in_features, meta.out_features, float(meta.wnorm or 0.0))
+        hit = self._trip_checked.get(key)
+        if hit is not None:
+            return hit
+        try:
+            ok = _trip_kernels_agree(self.ring, *key)
+        except Exception as exc:  # any surprise: today's path
+            log.error("trip kernel self-check raised %s for n=%d m=%d", type(exc).__name__, key[0], key[1])
+            ok = False
+        self._trip_checked[key] = ok
+        if not ok:
+            log.error("trip kernels disagree with the reference for n=%d m=%d at %s: TripEngine off "
+                      "(deferred checks and synchronous trips off too)", key[0], key[1], self.ring.name)
+            self.trip_engine = self.deferred_check = self.sync_trips = False
+        return ok
+
+    def warm_trip_engine(self) -> bool:
+        """Run the TripEngine self-check for every linear now (start-up) instead of on first use."""
+        if not self.trip_engine:
+            return False
+        for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
+            if not self._trip_self_check(self._meta.get(spec.id)):
+                return False
+        return True
+
+    def _final_linear_ordinal(self) -> int:
+        fo = self._final_ordinal
+        if fo is None:
+            try:
+                fo = max((s.id.ordinal for s in self.pack.linear_specs()), default=-1)  # type: ignore[attr-defined]
+            except Exception:  # unknown order: never defer
+                fo = -1
+            self._final_ordinal = fo
+        return fo
+
+    def _defer_ok(self, lid: Any) -> bool:
+        """A trip of ``lid`` may have its Freivalds check deferred: never the model's last linear (its
+        output leads straight to logits), never a linear outside the standard schedule, and only for
+        linears with at least :attr:`defer_min_out` outputs (a public per-linear choice)."""
+        if not self.deferred_check or not isinstance(lid, LinearId):
+            return False
+        if lid.ordinal >= self._final_linear_ordinal():
+            return False
+        return int(self._meta.get(lid).out_features) >= int(self.defer_min_out)
+
+    def _prepare_trip(self, calls: Sequence[LinearCall]) -> _Prepared:
+        """:meth:`_prepare_native` on ``pgw_fast.trip_prepare_into`` (constant-time width selection).
+
+        Same masks taken in the same order, same check and noise-sampling draws, same payload bytes
+        and scales. A chunk whose check is deferred also gets the Freivalds input half
+        ``uw . x_hat`` (computed in the same pass) for the output half after the reply.
+        """
+        t0 = time.perf_counter()
+        reservations, metas = self._precheck(calls)
+        xs: list[np.ndarray] = []
+        for call in calls:
+            x = call.x
+            if x.dtype != torch.float32 or x.device.type != "cpu":
+                x = x.to("cpu", torch.float32)
+            xn = x.detach().numpy()
+            if not xn.flags.c_contiguous:
+                xn = np.ascontiguousarray(xn)
+            if xn.size and not np.isfinite(xn).all():
+                raise RingOverflowError("non-finite activation values cannot be quantized")
+            xs.append(xn)
+        ring = self.ring
+        kbits, abits, cap = ring.k, ring.a, int(ring.cap or 0)
+        nb = kbits // 8
+        noise = self.noise_monitor
+        plan_call: Any = None
+        guard_packed: Any = None
+        if noise is not None:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
+        prep_into = native.fast.trip_prepare_into
+        want_soundness = self.min_soundness_bits > 0
+        max_item = self.max_rows_per_item
+        pool_min = int(self.trip_pool_min_elems)
+        sx_parts: list[list[np.ndarray]] = [[] for _ in calls]
+        chunks: list[_Chunk] = []
+        try:
+            for ci, (call, res, meta, xn) in enumerate(zip(calls, reservations, metas, xs, strict=True)):
+                t = int(xn.shape[0])
+                lid = call.id
+                n = meta.in_features
+                wn = float(meta.wnorm or 0.0)
+                defer_lid = self._defer_ok(lid)
+                row = 0
+                while row < t:
+                    check = self._should_check()
+                    sampled = bool(plan_call()) if plan_call is not None else noise is not None
+                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness)
+                    token = u = uw = None
+                    rhs = None
+                    r64 = None
+                    try:
+                        if chk is not None:
+                            token, u, uw = chk
+                            self._check_soundness(lid, n, u, token)
+                            if not check:
+                                token = u = uw = None
+                        if tuple(r.shape) != (rows, n) or tuple(wr.shape) != (rows, meta.out_features):
+                            raise ShapeError(
+                                f"{lid}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                            )
+                        r_np = r.numpy()
+                        r64 = r_np if r_np.dtype == np.int64 and r_np.flags.c_contiguous else \
+                            np.ascontiguousarray(r_np, dtype=np.int64)
+                        buf = np.empty(rows * n * nb, dtype=np.uint8)
+                        sx = np.empty(rows, dtype=np.float64)
+                        xh = np.empty((rows, n), dtype=np.int64) if sampled else None
+                        uw_in = None
+                        if defer_lid and u is not None and uw is not None and int(u.shape[0]) > 0:
+                            uw_in = uw
+                            rhs = np.empty((rows, int(u.shape[0])), dtype=np.uint64)
+                        try:
+                            prep_into(xn[row : row + rows], r64, kbits, abits, cap, wn, buf, sx, xh, uw_in, rhs,
+                                      0 if rows * n >= pool_min else 1)
+                        except ValueError as exc:
+                            if str(exc).startswith("ring_overflow"):
+                                raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                            raise ShapeError(str(exc)) from exc
+                        payload = buf.tobytes()
+                        if noise is not None:
+                            if guard_packed is not None and not sampled:
+                                guard_packed(payload, rows, n)
+                            elif xh is not None:
+                                x_hat = torch.from_numpy(xh)
+                                xq = center(x_hat - r.to(torch.int64), ring)
+                                try:
+                                    if plan_call is not None:
+                                        noise.guard(x_hat, xq, planned=True)  # type: ignore[attr-defined]
+                                    else:
+                                        noise.guard(x_hat, xq)  # type: ignore[attr-defined]
+                                finally:
+                                    _wipe(xq)
+                    except BaseException:
+                        _wipe(wr)
+                        if rhs is not None:
+                            rhs.fill(0)
+                        raise
+                    finally:
+                        _wipe(r)  # one-time pad: never keep it around
+                        if r64 is not None and r64 is not r_np:
+                            r64.fill(0)
+                    chunks.append(_Chunk(ci, row, rows, lid, None, wr, u, uw, payload, token, rhs=rhs))
+                    sx_parts[ci].append(sx)
+                    row += rows
+        except BaseException:
+            for ch in chunks:
+                _wipe(ch.wr)
+                if ch.rhs is not None:
+                    ch.rhs.fill(0)
+            raise
+        prep = self._native_request(calls, chunks, sx_parts, metas, t0)
+        prep.trip = True
+        prep.reservations = tuple(reservations)
+        return prep
+
+    def _finish_trip(self, prep: _Prepared, results: Sequence[Any], outs: list[list[torch.Tensor]]) -> None:
+        """Finish every chunk with ``pgw_fast.trip_finish_into`` (same outputs and statuses as
+        ``finish_group``). A chunk with a deferred check submits the Freivalds output half to the native
+        helper thread first and finishes (unmask, range check, rescale) meanwhile; the check is
+        registered as pending and joined before this session's next payload is built."""
+        fin = native.fast.trip_finish_into
+        k = self.ring.k
+        pool_min = int(self.trip_pool_min_elems)
+        submitted: list[tuple[_Chunk, Any]] = []
+        for ch, res in zip(prep.chunks, results, strict=True):
+            meta: _MaskedMeta = prep.metas[ch.call_index]
+            scale, bias, bound = self._consts(ch.lid, meta)
+            sx = prep.sx[ch.call_index]
+            if ch.row0 or ch.rows != sx.shape[0]:
+                sx = sx[ch.row0 : ch.row0 + ch.rows]
+            y = res.y_hat
+            yb = y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8)
+            wn = ch.wr.numpy()
+            in_place = wn.dtype in (np.int64, np.uint64, np.uint32) and wn.flags.c_contiguous and wn.flags.writeable
+            if not in_place:  # e.g. a strided test double: a copy (zeroed by the kernel); prep.wipe() zeroes ch.wr
+                wn = np.ascontiguousarray(wn, dtype=np.int64)
+            out = np.empty((ch.rows, meta.out_features), dtype=np.float32)
+            threads = 0 if ch.rows * meta.out_features >= pool_min else 1
+            pending = None
+            try:
+                if ch.u is not None and ch.rhs is not None:
+                    pending = native.fast.trip_freivalds_submit(yb, ch.u, ch.rhs, k)
+                    ch.rhs.fill(0)  # the helper holds its own copy (wiped after the check)
+                    ch.rhs = None
+                    status, bad = fin(yb, wn, sx, scale, bias, k, bound, out, threads=threads)
+                elif ch.u is not None and ch.uw is not None:
+                    status, bad = fin(yb, wn, sx, scale, bias, k, bound, out,
+                                      x_hat=bytes(ch.payload),  # type: ignore[arg-type]
+                                      u=ch.u, uw=ch.uw, threads=threads)
+                else:
+                    status, bad = fin(yb, wn, sx, scale, bias, k, bound, out, threads=threads)
+            except ValueError as exc:
+                raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+            finally:
+                if in_place:
+                    ch.wr_wiped = True  # the kernel zeroed W r (any returned status)
+            if pending is None and ch.u is not None and _vacuous(ch.u, status):
+                status = 3  # vectors wiped (reservation closed): an all-zero u verifies nothing
+            if status:
+                if pending is not None:  # its verdict no longer matters: wait (it reads y_hat and u)
+                    pending.wait()
+                for _, p in submitted:  # this request fails: no later check of it can matter either
+                    p.wait()
+                self._raise_status(status, bad, ch.lid, ch.rows, bound)
+            if pending is not None:
+                submitted.append((ch, pending))
+            outs[ch.call_index].append(torch.from_numpy(out))
+        if submitted:
+            entries = [_PendingCheck(prep.reservations, p, ch.lid, ch.rows,
+                                     prep.request.request_id if prep.request is not None else "-")
+                       for ch, p in submitted]
+            with self._pending_lock:
+                self._pending.extend(entries)
+            self.stats.add(deferred_checks=len(entries))
+
+    def _join_pending(self, calls: Sequence[LinearCall] | None) -> None:
+        """Wait for the deferred checks of the sessions of ``calls`` (``None``: every pending check).
+
+        Raises:
+            IntegrityError: a deferred check failed (the service returned a wrong result).
+            MaskReuseError: the check vectors were wiped meanwhile (reservation closed).
+        """
+        with self._pending_lock:
+            if not self._pending:
+                return
+            if calls is None or len(self._pending) > self.max_pending_checks:
+                mine, self._pending = self._pending, []
+            else:
+                ids = {id(c.session if c.session is not None else self.mask_source) for c in calls}
+                mine = []
+                keep: list[_PendingCheck] = []
+                for p in self._pending:
+                    (mine if any(id(r) in ids for r in p.reservations) else keep).append(p)
+                if not mine:
+                    return
+                self._pending = keep
+        err: PGWError | None = None
+        failed: _PendingCheck | None = None
+        for p in mine:  # wait for every one (each reads buffers it keeps alive), then report
+            status, bad = p.check.wait()
+            if status and err is None:
+                failed = p
+                if status == 3:
+                    err = MaskReuseError("mask reservation closed during a compute call")
+                elif status == 1:
+                    err = IntegrityError("compute service result failed the Freivalds check",
+                                         details={"linear": p.lid.key, "bad_rows": int(bad), "rows": p.rows,
+                                                  "deferred": True})
+                else:  # 4: the helper failed internally (fail closed)
+                    err = IntegrityError("deferred Freivalds check could not run",
+                                         details={"linear": p.lid.key, "status": int(status), "deferred": True})
+        if err is None:
+            return
+        if isinstance(err, IntegrityError):
+            self.stats.add(integrity_failures=1)
+            log.error("integrity check failed (deferred): request=%s code=%s details=%s",
+                      failed.request_id if failed is not None else "-", err.code, err.details)
+            if self.on_integrity_failure is not None:
+                try:
+                    self.on_integrity_failure(err)
+                except Exception:  # pragma: no cover - callback must not mask the error
+                    log.exception("on_integrity_failure callback raised")
+        raise err
+
+    def join_checks(self) -> None:
+        """Join every deferred check now (raises like :meth:`forward_many` on a failed one)."""
+        self._join_pending(None)
+
+    @property
+    def pending_checks(self) -> int:
+        """Deferred checks not joined yet (diagnostics)."""
+        with self._pending_lock:
+            return len(self._pending)
+
+    # ---- synchronous trips (engine hook) -----------------------------------------------------------
+    def sync_trip_ok(self, rows: int) -> bool:
+        """Engine hook (``TransformerModel.sync_decode``): a pass of ``rows`` rows may run as one
+        plaintext-thread call over :meth:`forward_many`. Yes for decode-sized passes when synchronous
+        trips are on (a trip-lane client and the TripEngine). :meth:`forward_many` never touches the
+        caller's event loop (the client's ``compute_sync`` runs on the lane or its private loop)."""
+        return bool(self.sync_trips) and 0 < int(rows) <= int(self.sync_trip_max_rows)
+
+    # ---- speculation padding rows -------------------------------------------------------------------
+    def _random_r(self, rows: int, n: int) -> np.ndarray:
+        """Fresh uniform ring elements ``(rows, n)`` from the OS CSPRNG (never a store mask)."""
+        raw = np.frombuffer(os.urandom(rows * n * 8), dtype=np.uint64).reshape(rows, n)
+        return (raw & np.uint64(self.ring.mask)).astype(np.int64)
+
+    def _filler_payload(self, x: np.ndarray | None, rows: int, meta: _MaskedMeta) -> bytes:
+        """Payload of padding rows: ``x`` (zeros for padding rows of a real call) quantized and masked
+        with a fresh local random ``r``, so the bytes are uniform ring elements, and the prepare work
+        is the real kernel's. ``r`` is not kept (nothing to unmask: the outputs are dropped)."""
+        n = meta.in_features
+        if x is None:
+            x = np.zeros((rows, n), dtype=np.float32)
+        r = self._random_r(rows, n)
+        try:
+            ring = self.ring
+            wn = float(meta.wnorm or 0.0)
+            try:
+                if self.trip_engine:
+                    buf = np.empty(rows * n * (ring.k // 8), dtype=np.uint8)
+                    native.fast.trip_prepare_into(x, r, ring.k, ring.a, int(ring.cap or 0), wn, buf,
+                                                  np.empty(rows, dtype=np.float64))
+                    return buf.tobytes()
+                if self._native_prepare_ok_meta(meta):
+                    payload, _, _ = native.fast.quantize_mask_pack(x, r, ring.k, ring.a, int(ring.cap or 0), wn, False)
+                    return bytes(payload)
+            except ValueError as exc:
+                if str(exc).startswith("ring_overflow"):
+                    raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                raise ShapeError(str(exc)) from exc
+            xq, _ = quantize_activations(torch.from_numpy(x), ring, meta.wnorm if ring.cap else None)
+            try:
+                return pack_ring(mask_activations(xq, torch.from_numpy(r), ring), ring)
+            finally:
+                _wipe(xq)
+        finally:
+            r.fill(0)
+
+    def _native_prepare_ok_meta(self, meta: _MaskedMeta) -> bool:
+        return (self._native_prepare and self.ring.k % 8 == 0 and self.ring.k <= 56
+                and (not self.ring.cap or meta.wnorm is not None))
+
+    def _prepare_padded(self, calls: Sequence[LinearCall]) -> _Prepared:
+        """Prepare calls that carry speculation padding (``meta[PAD_ROWS]``) or are dummies (``meta[DUMMY]``).
+
+        Real rows are prepared exactly as without padding (same masks, same bytes). Padding rows are
+        appended to the wire item of their call's last chunk, so the provider sees one item of
+        ``real + pad`` rows; they take no mask row. A dummy call (or a padded call without real rows)
+        becomes an item of padding rows only, built on the real prepare kernel with a local random
+        ``r``. Padding payloads are made before any mask row is taken.
+        """
+        metas_all: list[_MaskedMeta] = []
+        pads: list[int] = []
+        fill_payload: dict[int, bytes] = {}
+        for i, c in enumerate(calls):
+            meta: _MaskedMeta = self._meta.get(c.id)
+            metas_all.append(meta)
+            if c.x.ndim != 2 or c.x.shape[1] != meta.in_features:
+                raise ShapeError(f"{c.id}: x must be (T, {meta.in_features}), got {tuple(c.x.shape)}")
+            if _is_dummy(c):
+                rows = int(c.x.shape[0]) + _pad_rows(c)
+                if rows:
+                    xd = c.x.detach().to("cpu", torch.float32).numpy()
+                    if _pad_rows(c):
+                        xd = np.concatenate([xd, np.zeros((_pad_rows(c), meta.in_features), dtype=np.float32)])
+                    xd = np.ascontiguousarray(xd)
+                    if not np.isfinite(xd).all():
+                        raise RingOverflowError("non-finite activation values cannot be quantized")
+                    fill_payload[i] = self._filler_payload(xd, rows, meta)
+                pads.append(rows)
+            else:
+                p = _pad_rows(c)
+                if p:
+                    fill_payload[i] = self._filler_payload(None, p, meta)
+                pads.append(p)
+        real_idx = [i for i, c in enumerate(calls) if not _is_dummy(c) and int(c.x.shape[0]) > 0]
+        real_calls = [calls[i] for i in real_idx]
+        if real_calls:
+            core = self._prepare_core(real_calls)
+        else:
+            core = _Prepared([], [], [], [], None, 0.0)
+        try:
+            t0 = time.perf_counter()
+            pos = {j: i for j, i in enumerate(real_idx)}  # real call index -> original index
+            chunks: list[_Chunk] = []
+            fillers: list[_Filler] = []
+            items_map: list[tuple[str, int]] = []
+            by_call: dict[int, list[_Chunk]] = {}
+            for ch in core.chunks:
+                ch.call_index = pos[ch.call_index]
+                by_call.setdefault(ch.call_index, []).append(ch)
+            sxs: list[np.ndarray] = [np.zeros(0, dtype=np.float64) for _ in calls]
+            for j, i in enumerate(real_idx):
+                sxs[i] = core.sx[j]
+            for i, c in enumerate(calls):
+                own = by_call.get(i, [])
+                if own and pads[i] and not _is_dummy(c):
+                    own[-1].pad = pads[i]
+                    own[-1].pad_payload = fill_payload[i]
+                for ch in own:
+                    items_map.append(("c", len(chunks)))
+                    chunks.append(ch)
+                if pads[i] and not own:  # dummy, or padding of a call without real rows
+                    checks = None
+                    if not _is_dummy(c):
+                        checks = self._filler_checks(c)
+                    items_map.append(("f", len(fillers)))
+                    fillers.append(_Filler(i, c.id, pads[i], fill_payload[i], checks))
+            request = None
+            if items_map:
+                from pgw.wire.messages import ComputeItem, ComputeRequest
+
+                items = []
+                for kind, j in items_map:
+                    if kind == "c":
+                        ch = chunks[j]
+                        body = ch.payload if ch.payload is not None else pack_ring(ch.x_hat, self.ring)  # type: ignore[arg-type]
+                        if ch.pad:
+                            body = bytes(body) + ch.pad_payload  # type: ignore[operator]
+                        items.append(ComputeItem(ch.lid.key, ch.rows + ch.pad, body))
+                    else:
+                        f = fillers[j]
+                        items.append(ComputeItem(f.lid.key, f.rows, f.payload))
+                request = ComputeRequest(
+                    request_id=core.request.request_id if core.request is not None else uuid.uuid4().hex,
+                    fingerprint=self.fingerprint,
+                    ring=self.ring.name,
+                    items=tuple(items),
+                    deadline_ms=self.deadline_ms,
+                )
+            reservations = list(core.reservations)
+            for c in calls:
+                if _is_dummy(c) or int(c.x.shape[0]) == 0:
+                    res = c.session if c.session is not None else self.mask_source
+                    if res is not None:
+                        reservations.append(res)
+            prep = _Prepared(calls, chunks, sxs, metas_all, request, core.t_prepare + time.perf_counter() - t0,
+                             trip=core.trip, reservations=tuple(reservations), fillers=fillers, items_map=items_map)
+        except BaseException:
+            core.wipe()
+            raise
+        self.stats.add(pad_rows=sum(p for p, c in zip(pads, calls, strict=True) if not _is_dummy(c)),
+                       dummy_calls=sum(1 for c in calls if _is_dummy(c)))
+        return prep
+
+    def _filler_checks(self, call: LinearCall) -> tuple[Any, Any] | None:
+        """Current check vectors of the call's reservation (padding of a call without real rows)."""
+        res = call.session if call.session is not None else self.mask_source
+        if res is None or not self._should_check():
+            return None
+        try:
+            _, u, uw = self._current_checks(res, call.id)
+        except Exception:  # no vectors (closed or checks=0): the padding is not verified
+            return None
+        return u, uw
+
+    def _dummy_finish(self, lid: LinearId, meta: _MaskedMeta, y_hat: Any, rows: int, payload: bytes,
+                      checks: tuple[Any, Any] | None) -> None:
+        """Finish work on padding rows whose outputs are dropped: the real finish kernel with ``W r = 0``
+        (its range verdict is expected to fail and is ignored), and the Freivalds check of the padding
+        rows against the item's check vectors when there are any (the provider must compute them right
+        too). Raises like a real finish on a failed check."""
+        m, n = meta.out_features, meta.in_features
+        u = uw = None
+        if checks is not None:
+            u, uw = checks
+            if u is not None and not isinstance(u, np.ndarray):  # torch from checks()
+                u, uw = checks_to_u64(u, uw, self.ring)
+        nb = self.ring.k // 8
+        if self.ring.k % 8 == 0 and self.ring.k <= 56 and native_available("trip_finish_into"):
+            scale, bias, bound = self._consts(lid, meta)
+            yb = y_hat if isinstance(y_hat, bytes) else np.frombuffer(y_hat, dtype=np.uint8)
+            if len(yb) != rows * m * nb:
+                raise ProtocolError("compute response item is malformed: padding rows have the wrong size")
+            out = np.empty((rows, m), dtype=np.float32)
+            wr = np.zeros((rows, m), dtype=np.int64)
+            sx = np.zeros(rows, dtype=np.float64)
+            try:
+                if u is not None and uw is not None:
+                    status, bad = native.fast.trip_finish_into(
+                        yb, wr, sx, scale, bias, self.ring.k, bound, out,
+                        x_hat=bytes(payload), u=u, uw=uw)
+                else:
+                    status, bad = native.fast.trip_finish_into(yb, wr, sx, scale, bias, self.ring.k, bound, out)
+            except ValueError as exc:
+                raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+            out.fill(0)
+            if u is not None and (status == 3 or _vacuous(u, status)):
+                raise MaskReuseError("mask reservation closed during a compute call")
+            if status == 1:
+                raise IntegrityError("compute service result failed the Freivalds check",
+                                     details={"linear": lid.key, "bad_rows": int(bad), "rows": rows, "padding": True})
+            return
+        y64 = unpack_ring_u64(bytes(y_hat), (rows, m), self.ring)
+        if u is not None and uw is not None:
+            if not u.any():
+                raise MaskReuseError("mask reservation closed during a compute call")
+            x64 = unpack_ring_u64(payload, (rows, n), self.ring)
+            ok = freivalds_check_u64(x64, y64, u.astype(np.uint64, copy=False), uw.astype(np.uint64, copy=False),
+                                     self.ring)
+            if not bool(ok.all()):
+                raise IntegrityError("compute service result failed the Freivalds check",
+                                     details={"linear": lid.key, "bad_rows": int((~ok).sum()), "rows": rows,
+                                              "padding": True})
+
+    def _split_padded_results(self, prep: _Prepared, results: Sequence[Any],
+                              outs: list[list[torch.Tensor]]) -> tuple[list[Any], int]:
+        """Results aligned with ``prep.chunks`` (real rows only), after the dummy finish of every
+        padding part and filler item. Returns them and the padding bytes received."""
+        from pgw.wire.messages import ComputeResult
+
+        nb = self.ring.k // 8
+        real: list[Any] = []
+        pad_bytes = 0
+        assert prep.items_map is not None
+        for (kind, j), res in zip(prep.items_map, results, strict=True):
+            if kind == "c":
+                ch = prep.chunks[j]
+                if res.linear != ch.lid.key or int(res.rows) != ch.rows + ch.pad:
+                    raise ProtocolError("compute response item does not match the request",
+                                        details={"expected": ch.lid.key, "got": str(res.linear)})
+                if not ch.pad:
+                    real.append(res)
+                    continue
+                meta: _MaskedMeta = prep.metas[ch.call_index]
+                cut = ch.rows * meta.out_features * nb
+                y = memoryview(res.y_hat)
+                if len(y) != (ch.rows + ch.pad) * meta.out_features * nb:
+                    raise ProtocolError("compute response item is malformed: wrong y_hat size")
+                chk = (ch.u, ch.uw) if ch.u is not None else None
+                self._dummy_finish(ch.lid, meta, bytes(y[cut:]), ch.pad, ch.pad_payload or b"", chk)
+                pad_bytes += len(y) - cut
+                real.append(ComputeResult(res.linear, ch.rows, bytes(y[:cut])))
+            else:
+                f = prep.fillers[j]
+                meta = prep.metas[f.call_index]
+                if res.linear != f.lid.key or int(res.rows) != f.rows:
+                    raise ProtocolError("compute response item does not match the request",
+                                        details={"expected": f.lid.key, "got": str(res.linear)})
+                self._dummy_finish(f.lid, meta, res.y_hat, f.rows, f.payload, f.checks)
+                pad_bytes += len(res.y_hat)
+                rows_out = int(prep.calls[f.call_index].x.shape[0])  # the call's own rows; padding dropped
+                outs[f.call_index].append(torch.zeros((rows_out, meta.out_features), dtype=torch.float32))
+        return real, pad_bytes
 
     # ---- single-use mask prefetch -----------------------------------------------------------------
     def _maybe_prefetch(self, calls: Sequence[LinearCall]) -> None:
@@ -1028,6 +1768,118 @@ class MaskedBackend(LinearBackend):
             pool, self._prefetch_pool = self._prefetch_pool, None
         if pool is not None:
             pool.shutdown(wait=False, cancel_futures=True)
+        with self._pending_lock:  # deferred checks read buffers they keep alive: let them finish
+            pending, self._pending = self._pending, []
+        for p in pending:
+            with contextlib.suppress(Exception):
+                p.check.wait()
+
+    # ---- E2: exact local linears ------------------------------------------------------------------
+    def configure_local_linears(self, mode: str = "off", *, rtt_s: float | None = None,
+                                reps: int = 5) -> frozenset[str]:
+        """Decide once, at start-up, which linears the gateway computes itself (E2; public configuration).
+
+        ``off``: none. ``attention``: qkv and o of every layer, computed exactly from the pack's int8
+        weights with the same quantization and integer product as the masked path (so the same bits);
+        only gate_up and down are sent, halving the round trips. ``auto``: ``attention`` when the
+        calibrated local time of one layer's qkv + o (one row, median of ``reps``) is below two round
+        trips of ``rtt_s`` seconds; ``rtt_s=None`` takes the mean decode round trip measured so far
+        (at least 16 trips), else stays ``off``. The decision never changes per token. Call before
+        serving (not concurrently with calls). The local int8 weights are loaded here (start-up), so
+        a request never reads a weight.
+
+        Returns:
+            The linear kinds computed locally.
+        """
+        if mode not in LOCAL_LINEAR_MODES:
+            raise ConfigError(f"local_linears must be one of {LOCAL_LINEAR_MODES}, got {mode!r}")
+        policy: dict[str, Any] = {"mode": mode}
+        kinds: frozenset[str] = frozenset()
+        if mode != "off":
+            if self._local_w is None:
+                self._local_w = _WeightCache(self.pack, torch.device("cpu"), _to_int_weight)
+            if mode == "attention":
+                kinds = LOCAL_ATTENTION_KINDS
+            else:
+                kinds = self._calibrate_local(rtt_s, max(1, int(reps)), policy)
+        if kinds:
+            for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
+                if spec.id.kind.value in kinds:
+                    self._local_w.get(spec.id)  # type: ignore[union-attr]
+        else:
+            self._local_w = None
+        self._local_kinds = kinds
+        policy["kinds"] = tuple(sorted(kinds))
+        self.local_policy = policy
+        log.info("local linears: %s -> %s", mode, ", ".join(sorted(kinds)) or "none (every linear remote)")
+        return kinds
+
+    def _calibrate_local(self, rtt_s: float | None, reps: int, policy: dict[str, Any]) -> frozenset[str]:
+        if rtt_s is None:
+            st = self.stats.snapshot()
+            if st["decode_calls"] >= 16:
+                rtt_s = st["decode_remote_seconds"] / st["decode_calls"]
+        policy["rtt_s"] = rtt_s
+        specs = [s for s in self.pack.linear_specs() if s.id.layer == 0  # type: ignore[attr-defined]
+                 and s.id.kind.value in LOCAL_ATTENTION_KINDS]
+        if rtt_s is None or not specs:
+            policy["reason"] = "no round-trip measurement" if rtt_s is None else "no attention linears"
+            return frozenset()
+        gen = torch.Generator().manual_seed(0)
+        total = 0.0
+        for spec in specs:
+            x = torch.randn(1, spec.in_features, generator=gen)
+            call = LinearCall(spec.id, x)
+            self._forward_local_one(call)  # warm-up (loads the weight)
+            times = []
+            for _ in range(reps):
+                t0 = time.perf_counter()
+                self._forward_local_one(call)
+                times.append(time.perf_counter() - t0)
+            total += sorted(times)[len(times) // 2]
+        policy["local_s"] = total
+        on = total < 2.0 * float(rtt_s)
+        policy["reason"] = "local qkv+o {:.3g} s {} 2 round trips {:.3g} s".format(
+            total, "<" if on else ">=", 2.0 * float(rtt_s))
+        return LOCAL_ATTENTION_KINDS if on else frozenset()
+
+    def local_linear(self, lid: Any) -> bool:
+        """Engine hook: ``lid`` is computed exactly on the gateway (no mask, no round trip)."""
+        kinds = self._local_kinds
+        if not kinds:
+            return False
+        kind = getattr(lid, "kind", None)
+        return kind is not None and getattr(kind, "value", kind) in kinds
+
+    def _forward_local_one(self, call: LinearCall) -> torch.Tensor:
+        assert self._local_w is not None
+        w: _IntWeight = self._local_w.get(call.id)
+        meta: _MaskedMeta = self._meta.get(call.id)
+        x = call.x
+        if x.ndim != 2 or x.shape[1] != meta.in_features:
+            raise ShapeError(f"{call.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
+        xf = x.detach().to("cpu", torch.float32)
+        if xf.numel() and not bool(torch.isfinite(xf).all()):
+            raise RingOverflowError("non-finite activation values cannot be quantized")
+        # the masked path's quantization (same weight-row norm) and the exact integer product
+        xq, sx = quantize_activations(xf, self.ring, meta.wnorm if self.ring.cap else None)
+        try:
+            yq = exact_int_matmul(xq, w.w8t, self.ring.a)
+        finally:
+            _wipe(xq)
+        y = dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
+        return y if x.device.type == "cpu" else y.to(x.device)
+
+    def forward_local(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+        """Engine hook: evaluate calls of local linears on the gateway (bit-identical to the masked path)."""
+        t0 = time.perf_counter()
+        for c in calls:
+            if not self.local_linear(c.id):
+                raise ConfigError(f"{c.id} is not a local linear")
+        out = _grouped_forward(_LocalView(self), calls)
+        self.stats.add(local_calls=len(calls), local_rows=sum(int(c.x.shape[0]) for c in calls),
+                       local_seconds=time.perf_counter() - t0)
+        return out
 
     def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
         """``(rows, r, W r, (token, u, uw) | None)``: the next rows of one extent (at most ``max_rows``)."""
@@ -1324,10 +2176,14 @@ class MaskedBackend(LinearBackend):
                 if getattr(response, "request_id", None) != req.request_id:
                     raise ProtocolError("compute response id does not match the request")
                 results = tuple(response.items)
-                if len(results) != len(prep.chunks):
+                n_items = len(prep.items_map) if prep.items_map is not None else len(prep.chunks)
+                if len(results) != n_items:
                     raise ProtocolError(
-                        f"compute response has {len(results)} items, expected {len(prep.chunks)}"
+                        f"compute response has {len(results)} items, expected {n_items}"
                     )
+                if prep.items_map is not None:  # speculation padding: dummy finish, real rows remain
+                    results, pad_bytes = self._split_padded_results(prep, results, outs)  # type: ignore[assignment]
+                    bytes_down += pad_bytes
             else:
                 results = ()
             for ch, res in zip(prep.chunks, results, strict=True):
@@ -1341,7 +2197,9 @@ class MaskedBackend(LinearBackend):
                     checked += 1
                 else:
                     skipped += 1
-            if use_native and self._native_group and all(ch.payload is not None for ch in prep.chunks):
+            if prep.trip:
+                self._finish_trip(prep, results, outs)
+            elif use_native and self._native_group and all(ch.payload is not None for ch in prep.chunks):
                 self._finish_groups_native(prep, results, outs)
             else:
                 for ch, res in zip(prep.chunks, results, strict=True):
@@ -1631,6 +2489,63 @@ class MaskedBackend(LinearBackend):
         """Wipe a prepared request that will not be sent or finished."""
         if prep is not None:
             prep.wipe()
+
+
+class _LocalView:
+    """``forward`` = the masked backend's exact local product (for :func:`_grouped_forward`)."""
+
+    def __init__(self, backend: MaskedBackend):
+        self.forward = backend._forward_local_one
+
+
+def _trip_kernels_agree(ring: RingParams, n: int, m: int, wnorm: float) -> bool:
+    """Self-check of the TripEngine for one linear shape on public, deterministic test data.
+
+    ``trip_prepare_into`` must give the reference payload and scales (``quantize_activations``,
+    ``mask_activations``, ``pack_ring``) for a Gaussian row, a spike row and a zero row, and
+    ``trip_finish_into`` the reference outputs (``dequantize_outputs`` of ``centered(y_hat - W r)``)
+    and the range verdict of an out-of-range row.
+    """
+    rng = np.random.default_rng(0x9E3779B9 ^ (n * 1_000_003 + m))
+    rows = 3
+    k, nb = ring.k, ring.k // 8
+    x = (rng.standard_normal((rows, n)) * 3).astype(np.float32)
+    x[1] *= np.float32(1e-3)
+    x[1, int(rng.integers(0, n))] = 50.0
+    x[2] = 0.0
+    r = rng.integers(0, 1 << k, size=(rows, n), dtype=np.int64)
+    wn = float(wnorm) if ring.cap else 0.0
+    try:
+        xq, sx_ref = quantize_activations(torch.from_numpy(x), ring, wn if ring.cap else None)
+    except RingOverflowError:
+        return True  # no width fits for this test row at this norm: nothing to compare (public data)
+    want = pack_ring(mask_activations(xq, torch.from_numpy(r), ring), ring)
+    buf = np.empty(rows * n * nb, dtype=np.uint8)
+    sx = np.empty(rows, dtype=np.float64)
+    native.fast.trip_prepare_into(x, r, k, ring.a, int(ring.cap or 0), wn, buf, sx)
+    if buf.tobytes() != want or not np.array_equal(sx.view(np.uint64), sx_ref.numpy().view(np.uint64)):
+        return False
+    bound = int(ring.output_bound(n))
+    lim = min(bound, 1 << (k - 2), 1 << 20)
+    yq = rng.integers(-lim, lim + 1, size=(rows, m), dtype=np.int64)
+    wr = rng.integers(0, 1 << k, size=(rows, m), dtype=np.int64)
+    y_hat = pack_ring(torch.from_numpy((wr + yq) & ring.mask), ring)
+    scale = (rng.random(m) + 0.5).astype(np.float32) * np.float32(1e-3)
+    bias = rng.standard_normal(m).astype(np.float32)
+    ref = dequantize_outputs(torch.from_numpy(yq), torch.from_numpy(sx), torch.from_numpy(scale),
+                             torch.from_numpy(bias), torch.float32).numpy()
+    out = np.empty((rows, m), dtype=np.float32)
+    status, _ = native.fast.trip_finish_into(y_hat, wr.copy(), sx, scale, bias, k, bound, out)
+    if status != 0 or not np.array_equal(out.view(np.uint32), ref.view(np.uint32)):
+        return False
+    if bound < (1 << (k - 1)) - 1:  # an out-of-range output must be refused
+        bad = yq.copy()
+        bad[0, 0] = bound + 1
+        y_bad = pack_ring(torch.from_numpy((wr + bad) & ring.mask), ring)
+        status, _ = native.fast.trip_finish_into(y_bad, wr.copy(), sx, scale, bias, k, bound, out)
+        if status != 2 or out.any():
+            return False
+    return True
 
 
 def _run_coro_blocking(coro: Any) -> Any:
