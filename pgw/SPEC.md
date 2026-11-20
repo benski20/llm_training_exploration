@@ -380,7 +380,8 @@ v2 reply    {"v":2,"type":"maskgen_result","id":str,"vs":[int]?,
 - `cols` is a multiple of 256, at most 4096. Matrices are row-major `(n, cols)` and `(m, cols)`.
 - **v2 semantics.** The provider computes `Y = W8·b mod 2^bb` and returns
   `floor((Y + 2^(d−1)) / 2^d) mod 2^yb` with `d = bb − yb` (no offset when `d = 0`), with
-  `8 ≤ yb ≤ bb ≤ 64`.
+  `8 ≤ yb ≤ bb ≤ 64` and `bb ≥ 32` (the provider unpacks `b` to 64-bit words; the lower bound
+  caps that expansion at 2x; a v2 item still needs about 2-3x a v1 item's provider host memory).
 - **v2 bit packing.** Both operands use the same packing. The `w`-bit values are split into fields
   of 64, 32, 16 and 8 bits, from bit 0, taking the widest that fits each time. Each field is one
   contiguous little-endian `uint{width}` array over all values. The last `t = w mod 8` bits of each
@@ -402,8 +403,10 @@ v2 reply    {"v":2,"type":"maskgen_result","id":str,"vs":[int]?,
   `tail·σ·‖w‖ + [bb<q]·tail·2^(q−bb−1)·‖w‖ + [yb<bb]·2^(q−yb−1) + 255·dim < 2^(q−K−1−margin)`,
   with `tail = 24`, `margin = 1` bit, and `‖w‖` the largest int8 row norm of the linear (from the
   hint store). The terms are, in order, `W8·e`, the upload switch, the reply rounding, and the
-  hint's dropped low byte. The client checks this for every linear at startup and again before
-  every v2 request. Otherwise it uses v1 for that linear. For Qwen2.5-7B at K32 (rank 16), the
+  hint's dropped low byte. The client checks this for every linear at startup and otherwise uses
+  v1 for that linear. `‖w‖` comes from the customer's own hint store, not from the provider. The
+  re-check before each v2 request only asserts that the stored plan is consistent; it is not an
+  independent guard. For Qwen2.5-7B at K32 (rank 16), the
   bound is about 2^21.3 for linears with hidden-size inputs and 2^21.6 for the down projection,
   against a budget of 2^22. These figures are estimates from Qwen2.5-1.5B int8 row norms
   (‖w‖ / (127·√n) ≤ 0.37). Every linear then uses `(53, 35)`. Even all-±127 rows pass, with
@@ -419,6 +422,10 @@ v2 reply    {"v":2,"type":"maskgen_result","id":str,"vs":[int]?,
     probability `2·e^(−288)`.
   - The scaling factor is unchanged. Decrypted masks are exact and bit-identical to v1. The
     every-row check and the Freivalds soundness argument do not change.
+  - Status: the `bb = q − 3` upload replaces the plan's q = 2^53 (E5, after WP7) with a
+    customer-side randomised switch. It needs explicit research-owner sign-off; until then
+    `upload_switch=False` keeps `bb = q`. The factory runtime does not yet pass `params` and
+    `row_norms` to `RemoteMulmod64`, so production factories still send v1.
   - Not used: an upload that redefines the mask from a public value (the rejected 25-bit variant,
     which leaks noise), and low-bit `W·r` downloads (these need a new Freivalds soundness argument).
 - **Bytes per Qwen2.5-7B slot (K32).** Σn = 831,488 and Σm = 1,390,592.

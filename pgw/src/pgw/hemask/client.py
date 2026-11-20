@@ -26,9 +26,12 @@ The noise budget for a format ``(bb, yb)`` is::
 
 The first term is ``W8 e``, the second the upload switch, the third the reply rounding, and the
 last the hint's missing low byte. Each term is a high-probability or worst-case bound. The client
-checks this for every linear at startup and again before every v2 request, and it uses v1 for any
-linear where no format fits. Decrypted masks are exact either way, so they are identical to v1,
-and the factory's every-row check and the online Freivalds checks are unchanged.
+checks this for every linear at startup and uses v1 for any linear where no format fits. That
+startup plan is the real guard: it trusts ``row_norms``, which come from the customer's own hint
+store (built from ``W8``), not from the provider. Before each v2 request the client re-runs the
+check on the stored norm and format; that is a consistency assertion, not independent protection.
+Decrypted masks are exact either way, so they are identical to v1, and the factory's every-row
+check and the online Freivalds checks are unchanged.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from pgw.core.errors import ConfigError, ErrorCode, PGWError
 from pgw.hemask.lwe import HEParams
 from pgw.hemask.wire import (
     MASKGEN_PATH,
+    V2_MIN_B_BITS,
     V2_MIN_BITS,
     MaskgenItem,
     MaskgenRequest,
@@ -105,7 +109,7 @@ def v2_noise_bound(params: HEParams, max_row_l2: float, b_bits: int, y_bits: int
     dropped low byte (``255·dim``).
     """
     q = params.q
-    if not V2_MIN_BITS <= y_bits <= b_bits <= q:
+    if not (V2_MIN_BITS <= y_bits <= b_bits <= q and b_bits >= V2_MIN_B_BITS):
         raise ValueError(f"v2 format ({b_bits}, {y_bits}) does not fit q = 2^{q}")
     switch = q - b_bits
     bound = params.tail_sigmas * params.sigma * max_row_l2
@@ -258,7 +262,11 @@ class RemoteMulmod64:
                         len(refused), ", ".join(refused[:8]) + (" ..." if len(refused) > 8 else ""))
 
     def v2_format(self, linear: str, n: int) -> V2Format | None:
-        """The v2 format for ``linear`` (``n`` inputs), checked against the noise budget, or ``None`` (v1)."""
+        """The v2 format for ``linear`` (``n`` inputs), or ``None`` (v1).
+
+        The format comes from the startup plan; the re-check below asserts that the stored plan is
+        still consistent (same norm, same format) and is not an independent guard.
+        """
         fmts = self._v2.get(linear)
         if not fmts or self.params is None:
             return None
@@ -267,7 +275,7 @@ class RemoteMulmod64:
             m = self.out_features[linear]
             fmt = min(fmts, key=lambda f: (f.bytes_per_slot(n, m), f.b_bits))
             self._chosen[linear] = fmt
-        try:  # per-linear assertion before every v2 request
+        try:  # consistency assertion of the startup plan before every v2 request
             check_v2(self.params, self._norms[linear], fmt, margin_bits=self.margin_bits, label=linear)
         except ConfigError as exc:  # pragma: no cover - formats are checked at startup
             log.error("%s; using wire v1 for %s", exc, linear)

@@ -161,9 +161,11 @@ def test_v2_request_roundtrip_and_validation() -> None:
         return bytes(msgpack.packb({"v": 2, "type": "maskgen", "id": "r", "fp": "f", "items": [it]},
                                    use_bin_type=True))
 
-    for bad in ({"bb": 65}, {"yb": 54}, {"yb": 7}, {"bb": True}, {"b": bytes(10)}, {"yb": "35"}):
+    for bad in ({"bb": 65}, {"yb": 54}, {"yb": 7}, {"bb": True}, {"b": bytes(10)}, {"yb": "35"},
+                {"bb": 31, "yb": 8, "b": bytes(5 * DEGREE * 31 // 8)}):  # bb < 32 would inflate host memory
         with pytest.raises(ProtocolError):
             decode_maskgen_request(raw(**bad))
+    assert decode_maskgen_request(raw(bb=32, yb=8, b=bytes(5 * DEGREE * 32 // 8))).items[0].b_bits == 32
     v3 = bytes(msgpack.packb({"v": 3, "type": "maskgen", "id": "r", "fp": "f", "items": [{}]}, use_bin_type=True))
     with pytest.raises(VersionMismatchError) as ei:
         decode_maskgen_request(v3)

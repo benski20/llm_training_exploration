@@ -24,7 +24,7 @@ advertise it::
 (:func:`pack_bits`). The provider computes ``Y = W8 b mod 2^bb`` and returns
 ``floor((Y + 2^(d-1)) / 2^d) mod 2^yb`` with ``d = bb - yb`` (no offset when ``d = 0``),
 bit-packed at ``yb`` bits (:func:`pack_y_v2`). That is ``n·cols·bb/8`` bytes up and
-``m·cols·yb/8`` bytes down, ``8 <= yb <= bb <= 64``. The v2 reply has the same shape as v1:
+``m·cols·yb/8`` bytes down, ``8 <= yb <= bb <= 64`` and ``bb >= 32``. The v2 reply has the same shape as v1:
 ``{"v": 2, "type": "maskgen_result", ...}``. When ``bb`` is below the ciphertext modulus, the
 customer has switched its own ciphertext down (:mod:`pgw.hemask.client`). The provider needs no
 other parameter.
@@ -80,6 +80,10 @@ _VERSION = 1
 MASKGEN_VERSIONS: tuple[int, ...] = (1, 2)
 #: Smallest v2 width (``8 <= yb <= bb <= 64``).
 V2_MIN_BITS = 8
+#: Smallest v2 upload width the provider accepts. The provider unpacks ``b`` into ``uint64``, so a
+#: ``bb``-bit body costs ``64/bb`` times its size in host memory; ``bb >= 32`` caps that at 2x
+#: (customers send ``q`` or ``q - 3``, i.e. 53..64).
+V2_MIN_B_BITS = 32
 
 
 @dataclass(frozen=True)
@@ -236,8 +240,9 @@ def _decode_item_v1(i: int, it: dict[str, Any]) -> MaskgenItem:
 def _decode_item_v2(i: int, it: dict[str, Any]) -> MaskgenItem:
     cols = _check_cols(it.get("cols"), f"items[{i}]")
     bb, yb = it.get("bb"), it.get("yb")
-    if not (_int(bb) and _int(yb) and V2_MIN_BITS <= yb <= bb <= 64):
-        raise ProtocolError(f"maskgen: items[{i}] needs integer bb and yb with {V2_MIN_BITS} <= yb <= bb <= 64")
+    if not (_int(bb) and _int(yb) and V2_MIN_BITS <= yb <= bb <= 64 and bb >= V2_MIN_B_BITS):
+        raise ProtocolError(f"maskgen: items[{i}] needs integer bb and yb with {V2_MIN_BITS} <= yb <= bb <= 64 "
+                            f"and bb >= {V2_MIN_B_BITS}")
     # cols is a multiple of 256, so n*cols*bb/8 is a whole number of bytes for every n.
     if len(it["b"]) == 0 or len(it["b"]) % (cols * bb // 8):
         raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of cols*bb/8")

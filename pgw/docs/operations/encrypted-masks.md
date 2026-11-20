@@ -137,11 +137,23 @@ more bit of margin:
 24·σ·‖w‖  +  24·4·‖w‖ (53-bit upload)  +  2^(q−yb−1) (reply rounding)  +  255·dim (hint's low byte)  <  2^(q−K−2)
 ```
 
-The client checks this at startup for every linear and again before every v2 request. Linears that
-do not fit, or have no recorded norm, stay on v1. They are logged at startup. For Qwen2.5-7B at
+The client checks this at startup for every linear. Linears that do not fit, or have no recorded
+norm, stay on v1. The startup plan is the guard: it uses the row norms from the customer's own hint
+store, which is built from `W8` and is not provider-controlled. Before each v2 request the client
+re-asserts the stored plan, which is a consistency check rather than independent protection. They are logged at startup. For Qwen2.5-7B at
 K32 and rank 16, the bound comes to about 2^21.3 (hidden-size inputs) to 2^21.6 (down projection)
 against 2^22. These figures are estimated from Qwen2.5-1.5B int8 row norms, so every linear uses
 53/35. Even worst-case rows (every |w| = 127) fit, with 56/35 or 53/39 on the down projection.
+For all-±127 down-projection rows (n = 18944) the 53/39 bound is 2^21.98, just under 2^22. That
+budget already sits one bit below the decryption limit (failure at 2^23), and the bound is
+conservative: simulated all-±127 rows at K32/q56 and K40/q64 reach 2^20.05 against a non-noise
+bound of 2^20.76.
+
+**Design status.** The 53-bit upload departs from the original plan (E5 assumed q = 2^53 after
+WP7). Here the customer instead rounds its own q = 2^56 ciphertext down with fresh dither. The
+argument below was reviewed and holds, but as a new design it still needs explicit sign-off from
+the research owner. Until then, `RemoteMulmod64(..., upload_switch=False)` keeps 56-bit uploads
+(11.90 MB per 7B slot instead of 11.59 MB).
 
 **Why the rounding leaks nothing.**
 - The provider's rounding is a deterministic function of a value the provider computes anyway.
@@ -160,6 +172,13 @@ against 2^22. These figures are estimated from Qwen2.5-1.5B int8 row norms, so e
   leaked noise. It also does not ship low-bit `W·r` downloads, which would need a new Freivalds
   soundness argument.
 
+**Provider memory.** The service unpacks a v2 upload into a full `uint64` array plus a scratch
+array (and a byte copy on the CPU kernel). For the largest item (n = 18944, cols = 4096) each is
+about 0.6 GB, so a v2 item needs roughly 2-3x the host memory of a v1 item while in flight. The
+service rejects uploads narrower than 32 bits (`bb < 32`), which caps the unpack expansion at 2x
+the request body. Concurrency limits, `cols ≤ 4096` and authentication bound the rest; size
+provider host memory for the configured maskgen concurrency accordingly.
+
 **CPU cost.** In this release, packing and unpacking run in numpy on both sides. The measurements
 below come from a shared 4-vCPU host, single-threaded per call, so they are noisy.
 
@@ -171,7 +190,9 @@ below come from a shared 4-vCPU host, single-threaded per call, so they are nois
 
 On a T4 provider, the v2 numpy work is therefore larger than the GEMM itself (2-4 ms). v2 pays off
 where the link is the limit, which is any link of 1 Gbit/s or less: about 100 ms per slot on the
-wire. On a co-located link of 10 Gbit/s or more, keep v1 by turning v2 off on the service. The
+wire. The service serves v2 by default and the client has no link-speed setting, so on a
+co-located link of 10 Gbit/s or more, keep v1 by turning v2 off on the service
+(`PGW_SERVICE_MASKGEN_V2=false`); otherwise the provider CPU becomes the bottleneck. The
 other option is to move the v2 unpack and pack into the device kernel (`ComputeKernel`) or
 `pgw_fast`. That is a follow-up: the format is plain field casts, so it maps directly to a GPU
 kernel.
