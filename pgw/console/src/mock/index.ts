@@ -3,6 +3,7 @@
 
 import type { ApiKeyRecord, ChatRequest, CreateKeyRequest } from "../api/types";
 import * as fx from "./fixtures";
+import { handleSetup } from "./setup";
 
 type Role = "admin" | "viewer";
 const SESSION_KEY = "pgw-mock-session";
@@ -67,6 +68,8 @@ function streamChat(req: ChatRequest, signal?: AbortSignal | null): Response {
 async function handle(method: string, url: URL, headers: Headers, body: unknown, signal?: AbortSignal | null): Promise<Response> {
   const p = url.pathname;
   await delay(80 + Math.random() * 120);
+  const setup = handleSetup(method, p, headers, body);
+  if (setup) return setup;
 
   if (p === "/console/api/login" && method === "POST") {
     const token = (body as { token?: string })?.token;

@@ -27,7 +27,23 @@ if (__MOCK__) {
     if (__DEMO__) {
       const tag = document.createElement("div");
       tag.className = "demo-banner";
-      tag.textContent = "Demo with sample data. Sign in with the token \"admin\" (or \"viewer\").";
+      void import("./mock/setup").then((setup) => {
+        if (setup.setupActive()) {
+          tag.classList.add("is-inline");
+          tag.append(`Demo of first-run setup. Setup token: "setup". Enrollment code: `);
+          const code = document.createElement("code");
+          code.textContent = setup.SAMPLE_CODE;
+          tag.append(code);
+        } else {
+          tag.append(`Demo with sample data. Sign in with the token "admin" (or "viewer"). `);
+          const link = document.createElement("button");
+          link.type = "button";
+          link.className = "demo-banner-link";
+          link.textContent = "Try the first-run setup wizard";
+          link.onclick = () => setup.startSetupDemo();
+          tag.append(link);
+        }
+      });
       document.body.prepend(tag);
     }
     render();

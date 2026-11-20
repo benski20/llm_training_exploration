@@ -628,7 +628,7 @@ function FinishStep({ st, client }: { st: SetupState; client: SetupApi }) {
         ))}
         {result.mode === "normal" ? (
           <div className="setup-actions">
-            <a className="btn btn-primary btn-md" href="/console/login">
+            <a className="btn btn-primary btn-md" href={__DEMO__ ? "./" : "/console/login"}>
               <span className="btn-label">Go to sign-in</span>
             </a>
           </div>
