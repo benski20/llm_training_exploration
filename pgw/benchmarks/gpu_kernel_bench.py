@@ -71,8 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         m, n = max(1, m // args.scale), max(1, n // args.scale)
         w = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=gen)
         spec = LinearSpec(LinearId(0, KINDS[name]), m, n)
-        eager = ComputeKernel(spec, w, device=args.device, cuda_graphs=False)
-        graph = ComputeKernel(spec, w, device=args.device, cuda_graphs=True)
+        # digit-GEMM path only (the fused Triton GEMV has its own benchmark: triton_gemv_bench.py)
+        eager = ComputeKernel(spec, w, device=args.device, cuda_graphs=False, triton_gemv=False)
+        graph = ComputeKernel(spec, w, device=args.device, cuda_graphs=True, triton_gemv=False)
         for rows in rows_list:
             xs = [torch.from_numpy(rng.integers(0, ring.modulus, size=(rows, n), dtype=np.int64)) for _ in range(4)]
             te, ye = _time(eager, xs, ring, args.iters)

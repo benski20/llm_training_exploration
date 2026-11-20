@@ -34,6 +34,10 @@ import torch
 # Dev/staging escape hatch for the whole test suite: most fixtures open throw-away stores without an
 # external monotonic counter. Tests of the production default (refusal) pass the setting explicitly.
 os.environ.setdefault("PGW_MASKSTORE_ALLOW_NO_EXTERNAL_COUNTER", "true")
+# Without CUDA, Triton kernels (pgw.core.triton_gemv) run in the Triton interpreter on CPU tensors. The mode
+# must be chosen before triton is first imported (its own library functions are jitted at import time).
+if not torch.cuda.is_available():
+    os.environ.setdefault("TRITON_INTERPRET", "1")
 
 from pgw.core import (
     RING_K32_A8,

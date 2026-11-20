@@ -14,6 +14,11 @@ kernel launches plus padding, a synchronous pageable host-to-device copy and an 
   afterwards. Calls that fit no bucket run eagerly. A capture that fails is logged once and that
   ``(linear, K, bucket)`` runs eagerly from then on; a replay that disagrees with the eager result
   disables graphs on the device.
+* **Fused ring GEMV** (:meth:`DeviceExecutor.run_gemv`): for ``K <= 32`` and at most
+  :data:`pgw.core.triton_gemv.TRITON_GEMV_MAX_ROWS` rows, one Triton kernel computes the product
+  with wrapping 32-bit integer arithmetic (no digits, no padding); only the low 32 bits of ``x`` are
+  copied in. Used only after :func:`pgw.core.triton_gemv.self_check` passed on the device; a result
+  that disagrees with the digit-GEMM path disables it (:meth:`DeviceExecutor.disable_gemv`).
 * **Pinned staging** buffers per device and non-blocking copies both ways (one stream sync per call).
 * **Compact output**: for ``K <= 32`` the device returns int32 bit patterns (the low 32 bits of
   each ring element; :func:`from_compact` restores int64) which halves the device-to-host bytes;
@@ -42,6 +47,7 @@ import torch
 
 from pgw.core.errors import ConfigError
 from pgw.core.ringmm import offset_byte_consts, offset_byte_core, offset_byte_rows
+from pgw.core.triton_gemv import TRITON_GEMV_KS, low32, max_rows, ring_gemv, self_check
 
 __all__ = [
     "GRAPH_BUCKETS",
@@ -169,6 +175,7 @@ class ExecutorStats:
     captures: int = 0
     capture_failures: int = 0
     pinned_copies: int = 0
+    gemv: int = 0
 
 
 @dataclass(eq=False)
@@ -221,6 +228,54 @@ class DeviceExecutor:
         self._reserve_out = 0
         self._h_in: torch.Tensor | None = None
         self._h_out: torch.Tensor | None = None
+        #: fused Triton ring GEMV: None = not checked yet, then the self-check verdict (False after a mismatch)
+        self._gemv_ok: bool | None = None
+
+    # ---- fused ring GEMV (pgw.core.triton_gemv) ---------------------------------------------
+    def gemv_ready(self) -> bool:
+        """True if the fused Triton GEMV may serve calls on this device (self-check once, then cached)."""
+        if self._gemv_ok is None:
+            ok = self_check(self.device)
+            with self.lock:
+                if self._gemv_ok is None:
+                    self._gemv_ok = ok
+        return bool(self._gemv_ok)
+
+    def gemv_eligible(self, rows: int, k: int) -> bool:
+        """A call of ``rows`` rows in ring ``K`` fits the fused kernel and it passed its self-check."""
+        return k in TRITON_GEMV_KS and self.gemv_ready() and 1 <= rows <= max_rows(self.device)
+
+    def disable_gemv(self, reason: str) -> None:
+        """Stop using the fused kernel on this device (a result disagreed with the digit-GEMM path)."""
+        self._gemv_ok = False
+        log.error("fused ring GEMV disabled on %s: %s", self.device, reason)
+
+    def run_gemv(self, x: torch.Tensor, k: int, w: torch.Tensor, n: int, m: int) -> torch.Tensor:
+        """Compact ``x @ W^T mod 2^K`` with the fused kernel (one launch); host int32 ``(b, m)``.
+
+        Args:
+            x: Host int64 ``(b, n)`` (any int64; only the low 32 bits are sent: ``K <= 32``).
+            k: Ring bits (one of :data:`pgw.core.triton_gemv.TRITON_GEMV_KS`).
+            w: Padded int8 weight ``(mp, np_)`` on this device.
+            n: Inner dimension (``<= np_``).
+            m: Output features (``<= mp``).
+        """
+        with self.lock:
+            xd = self._stage_in32(x)
+            self.stats.gemv += 1
+            return self._stage_out(ring_gemv(xd, w, k, n=n, m=m))
+
+    def _stage_in32(self, x: torch.Tensor) -> torch.Tensor:
+        """Copy the low 32 bits of host int64 ``x`` to the device (half the bytes of :meth:`_stage_in`)."""
+        b, n = x.shape
+        lo = low32(x)
+        h = self._host("_h_in", b * n * 4) if self._cuda else None
+        if h is None:
+            return lo.contiguous().to(self.device, non_blocking=True)
+        src = h[: b * n * 4].view(torch.int32).view(b, n)
+        src.copy_(lo)
+        self.stats.pinned_copies += 1
+        return src.to(self.device, non_blocking=True)
 
     # ---- setup ---------------------------------------------------------------------------
     def reserve(self, in_features: int, out_features: int, buckets: Sequence[int] = GRAPH_BUCKETS) -> None:

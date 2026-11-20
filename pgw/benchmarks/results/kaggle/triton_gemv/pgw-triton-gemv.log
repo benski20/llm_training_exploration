@@ -1,0 +1,280 @@
+[{"stream_name":"stdout","time":7.67140114,"data":"[   0.1m] {'python': '3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]', 'torch': '2.11.0+cu130', 'cuda': '13.0', 'gpu': 'Tesla T4', 'gpu_count': 2, 'cpu_count': 4, 'mem': ['MemTotal:       32869288 kB', 'MemFree:        26250380 kB'], 'disk': 'Filesystem      Size  Used Avail Use% Mounted on\\noverlay         8.0T  5.6T  2.5T  70% /\\noverlay         8.0T  5.6T  2.5T  70% /\\n/dev/loop2       20G  1.5M   20G   1% /kaggle/working\\n'}\n"}
+,{"stream_name":"stdout","time":7.784738501,"data":"[   0.1m] RUN pip_install : /usr/bin/python3 -m pip install -q -e /tmp/pgwsrc/pgw[dev]\n"}
+,{"stream_name":"stdout","time":18.81851928,"data":"[   0.3m] DONE pip_install rc 0 11s\n"}
+,{"stream_name":"stdout","time":18.818563523999998,"data":"\n"}
+,{"stream_name":"stdout","time":18.818568408,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":18.818572328,"data":"\n"}
+,{"stream_name":"stdout","time":18.818576203,"data":"[   0.3m] RUN pip_freeze : /usr/bin/python3 -m pip freeze\n"}
+,{"stream_name":"stdout","time":19.792727326,"data":"[   0.3m] DONE pip_freeze rc 0 1s\n"}
+,{"stream_name":"stdout","time":19.792755674,"data":"=0.0.8\n"}
+,{"stream_name":"stdout","time":19.792760633,"data":"smart_open==8.0.4\n"}
+,{"stream_name":"stdout","time":19.79276483,"data":"sniffio==1.3.1\n"}
+,{"stream_name":"stdout","time":19.792769026,"data":"snowballstemmer==3.1.1\n"}
+,{"stream_name":"stdout","time":19.792772942,"data":"sortedcontainers==2.4.0\n"}
+,{"stream_name":"stdout","time":19.792776649,"data":"soundfile==0.14.0\n"}
+,{"stream_name":"stdout","time":19.792780175,"data":"soupsieve==3.0.4\n"}
+,{"stream_name":"stdout","time":19.792783381,"data":"soxr==1.1.0\n"}
+,{"stream_name":"stdout","time":19.7927865,"data":"spacy==3.8.16\n"}
+,{"stream_name":"stdout","time":19.79278973,"data":"spacy-legacy==3.0.12\n"}
+,{"stream_name":"stdout","time":19.792792922,"data":"spacy-loggers==1.0.5\n"}
+,{"stream_name":"stdout","time":19.792796154,"data":"spaghetti==1.7.6\n"}
+,{"stream_name":"stdout","time":19.792799333,"data":"spanner-graph-notebook==1.1.11\n"}
+,{"stream_name":"stdout","time":19.792802575,"data":"spglm==1.1.0\n"}
+,{"stream_name":"stdout","time":19.792806048,"data":"Sphinx==8.2.3\n"}
+,{"stream_name":"stdout","time":19.792809356,"data":"sphinxcontrib-applehelp==2.0.0\n"}
+,{"stream_name":"stdout","time":19.792812501,"data":"sphinxcontrib-devhelp==2.0.0\n"}
+,{"stream_name":"stdout","time":19.792815742,"data":"sphinxcontrib-htmlhelp==2.1.0\n"}
+,{"stream_name":"stdout","time":19.792818995,"data":"sphinxcontrib-jsmath==2.0.0\n"}
+,{"stream_name":"stdout","time":19.792826176,"data":"sphinxcontrib-qthelp==2.0.0\n"}
+,{"stream_name":"stdout","time":19.792829096,"data":"sphinxcontrib-serializinghtml==2.0.0\n"}
+,{"stream_name":"stdout","time":19.792831439,"data":"spint==1.1.0\n"}
+,{"stream_name":"stdout","time":19.792833597,"data":"splot==1.1.7\n"}
+,{"stream_name":"stdout","time":19.792835751,"data":"spopt==0.7.0\n"}
+,{"stream_name":"stdout","time":19.792837902,"data":"spreg==1.9.0\n"}
+,{"stream_name":"stdout","time":19.792840239,"data":"SQLAlchemy==2.1.6\n"}
+,{"stream_name":"stdout","time":19.792851059,"data":"sqlglot==25.20.2\n"}
+,{"stream_name":"stdout","time":19.79285479,"data":"sqlparse==0.6.0\n"}
+,{"stream_name":"stdout","time":19.792858592,"data":"squarify==0.4.5\n"}
+,{"stream_name":"stdout","time":19.792862241999998,"data":"srsly==2.5.4\n"}
+,{"stream_name":"stdout","time":19.792866115,"data":"sse-starlette==3.7.0\n"}
+,{"stream_name":"stdout","time":19.792869895,"data":"standard-aifc==3.13.0\n"}
+,{"stream_name":"stdout","time":19.7928731,"data":"standard-chunk==3.13.0\n"}
+,{"stream_name":"stdout","time":19.792886517,"data":"standard-sunau==3.13.0\n"}
+,{"stream_name":"stdout","time":19.792890015,"data":"stanio==0.5.1\n"}
+,{"stream_name":"stdout","time":19.792893226,"data":"starlette==1.9.0\n"}
+,{"stream_name":"stdout","time":19.792896449,"data":"statsmodels==0.15.0\n"}
+,{"stream_name":"stdout","time":19.792899578,"data":"stopit==1.1.2\n"}
+,{"stream_name":"stdout","time":19.792902735,"data":"strictyaml==1.7.3\n"}
+,{"stream_name":"stdout","time":19.792905908,"data":"stringzilla==5.3.1\n"}
+,{"stream_name":"stdout","time":19.792909042,"data":"stumpy==1.14.1\n"}
+,{"stream_name":"stdout","time":19.792912241,"data":"sympy==1.14.0\n"}
+,{"stream_name":"stdout","time":19.792915339,"data":"tables==3.10.2\n"}
+,{"stream_name":"stdout","time":19.792918545,"data":"tabulate==0.9.0\n"}
+,{"stream_name":"stdout","time":19.792921739,"data":"tbb==2022.3.1\n"}
+,{"stream_name":"stdout","time":19.792925075,"data":"tblib==3.2.2\n"}
+,{"stream_name":"stdout","time":19.792931711,"data":"tcmlib==1.6.0\n"}
+,{"stream_name":"stdout","time":19.792933936,"data":"tenacity==9.1.4\n"}
+,{"stream_name":"stdout","time":19.792936895,"data":"tensorboard==2.21.0\n"}
+,{"stream_name":"stdout","time":19.792948246999998,"data":"tensorboard-data-server==0.7.2\n"}
+,{"stream_name":"stdout","time":19.792952159,"data":"tensorflow==2.21.0\n"}
+,{"stream_name":"stdout","time":19.792955754,"data":"tensorflow-datasets==4.9.10\n"}
+,{"stream_name":"stdout","time":19.79295982,"data":"tensorflow-hub==0.16.1\n"}
+,{"stream_name":"stdout","time":19.792963602,"data":"tensorflow-metadata==1.21.0\n"}
+,{"stream_name":"stdout","time":19.79296699,"data":"tensorflow-probability==0.25.0\n"}
+,{"stream_name":"stdout","time":19.792970236,"data":"tensorflow-text==2.21.1\n"}
+,{"stream_name":"stdout","time":19.792973502,"data":"tensorstore==0.1.85\n"}
+,{"stream_name":"stdout","time":19.792976629,"data":"termcolor==3.3.0\n"}
+,{"stream_name":"stdout","time":19.792979807000002,"data":"terminado==0.18.1\n"}
+,{"stream_name":"stdout","time":19.792983042,"data":"testpath==0.6.0\n"}
+,{"stream_name":"stdout","time":19.792986187,"data":"text-unidecode==1.3\n"}
+,{"stream_name":"stdout","time":19.792989333,"data":"textblob==0.19.0\n"}
+,{"stream_name":"stdout","time":19.792992458,"data":"texttable==1.7.3\n"}
+,{"stream_name":"stdout","time":19.792995652,"data":"tf-slim==1.1.0\n"}
+,{"stream_name":"stdout","time":19.792998821,"data":"tf_keras==2.21.0\n"}
+,{"stream_name":"stdout","time":19.793002019,"data":"thinc==8.3.13\n"}
+,{"stream_name":"stdout","time":19.793005222,"data":"threadpoolctl==3.7.0\n"}
+,{"stream_name":"stdout","time":19.793008362,"data":"tifffile==2026.10.15\n"}
+,{"stream_name":"stdout","time":19.79301147,"data":"tiktoken==0.14.0\n"}
+,{"stream_name":"stdout","time":19.793014642,"data":"timm==1.0.30\n"}
+,{"stream_name":"stdout","time":19.793017864,"data":"tinycss2==1.5.1\n"}
+,{"stream_name":"stdout","time":19.793024435,"data":"tobler==0.14.0\n"}
+,{"stream_name":"stdout","time":19.793026647,"data":"tokenizers==0.23.3\n"}
+,{"stream_name":"stdout","time":19.793029223,"data":"toml==0.10.2\n"}
+,{"stream_name":"stdout","time":19.793041078,"data":"tomlkit==0.14.0\n"}
+,{"stream_name":"stdout","time":19.793044615,"data":"toolz==0.12.1\n"}
+,{"stream_name":"stdout","time":19.793048331,"data":"torch==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":19.793052289,"data":"torchao==0.10.0\n"}
+,{"stream_name":"stdout","time":19.793056109,"data":"torchaudio==2.11.0+cu130\n"}
+,{"stream_name":"stdout","time":19.793063946,"data":"torchcodec==0.11.0+cu130\n"}
+,{"stream_name":"stdout","time":19.793067227,"data":"torchdata==0.11.0\n"}
+,{"stream_name":"stdout","time":19.79307039,"data":"torchinfo==1.8.0\n"}
+,{"stream_name":"stdout","time":19.793073553,"data":"torchmetrics==1.9.0\n"}
+,{"stream_name":"stdout","time":19.793076794,"data":"torchsummary==1.5.1\n"}
+,{"stream_name":"stdout","time":19.793079955,"data":"torchtune==0.6.1\n"}
+,{"stream_name":"stdout","time":19.793083128,"data":"torchvision==0.26.0+cu130\n"}
+,{"stream_name":"stdout","time":19.79308635,"data":"tornado==6.5.7\n"}
+,{"stream_name":"stdout","time":19.793089525,"data":"TPOT==1.1.0\n"}
+,{"stream_name":"stdout","time":19.793092722,"data":"tqdm==4.67.3\n"}
+,{"stream_name":"stdout","time":19.793095982,"data":"traitlets==5.16.1\n"}
+,{"stream_name":"stdout","time":19.793099138,"data":"traittypes==0.2.3\n"}
+,{"stream_name":"stdout","time":19.793102357,"data":"transformers==5.20.2\n"}
+,{"stream_name":"stdout","time":19.793105567,"data":"treelite==4.8.0\n"}
+,{"stream_name":"stdout","time":19.793108715,"data":"treescope==0.1.10\n"}
+,{"stream_name":"stdout","time":19.793112076,"data":"triton==3.6.0\n"}
+,{"stream_name":"stdout","time":19.793119295,"data":"truststore==0.10.5\n"}
+,{"stream_name":"stdout","time":19.793121735,"data":"trx-python==0.6\n"}
+,{"stream_name":"stdout","time":19.793124784,"data":"tsfresh==0.21.2\n"}
+,{"stream_name":"stdout","time":19.793136479,"data":"tuf==7.0.1\n"}
+,{"stream_name":"stdout","time":19.793140399,"data":"tweepy==4.17.0\n"}
+,{"stream_name":"stdout","time":19.793144095,"data":"typeguard==4.6.0\n"}
+,{"stream_name":"stdout","time":19.79314803,"data":"typer==0.27.3\n"}
+,{"stream_name":"stdout","time":19.793151715,"data":"types-pytz==2026.5.0.20261006\n"}
+,{"stream_name":"stdout","time":19.793155037,"data":"types-PyYAML==6.0.12.20261113\n"}
+,{"stream_name":"stdout","time":19.79315837,"data":"types-setuptools==84.0.0.20261006\n"}
+,{"stream_name":"stdout","time":19.793161586,"data":"typing-inspect==0.9.0\n"}
+,{"stream_name":"stdout","time":19.793166019,"data":"typing-inspection==0.4.4\n"}
+,{"stream_name":"stdout","time":19.793169344,"data":"typing_extensions==4.16.0\n"}
+,{"stream_name":"stdout","time":19.793172527,"data":"tzdata==2026.5\n"}
+,{"stream_name":"stdout","time":19.793175719,"data":"tzlocal==5.4.5\n"}
+,{"stream_name":"stdout","time":19.793178904,"data":"ucxx-cu13==0.50.0\n"}
+,{"stream_name":"stdout","time":19.793182043,"data":"ujson==6.1.0\n"}
+,{"stream_name":"stdout","time":19.793185332,"data":"umap-learn==0.5.12\n"}
+,{"stream_name":"stdout","time":19.793188491,"data":"umf==1.0.3\n"}
+,{"stream_name":"stdout","time":19.793191616,"data":"universal_pathlib==0.3.10\n"}
+,{"stream_name":"stdout","time":19.793194785,"data":"update_checker==1.0.1\n"}
+,{"stream_name":"stdout","time":19.793197963,"data":"uri-template==1.3.0\n"}
+,{"stream_name":"stdout","time":19.793201117,"data":"uritemplate==4.2.0\n"}
+,{"stream_name":"stdout","time":19.793204296,"data":"urllib3==2.8.0\n"}
+,{"stream_name":"stdout","time":19.793210211999998,"data":"urwid==5.1.3\n"}
+,{"stream_name":"stdout","time":19.793213279,"data":"urwid_readline==0.15.1\n"}
+,{"stream_name":"stdout","time":19.79321549,"data":"uuid_utils==0.18.0\n"}
+,{"stream_name":"stdout","time":19.793218565,"data":"uvicorn==0.54.0\n"}
+,{"stream_name":"stdout","time":19.793229335,"data":"uvloop==0.23.0\n"}
+,{"stream_name":"stdout","time":19.793233207,"data":"vega-datasets==0.9.0\n"}
+,{"stream_name":"stdout","time":19.79324129,"data":"visions==0.8.1\n"}
+,{"stream_name":"stdout","time":19.793245211,"data":"vtk==9.7.2\n"}
+,{"stream_name":"stdout","time":19.793248415,"data":"wadllib==1.3.6\n"}
+,{"stream_name":"stdout","time":19.793251622,"data":"Wand==0.7.2\n"}
+,{"stream_name":"stdout","time":19.793254767,"data":"wandb==0.28.1\n"}
+,{"stream_name":"stdout","time":19.793257967,"data":"wasabi==1.1.3\n"}
+,{"stream_name":"stdout","time":19.793261145,"data":"watchdog==6.0.0\n"}
+,{"stream_name":"stdout","time":19.793264364,"data":"watchfiles==1.3.0\n"}
+,{"stream_name":"stdout","time":19.793267618,"data":"wavio==0.0.9\n"}
+,{"stream_name":"stdout","time":19.79327076,"data":"wcwidth==0.9.3\n"}
+,{"stream_name":"stdout","time":19.793273892,"data":"weasel==1.0.0\n"}
+,{"stream_name":"stdout","time":19.793277095,"data":"webcolors==25.10.0\n"}
+,{"stream_name":"stdout","time":19.793280257,"data":"webencodings==0.6.1\n"}
+,{"stream_name":"stdout","time":19.793285649,"data":"websocket-client==1.9.2\n"}
+,{"stream_name":"stdout","time":19.79328884,"data":"websockets==15.0.1\n"}
+,{"stream_name":"stdout","time":19.793292031,"data":"Werkzeug==3.1.9\n"}
+,{"stream_name":"stdout","time":19.793295172,"data":"wheel==0.48.0\n"}
+,{"stream_name":"stdout","time":19.793298453,"data":"widgetsnbextension==4.0.16\n"}
+,{"stream_name":"stdout","time":19.793305125,"data":"woodwork==0.31.0\n"}
+,{"stream_name":"stdout","time":19.793307454,"data":"wordcloud==1.9.6\n"}
+,{"stream_name":"stdout","time":19.793310024,"data":"wrapt==2.5.1\n"}
+,{"stream_name":"stdout","time":19.793321635,"data":"wsproto==1.3.2\n"}
+,{"stream_name":"stdout","time":19.7933256,"data":"xarray==2025.12.0\n"}
+,{"stream_name":"stdout","time":19.793329261,"data":"xarray-einstats==0.11.0\n"}
+,{"stream_name":"stdout","time":19.793333255,"data":"xee==0.1.2\n"}
+,{"stream_name":"stdout","time":19.793336979,"data":"xgboost==3.4.1\n"}
+,{"stream_name":"stdout","time":19.793340207,"data":"xlrd==2.0.2\n"}
+,{"stream_name":"stdout","time":19.793343345,"data":"xvfbwrapper==0.2.38\n"}
+,{"stream_name":"stdout","time":19.793346533,"data":"xxhash==4.0.2\n"}
+,{"stream_name":"stdout","time":19.793349742,"data":"xyzservices==2026.9.1\n"}
+,{"stream_name":"stdout","time":19.793352927,"data":"yarl==1.25.1\n"}
+,{"stream_name":"stdout","time":19.793356163,"data":"ydata-profiling==4.18.4\n"}
+,{"stream_name":"stdout","time":19.793359335,"data":"ydf==0.15.0\n"}
+,{"stream_name":"stdout","time":19.793362471000002,"data":"ydf_tf==2.21.0\n"}
+,{"stream_name":"stdout","time":19.793365628,"data":"yellowbrick==1.5\n"}
+,{"stream_name":"stdout","time":19.7933688,"data":"yfinance==0.2.66\n"}
+,{"stream_name":"stdout","time":19.79337197,"data":"zict==3.0.0\n"}
+,{"stream_name":"stdout","time":19.793375071,"data":"zipp==4.1.2\n"}
+,{"stream_name":"stdout","time":19.793378205,"data":"zstandard==0.25.0\n"}
+,{"stream_name":"stdout","time":19.793381354,"data":"\n"}
+,{"stream_name":"stdout","time":19.793384488,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":19.793387676000002,"data":"\n"}
+,{"stream_name":"stdout","time":19.793390958,"data":"[   0.3m] RUN pytest_triton_gemv : /usr/bin/python3 -m pytest tests/core/test_triton_gemv.py tests/core/test_ringmm.py tests/service/test_kernels.py tests/service/test_gpu_exec.py tests/service/test_gpu_graphs.py -v -rs --timeout 1800 -p no:cacheprovider\n"}
+,{"stream_name":"stdout","time":507.590933055,"data":"[   8.4m] DONE pytest_triton_gemv rc 0 488s\n"}
+,{"stream_name":"stdout","time":507.590975236,"data":"hs.py::test_graph_equals_eager_equals_reference[4736x448-32] SKIPPED [ 95%]\n"}
+,{"stream_name":"stdout","time":507.590988451,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[4736x448-40] SKIPPED [ 95%]\n"}
+,{"stream_name":"stdout","time":507.590992532,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[4736x448-48] SKIPPED [ 96%]\n"}
+,{"stream_name":"stdout","time":507.590996347,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-32] SKIPPED [ 96%]\n"}
+,{"stream_name":"stdout","time":507.591000133,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-40] SKIPPED [ 96%]\n"}
+,{"stream_name":"stdout","time":507.591003673,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[448x2368-48] SKIPPED [ 96%]\n"}
+,{"stream_name":"stdout","time":507.591007248,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-32] SKIPPED [ 96%]\n"}
+,{"stream_name":"stdout","time":507.591011112,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-40] SKIPPED [ 97%]\n"}
+,{"stream_name":"stdout","time":507.591014915,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[77x100-48] SKIPPED [ 97%]\n"}
+,{"stream_name":"stdout","time":507.591018548,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-32] SKIPPED [ 97%]\n"}
+,{"stream_name":"stdout","time":507.591022098,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-40] SKIPPED [ 97%]\n"}
+,{"stream_name":"stdout","time":507.591026078,"data":"tests/service/test_gpu_graphs.py::test_graph_equals_eager_equals_reference[5x33-48] SKIPPED [ 98%]\n"}
+,{"stream_name":"stdout","time":507.59102981,"data":"tests/service/test_gpu_graphs.py::test_extreme_operands[32] PASSED       [ 98%]\n"}
+,{"stream_name":"stdout","time":507.591033387,"data":"tests/service/test_gpu_graphs.py::test_extreme_operands[48] PASSED       [ 98%]\n"}
+,{"stream_name":"stdout","time":507.591036801,"data":"tests/service/test_gpu_graphs.py::test_full_size_7b_shape[o] PASSED      [ 98%]\n"}
+,{"stream_name":"stdout","time":507.591040383,"data":"tests/service/test_gpu_graphs.py::test_full_size_7b_shape[qkv] PASSED    [ 99%]\n"}
+,{"stream_name":"stdout","time":507.591043911,"data":"tests/service/test_gpu_graphs.py::test_warmup_captures_every_bucket_and_rows_beyond_run_eagerly SKIPPED [ 99%]\n"}
+,{"stream_name":"stdout","time":507.591047395,"data":"tests/service/test_gpu_graphs.py::test_randomized_stress_interleaved_linears SKIPPED [ 99%]\n"}
+,{"stream_name":"stdout","time":507.591051041,"data":"tests/service/test_gpu_graphs.py::test_concurrent_threads_are_serialized PASSED [ 99%]\n"}
+,{"stream_name":"stdout","time":507.591054638,"data":"tests/service/test_gpu_graphs.py::test_private_executor_capture_and_pinned_staging PASSED [100%]\n"}
+,{"stream_name":"stdout","time":507.591058204,"data":"\n"}
+,{"stream_name":"stdout","time":507.591061676,"data":"=========================== short test summary info ============================\n"}
+,{"stream_name":"stdout","time":507.591066441,"data":"SKIPPED [12] tests/core/test_triton_gemv.py:109: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.591070468,"data":"SKIPPED [6] tests/core/test_triton_gemv.py:122: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.591074403,"data":"SKIPPED [24] tests/core/test_triton_gemv.py:146: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.591077832,"data":"SKIPPED [1] tests/core/test_triton_gemv.py:164: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.59108446,"data":"SKIPPED [1] tests/core/test_triton_gemv.py:183: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.591088414,"data":"SKIPPED [3] tests/core/test_triton_gemv.py:189: Triton interpreter not enabled (CUDA host: see the gpu tests)\n"}
+,{"stream_name":"stdout","time":507.591092371,"data":"SKIPPED [19] tests/service/test_gpu_graphs.py:113: CUDA graph capture unsupported in this torch build; eager results verified exact\n"}
+,{"stream_name":"stdout","time":507.591095796,"data":"SKIPPED [1] tests/service/test_gpu_graphs.py:141: CUDA graph capture unsupported in this torch build; eager results verified exact\n"}
+,{"stream_name":"stdout","time":507.591099294,"data":"================= 362 passed, 67 skipped in 481.17s (0:08:01) ==================\n"}
+,{"stream_name":"stdout","time":507.591102776,"data":"\n"}
+,{"stream_name":"stdout","time":507.591106346,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":507.591109338,"data":"\n"}
+,{"stream_name":"stdout","time":507.591112675,"data":"[   8.4m] RUN triton_gemv_bench : python benchmarks/triton_gemv_bench.py --iters 300 --sweep --json /kaggle/working/triton_gemv_bench.json\n"}
+,{"stream_name":"stdout","time":593.835751056,"data":"[   9.9m] DONE triton_gemv_bench rc 0 86s\n"}
+,{"stream_name":"stdout","time":593.835786603,"data":" tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835791368,"data":"    %36 = arith.addi %33, %35 : tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835794874,"data":"    %37 = tt.bitcast %arg6 : i32 -\u003e i32\n"}
+,{"stream_name":"stdout","time":593.835798259,"data":"    %38 = tt.splat %37 : i32 -\u003e tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835801626,"data":"    %39 = arith.andi %36, %38 : tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835804875,"data":"    %40 = tt.splat %arg2 : !tt.ptr\u003ci32\u003e -\u003e tensor\u003c16x1x!tt.ptr\u003ci32\u003e\u003e\n"}
+,{"stream_name":"stdout","time":593.835808479,"data":"    %41 = tt.addptr %40, %23 : tensor\u003c16x1x!tt.ptr\u003ci32\u003e\u003e, tensor\u003c16x1xi64\u003e\n"}
+,{"stream_name":"stdout","time":593.835811909,"data":"    %42 = tt.expand_dims %6 {axis = 0 : i32} : tensor\u003c64xi32\u003e -\u003e tensor\u003c1x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835815282,"data":"    %43 = tt.broadcast %41 : tensor\u003c16x1x!tt.ptr\u003ci32\u003e\u003e -\u003e tensor\u003c16x64x!tt.ptr\u003ci32\u003e\u003e\n"}
+,{"stream_name":"stdout","time":593.835818667,"data":"    %44 = tt.broadcast %42 : tensor\u003c1x64xi32\u003e -\u003e tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.83582199,"data":"    %45 = tt.addptr %43, %44 : tensor\u003c16x64x!tt.ptr\u003ci32\u003e\u003e, tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835825339,"data":"    %46 = tt.expand_dims %9 {axis = 1 : i32} : tensor\u003c16xi1\u003e -\u003e tensor\u003c16x1xi1\u003e\n"}
+,{"stream_name":"stdout","time":593.835828638,"data":"    %47 = tt.expand_dims %10 {axis = 0 : i32} : tensor\u003c64xi1\u003e -\u003e tensor\u003c1x64xi1\u003e\n"}
+,{"stream_name":"stdout","time":593.83583187,"data":"    %48 = tt.broadcast %46 : tensor\u003c16x1xi1\u003e -\u003e tensor\u003c16x64xi1\u003e\n"}
+,{"stream_name":"stdout","time":593.835835177,"data":"    %49 = tt.broadcast %47 : tensor\u003c1x64xi1\u003e -\u003e tensor\u003c16x64xi1\u003e\n"}
+,{"stream_name":"stdout","time":593.835838394,"data":"    %50 = arith.andi %48, %49 : tensor\u003c16x64xi1\u003e\n"}
+,{"stream_name":"stdout","time":593.835841764,"data":"    %51 = tt.bitcast %39 : tensor\u003c16x64xi32\u003e -\u003e tensor\u003c16x64xi32\u003e\n"}
+,{"stream_name":"stdout","time":593.835856578,"data":"    tt.store %45, %51, %50 : tensor\u003c16x64x!tt.ptr\u003ci32\u003e\u003e\n"}
+,{"stream_name":"stdout","time":593.835859456,"data":"    tt.return\n"}
+,{"stream_name":"stdout","time":593.835861869,"data":"  }\n"}
+,{"stream_name":"stdout","time":593.835864241,"data":"}\n"}
+,{"stream_name":"stdout","time":593.83586664,"data":"\n"}
+,{"stream_name":"stdout","time":593.835869042,"data":"{-#\n"}
+,{"stream_name":"stdout","time":593.835871402,"data":"  external_resources: {\n"}
+,{"stream_name":"stdout","time":593.835873814,"data":"    mlir_reproducer: {\n"}
+,{"stream_name":"stdout","time":593.835880228,"data":"      pipeline: \"builtin.module(convert-triton-to-tritongpu{enable-source-remat=false num-ctas=1 num-warps=4 target=cuda:75 threads-per-warp=32}, tritongpu-coalesce, tritongpu-F32DotTC{emu-tf32=false}, triton-nvidia-gpu-plan-cta, tritongpu-remove-layout-conversions, tritongpu-optimize-thread-locality, tritongpu-accelerate-matmul, tritongpu-remove-layout-conversions, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, triton-nvidia-optimize-descriptor-encoding, triton-loop-aware-cse, triton-licm, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}, triton-loop-aware-cse, tritongpu-prefetch, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, tritongpu-coalesce-async-copy, triton-nvidia-optimize-tmem-layouts, tritongpu-remove-layout-conversions, triton-nvidia-interleave-tmem, tritongpu-reduce-data-duplication, tritongpu-reorder-instructions, triton-loop-aware-cse, symbol-dce, triton-nvidia-gpu-fence-insertion{compute-capability=75}, triton-nvidia-mma-lowering, sccp, cse, canonicalize{  max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true})\",\n"}
+,{"stream_name":"stdout","time":593.835885782,"data":"      disable_threading: true,\n"}
+,{"stream_name":"stdout","time":593.835888234,"data":"      verify_each: true\n"}
+,{"stream_name":"stdout","time":593.835890672,"data":"    }\n"}
+,{"stream_name":"stdout","time":593.835893008,"data":"  }\n"}
+,{"stream_name":"stdout","time":593.835895351,"data":"#-}\n"}
+,{"stream_name":"stdout","time":593.835897704,"data":"/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:50:0: error: Failures have been detected while processing an MLIR pass pipeline\n"}
+,{"stream_name":"stdout","time":593.835900466,"data":"/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:50:0: note: Pipeline failed while executing [`TritonGPUAccelerateMatmul` on 'builtin.module' operation]: reproducer generated at `std::errs, please share the reproducer above with Triton project.`\n"}
+,{"stream_name":"stdout","time":593.835903281,"data":"fused ring GEMV (tensor-core variant) failed its self-check on cuda:0 (RuntimeError: PassManager::run failed); retrying with the CUDA-core variant for one-row calls\n"}
+,{"stream_name":"stdout","time":593.835905934,"data":"\n"}
+,{"stream_name":"stdout","time":593.83590828,"data":"[   9.9m] RUN gpu_kernel_bench : python benchmarks/gpu_kernel_bench.py --iters 300\n"}
+,{"stream_name":"stdout","time":605.138066543,"data":"[  10.1m] DONE gpu_kernel_bench rc 0 11s\n"}
+,{"stream_name":"stdout","time":605.138092607,"data":"device=cuda ring=K32A12C27 iters=300 torch=2.11.0+cu130 gpu=Tesla T4\n"}
+,{"stream_name":"stdout","time":605.13809701,"data":"linear           m x n rows  eager ms  graph ms  speedup\n"}
+,{"stream_name":"stdout","time":605.13810065,"data":"qkv          4608x3584    1     0.481     0.278    1.73x\n"}
+,{"stream_name":"stdout","time":605.138104374,"data":"qkv          4608x3584    5     0.519     0.298    1.74x\n"}
+,{"stream_name":"stdout","time":605.138117346,"data":"qkv          4608x3584    8     0.547     0.308    1.78x\n"}
+,{"stream_name":"stdout","time":605.138120716,"data":"o            3584x3584    1     0.478     0.477    1.00x\n"}
+,{"stream_name":"stdout","time":605.138124011,"data":"o            3584x3584    5     0.515     0.521    0.99x\n"}
+,{"stream_name":"stdout","time":605.138127745,"data":"o            3584x3584    8     0.530     0.536    0.99x\n"}
+,{"stream_name":"stdout","time":605.13813107,"data":"gate_up     37888x3584    1     1.097     1.040    1.05x\n"}
+,{"stream_name":"stdout","time":605.138134408,"data":"gate_up     37888x3584    5     1.340     1.328    1.01x\n"}
+,{"stream_name":"stdout","time":605.138137867,"data":"gate_up     37888x3584    8     1.571     1.552    1.01x\n"}
+,{"stream_name":"stdout","time":605.138141245,"data":"down        3584x18944    1     0.651     0.653    1.00x\n"}
+,{"stream_name":"stdout","time":605.138144777,"data":"down        3584x18944    5     0.717     0.718    1.00x\n"}
+,{"stream_name":"stdout","time":605.138148655,"data":"down        3584x18944    8     0.768     0.755    1.02x\n"}
+,{"stream_name":"stdout","time":605.138152342,"data":"layer      (4 linears)    1     2.708     2.448    1.11x (avg/call eager 0.677 graph 0.612)\n"}
+,{"stream_name":"stdout","time":605.138155918,"data":"layer      (4 linears)    5     3.092     2.865    1.08x (avg/call eager 0.773 graph 0.716)\n"}
+,{"stream_name":"stdout","time":605.138159407,"data":"layer      (4 linears)    8     3.416     3.152    1.08x (avg/call eager 0.854 graph 0.788)\n"}
+,{"stream_name":"stdout","time":605.138162937,"data":"executor stats: ExecutorStats(replays=912, eager=6384, captures=1, capture_failures=3, pinned_copies=7299, gemv=0)\n"}
+,{"stream_name":"stdout","time":605.13816653,"data":"\n"}
+,{"stream_name":"stdout","time":605.138169945,"data":"---stderr---\n"}
+,{"stream_name":"stdout","time":605.138173397,"data":"CUDA graph capture failed on cuda:0 (K=32, rows\u003c=8, n=3584, m=3584): RuntimeError: it-\u003esecond-\u003euse_count \u003e 0 INTERNAL ASSERT FAILED at \"/pytorch/c10/cuda/CUDACachingAllocator.cpp\":2799, please report a bug to PyTorch. ; running eagerly\n"}
+,{"stream_name":"stdout","time":605.138179047,"data":"\n"}
+,{"stream_name":"stdout","time":605.138443212,"data":"[  10.1m] ALL DONE\n"}
+,{"stream_name":"stderr","time":607.562460913,"data":"/usr/local/lib/python3.13/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":607.562492719,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":607.794001648,"data":"/usr/local/lib/python3.13/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":607.794030596,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":608.546875357,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":609.506178467,"data":"[NbConvertApp] Writing 1140042 bytes to __results__.html\n"}
+]

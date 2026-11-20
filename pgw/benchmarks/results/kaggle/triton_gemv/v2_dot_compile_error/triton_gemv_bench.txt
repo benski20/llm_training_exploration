@@ -1,0 +1,10 @@
+self_check(cuda:0) = False (2.4 s incl. compiles)
+
+---stderr---
+fused ring GEMV unavailable on cuda:0 (CompilationError: at 38:15:
+    acc0 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc1 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc2 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    acc3 = tl.zeros((BLOCK_R, BLOCK_M), dtype=tl.int32)
+    for n0 in range(k_lo, k_hi, BLOCK_N):
+        offs_n = n0 + of); using the digit-GEMM path

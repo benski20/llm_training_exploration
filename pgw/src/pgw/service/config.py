@@ -77,6 +77,13 @@ class ServiceSettings(PGWSettings):
         "Off by default: capture is unreliable on some torch builds (2.11 + T4). "
         "Falls back to eager per shape if a capture fails. No effect on CPU",
     )
+    triton_gemv: bool = Field(
+        True,
+        description="CUDA devices: serve calls with K <= 32 and at most 16 rows (decode, speculative verify) with the "
+        "fused Triton ring GEMV (one kernel, wrapping 32-bit integer arithmetic, bit-identical results). Used only "
+        "if triton imports and a startup self-check against the digit-GEMM path passes on the device; the first call "
+        "per (linear, K, rows) is cross-checked too. false = always use the digit-GEMM path. No effect on CPU",
+    )
     cuda_graph_buckets: list[int] = Field(
         default_factory=lambda: [32, 64, 128],
         description="Padded GEMM row counts that get a CUDA graph (multiples of 32). With K=32 (4 byte planes) "

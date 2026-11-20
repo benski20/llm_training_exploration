@@ -1,0 +1,79 @@
+self_check(cuda:0) = True (3.1 s incl. compiles)
+gpu=Tesla T4 sms=40 torch=2.11.0+cu130 ring=K32A12C27 iters=300
+qkv          4608x3584    1     0.465     0.353    1.32x | qkv          4608x3584    1     0.249     0.146    1.71x     113 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+qkv          4608x3584    5     0.499     0.507    0.98x | qkv          4608x3584    5     0.253     0.754    0.34x      22 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+qkv          4608x3584    8     0.537     0.563    0.95x | qkv          4608x3584    8     0.253     0.523    0.48x      32 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+qkv          4608x3584   16     0.548     0.546    1.00x | qkv          4608x3584   16     0.255     1.060    0.24x      16 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584    1     0.485     0.252    1.93x | o            3584x3584    1     0.254     0.064    3.98x     202 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+o            3584x3584    5     0.502     0.502    1.00x | o            3584x3584    5     0.257     0.619    0.41x      21 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584    8     0.510     0.520    0.98x | o            3584x3584    8     0.255     0.412    0.62x      31 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584   16     0.533     0.530    1.00x | o            3584x3584   16     0.253     0.906    0.28x      14 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    1     1.025     0.883    1.16x | gate_up     37888x3584    1     0.785     0.765    1.03x     178 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    5     1.434     1.307    1.10x | gate_up     37888x3584    5     0.947     4.144    0.23x      33 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    8     1.502     1.507    1.00x | gate_up     37888x3584    8     1.069     4.573    0.23x      30 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584   16     2.201     2.201    1.00x | gate_up     37888x3584   16     1.442     8.887    0.16x      15 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944    1     0.643     0.528    1.22x | down        3584x18944    1     0.437     0.424    1.03x     160 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+down        3584x18944    5     0.885     0.715    1.24x | down        3584x18944    5     0.466     2.264    0.21x      30 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944    8     0.740     0.742    1.00x | down        3584x18944    8     0.477     2.459    0.19x      28 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944   16     1.170     0.930    1.26x | down        3584x18944   16     0.564     4.697    0.12x      14 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+
+service call (ComputeKernel.run_compact, host in/out), median ms per call
+linear           m x n rows  eager ms triton ms  speedup
+qkv          4608x3584    1     0.465     0.353    1.32x
+qkv          4608x3584    5     0.499     0.507    0.98x
+qkv          4608x3584    8     0.537     0.563    0.95x
+qkv          4608x3584   16     0.548     0.546    1.00x
+o            3584x3584    1     0.485     0.252    1.93x
+o            3584x3584    5     0.502     0.502    1.00x
+o            3584x3584    8     0.510     0.520    0.98x
+o            3584x3584   16     0.533     0.530    1.00x
+gate_up     37888x3584    1     1.025     0.883    1.16x
+gate_up     37888x3584    5     1.434     1.307    1.10x
+gate_up     37888x3584    8     1.502     1.507    1.00x
+gate_up     37888x3584   16     2.201     2.201    1.00x
+down        3584x18944    1     0.643     0.528    1.22x
+down        3584x18944    5     0.885     0.715    1.24x
+down        3584x18944    8     0.740     0.742    1.00x
+down        3584x18944   16     1.170     0.930    1.26x
+layer      (4 linears)    1     2.618     2.016    1.30x
+layer      (4 linears)    5     3.320     3.031    1.10x
+layer      (4 linears)    8     3.288     3.333    0.99x
+layer      (4 linears)   16     4.452     4.208    1.06x
+
+device only (CUDA events, operands on device), ms per call
+linear           m x n rows  digit ms triton ms  speedup        W8 bw  config
+qkv          4608x3584    1     0.249     0.146    1.71x     113 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+qkv          4608x3584    5     0.253     0.754    0.34x      22 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+qkv          4608x3584    8     0.253     0.523    0.48x      32 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+qkv          4608x3584   16     0.255     1.060    0.24x      16 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584    1     0.254     0.064    3.98x     202 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+o            3584x3584    5     0.257     0.619    0.41x      21 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584    8     0.255     0.412    0.62x      31 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+o            3584x3584   16     0.253     0.906    0.28x      14 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    1     0.785     0.765    1.03x     178 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    5     0.947     4.144    0.23x      33 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584    8     1.069     4.573    0.23x      30 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+gate_up     37888x3584   16     1.442     8.887    0.16x      15 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944    1     0.437     0.424    1.03x     160 GB/s  GemvConfig(block_r=1, block_m=32, block_n=512, split_k=2, num_warps=4, dot=False)
+down        3584x18944    5     0.466     2.264    0.21x      30 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944    8     0.477     2.459    0.19x      28 GB/s  GemvConfig(block_r=8, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+down        3584x18944   16     0.564     4.697    0.12x      14 GB/s  GemvConfig(block_r=16, block_m=4, block_n=512, split_k=1, num_warps=4, dot=False)
+layer int8 weight bytes 233.0 MB; at 300 GB/s: 0.777 ms
+
+config sweep (device only)
+qkv      rows= 1 heuristic 0.1461 ms  best 0.1073 ms (154 GB/s) GemvConfig(block_r=1, block_m=16, block_n=512, split_k=8, num_warps=4, dot=False)
+qkv      rows= 8 heuristic 0.5232 ms  best 0.4298 ms (38 GB/s) GemvConfig(block_r=8, block_m=8, block_n=512, split_k=1, num_warps=4, dot=False)
+o        rows= 1 heuristic 0.0637 ms  best 0.0591 ms (218 GB/s) GemvConfig(block_r=1, block_m=8, block_n=1024, split_k=1, num_warps=4, dot=False)
+o        rows= 8 heuristic 0.4118 ms  best 0.3762 ms (34 GB/s) GemvConfig(block_r=8, block_m=8, block_n=512, split_k=4, num_warps=4, dot=False)
+gate_up  rows= 1 heuristic 0.7645 ms  best 0.5954 ms (228 GB/s) GemvConfig(block_r=1, block_m=32, block_n=1024, split_k=2, num_warps=4, dot=False)
+gate_up  rows= 8 heuristic 4.5728 ms  best 4.3016 ms (32 GB/s) GemvConfig(block_r=8, block_m=8, block_n=512, split_k=1, num_warps=4, dot=False)
+down     rows= 1 heuristic 0.4240 ms  best 0.2960 ms (229 GB/s) GemvConfig(block_r=1, block_m=32, block_n=1024, split_k=8, num_warps=4, dot=False)
+down     rows= 8 heuristic 2.4588 ms  best 2.2240 ms (31 GB/s) GemvConfig(block_r=8, block_m=8, block_n=512, split_k=8, num_warps=4, dot=False)
+executor stats: ExecutorStats(replays=0, eager=8600, captures=0, capture_failures=0, pinned_copies=9828, gemv=1228)
+
+---stderr--- (truncated: tensor-core variant compile errors, MLIR dump removed; 768 sweep configs failed to compile)
+
+/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:87:41: error: 'arith.extf' op operand #0 must be floating-point-like, but got 'tensor<16x128xi8, #ttg.dot_op<{opIdx = 0, parent = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>}>>'
+        acc0 = tl.dot(d.to(tl.int8), wt, acc0, out_dtype=tl.int32)
+                                        ^
+

@@ -57,6 +57,19 @@ JOBS: dict[str, dict] = {
             "--loadtest", "1x1", "1x5", "4x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
+    # fused Triton ring GEMV (K <= 32, <= 16 rows): GPU exactness tests + timing vs the digit-GEMM path, 7B shapes
+    "pgw-triton-gemv": {"exclude": ["rust", "deploy", "scripts", "tests/vectors", "tests/gateway", "tests/cli",
+                                    "tests/maskstore", "tests/factory", "tests/docs", "tests/wire"], "steps": [
+        {"kind": "pytest", "name": "pytest_triton_gemv",
+         "args": ["tests/core/test_triton_gemv.py", "tests/core/test_ringmm.py", "tests/service/test_kernels.py",
+                  "tests/service/test_gpu_exec.py", "tests/service/test_gpu_graphs.py", "-v", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        {"kind": "shell", "name": "triton_gemv_bench",
+         "cmd": "python benchmarks/triton_gemv_bench.py --iters 300 --sweep --json /kaggle/working/triton_gemv_bench.json",
+         "timeout": 3600},
+        {"kind": "shell", "name": "gpu_kernel_bench",
+         "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300", "timeout": 1800},
+    ]},
     # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)
     "pgw-quality-7b": {"steps": [
         {"kind": "shell", "name": "quality_7b",
@@ -141,15 +154,17 @@ JOBS: dict[str, dict] = {
 }
 
 
-def source_tarball() -> bytes:
+def source_tarball(exclude: tuple[str, ...] = ()) -> bytes:
+    """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/)."""
     buf = io.BytesIO()
+    skip = EXCLUDE_PATHS + tuple(exclude)
 
     def filt(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
         parts = Path(ti.name).parts
         if len(parts) > 1 and parts[1] in EXCLUDE_TOP:
             return None
         rel = "/".join(parts[1:])
-        if any(rel == p or rel.startswith(p + "/") for p in EXCLUDE_PATHS):
+        if any(rel == p or rel.startswith(p + "/") for p in skip):
             return None
         if any(p in EXCLUDE_DIRS or p.endswith(".egg-info") for p in parts) or ti.name.endswith((".whl", ".so")):
             return None
@@ -166,12 +181,16 @@ def main() -> None:
     ap.add_argument("--owner", default="bensliv")
     ap.add_argument("--only", nargs="*")
     args = ap.parse_args()
-    raw = base64.b64encode(source_tarball()).decode()
-    tgz = "\n".join(raw[i : i + 100] for i in range(0, len(raw), 100))  # short lines (Kaggle rejects huge ones)
     template = (HERE / "kernel_template.py").read_text()
+    tarballs: dict[tuple[str, ...], str] = {}
     for slug, job in JOBS.items():
         if args.only and slug not in args.only:
             continue
+        excl = tuple(job.get("exclude", ()))
+        if excl not in tarballs:
+            raw = base64.b64encode(source_tarball(excl)).decode()
+            tarballs[excl] = "\n".join(raw[i : i + 100] for i in range(0, len(raw), 100))  # short lines for Kaggle
+        tgz = tarballs[excl]
         d = Path(args.out_root) / slug
         d.mkdir(parents=True, exist_ok=True)
         (d / "run.py").write_text(template.replace("__JOB__", json.dumps(job)).replace("__PGW_TGZ_B64__", tgz))
