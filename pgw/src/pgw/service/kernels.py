@@ -23,11 +23,14 @@ On CUDA, :meth:`ComputeKernel.run` goes through the device's
 decode-sized calls, pinned staging and non-blocking copies, and (:meth:`ComputeKernel.run_compact`)
 32-bit results for ``K <= 32``. Results are bit-identical to the eager path.
 
-Decode-sized CUDA calls (``K <= 32``, at most :data:`pgw.core.triton_gemv.TRITON_GEMV_MAX_ROWS`
-rows) use the fused Triton ring GEMV (:mod:`pgw.core.triton_gemv`: one kernel, int8 weight streamed
-once, wrapping 32-bit integer arithmetic) when ``triton_gemv`` is on and its self-check passed on
-the device; the first call per ``(K, rows)`` of each linear is also compared with the digit-GEMM
-path, and any disagreement switches the device back to it. Everything else is unchanged.
+Decode-sized CUDA calls (``K <= 32``, at most :func:`pgw.core.triton_gemv.max_rows` rows) use the
+fused Triton ring GEMV (:mod:`pgw.core.triton_gemv`: one kernel, int8 weight streamed once,
+wrapping 32-bit integer arithmetic) when ``triton_gemv`` is on and its self-check passed on the
+device; the first call per ``(K, rows)`` of each linear is also compared with the digit-GEMM path,
+and any disagreement switches the device back to it. The launch configuration comes from the
+device's table (measured, each rule self-checked) or the heuristic; 2-8 rows use the memory-bound
+``stream`` variant where it is enabled (``PGW_SERVICE_TRITON_GEMV_MULTIROW``: on GPUs without the
+tensor-core variant, such as a T4, after a startup timing gate). Everything else is unchanged.
 
 Measured: Llama-3-8B, T4, K=48: 0.45 s/token at batch 1, 0.014 s/token amortized at batch 32.
 Future: fused CUDA/Triton kernel doing digit split + K/8 GEMMs + shift-accumulate in one pass.
