@@ -118,6 +118,8 @@ fn run_trip(
         Err(e) => {
             assert!(payload.iter().all(|b| *b == 0), "payload not zeroed after an error");
             assert!(rhs.iter().all(|b| *b == 0), "rhs not zeroed after an error");
+            assert!(sx.iter().all(|b| b.to_bits() == 0), "sx not zeroed after an error");
+            assert!(xhat.iter().all(|b| *b == 0), "xhat not zeroed after an error");
             Err(e)
         }
     }
@@ -486,5 +488,127 @@ fn buffers_reused_across_calls() {
         let (pl, s, _) = reference(&x, &r, n, p).unwrap();
         assert_eq!(payload, pl);
         assert_eq!(sx[0].to_bits(), s[0]);
+    }
+}
+
+/// The summation path is public: `int_sum_ok` is monotone in the width (so `b <= b_int` is the
+/// reference's choice), the default ring is integer-only, and large-A capped rings run both.
+#[test]
+fn sum_path_is_public_and_matches_reference_condition() {
+    let mut g = Rng(9);
+    for _ in 0..400 {
+        let a = 2 + g.below(47) as u32;
+        let cap = 1 + g.below(62) as u32;
+        let n = [1usize, 7, 300, 3584, 18944, 1 << 20, 1 << 30][g.below(7) as usize];
+        let plan = WidthPlan::new(n, PrepareParams { k: 56, a, cap, wnorm: 1.0 + g.unit() * 1e6 });
+        for b in 2..=a {
+            assert_eq!(int_sum_ok(n, qmax_of(b)), b <= plan.b_int, "n={n} A{a} b={b}");
+        }
+        let want = if plan.b_int >= a {
+            SumPath::Int
+        } else if plan.b_int < 2 {
+            SumPath::Float
+        } else {
+            SumPath::Both
+        };
+        assert_eq!(plan.sum_path(), want);
+    }
+    for n in [3584usize, 18944] {
+        let p = PrepareParams { k: 32, a: 12, cap: 27, wnorm: 4000.0 };
+        assert_eq!(WidthPlan::new(n, p).sum_path(), SumPath::Int);
+    }
+    let big = PrepareParams { k: 56, a: 48, cap: 53, wnorm: (1u64 << 25) as f64 };
+    assert_eq!(WidthPlan::new(18944, big).sum_path(), SumPath::Both);
+    assert_eq!(WidthPlan::new(18944, PrepareParams { cap: 0, ..big }).sum_path(), SumPath::Off);
+}
+
+/// The width of a row from its scale (`amax / Q_b`).
+fn width_of(x: &[f32], sx: u64) -> u32 {
+    let amax = f64::from(f32::from_bits(row_amax_bits(x)));
+    let s = f64::from_bits(sx);
+    (2..=48).find(|&b| amax / qmax_of(b) == s).expect("scale of no width")
+}
+
+/// Regression (review): on a capped ring with a large A the reference sums squares as integers for
+/// small widths and as sequential floats for large ones. A Gaussian row (small width) and a spike
+/// row (large width) must run the same summation work, and stay bit-identical to the reference.
+#[test]
+fn large_a_rows_with_different_widths_run_the_same_path() {
+    let mut g = Rng(10);
+    let n = 18944;
+    for wexp in [18u32, 22, 25, 28, 31] {
+        let p = PrepareParams { k: 56, a: 48, cap: 53, wnorm: (1u64 << wexp) as f64 };
+        let gauss = gen_row(&mut g, n, 0);
+        let spike = gen_row(&mut g, n, 1);
+        let r: Vec<i64> = (0..n).map(|_| (g.next() & u64::mask(56)) as i64).collect();
+        let mut logs = Vec::new();
+        let mut widths = Vec::new();
+        for x in [&gauss, &spike] {
+            PATH_LOG.with(|l| l.borrow_mut().clear());
+            let got = run_trip(x, &r, n, p, None, 1).expect("fits");
+            logs.push(PATH_LOG.with(|l| std::mem::take(&mut *l.borrow_mut())));
+            widths.push(width_of(x, got.sx[0]));
+            let (pl, sx, xh) = reference(x, &r, n, p).expect("reference fits");
+            assert_eq!((got.sx, got.xhat, got.payload), (sx, xh, pl), "2^{wexp}: differs from the reference");
+        }
+        let w = WidthPlan::new(n, p).window() as usize;
+        assert_eq!(logs[0], vec![SumPath::Both; w], "2^{wexp}");
+        assert_eq!(logs[0], logs[1], "2^{wexp}: rows ran different summation paths");
+        if wexp == 25 {
+            // the case from the review: widths on both sides of b_int (25 at n = 18944)
+            let b_int = WidthPlan::new(n, p).b_int;
+            assert!(widths[0] <= b_int && widths[1] > b_int, "widths {widths:?}, b_int {b_int}");
+        }
+    }
+    // windows straddling b_int: wnorm placed so that the Gaussian row's choice is b_int or b_int + 1
+    for _ in 0..6 * stress() {
+        let x = gen_row(&mut g, n, 0);
+        let b = 24 + g.below(3) as u32;
+        let qm = qmax_of(b);
+        let amax = f64::from(f32::from_bits(row_amax_bits(&x)));
+        let mut q = vec![0i64; n];
+        quant_exact(&x, amax / qm, qm, &mut q);
+        let w0 = (1u64 << 53) as f64 / (sum_squares(&q, qm).sqrt() * NORM_SLACK);
+        for wnorm in [w0, f64::from_bits(w0.to_bits() + 1), w0 * 0.75] {
+            let p = PrepareParams { k: 56, a: 48, cap: 53, wnorm };
+            check_case(&mut g, &x, n, p, &format!("straddle b={b} wnorm={wnorm}"));
+        }
+    }
+}
+
+/// Status 3 (all-zero `u`) zeroes a reused output buffer like every other failure.
+#[test]
+fn finish_u_zero_clears_reused_output() {
+    let mut g = Rng(11);
+    let cs = fin_case(&mut g, 32, 2, 300, 40, 2);
+    let uz = vec![0u64; cs.c * cs.m];
+    for mode in 0..2u8 {
+        let mut wr = cs.wr.clone();
+        // SAFETY: `wr` is owned here and outlives the call.
+        let wrb = unsafe { WrBuf::new(wr.as_mut_ptr().cast(), wr.len(), true, true) };
+        let check = match mode {
+            0 => CheckMode::Full {
+                u: Src::U64(&uz),
+                uw: Src::U64(&cs.uw),
+                x_hat: Src::Bytes(&cs.payload),
+                c: cs.c,
+                n: cs.n,
+            },
+            _ => CheckMode::Split { u: Src::U64(&uz), rhs: &cs.rhs, c: cs.c },
+        };
+        let args = FinishArgs {
+            y_hat: &cs.y,
+            wr: wrb,
+            sx: &cs.sx,
+            scale: &cs.sc,
+            bias: Some(&cs.bias),
+            k: cs.k,
+            bound: u64::MAX >> 1,
+            check,
+        };
+        let mut out = vec![1.5f32; cs.rows * cs.m]; // the previous trip's outputs
+        assert_eq!(finish_into(&args, &mut out, 1).0, STATUS_U_ZERO);
+        assert!(out.iter().all(|v| v.to_bits() == 0), "mode {mode}: stale outputs survived status 3");
+        assert!(wr.iter().all(|v| *v == 0), "wr not wiped");
     }
 }

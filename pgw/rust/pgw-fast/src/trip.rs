@@ -37,6 +37,13 @@
 //!   with masks, not branches. The result is therefore bit-identical to the descending search.
 //! * If the parameters are degenerate (`wnorm` not finite and positive, `n > 2^31`), `W = A - 1`
 //!   (every width, still constant time). Uncapped rings have one width (`W = 1`).
+//! * The reference's sum of squares is the exact integer sum for widths with `Q_b < 2^31` and
+//!   `n Q_b^2 < 9e18`, and a sequential float64 sum (a serial dependency chain, much slower) above.
+//!   Which one a width takes depends on the width, hence on the data. The plan therefore fixes the
+//!   work from public values only ([`SumPath`]): if every width in `[2, A]` takes the same kind,
+//!   only that kind runs; otherwise (`Both`: capped rings with a large `A`, e.g. K56A48C53 at
+//!   n = 18944) every evaluated width computes both sums in one pass and selects the reference's
+//!   one with a mask (`b <= b_int`). The default K32A12C27 is `Int` at every 7B width.
 //!
 //! # Constant-time review notes
 //!
@@ -59,6 +66,12 @@
 //!   9.5 us), n=18944 54 us (102 us); the fused input half adds about 1 us at n=3584. Handing the
 //!   output half to the helper thread costs the submitting thread about 11 us (thread wake-up);
 //!   the output half itself is 6.6 us (m=4608) to 36 us (m=37888).
+//! * Large-A capped rings cost more, publicly: K56A48C53 at n=18944, wnorm=2^25 runs `Both` sums
+//!   (W=2): 112.7 us for a Gaussian row (width 24) and 112.7 us for a spike row (width 28),
+//!   interleaved medians (before the fix, 79 vs 105 us). K16A8C16 with realistic `wnorm` has
+//!   `d_b < 0` for every width, so W = A - 1 = 7 at n=18944 (4 at n=3584): about 3.5x the 7B W=2 cost.
+//! * `threads > 1` only sets the task size of prefill blocks; the persistent pool decides how many
+//!   workers pick them up.
 
 use crate::finish::{
     self, decode, dot, wipe, Exec, Group, GroupChecks, Part, RoRing, Src, Word, WrBuf, BLOCK, STATUS_FREIVALDS,
@@ -69,7 +82,7 @@ use crate::prepare::{
     MANY_PAR_MIN_ELEMS, NORM_SLACK,
 };
 use numpy::{PyArray2, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::cell::RefCell;
@@ -99,6 +112,27 @@ const EPS_Q: f64 = 1.0 / (1u64 << 48) as f64;
 /// Widths are indexed by bit count (`<= 48`).
 const NB_IDX: usize = 49;
 
+/// How the sum of squares of a candidate width is formed (public, per plan; see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SumPath {
+    /// Uncapped ring: no sum of squares.
+    Off,
+    /// Every width the plan can evaluate takes [`crate::prepare::sum_squares`]' exact integer sum.
+    Int,
+    /// Every such width takes its sequential float64 sum.
+    Float,
+    /// Both kinds occur among the evaluable widths: every width computes both sums and selects the
+    /// reference's one with a mask (`b <= b_int`), so the work does not depend on the chosen width.
+    Both,
+}
+
+/// Whether [`crate::prepare::sum_squares`] sums width `qmax` rows of `n` elements as integers (its
+/// exact condition; monotone: true up to some width, false above).
+#[inline(always)]
+fn int_sum_ok(n: usize, qmax: f64) -> bool {
+    qmax < 2_147_483_648.0 && (n as f64) * qmax * qmax < 9.0e18
+}
+
 /// Public per-linear plan of the constant-time width selection.
 #[derive(Clone, Debug)]
 pub struct WidthPlan {
@@ -109,16 +143,31 @@ pub struct WidthPlan {
     bounded: bool,
     p: [f64; NB_IDX],
     d: [f64; NB_IDX],
+    /// The summation path(s) every evaluated width runs.
+    sum: SumPath,
+    /// Largest width whose reference sum is the integer one (1 if none).
+    b_int: u32,
 }
 
 impl WidthPlan {
     /// The plan for rows of width `n` (parameters must be valid).
     pub fn new(n: usize, prm: PrepareParams) -> WidthPlan {
         let a = prm.a;
-        let mut plan = WidthPlan { a, w: 1, bounded: false, p: [0.0; NB_IDX], d: [0.0; NB_IDX] };
+        let mut plan =
+            WidthPlan { a, w: 1, bounded: false, p: [0.0; NB_IDX], d: [0.0; NB_IDX], sum: SumPath::Off, b_int: 1 };
         if prm.cap == 0 {
             return plan; // uncapped: the single width A
         }
+        // Which reference summation each width takes depends on the width, which is secret, so a
+        // plan whose evaluable widths (any of [2, A]) mix both kinds runs both for every width.
+        plan.b_int = (2..=a).filter(|&b| int_sum_ok(n, qmax_of(b))).max().unwrap_or(1);
+        plan.sum = if plan.b_int >= a {
+            SumPath::Int
+        } else if plan.b_int < 2 {
+            SumPath::Float
+        } else {
+            SumPath::Both
+        };
         let limit = (1u64 << prm.cap) as f64;
         let t = limit / (prm.wnorm * NORM_SLACK);
         let sane = prm.wnorm.is_finite() && prm.wnorm > 0.0 && t.is_finite() && t > 0.0 && n > 0 && n <= (1 << 31);
@@ -155,6 +204,11 @@ impl WidthPlan {
     /// Widths evaluated per row.
     pub fn window(&self) -> u32 {
         self.w
+    }
+
+    /// The summation path every evaluated width runs (public).
+    pub fn sum_path(&self) -> SumPath {
+        self.sum
     }
 
     /// `(lo, hi)`: largest certainly-fitting width (2 if none) and largest possibly-fitting width
@@ -226,39 +280,77 @@ fn quant_exact(xr: &[f32], s: f64, qmax: f64, q: &mut [i64]) {
 /// Rows that took the (provably unreachable) full-search fallback; tests assert it stays 0.
 static WINDOW_MISSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// [`quant_exact`] and, if `want_ss`, `sum(q * q)` with the same value as
-/// [`crate::prepare::sum_squares`] (the exact integer sum where that function sums integers, in any
-/// order since wrapping integer addition is associative; otherwise its sequential float64 sum).
+/// [`quant_exact`] fused with the sums of squares the plan needs: the exact integer sum (when
+/// `INT`; wrapping integer addition is associative, so the lane order does not matter) and the
+/// sequential float64 sum (when `FLT`; the same additions in the same order as
+/// [`crate::prepare::sum_squares`]).
 #[inline(always)]
-fn quant_exact_ss(xr: &[f32], s: f64, qmax: f64, q: &mut [i64], want_ss: bool) -> f64 {
-    let n = xr.len();
-    if !want_ss {
-        quant_exact(xr, s, qmax, q);
-        return 0.0;
-    }
-    if qmax < 2_147_483_648.0 && (n as f64) * qmax * qmax < 9.0e18 {
-        let mut acc = [0i64; 4];
-        let mut xc = xr.chunks_exact(4);
-        let mut qc = q.chunks_exact_mut(4);
-        for (xs, qs) in (&mut xc).zip(&mut qc) {
-            for i in 0..4 {
-                let v = biased_to_i64(quant_biased(xs[i], s, qmax));
-                qs[i] = v;
+fn quant_ss<const INT: bool, const FLT: bool>(xr: &[f32], s: f64, qmax: f64, q: &mut [i64]) -> (i64, f64) {
+    let mut acc = [0i64; 4];
+    let mut fs = 0.0f64;
+    let mut xc = xr.chunks_exact(4);
+    let mut qc = q.chunks_exact_mut(4);
+    for (xs, qs) in (&mut xc).zip(&mut qc) {
+        for i in 0..4 {
+            let v = biased_to_i64(quant_biased(xs[i], s, qmax));
+            qs[i] = v;
+            if INT {
                 let qi = i64::from(v as i32);
                 acc[i] = acc[i].wrapping_add(qi.wrapping_mul(qi));
             }
+            if FLT {
+                let vf = v as f64;
+                fs += vf * vf;
+            }
         }
-        let mut tail = 0i64;
-        for (x, qv) in xc.remainder().iter().zip(qc.into_remainder()) {
-            let v = biased_to_i64(quant_biased(*x, s, qmax));
-            *qv = v;
+    }
+    let mut tail = 0i64;
+    for (x, qv) in xc.remainder().iter().zip(qc.into_remainder()) {
+        let v = biased_to_i64(quant_biased(*x, s, qmax));
+        *qv = v;
+        if INT {
             let qi = i64::from(v as i32);
             tail = tail.wrapping_add(qi.wrapping_mul(qi));
         }
-        acc.iter().fold(tail, |a, b| a.wrapping_add(*b)) as f64
-    } else {
-        quant_exact(xr, s, qmax, q);
-        sum_squares(q, qmax)
+        if FLT {
+            let vf = v as f64;
+            fs += vf * vf;
+        }
+    }
+    (acc.iter().fold(tail, |a, b| a.wrapping_add(*b)), fs)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Summation paths run, one entry per evaluated width (tests check rows run the same sequence).
+    static PATH_LOG: RefCell<Vec<SumPath>> = const { RefCell::new(Vec::new()) };
+}
+
+/// [`quant_exact`] and the sum of squares with the same value as [`crate::prepare::sum_squares`].
+/// The path is the plan's (public); in [`SumPath::Both`] both sums are computed and `int_mask`
+/// (all ones iff this width's reference sum is the integer one) selects without a branch. The float
+/// sum starts from `+0.0` where `Iterator::sum` starts from `-0.0`: identical for `n >= 1` terms
+/// `>= +0`.
+#[inline(always)]
+fn quant_exact_ss(xr: &[f32], s: f64, qmax: f64, q: &mut [i64], path: SumPath, int_mask: u64) -> f64 {
+    #[cfg(test)]
+    PATH_LOG.with(|l| {
+        let mut l = l.borrow_mut();
+        if l.len() < 1 << 16 {
+            l.push(path);
+        }
+    });
+    match path {
+        SumPath::Off => {
+            quant_exact(xr, s, qmax, q);
+            0.0
+        }
+        SumPath::Int => quant_ss::<true, false>(xr, s, qmax, q).0 as f64,
+        SumPath::Float => quant_ss::<false, true>(xr, s, qmax, q).1,
+        SumPath::Both => {
+            let (i, f) = quant_ss::<true, true>(xr, s, qmax, q);
+            f64::from_bits(((i as f64).to_bits() & int_mask) | (f.to_bits() & !int_mask))
+        }
     }
 }
 
@@ -409,7 +501,8 @@ fn prepare_row<W: Word, const NB: usize>(
         let qm = qmax_of(b);
         let s = if amax > 0.0 { amax / qm } else { 1.0 };
         let qw = &mut sc.q[wi * n..(wi + 1) * n];
-        let ss = quant_exact_ss(xr, s, qm, qw, prm.cap != 0);
+        let int_mask = 0u64.wrapping_sub(u64::from(b <= plan.b_int));
+        let ss = quant_exact_ss(xr, s, qm, qw, plan.sum, int_mask);
         let fit = prm.cap == 0 || ss.sqrt() * prm.wnorm * NORM_SLACK <= limit;
         // larger widths come later and override (mask select, no branch)
         let mk = 0u64.wrapping_sub(u64::from(fit));
@@ -565,8 +658,8 @@ const TASK_ELEMS: usize = 16 * 1024;
 /// or empty. Bit-identical to [`crate::prepare::quantize_mask_pack_into`] (payload, `sx`, `x_hat`)
 /// and to the descending width search, including which error is returned. `threads`: `1` = the
 /// calling thread; otherwise prefill-sized calls (at least [`MANY_PAR_MIN_ELEMS`] elements, two or
-/// more rows) are split into whole-row blocks on the persistent pool. On error every output is
-/// zeroed.
+/// more rows) are split into whole-row blocks on the persistent pool. On error every output
+/// (`payload`, `sx`, `xhat`, `rhs`) is zeroed.
 pub fn prepare_into(
     x: &[f32],
     r: &[i64],
@@ -717,6 +810,7 @@ fn prepare_rows<W: Word, const NB: usize>(
 
 fn zero_prep(o: &mut PrepOut<'_>) {
     wipe(o.payload);
+    wipe(o.sx);
     wipe(o.xhat);
     wipe(o.rhs);
 }
@@ -775,8 +869,9 @@ pub struct FinishArgs<'a> {
 /// Fused finish into `out` (`rows x m` float32): bit-identical outputs and statuses to
 /// [`crate::finish::finish_group_run`] on the same chunk (and, in [`CheckMode::Split`], to the full
 /// check with the input half computed at prepare time). Returns `(status, bad_rows)`; `out` is
-/// zeroed (or, for [`STATUS_U_ZERO`], untouched) unless the status is OK. `threads` as in
-/// [`prepare_into`]. Shapes must have been validated (panics otherwise).
+/// zeroed unless the status is OK (also for [`STATUS_U_ZERO`], so a reused buffer never keeps the
+/// previous trip's outputs). `threads` as in [`prepare_into`]. Shapes must have been validated
+/// (panics otherwise; a failed pool task also panics, after zeroing `out`).
 pub fn finish_into(f: &FinishArgs<'_>, out: &mut [f32], threads: usize) -> (u8, usize) {
     let rows = f.sx.len();
     let m = f.scale.len();
@@ -800,7 +895,11 @@ pub fn finish_into(f: &FinishArgs<'_>, out: &mut [f32], threads: usize) -> (u8, 
     };
     let exec = Exec::Pool(threads);
     // SAFETY: `out` is an exclusive slice of exactly `rows * m` floats.
-    unsafe { finish::finish_group_into_raw(&g, out.as_mut_ptr(), exec, rhs_pre) }
+    let res = unsafe { finish::finish_group_into_raw(&g, out.as_mut_ptr(), exec, rhs_pre) };
+    if res.0 == STATUS_U_ZERO {
+        wipe(out); // the core writes nothing then: fail closed on a reused buffer
+    }
+    res
 }
 
 /// The Freivalds output half: `(u . y_hat_t) mod 2^K == rhs_t` for every row `t` and check vector.
@@ -927,35 +1026,67 @@ struct RawJob {
 // only read by the job.
 unsafe impl Send for RawJob {}
 
+/// Read-only borrows of a pending job's `y_hat` and `u` (rust-numpy borrow guards, which also hold
+/// strong references): while they are held, a read-write borrow of either array by `pgw_fast` (or
+/// any rust-numpy extension, e.g. `trip_prepare_into` writing a reused buffer) fails with
+/// `ValueError` instead of racing with the job. Plain numpy writes are not tracked by rust-numpy;
+/// the caller contract (unchanged until `wait()`) still applies to those.
+struct Held {
+    _y: ByteIn<'static>,
+    _u: RoRing<'static>,
+}
+
+// SAFETY: the guards are never used, only dropped, and every drop happens with the GIL held: in
+// `TripCheck::wait` / `done` (which hold the GIL) or in `Drop`, which pyo3 runs from the type's
+// `tp_dealloc` with the GIL held. Releasing a rust-numpy borrow needs nothing but the GIL.
+unsafe impl Send for Held {}
+
 /// A Freivalds output half running on the native helper thread (`trip_freivalds_submit`).
 ///
-/// The `y_hat` buffer and `u` must stay unchanged until :meth:`wait` returns (the handle keeps them
-/// alive; dropping the handle waits for the job).
+/// The `y_hat` buffer and `u` must stay unchanged until :meth:`wait` returns. The handle holds
+/// read-only rust-numpy borrows of both until then (so a read-write borrow through `pgw_fast` raises
+/// `ValueError`), and dropping the handle waits for the job (with the GIL held: call `wait()`).
 #[pyclass(module = "pgw_fast")]
 pub struct TripCheck {
     state: Arc<CheckState>,
-    _keep: Vec<PyObject>,
+    held: Mutex<Option<Held>>,
+}
+
+impl TripCheck {
+    /// Drop the borrows (GIL held by the caller; only once the job has run).
+    fn release(&self) {
+        let h = self.held.lock().unwrap_or_else(|e| e.into_inner()).take();
+        drop(h);
+    }
 }
 
 #[pymethods]
 impl TripCheck {
     /// Block (GIL released) until the check ran; returns ``(status, bad_rows)`` as
-    /// ``trip_freivalds_output`` (status 4: the helper failed internally).
+    /// ``trip_freivalds_output`` (status 4: the helper failed internally). Releases the borrows of
+    /// ``y_hat`` and ``u``.
     fn wait(&self, py: Python<'_>) -> (u8, usize) {
         let st = Arc::clone(&self.state);
-        py.allow_threads(move || st.wait())
+        let res = py.allow_threads(move || st.wait());
+        self.release();
+        res
     }
 
-    /// True once the result is available.
-    fn done(&self) -> bool {
-        self.state.res.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    /// True once the result is available (the borrows are released then).
+    fn done(&self, _py: Python<'_>) -> bool {
+        let d = self.state.res.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        if d {
+            self.release();
+        }
+        d
     }
 }
 
 impl Drop for TripCheck {
     fn drop(&mut self) {
-        // the job reads buffers that `_keep` holds: never release them before it ran
+        // the job reads the buffers that `held` keeps alive: never release them before it ran
         let _ = self.state.wait();
+        self.release();
     }
 }
 
@@ -1151,7 +1282,9 @@ fn trip_prepare_into<'py>(
 ///     threads: 1 = calling thread; 0 = the persistent pool when the chunk is large (prefill).
 ///
 /// Returns ``(status, bad_rows)`` with the statuses of ``finish_group``; ``out`` holds the outputs
-/// only for status 0 (zeroed otherwise; untouched for status 3).
+/// only for status 0 and is zeroed for every other status. An internal failure of a pool worker
+/// raises ``RuntimeError`` (an ``Exception``, not pyo3's ``PanicException``) with ``out`` zeroed
+/// and ``wr`` wiped.
 #[pyfunction]
 #[pyo3(signature = (y_hat, wr, sx, scale, bias, k, bound, out, x_hat = None, u = None, uw = None, rhs = None, wipe_wr = true, threads = 1))]
 #[allow(clippy::too_many_arguments)]
@@ -1261,10 +1394,18 @@ fn trip_finish_into<'py>(
     }
     let os = c_rw(&mut oa).ok_or_else(|| verr("out must be C-contiguous"))?;
     let args = FinishArgs { y_hat: ys, wr: wrb, sx: sx_s, scale: sc_s, bias: bias_s, k, bound, check };
-    let res = py.allow_threads(|| finish_into(&args, os, threads));
+    let res = py.allow_threads(|| {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| finish_into(&args, os, threads)));
+        if r.is_err() {
+            // fail closed: no output and no `W r` survive a failed worker
+            wipe(os);
+            args.wr.wipe_all();
+        }
+        r
+    });
     let _ = args; // borrows of `wra` end here
     drop(wra);
-    Ok(res)
+    res.map_err(|_| PyRuntimeError::new_err("trip_finish_into: internal error in a finish worker (outputs zeroed)"))
 }
 
 /// Validated `(y_hat, u, rhs)` of the output half: `(rows, c, m)`.
@@ -1322,8 +1463,9 @@ fn trip_freivalds_output<'py>(
 }
 
 /// ``trip_freivalds_submit(y_hat, u, rhs, k) -> TripCheck``: run the output half on the native
-/// helper thread and return at once. ``y_hat`` and ``u`` must not change until ``wait()`` returns
-/// (the handle keeps both alive; ``rhs`` is copied).
+/// helper thread and return at once. ``y_hat`` and ``u`` must not change until ``wait()`` returns:
+/// the handle keeps both alive and read-borrowed, so a ``pgw_fast`` call that would write either
+/// raises ``ValueError`` meanwhile (``rhs`` is copied).
 #[pyfunction]
 fn trip_freivalds_submit<'py>(
     y_hat: &Bound<'py, PyAny>,
@@ -1332,13 +1474,13 @@ fn trip_freivalds_submit<'py>(
     k: u32,
 ) -> PyResult<TripCheck> {
     check_k(k)?;
-    let (job, keep, rhs_v, c, m) = {
-        let yb = ByteIn::extract(y_hat, "y_hat")?;
+    let yb = ByteIn::extract(y_hat, "y_hat")?;
+    let ua = RoRing::extract(u, "u", k)?;
+    if matches!(ua, RoRing::B(_)) {
+        return Err(verr("u must be a 2-D numpy array"));
+    }
+    let (job, rhs_v, c, m) = {
         let ys = yb.slice("y_hat")?;
-        let ua = RoRing::extract(u, "u", k)?;
-        if matches!(ua, RoRing::B(_)) {
-            return Err(verr("u must be a 2-D numpy array"));
-        }
         let ra = rhs
             .downcast::<PyArray2<u64>>()
             .map_err(|_| verr("rhs must be a 2-D uint64 numpy array"))?
@@ -1352,9 +1494,16 @@ fn trip_freivalds_submit<'py>(
             Src::U32(s) => RawSrc::U32(s.as_ptr(), s.len()),
             Src::Bytes(_) => return Err(verr("u must be a 2-D numpy array")),
         };
-        let job = RawJob { y: (ys.as_ptr(), ys.len()), u: raw_u };
-        let keep: Vec<PyObject> = vec![y_hat.clone().unbind(), u.clone().unbind()];
-        (job, keep, rs, c, m)
+        (RawJob { y: (ys.as_ptr(), ys.len()), u: raw_u }, rs, c, m)
+    };
+    // SAFETY: only the lifetime changes. The guards are kept by the returned TripCheck and dropped
+    // with the GIL held (see `Held`); their strong references keep the data the pointers above
+    // address alive and in place (numpy data buffers and bytes objects never move).
+    let held = unsafe {
+        Held {
+            _y: std::mem::transmute::<ByteIn<'py>, ByteIn<'static>>(yb),
+            _u: std::mem::transmute::<RoRing<'py>, RoRing<'static>>(ua),
+        }
     };
     let state = Arc::new(CheckState { res: Mutex::new(None), cv: Condvar::new() });
     let st = Arc::clone(&state);
@@ -1378,7 +1527,7 @@ fn trip_freivalds_submit<'py>(
         // the helper thread is gone: run here (same result)
         (e.0)();
     }
-    Ok(TripCheck { state, _keep: keep })
+    Ok(TripCheck { state, held: Mutex::new(Some(held)) })
 }
 
 #[cfg(test)]

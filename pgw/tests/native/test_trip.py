@@ -142,6 +142,48 @@ def test_prepare_into_capped_widths(wnorm_scale: float) -> None:
         assert np.array_equal(buf.rhs, _rhs_ref(want[1], uw, ring))
 
 
+def _width(x_row: np.ndarray, sx: float) -> int:
+    amax = float(np.abs(x_row).max())
+    return next(b for b in range(2, 49) if amax / ((1 << (b - 1)) - 1) == sx)
+
+
+def test_prepare_into_large_a_ring_mixed_sum_paths() -> None:
+    """Review regression: on K56A48C53 at n=18944 the reference sums squares as integers for widths
+    <= 25 and as sequential floats above. A Gaussian row (width 24) and a spike row (width 28) stay
+    bit-identical to the reference (the kernel runs both sums for every width and selects by mask;
+    the Rust test ``large_a_rows_with_different_widths_run_the_same_path`` checks the path)."""
+    ring = RingParams.from_name("K56A48C53")
+    rng = np.random.default_rng(56)
+    n = 18944
+    x = np.stack([rng.normal(size=n), rng.uniform(-0.005, 0.005, size=n)]).astype(np.float32)
+    x[1, 7] = 300.0
+    r = rng.integers(0, 1 << 56, size=x.shape, dtype=np.int64)
+    wn = float(2**25)
+    want = _reference(x, r, ring, wn)
+    buf = Buffers(2, n, ring, 1)
+    _trip_prepare(x, r, ring, wn, buf)
+    assert buf.payload.tobytes() == want[0]
+    assert np.array_equal(buf.xhat, want[1])
+    assert np.array_equal(buf.sx.view(np.uint64), want[2].view(np.uint64))
+    w = [_width(x[i], buf.sx[i]) for i in range(2)]
+    assert w[0] <= 25 < w[1], w  # one row on each side of the integer / float boundary
+
+
+def test_prepare_into_error_zeroes_every_output() -> None:
+    ring = RingParams.from_name("K32A12C27")
+    rng = np.random.default_rng(3)
+    x = _activations(rng, 3, 64, "normal")
+    r = rng.integers(0, 1 << 32, size=x.shape, dtype=np.int64)
+    uw = rng.integers(0, 1 << 32, size=(2, 64), dtype=np.uint64)
+    buf = Buffers(3, 64, ring, 2)
+    _trip_prepare(x, r, ring, 100.0, buf, uw)  # a successful trip leaves scales in the reused buffers
+    assert buf.sx.all() and buf.payload.any()
+    with pytest.raises(ValueError, match="^ring_overflow:"):
+        _trip_prepare(x, r, ring, 1e30, buf, uw)
+    for a in (buf.payload, buf.sx, buf.xhat, buf.rhs):
+        assert not a.any()
+
+
 def test_prepare_into_prefill_blocks_on_pool() -> None:
     ring = RingParams.from_name("K32A12C27")
     rng = np.random.default_rng(9)
@@ -288,7 +330,9 @@ def test_finish_into_matches_finish_group(ring_name: str, rows: int, m: int, n: 
     uz = np.zeros_like(call.u)
     assert call.old(call.y_hat, uz)[1] == 3
     for mode in ("full", "split"):
+        out.fill(1.0)  # the previous trip's outputs in the reused buffer
         assert call.new(call.y_hat, uz, mode, out)[0] == 3
+        assert not out.any()
     assert native.fast.trip_freivalds_output(call.y_hat, uz, call.rhs, ring.k)[0] == 3
     # range check
     st_old = call.old(call.y_hat, call.u, bound=0)[1]
@@ -336,6 +380,41 @@ def test_freivalds_on_helper_thread() -> None:
         native.fast.trip_freivalds_submit(bytes(call.y_hat), call.u.copy(), call.rhs, ring.k)
     with pytest.raises(ValueError, match="rhs shape"):
         native.fast.trip_freivalds_submit(call.y_hat, call.u, call.rhs[:, :1].copy(), ring.k)
+
+
+def test_pending_check_borrows_its_buffers() -> None:
+    """While a submitted check may still read ``y_hat`` and ``u``, a pgw_fast call that would write
+    either raises ValueError (rust-numpy borrow) instead of racing with it; ``wait()`` releases them."""
+    ring = RingParams.from_name("K32A12C27")
+    call = Call(ring, 2, 700, 100, 2, seed=6)
+    y = np.frombuffer(call.y_hat, dtype=np.uint8).copy()  # a reused lane reply buffer
+    u = call.u.copy()
+    n = y.size // 4
+    x = np.ones((1, n), np.float32)
+    r = np.zeros((1, n), np.int64)
+    sx = np.zeros(1)
+
+    def write_y() -> None:  # writes y as the payload of the next prepare
+        native.fast.trip_prepare_into(x, r, 32, 12, 27, 100.0, y, sx)
+
+    def write_u() -> None:  # writes u as an rhs buffer
+        native.fast.trip_prepare_into(x[:, :350], r[:, :350], 32, 12, 27, 100.0, np.zeros(1400, np.uint8), sx,
+                                      None, np.zeros((2, 350), np.uint64), u)
+
+    chk = native.fast.trip_freivalds_submit(y, u, call.rhs, ring.k)
+    for write in (write_y, write_u):
+        with pytest.raises(ValueError, match="borrowed"):
+            write()
+    assert chk.wait() == (0, 0)
+    write_y()  # released
+    with pytest.raises(ValueError, match="rhs has"):  # borrow released: now only the shape is wrong
+        write_u()
+    chk2 = native.fast.trip_freivalds_submit(np.frombuffer(call.y_hat, dtype=np.uint8).copy(), u, call.rhs, ring.k)
+    while not chk2.done():
+        pass
+    with pytest.raises(ValueError, match="rhs has"):  # done() released the borrow of u as well
+        write_u()
+    assert chk2.wait() == (0, 0)
     with pytest.raises(ValueError, match="y_hat has"):
         native.fast.trip_freivalds_output(call.y_hat[:-4], call.u, call.rhs, ring.k)
 
