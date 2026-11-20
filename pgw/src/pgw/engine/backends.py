@@ -608,6 +608,34 @@ class _PendingCheck:
     request_id: str
 
 
+@dataclass
+class _FailedCheck:
+    """A failed deferred check harvested outside its own session's path (another session's join, the
+    pending-check limit, :meth:`MaskedBackend.close`). It was already reported (log, stats, callback);
+    the error is raised in its own session's next call. Weak references where the reservation allows
+    them, so an abandoned session is not kept alive (a dead reference: the session is gone)."""
+
+    refs: tuple[Any, ...]  # weakref.ref, or the reservation itself when it takes no weak references
+    error: PGWError
+
+    def owned_by(self, ids: set[int]) -> bool:
+        for r in self.refs:
+            obj = r() if isinstance(r, weakref.ref) else r
+            if obj is not None and id(obj) in ids:
+                return True
+        return False
+
+    def alive(self) -> bool:
+        return any((r() if isinstance(r, weakref.ref) else r) is not None for r in self.refs)
+
+
+def _weak_or_strong(obj: Any) -> Any:
+    try:
+        return weakref.ref(obj)
+    except TypeError:
+        return obj
+
+
 def _vacuous(u: Any, status: int) -> bool:
     """True if the Freivalds vectors ``u`` are all zero (a check against them proves nothing).
 
@@ -869,7 +897,9 @@ class MaskedBackend(LinearBackend):
         #: the native helper thread while the gateway continues with the plaintext step. It is joined
         #: before the same session's next payload is built (so before its next send), and the last
         #: linear of the model is always checked synchronously (so before any logits leave). A failed
-        #: check raises :class:`IntegrityError` there. Default: with the TripEngine (``PGW_DEFERRED_CHECK``).
+        #: check raises :class:`IntegrityError` there (see :attr:`defer_min_out` for what the session's
+        #: state may already hold then). A session that ends or aborts with checks pending should be
+        #: released with :meth:`release_session_checks`. Default: with the TripEngine (``PGW_DEFERRED_CHECK``).
         self.deferred_check = self.trip_engine and (
             _env_flag("PGW_DEFERRED_CHECK", True) if deferred_check is None else bool(deferred_check))
         #: :meth:`sync_trip_ok` answers yes for decode-sized passes (the engine then runs a whole decode
@@ -890,10 +920,18 @@ class MaskedBackend(LinearBackend):
         #: Defer only checks of linears with at least this many outputs (public, per linear): handing
         #: the output half to the helper thread costs ~10-20 us here, more than the half itself for
         #: m <= 4608 (7B qkv, o, down); it pays for gate_up (m = 37888, ~36 us). 0 = every linear.
+        #: Lowering it lets unverified qkv / o outputs reach the session's plaintext state (its KV
+        #: cache) before the join raises. Nothing is sent before the join (no privacy loss), but that
+        #: session's cache is then poisoned: after an :class:`IntegrityError` the gateway must discard
+        #: the session (never resume it). The default defers only gate_up, whose output is consumed
+        #: within the same layer (down's prepare joins it), so no cache entry depends on it.
         self.defer_min_out = 16384
         self._trip_checked: dict[tuple[int, int, float], bool] = {}
         self._final_ordinal: int | None = None
         self._pending: list[_PendingCheck] = []
+        #: Failed deferred checks harvested outside their own session's path: raised in that
+        #: session's next call (bounded by :attr:`max_pending_checks`, oldest dropped; all reported).
+        self._failed: list[_FailedCheck] = []
         self._pending_lock = threading.Lock()
         #: Linear kinds computed exactly on the gateway (E2): empty = every linear is remote.
         self._local_kinds: frozenset[str] = frozenset()
@@ -1126,7 +1164,7 @@ class MaskedBackend(LinearBackend):
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
         # Deferred checks of these sessions are joined first: no mask row is taken and no payload
         # is built (so nothing is sent) before the previous trip's results proved correct.
-        if self._pending:
+        if self._pending or self._failed:
             self._join_pending(calls)
         if any(c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta) for c in calls):
             prep = self._prepare_padded(calls)
@@ -1384,55 +1422,120 @@ class MaskedBackend(LinearBackend):
     def _join_pending(self, calls: Sequence[LinearCall] | None) -> None:
         """Wait for the deferred checks of the sessions of ``calls`` (``None``: every pending check).
 
+        Other sessions' checks are never raised here: finished ones are harvested without waiting
+        (which also drops their references to the reservations, e.g. of an aborted request), and above
+        :attr:`max_pending_checks` the oldest are waited for. A failed one is reported at once (log,
+        ``integrity_failures``, ``on_integrity_failure``) and raised in its own session's next call.
+
         Raises:
-            IntegrityError: a deferred check failed (the service returned a wrong result).
+            IntegrityError: a deferred check of these sessions failed (the service returned a wrong result).
             MaskReuseError: the check vectors were wiped meanwhile (reservation closed).
         """
         with self._pending_lock:
-            if not self._pending:
+            if not self._pending and not self._failed:
                 return
-            if calls is None or len(self._pending) > self.max_pending_checks:
-                mine, self._pending = self._pending, []
+            mine: list[_PendingCheck]
+            others: list[_PendingCheck] = []
+            stashed: list[_FailedCheck]
+            if calls is None:
+                mine = self._pending
+                stashed = [f for f in self._failed if f.alive()]
+                self._failed = []
             else:
                 ids = {id(c.session if c.session is not None else self.mask_source) for c in calls}
                 mine = []
-                keep: list[_PendingCheck] = []
                 for p in self._pending:
-                    (mine if any(id(r) in ids for r in p.reservations) else keep).append(p)
-                if not mine:
-                    return
-                self._pending = keep
-        err: PGWError | None = None
-        failed: _PendingCheck | None = None
-        for p in mine:  # wait for every one (each reads buffers it keeps alive), then report
+                    (mine if any(id(r) in ids for r in p.reservations) else others).append(p)
+                stashed = []
+                keep_failed: list[_FailedCheck] = []
+                for f in self._failed:
+                    (stashed if f.owned_by(ids) else keep_failed).append(f)
+                self._failed = keep_failed
+            # other sessions: harvest what already finished; wait for the oldest above the limit
+            excess = max(0, len(others) - int(self.max_pending_checks))
+            harvest = others[:excess]
+            still: list[_PendingCheck] = []
+            for p in others[excess:]:
+                (harvest if p.check.done() else still).append(p)
+            self._pending = still
+        if harvest:
+            for p, err in self._wait_checks(harvest):
+                if err is not None:
+                    self._report_deferred(err, p)
+                    self._stash_failure(p, err)
+        err_mine: PGWError | None = None
+        for p, err in self._wait_checks(mine):  # wait for every one (each reads buffers it keeps alive)
+            if err is not None:
+                self._report_deferred(err, p)
+                if err_mine is None:
+                    err_mine = err
+        if stashed and err_mine is None:
+            err_mine = stashed[0].error
+        if err_mine is not None:
+            raise err_mine
+
+    def _wait_checks(self, checks: Sequence[_PendingCheck]) -> list[tuple[_PendingCheck, PGWError | None]]:
+        """Wait for ``checks``; their verdicts (``None``: verified, counted in ``freivalds_checked``)."""
+        out: list[tuple[_PendingCheck, PGWError | None]] = []
+        ok = 0
+        for p in checks:
             status, bad = p.check.wait()
-            if status and err is None:
-                failed = p
-                if status == 3:
-                    err = MaskReuseError("mask reservation closed during a compute call")
-                elif status == 1:
-                    err = IntegrityError("compute service result failed the Freivalds check",
-                                         details={"linear": p.lid.key, "bad_rows": int(bad), "rows": p.rows,
-                                                  "deferred": True})
-                else:  # 4: the helper failed internally (fail closed)
-                    err = IntegrityError("deferred Freivalds check could not run",
-                                         details={"linear": p.lid.key, "status": int(status), "deferred": True})
-        if err is None:
+            err: PGWError | None = None
+            if status == 3:
+                err = MaskReuseError("mask reservation closed during a compute call")
+            elif status == 1:
+                err = IntegrityError("compute service result failed the Freivalds check",
+                                     details={"linear": p.lid.key, "bad_rows": int(bad), "rows": p.rows,
+                                              "deferred": True})
+            elif status:  # 4: the helper failed internally (fail closed)
+                err = IntegrityError("deferred Freivalds check could not run",
+                                     details={"linear": p.lid.key, "status": int(status), "deferred": True})
+            else:
+                ok += 1
+            out.append((p, err))
+        if ok:
+            self.stats.add(freivalds_checked=ok)
+        return out
+
+    def _report_deferred(self, err: PGWError, p: _PendingCheck) -> None:
+        """Log, count and call ``on_integrity_failure`` for a failed deferred check (once per failure)."""
+        if not isinstance(err, IntegrityError):
+            log.warning("deferred check could not complete: request=%s code=%s", p.request_id, err.code)
             return
-        if isinstance(err, IntegrityError):
-            self.stats.add(integrity_failures=1)
-            log.error("integrity check failed (deferred): request=%s code=%s details=%s",
-                      failed.request_id if failed is not None else "-", err.code, err.details)
-            if self.on_integrity_failure is not None:
-                try:
-                    self.on_integrity_failure(err)
-                except Exception:  # pragma: no cover - callback must not mask the error
-                    log.exception("on_integrity_failure callback raised")
-        raise err
+        self.stats.add(integrity_failures=1)
+        log.error("integrity check failed (deferred): request=%s code=%s details=%s",
+                  p.request_id, err.code, err.details)
+        if self.on_integrity_failure is not None:
+            try:
+                self.on_integrity_failure(err)
+            except Exception:  # pragma: no cover - callback must not mask the error
+                log.exception("on_integrity_failure callback raised")
+
+    def _stash_failure(self, p: _PendingCheck, err: PGWError) -> None:
+        f = _FailedCheck(tuple(_weak_or_strong(r) for r in p.reservations), err)
+        with self._pending_lock:
+            self._failed = [x for x in self._failed if x.alive()]
+            self._failed.append(f)
+            over = len(self._failed) - max(1, int(self.max_pending_checks))
+            if over > 0:  # already reported; only the raise in that session's next call is lost
+                del self._failed[:over]
 
     def join_checks(self) -> None:
         """Join every deferred check now (raises like :meth:`forward_many` on a failed one)."""
         self._join_pending(None)
+
+    def release_session_checks(self, session: Any) -> None:
+        """Gateway hook for a session that ends or aborts (e.g. between gate_up and down): wait for
+        its deferred checks and drop every reference to it. Failures are reported (log, stats,
+        ``on_integrity_failure``), never raised: no output of that session is used any more."""
+        with self._pending_lock:
+            mine = [p for p in self._pending if any(r is session for r in p.reservations)]
+            if mine:
+                self._pending = [p for p in self._pending if not any(r is session for r in p.reservations)]
+            self._failed = [f for f in self._failed if not f.owned_by({id(session)}) and f.alive()]
+        for p, err in self._wait_checks(mine):
+            if err is not None:
+                self._report_deferred(err, p)
 
     @property
     def pending_checks(self) -> int:
@@ -1770,9 +1873,17 @@ class MaskedBackend(LinearBackend):
             pool.shutdown(wait=False, cancel_futures=True)
         with self._pending_lock:  # deferred checks read buffers they keep alive: let them finish
             pending, self._pending = self._pending, []
-        for p in pending:
-            with contextlib.suppress(Exception):
-                p.check.wait()
+            self._failed = []
+        # their verdicts are still reported (log, ``integrity_failures``, ``on_integrity_failure``),
+        # never raised from close()
+        try:
+            verdicts = self._wait_checks(pending)
+        except Exception:  # pragma: no cover - the native wait does not raise
+            log.exception("waiting for deferred checks at close failed")
+            return
+        for p, err in verdicts:
+            if err is not None:
+                self._report_deferred(err, p)
 
     # ---- E2: exact local linears ------------------------------------------------------------------
     def configure_local_linears(self, mode: str = "off", *, rtt_s: float | None = None,
@@ -1867,6 +1978,10 @@ class MaskedBackend(LinearBackend):
             yq = exact_int_matmul(xq, w.w8t, self.ring.a)
         finally:
             _wipe(xq)
+        # the masked path's range check (status 2 of its finish): same refusal on the same outputs
+        bound = int(self.ring.output_bound(meta.in_features))
+        if yq.numel() and int(yq.abs().max()) > bound:
+            self._raise_status(2, 0, call.id, int(yq.shape[0]), bound)
         y = dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
         return y if x.device.type == "cpu" else y.to(x.device)
 
@@ -2193,10 +2308,10 @@ class MaskedBackend(LinearBackend):
                         details={"expected": ch.lid.key, "got": str(res.linear)},
                     )
                 bytes_down += len(res.y_hat)
-                if ch.u is not None:
-                    checked += 1
-                else:
+                if ch.u is None:
                     skipped += 1
+                elif not (prep.trip and ch.rhs is not None):  # a deferred check counts once it passed
+                    checked += 1
             if prep.trip:
                 self._finish_trip(prep, results, outs)
             elif use_native and self._native_group and all(ch.payload is not None for ch in prep.chunks):
@@ -2518,7 +2633,28 @@ def _trip_kernels_agree(ring: RingParams, n: int, m: int, wnorm: float) -> bool:
     try:
         xq, sx_ref = quantize_activations(torch.from_numpy(x), ring, wn if ring.cap else None)
     except RingOverflowError:
-        return True  # no width fits for this test row at this norm: nothing to compare (public data)
+        # No width fits some test row at this norm. Fail closed: the trip kernel must refuse the same
+        # rows, and the comparison runs on the rows that do fit; it needs at least one non-zero row.
+        buf = np.empty(rows * n * nb, dtype=np.uint8)
+        sx = np.empty(rows, dtype=np.float64)
+        try:
+            native.fast.trip_prepare_into(x, r, k, ring.a, int(ring.cap or 0), wn, buf, sx)
+        except ValueError as exc:
+            if not str(exc).startswith("ring_overflow"):
+                return False
+        else:
+            return False  # accepted what the reference refuses
+        keep = []
+        for i in range(rows):
+            try:
+                quantize_activations(torch.from_numpy(x[i : i + 1]), ring, wn if ring.cap else None)
+            except RingOverflowError:
+                continue
+            keep.append(i)
+        if not any(x[i].any() for i in keep):
+            return False  # nothing non-trivial fits: no evidence the kernels agree
+        x, r, rows = np.ascontiguousarray(x[keep]), np.ascontiguousarray(r[keep]), len(keep)
+        xq, sx_ref = quantize_activations(torch.from_numpy(x), ring, wn if ring.cap else None)
     want = pack_ring(mask_activations(xq, torch.from_numpy(r), ring), ring)
     buf = np.empty(rows * n * nb, dtype=np.uint8)
     sx = np.empty(rows, dtype=np.float64)

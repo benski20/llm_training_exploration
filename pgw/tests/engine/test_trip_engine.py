@@ -207,6 +207,24 @@ def test_self_check_passes_on_every_ring(qwen_pack: InMemoryPack) -> None:
             assert B._trip_kernels_agree(ring, n, m, wn), (name, n, m)
 
 
+def test_self_check_fails_closed_when_test_rows_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A weight-row norm at which the Gaussian test row fits no width: the check still compares the
+    rows that fit (and the kernel must refuse the same batch); with no non-zero row fitting, it fails."""
+    ring = RingParams.from_name("K32A12C27")
+    n, m = 3584, 4608
+    big = float(1 << ring.cap)
+    assert B._trip_kernels_agree(ring, n, m, big / 6.7)  # Gaussian row overflows, spike row fits
+    assert not B._trip_kernels_agree(ring, n, m, 2 * big)  # nothing non-zero fits: off, never vacuous
+    real = native.fast.trip_prepare_into
+
+    def accepts_everything(x: Any, r: Any, k: int, a: int, cap: int, wn: float, buf: Any, sx: Any,
+                           *rest: Any) -> Any:
+        return real(x, r, k, a, cap, 1.0, buf, sx, *rest)  # ignores the norm: no overflow raised
+
+    monkeypatch.setattr(native.fast, "trip_prepare_into", accepts_everything)
+    assert not B._trip_kernels_agree(ring, n, m, big / 6.7)
+
+
 def test_warm_trip_engine_at_startup(qwen_pack: InMemoryPack) -> None:
     be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
                        trip_engine=True)

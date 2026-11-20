@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 import torch
 
-from pgw.core import RING_K40_A12, ConfigError, RingParams
+from pgw.core import RING_K40_A12, ConfigError, IntegrityError, RingParams
 from pgw.core.ring import DEFAULT_RING
 from pgw.core.types import LinearId, LinearKind
 from pgw.engine import (
@@ -132,3 +132,25 @@ def test_auto_calibration(qwen_pack: InMemoryPack) -> None:
     assert be.configure_local_linears("auto") == B.LOCAL_ATTENTION_KINDS
     assert be.local_policy["rtt_s"] == pytest.approx(2.0)
     assert be.configure_local_linears("off") == frozenset() and be._local_w is None
+
+
+def test_local_linear_refuses_out_of_range_outputs_like_the_masked_path(qwen_pack: InMemoryPack,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                       local_linears="attention")
+    lid = LinearId(0, LinearKind.QKV)
+    x = torch.randn(2, qwen_pack.arch.hidden_size)
+    be.forward_local([LinearCall(lid, x)])
+    bound = DEFAULT_RING.output_bound(qwen_pack.arch.hidden_size)
+    real = B.exact_int_matmul
+
+    def too_big(xq: torch.Tensor, w8t: torch.Tensor, value_bits: int) -> torch.Tensor:
+        y = real(xq, w8t, value_bits)
+        y[1, 0] = bound + 1
+        return y
+
+    monkeypatch.setattr(B, "exact_int_matmul", too_big)
+    with pytest.raises(IntegrityError) as ei:
+        be.forward_local([LinearCall(lid, x)])
+    assert ei.value.details["bound"] == bound
+    be.close()
