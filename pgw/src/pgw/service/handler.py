@@ -61,19 +61,39 @@ _UNKNOWN_TENANT = "unknown"
 #: Default for :attr:`ServiceHandler.group_min_rows` (``PGW_SERVICE_GROUP_MIN_ROWS`` overrides it).
 GROUP_MIN_ROWS = 3
 
-#: Default for :attr:`ServiceHandler.maskgen_concurrency` (``PGW_SERVICE_MASKGEN_CONCURRENCY`` overrides it).
+#: Default for :attr:`ServiceHandler.maskgen_concurrency` when the service has a CUDA device
+#: (``PGW_SERVICE_MASKGEN_CONCURRENCY`` overrides it). Each item runs on its own CUDA stream.
 MASKGEN_CONCURRENCY = 2
 
+#: Default for :attr:`ServiceHandler.maskgen_concurrency` on CPU-only services: one CPU maskgen
+#: call already uses every intra-op thread and the combine pool, so two at once only oversubscribe
+#: the cores and double the peak working memory.
+MASKGEN_CONCURRENCY_CPU = 1
 
-def _maskgen_concurrency_default() -> int:
+
+def _uses_cuda(settings: Any) -> bool:
+    """True if any device the service is configured for is (or resolves to) a CUDA device."""
+    devs = list(getattr(settings, "devices", None) or []) or [getattr(settings, "device", "auto")]
+    for d in devs:
+        s = str(d).strip().lower()
+        if s == "auto":
+            if torch.cuda.is_available():
+                return True
+        elif s.startswith("cuda"):
+            return True
+    return False
+
+
+def _maskgen_concurrency_default(settings: Any = None) -> int:
+    fallback = MASKGEN_CONCURRENCY if settings is not None and _uses_cuda(settings) else MASKGEN_CONCURRENCY_CPU
     raw = os.environ.get("PGW_SERVICE_MASKGEN_CONCURRENCY", "").strip()
     if not raw:
-        return MASKGEN_CONCURRENCY
+        return fallback
     try:
         return max(1, int(raw))
     except ValueError:
         log.warning("ignoring PGW_SERVICE_MASKGEN_CONCURRENCY=%r (not an integer)", raw)
-        return MASKGEN_CONCURRENCY
+        return fallback
 
 
 def _maskgen_item(kern: Any, it: Any) -> bytes:
@@ -156,7 +176,9 @@ class ServiceHandler:
         metrics: Service metrics.
         maskgen_concurrency: Encrypted maskgen items computed at the same time (each on its own CUDA
             stream on GPUs; the rest wait). Bounds the working memory of large maskgen requests.
-            Default :data:`MASKGEN_CONCURRENCY` (``PGW_SERVICE_MASKGEN_CONCURRENCY``).
+            Default :data:`MASKGEN_CONCURRENCY` with a CUDA device, :data:`MASKGEN_CONCURRENCY_CPU`
+            on CPU-only services (``PGW_SERVICE_MASKGEN_CONCURRENCY`` overrides both). A slot is
+            held until the worker thread finishes, also when the waiting request is cancelled.
         group_min_rows: Items of one request for the same linear are computed as one group (one
             kernel call) when they have at least this many rows in all, or when the linear has no
             fused one-row kernel. Below it, on a kernel serving one-row calls with the fused Triton
@@ -187,7 +209,7 @@ class ServiceHandler:
         self._idle = asyncio.Event()
         self._idle.set()
         self.maskgen_concurrency = (max(1, int(maskgen_concurrency)) if maskgen_concurrency is not None
-                                    else _maskgen_concurrency_default())
+                                    else _maskgen_concurrency_default(settings))
         self._maskgen_slots = asyncio.Semaphore(self.maskgen_concurrency)  # bounded, not one global lock
         self.group_min_rows = max(0, int(group_min_rows)) if group_min_rows is not None else _group_min_rows_default()
         #: requests answered by :meth:`compute_inline` (the stream channel's frame lane)
@@ -320,14 +342,36 @@ class ServiceHandler:
             out = []
             for it in request.items:
                 kern = model.kernel(it.linear)
-                async with self._maskgen_slots:
-                    y = await asyncio.to_thread(_maskgen_item, kern, it)
+                y = await self._maskgen_in_slot(kern, it)
                 out.append(MaskgenResult(it.linear, it.cols, y))
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
             self.inflight -= 1
             if self.inflight == 0:
                 self._idle.set()
+
+    async def _maskgen_in_slot(self, kern: Any, it: Any) -> bytes:
+        """Run one maskgen item in a worker thread under :attr:`_maskgen_slots`.
+
+        The slot is released when the thread finishes, not when the awaiting request goes away:
+        a cancelled request (client disconnect) cannot stop ``to_thread`` work, so releasing on
+        cancellation would let more than :attr:`maskgen_concurrency` items run at once.
+        """
+        slots = self._maskgen_slots
+        await slots.acquire()
+        try:
+            fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it))
+        except BaseException:
+            slots.release()
+            raise
+
+        def _done(f: asyncio.Future[bytes]) -> None:
+            slots.release()
+            if not f.cancelled():
+                f.exception()  # retrieved: no "exception was never retrieved" for abandoned items
+
+        fut.add_done_callback(_done)
+        return await asyncio.shield(fut)
 
     def on_request_done(self, ctx: RequestContext, status: int, code: str | None) -> None:
         """Metrics hook called by the wire router after every compute reply."""

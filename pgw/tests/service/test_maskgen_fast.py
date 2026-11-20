@@ -383,6 +383,82 @@ async def test_maskgen_runs_concurrently_up_to_the_limit(int8_engine: None, monk
         assert resp.items[0].y == _old_provider(w, d, DEGREE, 56, 16)
 
 
+def test_maskgen_concurrency_default_is_one_on_cpu_two_with_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.service import handler as handler_mod
+
+    monkeypatch.delenv("PGW_SERVICE_MASKGEN_CONCURRENCY", raising=False)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    cpu = ServiceSettings(packs=[], device="cpu")
+    auto = ServiceSettings(packs=[], device="auto")
+    cuda = ServiceSettings(packs=[], device="cuda:0")
+    multi = ServiceSettings(packs=[], devices=["cpu", "cuda:1"])
+    assert handler_mod._maskgen_concurrency_default(cpu) == handler_mod.MASKGEN_CONCURRENCY_CPU == 1
+    assert handler_mod._maskgen_concurrency_default(auto) == 1
+    assert handler_mod._maskgen_concurrency_default(cuda) == handler_mod.MASKGEN_CONCURRENCY == 2
+    assert handler_mod._maskgen_concurrency_default(multi) == 2
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert handler_mod._maskgen_concurrency_default(auto) == 2
+    monkeypatch.setenv("PGW_SERVICE_MASKGEN_CONCURRENCY", "3")
+    assert handler_mod._maskgen_concurrency_default(cpu) == 3
+    monkeypatch.setenv("PGW_SERVICE_MASKGEN_CONCURRENCY", "x")
+    assert handler_mod._maskgen_concurrency_default(cpu) == 1
+
+
+async def test_maskgen_slot_held_until_the_thread_finishes_on_cancel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cancelled request does not free its slot while its worker thread still runs."""
+    from pgw.service import handler as handler_mod
+
+    started, release = threading.Event(), threading.Event()
+    active = peak = 0
+    lock = threading.Lock()
+
+    def item(kern: Any, it: Any) -> bytes:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        started.set()
+        try:
+            if it == "slow":
+                release.wait(5)
+            return b"y"
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(handler_mod, "_maskgen_item", item)
+    h = handler_mod.ServiceHandler.__new__(handler_mod.ServiceHandler)
+    h.maskgen_concurrency = 1
+    h._maskgen_slots = asyncio.Semaphore(1)
+    first = asyncio.ensure_future(h._maskgen_in_slot(None, "slow"))
+    await asyncio.to_thread(started.wait, 5)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert h._maskgen_slots.locked()  # the thread still runs: its slot is still taken
+    second = asyncio.ensure_future(h._maskgen_in_slot(None, "fast"))
+    await asyncio.sleep(0.05)
+    assert not second.done()
+    release.set()
+    assert await asyncio.wait_for(second, 5) == b"y"
+    assert peak == 1
+    assert not h._maskgen_slots.locked()
+
+
+async def test_maskgen_slot_released_after_worker_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.service import handler as handler_mod
+
+    def boom(kern: Any, it: Any) -> bytes:
+        raise ValueError("boom")
+
+    monkeypatch.setattr(handler_mod, "_maskgen_item", boom)
+    h = handler_mod.ServiceHandler.__new__(handler_mod.ServiceHandler)
+    h._maskgen_slots = asyncio.Semaphore(1)
+    with pytest.raises(ValueError, match="boom"):
+        await h._maskgen_in_slot(None, None)
+    assert not h._maskgen_slots.locked()
+
+
 # ---- GPU ---------------------------------------------------------------------------------------------
 @pytest.mark.gpu
 @pytest.mark.parametrize("m,n,cols", [(96, 64, DEGREE), (37, 70, DEGREE), (4608, 3584, DEGREE), (64, 18944, 4 * DEGREE)])

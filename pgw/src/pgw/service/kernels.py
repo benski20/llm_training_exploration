@@ -508,6 +508,8 @@ class ComputeKernel:
         eng = engine()  # PGW_HEMASK_ENGINE=cpu_f64 forces the float64 path, as before
         if self.in_features > INT_MM_MAX_INNER_CPU:  # beyond the probed exact inner length
             return False
+        # A CPU-device kernel with engine() == "cuda" and slow CPU int8 takes the float64 path
+        # (exact, possibly slower than the old small_mm_big, which ran its GEMMs on the GPU).
         return (eng == "cpu_int8" or (eng == "cuda" and cpu_int8_fast())) and cpu_int8_available()
 
     def _mulmod64_f64(self, b: np.ndarray) -> np.ndarray:
