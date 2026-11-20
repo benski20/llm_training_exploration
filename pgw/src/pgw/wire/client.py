@@ -54,6 +54,8 @@ from pgw.wire.messages import (
     ATTEMPT_HEADER,
     COMPUTE_PATH,
     DEADLINE_HEADER,
+    LANE_OPEN_PATH,
+    LANE_TRANSPORTS,
     MODELS_PATH,
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
@@ -64,6 +66,8 @@ from pgw.wire.messages import (
     ComputeResponse,
     ComputeResult,
     ErrorResponse,
+    LaneOpenRequest,
+    LaneTicket,
     ModelInfo,
     ModelsResponse,
     ServerTiming,
@@ -83,6 +87,7 @@ _ITEM_OVERHEAD = 96
 # Caps on non-compute response bodies.
 _MAX_ERROR_BODY = 1 << 20
 _MAX_MODELS_BODY = 16 << 20
+_MAX_LANE_TICKET_BODY = 8 << 20
 
 
 def _fast_lane_default() -> bool:
@@ -1096,6 +1101,7 @@ class ComputeClient:
         max_response_bytes: int,
         stream_check: Callable[[ComputeResponse], T] | None = None,
         resume: PGWError | None = None,
+        max_retries: int | None = None,
     ) -> T:
         """One logical call with retries until success, a non-retryable error or the deadline.
 
@@ -1105,6 +1111,7 @@ class ComputeClient:
         ``resume``: attempt 1 was already made (by :meth:`compute_fast`, which also deposited the
         call's retry token) and failed with this error; the loop continues with it as if its own
         first attempt had failed (same retry decision, backoff and budget), resending ``body``.
+        ``max_retries``: overrides :attr:`ClientConfig.max_retries` for this call.
         """
         if self._closed:
             raise ServiceUnavailableError("compute client is closed")
@@ -1112,7 +1119,7 @@ class ComputeClient:
         attempt = 0
         if resume is not None:
             attempt = 1
-            await self._retry_or_raise(resume, attempt, deadline, request_id)
+            await self._retry_or_raise(resume, attempt, deadline, request_id, max_retries)
         else:
             self._deposit_retry_token()
         cfg = self.config
@@ -1201,14 +1208,15 @@ class ComputeClient:
                 self._hook(path, status, t0, str(e.code))
                 raise
             self._hook(path, status, t0, str(exc.code))
-            await self._retry_or_raise(exc, attempt, deadline, request_id)
+            await self._retry_or_raise(exc, attempt, deadline, request_id, max_retries)
 
-    async def _retry_or_raise(self, exc: PGWError, attempt: int, deadline: float, request_id: str) -> None:
+    async def _retry_or_raise(self, exc: PGWError, attempt: int, deadline: float, request_id: str,
+                              max_retries: int | None = None) -> None:
         """After failed attempt ``attempt``: wait the backoff and return (retry), or raise ``exc``."""
         cfg = self.config
         retry_after = exc.details.get("retry_after_s")
         ra = float(retry_after) if isinstance(retry_after, int | float) else None
-        if exc.retryable and attempt <= cfg.max_retries:
+        if exc.retryable and attempt <= (cfg.max_retries if max_retries is None else max_retries):
             delay = self._backoff(attempt, ra)
             if time.monotonic() + delay < deadline and not self._take_retry_token():
                 self.stats.retries_denied += 1
@@ -1600,6 +1608,37 @@ class ComputeClient:
     def connect_sync(self, expected_fingerprint: str | None = None, ring: str | None = None) -> ModelsResponse:
         """Blocking :meth:`connect`."""
         return self._run_sync(self.connect(expected_fingerprint, ring))
+
+    async def lane_open(self, fingerprint: str, ring: str, *, transports: tuple[str, ...] = LANE_TRANSPORTS,
+                        lane_versions: tuple[int, ...] = (1,)) -> LaneTicket:
+        """Ask the service for a trip-lane ticket (``lane_open``; chat-speed WP-A3, :mod:`pgw.wire.lane`).
+
+        Sent like any other call of this client (TLS, authentication, retries, limits). The request holds
+        only the fingerprint and ring, which every compute request carries already.
+
+        Raises:
+            PGWError: the service offers no lane (``unavailable``, or an older service's HTTP 404), or the
+                ticket is malformed or answers another request.
+        """
+        rid = uuid.uuid4().hex
+        body = encode_message(LaneOpenRequest(rid, fingerprint, ring, tuple(transports), tuple(lane_versions)))
+
+        def decode(b: bytes) -> LaneTicket:
+            ticket = decode_message(b, LaneTicket, max_bytes=_MAX_LANE_TICKET_BODY)
+            if ticket.request_id != rid:
+                raise ProtocolError("lane ticket id does not match the request")
+            return ticket
+
+        # One attempt: the lane is optional, so a service without one costs a single round trip, not a
+        # retry series in front of the first compute call.
+        deadline = time.monotonic() + self.config.request_timeout_s
+        return await self._call("POST", LANE_OPEN_PATH, body=body, request_id=rid, deadline=deadline, decode=decode,
+                                max_response_bytes=_MAX_LANE_TICKET_BODY, max_retries=0)
+
+    def lane_open_sync(self, fingerprint: str, ring: str, *, transports: tuple[str, ...] = LANE_TRANSPORTS,
+                       lane_versions: tuple[int, ...] = (1,)) -> LaneTicket:
+        """Blocking :meth:`lane_open`."""
+        return self._run_sync(self.lane_open(fingerprint, ring, transports=transports, lane_versions=lane_versions))
 
     async def aclose(self) -> None:
         """Close connections (all pools, including the private sync loop's)."""

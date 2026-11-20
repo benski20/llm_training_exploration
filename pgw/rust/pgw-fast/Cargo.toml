@@ -24,6 +24,9 @@ zeroize = "1"
 # Note: these pull in crates that need Rust 1.89 (the workspace MSRV); Cargo.lock is format v4,
 # which needs cargo >= 1.78.
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "zeroize"] }
+# lane.rs: TLS 1.3 on the TCP trip lane (rustls with the `ring` provider: no aws-lc / cmake; PEM parsing
+# through rustls' own pki-types, no rustls-pemfile).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [dev-dependencies]
 # writer.rs tests: the allocating `Aead::encrypt` as an independent reference.
