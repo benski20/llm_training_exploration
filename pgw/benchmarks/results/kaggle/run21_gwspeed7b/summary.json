@@ -1,0 +1,147 @@
+{
+ "job": {
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "build_native",
+    "cmd": "(command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) && . $HOME/.cargo/env && python rust/tools/build_fast.py && python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
+    "timeout": 1200
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_gpu",
+    "args": [
+     "tests",
+     "-m",
+     "gpu",
+     "-q",
+     "-rs",
+     "--timeout",
+     "900"
+    ],
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "gpu_kernel_bench",
+    "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "profile_gateway_cpu",
+    "cmd": "python benchmarks/profile_gateway.py --preset 7b --layers 1 --steps 24 --ring K32A12C27 --profile --workdir /tmp/pgw_prof",
+    "timeout": 1800
+   },
+   {
+    "kind": "pytest",
+    "name": "pytest_spec_ringmm",
+    "args": [
+     "tests/engine/test_speculative.py",
+     "tests/core/test_ringmm.py",
+     "tests/wire/test_stream.py",
+     "-q",
+     "-rs",
+     "--timeout",
+     "900"
+    ],
+    "timeout": 1500
+   },
+   {
+    "kind": "validate",
+    "label": "qwen7b",
+    "args": [
+     "--model",
+     "Qwen/Qwen2.5-7B-Instruct",
+     "--label",
+     "qwen7b",
+     "--device",
+     "cuda",
+     "--ref-device",
+     "cuda",
+     "--ring",
+     "K32A12C27",
+     "--plain-dtype",
+     "float16",
+     "--delete-hf",
+     "--max-tokens",
+     "64",
+     "--concurrent",
+     "4",
+     "--draft-model",
+     "Qwen/Qwen2.5-0.5B-Instruct",
+     "--spec-tokens",
+     "8",
+     "--draft-device",
+     "cpu",
+     "cuda:1",
+     "--loadtest",
+     "1x1",
+     "1x5",
+     "4x1",
+     "--loadtest-tokens",
+     "4",
+     "--factory-bench-slots",
+     "64"
+    ],
+    "timeout": 7800
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 30.8,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "build_native": {
+   "rc": 0,
+   "seconds": 39.6,
+   "tail": "yn v2.0.119\n  Downloaded libc v0.2.191\n  Downloaded pyo3 v0.23.5\n   Compiling target-lexicon v0.12.16\n   Compiling autocfg v1.5.1\n   Compiling version_check v0.9.5\n   Compiling once_cell v1.21.4\n   Compiling typenum v1.20.1\n   Compiling generic-array v0.14.7\n   Compiling proc-macro2 v1.0.107\n   Compiling quote v1.0.47\n   Compiling unicode-ident v1.0.27\n   Compiling num-traits v0.2.19\n   Compiling pyo3-build-config v0.23.5\n   Compiling libc v0.2.191\n   Compiling subtle v2.6.1\n   Compiling cfg-if v1.0.5\n   Compiling syn v2.0.119\n   Compiling crypto-common v0.1.7\n   Compiling block-buffer v0.10.4\n   Compiling digest v0.10.7\n   Compiling memoffset v0.9.1\n   Compiling matrixmultiply v0.3.11\n   Compiling heck v0.5.0\n   Compiling inout v0.1.4\n   Compiling pyo3-macros-backend v0.23.5\n   Compiling pyo3-ffi v0.23.5\n   Compiling pyo3 v0.23.5\n   Compiling cpufeatures v0.2.17\n   Compiling rawpointer v0.2.1\n   Compiling cipher v0.4.4\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling hmac v0.12.1\n   Compiling unindent v0.2.4\n   Compiling indoc v2.0.8\n   Compiling hkdf v0.12.4\n   Compiling ndarray v0.16.1\n   Compiling chacha20 v0.9.1\n   Compiling sha2 v0.10.9\n   Compiling rustc-hash v2.1.3\n   Compiling zeroize v1.9.1\n   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n   Compiling pyo3-macros v0.23.5\n   Compiling numpy v0.23.0\n   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n    Finished `release` profile [optimized] target(s) in 22.37s\n"
+  },
+  "pytest_gpu": {
+   "rc": 0,
+   "seconds": 332.0,
+   "tail": ".................................sssssssssssssssss....ss............     [100%]\n=========================== short test summary info ============================\nSKIPPED [18] tests/service/test_gpu_graphs.py:112: CUDA graph capture unsupported in this torch build; eager results verified exact\nSKIPPED [1] tests/service/test_gpu_graphs.py:140: CUDA graph capture unsupported in this torch build; eager results verified exact\n49 passed, 19 skipped, 1963 deselected in 325.18s (0:05:25)\n\n---stderr---\n"
+  },
+  "gpu_kernel_bench": {
+   "rc": 0,
+   "seconds": 11.5,
+   "tail": "device=cuda ring=K32A12C27 iters=300 torch=2.11.0+cu130 gpu=Tesla T4\nlinear           m x n rows  eager ms  graph ms  speedup\nqkv          4608x3584    1     0.484     0.278    1.75x\nqkv          4608x3584    5     0.516     0.296    1.74x\nqkv          4608x3584    8     0.538     0.310    1.73x\no            3584x3584    1     0.495     0.482    1.03x\no            3584x3584    5     0.510     0.514    0.99x\no            3584x3584    8     0.529     0.536    0.99x\ngate_up     37888x3584    1     1.155     1.040    1.11x\ngate_up     37888x3584    5     1.326     1.334    0.99x\ngate_up     37888x3584    8     1.545     1.585    0.98x\ndown        3584x18944    1     0.653     0.654    1.00x\ndown        3584x18944    5     0.717     0.723    0.99x\ndown        3584x18944    8     0.764     0.759    1.01x\nlayer      (4 linears)    1     2.788     2.454    1.14x (avg/call eager 0.697 graph 0.613)\nlayer      (4 linears)    5     3.068     2.867    1.07x (avg/call eager 0.767 graph 0.717)\nlayer      (4 linears)    8     3.377     3.190    1.06x (avg/call eager 0.844 graph 0.798)\nexecutor stats: ExecutorStats(replays=912, eager=6384, captures=1, capture_failures=3, pinned_copies=7299)\n\n---stderr---\nCUDA graph capture failed on cuda:0 (K=32, rows<=8, n=3584, m=3584): RuntimeError: it->second->use_count > 0 INTERNAL ASSERT FAILED at \"/pytorch/c10/cuda/CUDACachingAllocator.cpp\":2799, please report a bug to PyTorch. ; running eagerly\n"
+  },
+  "profile_gateway_cpu": {
+   "rc": 0,
+   "seconds": 32.6,
+   "tail": "32}\n       23    0.001    0.000    0.005    0.000 /tmp/pgwsrc/pgw/src/pgw/core/prng.py:141(ring_uniform_rows_with_key)\n       12    0.001    0.000    0.001    0.000 {method 'update_into' of 'cryptography.hazmat.bindings._rust.openssl.ciphers.AEADDecryptionContext' objects}\n      104    0.001    0.000    0.001    0.000 {method 'fill' of 'numpy.ndarray' objects}\n       92    0.001    0.000    0.008    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:475(_read_wr)\n       12    0.001    0.000    0.001    0.000 {built-in method posix.pread}\n       12    0.001    0.000    0.004    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/format.py:419(decrypt_into)\n       92    0.001    0.000    0.001    0.000 /usr/lib/python3.13/uuid.py:142(__init__)\n       23    0.001    0.000    0.001    0.000 {built-in method ciphers.create_encryption_ctx}\n       92    0.001    0.000    0.018    0.000 /tmp/pgwsrc/pgw/src/pgw/maskstore/store.py:422(take_checked)\n       92    0.001    0.000    0.002    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:548(_wipe)\n       92    0.001    0.000    0.001    0.000 /tmp/pgwsrc/pgw/src/pgw/engine/backends.py:109(add_many)\n      736    0.001    0.000    0.001    0.000 {method 'get' of 'dict' objects}\n\n\n\n\n---stderr---\n\nWriting model shards:   0%|          | 0/1 [00:00<?, ?it/s]\nWriting model shards: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 1/1 [00:00<00:00,  6.88it/s]\nWriting model shards: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 1/1 [00:00<00:00,  6.87it/s]\nmask inventory low: 9f72ce779c34 K32A12C27 has 28 slots (< 4096)\n"
+  },
+  "pytest_spec_ringmm": {
+   "rc": 0,
+   "seconds": 37.7,
+   "tail": "........................................................................ [ 29%]\n........................................................................ [ 59%]\n........................................................................ [ 89%]\n..........................                                               [100%]\n242 passed in 32.14s\n\n---stderr---\n"
+  },
+  "validate_qwen7b": {
+   "rc": 0,
+   "seconds": 1557.7,
+   "tail": "ote_seconds': 9.872377491992665, 'local_seconds': 10.425511013015694}, 'gateway_local_engine_s_per_token': 0.1002, 'remote_s_per_token': 0.0949}\n[gpu_validate 01:24:07] spec_cuda1_concurrent: {'requests': 4, 'ok': 4, 'tokens_identical': [True, True, True, True], 'errors': [], 'wall_s': 132.52, 'generated_tokens_per_s': 1.932, 'all_tokens_per_s': 3.139, 'gateway_cpu_s_per_token': 0.3466}\n[gpu_validate 01:24:11] loadtest sessions=1 rows=1: 4.561310427631358 token-rows/s\n[gpu_validate 01:24:15] loadtest sessions=1 rows=5: 13.351302085333424 token-rows/s\n[gpu_validate 01:24:20] loadtest sessions=4 rows=1: 6.444029548465552 token-rows/s\n\n---stderr---\n\nFetching 11 files:   0%|          | 0/11 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 11 files:   9%|\u2589         | 1/11 [00:00<00:01,  8.54it/s]\nFetching 11 files:  55%|\u2588\u2588\u2588\u2588\u2588\u258d    | 6/11 [00:00<00:00, 30.75it/s]\nFetching 11 files:  64%|\u2588\u2588\u2588\u2588\u2588\u2588\u258e   | 7/11 [00:20<00:00, 30.75it/s]\nFetching 11 files:  73%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258e  | 8/11 [01:00<00:30, 10.08s/it]\nFetching 11 files:  82%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258f | 9/11 [01:02<00:17,  8.59s/it]\nFetching 11 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 11/11 [01:11<00:00,  7.06s/it]\nFetching 11 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 11/11 [01:11<00:00,  6.49s/it]\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]\nFetching 7 files:  57%|\u2588\u2588\u2588\u2588\u2588\u258b    | 4/7 [00:00<00:00, 33.02it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:07<00:00,  1.01s/it]\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869292 kB",
+   "MemFree:        26243372 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  2.1M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 34.2
+}

@@ -1,0 +1,21 @@
+device=cuda ring=K32A12C27 iters=300 torch=2.11.0+cu130 gpu=Tesla T4
+linear           m x n rows  eager ms  graph ms  speedup
+qkv          4608x3584    1     0.484     0.278    1.75x
+qkv          4608x3584    5     0.516     0.296    1.74x
+qkv          4608x3584    8     0.538     0.310    1.73x
+o            3584x3584    1     0.495     0.482    1.03x
+o            3584x3584    5     0.510     0.514    0.99x
+o            3584x3584    8     0.529     0.536    0.99x
+gate_up     37888x3584    1     1.155     1.040    1.11x
+gate_up     37888x3584    5     1.326     1.334    0.99x
+gate_up     37888x3584    8     1.545     1.585    0.98x
+down        3584x18944    1     0.653     0.654    1.00x
+down        3584x18944    5     0.717     0.723    0.99x
+down        3584x18944    8     0.764     0.759    1.01x
+layer      (4 linears)    1     2.788     2.454    1.14x (avg/call eager 0.697 graph 0.613)
+layer      (4 linears)    5     3.068     2.867    1.07x (avg/call eager 0.767 graph 0.717)
+layer      (4 linears)    8     3.377     3.190    1.06x (avg/call eager 0.844 graph 0.798)
+executor stats: ExecutorStats(replays=912, eager=6384, captures=1, capture_failures=3, pinned_copies=7299)
+
+---stderr---
+CUDA graph capture failed on cuda:0 (K=32, rows<=8, n=3584, m=3584): RuntimeError: it->second->use_count > 0 INTERNAL ASSERT FAILED at "/pytorch/c10/cuda/CUDACachingAllocator.cpp":2799, please report a bug to PyTorch. ; running eagerly

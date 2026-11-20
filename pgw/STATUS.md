@@ -44,8 +44,8 @@ reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*
 
 | metric | 2026-11-17 | 2026-11-19 | what changed |
 |---|---|---|---|
-| decode, 1 request | 0.86 s/token | 0.50 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
-| time to first token, 40-token prompt | 8.4 s | 3.0 s | pipelined prefill (gateway and service overlap) |
+| decode, 1 request | 0.86 s/token | 0.48 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
+| time to first token, 40-token prompt | 8.4 s | 3.0-3.3 s | pipelined prefill (gateway and service overlap) |
 | one service round trip, 1 row (load test) | 2.5 ms | 1.75 ms (0.80 ms GPU) | uvicorn WebSocket framing, inline small batches |
 | decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.51 s/token | exact verification, coupled drafts, adaptive draft length; 2.6x fewer round trips |
 | gateway CPU per masked call (Kaggle CPU) | about 2.9 ms | about 1.8 ms | `pgw_fast` kernels: prepare 0.05 ms, finish 0.2 ms; the rest is Python orchestration |
@@ -53,6 +53,11 @@ reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*
 Where a decode token's time goes now: about 112 x 3.5 ms in round trips (of which about 0.9 ms is GPU
 work; the rest is service and client Python and WebSocket framing), about 0.2 s gateway work, and
 about 0.1 s for the float32 LM head. A draft model on a CPU-only gateway does not pay off yet.
+
+**Concurrency on Kaggle is still about 2.3 generated tokens/s for 4 streams (run 21).** The 4 sessions
+share round trips (7392 trips for 4 x 65 tokens), but each 4-session step takes about 1.7 s: about
+0.7 s in round trips (gateway, service and mask factory share the VM's 4 vCPUs), about 0.5 s of gateway
+crypto, and about 0.5 s of float32 LM heads computed one row at a time (2.2 GB of weights read per row).
 
 **CUDA graphs are off by default** (`PGW_SERVICE_CUDA_GRAPHS=true` turns them on). On torch 2.11 with
 a T4 most captures fail inside PyTorch's caching allocator and the service falls back to eager, and
