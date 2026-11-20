@@ -92,6 +92,9 @@ def _signal_handlers(stop: Callable[[], None]) -> Iterator[None]:
 @click.group("factory", context_settings={"help_option_names": ["-h", "--help"]})
 def factory_group() -> None:
     """Mask factory (customer-run or independent partner): generate one-time masks offline."""
+    from pgw.core.proc_tuning import apply_malloc_tuning
+
+    apply_malloc_tuning()  # large mask buffers: keep them on the heap (PGW_MALLOC_TUNING=0 turns it off)
 
 
 _common = [

@@ -81,7 +81,9 @@ class BatchStats:
 
 @dataclass(eq=False)
 class _Entry:
-    x: torch.Tensor
+    #: row blocks of one submission, computed back to back in this order (usually one)
+    parts: tuple[torch.Tensor, ...]
+    rows: int
     fut: asyncio.Future[tuple[torch.Tensor, BatchTiming]]
     t_enq: float
     #: the caller accepts the kernel's compact result (int32 bit patterns for K <= 32 on CUDA)
@@ -271,18 +273,58 @@ class BatchScheduler:
         rows = int(x_hat.shape[0])
         if rows == 0:
             return torch.zeros((0, kernel.out_features), dtype=torch.int64), BatchTiming()
+        return await self._submit((fingerprint, ring.name, linear), kernel, ring, (x_hat,), rows, compact)
+
+    async def submit_parts(
+        self, fingerprint: str, ring: RingParams, linear: str, parts: Sequence[torch.Tensor], *,
+        compact: bool = False,
+    ) -> tuple[list[torch.Tensor], BatchTiming]:
+        """Several row blocks for one linear as **one** submission; results per block, in order.
+
+        The blocks are computed back to back in one kernel call (or one per ``max_batch_rows``
+        chunk), possibly together with other submissions' rows, exactly like one
+        :meth:`submit_timed` of their concatenation, but without concatenating on the event loop.
+        Rows are independent in the ring product, so every block's result is bit-identical to
+        submitting it alone. Small groups run inline on an idle device (``inline_max_rows``); larger
+        ones take the queued path. A failure fails the whole group.
+
+        Raises:
+            Same as :meth:`submit_timed`; a :class:`ShapeError` names the offending block.
+        """
+        if not self._accepting:
+            raise ServiceUnavailableError("compute scheduler is not accepting work", details={"retry_after_s": 1.0})
+        kernel: ComputeKernel = self.registry.get(fingerprint).kernel(linear)  # type: ignore[attr-defined]
+        sizes: list[int] = []
+        for i, x in enumerate(parts):
+            if x.ndim != 2 or x.shape[1] != kernel.in_features or x.dtype != torch.int64:
+                raise ShapeError(
+                    f"{linear}: x_hat must be int64 (rows, {kernel.in_features}), got {x.dtype} {tuple(x.shape)}",
+                    details={"linear": linear, "part": i},
+                )
+            sizes.append(int(x.shape[0]))
+        rows = sum(sizes)
+        if rows == 0:
+            return [torch.zeros((0, kernel.out_features), dtype=torch.int64) for _ in sizes], BatchTiming()
+        live = tuple(x for x, n in zip(parts, sizes, strict=True) if n > 0)
+        y, timing = await self._submit((fingerprint, ring.name, linear), kernel, ring, live, rows, compact)
+        return list(torch.split(y, sizes, dim=0)), timing
+
+    async def _submit(
+        self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams, parts: tuple[torch.Tensor, ...],
+        rows: int, compact: bool,
+    ) -> tuple[torch.Tensor, BatchTiming]:
+        """Run validated, non-empty row blocks (``rows`` in all); result rows in block order."""
         if self._queued_rows + rows > self.max_queued_rows:
             raise ServiceUnavailableError(
                 "compute queue is full", details={"retry_after_s": 1.0, "queued_rows": self._queued_rows}
             )
-        key = (fingerprint, ring.name, linear)
         if rows <= self.inline_max_rows and self.window_s <= 0 and key not in self._open:
             dev = str(kernel.device)
             d = self._devices.get(dev) or self._ensure_device(dev)
             if d.busy == 0 and not d.ready:  # idle device: no batch to join, nothing to wait for
-                return self._run_inline(d, kernel, ring, x_hat, rows, compact)
+                return self._run_inline(d, kernel, ring, parts, rows, compact)
         if rows <= self.max_batch_rows:  # the common case: one chunk, await its future directly
-            fut = self._add(key, kernel, ring, x_hat, compact)
+            fut = self._add(key, kernel, ring, parts, compact)
             self.stats.submitted_rows += rows
             try:
                 return await fut
@@ -290,8 +332,8 @@ class BatchScheduler:
                 fut.cancel()  # caller gone or failed: drop our rows if not started yet
                 raise
         futs: list[asyncio.Future[tuple[torch.Tensor, BatchTiming]]] = []
-        for r0 in range(0, rows, self.max_batch_rows):
-            futs.append(self._add(key, kernel, ring, x_hat[r0 : r0 + self.max_batch_rows], compact))
+        for chunk in _chunk_parts(parts, self.max_batch_rows):
+            futs.append(self._add(key, kernel, ring, chunk, compact))
         self.stats.submitted_rows += rows
         try:
             results = await asyncio.gather(*futs)
@@ -307,8 +349,8 @@ class BatchScheduler:
         )
         return (ys[0] if len(ys) == 1 else torch.cat(ys, dim=0)), timing
 
-    def _run_inline(self, d: _Device, kernel: ComputeKernel, ring: RingParams, x: torch.Tensor, rows: int,
-                    compact: bool) -> tuple[torch.Tensor, BatchTiming]:
+    def _run_inline(self, d: _Device, kernel: ComputeKernel, ring: RingParams,
+                    parts: Sequence[torch.Tensor], rows: int, compact: bool) -> tuple[torch.Tensor, BatchTiming]:
         """A one-submission batch on an idle device, run synchronously on the event loop.
 
         What :meth:`_add` + :meth:`_start` (inline branch) + :meth:`_resolve` do for a batch that
@@ -321,7 +363,7 @@ class BatchScheduler:
         d.busy += 1
         try:
             t_start = time.perf_counter()
-            y, secs = _run_kernel(kernel, (x,), ring)
+            y, secs = _run_kernel(kernel, parts, ring)
         except Exception as exc:
             self.stats.failed_batches += 1
             if isinstance(exc, PGWError):
@@ -341,12 +383,14 @@ class BatchScheduler:
         return (y if compact else from_compact(y, ring.k)), timing
 
     def _add(
-        self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams, x: torch.Tensor,
-        compact: bool = False,
+        self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams,
+        x: torch.Tensor | tuple[torch.Tensor, ...], compact: bool = False,
     ) -> asyncio.Future[tuple[torch.Tensor, BatchTiming]]:
+        """Add one submission (a tensor or several row blocks, at most ``max_batch_rows`` rows in all)."""
         loop = self._loop
         assert loop is not None
-        rows = int(x.shape[0])
+        parts = (x,) if isinstance(x, torch.Tensor) else x
+        rows = sum(int(p.shape[0]) for p in parts)
         b = self._open.get(key)
         new = False
         if b is None or b.started or b.rows + rows > self.max_batch_rows:
@@ -356,7 +400,7 @@ class BatchScheduler:
             self._open[key] = b
             new = True
         fut: asyncio.Future[tuple[torch.Tensor, BatchTiming]] = loop.create_future()
-        b.entries.append(_Entry(x, fut, time.perf_counter(), compact))
+        b.entries.append(_Entry(parts, rows, fut, time.perf_counter(), compact))
         b.rows += rows
         self._queued_rows += rows
         self._queued_items += 1
@@ -407,7 +451,7 @@ class BatchScheduler:
         for e in b.entries:
             self._queued_items -= 1
             if e.fut.done():  # cancelled by its caller
-                n = int(e.x.shape[0])
+                n = e.rows
                 self._queued_rows -= n
                 self.stats.dropped_rows += n
             else:
@@ -418,11 +462,11 @@ class BatchScheduler:
             self._batch_done()
             return
         b.live = live
-        b.live_rows = sum(int(e.x.shape[0]) for e in live)
+        b.live_rows = sum(e.rows for e in live)
         loop = self._loop
         assert loop is not None
         t_start = time.perf_counter()
-        parts = [e.x for e in live]  # concatenated in the worker thread, off the event loop
+        parts = [p for e in live for p in e.parts]  # concatenated in the worker thread, off the event loop
         if b.live_rows <= self.inline_max_rows and d.busy == 0 and not d.ready:
             # idle device, small batch: run it here (no pool hand-off and wake-up in either direction)
             d.busy += 1
@@ -501,7 +545,7 @@ class BatchScheduler:
         compute_ms = secs * 1e3
         r0 = 0
         for e in live:
-            n = int(e.x.shape[0])
+            n = e.rows
             if not e.fut.done():
                 timing = BatchTiming(queue_ms=(t_start - e.t_enq) * 1e3, compute_ms=compute_ms, batch_rows=rows)
                 ye = y[r0 : r0 + n]
@@ -511,7 +555,7 @@ class BatchScheduler:
     def _fail(self, b: _Batch, exc: PGWError) -> None:
         for e in b.entries:
             self._queued_items -= 1
-            self._queued_rows -= int(e.x.shape[0])
+            self._queued_rows -= e.rows
             if not e.fut.done():
                 e.fut.set_exception(exc)
         self._set_depth()
@@ -519,6 +563,26 @@ class BatchScheduler:
     def devices(self) -> Sequence[str]:
         """Devices with an active thread pool."""
         return list(self._devices)
+
+
+def _chunk_parts(parts: Sequence[torch.Tensor], max_rows: int) -> list[tuple[torch.Tensor, ...]]:
+    """Split row blocks into consecutive chunks of at most ``max_rows`` rows (blocks may be cut)."""
+    chunks: list[tuple[torch.Tensor, ...]] = []
+    cur: list[torch.Tensor] = []
+    room = max_rows
+    for x in parts:
+        r0, n = 0, int(x.shape[0])
+        while r0 < n:
+            take = min(room, n - r0)
+            cur.append(x if take == n else x[r0 : r0 + take])
+            r0 += take
+            room -= take
+            if room == 0:
+                chunks.append(tuple(cur))
+                cur, room = [], max_rows
+    if cur:
+        chunks.append(tuple(cur))
+    return chunks
 
 
 def _run_kernel(

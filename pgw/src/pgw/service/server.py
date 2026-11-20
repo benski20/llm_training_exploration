@@ -326,11 +326,13 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
 def serve(settings: ServiceSettings | None = None) -> None:
     """Blocking entry point used by ``pgw service serve`` and ``python -m pgw.service``."""
     from pgw.core.log import configure_logging
+    from pgw.core.proc_tuning import apply_malloc_tuning, loop_name, new_event_loop
     from pgw.core.settings import CommonSettings
 
+    malloc_tuned = apply_malloc_tuning()
     common = CommonSettings()  # PGW_LOG_LEVEL / PGW_LOG_JSON
     configure_logging(level=common.log_level, json_lines=common.log_json)
     s = settings or ServiceSettings()
-    log.info("starting %s on %s:%d (tls=%s, mtls=%s, packs=%d)", s.server_name, s.host, s.port, s.tls.enabled,
-             s.tls.require_client_cert, len(s.packs))
-    asyncio.run(serve_async(s))
+    log.info("starting %s on %s:%d (tls=%s, mtls=%s, packs=%d, loop=%s, malloc_tuning=%s)", s.server_name, s.host,
+             s.port, s.tls.enabled, s.tls.require_client_cert, len(s.packs), loop_name(), malloc_tuned)
+    asyncio.run(serve_async(s), loop_factory=new_event_loop)
