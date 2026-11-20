@@ -44,7 +44,7 @@ import torch
 from pgw.core import native
 from pgw.core.errors import ConfigError, IntegrityError, PGWError
 from pgw.core.fingerprint import short_fingerprint
-from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows, new_seed
+from pgw.core.prng import MAX_STREAM_BYTES, SEED_BYTES, SeedExpander, max_stream_rows, new_seed
 from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
@@ -181,6 +181,8 @@ class _CpuRing:
             key = self._keys[linear] = bytearray(self._exp.stream_key("r", linear))
         if self.native:
             return torch.from_numpy(native.fast.mask_rows_with_key(key, cols, k, row_start, row_count))
+        if 8 * cols * (row_start + row_count) > MAX_STREAM_BYTES:  # native fill_ring checks the end too
+            raise ConfigError("mask rows beyond the 2^32-block ChaCha20 counter range")
         return SeedExpander.ring_uniform_rows_with_key(key, cols, k, row_start, row_count)
 
     def wipe(self) -> None:
@@ -591,7 +593,13 @@ class MaskGenerator:
             t0 = time.perf_counter()
             try:
                 if c.event is not None:  # pragma: no cover - GPU only
-                    c.event.synchronize()
+                    try:
+                        c.event.synchronize()
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            torch.cuda.synchronize(self.device)  # the copy must not write wr after the wipe
+                        c.wr.zero_()
+                        raise
                 dt = c.seconds + time.perf_counter() - t0
                 if cu is not None and cw is not None:
                     t1 = time.perf_counter()

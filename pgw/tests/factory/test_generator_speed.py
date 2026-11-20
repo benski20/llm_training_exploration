@@ -158,6 +158,18 @@ def test_cpu_ring_wipes_finished_linear_keys() -> None:
     assert k1 == bytearray(32) and not ring._keys
 
 
+@pytest.mark.parametrize("use_native", [False, pytest.param(True, marks=needs_native)])
+def test_cpu_ring_checks_stream_end(use_native: bool) -> None:
+    # 8 int64 columns = one ChaCha20 block per row: the last addressable row is 2^32 - 1
+    ring = fg._CpuRing(SeedExpander(SEED), use_native)
+    try:
+        assert ring.rows("0.qkv", 8, 32, (1 << 32) - 1, 1).shape == (1, 8)
+        with pytest.raises((ValueError, fg.ConfigError), match="2\\^32"):
+            ring.rows("0.qkv", 8, 32, (1 << 32) - 1, 2)
+    finally:
+        ring.wipe()
+
+
 def test_native_rng_requested_without_extension(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fg, "_NATIVE_RNG", False)
     with pytest.raises(Exception, match="native_rng"):
