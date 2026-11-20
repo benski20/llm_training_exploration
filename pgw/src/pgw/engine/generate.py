@@ -97,9 +97,10 @@ class _SeqState:
     ctx: list[int] = field(default_factory=list)  # tokens held in the target KV cache
     draft_cache: KVCache | None = None
     drafts: list[int] = field(default_factory=list)  # proposals for the current step
-    spec_proposed: int = 0
+    spec_proposed: int = 0  # draft rows sent for verification (accepted or not)
     spec_accepted: int = 0
     spec_passes: int = 0
+    draft_ms: float = 0.0  # wall time of the draft-model passes this sequence took part in
 
     @property
     def done(self) -> bool:
@@ -110,21 +111,31 @@ class _SeqState:
 _LOOKUP_WINDOW = 4096
 
 
-def _lookup_drafts(seq: Sequence[int], k: int, max_n: int) -> list[int]:
-    """Prompt-lookup proposal: the up-to-``k`` tokens that followed the latest earlier occurrence of
-    the last ``n`` tokens of ``seq`` (``n`` from ``max_n`` down to 1); ``[]`` if there is none."""
+def _lookup_drafts(seq: Sequence[int], k: int, max_n: int, min_n: int = 3) -> list[int]:
+    """Prompt-lookup proposal: the ``k`` tokens that followed the latest earlier occurrence of the last
+    ``n`` tokens of ``seq`` (``n`` from ``max_n`` down to ``min_n``).
+
+    A match followed by a full ``k`` tokens is preferred over a later one cut short by the end of the
+    context; when there is none, the continuation of the latest (longest-``n``) match is returned, which may
+    be shorter than ``k`` (the caller pads it with the draft model or drops it). ``[]`` if nothing matches.
+    ``min_n`` keeps short (1- and 2-gram) coincidences from proposing tokens.
+    """
     if len(seq) > _LOOKUP_WINDOW:  # bound the per-step cost on long contexts
         seq = seq[-_LOOKUP_WINDOW:]
+    seq = list(seq)
     size = len(seq)
-    for n in range(min(max_n, size - 1), 0, -1):
-        tail = list(seq[size - n :])
+    short: list[int] = []
+    for n in range(min(max_n, size - 1), max(1, min_n) - 1, -1):
+        tail = seq[size - n :]
         first = tail[0]
         for i in range(size - n - 1, -1, -1):  # latest match first, never the tail itself
-            if seq[i] == first and list(seq[i : i + n]) == tail:
-                out = list(seq[i + n : i + n + k])
-                if out:
+            if seq[i] == first and seq[i : i + n] == tail:
+                out = seq[i + n : i + n + k]
+                if len(out) == k:
                     return out
-    return []
+                if out and not short:
+                    short = out
+    return short
 
 
 def _dcache(st: _SeqState) -> KVCache:
@@ -158,6 +169,21 @@ class Generator:
             while it agrees, so every emitted token is drawn exactly as without speculation (same
             greedy choice, same seeded sample). Rejected positions cost mask rows, never tokens.
         spec_tokens: Draft tokens proposed per step (0 disables speculation).
+        lookup: Prompt lookup: longest n-gram tried (0 disables).
+        spec_min_tokens: Adaptive draft length (draft model only): always ``spec_min_tokens`` drafts, the full
+            ``spec_tokens`` only while the draft is confident (``draft_confidence``). ``None``: one fixed size.
+        draft_confidence: Draft top probability needed for the long size (0: always the long size).
+        lookup_min_n: Shortest n-gram prompt lookup accepts as a match (no 1-gram coincidences).
+        spec_max_batch: Speculate only in steps with at most this many sequences. A verify pass adds
+            ``k`` rows per sequence to every linear of a step that the other sequences must wait for; with
+            several sequences sharing a step the extra rows cost more than the passes they save.
+
+    Privacy of speculation: the compute service sees how many rows each pass carries. Every pass of a
+    sequence carries 1 or ``1 + k`` rows, ``k`` one fixed size (or, with the adaptive draft length, one of
+    two fixed sizes): a prompt-lookup proposal is exactly ``k`` tokens (a short match is completed by the
+    draft model or dropped), and near the end of the token budget, the context or the mask reservation the
+    draft length drops to 0 rather than to a size that depends on how many drafts were accepted. So a pass
+    tells the service at most about one bit about how predictable the text is.
     """
 
     def __init__(
@@ -169,10 +195,12 @@ class Generator:
         session_factory: SessionFactory | None = None,
         batching: bool = True,
         draft: TransformerModel | None = None,
-        spec_tokens: int = 4,
+        spec_tokens: int = 2,
         lookup: int = 0,
         spec_min_tokens: int | None = None,
         draft_confidence: float = 0.0,
+        lookup_min_n: int = 3,
+        spec_max_batch: int = 1,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
@@ -188,14 +216,20 @@ class Generator:
         self._draft_vocab = int(dv) if dv is not None else None
         if lookup < 0 or lookup > 8:
             raise ConfigError("lookup must be in [0, 8]")
+        if lookup_min_n < 2 or lookup_min_n > 8:
+            raise ConfigError("lookup_min_n must be in [2, 8]")
+        if spec_max_batch < 1:
+            raise ConfigError("spec_max_batch must be >= 1")
         self.draft = draft if spec_tokens > 0 else None
         #: Prompt-lookup drafting: propose what followed the latest earlier match of the last
-        #: ``lookup`` (down to 1) tokens of the context. Costs no model compute.
+        #: ``lookup`` (down to ``lookup_min_n``) tokens of the context. Costs no model compute.
         self.lookup = lookup if spec_tokens > 0 else 0
+        self.lookup_min_n = lookup_min_n
+        self.spec_max_batch = spec_max_batch
         self.spec_tokens = spec_tokens if (draft is not None or self.lookup) else 0
-        # Adaptive draft length: always draft spec_min_tokens; continue to spec_tokens only when every
-        # draft token so far had top probability >= draft_confidence. Two fixed sizes, so the row count
-        # of a pass tells the compute service at most one bit about how predictable the text is.
+        # Adaptive draft length: always draft spec_min_tokens; continue to spec_tokens only when each of the
+        # first spec_min_tokens (at least one) draft tokens had top probability >= draft_confidence. Two fixed
+        # sizes, so the row count of a pass tells the compute service little about how predictable the text is.
         lo = self.spec_tokens if spec_min_tokens is None else max(0, min(spec_min_tokens, self.spec_tokens))
         if not 0.0 <= draft_confidence < 1.0:
             raise ConfigError("draft_confidence must be in [0, 1)")
@@ -216,6 +250,12 @@ class Generator:
         self._rr = 0
         #: Reservation closes running in worker threads (never on the event loop; see _arelease).
         self._closing: set[asyncio.Future[None]] = set()
+        #: Speculation counters over the generator's lifetime (read by metrics and benchmarks):
+        #: ``spec_passes`` verify passes, ``spec_rows`` draft rows sent, ``spec_accepted`` drafts accepted,
+        #: ``draft_calls`` / ``draft_ms`` draft-model planning steps and their wall time.
+        self.spec_stats: dict[str, float] = {
+            "spec_passes": 0.0, "spec_rows": 0.0, "spec_accepted": 0.0, "draft_calls": 0.0, "draft_ms": 0.0,
+        }
 
     # ---- state management ---------------------------------------------------------------------
     def _new_state(
@@ -403,6 +443,10 @@ class Generator:
         if st.spec_passes:
             timings["spec_passes"] = float(st.spec_passes)
             timings["spec_accept_rate"] = st.spec_accepted / max(1, st.spec_proposed)
+            timings["spec_rows"] = float(st.spec_proposed)
+            timings["spec_accepted"] = float(st.spec_accepted)
+        if st.draft_ms:
+            timings["draft_ms"] = st.draft_ms
         return GenerationResult(
             token_ids=list(st.output_ids),
             text="".join(st.text_parts),
@@ -417,13 +461,22 @@ class Generator:
     # ---- synchronous API -------------------------------------------------------------------------
     # ---- speculative decoding ---------------------------------------------------------------
     def _spec_budget(self, st: _SeqState) -> int:
-        """Draft tokens for this step: never past max_tokens, the context, or the masks needed to finish."""
+        """Draft tokens for this step: ``spec_tokens`` (or, with the adaptive length, ``spec_min_tokens``) when
+        that many fit, else 0. Never past max_tokens, the context, or the masks needed to finish.
+
+        The size never shrinks to "whatever is left": near the end of the token budget, the context or the
+        reservation's spare rows (which depend on how many drafts were rejected) speculation simply stops,
+        so the rows of a pass stay in {1, 1 + k}.
+        """
         if not self.spec_tokens:
             return 0
         left = st.params.max_tokens - len(st.generated)  # tokens still to emit, including this step's
-        k = min(self.spec_tokens, left - 1, st.cache.max_len - st.cache.length - len(st.pending))
+        cap = min(left - 1, st.cache.max_len - st.cache.length - len(st.pending))
+        sizes = [k for k in dict.fromkeys((self.spec_tokens, self.spec_min_tokens)) if 0 < k <= cap]
+        if not sizes:
+            return 0
         remaining = getattr(st.session, "remaining", None)
-        if callable(remaining) and k > 0:
+        if callable(remaining):
             try:
                 rows = int(remaining(_FIRST_LINEAR))
                 reserved = getattr(st.session, "reserved_rows", None)
@@ -432,34 +485,66 @@ class Generator:
                 return 0  # unknown session type: do not speculate
             # Never use rows that finishing without speculation needs (the cap), and never make the
             # store reserve more just to speculate: only rows the session already holds.
-            k = min(k, rows - (len(st.pending) + left - 1), held - len(st.pending))
-        return max(0, k)
+            spare = min(rows - (len(st.pending) + left - 1), held - len(st.pending))
+            sizes = [k for k in sizes if k <= spare]
+        return sizes[0] if sizes else 0
 
     def _plan_drafts(self, batch: Sequence[_SeqState]) -> None:
-        """Propose up to ``spec_tokens`` tokens per sequence: prompt lookup first (free), else the draft model
-        (plaintext, local)."""
+        """Propose exactly ``k`` tokens per sequence (``k`` from :meth:`_spec_budget`), or none.
+
+        Prompt lookup first (free); a match shorter than ``k`` is completed by the draft model, or dropped
+        when there is none. Otherwise the draft model (plaintext, local) proposes all ``k``. Steps with more
+        than ``spec_max_batch`` sequences do not speculate.
+        """
         if not self.spec_tokens:
             return
-        active: list[tuple[_SeqState, int]] = []
+        over = len(batch) > self.spec_max_batch
+        tv = self._target_vocab
+        # (state, draft size, lookup tokens the draft model continues from)
+        active: list[tuple[_SeqState, int, list[int]]] = []
         for st in batch:
             st.drafts = []
             if st.draft_cache is not None and st.draft_cache.length > len(st.ctx):
                 st.draft_cache.truncate(len(st.ctx))  # drop proposals of an earlier (failed) step
+            if over:
+                continue
             k = self._spec_budget(st)
             if k <= 0:
                 continue
+            can_draft = self.draft is not None and st.draft_cache is not None and not self._needs_draft_prefill(st)
+            seed: list[int] = []
             if self.lookup:
-                found = _lookup_drafts(st.ctx + st.pending, k, self.lookup)
-                if self._target_vocab is not None:
-                    found = [t for t in found if t < self._target_vocab][:k]
-                if found:
-                    st.drafts = found
+                found = _lookup_drafts(st.ctx + st.pending, k, max(self.lookup, self.lookup_min_n), self.lookup_min_n)
+                if tv is not None:  # a proposal ends at the first id the target does not have
+                    cut = next((j for j, t in enumerate(found) if t >= tv), len(found))
+                    found = found[:cut]
+                if len(found) >= k:
+                    st.drafts = found[:k]
                     continue
-            if self.draft is not None and st.draft_cache is not None and not self._needs_draft_prefill(st):
-                active.append((st, k))
+                if found and not can_draft:
+                    continue  # a short match alone would reveal its length: no drafts this step
+                seed = found
+            if can_draft:
+                active.append((st, k, seed))
         if not active or self.draft is None:
             return
+        t0 = time.perf_counter()
+        try:
+            self._draft_tokens(active)
+        finally:
+            ms = (time.perf_counter() - t0) * 1e3
+            for st, _, _ in active:
+                st.draft_ms += ms
+            self.spec_stats["draft_calls"] += 1
+            self.spec_stats["draft_ms"] += ms
+
+    def _draft_tokens(self, active: Sequence[tuple[_SeqState, int, list[int]]]) -> None:
+        """Run the draft model so each ``(st, k, seed)`` ends with ``st.drafts`` of an allowed size: ``k``,
+        ``spec_min_tokens`` (adaptive length, no lookup seed) or 0."""
+        assert self.draft is not None
         dv, tv = self._draft_vocab, self._target_vocab
+        mn = self.spec_min_tokens
+        tau = self.draft_confidence
 
         def din(ids: list[int]) -> list[int]:
             return ids if dv is None else [t if t < dv else dv - 1 for t in ids]
@@ -469,37 +554,58 @@ class Generator:
         # own sampler (same RNG state, penalties, temperature and filters), so it uses exactly the noise
         # the target's sample at that position will use and agrees whenever the two distributions are
         # close. Acceptance is unchanged (target sample == draft), so the output is too.
-        forks = {id(st): st.sampler.fork() for st, _ in active if not st.params.greedy}
-
+        forks = {id(st): st.sampler.fork() for st, _, _ in active if not st.params.greedy}
+        # Adaptive length: decided once the first max(1, spec_min_tokens) tokens are drafted. Only then is
+        # the draft's top probability needed (a softmax and a host sync per token); never with one fixed size.
+        probe = {id(st): max(1, mn) for st, k, seed in active if tau > 0 and mn < k and not seed}
         unsure: set[int] = set()
-        tau = self.draft_confidence
+        finished: set[int] = set()
+        pending_seed = {id(st): len(seed) for st, _, seed in active if seed}
 
-        def take(st: _SeqState, k: int, lg: torch.Tensor) -> None:
-            if tau > 0 and float(torch.softmax(lg.to(torch.float32), dim=-1).max()) < tau:
-                unsure.add(id(st))
-            fk = forks.get(id(st))
+        def take(st: _SeqState, lg: torch.Tensor) -> None:
+            sid = id(st)
+            n_probe = probe.get(sid, 0)
+            if len(st.drafts) < n_probe and float(torch.softmax(lg.to(torch.float32), dim=-1).max()) < tau:
+                unsure.add(sid)
+            fk = forks.get(sid)
             if fk is None:
                 t = int(torch.argmax(lg))
             else:
                 if tv is not None and lg.numel() != tv:  # align with the target's vocabulary (RNG draws)
                     lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
+                skip = pending_seed.pop(sid, 0)
+                if skip:  # lookup tokens took these positions: advance the fork past their draws
+                    flat = torch.zeros(lg.numel())
+                    for _ in range(skip):
+                        fk.propose(flat, [])
                 t = fk.propose(lg, st.generated + st.drafts)
             if tv is not None and t >= tv:  # not a target token: end this sequence's draft here
-                stopped.add(id(st))
-            else:
-                st.drafts.append(t)
+                stopped.add(sid)
+                return
+            st.drafts.append(t)
+            if n_probe and len(st.drafts) == n_probe and sid in unsure:
+                del st.drafts[mn:]  # not confident: the short size
+                finished.add(sid)
 
-        feeds = [SequenceInput(din(st.ctx[_dcache(st).length:] + st.pending), _dcache(st)) for st, _ in active]
-        for (st, k), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
-            take(st, k, lg)
+        for st, _, seed in active:
+            st.drafts = list(seed)
+        feeds = [SequenceInput(din(st.ctx[_dcache(st).length:] + st.pending + st.drafts), _dcache(st))
+                 for st, _, _ in active]
+        for (st, _, _), lg in zip(active, self.draft.forward_batch(feeds), strict=True):
+            take(st, lg)
         while True:
-            cur = [(st, k) for st, k in active if len(st.drafts) < k and id(st) not in stopped
-                   and not (len(st.drafts) >= self.spec_min_tokens and id(st) in unsure)]
+            cur = [st for st, k, _ in active if len(st.drafts) < k and id(st) not in stopped
+                   and id(st) not in finished]
             if not cur:
                 break
-            outs = self.draft.forward_batch([SequenceInput(din([st.drafts[-1]]), _dcache(st)) for st, _ in cur])
-            for (st, k), lg in zip(cur, outs, strict=True):
-                take(st, k, lg)
+            outs = self.draft.forward_batch([SequenceInput(din([st.drafts[-1]]), _dcache(st)) for st in cur])
+            for st, lg in zip(cur, outs, strict=True):
+                take(st, lg)
+        for st, k, seed in active:  # a draft cut short (out-of-vocabulary id) falls back to an allowed size
+            n = len(st.drafts)
+            if n == k or (id(st) in finished and n == mn):
+                continue
+            del st.drafts[mn if (not seed and 0 < mn < k and n >= mn) else 0:]
 
     def _needs_draft_prefill(self, st: _SeqState) -> bool:
         """First step of a request: the draft has not seen the prompt yet. That step carries no model
@@ -570,6 +676,10 @@ class Generator:
         st.spec_passes += 1
         st.spec_proposed += len(drafts)
         st.spec_accepted += i
+        stats = self.spec_stats
+        stats["spec_passes"] += 1
+        stats["spec_rows"] += len(drafts)
+        stats["spec_accepted"] += i
         st.drafts = []
         return events
 

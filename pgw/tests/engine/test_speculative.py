@@ -112,7 +112,7 @@ def test_speculative_async_batched_streams(qwen_pack: InMemoryPack, other_draft_
     prompts = [PROMPT, [256, 65, 66, 67], [256, 120, 121]]
     params = SamplingParams(max_tokens=18, temperature=0.0, ignore_eos=True)
     base = [Generator(target, tiny_tokenizer).generate(p, params).token_ids for p in prompts]
-    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=4)
+    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=4, spec_max_batch=8)
 
     async def one(p: list[int]) -> list[int]:
         return [ev.token_id async for ev in gen.astream(p, params)]
@@ -204,12 +204,19 @@ def test_int8_draft_backend_is_accurate_with_activation_outliers(qwen_pack: InMe
 def test_lookup_drafts_unit() -> None:
     from pgw.engine.generate import _lookup_drafts
 
-    seq = [1, 2, 3, 4, 5, 9, 2, 3]
-    assert _lookup_drafts(seq, 3, 3) == [4, 5, 9]  # "2 3" matched earlier -> what followed
+    seq = [1, 2, 3, 4, 5, 9, 1, 2, 3]
+    assert _lookup_drafts(seq, 3, 3) == [4, 5, 9]  # "1 2 3" matched earlier -> what followed
     assert _lookup_drafts([7, 8, 9], 2, 3) == []  # no repeat
-    assert _lookup_drafts([5, 1, 5, 2, 5], 2, 3) == [2, 5]  # latest earlier match of "5" wins
-    assert _lookup_drafts([1, 2, 1, 2], 4, 3) == [1, 2]  # stops at the end of the context
+    # 1- and 2-gram coincidences are not matches any more (default min_n=3) ...
+    assert _lookup_drafts([5, 1, 5, 2, 5], 2, 3) == []
+    assert _lookup_drafts([1, 2, 3, 4, 5, 9, 2, 3], 3, 3) == []
+    # ... unless explicitly allowed
+    assert _lookup_drafts([5, 1, 5, 2, 5], 2, 3, min_n=1) == [2, 5]  # latest earlier match of "5" wins
+    assert _lookup_drafts([1, 2, 1, 2], 4, 3, min_n=1) == [1, 2]  # short: stops at the end of the context
     assert _lookup_drafts([4], 2, 3) == []
+    # a match followed by a full k tokens wins over a later one cut short by the end of the context
+    assert _lookup_drafts([4, 4, 4, 4, 4, 4], 3, 3) == [4, 4, 4]
+    assert _lookup_drafts([8, 1, 2, 3, 7, 7, 1, 2, 3, 6, 1, 2, 3], 4, 3) == [6, 1, 2, 3]
 
 
 @pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded", "penalties", "stop"])
@@ -283,8 +290,235 @@ def test_adaptive_draft_length_identical_and_two_sizes(qwen_pack: InMemoryPack, 
     gen._inputs = spy  # type: ignore[method-assign]
     spec = gen.generate(PROMPT, params)
     assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
-    left = params.max_tokens
-    for k in sizes[1:]:  # after the first pass: 3 or 8 drafts, fewer only when the budget runs out
-        assert k in (0, 3, 8) or k < min(8, left)
+    for k in sizes:  # two fixed sizes (or none), also when the budget runs out
+        assert k in (0, 3, 8)
     if tau == 0.0:
         assert 8 in sizes  # never unsure: always the long draft when the budget allows
+
+
+# ---- privacy of speculation: fixed draft sizes, retune, metrics -----------------------------------------
+
+
+def _pass_rows(gen: Generator) -> list[list[int]]:
+    """Spy: rows of every target pass, per sequence of the step."""
+    rows: list[list[int]] = []
+    orig = gen._inputs
+
+    def spy(batch: Any) -> Any:
+        out = orig(batch)
+        rows.append([len(si.input_ids) for si in out])
+        return out
+
+    gen._inputs = spy  # type: ignore[method-assign]
+    return rows
+
+
+@pytest.mark.parametrize("k", [1, 2])
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded", "penalties", "stop"])
+def test_fixed_k_output_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                  tiny_tokenizer: ChatTokenizer, params: SamplingParams, k: int) -> None:
+    target = _plain(qwen_pack)
+    base = _run(Generator(target, tiny_tokenizer), params)
+    for draft_pack in (qwen_pack, other_draft_pack):
+        gen = Generator(target, tiny_tokenizer, draft=_plain(draft_pack), spec_tokens=k)
+        rows = _pass_rows(gen)
+        spec = _run(gen, params)
+        assert spec.token_ids == base.token_ids and spec.text == base.text
+        assert spec.finish_reason == base.finish_reason and spec.logprobs == base.logprobs
+        assert all(r[0] in (1, 1 + k) for r in rows[1:])
+
+
+def test_fixed_k_masked_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                  tiny_tokenizer: ChatTokenizer) -> None:
+    """k=2 through MaskedBackend with the default row budget (2.0): same tokens, masks == rows sent."""
+    params = SamplingParams(max_tokens=16, temperature=0.0, ignore_eos=True, logprobs=1)
+    plain, masked, _client = plain_and_masked(qwen_pack, DEFAULT_RING)
+    base = Generator(plain, tiny_tokenizer).generate(PROMPT, params)
+    slots = len(PROMPT) + 2 * params.max_tokens
+    gen = Generator(masked, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=2)
+    rows = _pass_rows(gen)
+    spec = gen.generate(PROMPT, params, session=LocalMaskReservation(qwen_pack, DEFAULT_RING, slots))
+    assert spec.token_ids == base.token_ids and spec.logprobs == base.logprobs
+    assert spec.masks_consumed == sum(r[0] for r in rows) <= slots
+    assert all(r[0] in (1, 3) for r in rows[1:])
+
+
+@pytest.mark.parametrize("params", PARAMS, ids=["greedy", "seeded", "penalties", "stop"])
+@pytest.mark.parametrize("with_draft", [False, True])
+@pytest.mark.parametrize("k", [2, 3])
+def test_lookup_rows_per_pass_fixed(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                    tiny_tokenizer: ChatTokenizer, params: SamplingParams, with_draft: bool,
+                                    k: int) -> None:
+    """With prompt lookup on, every decode pass carries 1 or 1 + k rows: a short match is completed by the
+    draft model (or dropped without one), never sent at its own length."""
+    target = _plain(qwen_pack)
+    prompt = PROMPT * 4
+    base = Generator(target, tiny_tokenizer).generate(prompt, params)
+    draft = _plain(other_draft_pack) if with_draft else None
+    gen = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=k, lookup=3)
+    rows = _pass_rows(gen)
+    spec = gen.generate(prompt, params)
+    assert spec.token_ids == base.token_ids and spec.text == base.text
+    assert spec.finish_reason == base.finish_reason and spec.logprobs == base.logprobs
+    assert rows[0][0] in (len(prompt), len(prompt) + k)  # prefill (lookup may speculate on the prompt)
+    assert all(r[0] in (1, 1 + k) for r in rows[1:])
+    assert rows[0][0] == len(prompt) + k or any(r[0] == 1 + k for r in rows)  # lookup did propose
+
+
+def test_lookup_pads_short_match_with_draft(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                            tiny_tokenizer: ChatTokenizer) -> None:
+    """A match cut short by the end of the context: completed by the draft (k tokens), else no drafts."""
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=8, temperature=0.0, ignore_eos=True)
+    tail = [40, 41, 42]
+    prompt = [256, 50, *tail, 60, *tail]  # the earlier "40 41 42" is followed by only 4 tokens
+    k = 6
+    lookup_only = Generator(target, tiny_tokenizer, spec_tokens=k, lookup=3)
+    st = lookup_only._new_state(prompt, params, None)
+    lookup_only._plan_drafts([st])
+    assert st.drafts == []  # [60, 40, 41, 42] is shorter than k: dropped, not sent with 4 rows
+
+    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=k, lookup=3)
+    st = gen._new_state(prompt, params, None)
+    gen._step_sync([st])  # prefill: the draft reads the prompt meanwhile
+    assert st.draft_cache is not None and st.draft_cache.length == len(prompt)
+    st.pending = [prompt[-1]]  # rewind one position: the context ends in the repeated tail again
+    st.ctx = list(prompt[:-1])
+    st.cache.set_length(len(st.ctx))
+    st.draft_cache.truncate(len(st.ctx))
+    from pgw.engine.generate import _lookup_drafts
+
+    found = _lookup_drafts(st.ctx + st.pending, k, 3)
+    assert 0 < len(found) < k
+    gen._plan_drafts([st])
+    assert len(st.drafts) == k and st.drafts[: len(found)] == found
+
+
+def test_one_gram_match_does_not_preempt_draft(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                               tiny_tokenizer: ChatTokenizer) -> None:
+    from pgw.engine.generate import _lookup_drafts
+
+    target = _plain(qwen_pack)
+    draft = _plain(other_draft_pack)
+    params = SamplingParams(max_tokens=8, temperature=0.0, ignore_eos=True)
+    with_lookup = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=2, lookup=3)
+    draft_only = Generator(target, tiny_tokenizer, draft=draft, spec_tokens=2)
+    st = with_lookup._new_state(PROMPT, params, None)
+    with_lookup._step_sync([st])  # prefill
+    st.drafts = []
+    st.pending = [PROMPT[1]]  # 72 occurred before: a 1-gram match only
+    seq = st.ctx + st.pending
+    assert _lookup_drafts(seq, 2, 3, min_n=1) and not _lookup_drafts(seq, 2, 3)
+    with_lookup._plan_drafts([st])
+    got = list(st.drafts)
+    draft_only._plan_drafts([st])
+    assert len(got) == 2 and got == st.drafts  # the draft model's proposal, not the 1-gram lookup
+
+
+def test_no_drafts_when_step_exceeds_spec_max_batch(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer) -> None:
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=8, temperature=0.0, ignore_eos=True)
+    prompt = PROMPT * 4
+    for limit in (1, 2):
+        gen = Generator(target, tiny_tokenizer, spec_tokens=2, lookup=3, spec_max_batch=limit)
+        a, b, c = (gen._new_state(prompt, params, None) for _ in range(3))
+        gen._plan_drafts([a])
+        assert len(a.drafts) == 2
+        gen._plan_drafts([a, b])
+        assert [len(a.drafts), len(b.drafts)] == ([0, 0] if limit == 1 else [2, 2])
+        gen._plan_drafts([a, b, c])
+        assert a.drafts == b.drafts == c.drafts == []
+    assert Generator(target, tiny_tokenizer, spec_tokens=2, lookup=3).spec_max_batch == 1  # default
+
+
+def test_budget_drops_to_zero_not_to_remainder(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer) -> None:
+    """Near the end of max_tokens or the spare mask rows, k is spec_tokens or 0, never in between."""
+    target = _plain(qwen_pack)
+    gen = Generator(target, tiny_tokenizer, spec_tokens=4, lookup=3)
+    for max_tokens in range(1, 8):
+        st = gen._new_state(PROMPT, SamplingParams(max_tokens=max_tokens, temperature=0.0), None)
+        assert gen._spec_budget(st) == (4 if max_tokens - 1 >= 4 else 0)
+    params = SamplingParams(max_tokens=10, temperature=0.0)
+    for spare in range(0, 7):
+        res = LocalMaskReservation(qwen_pack, DEFAULT_RING, len(PROMPT) + params.max_tokens - 1 + spare)
+        st = gen._new_state(PROMPT, params, res)
+        assert gen._spec_budget(st) == (4 if spare >= 4 else 0)
+    adaptive = Generator(target, tiny_tokenizer, spec_tokens=4, spec_min_tokens=2, lookup=3, draft_confidence=0.5)
+    for spare in range(0, 7):
+        res = LocalMaskReservation(qwen_pack, DEFAULT_RING, len(PROMPT) + params.max_tokens - 1 + spare)
+        st = adaptive._new_state(PROMPT, params, res)
+        assert adaptive._spec_budget(st) == (4 if spare >= 4 else 2 if spare >= 2 else 0)
+
+
+@pytest.mark.parametrize("which", ["same", "other"])
+def test_k2_with_row_budget_2_does_not_starve(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                              tiny_tokenizer: ChatTokenizer, which: str) -> None:
+    """The default retune: k=2 drafts with 2.0 mask rows per requested token. A perfect draft speculates on
+    every pass; a poor one at least until half the spare rows (one per requested token) are used up."""
+    params = SamplingParams(max_tokens=24, temperature=0.0, ignore_eos=True)
+    plain, masked, _ = plain_and_masked(qwen_pack, DEFAULT_RING)
+    base = Generator(plain, tiny_tokenizer).generate(PROMPT, params)
+    slots = len(PROMPT) + 2 * params.max_tokens
+    res = LocalMaskReservation(qwen_pack, DEFAULT_RING, slots)
+    draft = _plain(qwen_pack if which == "same" else other_draft_pack)
+    gen = Generator(masked, tiny_tokenizer, draft=draft, spec_tokens=2)
+    rows = _pass_rows(gen)
+    out = gen.generate(PROMPT, params, session=res)
+    assert out.token_ids == base.token_ids
+    assert out.masks_consumed <= slots
+    decode = [r[0] for r in rows[1:]]
+    spec_passes = sum(1 for r in decode if r == 3)
+    if which == "same":
+        # every pass but the last couple (max_tokens budget) carries 2 drafts, all accepted
+        assert spec_passes >= len(decode) - 2
+        assert len(rows) <= params.max_tokens // 3 + 3
+    else:
+        # each rejected row burns one spare row: at least max_tokens / 2 tokens' worth of speculative passes
+        assert spec_passes >= min(len(decode) - 2, params.max_tokens // 2 - 1)
+
+
+def test_speculation_metrics(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                             tiny_tokenizer: ChatTokenizer) -> None:
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=20, temperature=0.0, ignore_eos=True)
+    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=2)
+    rows = _pass_rows(gen)
+    out = gen.generate(PROMPT, params)
+    t = out.timings_ms
+    spec_passes = sum(1 for r in rows if r[0] == 3)
+    assert t["spec_passes"] == spec_passes > 0
+    assert t["spec_rows"] == 2 * spec_passes
+    assert 0 <= t["spec_accepted"] <= t["spec_rows"]
+    assert t["draft_ms"] > 0
+    st = gen.spec_stats
+    assert st["spec_passes"] == t["spec_passes"] and st["spec_rows"] == t["spec_rows"]
+    assert st["spec_accepted"] == t["spec_accepted"] and st["draft_ms"] >= t["draft_ms"] > 0
+    assert st["draft_calls"] >= 1
+    plain_gen = Generator(target, tiny_tokenizer)
+    res = plain_gen.generate(PROMPT, params)
+    assert "draft_ms" not in res.timings_ms and "spec_rows" not in res.timings_ms
+
+
+def test_fixed_size_skips_confidence_softmax(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
+                                             tiny_tokenizer: ChatTokenizer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One fixed draft size (spec_min_tokens >= spec_tokens): no per-token softmax over the draft logits."""
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=10, temperature=0.0, ignore_eos=True)
+    base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
+    gen = Generator(target, tiny_tokenizer, draft=_plain(other_draft_pack), spec_tokens=2, spec_min_tokens=2,
+                    draft_confidence=0.5)
+    calls = 0
+    real = torch.softmax
+
+    def counting(*a: Any, **kw: Any) -> torch.Tensor:
+        nonlocal calls
+        calls += 1
+        return real(*a, **kw)
+
+    import pgw.engine.generate as G
+
+    monkeypatch.setattr(G.torch, "softmax", counting)
+    out = gen.generate(PROMPT, params)
+    monkeypatch.setattr(G.torch, "softmax", real)
+    assert out.token_ids == base.token_ids
+    assert calls == 0
