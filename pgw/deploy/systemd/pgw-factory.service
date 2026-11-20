@@ -10,6 +10,10 @@ User=pgw
 Group=pgw
 EnvironmentFile=/etc/pgw/factory.env
 LoadCredential=kek:/etc/pgw/secrets/kek
+# glibc malloc: keep large per-call buffers on the heap (same values pgw.core.proc_tuning sets)
+Environment=MALLOC_TRIM_THRESHOLD_=268435456
+Environment=MALLOC_TOP_PAD_=67108864
+Environment=MALLOC_MMAP_THRESHOLD_=33554432
 Environment=PGW_MASKSTORE_KEY_PROVIDER=file
 Environment=PGW_MASKSTORE_KEY_FILE=/run/credentials/pgw-factory.service/kek
 StateDirectory=pgw

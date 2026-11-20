@@ -18,6 +18,10 @@ EnvironmentFile=/etc/pgw/gateway.env
 LoadCredential=service-token:/etc/pgw/secrets/service-token
 LoadCredential=admin-token:/etc/pgw/secrets/admin-token
 LoadCredential=kek:/etc/pgw/secrets/kek
+# glibc malloc: keep large per-call buffers on the heap (same values pgw.core.proc_tuning sets)
+Environment=MALLOC_TRIM_THRESHOLD_=268435456
+Environment=MALLOC_TOP_PAD_=67108864
+Environment=MALLOC_MMAP_THRESHOLD_=33554432
 Environment=PGW_MASKSTORE_KEY_PROVIDER=file
 Environment=PGW_MASKSTORE_KEY_FILE=/run/credentials/pgw-gateway.service/kek
 Environment=PGW_GATEWAY_MODELS_FILE=/run/pgw/models.yaml

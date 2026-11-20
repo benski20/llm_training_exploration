@@ -60,6 +60,9 @@ def gateway_group() -> None:
 def serve(host: str | None, port: int | None) -> None:
     """Serve the gateway (settings from PGW_GATEWAY_* / PGW_MASKSTORE_*)."""
     from pgw.core.log import configure_logging
+    from pgw.core.proc_tuning import apply_malloc_tuning
+
+    apply_malloc_tuning()  # before the model, masks and buffers are allocated
     from pgw.core.settings import CommonSettings
     from pgw.gateway.app import create_app
     from pgw.gateway.config import GatewaySettings
@@ -194,6 +197,9 @@ def run_gateway_servers(app: Any, settings: Any, host: str, port: int, tls: dict
 
     import uvicorn
 
+    from pgw.core.proc_tuning import apply_malloc_tuning, new_event_loop
+
+    apply_malloc_tuning()
     state = getattr(app.state, "pgw", None)
 
     class _DrainingServer(uvicorn.Server):
@@ -222,7 +228,7 @@ def run_gateway_servers(app: Any, settings: Any, host: str, port: int, tls: dict
         for t in done:
             t.result()
 
-    asyncio.run(_main())
+    asyncio.run(_main(), loop_factory=new_event_loop)
 
 
 @gateway_group.group("keys")
