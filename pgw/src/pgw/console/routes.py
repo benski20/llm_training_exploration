@@ -256,6 +256,11 @@ def install_console(
         resp.set_cookie(COOKIE_NAME, sess_sid, max_age=int(store.max_age_s), path="/", httponly=True,
                         samesite="strict", secure=_secure(request))
 
+    @app.get("/console/api/setup/status")
+    async def console_setup_status() -> Any:
+        # The console asks this first; in setup mode (pgw.gateway.setup) the answer is setup_mode: true.
+        return {"setup_mode": False, "signed_in": False}
+
     @app.get("/console/api/auth-methods")
     async def console_auth_methods() -> Any:
         return {"token": token_login and sessions is not None and sessions.login_enabled,

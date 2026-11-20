@@ -5,6 +5,8 @@ Routes (SPEC.md section 6.2):
     GET  /pgw/v1/models    ModelsResponse
     GET  /healthz          liveness;  GET /readyz  readiness (packs loaded, device OK, not draining)
     GET  /metrics          Prometheus (optionally only on a separate port, see :mod:`pgw.service.server`)
+    GET  /pgw/v1/enroll/ca, POST /pgw/v1/enroll   gateway enrollment (when ``enrollment_file`` is set;
+                           see :mod:`pgw.enroll.service`)
 Run with hypercorn for HTTP/2 (``pgw service serve`` / ``python -m pgw.service``).
 
 Lifecycle: on startup the app loads every configured pack (``verify="full"``, linears only) in a
@@ -147,7 +149,8 @@ def _build_state(
     has_creds = s.tokens_file is not None or s.mtls_tenants_file is not None
     if authenticator is None and (has_creds or not s.allow_unauthenticated):
         authenticator = TenantAuthenticator(
-            s.tokens_file, allow_unauthenticated=s.allow_unauthenticated, mtls_tenants_file=s.mtls_tenants_file
+            s.tokens_file, allow_unauthenticated=s.allow_unauthenticated, mtls_tenants_file=s.mtls_tenants_file,
+            allow_empty=s.enrollment_file is not None,
         )
     metrics = metrics or ServiceMetrics(enabled=s.metrics_enabled)
     batcher = BatchScheduler(
@@ -244,6 +247,15 @@ def create_app(
     async def metrics_route(request: Request) -> Response:
         body, ctype = state.metrics.render()
         return Response(content=body, media_type=ctype.split(";")[0], headers={"Content-Type": ctype})
+
+    if s.enrollment_file is not None:
+        from pgw.enroll.service import add_enroll_routes
+
+        def _served() -> list[dict[str, Any]]:
+            return [{"name": m.name, "fingerprint": m.fingerprint, "rings": list(m.rings), "pack_path": m.pack_path}
+                    for m in state.registry.models()]
+
+        add_enroll_routes(app, s, state.handler.authenticator, _served)
 
     app.add_route("/healthz", healthz, methods=["GET"], include_in_schema=False)
     app.add_route("/readyz", readyz, methods=["GET"], include_in_schema=False)

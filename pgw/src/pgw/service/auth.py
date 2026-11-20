@@ -22,12 +22,16 @@ import hashlib
 import hmac
 import logging
 import re
+import secrets
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from pgw.core.errors import AuthError, ConfigError, ErrorCode, PGWError
 
-__all__ = ["TenantAuthenticator", "TenantIdentity", "hash_token", "parse_subject_cn"]
+__all__ = [
+    "TenantAuthenticator", "TenantIdentity", "hash_token", "issue_tenant_token", "parse_subject_cn", "valid_tenant_id",
+]
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +43,34 @@ _ANON = "anonymous"
 def hash_token(token: str) -> str:
     """SHA-256 hex digest of a token (the form stored in ``tokens_file``)."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def valid_tenant_id(tenant: str) -> bool:
+    """Whether ``tenant`` is a valid tenant id (``[A-Za-z0-9][A-Za-z0-9._-]{0,63}``)."""
+    return bool(_TENANT_RE.fullmatch(tenant))
+
+
+def issue_tenant_token(tenant: str, tokens_file: Path) -> tuple[str, str]:
+    """Create a tenant bearer token and append ``tenant:sha256`` to ``tokens_file`` (mode 0600).
+
+    Returns ``(token, sha256 hex)``; only the hash is stored. Shared by ``pgw service token create``
+    and enrollment (``POST /pgw/v1/enroll``).
+
+    Raises:
+        ConfigError: invalid tenant id or unwritable tokens file.
+    """
+    from pgw.core.fileio import write_private
+
+    if not valid_tenant_id(tenant):
+        raise ConfigError("tenant id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+    token = "pgwt-" + secrets.token_urlsafe(32)
+    digest = hash_token(token)
+    with _TOKENS_FILE_LOCK:
+        write_private(Path(tokens_file), f"{tenant}:{digest}\n", append=True)
+    return token, digest
+
+
+_TOKENS_FILE_LOCK = threading.Lock()
 
 
 def parse_subject_cn(subject: str) -> str | None:
@@ -93,6 +125,7 @@ class TenantAuthenticator:
         mtls_tenants_file: Certificate subject -> tenant map, or ``None``.
         token_hashes: Extra ``{sha256_hex: tenant}`` entries (tests, programmatic setup).
         mtls_subjects: Extra ``{subject_or_cn: tenant}`` entries.
+        allow_empty: Start with no credentials at all (enrollment adds tenants at run time).
 
     Raises:
         ConfigError: unreadable/malformed files, or no way to authenticate anyone while
@@ -107,6 +140,7 @@ class TenantAuthenticator:
         mtls_tenants_file: Path | None = None,
         token_hashes: dict[str, str] | None = None,
         mtls_subjects: dict[str, str] | None = None,
+        allow_empty: bool = False,
     ):
         self.allow_unauthenticated = allow_unauthenticated
         self._tokens: list[tuple[bytes, str]] = []
@@ -125,7 +159,7 @@ class TenantAuthenticator:
             if not _TENANT_RE.match(tenant):
                 raise ConfigError("mtls_subjects values must be tenant ids")
             self._subjects[subj] = tenant
-        if not self._tokens and not self._subjects and not allow_unauthenticated:
+        if not self._tokens and not self._subjects and not allow_unauthenticated and not allow_empty:
             raise ConfigError(
                 "no tenant credentials configured: set tokens_file and/or mtls_tenants_file "
                 "(or allow_unauthenticated for development)"
@@ -133,6 +167,18 @@ class TenantAuthenticator:
         if allow_unauthenticated:
             log.warning("compute service accepts UNAUTHENTICATED requests (development mode)")
         log.info("tenant auth: %d token(s), %d certificate subject(s)", len(self._tokens), len(self._subjects))
+
+    def add_token_hash(self, digest_hex: str, tenant: str) -> None:
+        """Accept a new token (by SHA-256 hex) for ``tenant`` without a restart (enrollment)."""
+        if not _HEX64_RE.match(digest_hex.lower()) or not _TENANT_RE.match(tenant):
+            raise ConfigError("add_token_hash needs a sha256 hex digest and a tenant id")
+        self._tokens = [*self._tokens, (bytes.fromhex(digest_hex.lower()), tenant)]
+
+    def add_subject(self, subject: str, tenant: str) -> None:
+        """Map a client-certificate subject or CN to ``tenant`` without a restart (enrollment)."""
+        if not _TENANT_RE.match(tenant) or not subject:
+            raise ConfigError("add_subject needs a subject and a tenant id")
+        self._subjects = {**self._subjects, subject: tenant}
 
     @property
     def tenants(self) -> set[str]:

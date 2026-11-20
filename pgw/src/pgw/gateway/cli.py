@@ -1,4 +1,7 @@
-"""``pgw gateway`` commands: ``serve`` and ``keys create|list|revoke``.
+"""``pgw gateway`` commands: ``serve``, ``enroll`` and ``keys create|list|revoke``.
+
+``serve`` starts the first-run setup wizard (:mod:`pgw.gateway.setup`) instead of the API when no
+model is configured, a wizard run under ``config_dir`` is unfinished, or ``setup_mode`` is set.
 
 The top-level CLI (``pgw.cli``) mounts :data:`gateway_group`; it is also runnable as
 ``python -m pgw.gateway``. Exit codes: 0 ok, 1 :class:`pgw.core.PGWError`, 3 not implemented.
@@ -63,8 +66,19 @@ def serve(host: str | None, port: int | None) -> None:
 
     common = CommonSettings()
     configure_logging(common.log_level, json_lines=common.log_json)
-    settings = GatewaySettings()
-    app = create_app(settings)
+    settings = _settings_with_wizard_env(GatewaySettings())
+    from pgw.gateway.setup import should_run_setup
+
+    supervisor = None
+    if should_run_setup(settings):
+        app = _setup_app(settings, host or settings.host, port or settings.port)
+    else:
+        app = create_app(settings)
+        if settings.factory_env_file is not None:
+            from pgw.gateway.setup_jobs import FactorySupervisor, read_env_file
+
+            supervisor = FactorySupervisor(read_env_file(settings.factory_env_file))
+            supervisor.start()
 
     bind = host or settings.host
     if not settings.tls.enabled and bind not in ("127.0.0.1", "::1", "localhost"):
@@ -83,7 +97,88 @@ def serve(host: str | None, port: int | None) -> None:
             tls["ssl_ca_certs"] = str(settings.tls.ca_file)
             if settings.tls.require_client_cert:
                 tls["ssl_cert_reqs"] = ssl.CERT_REQUIRED
-    run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    try:
+        run_gateway_servers(app, settings, bind, port or settings.port, tls)
+    finally:
+        if supervisor is not None:
+            supervisor.stop()
+
+
+def _settings_with_wizard_env(settings: Any) -> Any:
+    """Settings plus ``<config_dir>/gateway.env`` written by a finished setup wizard.
+
+    Only read when the wizard manages ``config_dir`` (``setup/state.json`` exists); variables already
+    set in the environment win over the file.
+    """
+    import os
+
+    from pgw.gateway.config import GatewaySettings
+    from pgw.gateway.setup import load_setup_state
+    from pgw.gateway.setup_jobs import read_env_file
+
+    st = load_setup_state(settings.config_dir)
+    env_file = Path(settings.config_dir) / "gateway.env"
+    if st is None or not st.get("finished") or not env_file.is_file():
+        return settings
+    for k, v in read_env_file(env_file).items():
+        os.environ.setdefault(k, v)
+    return GatewaySettings()
+
+
+def _setup_app(settings: Any, host: str, port: int) -> Any:
+    from pgw.gateway.setup import create_setup_app, new_setup_token
+
+    token = new_setup_token()
+    app = create_setup_app(settings, setup_token=token)
+    shown = "localhost" if host in ("0.0.0.0", "::", "127.0.0.1") else host  # noqa: S104
+    scheme = "https" if settings.tls.enabled else "http"
+    banner = (
+        "\n" + "=" * 72 + "\n"
+        "PGW gateway setup mode: no model is configured yet.\n"
+        f"Open {scheme}://{shown}:{port}/console/ and enter this one-time setup token:\n\n"
+        f"    {token}\n\n"
+        "The token is valid until this process stops. Keep it private.\n" + "=" * 72 + "\n"
+    )
+    click.echo(banner)
+    logging.getLogger("pgw.gateway.setup").warning("setup mode: setup token printed to stdout; open /console/")
+    return app
+
+
+@gateway_group.command("enroll")
+@click.argument("code")
+@click.option("--config-dir", type=click.Path(path_type=Path, file_okay=False), required=True,
+              help="Where to write the credentials, models.json and enrollment.json")
+@click.option("--name", "gateway_name", default=None, help="Gateway name shown to the provider (default: host name)")
+@click.option("--packs-dir", type=click.Path(path_type=Path, file_okay=False), default=None,
+              help="Model pack directory referenced from models.json (default: <config-dir>/packs)")
+@click.option("--no-client-cert", is_flag=True, help="Do not request an mTLS client certificate")
+@click.option("--force", is_flag=True, help="Replace the files of an earlier enrollment")
+@_errors
+def enroll(code: str, config_dir: Path, gateway_name: str | None, packs_dir: Path | None, no_client_cert: bool,
+           force: bool) -> None:
+    """Join the compute service with a one-time enrollment code (PGW1-...).
+
+    The code is checked locally first (typos are caught before any network call). The service's
+    certificate authority must match the fingerprint in the code. The gateway's private key is
+    generated here and never leaves this machine.
+    """
+    from pgw.enroll.client import enroll_gateway
+
+    res = enroll_gateway(code, config_dir, gateway_name=gateway_name, force=force, packs_dir=packs_dir,
+                         request_client_cert=not no_client_cert, progress=lambda m: click.echo(f"  {m}", err=True))
+    click.echo(f"Enrolled as tenant {res.tenant} with {res.service_url}.")
+    for k, p in res.files.items():
+        click.echo(f"  wrote {p}" + (" (mode 0600)" if k in ("token", "client_key", "models") else ""))
+    click.echo("\nNext steps:")
+    for m in res.models:
+        packs = packs_dir or config_dir / "packs"
+        rev = f" --revision {m['revision']}" if m.get("revision") else ""
+        click.echo(f"  1. Build the model pack: pgw pack {m.get('hf_repo')} {packs / m['name']} "
+                   f"--name {m.get('pack_name') or m['name']}{rev}  (fingerprint must be {m['fingerprint'][:12]}...)")
+    click.echo(f"  2. Initialize the mask store: pgw maskstore init --root /var/lib/pgw/masks "
+               f"--key-file {config_dir / 'secrets' / 'maskstore.kek'}")
+    click.echo(f"  3. Start the gateway: PGW_GATEWAY_MODELS_FILE={res.files['models']} pgw gateway serve")
+    click.echo("  Or skip all of this: start 'pgw gateway serve' with no models and use the setup wizard at /console/.")
 
 
 def run_gateway_servers(app: Any, settings: Any, host: str, port: int, tls: dict[str, Any]) -> None:
