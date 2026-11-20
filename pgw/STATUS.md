@@ -393,6 +393,12 @@ final padding fix (bug 3) was not done. No real model shape is affected by that 
 6. Topology B packaging: Terraform modules (VPC, PrivateLink or PSC, KMS key, gateway node pool) and
    a customer runbook.
 7. Factory throughput: move the CSPRNG and digit split to the GPU to reach 500k or more slots/h on a T4.
+   *Implemented, not yet measured on a GPU:* `pgw.factory.gpu_prng` computes the ChaCha20 keystream
+   (key still derived on the CPU by HKDF) straight into the int8 digit planes of the GEMM operand, so
+   `r` never crosses the host bus. It is on by default on CUDA after a self-test against the CPU
+   expander (`PGW_FACTORY_GPU_PRNG=0` turns it off), and the output self-check re-derives its sampled
+   rows on the CPU. The Kaggle job `pgw-factory-gpu-prng` runs the CUDA byte-identity tests and the 7B
+   K32A12C27 slots/h comparison with the setting at 1 and at 0.
 8. Close the integrity gaps: rotate segments after an integrity failure, scan the soundness floor at
    start-up, and spot-check factory `W r` independently (T-29).
 9. Metadata hardening: implement `pad_rows_to` and the optional dummy rounds.

@@ -502,3 +502,21 @@ Behaviour changes other components and operators must know about:
   counter requirement). Status: [done]
 - pyproject: new optional extras `hsm`, `kms-aws`, `kms-gcp`, `kms-azure` for key-provider SDKs. Status: [done]
 - SPEC 13: Terraform for topology B marked planned (not shipped). STATUS.md added. Status: [done]
+
+## 2026-11-20 factory: GPU mask PRNG (STATUS "Factory throughput") -> factory, lead architect
+- What (additive, factory-internal; derivation SPEC 7.3 and the segment format are unchanged):
+  - `pgw.factory.gpu_prng`: Triton kernel (RFC 8439 ChaCha20, counter = the CPU path's seek block, nonce 0)
+    that writes ring elements mod 2^K, or their balanced int8 digit planes straight into the zero-padded
+    GEMM operand. The stream key is derived on the CPU (`SeedExpander.stream_key("r", linear)`), uploaded
+    as 8 words and zeroed after the linear; digit planes and digit products are zeroed after each chunk.
+    Plain-torch emulation (`chacha20_blocks_torch`, `ring_rows_torch`, `digit_planes_torch`) for tests.
+  - `RingKernel.plane_shape(rows)` / `matmul_planes(d8, rows, params)` (int8 backends): the second half of
+    `int8_ring_matmul`, bit-identical to `matmul`. `ring_vecmat` splits `u` on the weight's device.
+  - `MaskGenerator(..., gpu_prng=None, gpu_prng_impl="auto")`, `FactorySettings.gpu_prng` /
+    `PGW_FACTORY_GPU_PRNG` (`auto` default = on for `cuda_int8`; `0` off; `1` on). First use runs
+    `gpu_prng.self_test` against the CPU expander; failure logs an error and keeps the CPU path. With the
+    GPU path the output self-check takes its sampled `r` rows from the CPU expander (a keystream fault fails
+    the segment), and an `IntegrityError` there disables the GPU path for that generator.
+  - `GenerationStats.extra["gpu_prng"]`, `BenchmarkResult.gpu_prng`.
+- Status: [done] code + CPU tests (interpreter/emulation); CUDA tests and the T4 throughput numbers are in the
+  Kaggle job `pgw-factory-gpu-prng` (not run yet).

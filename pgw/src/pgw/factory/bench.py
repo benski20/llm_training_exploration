@@ -113,6 +113,8 @@ class BenchmarkResult:
     layers_measured: int
     layers_total: int
     gpu_name: str | None = None
+    #: ``r`` expanded on the GPU (:mod:`pgw.factory.gpu_prng`; ``PGW_FACTORY_GPU_PRNG``)
+    gpu_prng: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable form."""
@@ -217,8 +219,10 @@ def benchmark_preset(
     gen = MaskGenerator(pack, rp, device=device, backend=backend)
     seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, None, warmup)
     full_specs = [s for i in range(shape.layers) for s in shape.layer_specs(i)]
-    return _finish(shape.name, "preset", rp, gen.device, gen.backend, slots, seconds, gemm, check, segment_slots,
-                   slot_bytes(full_specs, rp), price_per_hour, layers, shape.layers)
+    res = _finish(shape.name, "preset", rp, gen.device, gen.backend, slots, seconds, gemm, check, segment_slots,
+                  slot_bytes(full_specs, rp), price_per_hour, layers, shape.layers)
+    res.gpu_prng = bool(gen.last_stats.extra.get("gpu_prng", False))
+    return res
 
 
 def benchmark_pack(
@@ -241,8 +245,10 @@ def benchmark_pack(
     rp = ring_from_setting(ring)
     gen = MaskGenerator(pack, rp, device=device, backend=backend)
     seconds, gemm, check = _time_generation(gen, slots, chunk_slots, checks, store, warmup)
-    return _finish(getattr(pack, "name", "pack"), "pack+store" if store is not None else "pack", rp, gen.device,
-                   gen.backend, slots, seconds, gemm, check, segment_slots, gen.bytes_per_slot, price_per_hour, 1, 1)
+    res = _finish(getattr(pack, "name", "pack"), "pack+store" if store is not None else "pack", rp, gen.device,
+                  gen.backend, slots, seconds, gemm, check, segment_slots, gen.bytes_per_slot, price_per_hour, 1, 1)
+    res.gpu_prng = bool(gen.last_stats.extra.get("gpu_prng", False))
+    return res
 
 
 def format_report(r: BenchmarkResult) -> str:
@@ -253,7 +259,8 @@ def format_report(r: BenchmarkResult) -> str:
     dev = f"{r.device} [{r.gpu_name}]" if r.gpu_name else r.device
     lines = [
         f"model            {r.model}{extrap}",
-        f"ring / device    {r.ring} on {dev} via {r.backend}",
+        f"ring / device    {r.ring} on {dev} via {r.backend}"
+        f"{' (r expanded on the GPU)' if r.gpu_prng else ''}",
         f"measured         {r.slots_measured} slots in {r.seconds:.3f}s (GEMM {100 * r.gemm_fraction:.0f}%)",
         f"throughput       {r.slots_per_second:,.1f} tokens/s = {r.tokens_per_hour:,.0f} tokens/hour",
         f"per token        {1e3 * r.seconds_per_token:.3f} ms, {r.bytes_per_token / 1e6:.2f} MB of masks",

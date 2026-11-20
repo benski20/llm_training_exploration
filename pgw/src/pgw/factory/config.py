@@ -98,6 +98,12 @@ class FactorySettings(PGWSettings):
     self_check_rows: int = Field(
         8, ge=-1, description="Rows per chunk whose W8.r output is verified before writing (-1 = all, 0 = off)"
     )
+    gpu_prng: Literal["auto"] | bool = Field(
+        "auto",
+        description="Expand mask rows r (ChaCha20 + digit split) on the factory GPU instead of the CPU: 'auto' = on "
+        "for CUDA factories once the kernel's self-test against the CPU expander passed, false = always CPU, "
+        "true = on (still self-tested; never used when the test fails). Same derivation and output",
+    )
     # ---- encrypted mask generation (pgw.hemask) -----------------------------------------------
     he_service_url: str | None = Field(
         None, description="Compute service URL: get W8.r from the provider on MLWE-encrypted masks instead of "

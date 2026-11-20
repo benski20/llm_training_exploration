@@ -12,6 +12,12 @@ Work is linear-major (the segment file layout is linear-major, SPEC 7.2): one we
 device at a time, which is what makes weight streaming for 70B-class models possible. With
 ``pipeline=True`` three stages overlap: ChaCha20 expansion of the next ``r`` chunk (thread), the
 ring GEMMs (caller thread; torch releases the GIL) and encryption/writing (writer thread).
+
+On CUDA the ChaCha20 expansion and the digit split run on the GPU instead
+(:mod:`pgw.factory.gpu_prng`, ``PGW_FACTORY_GPU_PRNG``): the stream key is derived on the CPU by the
+same HKDF code, the keystream is computed straight into the int8 digit planes of the GEMM operand, and
+``r`` never crosses the host bus. The kernel is self-tested against the CPU expander before first use
+and the output self-check re-derives its sampled rows on the CPU.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from pgw.core.prng import SEED_BYTES, SeedExpander, max_stream_rows, new_seed
 from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
+from pgw.factory import gpu_prng as _gp
 from pgw.factory.governor import Throttle
 from pgw.factory.kernels import RingKernel, resolve_backend, resolve_device, ring_vecmat
 from pgw.factory.streaming import WeightStreamer, auto_resident_bytes
@@ -143,7 +150,15 @@ class MaskGenerator:
             Freivalds check only covers ``W8 x_hat``. A kernel fault (e.g. a saturating int8 GEMM
             or a GPU bit flip) affects many rows, so a sample suffices. ``0`` disables the
             check, ``-1`` verifies every row (about 5% extra CPU time). A mismatch raises
-            :class:`pgw.core.IntegrityError` and the segment is aborted.
+            :class:`pgw.core.IntegrityError` and the segment is aborted. The rows of ``r`` it uses
+            are always the CPU expander's, so with the GPU PRNG a keystream fault fails it too.
+        gpu_prng: Expand ``r`` (ChaCha20 + digit split) on the GPU: ``None`` = ``PGW_FACTORY_GPU_PRNG``
+            (default ``auto``: on for ``cuda_int8``), ``False`` = CPU ChaCha20, ``True`` = on. Used only
+            after :func:`pgw.factory.gpu_prng.self_test` passed on the device (checked on first use; on
+            failure an error is logged and the CPU path is used). Never with ``remote``.
+        gpu_prng_impl: ``auto`` (the Triton kernel on CUDA). Tests may pass ``triton`` or ``torch`` with
+            ``gpu_prng=True`` to run the device path on a ``cpu_int8`` generator (Triton interpreter or
+            the torch emulation).
     """
 
     def __init__(
@@ -159,6 +174,8 @@ class MaskGenerator:
         memory_fraction: float = 0.85,
         self_check_rows: int = DEFAULT_SELF_CHECK_ROWS,
         remote: Any = None,
+        gpu_prng: bool | str | None = None,
+        gpu_prng_impl: str = "auto",
     ):
         self.pack = pack
         # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
@@ -192,6 +209,13 @@ class MaskGenerator:
         if self_check_rows < -1:
             raise ConfigError(f"self_check_rows must be -1 (all), 0 (off) or positive, got {self_check_rows}")
         self.self_check_rows = int(self_check_rows)
+        self.gpu_prng_requested = _gp.gpu_prng_setting(gpu_prng)
+        if gpu_prng_impl not in ("auto", "triton", "torch"):
+            raise ConfigError(f"gpu_prng_impl must be auto, triton or torch, got {gpu_prng_impl!r}")
+        self.gpu_prng_impl = gpu_prng_impl
+        self._dev_prng: str | None = None
+        self._dev_prng_resolved = False
+        self._dev_prng_lock = threading.Lock()
         self.last_stats = GenerationStats(backend=self.backend, device=str(self.device))
         self._lock = threading.Lock()  # one segment at a time per generator
         log.info(
@@ -226,6 +250,48 @@ class MaskGenerator:
     def tokens_per_second(self) -> float:
         """Measured throughput of the last run (slots/s)."""
         return self.last_stats.slots_per_second
+
+    # ---- GPU PRNG ------------------------------------------------------------------------------
+    def device_prng(self) -> str | None:
+        """Implementation used to expand ``r`` on the device (``"triton"``/``"torch"``), or ``None`` (CPU).
+
+        Resolved once, on first use: runs the GPU PRNG self-test (compiles the kernel) when it applies.
+        """
+        with self._dev_prng_lock:
+            if not self._dev_prng_resolved:
+                self._dev_prng = self._resolve_device_prng()
+                self._dev_prng_resolved = True
+            return self._dev_prng
+
+    def _resolve_device_prng(self) -> str | None:
+        want = self.gpu_prng_requested
+        if want is False or self.remote is not None:
+            return None
+        impl = self.gpu_prng_impl
+        if self.backend == "cuda_int8":
+            impl = "triton" if impl == "auto" else impl
+        elif self.backend == "cpu_int8" and want is True and impl != "auto":
+            pass  # test hook: the device path on CPU tensors
+        else:
+            if want is True:
+                log.info("GPU mask PRNG requested but the factory runs %s on %s; using CPU ChaCha20",
+                         self.backend, self.device)
+            return None
+        if impl == "triton" and not _gp.triton_available():
+            (log.warning if want else log.info)("GPU mask PRNG: triton is not available; using CPU ChaCha20")
+            return None
+        if not _gp.self_test(self.device, impl, (self.ring.k,)):  # type: ignore[arg-type]
+            return None  # self_test logged the error
+        log.info("mask generator: r expansion and digit split on %s (%s)", self.device, impl)
+        return impl
+
+    def _disable_device_prng(self, why: str) -> None:
+        with self._dev_prng_lock:
+            if self._dev_prng is not None:
+                log.error("mask generator: disabling the GPU mask PRNG on %s after %s; using CPU ChaCha20",
+                          self.device, why)
+            self._dev_prng = None
+            self._dev_prng_resolved = True
 
     # ---- generation --------------------------------------------------------------------------
     @staticmethod
@@ -295,6 +361,9 @@ class MaskGenerator:
         stats = GenerationStats(slots=slots, linears=len(specs), backend=self.backend, device=str(self.device))
         self.last_stats = stats
         rng_time = [0.0]
+        dev_prng = self.device_prng() if self.remote is None else None
+        stats.extra["gpu_prng"] = dev_prng is not None
+        n_limbs = _gp.limbs(k)
 
         def make_r(task: tuple[int, int, int]) -> torch.Tensor:
             i, start, rows = task
@@ -308,7 +377,9 @@ class MaskGenerator:
             rng_time[0] += time.perf_counter() - t0
             return r
 
-        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-factory-rng") if self.pipeline else None
+        pool = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-factory-rng")
+                if self.pipeline and dev_prng is None else None)
+        stream: _gp.DeviceRingStream | None = None
         pending: Future[torch.Tensor] | None = None
         t_start = time.perf_counter()
         ti = 0
@@ -338,28 +409,50 @@ class MaskGenerator:
                     cu, cw = _u64(v.t()), _u64(ring_vecmat(v, w, self.ring).t())
                     v.zero_()
                 stats.check_seconds += time.perf_counter() - t0
+                if dev_prng is not None:
+                    # stream key derived on the CPU (SPEC 7.3, unchanged); expansion on the device
+                    stream = _gp.DeviceRingStream(exp.stream_key("r", lid.key), spec.in_features, k, w.device,
+                                                  dev_prng)  # type: ignore[arg-type]
                 for start in range(0, slots, chunk_slots):
                     task = tasks[ti]
                     ti += 1
-                    if pending is not None:
-                        r = pending.result()
-                        pending = pool.submit(make_r, tasks[ti]) if pool is not None and ti < len(tasks) else None
+                    r: torch.Tensor | None = None
+                    if stream is not None:
+                        t0 = time.perf_counter()
+                        p, np_ = kern.plane_shape(task[2])
+                        d8 = torch.zeros((n_limbs * p, np_), dtype=torch.int8, device=w.device)
+                        stream.digit_planes(start, task[2], d8)
+                        rng_time[0] += time.perf_counter() - t0
+                        t0 = time.perf_counter()
+                        try:
+                            wr = kern.matmul_planes(d8, task[2], self.ring)
+                        finally:
+                            d8.zero_()
+                            del d8
                     else:
-                        r = make_r(task)
-                    t0 = time.perf_counter()
-                    wr = kern.matmul(r, self.ring)
+                        if pending is not None:
+                            r = pending.result()
+                            pending = pool.submit(make_r, tasks[ti]) if pool is not None and ti < len(tasks) else None
+                        else:
+                            r = make_r(task)
+                        t0 = time.perf_counter()
+                        wr = kern.matmul(r, self.ring)
                     wr = wr.cpu() if cuda else wr
                     dt = time.perf_counter() - t0
                     if cu is not None and cw is not None:
                         t1 = time.perf_counter()
                         try:
-                            stats.self_checked_rows += self._self_check(lid, r, wr, cu, cw)
-                        except BaseException:
-                            r.zero_()
+                            stats.self_checked_rows += self._self_check(lid, r, wr, cu, cw, stream=stream, row0=start)
+                        except BaseException as exc:
+                            if r is not None:
+                                r.zero_()
                             wr.zero_()
+                            if stream is not None and isinstance(exc, IntegrityError):
+                                self._disable_device_prng("a failed output self-check")
                             raise
                         stats.check_seconds += time.perf_counter() - t1
-                    r.zero_()
+                    if r is not None:
+                        r.zero_()
                     del r
                     stats.gemm_seconds += dt
                     stats.wr_bytes += wr.numel() * self.ring.bytes_per_element
@@ -368,8 +461,13 @@ class MaskGenerator:
                         thr.account(dt, task[2] * spec.out_features * spec.in_features / total_mn)
                         stats.throttle_seconds += thr.slept_s - before
                     yield GeneratedLinear(lid, start, wr, uw if start == 0 else None)
+                if stream is not None:
+                    stream.wipe()
+                    stream = None
                 del kern, w
         finally:
+            if stream is not None:
+                stream.wipe()
             if pending is not None:
                 pending.cancel()
             if pool is not None:
@@ -379,10 +477,13 @@ class MaskGenerator:
             stats.rng_seconds = rng_time[0]
             stats.seconds = time.perf_counter() - t_start
 
-    def _self_check(self, lid: LinearId, r: torch.Tensor, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray) -> int:
+    def _self_check(self, lid: LinearId, r: torch.Tensor | None, wr: torch.Tensor, cu: np.ndarray, cw: np.ndarray,
+                    *, stream: _gp.DeviceRingStream | None = None, row0: int = 0) -> int:
         """Verify ``wr[t] @ cu == r[t] @ cw (mod 2^K)`` on sampled rows; return the rows checked.
 
         ``cu`` is ``(m, c)`` (check vectors as columns) and ``cw`` is ``(n, c)`` (``u W8`` transposed).
+        With the GPU PRNG (``r is None``) the sampled rows ``row0 + t`` of ``r`` are re-derived by the CPU
+        expander from ``stream``'s key, so a wrong GPU keystream fails the check like a wrong GEMM.
 
         uint64 arithmetic wraps mod ``2^64``, which is exact mod ``2^K``. Row selection is not
         secret (it only has to be unpredictable to a faulty kernel, not to an adversary).
@@ -390,15 +491,18 @@ class MaskGenerator:
         Raises:
             IntegrityError: the GEMM output (or ``u W8``) is wrong; the segment must be discarded.
         """
-        rows = int(r.shape[0])
+        rows = int(wr.shape[0])
         n_check = rows if self.self_check_rows < 0 else min(rows, self.self_check_rows)
         if n_check <= 0:
             return 0
-        if n_check < rows:
-            idx = torch.randperm(rows)[:n_check]
-            rs, ws = r.index_select(0, idx), wr.index_select(0, idx)
+        idx = torch.randperm(rows)[:n_check] if n_check < rows else torch.arange(rows)
+        ws = wr.index_select(0, idx) if n_check < rows else wr
+        if r is None:
+            if stream is None:
+                raise PGWError("self-check needs r or its stream")
+            rs = stream.cpu_rows(row0, idx)
         else:
-            rs, ws = r, wr
+            rs = r.index_select(0, idx) if n_check < rows else r
         try:
             lhs = (_u64(ws) @ cu) & np.uint64(self.ring.mask)
             rhs = (_u64(rs) @ cw) & np.uint64(self.ring.mask)

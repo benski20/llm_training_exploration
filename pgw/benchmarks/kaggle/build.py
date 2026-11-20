@@ -131,6 +131,29 @@ JOBS: dict[str, dict] = {
         {"kind": "shell", "name": "gpu_kernel_bench",
          "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300", "timeout": 1800},
     ]},
+    # factory r expansion on the GPU (ChaCha20 + digit split in one Triton kernel): byte-identity vs the CPU
+    # expander on CUDA, then 7B (K32A12C27) factory slots/h with PGW_FACTORY_GPU_PRNG=1 vs 0 (same seeds/work).
+    # Target (STATUS "Factory throughput"): >= 500k slots/h on a T4 (was 169k with CPU ChaCha20).
+    "pgw-factory-gpu-prng": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                         "tests/wire", "tests/service", "tests/console"], "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_factory_gpu",
+         "args": ["tests/factory", "-m", "gpu", "-v", "-rs", "--timeout", "1800"], "timeout": 2400},
+        {"kind": "pytest", "name": "pytest_gpu_prng_all",
+         "args": ["tests/factory/test_gpu_prng.py", "tests/factory/test_generator.py",
+                  "tests/factory/test_self_check.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},
+        *[{"kind": "shell", "name": f"bench_factory_7b_k32_l{layers}_gpu_prng{flag}",
+           "cmd": f"PGW_FACTORY_GPU_PRNG={flag} python -m pgw.cli bench factory --model qwen2.5-7b --ring K32A12C27 "
+                  f"--device cuda --layers {layers} --slots 1024 --chunk-slots 256 --json",
+           "timeout": 2400}
+          for layers in (2, 28) for flag in (1, 0)],
+        *[{"kind": "shell", "name": f"bench_factory_7b_k40_gpu_prng{flag}",
+           "cmd": f"PGW_FACTORY_GPU_PRNG={flag} python -m pgw.cli bench factory --model qwen2.5-7b --ring K40A12 "
+                  "--device cuda --layers 2 --slots 1024 --chunk-slots 256 --json",
+           "timeout": 2400}
+          for flag in (1, 0)],
+    ]},
     # 7B quality of the 32-bit capped ring vs today's K40A12 (int8 weights + per-token activations on GPU)
     "pgw-quality-7b": {"steps": [
         {"kind": "shell", "name": "quality_7b",

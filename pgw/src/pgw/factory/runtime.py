@@ -77,7 +77,8 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
             remote = build_he_backend(settings, pack, ring) if settings.he_service_url else None
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
-                              self_check_rows=settings.self_check_rows, remote=remote)
+                              self_check_rows=settings.self_check_rows, remote=remote,
+                              gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng))
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g

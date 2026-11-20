@@ -578,7 +578,10 @@ live reservations are tracked process-wide. Rollback witness and partner signatu
 
 **Factory (7.4).** Self-check before each chunk is written: sampled rows verify
 `u·(W8 r) == (u W8)·r (mod 2^K)` (`PGW_FACTORY_SELF_CHECK_ROWS`, default 8, -1 all, 0 off); a mismatch
-aborts the segment (`IntegrityError`). `cpu_int8` backend behind an exactness probe. Recipient keys
+aborts the segment (`IntegrityError`). On CUDA the `r` stream (7.3, key derived on the CPU) is expanded
+by a GPU ChaCha20 kernel straight into the GEMM's digit planes (`PGW_FACTORY_GPU_PRNG`, default on after a
+self-test against the CPU expander; same bytes, the self-check uses CPU-derived rows). `cpu_int8` backend
+behind an exactness probe. Recipient keys
 are validated (small-order X25519 points refused). `ExportSink.recover()` at every start publishes
 segments stranded in staging and signs unsigned outbox segments. `Throttle.max_slots_per_hour`
 accumulates no idle credit. Partner signing: 7.7.

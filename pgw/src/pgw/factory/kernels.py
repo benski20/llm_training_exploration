@@ -36,7 +36,15 @@ import torch
 
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams, balanced_digits
-from pgw.core.ringmm import PreparedWeight, _shift_mod, cpu_int8_available, cpu_int8_fast, int8_ring_matmul
+from pgw.core.ringmm import (
+    PreparedWeight,
+    _combine_digit_rows,
+    _shift_mod,
+    cpu_int8_available,
+    cpu_int8_fast,
+    int8_digit_gemm,
+    int8_ring_matmul,
+)
 
 __all__ = [
     "FACTORY_BACKENDS",
@@ -176,6 +184,52 @@ class RingKernel:
 
     __call__ = matmul
 
+    @property
+    def supports_planes(self) -> bool:
+        """True if :meth:`matmul_planes` is available (the int8 digit-GEMM backends)."""
+        return self.backend in ("cuda_int8", "cpu_int8")
+
+    def plane_shape(self, rows: int) -> tuple[int, int]:
+        """``(P, NP)``: padded rows and inner dimension of one digit plane for a batch of ``rows``.
+
+        The stacked operand of :meth:`matmul_planes` is int8 ``(ceil(K/8) * P, NP)``, zero outside the
+        ``rows x n`` block of each plane: the same operand :meth:`matmul` builds from ``r`` (on CUDA rows
+        are padded to at least 32 and a multiple of 8, columns to the padded weight).
+        """
+        if not self.supports_planes:
+            raise ConfigError(f"digit-plane GEMM needs an int8 backend, not {self.backend}")
+        assert self._w is not None
+        if self.backend == "cuda_int8":
+            return max(_CUDA_MIN_ROWS, -(-rows // 8) * 8), int(self._w.shape[1])
+        return rows, self.in_features
+
+    def matmul_planes(self, d8: torch.Tensor, rows: int, params: RingParams) -> torch.Tensor:
+        """``r @ W8^T mod 2^K`` (int64 ``(rows, m)`` on the weight's device) from the digit planes of ``r``.
+
+        ``d8`` is the stacked balanced base-256 digit operand of :meth:`plane_shape` (built on the device
+        by :class:`pgw.factory.gpu_prng.DeviceRingStream`, so ``r`` never crosses the host bus). Bit-identical
+        to :meth:`matmul` on the same ``r``: it is the second half of :func:`pgw.core.ringmm.int8_ring_matmul`.
+        The int64 digit products are zeroed after they are combined.
+        """
+        if not self.supports_planes:
+            raise ConfigError(f"digit-plane GEMM needs an int8 backend, not {self.backend}")
+        assert self._w is not None
+        n_l = -(-params.k // 8)
+        p, np_ = self.plane_shape(rows)
+        if d8.dtype != torch.int8 or tuple(d8.shape) != (n_l * p, np_) or d8.device != self._w.device:
+            raise ShapeError(f"digit planes must be int8 {(n_l * p, np_)} on {self._w.device}, got {d8.dtype} "
+                             f"{tuple(d8.shape)} on {d8.device}")
+        if rows == 0:
+            return torch.zeros((0, self.out_features), dtype=torch.int64, device=self._w.device)
+        y = int8_digit_gemm(d8, self._w)
+        try:
+            acc = _combine_digit_rows(y, p, n_l, 8, params.k)
+        finally:
+            y.zero_()
+        if p == rows and int(acc.shape[1]) == self.out_features:
+            return acc
+        return acc[:rows, : self.out_features].contiguous()
+
 
 def _vecmat_digit_bits(inner: int, k: int) -> int:
     """Widest balanced digit with ``2^(b-1) * 128 * inner <= 2^52``, balanced across limbs."""
@@ -222,7 +276,8 @@ def ring_vecmat(
         return int8_ring_matmul(u.to(torch.int64), w8.t(), k)
     rows = max(1, min(m, _VECMAT_CHUNK_ELEMS // max(1, n)))
     bits = _vecmat_digit_bits(rows, k)
-    digits = [d.to(dev, torch.float64) for d in balanced_digits(u.to(torch.int64) & mask, k, bits)]
+    # split on the weight's device (no host round trip of the digits)
+    digits = [d.to(torch.float64) for d in balanced_digits(u.to(dev, torch.int64) & mask, k, bits)]
     acc = torch.zeros((c, n), dtype=torch.int64, device=dev)
     for r0 in range(0, m, rows):
         r1 = min(m, r0 + rows)
