@@ -276,6 +276,11 @@ class BatchScheduler:
                 "compute queue is full", details={"retry_after_s": 1.0, "queued_rows": self._queued_rows}
             )
         key = (fingerprint, ring.name, linear)
+        if rows <= self.inline_max_rows and self.window_s <= 0 and key not in self._open:
+            dev = str(kernel.device)
+            d = self._devices.get(dev) or self._ensure_device(dev)
+            if d.busy == 0 and not d.ready:  # idle device: no batch to join, nothing to wait for
+                return self._run_inline(d, kernel, ring, x_hat, rows, compact)
         if rows <= self.max_batch_rows:  # the common case: one chunk, await its future directly
             fut = self._add(key, kernel, ring, x_hat, compact)
             self.stats.submitted_rows += rows
@@ -301,6 +306,39 @@ class BatchScheduler:
             batch_rows=max(r[1].batch_rows for r in results),
         )
         return (ys[0] if len(ys) == 1 else torch.cat(ys, dim=0)), timing
+
+    def _run_inline(self, d: _Device, kernel: ComputeKernel, ring: RingParams, x: torch.Tensor, rows: int,
+                    compact: bool) -> tuple[torch.Tensor, BatchTiming]:
+        """A one-submission batch on an idle device, run synchronously on the event loop.
+
+        What :meth:`_add` + :meth:`_start` (inline branch) + :meth:`_resolve` do for a batch that
+        starts and finishes at once, without the batch, entry and future objects: same stats,
+        metrics, error mapping and results. Nothing can join it (it is never open), and no other
+        batch can start on the device while it runs (the event loop is busy with it).
+        """
+        t_enq = time.perf_counter()
+        self.stats.submitted_rows += rows
+        d.busy += 1
+        try:
+            t_start = time.perf_counter()
+            y, secs = _run_kernel(kernel, (x,), ring)
+        except Exception as exc:
+            self.stats.failed_batches += 1
+            if isinstance(exc, PGWError):
+                raise
+            log.error("kernel failed for %s (%d rows) on %s", kernel.linear, rows, kernel.device, exc_info=exc)
+            raise PGWError("compute kernel failed") from exc
+        finally:
+            d.busy -= 1
+        st = self.stats
+        st.batches += 1
+        st.batched_rows += rows
+        if rows > st.max_batch_rows_seen:
+            st.max_batch_rows_seen = rows
+        if self.metrics is not None:
+            self.metrics.batch(kernel.kind, kernel.backend, rows, secs)
+        timing = BatchTiming(queue_ms=(t_start - t_enq) * 1e3, compute_ms=secs * 1e3, batch_rows=rows)
+        return (y if compact else from_compact(y, ring.k)), timing
 
     def _add(
         self, key: tuple[str, str, str], kernel: ComputeKernel, ring: RingParams, x: torch.Tensor,
@@ -387,13 +425,13 @@ class BatchScheduler:
         parts = [e.x for e in live]  # concatenated in the worker thread, off the event loop
         if b.live_rows <= self.inline_max_rows and d.busy == 0 and not d.ready:
             # idle device, small batch: run it here (no pool hand-off and wake-up in either direction)
-            res: _CFuture[tuple[torch.Tensor, float]] = _CFuture()
             d.busy += 1
             try:
-                res.set_result(_run_kernel(b.kernel, parts, b.ring))
+                out = _run_kernel(b.kernel, parts, b.ring)
             except Exception as exc:
-                res.set_exception(exc)
-            self._finish(d, b, t_start, res)
+                self._finish(d, b, t_start, None, exc)
+            else:
+                self._finish(d, b, t_start, out, None)
             return
         try:
             cf = d.executor.submit(_run_kernel, b.kernel, parts, b.ring)
@@ -410,32 +448,42 @@ class BatchScheduler:
 
         def done(f: _CFuture[tuple[torch.Tensor, float]]) -> None:  # runs in the worker thread
             try:
-                loop.call_soon_threadsafe(self._finish, d, b, t_start, f)
+                loop.call_soon_threadsafe(self._finish_future, d, b, t_start, f)
             except RuntimeError:  # event loop already closed (process shutting down)
                 pass
 
         cf.add_done_callback(done)
 
-    def _finish(self, d: _Device, b: _Batch, t_start: float, f: _CFuture[tuple[torch.Tensor, float]]) -> None:
-        """Kernel finished (on the event loop): resolve the callers, then start the next ready batch."""
+    def _finish_future(self, d: _Device, b: _Batch, t_start: float, f: _CFuture[tuple[torch.Tensor, float]]) -> None:
+        """Pool completion (on the event loop): unwrap the future and :meth:`_finish`."""
+        if f.cancelled():
+            self._finish(d, b, t_start, None,
+                         ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0}))
+            return
+        exc = f.exception()
+        self._finish(d, b, t_start, None if exc is not None else f.result(), exc)
+
+    def _finish(self, d: _Device, b: _Batch, t_start: float, out: tuple[torch.Tensor, float] | None,
+                exc: BaseException | None) -> None:
+        """Kernel finished (on the event loop): resolve the callers, then start the next ready batch.
+
+        Exactly one of ``out`` (``(y, seconds)``) and ``exc`` is set.
+        """
         d.busy -= 1
         d.running.discard(b)
         try:
             if not b.aborted:
-                self._resolve(b, t_start, f)
+                self._resolve(b, t_start, out, exc)
         finally:
             self._batch_done()
             self._pump(d)
 
-    def _resolve(self, b: _Batch, t_start: float, f: _CFuture[tuple[torch.Tensor, float]]) -> None:
+    def _resolve(self, b: _Batch, t_start: float, out: tuple[torch.Tensor, float] | None,
+                 exc: BaseException | None) -> None:
         live, rows = b.live, b.live_rows
         self._queued_rows -= rows
-        exc: BaseException | None
-        if f.cancelled():
-            exc = ServiceUnavailableError("service is shutting down", details={"retry_after_s": 1.0})
-        else:
-            exc = f.exception()
-        if exc is not None:
+        if exc is not None or out is None:
+            exc = exc if exc is not None else PGWError("compute kernel returned no result")
             self.stats.failed_batches += 1
             err = exc if isinstance(exc, PGWError) else PGWError("compute kernel failed")
             if not isinstance(exc, PGWError):
@@ -444,7 +492,7 @@ class BatchScheduler:
                 if not e.fut.done():
                     e.fut.set_exception(err)
             return
-        y, secs = f.result()
+        y, secs = out
         self.stats.batches += 1
         self.stats.batched_rows += rows
         self.stats.max_batch_rows_seen = max(self.stats.max_batch_rows_seen, rows)

@@ -112,6 +112,8 @@ async def test_stream_exact_and_multiplexed(serve: Any) -> None:
         assert resp.request_id == req.request_id
         _check(resp, req, xs, srv.handler)
     assert client.stats.stream_opens == 1 and client.stats.stream_requests == 16
+    # replies were dispatched straight from the connection (no reader queue)
+    assert getattr(client._channels[asyncio.get_running_loop()].ws, "pgw_direct", False)
     assert all(code is None for _, code in srv.handler.done)  # metrics hook ran for every frame
     # identical to the HTTP path
     http = _client(srv.url, stream=False)
@@ -213,3 +215,33 @@ def test_sync_api_uses_the_stream(serve: Any) -> None:
         _check(client.compute_sync(req), req, xs, srv.handler)
     assert client.stats.stream_requests == 3 and client.stats.stream_opens == 1
     client.close()
+
+
+async def test_direct_channel_closes_on_a_text_frame_or_garbage() -> None:
+    """Replies the channel cannot use fail every waiter and close the connection."""
+    from pgw.wire.client import _StreamChannel
+
+    class _WS:
+        pgw_direct = True
+        pgw_sink: Any = None
+        closed = False
+
+        async def wait_closed(self) -> None:
+            await asyncio.sleep(3600)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    for bad in ("text", b"\xc1 not msgpack"):
+        ws = _WS()
+        ch = _StreamChannel(ws, 1 << 20)
+        assert ws.pgw_sink is not None
+        fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        ch.pending["r1"] = [fut]
+        ws.pgw_sink(bad)
+        with pytest.raises(ServiceUnavailableError):
+            fut.result()
+        assert ch.closed and ws.pgw_sink is None
+        await asyncio.sleep(0)
+        assert ws.closed
+        ch.reader.cancel()

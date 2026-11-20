@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import struct
 from collections.abc import Callable, Mapping
 from typing import Any, TypeVar, cast
 
@@ -169,8 +170,122 @@ def encode_message(msg: object) -> bytes:
     Raises:
         TypeError: ``msg`` is not a message dataclass (a programming error).
     """
+    # Compute requests/responses (one per masked round trip) are framed by hand: the payload is
+    # copied once into the output instead of into msgpack's growing pack buffer, and no dicts are
+    # built. The bytes are identical to the generic path (tests compare both).
+    tm = type(msg)
+    if tm is ComputeRequest or tm is ComputeResponse:
+        fast = _encode_compute(cast(ComputeRequest | ComputeResponse, msg))
+        if fast is not None:
+            return fast
     out = msgpack.packb(message_to_dict(msg), use_bin_type=True)
     return cast(bytes, out)
+
+
+_U64 = 1 << 64
+_FLOAT64 = struct.Struct(">d")
+
+
+def _mp_uint(v: int) -> bytes:
+    if v < 0x80:
+        return bytes((v,))
+    if v < 0x100:
+        return b"\xcc" + bytes((v,))
+    if v < 0x10000:
+        return b"\xcd" + v.to_bytes(2, "big")
+    if v < 0x100000000:
+        return b"\xce" + v.to_bytes(4, "big")
+    return b"\xcf" + v.to_bytes(8, "big")
+
+
+def _mp_str(s: str) -> bytes:
+    b = s.encode("utf-8")
+    n = len(b)
+    if n < 32:
+        return bytes((0xA0 | n,)) + b
+    if n < 0x100:
+        return b"\xd9" + bytes((n,)) + b
+    if n < 0x10000:
+        return b"\xda" + n.to_bytes(2, "big") + b
+    return b"\xdb" + n.to_bytes(4, "big") + b
+
+
+def _mp_bin_header(n: int) -> bytes:
+    if n < 0x100:
+        return b"\xc4" + bytes((n,))
+    if n < 0x10000:
+        return b"\xc5" + n.to_bytes(2, "big")
+    return b"\xc6" + n.to_bytes(4, "big")
+
+
+def _mp_array_header(n: int) -> bytes:
+    if n < 16:
+        return bytes((0x90 | n,))
+    if n < 0x10000:
+        return b"\xdc" + n.to_bytes(2, "big")
+    return b"\xdd" + n.to_bytes(4, "big")
+
+
+def _uint_ok(*vals: object) -> bool:
+    return all(type(v) is int and 0 <= v < _U64 for v in vals)
+
+
+def _str_ok(*vals: object) -> bool:
+    return all(type(v) is str for v in vals)
+
+
+def _payload(b: object) -> bytes | bytearray | memoryview | None:
+    """A bin payload usable as-is (``None``: let the generic encoder handle it)."""
+    if type(b) is bytes or type(b) is bytearray:
+        return b
+    if isinstance(b, memoryview) and b.c_contiguous:
+        return b.cast("B")
+    return None
+
+
+_K_V, _K_TYPE, _K_ID, _K_FP, _K_RING, _K_ITEMS, _K_DEADLINE = (
+    _mp_str(k) for k in ("v", "type", "id", "fp", "ring", "items", "deadline_ms"))
+_K_LINEAR, _K_ROWS, _K_XHAT, _K_YHAT, _K_TIMING = (_mp_str(k) for k in ("linear", "rows", "x_hat", "y_hat", "timing"))
+_V_COMPUTE, _V_COMPUTE_RESULT = _mp_str("compute"), _mp_str("compute_result")
+_K_QUEUE, _K_COMPUTE_MS, _K_BATCH_ROWS = (_mp_str(k) for k in ("queue_ms", "compute_ms", "batch_rows"))
+
+
+def _encode_compute(msg: ComputeRequest | ComputeResponse) -> bytes | None:
+    """msgpack bytes of a compute request/response, identical to ``packb(message_to_dict(msg))``;
+    ``None`` when a field is outside what this encoder handles (the generic path then runs)."""
+    parts: list[bytes | bytearray | memoryview] = []
+    if isinstance(msg, ComputeRequest):
+        if (not _uint_ok(msg.version) or (msg.deadline_ms is not None and not _uint_ok(msg.deadline_ms))
+                or not _str_ok(msg.request_id, msg.fingerprint, msg.ring)):
+            return None
+        parts += [b"\x87" if msg.deadline_ms is not None else b"\x86",
+                  _K_V, _mp_uint(msg.version), _K_TYPE, _V_COMPUTE, _K_ID, _mp_str(msg.request_id),
+                  _K_FP, _mp_str(msg.fingerprint), _K_RING, _mp_str(msg.ring),
+                  _K_ITEMS, _mp_array_header(len(msg.items))]
+        for it in msg.items:
+            data = _payload(it.x_hat)
+            if data is None or not _uint_ok(it.rows) or not _str_ok(it.linear):
+                return None
+            parts += [b"\x83", _K_LINEAR, _mp_str(it.linear), _K_ROWS, _mp_uint(it.rows),
+                      _K_XHAT, _mp_bin_header(len(data)), data]
+        if msg.deadline_ms is not None:
+            parts += [_K_DEADLINE, _mp_uint(msg.deadline_ms)]
+        return b"".join(parts)
+    t = msg.timing
+    if (not _uint_ok(msg.version, t.batch_rows) or type(t.queue_ms) is not float
+            or type(t.compute_ms) is not float or not _str_ok(msg.request_id)):
+        return None
+    parts += [b"\x85", _K_V, _mp_uint(msg.version), _K_TYPE, _V_COMPUTE_RESULT, _K_ID, _mp_str(msg.request_id),
+              _K_ITEMS, _mp_array_header(len(msg.items))]
+    for r in msg.items:
+        data = _payload(r.y_hat)
+        if data is None or not _uint_ok(r.rows) or not _str_ok(r.linear):
+            return None
+        parts += [b"\x83", _K_LINEAR, _mp_str(r.linear), _K_ROWS, _mp_uint(r.rows),
+                  _K_YHAT, _mp_bin_header(len(data)), data]
+    parts += [_K_TIMING, b"\x83", _K_QUEUE, b"\xcb" + _FLOAT64.pack(t.queue_ms),
+              _K_COMPUTE_MS, b"\xcb" + _FLOAT64.pack(t.compute_ms), _K_BATCH_ROWS, _mp_uint(t.batch_rows)]
+    return b"".join(parts)
 
 
 def encode_error_json(err: ErrorResponse) -> bytes:
@@ -314,7 +429,92 @@ def _linear(v: Any, what: str) -> str:
 # ---------------------------------------------------------------------------------------------
 # per-type parsers (input: the top-level map, already checked for "v" and "type")
 # ---------------------------------------------------------------------------------------------
+# Fast paths for the two per-round-trip messages: the same checks as the generic parsers below,
+# without building context strings for error messages that are not raised. Anything they do not
+# accept as-is (including every invalid message) goes to the generic parser, which raises the
+# precise error.
+_RING_CANON: dict[str, str] = {}
+_MAX_DEADLINE_MS = 7 * 24 * 3600 * 1000
+
+
+def _ring_canon(v: object) -> str | None:
+    if type(v) is not str:
+        return None
+    hit = _RING_CANON.get(v)
+    if hit is None and len(v) <= _MAX_RING_LEN:
+        try:
+            hit = RingParams.from_name(v).name
+        except ConfigError:
+            return None
+        if len(_RING_CANON) < 64:
+            _RING_CANON[v] = hit
+    return hit
+
+
+def _ok_str(v: object, max_len: int, pattern: re.Pattern[str]) -> bool:
+    return type(v) is str and len(v) <= max_len and pattern.match(v) is not None
+
+
+def _fast_compute_request(d: dict[str, Any], v: int) -> ComputeRequest | None:
+    items_raw = d.get("items")
+    rid, fp = d.get("id"), d.get("fp")
+    ring = _ring_canon(d.get("ring"))
+    if (type(items_raw) is not list or not items_raw or ring is None or not _ok_str(rid, _MAX_ID_LEN, _ID_RE)
+            or not _ok_str(fp, 64, _FP_RE)):
+        return None
+    deadline = d.get("deadline_ms")
+    if deadline is not None and (type(deadline) is not int or not 0 <= deadline <= _MAX_DEADLINE_MS):
+        return None
+    items = []
+    for raw in items_raw:
+        if type(raw) is not dict:
+            return None
+        linear, rows, x_hat = raw.get("linear"), raw.get("rows"), raw.get("x_hat")
+        if (type(rows) is not int or rows < 1 or type(x_hat) is not bytes
+                or not _ok_str(linear, _MAX_LINEAR_LEN, _LINEAR_RE)):
+            return None
+        items.append(ComputeItem(linear, rows, x_hat))  # type: ignore[arg-type]
+    return ComputeRequest(request_id=rid, fingerprint=fp, ring=ring, items=tuple(items),  # type: ignore[arg-type]
+                          deadline_ms=deadline, version=v)
+
+
+def _fast_ms(x: object) -> float | None:
+    if type(x) is float:
+        return x if math.isfinite(x) else None
+    return float(x) if type(x) is int else None
+
+
+def _fast_compute_response(d: dict[str, Any], v: int) -> ComputeResponse | None:
+    items_raw, rid, t = d.get("items"), d.get("id"), d.get("timing")
+    if type(items_raw) is not list or not _ok_str(rid, _MAX_ID_LEN, _ID_RE):
+        return None
+    if t is None:
+        timing = ServerTiming()
+    else:
+        if type(t) is not dict:
+            return None
+        q, c, b = _fast_ms(t.get("queue_ms", 0.0)), _fast_ms(t.get("compute_ms", 0.0)), t.get("batch_rows", 0)
+        if q is None or c is None or type(b) is not int or b < 0:
+            return None
+        timing = ServerTiming(queue_ms=q, compute_ms=c, batch_rows=b)
+    items = []
+    for raw in items_raw:
+        if type(raw) is not dict:
+            return None
+        linear, rows, y_hat = raw.get("linear"), raw.get("rows"), raw.get("y_hat")
+        if (type(rows) is not int or rows < 1 or type(y_hat) is not bytes
+                or not _ok_str(linear, _MAX_LINEAR_LEN, _LINEAR_RE)):
+            return None
+        items.append(ComputeResult(linear, rows, y_hat))  # type: ignore[arg-type]
+    return ComputeResponse(request_id=rid, items=tuple(items), timing=timing, version=v)  # type: ignore[arg-type]
+
+
 def _parse_compute_request(d: dict[str, Any], v: int) -> ComputeRequest:
+    fast = _fast_compute_request(d, v)
+    return fast if fast is not None else _parse_compute_request_generic(d, v)
+
+
+def _parse_compute_request_generic(d: dict[str, Any], v: int) -> ComputeRequest:
     items_raw = _list(_req(d, "items", ""), "items")
     if not items_raw:
         raise ProtocolError("compute request has no items")
@@ -354,6 +554,11 @@ def _parse_timing(raw: Any) -> ServerTiming:
 
 
 def _parse_compute_response(d: dict[str, Any], v: int) -> ComputeResponse:
+    fast = _fast_compute_response(d, v)
+    return fast if fast is not None else _parse_compute_response_generic(d, v)
+
+
+def _parse_compute_response_generic(d: dict[str, Any], v: int) -> ComputeResponse:
     items = []
     for i, raw in enumerate(_list(_req(d, "items", ""), "items")):
         ctx = f"items[{i}]"
