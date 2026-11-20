@@ -153,6 +153,13 @@ def decode_compute_request(
         ProtocolError: malformed message, unknown linear.
         ShapeError: ``x_hat`` length does not match ``rows * n * K/8``.
     """
+    return _decode_compute_request(body, limits, linear_dims)[0]
+
+
+def _decode_compute_request(
+    body: bytes | bytearray | memoryview, limits: WireLimits, linear_dims: LinearDims
+) -> tuple[ComputeRequest, Mapping[str, tuple[int, int]]]:
+    """:func:`decode_compute_request`, also returning the model's resolved ``{linear: (m, n)}``."""
     req = decode_message(body, ComputeRequest, max_bytes=limits.max_request_bytes)
     try:
         if len(req.items) > limits.max_items:
@@ -182,7 +189,7 @@ def decode_compute_request(
     except PGWError as exc:
         exc.details.setdefault("request_id", req.request_id)
         raise
-    return req
+    return req, dims
 
 
 def validate_compute_response(
@@ -515,7 +522,7 @@ def create_router(
         ``box`` receives ``[request_id, RequestContext]`` as soon as they are known (for error
         replies and the metrics hook).
         """
-        req = decode_compute_request(body, lim, handler.linear_dims)
+        req, dims = _decode_compute_request(body, lim, handler.linear_dims)
         box[0] = req.request_id
         budget: float | None = None
         if req.deadline_ms is not None:
@@ -550,31 +557,33 @@ def create_router(
         else:
             resp = await handler.compute(req, ctx)
         if validate_responses:
-            dims = _resolve_dims(handler.linear_dims, req.fingerprint, req.ring)
+            # out_features of the request's own linears (decoding checked that each one is served)
             try:
-                validate_compute_response(req, resp, {k: int(v[0]) for k, v in dims.items()})
+                validate_compute_response(req, resp, {it.linear: int(dims[it.linear][0]) for it in req.items})
             except ProtocolError as exc:  # our own bug: never send a malformed result
                 raise PGWError(f"service produced an invalid response: {exc.message}") from exc
         out = encode_message(resp)
-        log.debug(
-            "pgw compute ok",
-            extra={
-                "request_id": req.request_id,
-                "items": len(req.items),
-                "rows": req.total_rows,
-                "bytes_in": len(body),
-                "bytes_out": len(out),
-                "ms": round((time.monotonic() - t0) * 1e3, 3),
-            },
-        )
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "pgw compute ok",
+                extra={
+                    "request_id": req.request_id,
+                    "items": len(req.items),
+                    "rows": req.total_rows,
+                    "bytes_in": len(body),
+                    "bytes_out": len(out),
+                    "ms": round((time.monotonic() - t0) * 1e3, 3),
+                },
+            )
         return out
 
     async def _done(box: list[Any], t0: float, status: int, code: str | None) -> None:
         if done_hook is None:
             return
         try:
-            await _maybe_await(done_hook(box[1] or RequestContext(request_id=box[0] or "", received_at=t0),
-                                         status, code))
+            r = done_hook(box[1] or RequestContext(request_id=box[0] or "", received_at=t0), status, code)
+            if r is not None and inspect.isawaitable(r):
+                await r
         except Exception:  # metrics must never break a reply
             log.exception("on_request_done hook failed")
 
@@ -650,6 +659,7 @@ def create_router(
                         "reason": str(getattr(exc, "code", "unauthorized"))[:100]})
             return
         await send({"type": "websocket.accept"})
+        loop = asyncio.get_running_loop()
         send_lock = asyncio.Lock()
         slots = asyncio.Semaphore(max(1, lim.max_stream_inflight))
         tasks: set[asyncio.Task[None]] = set()
@@ -676,7 +686,9 @@ def create_router(
                             raise _budget_exhausted(body_budget, len(body))
                         held = len(body)
                     if precheck is not None:
-                        await _maybe_await(precheck())
+                        r = precheck()
+                        if r is not None and inspect.isawaitable(r):
+                            await r
                     out = await _process(body, identity, t0, 1, None, box)
                     status, code = 200, None
                 except Exception as exc:
@@ -715,9 +727,13 @@ def create_router(
                     await close(1009, "frame too large")
                     break
                 await slots.acquire()
-                t = asyncio.create_task(one(data))
-                tasks.add(t)
-                t.add_done_callback(tasks.discard)
+                # Eager start: the request runs right here until its first real suspension. An idle
+                # device's decode-sized batch computes and replies without one, so a sequential
+                # caller's round trip costs no extra event-loop iteration and no task scheduling.
+                t = asyncio.eager_task_factory(loop, one(data))
+                if not t.done():
+                    tasks.add(t)
+                    t.add_done_callback(tasks.discard)
             if closing.is_set():
                 with contextlib.suppress(Exception):
                     await close(1008, "unreadable request")

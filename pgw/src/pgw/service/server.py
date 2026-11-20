@@ -104,6 +104,47 @@ def _needs_peer_identity(settings: ServiceSettings) -> bool:
     return t.enabled and t.ca_file is not None and not settings.trusted_client_cert_header
 
 
+#: Messages a WebSocket connection may have queued for the app before reading pauses.
+WS_QUEUE_PAUSE = 2
+
+
+def stream_ws_protocol(base: type[Any]) -> type[Any]:
+    """uvicorn's sans-I/O WebSocket protocol, pausing reads only when the app falls behind.
+
+    uvicorn pauses the transport after *every* received message and resumes it when the app takes
+    the message: two event-loop selector updates (``epoll_ctl``) per compute frame on the stream
+    channel, whose reader takes every frame at once. Here reading pauses only once
+    :data:`WS_QUEUE_PAUSE` messages are waiting (and uvicorn resumes it, as before, when the queue
+    drains), so buffering stays bounded to a couple of frames. Classes without the expected
+    ``read_paused`` / ``queue`` / ``send_receive_event_to_app`` hooks are returned unchanged.
+    """
+    import inspect
+
+    hook = getattr(base, "send_receive_event_to_app", None)
+    try:
+        src = inspect.getsource(base) if hook is not None else ""
+    except (OSError, TypeError):  # pragma: no cover - no source: cannot verify
+        src = ""
+    if "self.read_paused" not in src or "self.queue" not in src or "pause_reading" not in src:
+        return base
+
+    class StreamWebSocketProtocol(base):  # type: ignore[misc]
+        def send_receive_event_to_app(self) -> None:
+            me = cast(Any, self)
+            paused = bool(me.read_paused)
+            me.read_paused = True  # uvicorn pauses only a transport that is not paused already
+            try:
+                super().send_receive_event_to_app()
+            finally:
+                me.read_paused = paused
+            if not paused and me.queue.qsize() >= WS_QUEUE_PAUSE and not me.transport.is_closing():
+                me.read_paused = True
+                me.transport.pause_reading()
+
+    StreamWebSocketProtocol.__name__ = StreamWebSocketProtocol.__qualname__ = f"Stream{base.__name__}"
+    return StreamWebSocketProtocol
+
+
 def build_uvicorn_config(settings: ServiceSettings, app: Any, *, bind: str | None = None) -> Any:
     """uvicorn ``Config`` for the main listener: httptools + ``websockets`` framing, the same TLS
     policy as hypercorn (the SSL context comes from :func:`build_hypercorn_config`, with ALPN
@@ -134,7 +175,7 @@ def build_uvicorn_config(settings: ServiceSettings, app: Any, *, bind: str | Non
     if ws_path is None:  # pragma: no cover - uvicorn < 0.35
         ws_path = WS_PROTOCOLS["websockets"]
     assert ws_path is not None
-    ws_cls = import_from_string(ws_path)
+    ws_cls = stream_ws_protocol(import_from_string(ws_path))
     if _needs_peer_identity(s):
         if not uvicorn_peer_cert_supported(http_cls, ws_cls):
             raise ConfigError(

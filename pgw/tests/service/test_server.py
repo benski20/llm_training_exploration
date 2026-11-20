@@ -249,6 +249,52 @@ def test_build_uvicorn_config(pki: dict[str, Path]) -> None:
     plain = build_uvicorn_config(ServiceSettings(allow_unauthenticated=True, host="127.0.0.1"), app=lambda *a: None)
     plain.load()
     assert plain.ssl is None and not plain.ws_protocol_class.__name__.startswith("PeerCert")
+    assert plain.ws_protocol_class.__name__.startswith("Stream")  # pauses reads only when the app lags
+    assert issubclass(cfg.ws_protocol_class, plain.ws_protocol_class.__mro__[1])
+
+
+def test_stream_ws_protocol_pauses_only_when_the_app_falls_behind() -> None:
+    import asyncio
+
+    from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
+
+    from pgw.service.server import WS_QUEUE_PAUSE, stream_ws_protocol
+
+    cls = stream_ws_protocol(WebSocketsSansIOProtocol)
+    assert cls is not WebSocketsSansIOProtocol
+
+    class _Transport:
+        paused = resumed = 0
+
+        def pause_reading(self) -> None:
+            self.paused += 1
+
+        def resume_reading(self) -> None:
+            self.resumed += 1
+
+        def is_closing(self) -> bool:
+            return False
+
+    async def main() -> None:
+        p = cls.__new__(cls)
+        t = _Transport()
+        p.transport, p.queue, p.read_paused, p.close_sent = t, asyncio.Queue(), False, False
+        p.curr_msg_data_type = "bytes"
+        msgs = [f"m{i}".encode() for i in range(WS_QUEUE_PAUSE)]
+        for m in msgs:
+            p.frames = [m]
+            p.send_receive_event_to_app()
+        assert t.paused == 1 and p.read_paused  # paused once the queue reached the limit, not per message
+        for m in msgs:
+            assert (await p.receive())["bytes"] == m
+        assert t.resumed == 1 and not p.read_paused  # uvicorn resumes when the queue drains
+        p.frames = [b"next"]
+        p.send_receive_event_to_app()
+        assert t.paused == 1 and p.queue.qsize() == 1
+
+    asyncio.run(main())
+    # protocol classes without the expected hooks are left alone
+    assert stream_ws_protocol(object) is object
 
 
 @pytest.mark.slow

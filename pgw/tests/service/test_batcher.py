@@ -271,3 +271,30 @@ async def test_inline_small_batches_on_an_idle_device() -> None:
     assert k.calls[-2:] == [3, 2]  # type: ignore[attr-defined]
     await b.stop()
     assert b.queued_rows == 0 and b.queued_items == 0
+
+
+async def test_inline_fast_path_accounting_and_failures() -> None:
+    """A submission run inline on an idle device counts, times and fails like a batched one."""
+    from pgw.service.metrics import ServiceMetrics
+
+    reg, ws = _registry()
+    m = ServiceMetrics()
+    b = BatchScheduler(reg, batch_window_ms=0, inline_max_rows=8, metrics=m)
+    await b.start()
+    x = rand_x(3, 16, RING_K40_A12, seed=4)
+    y, timing = await b.submit_timed(FP, RING_K40_A12, "0.qkv", x)
+    assert torch.equal(y, expected(x, ws["0.qkv"], RING_K40_A12)) and y.dtype == torch.int64
+    assert timing.batch_rows == 3 and timing.compute_ms > 0 and timing.queue_ms >= 0
+    st = b.stats
+    assert (st.submitted_rows, st.batches, st.batched_rows, st.max_batch_rows_seen) == (3, 1, 3, 3)
+    assert b.queued_rows == 0 and b.queued_items == 0 and not b._open
+    assert 'pgw_service_batch_rows_sum{linear_kind="qkv"} 3.0' in m.render()[0].decode()
+    reg.get(FP).kernel("0.qkv").fail = True  # type: ignore[attr-defined]
+    with pytest.raises(PGWError) as ei:
+        await b.submit(FP, RING_K40_A12, "0.qkv", x)
+    assert ei.value.code == "internal" and "secret" not in ei.value.message
+    assert b.stats.failed_batches == 1 and b.queued_rows == 0
+    assert all(d.busy == 0 for d in b._devices.values())
+    reg.get(FP).kernel("0.qkv").fail = False  # type: ignore[attr-defined]
+    assert torch.equal(await b.submit(FP, RING_K40_A12, "0.qkv", x), y)
+    await b.stop()

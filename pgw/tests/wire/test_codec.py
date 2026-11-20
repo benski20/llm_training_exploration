@@ -292,3 +292,67 @@ def test_skeleton_constructor_compatible():
     req = ComputeRequest("id", "0" * 64, "K40A12", (ComputeItem("0.qkv", 1, b"\x00" * 5),))
     assert decode_message(encode_message(req), ComputeRequest) == req
     assert req.payload_bytes == 5 and req.total_rows == 1
+
+
+@pytest.mark.parametrize("deadline", [None, 0, 250, 7 * 24 * 3600 * 1000])
+def test_compute_messages_fast_encoding_is_byte_identical(deadline: int | None) -> None:
+    """Compute requests/responses are framed by hand; the bytes equal the generic msgpack encoding."""
+    blobs = [b"", b"\x01", bytes(range(256)), bytes(70000), bytearray(b"ab" * 40000), memoryview(bytes(300))]
+    items = tuple(ComputeItem(f"{i}.qkv", rows, b) for i, (rows, b) in enumerate(zip([1, 127, 128, 65536, 2**32, 3],
+                                                                                         blobs, strict=True)))
+    req = ComputeRequest("r" * 40, FP, "K32A12C27", items, deadline_ms=deadline)
+    resp = ComputeResponse("x" * 31, tuple(ComputeResult(it.linear, it.rows, it.x_hat) for it in items),
+                           ServerTiming(0.0123, 1e300, 2**40))
+    for msg in (req, resp, ComputeResponse("id", (), ServerTiming())):
+        assert encode_message(msg) == msgpack.packb(message_to_dict(msg), use_bin_type=True)
+    # fields the fast path does not handle as-is fall back to the generic encoder
+    odd = ComputeResponse("id", (ComputeResult("0.o", 1, b"ab"),), ServerTiming(1, 2, 3))  # type: ignore[arg-type]
+    assert encode_message(odd) == msgpack.packb(message_to_dict(odd), use_bin_type=True)
+    assert decode_message(encode_message(req), ComputeRequest) == ComputeRequest(
+        req.request_id, FP, "K32A12C27", tuple(ComputeItem(it.linear, it.rows, bytes(it.x_hat)) for it in items),
+        deadline_ms=deadline)
+
+
+def test_compute_messages_fast_decoding_matches_generic() -> None:
+    """The fast parsers accept exactly what the generic ones accept, with the same result."""
+    from pgw.core import RING_K32_A12_C27
+    from pgw.wire import codec
+
+    req, _ = make_request(RING_K32_A12_C27, [("0.o", 2), ("0.qkv", 1)], deadline_ms=900)
+    body = message_to_dict(req)
+    resp = ComputeResponse(req.request_id, (ComputeResult("0.o", 2, b"abcd"),), ServerTiming(1.5, 2.0, 7))
+    cases: list[tuple[type, dict]] = [(ComputeRequest, body), (ComputeResponse, message_to_dict(resp))]
+    variants = [
+        lambda d: d.update(ring="k32a12c27"),  # canonicalised, like the generic parser does
+        lambda d: d.update(deadline_ms=True),
+        lambda d: d.update(id="bad id"),
+        lambda d: d.update(fp=FP + "\n"),
+        lambda d: d.update(timing={"queue_ms": 1, "compute_ms": float("inf"), "batch_rows": 0}),
+        lambda d: d.update(timing={"queue_ms": 3, "compute_ms": 4, "batch_rows": 1}),
+        lambda d: d.update(timing=None),
+        lambda d: d["items"][0].update(rows=True),
+        lambda d: d["items"][0].update(rows=0),
+        lambda d: d["items"][0].update(linear="0/o"),
+        lambda d: d.update(items=[]),
+    ]
+    for cls, base in cases:
+        for change in [lambda d: None, *variants]:
+            d = json.loads(json.dumps(base, default=lambda b: b.hex()))  # deep copy
+            for it, orig in zip(d["items"], base["items"], strict=True):
+                for k in ("x_hat", "y_hat"):
+                    if k in it:
+                        it[k] = orig[k]
+            change(d)
+            generic = (codec._parse_compute_request_generic if cls is ComputeRequest
+                       else codec._parse_compute_response_generic)
+            fast = codec._fast_compute_request if cls is ComputeRequest else codec._fast_compute_response
+            try:
+                want: object = generic(d, 1)
+            except PGWError:
+                want = None
+            got = fast(d, 1)
+            # the fast path accepts only what the generic parser accepts, with the same result; what
+            # it leaves alone the generic parser decides (and raises for invalid input)
+            assert got is None or got == want
+            if change is variants[0] or change is variants[5] or change is variants[6]:
+                assert got is not None  # well-formed messages take the fast path

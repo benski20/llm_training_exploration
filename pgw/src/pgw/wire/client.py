@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import functools
 import logging
 import math
 import random
@@ -242,8 +243,66 @@ class _StreamReply(Exception):  # noqa: N818 - internal control flow
         self.error = error
 
 
+@functools.cache
+def _direct_connection_class() -> type[Any] | None:
+    """A ``websockets`` client connection class that hands complete binary messages to a sink
+    callback (``pgw_sink``) from ``data_received`` instead of queueing them for ``recv()``.
+
+    Uses the documented ``create_connection`` factory hook and ``process_event``; handshake, pings,
+    pongs, close frames and size limits stay with ``websockets``. ``None`` when this ``websockets``
+    release does not have the hook (the channel then reads with a task).
+    """
+    try:
+        from websockets.asyncio.client import ClientConnection, connect
+        from websockets.frames import Frame, Opcode
+    except ImportError:  # pragma: no cover - websockets < 13
+        return None
+    import inspect
+
+    if not callable(getattr(ClientConnection, "process_event", None)) or (
+        "create_connection" not in inspect.signature(connect).parameters
+    ):  # pragma: no cover - other websockets releases
+        return None
+
+    class _DirectConnection(ClientConnection):
+        pgw_direct = True
+        pgw_sink: Callable[[bytes | str], None] | None = None
+        _pgw_frags: list[bytes] | None = None
+
+        def process_event(self, event: Any) -> None:
+            sink = self.pgw_sink
+            if sink is None or not isinstance(event, Frame):  # the handshake response, or no channel yet
+                super().process_event(event)
+                return
+            op = event.opcode
+            if op is Opcode.BINARY:
+                if event.fin:
+                    sink(bytes(event.data) if type(event.data) is not bytes else event.data)
+                else:
+                    self._pgw_frags = [bytes(event.data)]
+                return
+            if op is Opcode.CONT and self._pgw_frags is not None:  # websockets bounds the total size
+                self._pgw_frags.append(bytes(event.data))
+                if event.fin:
+                    data, self._pgw_frags = b"".join(self._pgw_frags), None
+                    sink(data)
+                return
+            if op is Opcode.TEXT:
+                sink("")  # not part of the protocol: the channel closes
+                return
+            super().process_event(event)  # control frames: pongs (keepalive), close, ...
+
+    return _DirectConnection
+
+
 class _StreamChannel:
-    """One WebSocket to :data:`STREAM_PATH`; concurrent requests are matched to replies by request id."""
+    """One WebSocket to :data:`STREAM_PATH`; concurrent requests are matched to replies by request id.
+
+    With a :func:`_direct_connection_class` connection, every complete binary message is decoded and
+    handed to its waiter straight from the connection's ``data_received`` callback (no reader task,
+    no message queue: one event-loop wake-up per reply instead of two). Other connections are read
+    by a reader task.
+    """
 
     def __init__(self, ws: Any, max_response_bytes: int):
         self.ws = ws
@@ -253,29 +312,69 @@ class _StreamChannel:
         self.closed = False
         self.retiring = False  # no new requests; closes once the in-flight ones are answered
         self._send_lock = asyncio.Lock()
-        self.reader = asyncio.get_running_loop().create_task(self._read())
+        loop = asyncio.get_running_loop()
+        if getattr(ws, "pgw_direct", False):
+            ws.pgw_sink = self._on_message
+            self.reader = loop.create_task(self._watch())
+        else:
+            self.reader = loop.create_task(self._read())
+
+    def _dispatch(self, msg: bytes | str) -> str | None:
+        """Hand one received message to its waiter; returns why the channel must close, if it must."""
+        if isinstance(msg, str):
+            return "compute stream sent a text frame"
+        try:
+            obj = decode_any(msg, max_bytes=self.max_response_bytes)
+        except PGWError as exc:
+            return f"undecodable compute stream frame ({exc.code})"
+        rid = getattr(obj, "request_id", None)
+        if rid is None and isinstance(obj, ErrorResponse):
+            return f"compute stream closed by the service: {obj.code}: {obj.message}"
+        for fut in self.pending.get(rid, ()) if rid else ():
+            if not fut.done():
+                fut.set_result(obj)
+                break
+        # nothing waiting: a late reply to a request that already gave up - drop it
+        return None
+
+    def _on_message(self, msg: bytes | str) -> None:
+        """Direct dispatch (runs inside the connection's ``data_received``; must not raise)."""
+        if self.closed:
+            return
+        try:
+            why = self._dispatch(msg)
+        except Exception as exc:  # never break the transport callback
+            why = f"compute stream reply handling failed ({type(exc).__name__})"
+        if why is not None:
+            self._fail_all(why)
+            self.ws.pgw_sink = None
+            asyncio.get_running_loop().create_task(self._close_ws())
+
+    async def _close_ws(self) -> None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.ws.close(), timeout=2)
+
+    async def _watch(self) -> None:
+        """Direct mode: fail the waiters once the connection is gone."""
+        why = "compute stream closed"
+        try:
+            await self.ws.wait_closed()
+            exc = getattr(self.ws.protocol, "close_exc", None) if hasattr(self.ws, "protocol") else None
+            if exc is not None and type(exc).__name__ == "ConnectionClosedError":
+                why = f"compute stream connection lost ({type(exc).__name__})"
+        except Exception as exc:  # pragma: no cover - wait_closed does not raise
+            why = f"compute stream connection lost ({type(exc).__name__})"
+        finally:
+            self._fail_all(why)
 
     async def _read(self) -> None:
         why = "compute stream closed"
         try:
             async for msg in self.ws:
-                if isinstance(msg, str):
-                    why = "compute stream sent a text frame"
+                stop = self._dispatch(msg)
+                if stop is not None:
+                    why = stop
                     break
-                try:
-                    obj = decode_any(msg, max_bytes=self.max_response_bytes)
-                except PGWError as exc:
-                    why = f"undecodable compute stream frame ({exc.code})"
-                    break
-                rid = getattr(obj, "request_id", None)
-                if rid is None and isinstance(obj, ErrorResponse):
-                    why = f"compute stream closed by the service: {obj.code}: {obj.message}"
-                    break
-                for fut in self.pending.get(rid, ()) if rid else ():
-                    if not fut.done():
-                        fut.set_result(obj)
-                        break
-                # nothing waiting: a late reply to a request that already gave up - drop it
         except Exception as exc:  # connection errors
             why = f"compute stream connection lost ({type(exc).__name__})"
         finally:
@@ -394,6 +493,8 @@ class ComputeClient:
         self._retry_tokens = float(config.retry_budget_burst)
         self._retry_lock = threading.Lock()
         self._model: ModelInfo | None = None
+        #: ``(model, {linear: out_features})`` of :attr:`_model` (built once, not per call)
+        self._out_features: tuple[ModelInfo, dict[str, int]] | None = None
         self._models: ModelsResponse | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
@@ -476,6 +577,9 @@ class ComputeClient:
                     "max_size": cfg.max_response_bytes, "open_timeout": cfg.connect_timeout_s,
                     "ping_interval": 20, "ping_timeout": 20, "close_timeout": 2,
                 }
+                direct = _direct_connection_class()
+                if direct is not None:
+                    kw["create_connection"] = direct
                 if self._ssl is not None:
                     if self._stream_ssl is None:  # the upgrade is HTTP/1.1: never let ALPN pick h2
                         self._stream_ssl = build_ssl_context(cfg)
@@ -590,7 +694,9 @@ class ComputeClient:
         ``_MAX_ERROR_BODY`` for errors), so a broken or hostile server cannot exhaust memory.
         """
         cfg = self.config
-        http = self._http()
+        if self._closed:
+            raise ServiceUnavailableError("compute client is closed")
+        http: httpx.AsyncClient | None = None  # opened on first HTTP use (stream calls never need it)
         self._deposit_retry_token()
         attempt = 0
         while True:
@@ -640,6 +746,8 @@ class ComputeClient:
                 timeout = httpx.Timeout(
                     remaining, connect=min(cfg.connect_timeout_s, remaining), pool=min(cfg.pool_timeout_s, remaining)
                 )
+                if http is None:
+                    http = self._http()
                 # asyncio.timeout also bounds transports that ignore httpx timeouts (e.g. in-process).
                 async with asyncio.timeout(remaining):
                     async with http.stream(method, path, content=body, headers=headers, timeout=timeout) as resp:
@@ -810,8 +918,12 @@ class ComputeClient:
     async def _send_one(self, req: ComputeRequest, deadline: float) -> ComputeResponse:
         body = encode_message(req)
         out_features = None
-        if self._model is not None and self._model.fingerprint == req.fingerprint:
-            out_features = {k: m for k, (m, _) in self._model.linear_dims().items()}
+        model = self._model
+        if model is not None and model.fingerprint == req.fingerprint:
+            cached = self._out_features
+            if cached is None or cached[0] is not model:
+                cached = self._out_features = (model, {k: m for k, (m, _) in model.linear_dims().items()})
+            out_features = cached[1]
 
         def check(resp: ComputeResponse) -> ComputeResponse:
             validate_compute_response(req, resp, out_features)
@@ -831,28 +943,34 @@ class ComputeClient:
             max_response_bytes=self.config.max_response_bytes,
             stream_check=check,
         )
-        log.debug(
-            "pgw compute",
-            extra={
-                "request_id": req.request_id,
-                "items": len(req.items),
-                "rows": req.total_rows,
-                "bytes_up": len(body),
-                "bytes_down": resp.payload_bytes,
-                "ms": round((time.monotonic() - t0) * 1e3, 3),
-            },
-        )
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "pgw compute",
+                extra={
+                    "request_id": req.request_id,
+                    "items": len(req.items),
+                    "rows": req.total_rows,
+                    "bytes_up": len(body),
+                    "bytes_down": resp.payload_bytes,
+                    "ms": round((time.monotonic() - t0) * 1e3, 3),
+                },
+            )
         return resp
 
     def _split(self, req: ComputeRequest) -> list[tuple[ComputeRequest, list[_Piece]]]:
         """Partition ``req`` into sub-requests within the limits (or ``[(req, ...)]`` if it fits)."""
         max_bytes, max_items, max_rows = self._effective_limits()
         budget = max_bytes - _REQUEST_OVERHEAD - len(req.request_id) - len(req.ring)
-        fits = (
-            len(req.items) <= max_items
-            and all(it.rows <= max_rows for it in req.items)
-            and req.payload_bytes + _ITEM_OVERHEAD * len(req.items) <= budget
-        )
+        req_items = req.items
+        if len(req_items) == 1:  # decode calls
+            it0 = req_items[0]
+            fits = it0.rows <= max_rows and len(it0.x_hat) + _ITEM_OVERHEAD <= budget and max_items >= 1
+        else:
+            fits = (
+                len(req_items) <= max_items
+                and all(it.rows <= max_rows for it in req_items)
+                and req.payload_bytes + _ITEM_OVERHEAD * len(req_items) <= budget
+            )
         if fits:
             return [(req, [_Piece(i, 0, it.rows) for i, it in enumerate(req.items)])]
         groups: list[list[_Piece]] = [[]]

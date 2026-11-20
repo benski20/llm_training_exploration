@@ -158,7 +158,9 @@ class ServiceHandler:
         ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
         tenant = ident.tenant_id if ident is not None else "anonymous"
         self._admit(tenant, request.total_rows)
-        st = self._tenants.setdefault(tenant, _TenantState())
+        st = self._tenants.get(tenant)
+        if st is None:
+            st = self._tenants.setdefault(tenant, _TenantState())
         self.inflight += 1
         st.inflight += 1
         self._idle.clear()
@@ -275,17 +277,20 @@ class ServiceHandler:
                 data = pack_ring(y, ring)
             return ComputeResult(it.linear, rows, data), timing
 
-        results: list[tuple[ComputeResult, BatchTiming]]
-        if len(request.items) == 1:  # decode calls: no extra task per item
-            results = [await one(0)]
-        else:
-            tasks = [asyncio.ensure_future(one(i)) for i in range(len(request.items))]
-            try:
-                results = list(await asyncio.gather(*tasks))
-            except BaseException:
-                for t in tasks:
-                    t.cancel()
-                raise
+        if len(request.items) == 1:  # decode calls: no extra task per item, no per-kind tallies
+            res, bt = await one(0)
+            it0 = request.items[0]
+            self.metrics.rows(tenant, it0.linear.split(".", 1)[1], int(it0.rows))
+            self.metrics.bytes_io(tenant, bytes_in, len(res.y_hat))
+            return ComputeResponse(request.request_id, (res,), ServerTiming(
+                queue_ms=round(bt.queue_ms, 3), compute_ms=round(bt.compute_ms, 3), batch_rows=bt.batch_rows))
+        tasks = [asyncio.ensure_future(one(i)) for i in range(len(request.items))]
+        try:
+            results: list[tuple[ComputeResult, BatchTiming]] = list(await asyncio.gather(*tasks))
+        except BaseException:
+            for t in tasks:
+                t.cancel()
+            raise
         out = tuple(r[0] for r in results)
         bytes_out = sum(len(r.y_hat) for r in out)
         kinds: dict[str, int] = {}
