@@ -567,6 +567,16 @@ def _wipe(t: torch.Tensor) -> None:
         t.zero_()
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """Boolean environment switch (``0/false/no/off`` and ``1/true/yes/on``; anything else: default)."""
+    v = os.environ.get(name, "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    return default
+
+
 def _wr_int64(wr: torch.Tensor) -> np.ndarray:
     """``W r`` as an int64 array: the tensor's own buffer, or a copy of a uint32 one (zero it after use)."""
     a = wr.numpy()
@@ -639,6 +649,8 @@ class MaskedBackend(LinearBackend):
         deadline_ms: int | None = None,
         on_integrity_failure: Any = None,
         min_soundness_bits: float = 0.0,
+        prepare_many: bool | None = None,
+        mask_prefetch: bool | None = None,
     ):
         if not 0.0 <= freivalds_rate <= 1.0:
             raise ConfigError("freivalds_rate must be in [0, 1]")
@@ -675,6 +687,28 @@ class MaskedBackend(LinearBackend):
         self._native_prepare = native_available("quantize_mask_pack")
         self._native_finish = native_available("finish_chunk")
         self._native_group = native_available("finish_group")
+        #: Several wire items of one round trip go through one native ``quantize_mask_pack_many``
+        #: call (spread over a persistent pool when large); the same bytes as one call per item.
+        #: ``PGW_PREPARE_MANY=0`` (or ``prepare_many=False``) keeps one native call per item.
+        self.prepare_many = (_env_flag("PGW_PREPARE_MANY", True) if prepare_many is None
+                             else bool(prepare_many)) and native_available("quantize_mask_pack_many")
+        #: Single-use mask prefetch (:meth:`_maybe_prefetch`): after a multi-session step, or a call
+        #: of ``3..prefetch_max_rows`` rows, a background thread stages the next rows of the same
+        #: (reservation, linear), so the next step takes them without deriving them. Staging never
+        #: changes which rows a call gets. ``PGW_MASK_PREFETCH=0`` (or ``mask_prefetch=False``) turns
+        #: it off.
+        self.mask_prefetch = (_env_flag("PGW_MASK_PREFETCH", True) if mask_prefetch is None
+                              else bool(mask_prefetch))
+        #: Calls with more rows than this (prefill) are not prefetched for: the next call of that
+        #: linear is a decode step.
+        self.prefetch_max_rows = 8
+        #: Steps staged ahead per (reservation, linear); the reservation's byte budget also bounds it.
+        self.prefetch_depth = 2
+        self._prefetch_pool: Any = None
+        self._prefetch_pending = 0
+        self._prefetch_lock = threading.Lock()
+        #: Rows staged by the prefetcher (diagnostics).
+        self.prefetched_rows = 0
         self.stats = BackendStats()
         #: Calls with at most this many rows in total count as decode in ``stats.decode_*`` (the
         #: engine's ``inline_max_rows`` default; the runtime may set it to its configured value).
@@ -901,9 +935,86 @@ class MaskedBackend(LinearBackend):
         return True
 
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
-        if self._native_prepare_ok(calls):
-            return self._prepare_native(calls)
-        return self._prepare_python(calls)
+        prep = self._prepare_native(calls) if self._native_prepare_ok(calls) else self._prepare_python(calls)
+        if self.mask_prefetch:
+            self._maybe_prefetch(calls)
+        return prep
+
+    # ---- single-use mask prefetch -----------------------------------------------------------------
+    def _maybe_prefetch(self, calls: Sequence[LinearCall]) -> None:
+        """Stage the next rows of every (reservation, linear) of this step in the background.
+
+        Active only for multi-session steps (two or more reservations) or calls of
+        ``3..prefetch_max_rows`` rows (speculative verification); single-stream decode keeps its
+        critical path free of a second thread. The staged rows are the reservation's next rows in
+        order (a cache of what the next take would derive), held by that reservation only: they are
+        never handed to another session, and ``close()`` zeroes the unused ones (they stay burned).
+        Staging stops at the current extent's end, so it never moves a call across a boundary.
+        """
+        need: dict[tuple[int, str], list[Any]] = {}
+        for c in calls:
+            res = c.session if c.session is not None else self.mask_source
+            if res is None or not hasattr(res, "prefetch"):
+                continue
+            key = (id(res), c.id.key)
+            hit = need.get(key)
+            if hit is None:
+                need[key] = [res, c.id, int(c.x.shape[0])]
+            else:
+                hit[2] += int(c.x.shape[0])
+        if not need:
+            return
+        multi = len({k[0] for k in need}) > 1
+        cap = int(self.prefetch_max_rows)
+        items = [(res, lid, rows * max(1, int(self.prefetch_depth))) for res, lid, rows in need.values()
+                 if 0 < rows <= cap and (multi or rows >= 3)]
+        if not items:
+            return
+        with self._prefetch_lock:
+            if self._prefetch_pending >= 2:  # the prefetcher is behind: never queue unbounded work
+                return
+            if self._prefetch_pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._prefetch_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-prefetch")
+            self._prefetch_pending += 1
+            pool = self._prefetch_pool
+        try:
+            pool.submit(self._run_prefetch, items)
+        except RuntimeError:  # shut down
+            with self._prefetch_lock:
+                self._prefetch_pending -= 1
+
+    def _run_prefetch(self, items: Sequence[tuple[Any, LinearId, int]]) -> None:
+        try:
+            staged = 0
+            for res, lid, rows in items:
+                try:
+                    staged += int(res.prefetch(lid, rows))
+                except Exception as exc:  # the next take derives the rows (and reports any error)
+                    log.debug("mask prefetch for %s skipped: %s", lid, type(exc).__name__)
+            self.prefetched_rows += staged
+        finally:
+            with self._prefetch_lock:
+                self._prefetch_pending -= 1
+
+    def wait_prefetch(self, timeout: float = 5.0) -> bool:
+        """Wait until queued prefetches finished (tests and benchmarks); ``False`` on timeout."""
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._prefetch_lock:
+                if self._prefetch_pending == 0:
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.001)
+
+    def close(self) -> None:
+        """Stop the prefetch thread (staged rows belong to their reservations, which zero them)."""
+        with self._prefetch_lock:
+            pool, self._prefetch_pool = self._prefetch_pool, None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
         """``(rows, r, W r, (token, u, uw) | None)``: the next rows of one extent (at most ``max_rows``)."""
@@ -921,8 +1032,6 @@ class MaskedBackend(LinearBackend):
 
     def _prepare_native(self, calls: Sequence[LinearCall]) -> _Prepared:
         """:meth:`_prepare_python` with quantize + mask + pack fused in ``pgw_fast`` (bit-identical)."""
-        from pgw.wire.messages import ComputeItem, ComputeRequest
-
         t0 = time.perf_counter()
         reservations, metas = self._precheck(calls)
         # Same guarantee as the Python path: a non-finite activation in a later call must not
@@ -958,6 +1067,9 @@ class MaskedBackend(LinearBackend):
         max_item = self.max_rows_per_item
         sx_parts: list[list[np.ndarray]] = [[] for _ in calls]
         chunks: list[_Chunk] = []
+        if self.prepare_many and (len(calls) > 1 or sum(int(x.shape[0]) for x in xs) > 1):
+            self._native_many(calls, reservations, metas, xs, plan_call, guard_packed, chunks, sx_parts)
+            return self._native_request(calls, chunks, sx_parts, metas, t0)
         try:
             for ci, (call, res, meta, xn) in enumerate(zip(calls, reservations, metas, xs, strict=True)):
                 t = int(xn.shape[0])
@@ -1018,6 +1130,12 @@ class MaskedBackend(LinearBackend):
             for ch in chunks:
                 _wipe(ch.wr)
             raise
+        return self._native_request(calls, chunks, sx_parts, metas, t0)
+
+    def _native_request(self, calls: Sequence[LinearCall], chunks: list[_Chunk], sx_parts: list[list[np.ndarray]],
+                        metas: list[_MaskedMeta], t0: float) -> _Prepared:
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
         sxs = [np.concatenate(p) if len(p) > 1 else (p[0] if p else np.zeros(0, dtype=np.float64))
                for p in sx_parts]
         request = None
@@ -1030,6 +1148,84 @@ class MaskedBackend(LinearBackend):
                 deadline_ms=self.deadline_ms,
             )
         return _Prepared(calls, chunks, sxs, metas, request, time.perf_counter() - t0)
+
+    def _native_many(self, calls: Sequence[LinearCall], reservations: list[Any], metas: list[_MaskedMeta],
+                     xs: list[np.ndarray], plan_call: Any, guard_packed: Any, chunks: list[_Chunk],
+                     sx_parts: list[list[np.ndarray]]) -> None:
+        """The per-item loop of :meth:`_prepare_native` with one ``quantize_mask_pack_many`` call.
+
+        Chunks, their rows, the check and noise-sampling draws, and every byte are the same as
+        the per-item loop's: masks are taken chunk by chunk in the same order, then all chunks are
+        quantized, masked and packed in one native call (several sessions, or row blocks of a
+        prefill, in parallel). The difference is on failure only: a ring overflow or a noise alarm
+        in a chunk also burns the rows already taken for the later chunks of the batch (the
+        per-item loop stops taking at the failing chunk). Burned rows are never used again.
+        """
+        ring = self.ring
+        noise = self.noise_monitor
+        group_finish = self._native_group
+        want_soundness = self.min_soundness_bits > 0
+        max_item = self.max_rows_per_item
+        # [call index, first row, rows, linear, r, W r, token, u, uw, sampled, want x_hat, wnorm, in_features]
+        pend: list[list[Any]] = []
+        try:
+            try:
+                for ci, (call, res, meta, xn) in enumerate(zip(calls, reservations, metas, xs, strict=True)):
+                    t = int(xn.shape[0])
+                    lid = call.id
+                    wn = float(meta.wnorm or 0.0)
+                    row = 0
+                    while row < t:
+                        check = self._should_check()
+                        sampled = bool(plan_call()) if plan_call is not None else noise is not None
+                        rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness)
+                        p = [ci, row, rows, lid, r, wr, None, None, None, sampled, not group_finish or sampled,
+                             wn, meta.in_features]
+                        pend.append(p)
+                        if chk is not None:
+                            token, u, uw = chk
+                            self._check_soundness(lid, meta.in_features, u, token)
+                            if check:
+                                p[6], p[7], p[8] = token, u, uw
+                        if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
+                            raise ShapeError(
+                                f"{lid}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                            )
+                        row += rows
+                try:
+                    outs = native.fast.quantize_mask_pack_many(
+                        [xs[p[0]][p[1] : p[1] + p[2]] for p in pend], [p[4].numpy() for p in pend],
+                        ring.k, ring.a, int(ring.cap or 0), [p[11] for p in pend], [p[10] for p in pend],
+                    )
+                except ValueError as exc:
+                    if str(exc).startswith("ring_overflow"):
+                        raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                    raise ShapeError(str(exc)) from exc
+                for p, (payload, xh, sx) in zip(pend, outs, strict=True):
+                    x_hat = None if xh is None else torch.from_numpy(xh)
+                    if noise is not None:
+                        if guard_packed is not None and not p[9]:
+                            guard_packed(payload, p[2], p[12])
+                        elif x_hat is not None:  # xq = centered(x_hat - r), for its checks
+                            xq = center(x_hat - p[4].to(torch.int64), ring)
+                            try:
+                                if plan_call is not None:
+                                    noise.guard(x_hat, xq, planned=True)  # type: ignore[attr-defined]
+                                else:
+                                    noise.guard(x_hat, xq)  # type: ignore[attr-defined]
+                            finally:
+                                _wipe(xq)
+                        if group_finish:
+                            x_hat = None  # the group finish reads the payload: every chunk alike
+                    chunks.append(_Chunk(p[0], p[1], p[2], p[3], x_hat, p[5], p[7], p[8], payload, p[6]))
+                    sx_parts[p[0]].append(sx)
+            finally:
+                for p in pend:
+                    _wipe(p[4])  # one-time pads: never keep them around
+        except BaseException:
+            for p in pend:
+                _wipe(p[5])
+            raise
 
     def _prepare_python(self, calls: Sequence[LinearCall]) -> _Prepared:
         from pgw.wire.messages import ComputeItem, ComputeRequest

@@ -179,6 +179,15 @@ class WindowedReservation:
         r, wr = part.take(lid, rows)
         return rows, r, wr, chk
 
+    def prefetch(self, lid: LinearId | str, rows: int) -> int:
+        """``MaskReservation.prefetch`` of the current part (never another part, never an extension)."""
+        with self._lock:
+            if self._closed:
+                return 0
+            part = self._current(lid)
+        fn = getattr(part, "prefetch", None)
+        return 0 if fn is None else int(fn(lid, rows))
+
     def checks_compact(self, lid: LinearId | str) -> Any:
         """``MaskReservation.checks_compact`` of the current part (token ``None`` if it has none)."""
         with self._lock:

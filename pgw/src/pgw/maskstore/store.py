@@ -257,13 +257,41 @@ class _Extent:
         self.seg.close()
 
 
+class _Stage:
+    """Rows ``[start, start + len(r))`` of one linear, derived ahead of its cursor (one extent only).
+
+    ``pos`` rows were handed out (and zeroed here); the rest are the linear's next rows."""
+
+    __slots__ = ("ei", "pos", "r", "start", "wr")
+
+    def __init__(self, ei: int, start: int, r: np.ndarray, wr: np.ndarray):
+        self.ei = ei
+        self.start = start
+        self.r = r
+        self.wr = wr
+        self.pos = 0
+
+    @property
+    def left(self) -> int:
+        return int(self.r.shape[0]) - self.pos
+
+    @property
+    def nbytes(self) -> int:
+        return int(self.r.nbytes + self.wr.nbytes)
+
+    def wipe(self) -> None:
+        self.r.fill(0)
+        self.wr.fill(0)
+
+
 class MaskReservation:
     """Slots exclusively owned by one generation session.
 
     Slots are already marked consumed in durable state when the reservation is created. Rows are
     handed out strictly in order: ``take(lid, T)`` returns the next ``T`` rows for linear ``lid``;
     each linear has its own cursor (every token position consumes one row of every linear).
-    Unused rows are destroyed on :meth:`close` (never returned to the pool).
+    Unused rows are destroyed on :meth:`close` (never returned to the pool). :meth:`prefetch` may
+    derive a linear's next rows ahead of :meth:`take` (same rows, same order; zeroed on close).
 
     Not created directly; use :meth:`MaskStore.reserve`. Thread-safe.
     """
@@ -311,6 +339,11 @@ class MaskReservation:
         self._rkey_cache: dict[tuple[int, str], bytearray] = {}
         # linear key -> index of the extent its cursor is in (cursors only move forward)
         self._cur_ext: dict[str, int] = dict.fromkeys(self._linears, 0)
+        # linear key -> rows derived ahead by prefetch() (the next rows of that linear, in order)
+        self._stage: dict[str, _Stage] = {}
+        self._staged_bytes = 0
+        #: Staged rows that were never handed out when the reservation closed (zeroed, burned).
+        self.staged_burned = 0
 
     def __repr__(self) -> str:
         return (
@@ -445,11 +478,98 @@ class MaskReservation:
             r, wr = self._take_locked(key, ei, ex, start, rows, compact=True)
         return rows, r, wr, chk
 
+    #: Most bytes of prefetched (staged) rows one reservation holds (``r`` and ``W r`` together).
+    stage_max_bytes = 64 << 20
+
+    def prefetch(self, lid: LinearId | str, rows: int) -> int:
+        """Derive the next ``rows`` rows of ``lid`` ahead of time; returns how many were staged.
+
+        Staged rows are exactly the rows the next :meth:`take` calls of ``lid`` would derive (same
+        order, same values): staging changes no output and no row count. They stay single-use and
+        belong to this reservation: :meth:`take` hands each one out once (and zeroes its staged
+        copy); :meth:`close` zeroes the rest, which stay burned like every unused row. A stage never
+        crosses a segment-extent boundary and is bounded by :attr:`stage_max_bytes`. Stages nothing
+        (0) when ``lid`` already has staged rows, the reservation is closed or exhausted.
+
+        Raises:
+            ConfigError: unknown linear.
+            MaskStoreError: decryption/authentication failure (nothing is staged or consumed).
+        """
+        key = self._key(lid)
+        if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
+            return 0
+        with self._lock:
+            if self._closed or key in self._stage:
+                return 0
+            start = self._cursor[key]
+            if start >= self._slots:
+                return 0
+            ei = self._cursor_extent(key, start)
+            ex = self._extents[ei]
+            _, lin = self._linears[key]
+            per_row = 8 * (lin.in_features + lin.out_features)
+            n = min(rows, ex.end_row - start, (self.stage_max_bytes - self._staged_bytes) // per_row)
+            if n <= 0:
+                return 0
+            r, wr = self._derive_locked(key, ei, ex, start, n, compact=True)
+            st = _Stage(ei, start, r.numpy(), wr.numpy())
+            self._stage[key] = st
+            self._staged_bytes += st.nbytes
+            return n
+
+    def staged_rows(self, lid: LinearId | str) -> int:
+        """Rows of ``lid`` staged by :meth:`prefetch` and not yet handed out."""
+        key = self._key(lid)
+        with self._lock:
+            st = self._stage.get(key)
+            return 0 if st is None else st.left
+
+    def _drop_stage_locked(self, key: str) -> None:
+        st = self._stage.pop(key, None)
+        if st is not None:
+            st.wipe()
+            self._staged_bytes -= st.nbytes
+
     def _take_locked(
         self, key: str, ei: int, ex: _Extent, start: int, rows: int, compact: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Advance first: whatever happens below, these rows are never handed out again.
         self._cursor[key] = start + rows
+        st = self._stage.get(key)
+        if st is None:
+            return self._derive_locked(key, ei, ex, start, rows, compact)
+        if st.ei != ei or st.start + st.pos != start:  # pragma: no cover - defensive (stages track the cursor)
+            self._drop_stage_locked(key)
+            return self._derive_locked(key, ei, ex, start, rows, compact)
+        k = min(rows, st.left)
+        a, b = st.pos, st.pos + k
+        r_np = st.r[a:b].copy()
+        wr_np = st.wr[a:b].astype(np.int64) if not compact and st.wr.dtype != np.int64 else st.wr[a:b].copy()
+        st.r[a:b].fill(0)  # handed out: the staged copy is gone
+        st.wr[a:b].fill(0)
+        st.pos = b
+        if st.left == 0:
+            self._drop_stage_locked(key)
+        if k < rows:  # the rest of the call (same extent): derived as usual
+            try:
+                r2, wr2 = self._derive_locked(key, ei, ex, start + k, rows - k, compact)
+            except BaseException:
+                r_np.fill(0)
+                wr_np.fill(0)
+                raise
+            r2n, wr2n = r2.numpy(), wr2.numpy()
+            dt = wr_np.dtype if wr2n.dtype == wr_np.dtype else np.dtype(np.int64)
+            r_all = np.concatenate([r_np, r2n])
+            wr_all = np.concatenate([wr_np, wr2n], dtype=dt)
+            for t in (r_np, wr_np, r2n, wr2n):  # secret-derived temporaries
+                t.fill(0)
+            r_np, wr_np = r_all, wr_all
+        return torch.from_numpy(r_np), torch.from_numpy(wr_np)
+
+    def _derive_locked(
+        self, key: str, ei: int, ex: _Extent, start: int, rows: int, compact: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rows ``[start, start + rows)`` of ``key`` (all in extent ``ei``); does not move the cursor."""
         li, lin = self._linears[key]
         slot0 = ex.ext.start + (start - ex.first_row)
         r = self._mask_rows_locked(ei, ex, key, lin.in_features, slot0, rows)
@@ -626,6 +746,12 @@ class MaskReservation:
             for rk in self._rkey_cache.values():
                 _zero(rk)
             self._rkey_cache.clear()
+            # Prefetched rows never handed out: zeroed, and burned like every row past the cursors.
+            self.staged_burned = sum(st.left for st in self._stage.values())
+            for st in self._stage.values():
+                st.wipe()
+            self._stage.clear()
+            self._staged_bytes = 0
             for e in self._extents:
                 e.wipe()
             used = max(self._cursor.values(), default=0)
