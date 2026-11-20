@@ -95,6 +95,25 @@ current extent; `MaskReservation.take_checked` (boundary + checks + take under o
 LM head (`benchmarks/lm_head_bench.py`, 7B float32): 47 ms per sequence, so 0.19 s per step with 4
 sequences; the opt-in `batch_lm_head` (default off, changes logprob bits, not quality) takes 0.11 s.
 
+## Update 2026-11-20: phase 1 of the speed and readiness plan (Kaggle run 26)
+
+Plan: `research/plans/speed-readiness-plan-2026-11-20.md` (55-agent sweep, adversarially verified).
+Seven packages (wnorm in the manifest, noise-monitor lean path, GQA attention with a load-time
+bit-equality check, speculation privacy fix with fixed row counts, service per-session batching,
+telemetry, security and ops hardening) plus reviewer fixes. Run 26, Qwen2.5-7B on one T4, all outputs
+bit-identical:
+
+| metric | run 25 | run 26 |
+|---|---|---|
+| decode, 1 request | 0.365 s/token | **0.339 s/token** |
+| time to first token, 40-token prompt | 2.89 s | **2.37 s** |
+| generated tokens/s, 4 / 8 / 16 streams | 3.0 / - / - | **4.16 / 4.70 / 4.61** |
+| decode round trip (remote) | | 1.47 ms (112 per token) |
+| decode gateway work per trip | | 0.72 ms |
+
+Decode time per token: 0.165 s round trips, 0.080 s gateway masking, 0.094 s other (LM head, float ops,
+Python). Loopback socket floor: 33 us (64 B) to 81 us (80 KB) per exchange.
+
 ## Update 2026-11-20: bfloat16 LM head (exact)
 
 Open checkpoints ship in bfloat16, so the float32 LM head's values are all exactly bfloat16. The
@@ -117,7 +136,7 @@ reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*
 
 | metric | 2026-11-17 | 2026-11-19 | what changed |
 |---|---|---|---|
-| decode, 1 request | 0.86 s/token | 0.365 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
+| decode, 1 request | 0.86 s/token | 0.339 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
 | time to first token, 40-token prompt | 8.4 s | 3.0-3.3 s | pipelined prefill (gateway and service overlap) |
 | one service round trip, 1 row (load test) | 2.5 ms | 1.75 ms (0.80 ms GPU) | uvicorn WebSocket framing, inline small batches |
 | decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.43 s/token | exact verification, coupled drafts, adaptive draft length; 2.6x fewer round trips |
