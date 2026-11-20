@@ -70,6 +70,9 @@ SETUP_STEPS = ("enroll", "model", "maskstore", "admin", "verify", "finish")
 #: Mask buffer the wizard configures for the factory (slots = tokens of masks kept ready).
 FACTORY_LOW_WATER_SLOTS = 1000
 FACTORY_TARGET_SLOTS = 4000
+#: Size of the factory's first segment for a new store: the gateway can serve as soon as it is stored
+#: (a full 4096-slot segment takes about 2 min next to a T4 provider, but much longer over a slow link).
+FACTORY_FIRST_SEGMENT_SLOTS = 256
 
 
 # =================================================================================================
@@ -359,6 +362,7 @@ class SetupController:
             "PGW_FACTORY_STATE_DIR": str(self.data_dir / "factory"),
             "PGW_FACTORY_LOW_WATER_SLOTS": str(FACTORY_LOW_WATER_SLOTS),
             "PGW_FACTORY_TARGET_SLOTS": str(FACTORY_TARGET_SLOTS),
+            "PGW_FACTORY_FIRST_SEGMENT_SLOTS": str(FACTORY_FIRST_SEGMENT_SLOTS),
         }
         if files.get("ca"):
             env["PGW_FACTORY_HE_CA_FILE"] = files["ca"]

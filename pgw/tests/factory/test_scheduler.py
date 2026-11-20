@@ -56,6 +56,29 @@ def test_plan_hysteresis(tmp_path: Path, fake_store: FakeMaskStore, fake_pack: F
     sch.close()
 
 
+def test_first_segment_of_a_new_store_is_small(tmp_path: Path, fake_store: FakeMaskStore,
+                                               fake_pack: FakePack) -> None:
+    sch = _sched(tmp_path, fake_store, [fake_pack], first_segment_slots=20)
+    p = sch.plan()[0]
+    assert (p.segments, p.slots_per_segment, p.available) == (1, 20, 0) and "first segment" in p.reason
+    assert len(sch.run_once()) == 1 and [s.slots for s in fake_store.segments.values()] == [20]
+    p = sch.plan()[0]  # then full segments up to the target
+    assert (p.segments, p.slots_per_segment, p.available) == (6, 50, 20)
+    sch.run_once()
+    assert sch.plan() == [] and len(fake_store.segments) == 7
+    fake_store.consume(fake_pack.fingerprint, 290)  # 30 left: below low water, but not empty -> full segments
+    p = sch.plan()[0]
+    assert p.slots_per_segment == 50
+    sch.close()
+
+
+def test_first_segment_slots_not_larger_than_segment_slots(tmp_path: Path, fake_store: FakeMaskStore,
+                                                          fake_pack: FakePack) -> None:
+    sch = _sched(tmp_path, fake_store, [fake_pack], first_segment_slots=500)
+    assert sch.plan()[0].slots_per_segment == 50
+    sch.close()
+
+
 def test_refill_continues_until_target(tmp_path: Path, fake_store: FakeMaskStore, fake_pack: FakePack) -> None:
     sch = _sched(tmp_path, fake_store, [fake_pack], max_segments_per_run=2)
     assert sch.run_once() and len(fake_store.segments) == 2  # 100 available, still refilling

@@ -15,6 +15,20 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-20 (two-party deployment on Modal)
+
+`deploy/modal/` runs a real provider/customer pair as two Modal apps (one command: `launch.py`). The
+customer is onboarded through the setup wizard over a public URL: enrollment with CA pin and an
+issued client certificate, the model downloaded from Hugging Face and packed by the gateway itself
+(fingerprint matches the provider's), encrypted mask generation over the network, finish without a
+restart. A masked greedy chat was bit-identical (tokens and logprobs) to the plaintext reference.
+Found on the way: a new store waited for a full 4096-token mask segment before the gateway could
+serve (over an hour at the 1.5 MB/s the tunnel carries). The factory now makes a small first segment
+for an empty store (`PGW_FACTORY_FIRST_SEGMENT_SLOTS`; the wizard sets 256), so the first masks arrive
+after about 2 minutes. The service authenticates compute calls with the tenant token; client
+certificates are verified and tenant-checked when presented but cannot be required on the port that
+also serves enrollment.
+
 ## Update 2026-11-20 (deterministic multi-row LM head)
 
 The float32 LM head (`norm(h) @ lm_head^T`) is now `pgw.engine.lm_head.lm_head_logits`: a fixed

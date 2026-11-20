@@ -250,6 +250,8 @@ async def test_wizard_happy_path(svc: EnrollService, tmp_path: Path, tiny_hf_dir
             await _wait(c, lambda s: (s["masks"] or 0) > 0 or (factories and factories[0].done.is_set()),
                         "first masks")
             assert factories and factories[0].error is None, factories[0].error
+            # a new store gets a small first segment, so the gateway can serve before a full one is made
+            assert factories[0].env["PGW_FACTORY_FIRST_SEGMENT_SLOTS"] == "256"
             r = await c.post("/console/api/setup/verify", json={}, headers=h)
             checks = {x["id"]: x for x in r.json()["checks"]}
             assert r.json()["ok"], checks
