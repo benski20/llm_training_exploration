@@ -14,7 +14,10 @@ This module closes that gap with two small pieces:
   task and spawns the per-request app tasks from it, so the value is visible to exactly the
   requests of that connection (HTTP/1.1 keep-alive and every HTTP/2 stream) and nothing else.
 * :class:`PeerCertMiddleware` copies that value into
-  ``scope["extensions"]["tls"]["client_cert_name"]`` (overwriting whatever was there).
+  ``scope["extensions"]["tls"]["client_cert_name"]`` and the certificate itself (PEM) into
+  ``scope["extensions"]["tls"]["client_cert_chain"]`` (overwriting whatever was there). The
+  certificate is what certificate renewal compares the submitted certificate against
+  (:func:`peer_cert_der`).
 
 If hypercorn changes its internals the shim refuses to install (:func:`peer_cert_supported`
 returns False) and :func:`pgw.service.server.serve_async` refuses to start a configuration that
@@ -40,6 +43,7 @@ from typing import Any
 __all__ = [
     "PeerCertMiddleware",
     "install_hypercorn_peer_cert_shim",
+    "peer_cert_der",
     "peer_cert_subject",
     "peer_cert_supported",
     "subject_from_der",
@@ -50,6 +54,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 _PEER_SUBJECT: contextvars.ContextVar[str | None] = contextvars.ContextVar("pgw_tls_peer_subject", default=None)
+_PEER_DER: contextvars.ContextVar[bytes | None] = contextvars.ContextVar("pgw_tls_peer_der", default=None)
 _INSTALL_LOCK = threading.Lock()
 _installed: bool | None = None  # None = not attempted yet
 _MARKER = "__pgw_peer_cert_shim__"
@@ -70,14 +75,40 @@ def peer_cert_subject() -> str | None:
     return _PEER_SUBJECT.get()
 
 
-def _subject_of_writer(writer: Any) -> str | None:
+def _peer_of_writer(writer: Any) -> tuple[str | None, bytes | None]:
+    """``(subject, DER)`` of the verified peer certificate of a TLS transport/stream writer."""
     ssl_object = writer.get_extra_info("ssl_object")
     if ssl_object is None:
-        return None
+        return None, None
     der = ssl_object.getpeercert(binary_form=True)
     if not der:
+        return None, None
+    subject = subject_from_der(der)
+    return subject, (bytes(der) if subject else None)
+
+
+def _der_to_pem(der: bytes) -> str:
+    import ssl
+
+    return ssl.DER_cert_to_PEM_cert(der)
+
+
+def peer_cert_der(scope: Any) -> bytes | None:
+    """DER of the client certificate published in ``scope["extensions"]["tls"]["client_cert_chain"]``
+    (the first entry, PEM) by this module or the trusted-proxy middleware; ``None`` if absent or
+    unparsable."""
+    tls = (scope.get("extensions") or {}).get("tls") or {}
+    chain = tls.get("client_cert_chain")
+    if not isinstance(chain, list | tuple) or not chain or not isinstance(chain[0], str):
         return None
-    return subject_from_der(der)
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        cert = x509.load_pem_x509_certificate(chain[0].encode("ascii"))
+        return cert.public_bytes(serialization.Encoding.DER)
+    except Exception:  # an unparsable certificate is no certificate
+        return None
 
 
 def install_hypercorn_peer_cert_shim() -> bool:
@@ -109,13 +140,15 @@ def install_hypercorn_peer_cert_shim() -> bool:
         @functools.wraps(orig)
         async def run(self: Any) -> None:
             writer = getattr(self, "writer", None)
-            subject = None
+            subject: str | None = None
+            der: bytes | None = None
             if writer is not None:
                 try:
-                    subject = _subject_of_writer(writer)
+                    subject, der = _peer_of_writer(writer)
                 except Exception:  # never break the connection over identity capture
                     log.exception("could not read the TLS peer certificate")
             _PEER_SUBJECT.set(subject)
+            _PEER_DER.set(der)
             await orig(self)
 
         setattr(run, _MARKER, True)
@@ -152,19 +185,23 @@ class PeerCertMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") in ("http", "websocket"):
-            scope = _publish(scope, _PEER_SUBJECT.get())
+            scope = _publish(scope, _PEER_SUBJECT.get(), _PEER_DER.get())
         await self.app(scope, receive, send)
 
 
-def _publish(scope: Scope, subject: str | None) -> Scope:
-    """Copy of ``scope`` whose TLS extension carries exactly ``subject`` (nothing when ``None``)."""
+def _publish(scope: Scope, subject: str | None, der: bytes | None = None) -> Scope:
+    """Copy of ``scope`` whose TLS extension carries exactly ``subject`` and the certificate ``der``
+    (as ``client_cert_chain = [PEM]``); nothing when ``None``."""
     scope = dict(scope)
     ext = dict(scope.get("extensions") or {})
     tls = dict(ext.get("tls") or {})
     tls.pop("client_cert_name", None)
     tls.pop("client_cert_subject", None)
+    tls.pop("client_cert_chain", None)
     if subject:
         tls["client_cert_name"] = subject
+        if der:
+            tls["client_cert_chain"] = [_der_to_pem(der)]
     ext["tls"] = tls
     scope["extensions"] = ext
     return scope
@@ -176,15 +213,17 @@ def _publish(scope: Scope, subject: str | None) -> Scope:
 class _ConnectionPeerApp:
     """The ASGI app of one uvicorn connection: publishes that connection's verified subject."""
 
-    __slots__ = ("app", "subject")
+    __slots__ = ("app", "der", "subject")
 
-    def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]], subject: str | None):
+    def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]], subject: str | None,
+                 der: bytes | None = None):
         self.app = app
         self.subject = subject
+        self.der = der
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") in ("http", "websocket"):
-            scope = _publish(scope, self.subject)
+            scope = _publish(scope, self.subject, self.der)
         await self.app(scope, receive, send)
 
 
@@ -209,12 +248,13 @@ def uvicorn_peer_cert_protocol(base: type[Any]) -> type[Any]:
         def connection_made(self, transport: Any) -> None:
             app = getattr(self, "app", None)
             subject: str | None = None
+            der: bytes | None = None
             try:
-                subject = _subject_of_writer(transport)
+                subject, der = _peer_of_writer(transport)
             except Exception:  # never break the connection over identity capture
                 log.exception("could not read the TLS peer certificate")
             # the protocol instance serves exactly this connection: wrap its app for it alone
-            self.app = _ConnectionPeerApp(app, subject) if callable(app) else _refuse
+            self.app = _ConnectionPeerApp(app, subject, der) if callable(app) else _refuse
             super().connection_made(transport)
 
     PeerCertProtocol.__name__ = PeerCertProtocol.__qualname__ = f"PeerCert{base.__name__}"

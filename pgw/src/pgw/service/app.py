@@ -100,32 +100,46 @@ class ServiceState:
         return ready, details
 
 
-def _client_cert_header_middleware(app: ASGIApp, header: str) -> ASGIApp:
+def _client_cert_header_middleware(app: ASGIApp, header: str, pem_header: str | None = None) -> ASGIApp:
     """Copy a TLS-terminating proxy's verified client-cert subject header into the ASGI TLS
-    extension (``scope["extensions"]["tls"]["client_cert_name"]``) where the wire router reads it.
+    extension (``scope["extensions"]["tls"]["client_cert_name"]``) where the wire router reads it,
+    and, with ``pem_header``, the certificate itself (URL-encoded PEM) into ``client_cert_chain``.
 
     Only enable when every request reaches the service through that proxy; otherwise clients
-    could forge the header.
+    could forge the header. Anything already in those scope keys is dropped.
     """
     hname = header.lower().encode("latin-1")
+    pname = pem_header.lower().encode("latin-1") if pem_header else None
+
+    def single(scope: Scope, name: bytes) -> str | None:
+        values = [v for k, v in scope.get("headers") or () if k.lower() == name]
+        if len(values) == 1:
+            return values[0].decode("latin-1").strip() or None
+        if len(values) > 1:
+            # A proxy that appends instead of overwriting would let clients smuggle a subject:
+            # ambiguous identity is no identity.
+            log.warning("ignoring %d copies of the trusted client-cert header", len(values))
+        return None
 
     async def mw(scope: Scope, receive: Callable[[], Awaitable[Any]], send: Callable[[Any], Awaitable[None]]) -> None:
         if scope.get("type") in ("http", "websocket"):
-            values = [v for k, v in scope.get("headers") or () if k.lower() == hname]
-            value: str | None = None
-            if len(values) == 1:
-                value = values[0].decode("latin-1").strip()
-            elif len(values) > 1:
-                # A proxy that appends instead of overwriting would let clients smuggle a subject:
-                # ambiguous identity is no identity.
-                log.warning("ignoring %d copies of the trusted client-cert header", len(values))
+            value = single(scope, hname)
+            pem: str | None = None
+            if value and pname is not None:
+                from urllib.parse import unquote
+
+                raw = single(scope, pname)
+                pem = unquote(raw) if raw else None
             scope = dict(scope)
             ext = dict(scope.get("extensions") or {})
             tls = dict(ext.get("tls") or {})
             tls.pop("client_cert_name", None)
             tls.pop("client_cert_subject", None)
+            tls.pop("client_cert_chain", None)
             if value:
                 tls["client_cert_name"] = value
+                if pem:
+                    tls["client_cert_chain"] = [pem]
             ext["tls"] = tls
             scope["extensions"] = ext
         await app(scope, receive, send)
@@ -264,15 +278,16 @@ def create_app(
         app.add_route("/metrics", metrics_route, methods=["GET"], include_in_schema=False)
 
     if s.trusted_client_cert_header:
-        app.add_middleware(_HeaderToTLSExt, header=s.trusted_client_cert_header)
+        app.add_middleware(_HeaderToTLSExt, header=s.trusted_client_cert_header,
+                           pem_header=s.trusted_client_cert_pem_header)
     return app
 
 
 class _HeaderToTLSExt:
     """Starlette-compatible middleware class wrapping :func:`_client_cert_header_middleware`."""
 
-    def __init__(self, app: ASGIApp, header: str):
-        self._mw = _client_cert_header_middleware(app, header)
+    def __init__(self, app: ASGIApp, header: str, pem_header: str | None = None):
+        self._mw = _client_cert_header_middleware(app, header, pem_header)
 
     async def __call__(self, scope: Scope, receive: Callable[[], Awaitable[Any]],
                        send: Callable[[Any], Awaitable[None]]) -> None:

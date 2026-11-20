@@ -66,11 +66,10 @@ def test_trusted_proxy_buckets_are_per_client() -> None:
     a = r.resolve("10.0.0.2", ["198.51.100.1"])
     b = r.resolve("10.0.0.2", ["198.51.100.2"])
     for _ in range(2):
-        lim.blocked(a)
-        lim.failure(a)
+        lim.failure(a, lim.blocked(a))
     with pytest.raises(RateLimitedError):
         lim.blocked(a)
-    lim.blocked(b)  # a different client behind the same proxy is not affected
+    lim.release(lim.blocked(b))  # a different client behind the same proxy is not affected
     # an untrusted peer cannot choose its bucket with the header
     assert r.resolve("198.51.100.1", ["198.51.100.99"]) == "198.51.100.1"
 
@@ -79,15 +78,65 @@ def test_only_failures_count_and_global_ceiling() -> None:
     clock = _Clock()
     lim = LoginRateLimiter(attempts=3, global_failures=5, clock=clock)
     for _ in range(50):
-        lim.blocked("good")  # successes never count
+        with lim.attempt("good"):  # successes never count
+            pass
     for i in range(5):
-        lim.blocked(f"c{i}")
-        lim.failure(f"c{i}")
+        with lim.attempt(f"c{i}") as a:
+            a.fail()
     with pytest.raises(RateLimitedError) as ei:
         lim.blocked("fresh")  # global ceiling reached from rotating addresses
     assert "gateway" in ei.value.message
     clock.t += 61
-    lim.blocked("fresh")
+    lim.release(lim.blocked("fresh"))
+
+
+def test_login_admission_is_atomic() -> None:
+    """Attempts in flight count against the limit: N concurrent wrong guesses cannot all pass the check
+    before their failures are recorded; settled successes free their slot."""
+    import threading
+
+    clock = _Clock()
+    lim = LoginRateLimiter(attempts=3, global_failures=5, clock=clock)
+    passed: list[int] = []
+    limited = [0]
+    lock = threading.Lock()
+    go = threading.Barrier(20)
+
+    def guess() -> None:
+        go.wait()
+        try:
+            r = lim.blocked("mallory")
+        except RateLimitedError:
+            with lock:
+                limited[0] += 1
+            return
+        with lock:
+            passed.append(r)
+
+    ts = [threading.Thread(target=guess) for _ in range(20)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(passed) == 3 and limited[0] == 17  # only `attempts` are admitted while none has settled
+    for r in passed:
+        lim.failure("mallory", r)
+    with pytest.raises(RateLimitedError):
+        lim.blocked("mallory")
+    # the global ceiling counts in-flight attempts too (rotating addresses)
+    held = [lim.blocked(f"c{i}") for i in range(2)]  # 3 failures + 2 in flight = 5
+    with pytest.raises(RateLimitedError, match="gateway"):
+        lim.blocked("fresh")
+    for r in held:
+        lim.release(r)
+    lim.release(lim.blocked("fresh"))
+    # a reservation that is never settled expires after the window
+    lim2 = LoginRateLimiter(attempts=1, clock=clock)
+    lim2.blocked("x")
+    with pytest.raises(RateLimitedError):
+        lim2.blocked("x")
+    clock.t += 61
+    lim2.release(lim2.blocked("x"))
 
 
 async def test_console_login_counts_failures_only(tiny_pack_dir: Path, tmp_path: Path) -> None:

@@ -138,6 +138,54 @@ def test_settings_refuse_mtls_map_without_verified_certs(tmp_path: Path) -> None
     ServiceSettings(mtls_tenants_file=m, trusted_client_cert_header="X-Client-Cert")  # proxy mode is fine
 
 
+async def test_peer_certificate_itself_is_published(two_client_pki: dict[str, Path]) -> None:
+    """The verified peer certificate (not only its subject) reaches the scope, for byte-exact renewal checks."""
+    import asyncio
+
+    from cryptography import x509
+
+    from pgw.service.tls_peer import _ConnectionPeerApp, _peer_of_writer, _publish, peer_cert_der
+
+    pki = two_client_pki
+    sctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    sctx.load_cert_chain(str(pki["server"]), str(pki["server_key"]))
+    sctx.load_verify_locations(cafile=str(pki["ca"]))
+    sctx.verify_mode = ssl.CERT_REQUIRED
+    seen: list[tuple[str | None, bytes | None]] = []
+
+    async def on_conn(r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        seen.append(_peer_of_writer(w))
+        w.write(b"ok")
+        await w.drain()
+        w.close()
+
+    server = await asyncio.start_server(on_conn, "127.0.0.1", 0, ssl=sctx)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        cctx = ssl.create_default_context(cafile=str(pki["ca"]))
+        cctx.load_cert_chain(str(pki["a"]), str(pki["a_key"]))
+        r, w = await asyncio.open_connection("127.0.0.1", port, ssl=cctx, server_hostname="127.0.0.1")
+        assert await asyncio.wait_for(r.read(2), 5) == b"ok"
+        w.close()
+    finally:
+        server.close()
+        await server.wait_closed()
+    want = x509.load_pem_x509_certificate(pki["a"].read_bytes()).public_bytes(serialization.Encoding.DER)
+    subject, der = seen[0]
+    assert subject == "CN=gw-a" and der == want
+    scope = _publish({"type": "http", "extensions": {"tls": {"client_cert_chain": ["forged"]}}}, subject, der)
+    assert peer_cert_der(scope) == want
+    # without a verified certificate nothing (and nothing injected upstream) is published
+    assert peer_cert_der(_publish({"type": "http", "extensions": {"tls": {"client_cert_chain": ["x"]}}}, None)) is None
+    got: list[Any] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        got.append(scope)
+
+    await _ConnectionPeerApp(app, subject, der)({"type": "http"}, None, None)  # type: ignore[arg-type]
+    assert peer_cert_der(got[0]) == want
+
+
 async def test_peer_cert_middleware_strips_injected_identity() -> None:
     seen: dict[str, Any] = {}
 

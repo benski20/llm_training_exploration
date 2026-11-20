@@ -54,8 +54,10 @@ def make_pki(d: Path) -> dict[str, Path]:
 
 
 @contextlib.contextmanager
-def enroll_service(pack_dir: Path, d: Path, **overrides: Any) -> Iterator[EnrollService]:
-    """A real compute service (uvicorn, TLS) serving ``pack_dir`` with enrollment enabled."""
+def enroll_service(pack_dir: Path, d: Path, *, verify_client_certs: bool = False,
+                   **overrides: Any) -> Iterator[EnrollService]:
+    """A real compute service (uvicorn, TLS) serving ``pack_dir`` with enrollment enabled (with
+    ``verify_client_certs``: client certificates of the client-issuing CA are verified, optional)."""
     from pgw.service import ServiceSettings
     from tests.service.test_server import _free_port, _ServerThread, _wait_ready
 
@@ -67,7 +69,8 @@ def enroll_service(pack_dir: Path, d: Path, **overrides: Any) -> Iterator[Enroll
     kw: dict[str, Any] = dict(
         host="127.0.0.1", port=port, metrics_port=mport, packs=[pack_dir], device="cpu", tokens_file=tokens,
         batch_window_ms=1.0, rings=["K32A12C27", "K40A12"], server="uvicorn", drain_timeout_s=2.0,
-        tls={"cert_file": pki["server"], "key_file": pki["server_key"]},
+        tls={"cert_file": pki["server"], "key_file": pki["server_key"],
+             **({"ca_file": pki["client_ca"]} if verify_client_certs else {})},
         enrollment_file=d / "enrollment.json", public_url=url, enrollment_ca_file=pki["ca"],
         client_issuing_ca_cert_file=pki["client_ca"], client_issuing_ca_key_file=pki["client_ca_key"],
     )

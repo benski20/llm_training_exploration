@@ -105,6 +105,12 @@ class FactorySettings(PGWSettings):
     )
     he_token_file: Path | None = Field(None, description="File with the service bearer token (encrypted mode)")
     he_ca_file: Path | None = Field(None, description="CA bundle for the service (encrypted mode)")
+    he_client_cert_file: Path | None = Field(
+        None, description="mTLS client certificate (PEM) presented to the service (encrypted mode): the gateway's "
+        "enrolled client.crt, needed when the service requires client certificates for compute. Renewals of the "
+        "file are picked up by new connections",
+    )
+    he_client_key_file: Path | None = Field(None, description="Private key of he_client_cert_file (PEM, 0600)")
     he_hint_dir: Path | None = Field(None, description="Where the one-time hint W8.A is kept (default: <state>/hemask)")
     he_rank: int = Field(16, ge=8, le=32, description="MLWE module rank (LWE dimension = 256 x rank)")
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
@@ -147,6 +153,8 @@ class FactorySettings(PGWSettings):
         lw, tg = self.low_water_slots, self.target_slots
         if lw is not None and tg is not None and tg < lw:
             raise ValueError("target_slots must be >= low_water_slots")
+        if (self.he_client_cert_file is None) != (self.he_client_key_file is None):
+            raise ValueError("he_client_cert_file and he_client_key_file must be set together")
         return self
 
     @property

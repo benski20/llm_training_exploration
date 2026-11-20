@@ -128,3 +128,79 @@ async def test_reloaded_pair_is_presented_on_the_next_connection(tmp_path: Path)
         assert reload_client_cert(cert, key) >= 1
         assert await srv.connect(ctx) == b"ok"  # the same (live) context, the new certificate
     assert srv.serials == [s1, s2]
+
+
+async def test_compute_client_swaps_context_and_retires_pools(tmp_path: Path) -> None:
+    """A reload builds a new TLS context for each ComputeClient (the live one is not mutated), retires the
+    pooled HTTP client opened before it (e.g. without a certificate) and presents the new pair."""
+    from pgw.wire.client import ComputeClient
+
+    pki = make_pki(tmp_path / "pki")
+    now = dt.datetime.now(dt.UTC)
+    # expired: the client starts without presenting a certificate (token-only)
+    cert, key, _ = _client_cert(pki, tmp_path, "gw", not_before=now - dt.timedelta(days=31),
+                                not_after=now - dt.timedelta(minutes=1))
+    client = ComputeClient(_cfg(pki, cert, key).model_copy(update={"request_timeout_s": 0.2,
+                                                                   "connect_timeout_s": 0.1}))
+    try:
+        old_ctx = client._ssl
+        assert old_ctx is not None
+        pool = client._http()
+        async with _Server(pki) as srv:
+            assert await srv.connect(old_ctx) == b"ok"
+            new_c, new_k, s2 = _client_cert(pki, tmp_path, "new", not_before=now - dt.timedelta(minutes=1),
+                                            not_after=now + dt.timedelta(hours=2))
+            new_c.replace(cert)
+            new_k.replace(key)
+            assert reload_client_cert(cert, key) >= 1
+            assert client._ssl is not None and client._ssl is not old_ctx
+            assert client._http() is not pool  # the pool opened without a certificate is not reused
+            assert await srv.connect(client._ssl) == b"ok"
+            assert await srv.connect(old_ctx) == b"ok"  # the old context was not changed
+        assert srv.serials == [None, s2, None]
+        for _ in range(100):  # the retired pool is closed after its grace period
+            if pool.is_closed:
+                break
+            await asyncio.sleep(0.02)
+        assert pool.is_closed
+    finally:
+        await client.aclose()
+
+
+def test_concurrent_reloads_are_serialized(tmp_path: Path) -> None:
+    import threading
+
+    from pgw.wire import client as wc
+
+    pki = make_pki(tmp_path / "pki")
+    now = dt.datetime.now(dt.UTC)
+    cert, key, _ = _client_cert(pki, tmp_path, "gw", not_before=now - dt.timedelta(minutes=1),
+                                not_after=now + dt.timedelta(hours=1))
+    clients = [wc.ComputeClient(_cfg(pki, cert, key)) for _ in range(3)]
+    active, peak, calls = [0], [0], [0]
+    lock = threading.Lock()
+    orig = wc.ComputeClient._reload_tls
+
+    def tracked(self: wc.ComputeClient) -> None:
+        with lock:
+            active[0] += 1
+            calls[0] += 1
+            peak[0] = max(peak[0], active[0])
+        try:
+            orig(self)
+        finally:
+            with lock:
+                active[0] -= 1
+
+    try:
+        wc.ComputeClient._reload_tls = tracked  # type: ignore[method-assign]
+        ts = [threading.Thread(target=reload_client_cert, args=(cert, key)) for _ in range(8)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert peak[0] == 1 and calls[0] == 8 * 3
+    finally:
+        wc.ComputeClient._reload_tls = orig  # type: ignore[method-assign]
+        for c in clients:
+            c.close()

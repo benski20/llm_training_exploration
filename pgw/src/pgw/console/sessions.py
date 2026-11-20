@@ -17,7 +17,8 @@ import secrets
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -87,9 +88,14 @@ class LoginRateLimiter:
 
     Two ways to use it:
 
-    * :meth:`blocked` before checking a credential and :meth:`failure` when it was wrong: only failures
-      count, per client and globally (``global_failures`` per window across all clients, so rotating
-      addresses does not buy unlimited guesses), and a correct sign-in is never slowed down.
+    * :meth:`blocked` before checking a credential, then :meth:`failure` when it was wrong and
+      :meth:`release` in any case (``try/finally``; :meth:`attempt` does both). Only failures are
+      remembered, per client and globally (``global_failures`` per window across all clients, so
+      rotating addresses does not buy unlimited guesses), and a correct sign-in is never slowed down.
+      Admission is atomic: :meth:`blocked` reserves the attempt, and attempts still in flight count
+      against the limits until released, so N concurrent wrong guesses cannot all pass the check
+      before their failures are recorded. A reservation that is never released expires after
+      ``window_s``.
     * :meth:`check`: counts every attempt (cheap caps on endpoints that start a flow, e.g. SSO).
 
     Args:
@@ -108,6 +114,8 @@ class LoginRateLimiter:
         self.clock = clock
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._global: deque[float] = deque()
+        self._pending: dict[int, tuple[str, float]] = {}  # reservation -> (client, reserved at)
+        self._next = 0
         self._lock = threading.Lock()
 
     def _queue(self, client: str, now: float) -> deque[float]:
@@ -133,27 +141,69 @@ class LoginRateLimiter:
                 raise self._limited(q[0], now, "console login attempts")
             q.append(now)
 
-    def blocked(self, client: str) -> None:
-        """Raise :class:`RateLimitedError` if ``client`` (or everyone together) failed too often recently."""
+    def blocked(self, client: str) -> int:
+        """Reserve one sign-in attempt by ``client``; raise :class:`RateLimitedError` if its recent failures
+        plus its attempts in flight (or everyone's together) reach the limit.
+
+        Returns:
+            A reservation to pass to :meth:`failure` / :meth:`release`.
+        """
         now = self.clock()
         with self._lock:
+            for k in [k for k, (_, t) in self._pending.items() if t <= now - self.window_s]:
+                del self._pending[k]  # never released: do not hold the slot forever
             g = self._global
             while g and g[0] <= now - self.window_s:
                 g.popleft()
-            if len(g) >= self.global_failures:
-                raise self._limited(g[0], now, "failed sign-in attempts on this gateway")
+            if len(g) + len(self._pending) >= self.global_failures:
+                raise self._limited(g[0] if g else now, now, "failed sign-in attempts on this gateway")
             q = self._queue(client, now)
-            if len(q) >= self.attempts:
-                raise self._limited(q[0], now, "failed sign-in attempts")
+            mine = sum(1 for c, _ in self._pending.values() if c == client)
+            if len(q) + mine >= self.attempts:
+                raise self._limited(q[0] if q else now, now, "failed sign-in attempts")
+            self._next += 1
+            self._pending[self._next] = (client, now)
+            return self._next
 
-    def failure(self, client: str) -> None:
-        """Record one failed attempt by ``client``."""
+    def release(self, reservation: int | None) -> None:
+        """Settle a reservation from :meth:`blocked` that did not fail (a no-op after :meth:`failure`)."""
+        if reservation is None:
+            return
+        with self._lock:
+            self._pending.pop(reservation, None)
+
+    def failure(self, client: str, reservation: int | None = None) -> None:
+        """Record one failed attempt by ``client`` (settling ``reservation`` if given)."""
         now = self.clock()
         with self._lock:
+            if reservation is not None:
+                self._pending.pop(reservation, None)
             self._queue(client, now).append(now)
             self._global.append(now)
             while len(self._global) > self.global_failures:
                 self._global.popleft()
+
+    @contextmanager
+    def attempt(self, client: str) -> Iterator[_Attempt]:
+        """``with limiter.attempt(client) as a: ... a.fail()``: :meth:`blocked`, then always settled."""
+        a = _Attempt(self, client, self.blocked(client))
+        try:
+            yield a
+        finally:
+            self.release(a.reservation)
+
+
+class _Attempt:
+    """One reserved sign-in attempt (see :meth:`LoginRateLimiter.attempt`)."""
+
+    __slots__ = ("client", "limiter", "reservation")
+
+    def __init__(self, limiter: LoginRateLimiter, client: str, reservation: int):
+        self.limiter, self.client, self.reservation = limiter, client, reservation
+
+    def fail(self) -> None:
+        """Count this attempt as a failure."""
+        self.limiter.failure(self.client, self.reservation)
 
 
 class ConsoleSessions:

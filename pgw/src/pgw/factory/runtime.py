@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from pgw.factory.sinks import ExportSink, StoreSink, load_recipient_public_key
 
 __all__ = [
     "build_generators", "build_scheduler", "build_sink", "key_provider_from_settings", "open_packs", "open_store",
+    "watch_client_cert",
 ]
 
 log = logging.getLogger(__name__)
@@ -98,9 +100,15 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     token = None
     if settings.he_token_file is not None:
         token = SecretStr(Path(settings.he_token_file).read_text().strip())
+    # The gateway's enrolled client certificate, when configured: a service that requires mTLS for compute
+    # refuses the token alone.
     client = ComputeClient(ClientConfig(base_url=settings.he_service_url, token=token, ca_file=settings.he_ca_file,
+                                        client_cert_file=settings.he_client_cert_file,
+                                        client_key_file=settings.he_client_key_file,
                                         request_timeout_s=settings.he_timeout_s,
                                         max_request_bytes=1 << 30))
+    if settings.he_client_cert_file is not None and settings.he_client_key_file is not None:
+        watch_client_cert(settings.he_client_cert_file, settings.he_client_key_file)
     hint_root = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
     from pgw.hemask.lwe import HEParams
 
@@ -111,6 +119,52 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call)
+
+
+_WATCHED: dict[tuple[str, str], threading.Thread] = {}
+_WATCH_LOCK = threading.Lock()
+
+
+def watch_client_cert(cert_file: Path, key_file: Path, *, interval_s: float = 60.0,
+                      stop: threading.Event | None = None) -> threading.Thread:
+    """Reload a client certificate pair into this process's compute clients when the files change.
+
+    The gateway renews its client certificate in place (same paths) in its own process; the factory is a
+    separate process, so it polls the files (modification time and size) and calls
+    :func:`pgw.wire.client.reload_client_cert` on a change. One watcher per pair per process.
+    """
+    key = (str(Path(cert_file).resolve()), str(Path(key_file).resolve()))
+    with _WATCH_LOCK:
+        t = _WATCHED.get(key)
+        if t is not None and t.is_alive():
+            return t
+        ev = stop or threading.Event()
+
+        def stamp() -> tuple[tuple[int, int], ...] | None:
+            try:
+                return tuple((os.stat(p).st_mtime_ns, os.stat(p).st_size) for p in key)
+            except OSError:
+                return None
+
+        def run() -> None:
+            from pgw.wire.client import reload_client_cert
+
+            last = stamp()
+            while not ev.wait(interval_s):
+                cur = stamp()
+                if cur is None or cur == last:
+                    continue
+                try:
+                    reload_client_cert(Path(key[0]), Path(key[1]))
+                    last = cur
+                    log.info("factory: loaded the renewed client certificate %s", Path(key[0]).name)
+                except ConfigError as exc:  # e.g. between the key and the certificate rename: retry next time
+                    log.warning("factory: cannot load the renewed client certificate yet: %s", exc.message)
+
+        t = threading.Thread(target=run, name="pgw-factory-cert-watch", daemon=True)
+        _WATCHED[key] = t
+        t.start()
+        return t
 
 
 def build_sink(settings: FactorySettings, store: Any = None) -> Any:

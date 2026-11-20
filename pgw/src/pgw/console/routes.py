@@ -279,20 +279,21 @@ def install_console(
             raise PGWError("console login is disabled: no admin token is configured (PGW_GATEWAY_ADMIN_TOKEN)",
                            code=ErrorCode.UNAVAILABLE)
         client = _client(request)
-        state.login_limiter.blocked(client)  # only failed sign-ins count
-        try:
-            body = await request.json()
-        except ValueError as exc:
-            raise InvalidRequestError("body must be JSON: {\"token\": \"...\"}") from exc
-        token = body.get("token") if isinstance(body, dict) else None
-        if not isinstance(token, str) or not token or len(token) > 4096:
-            raise InvalidRequestError("body needs a string 'token'")
-        role = store.authenticate(token.strip())
-        if role is None:
-            state.login_limiter.failure(client)
-            state.audit.event("console.login_failed", action="console_login", client=client, method="token",
-                              code=str(ErrorCode.UNAUTHENTICATED))
-            raise AuthError("invalid console token")
+        # only failed sign-ins count; attempts in flight count until settled (atomic admission)
+        with state.login_limiter.attempt(client) as att:
+            try:
+                body = await request.json()
+            except ValueError as exc:
+                raise InvalidRequestError("body must be JSON: {\"token\": \"...\"}") from exc
+            token = body.get("token") if isinstance(body, dict) else None
+            if not isinstance(token, str) or not token or len(token) > 4096:
+                raise InvalidRequestError("body needs a string 'token'")
+            role = store.authenticate(token.strip())
+            if role is None:
+                att.fail()
+                state.audit.event("console.login_failed", action="console_login", client=client, method="token",
+                                  code=str(ErrorCode.UNAUTHENTICATED))
+                raise AuthError("invalid console token")
         old = request.cookies.get(COOKIE_NAME)
         if old:
             store.delete(old)
@@ -344,23 +345,24 @@ def install_console(
             cap = getattr(state, "oidc_callback_limiter", None)
             if cap is not None:
                 cap.check("*")  # cheap global cap: every callback costs a token request to the IdP
-            state.login_limiter.blocked(client)
-            try:
-                ident = await oidc.finish(code=q.get("code"), state=q.get("state"), error=q.get("error"),
-                                          iss=q.get("iss"), binding=request.cookies.get(BINDING_COOKIE))
-            except OIDCError as exc:
-                state.login_limiter.failure(client)
-                state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
-                                  code=str(exc.code), reason=exc.reason, subject=exc.subject, email=exc.email)
-                raise
-            except PGWError:
-                raise
-            except Exception as exc:  # never leak details of a failed sign-in
-                state.login_limiter.failure(client)
-                err = as_auth_error(exc)
-                state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
-                                  code=str(err.code), reason="oidc_error")
-                raise err from exc
+            with state.login_limiter.attempt(client) as att:
+                try:
+                    ident = await oidc.finish(code=q.get("code"), state=q.get("state"), error=q.get("error"),
+                                              iss=q.get("iss"), binding=request.cookies.get(BINDING_COOKIE))
+                except OIDCError as exc:
+                    att.fail()
+                    state.audit.event("console.login_failed", action="console_login", client=client,
+                                      method="oidc", code=str(exc.code), reason=exc.reason, subject=exc.subject,
+                                      email=exc.email)
+                    raise
+                except PGWError:
+                    raise
+                except Exception as exc:  # never leak details of a failed sign-in
+                    att.fail()
+                    err = as_auth_error(exc)
+                    state.audit.event("console.login_failed", action="console_login", client=client,
+                                      method="oidc", code=str(err.code), reason="oidc_error")
+                    raise err from exc
         except PGWError as exc:
             resp: Response = _sso_error_page(exc)
             _clear_binding(request, resp)

@@ -55,6 +55,9 @@ class Env:
     def subject(self, path: Path | None = None) -> str:
         return x509.load_pem_x509_certificate((path or self.cert).read_bytes()).subject.rfc4514_string()
 
+    def der(self, path: Path | None = None) -> bytes:
+        return _der((path or self.cert).read_text())
+
     def transport(self) -> httpx.MockTransport:
         """Hands the request to the service as the TLS layer would: with the subject of the cert on disk."""
 
@@ -62,12 +65,18 @@ class Env:
             assert req.url.path == "/pgw/v1/enroll/renew"
             try:
                 out = self.svc.renew(json.loads(req.content), "10.0.0.1", req.headers.get("authorization"),
-                                     self.subject())
+                                     self.subject(), self.der())
             except PGWError as exc:
                 return httpx.Response(exc.http_status, json={"error": {"code": str(exc.code), "message": exc.message}})
             return httpx.Response(200, json=out)
 
         return httpx.MockTransport(handler)
+
+
+def _der(pem: str) -> bytes:
+    from cryptography.hazmat.primitives import serialization
+
+    return x509.load_pem_x509_certificate(pem.encode()).public_bytes(serialization.Encoding.DER)
 
 
 def _serial(p: Path) -> int:
@@ -84,8 +93,8 @@ def test_renew_rules(tmp_path: Path) -> None:
     _, csr = _key_and_csr("x")
     body = {"csr_pem": csr, "cert_pem": cur}
 
-    def renew(b: Any = body, tok: str | None = token, s: str | None = subj) -> Any:
-        return env.svc.renew(b, "10.0.0.9", f"Bearer {tok}" if tok else None, s)
+    def renew(b: Any = body, tok: str | None = token, s: str | None = subj, der: bytes | None = _der(cur)) -> Any:
+        return env.svc.renew(b, "10.0.0.9", f"Bearer {tok}" if tok else None, s, der)
 
     with pytest.raises(PGWError) as ei:
         renew(tok=None)
@@ -102,13 +111,29 @@ def test_renew_rules(tmp_path: Path) -> None:
     with pytest.raises(PGWError) as ei:
         renew(b={"csr_pem": "junk", "cert_pem": cur})
     assert ei.value.http_status == 400
+    with pytest.raises(PGWError) as ei:
+        renew(der=None)  # the subject alone is not enough: the handshake certificate itself is needed
+    assert ei.value.http_status == 403 and "certificate itself" in ei.value.message
+    # a second certificate with the same subject (CN) and tenant, valid and issued by the same CA: the body
+    # certificate must be byte-identical to the one presented in the handshake, not just share its subject
+    sibling = env.svc.renew(body, "10.0.0.9", f"Bearer {token}", subj, _der(cur))["client_cert_pem"]
+    assert x509.load_pem_x509_certificate(sibling.encode()).subject.rfc4514_string() == subj
+    with pytest.raises(PGWError) as ei:
+        renew(der=_der(sibling))  # handshake: the sibling; body: the original
+    assert ei.value.http_status == 403
+    with pytest.raises(PGWError) as ei:
+        renew(b={"csr_pem": csr, "cert_pem": sibling})  # handshake: the original; body: the sibling
+    assert ei.value.http_status == 403
+    reasons = [json.loads(line).get("reason") for line in env.audit.read_text().splitlines()]
+    assert "no_client_cert_der" in reasons and reasons.count("cert_mismatch") >= 3
     out = renew()
     new = x509.load_pem_x509_certificate(out["client_cert_pem"].encode())
     old = x509.load_pem_x509_certificate(cur.encode())
     assert new.subject == old.subject and new.serial_number != old.serial_number
     events = [json.loads(line) for line in env.audit.read_text().splitlines()]
     ok = [e for e in events if e["event"] == "enroll.renewed"]
-    assert len(ok) == 1 and ok[0]["tenant"] == "acme"
+    assert len(ok) == 2 and ok[-1]["tenant"] == "acme"
+    ok = ok[-1:]
     assert ok[0]["cert_serial"] == f"{new.serial_number:x}" and ok[0]["prev_cert_serial"] == f"{old.serial_number:x}"
     assert token not in json.dumps(events)
 
@@ -120,7 +145,7 @@ def test_expired_cert_is_never_renewed(tmp_path: Path) -> None:
     _, csr = _key_and_csr("x")
     with pytest.raises(PGWError) as ei:
         env.svc.renew({"csr_pem": csr, "cert_pem": env.cert.read_text()}, "10.0.0.1", f"Bearer {token}",
-                      env.subject())
+                      env.subject(), env.der())
     assert ei.value.http_status == 403 and "expired" in ei.value.message
 
 
@@ -178,7 +203,7 @@ def test_renew_client_cert_rejects_cert_for_another_key(tmp_path: Path) -> None:
     token = env.enroll()
     before = (env.cert.read_bytes(), env.key.read_bytes())
     other_cert = env.svc.renew({"csr_pem": _key_and_csr("z")[1], "cert_pem": env.cert.read_text()}, "1.1.1.1",
-                               f"Bearer {token}", env.subject())["client_cert_pem"]
+                               f"Bearer {token}", env.subject(), env.der())["client_cert_pem"]
     t = httpx.MockTransport(lambda req: httpx.Response(200, json={"client_cert_pem": other_cert}))
     with pytest.raises(PGWError, match="not for this gateway"):
         renew_client_cert(URL, token, env.cert, env.key, transport=t)
@@ -205,6 +230,64 @@ def test_enroll_limiter_counts_failures_only(tmp_path: Path) -> None:
         env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.4")
 
 
+def test_enroll_limiter_admission_is_atomic(tmp_path: Path) -> None:
+    """N concurrent wrong guesses cannot all pass the check before their failures are counted."""
+    import threading
+
+    from pgw.core.errors import RateLimitedError
+    from pgw.enroll.service import _IPRateLimiter
+
+    env = Env(tmp_path)
+    env.svc.limiter = _IPRateLimiter(2, global_per_minute=100)
+    gate = threading.Event()
+    entered = threading.Semaphore(0)
+    orig = env.svc._enroll
+
+    def slow(body: Any, client: str) -> Any:
+        entered.release()
+        gate.wait(10)
+        return orig(body, client)
+
+    env.svc._enroll = slow  # type: ignore[method-assign]
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def attempt() -> None:
+        try:
+            env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.7")
+            r = "ok"
+        except RateLimitedError:
+            r = "limited"
+        except PGWError:
+            r = "failed"
+        with lock:
+            results.append(r)
+
+    ts = [threading.Thread(target=attempt) for _ in range(10)]
+    for t in ts:
+        t.start()
+    for _ in range(2):
+        assert entered.acquire(timeout=10)
+    for _ in range(100):  # the other 8 are refused without waiting for the 2 in flight
+        with lock:
+            if len(results) == 8:
+                break
+        time.sleep(0.01)
+    with lock:
+        assert results == ["limited"] * 8
+    gate.set()
+    for t in ts:
+        t.join()
+    assert sorted(results) == ["failed"] * 2 + ["limited"] * 8
+    with pytest.raises(RateLimitedError):  # both failures were counted
+        env.svc.enroll({"secret": "00" * 16, "gateway_name": "x"}, "10.0.0.7")
+    # a successful attempt releases its slot without counting
+    env.svc._enroll = orig  # type: ignore[method-assign]
+    env.svc.limiter = _IPRateLimiter(1, global_per_minute=100)
+    for i in range(3):
+        env.enroll(name=f"ok-{i}")
+
+
 async def test_renew_route(tmp_path: Path) -> None:
     from starlette.applications import Starlette
 
@@ -215,12 +298,64 @@ async def test_renew_route(tmp_path: Path) -> None:
     token = env.enroll()
     app = Starlette()
     add_enroll_routes(app, env.settings, env.auth, lambda: [])
-    app.add_middleware(_HeaderToTLSExt, header="x-client-cert")
+    app.add_middleware(_HeaderToTLSExt, header="x-client-cert", pem_header="x-client-cert-pem")
+    from urllib.parse import quote
+
     body = {"csr_pem": _key_and_csr("x")[1], "cert_pem": env.cert.read_text()}
+    auth = {"authorization": f"Bearer {token}"}
+    pem_hdr = {"x-client-cert-pem": quote(env.cert.read_text())}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as h:
-        r = await h.post("/pgw/v1/enroll/renew", json=body, headers={"authorization": f"Bearer {token}"})
+        r = await h.post("/pgw/v1/enroll/renew", json=body, headers=auth)
         assert r.status_code == 403  # no client certificate
+        r = await h.post("/pgw/v1/enroll/renew", json=body, headers={**auth, "x-client-cert": env.subject()})
+        assert r.status_code == 403  # the subject alone: the certificate itself is needed
+        r = await h.post("/pgw/v1/enroll/renew", json=body, headers={**auth, **pem_hdr})
+        assert r.status_code == 403  # a certificate without the verified subject header is ignored
         r = await h.post("/pgw/v1/enroll/renew", json=body,
-                         headers={"authorization": f"Bearer {token}", "x-client-cert": env.subject()})
+                         headers={**auth, "x-client-cert": env.subject(), **pem_hdr})
         assert r.status_code == 200, r.text
         assert r.headers["cache-control"] == "no-store" and "BEGIN CERTIFICATE" in r.json()["client_cert_pem"]
+
+
+def test_renew_over_real_mtls(tiny_pack_dir: Path, tmp_path: Path) -> None:
+    """Native TLS (uvicorn): enroll, compute needs the certificate, renewal checks the handshake certificate
+    byte for byte (a same-subject sibling in the body is refused), and the renewed pair works."""
+    import ssl
+
+    from pgw.enroll.client import enroll_gateway
+    from tests.enroll_helpers import enroll_service
+
+    mtls = tmp_path / "mtls.txt"
+    mtls.write_text("")
+    with enroll_service(tiny_pack_dir, tmp_path / "svc", verify_client_certs=True, mtls_tenants_file=mtls,
+                        require_client_cert_for_compute=True) as svc:
+        assert svc.settings.compute_requires_client_cert
+        code, _ = svc.create_code("acme")
+        cfg = tmp_path / "etc"
+        res = enroll_gateway(code, cfg, gateway_name="gw-1")
+        files = res.files
+        token = files["token"].read_text().strip()
+        assert "acme:pgw-gw.acme.gw-1" in mtls.read_text()  # persisted for restarts
+
+        def ctx(cert: Path | None = files["client_cert"]) -> ssl.SSLContext:
+            c = ssl.create_default_context(cafile=str(files["ca"]))
+            if cert is not None:
+                c.load_cert_chain(str(cert), str(files["client_key"]))
+            return c
+
+        hdr = {"authorization": f"Bearer {token}", "PGW-Protocol": "1"}
+        assert httpx.get(f"{svc.url}/pgw/v1/models", headers=hdr, verify=ctx(None)).status_code == 403
+        assert httpx.get(f"{svc.url}/pgw/v1/models", headers=hdr, verify=ctx()).status_code == 200
+        # a sibling certificate: same CN, same CA, valid, but not the one presented in the handshake
+        first = files["client_cert"].read_text()
+        sibling = httpx.post(f"{svc.url}/pgw/v1/enroll/renew", headers=hdr, verify=ctx(),
+                             json={"csr_pem": _key_and_csr("x")[1], "cert_pem": first})
+        assert sibling.status_code == 200, sibling.text
+        sib_pem = sibling.json()["client_cert_pem"]
+        r = httpx.post(f"{svc.url}/pgw/v1/enroll/renew", headers=hdr, verify=ctx(),
+                       json={"csr_pem": _key_and_csr("y")[1], "cert_pem": sib_pem})
+        assert r.status_code == 403
+        # the real renewer: presents the current pair, sends the same certificate, installs the new one
+        serial = renew_client_cert(svc.url, token, files["client_cert"], files["client_key"], ca_file=files["ca"])
+        assert _serial(files["client_cert"]) == serial
+        assert httpx.get(f"{svc.url}/pgw/v1/models", headers=hdr, verify=ctx()).status_code == 200

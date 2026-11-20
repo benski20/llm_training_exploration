@@ -15,9 +15,9 @@
 ``POST /pgw/v1/enroll/renew``  (JSON ``{"csr_pem": str, "cert_pem": str}``)
     Renews an enrolled gateway's client certificate before it expires. Needs the tenant bearer token,
     the current client certificate presented in the TLS handshake (proof that the caller holds its key)
-    and the same certificate in ``cert_pem``: issued by this service's client CA, not expired, its CN
-    the TLS-verified one and belonging to the token's tenant. The new certificate keeps the CN. Audited
-    as ``enroll.renewed`` with the old and new serials. An expired certificate is never accepted (the
+    and the same certificate, byte for byte (DER), in ``cert_pem``: issued by this service's client CA,
+    not expired, its CN the TLS-verified one and belonging to the token's tenant. The new certificate keeps
+    the CN. Audited as ``enroll.renewed`` with the old and new serials. An expired certificate is never accepted (the
     gateway then has to enroll again).
 
 Failures of the code itself (unknown, used, revoked, expired) all return the same 401.
@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -36,7 +37,7 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from pgw.core.errors import ConfigError, ErrorCode, PGWError, RateLimitedError
 from pgw.enroll.store import EnrollmentRecord, EnrollmentRejectedError, EnrollmentStore
@@ -47,6 +48,7 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 ENROLL_PATH = "/pgw/v1/enroll"
 ENROLL_CA_PATH = "/pgw/v1/enroll/ca"
@@ -167,7 +169,12 @@ def check_csr(csr_pem: str) -> Any:
 # ---- rate limiting and audit -------------------------------------------------------------------------
 class _IPRateLimiter:
     """Failed attempts per client address per minute, plus a global ceiling on failures from all addresses
-    (so rotating addresses does not buy unlimited code guesses). Successful calls are not counted."""
+    (so rotating addresses does not buy unlimited code guesses). Successful calls are not counted.
+
+    Admission is atomic: :meth:`acquire` counts the attempt as in flight (against both limits) until
+    :meth:`release` settles it, as a failure or not. So N concurrent attempts cannot all pass the check
+    before the first of their failures is recorded.
+    """
 
     def __init__(self, per_minute: int, *, global_per_minute: int = 300, max_clients: int = 10_000,
                  clock: Callable[[], float] = time.monotonic):
@@ -177,6 +184,8 @@ class _IPRateLimiter:
         self.clock = clock
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._global: deque[float] = deque()
+        self._inflight: dict[str, int] = {}
+        self._global_inflight = 0
         self._lock = threading.Lock()
 
     def _queue(self, client: str, now: float) -> deque[float]:
@@ -188,28 +197,52 @@ class _IPRateLimiter:
             self._hits.popitem(last=False)
         return q
 
-    def check(self, client: str) -> None:
-        """Raise :class:`RateLimitedError` if ``client`` (or everyone together) failed too often."""
+    def acquire(self, client: str) -> None:
+        """Reserve one attempt by ``client``; raise :class:`RateLimitedError` if its recent failures plus its
+        attempts in flight (or everyone's together) reach the limit. Pair with :meth:`release`."""
         now = self.clock()
         with self._lock:
             g = self._global
             while g and g[0] <= now - 60.0:
                 g.popleft()
             q = self._queue(client, now)
-            for queue, limit in ((g, self.global_per_minute), (q, self.per_minute)):
-                if len(queue) >= limit:
+            mine = self._inflight.get(client, 0)
+            for queue, busy, limit in ((g, self._global_inflight, self.global_per_minute),
+                                       (q, mine, self.per_minute)):
+                if len(queue) + busy >= limit:
+                    retry = queue[0] + 60.0 - now if queue else 1.0
                     raise RateLimitedError("too many failed enrollment attempts; try again later",
-                                           details={"retry_after_s": max(1.0, queue[0] + 60.0 - now),
-                                                    "limit": "enroll"})
+                                           details={"retry_after_s": max(1.0, retry), "limit": "enroll"})
+            self._inflight[client] = mine + 1
+            self._global_inflight += 1
 
-    def failure(self, client: str) -> None:
-        """Count one failed attempt by ``client``."""
+    def release(self, client: str, *, failed: bool) -> None:
+        """Settle an attempt reserved with :meth:`acquire`; ``failed`` counts it as a failure."""
         now = self.clock()
         with self._lock:
-            self._queue(client, now).append(now)
-            self._global.append(now)
-            while len(self._global) > self.global_per_minute:
-                self._global.popleft()
+            n = self._inflight.get(client, 0) - 1
+            if n > 0:
+                self._inflight[client] = n
+            else:
+                self._inflight.pop(client, None)
+            self._global_inflight = max(0, self._global_inflight - 1)
+            if failed:
+                self._queue(client, now).append(now)
+                self._global.append(now)
+                while len(self._global) > self.global_per_minute:
+                    self._global.popleft()
+
+    def guarded(self, client: str, fn: Callable[[], T]) -> T:
+        """Run ``fn`` as one reserved attempt; a :class:`PGWError` with a failure code counts as a failure."""
+        self.acquire(client)
+        failed = False
+        try:
+            return fn()
+        except PGWError as exc:
+            failed = exc.code in _FAILURE_CODES
+            raise
+        finally:
+            self.release(client, failed=failed)
 
 
 #: Errors that count as a failed attempt for the limiter (a refused code or credential, a malformed body);
@@ -288,13 +321,7 @@ class EnrollmentService:
         Raises:
             RateLimitedError, PGWError(protocol), EnrollmentRejectedError, PGWError(unavailable).
         """
-        self.limiter.check(client)
-        try:
-            return self._enroll(body, client)
-        except PGWError as exc:
-            if exc.code in _FAILURE_CODES:
-                self.limiter.failure(client)
-            raise
+        return self.limiter.guarded(client, lambda: self._enroll(body, client))
 
     def _enroll(self, body: Any, client: str) -> dict[str, Any]:
         if not isinstance(body, dict):
@@ -360,23 +387,23 @@ class EnrollmentService:
         return out
 
 
-    def renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None) -> dict[str, Any]:
+    def renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None,
+              cert_der: bytes | None = None) -> dict[str, Any]:
         """Renew a gateway client certificate (blocking: run it in a worker thread). See the module docstring.
+
+        Args:
+            cert_subject: Subject of the verified client certificate of the TLS handshake.
+            cert_der: DER of that certificate (``cert_pem`` in the body must be byte-identical to it).
 
         Raises:
             RateLimitedError, AuthError (401), PGWError(permission_denied / protocol / unavailable).
         """
-        self.limiter.check(client)
-        try:
-            return self._renew(body, client, authorization, cert_subject)
-        except PGWError as exc:
-            if exc.code in _FAILURE_CODES:
-                self.limiter.failure(client)
-            raise
+        return self.limiter.guarded(client, lambda: self._renew(body, client, authorization, cert_subject, cert_der))
 
     def _renew(self, body: Any, client: str, authorization: str | None, cert_subject: str | None,
-               ) -> dict[str, Any]:
+               cert_der: bytes | None) -> dict[str, Any]:
         from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
         from cryptography.x509.oid import NameOID
 
         from pgw.core.errors import AuthError
@@ -415,6 +442,15 @@ class EnrollmentService:
             cur = x509.load_pem_x509_certificate(str(cert_pem).encode("ascii"))
         except (ValueError, UnicodeEncodeError) as exc:
             raise PGWError("cert_pem is not a PEM certificate", code=ErrorCode.PROTOCOL) from exc
+        # The certificate renewed must be exactly the one presented in the TLS handshake (whose key the
+        # caller proved it holds), not merely one with the same subject.
+        if not cert_der:
+            raise deny("no_client_cert_der", "certificate renewal needs the client certificate itself from the TLS "
+                       "handshake (native mTLS, or trusted_client_cert_pem_header behind a TLS-terminating proxy)",
+                       tenant)
+        if not hmac.compare_digest(cur.public_bytes(serialization.Encoding.DER), bytes(cert_der)):
+            raise deny("cert_mismatch", "the certificate does not match the TLS client certificate or the tenant",
+                       tenant)
         ca_cert = x509.load_pem_x509_certificate(Path(s.client_issuing_ca_cert_file).read_bytes())
         try:
             cur.verify_directly_issued_by(ca_cert)
@@ -508,6 +544,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     async def post_renew(request: Request) -> Response:
+        from pgw.service.tls_peer import peer_cert_der
         from pgw.wire.server import client_cert_subject
 
         client = client_ip(request)
@@ -523,7 +560,7 @@ def add_enroll_routes(app: Any, settings: Any, authenticator: Any, models: Calla
             except ValueError as exc:
                 raise PGWError("body must be JSON", code=ErrorCode.PROTOCOL) from exc
             out = await asyncio.to_thread(svc.renew, body, client, request.headers.get("authorization"),
-                                          client_cert_subject(request.scope))
+                                          client_cert_subject(request.scope), peer_cert_der(request.scope))
         except PGWError as exc:
             return _err(exc)
         except Exception as exc:  # never leak details

@@ -167,6 +167,9 @@ CERT_EXPIRY_MARGIN_S = 60.0
 _CERT_CONTEXTS: dict[tuple[str, str], weakref.WeakSet[ssl.SSLContext]] = {}
 _CERT_CLIENTS: weakref.WeakSet[ComputeClient] = weakref.WeakSet()
 _CERT_LOCK = threading.Lock()
+# Serializes reload_client_cert calls (one renewal's reload never interleaves with another's).
+_RELOAD_LOCK = threading.Lock()
+_BACKGROUND: set[asyncio.Task[None]] = set()  # strong references to fire-and-forget pool closes
 
 
 def client_cert_validity(cert_file: Path) -> tuple[float, float] | None:
@@ -197,14 +200,15 @@ def _usable_client_cert(config: ClientConfig, now: float) -> bool:
     return False
 
 
-def build_ssl_context(config: ClientConfig, *, now: float | None = None) -> ssl.SSLContext:
+def build_ssl_context(config: ClientConfig, *, now: float | None = None, register: bool = True) -> ssl.SSLContext:
     """TLS context for ``config``: TLS >= 1.2, server verification against ``ca_file`` (or the
     system store), and the mTLS client certificate when configured.
 
     A client certificate that has expired or expires within :data:`CERT_EXPIRY_MARGIN_S` is not
     presented (an error is logged): the connection falls back to token-only authentication, which a
-    service with optional client certificates accepts, instead of failing every handshake. The context
-    is registered so :func:`reload_client_cert` can load a renewed pair into it.
+    service with optional client certificates accepts, instead of failing every handshake. With
+    ``register`` the context is registered so :func:`reload_client_cert` can load a renewed pair into it
+    (contexts a :class:`ComputeClient` owns are not registered: it builds a new one and swaps instead).
 
     Raises:
         ConfigError: unreadable certificate/key files.
@@ -223,44 +227,55 @@ def build_ssl_context(config: ClientConfig, *, now: float | None = None) -> ssl.
             if _usable_client_cert(config, time.time() if now is None else now):
                 pw = config.client_key_password.get_secret_value() if config.client_key_password else None
                 ctx.load_cert_chain(str(config.client_cert_file), str(config.client_key_file), password=pw)
-            key = (str(Path(config.client_cert_file).resolve()), str(Path(config.client_key_file).resolve()))
-            with _CERT_LOCK:
-                _CERT_CONTEXTS.setdefault(key, weakref.WeakSet()).add(ctx)
+            if register:
+                key = (str(Path(config.client_cert_file).resolve()), str(Path(config.client_key_file).resolve()))
+                with _CERT_LOCK:
+                    _CERT_CONTEXTS.setdefault(key, weakref.WeakSet()).add(ctx)
     except (OSError, ssl.SSLError) as exc:
         raise ConfigError(f"cannot load TLS material: {type(exc).__name__}: {exc}") from exc
     return ctx
 
 
 def reload_client_cert(cert_file: Path, key_file: Path, *, password: str | None = None) -> int:
-    """Load a renewed client certificate/key pair into every live context built from these files.
+    """Load a renewed client certificate/key pair (thread-safe; reloads are serialized).
 
-    New TLS handshakes present the new certificate; connections already open keep theirs (the service
-    checks the certificate at the handshake only). Every :class:`ComputeClient` using the pair also
-    retires its compute stream channels: each closes once its in-flight calls are answered (never during
-    a round trip) and the next call opens a fresh channel with the new certificate.
+    Every :class:`ComputeClient` using the pair builds a new TLS context from the files and swaps it in
+    (live contexts are not mutated): its pooled HTTP connections are retired (the next request opens a new
+    pool that presents the new certificate, so connections opened without a certificate, e.g. after it had
+    expired, are not reused; the old pool is closed once calls still using it are past their budget) and
+    its compute stream channels close once their in-flight calls are answered (never during a round trip).
+    Contexts that callers built themselves with :func:`build_ssl_context` cannot be swapped: the pair is
+    loaded into them, so their new handshakes present it. Connections already open keep their certificate
+    (the service checks it at the handshake only).
 
     Returns:
-        The number of TLS contexts updated.
+        The number of TLS contexts updated or replaced.
 
     Raises:
-        ConfigError: the new pair cannot be loaded (the contexts keep the previous certificate).
+        ConfigError: the new pair cannot be loaded (everything keeps the previous certificate).
     """
     key = (str(Path(cert_file).resolve()), str(Path(key_file).resolve()))
-    with _CERT_LOCK:
-        contexts = list(_CERT_CONTEXTS.get(key, ()))
-        clients = [c for c in _CERT_CLIENTS if c._cert_key == key]
-    try:  # validate the pair once before touching a live context
-        probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        probe.load_cert_chain(key[0], key[1], password=password)
-        for ctx in contexts:
-            ctx.load_cert_chain(key[0], key[1], password=password)
-    except (OSError, ssl.SSLError) as exc:
-        raise ConfigError(f"cannot load the renewed client certificate: {type(exc).__name__}: {exc}") from exc
-    for c in clients:
-        c.retire_channels()
+    with _RELOAD_LOCK:
+        try:  # validate the pair once before touching anything live
+            probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            probe.load_cert_chain(key[0], key[1], password=password)
+        except (OSError, ssl.SSLError) as exc:
+            raise ConfigError(f"cannot load the renewed client certificate: {type(exc).__name__}: {exc}") from exc
+        with _CERT_LOCK:
+            contexts = list(_CERT_CONTEXTS.get(key, ()))
+            clients = [c for c in _CERT_CLIENTS if c._cert_key == key]
+        swapped = 0
+        for c in clients:  # build first: a failure leaves every client on its previous context
+            c._reload_tls()
+            swapped += 1
+        try:
+            for ctx in contexts:
+                ctx.load_cert_chain(key[0], key[1], password=password)
+        except (OSError, ssl.SSLError) as exc:
+            raise ConfigError(f"cannot load the renewed client certificate: {type(exc).__name__}: {exc}") from exc
     log.info("loaded the renewed client certificate into %d TLS context(s) and %d client(s)", len(contexts),
-             len(clients))
-    return len(contexts)
+             swapped)
+    return len(contexts) + swapped
 
 
 @dataclass
@@ -548,7 +563,7 @@ class ComputeClient:
         self._transport = transport
         self._on_attempt = on_attempt
         self._sleep = sleep or asyncio.sleep
-        self._ssl: ssl.SSLContext | None = build_ssl_context(config) if config.uses_tls else None
+        self._ssl: ssl.SSLContext | None = build_ssl_context(config, register=False) if config.uses_tls else None
         if not config.uses_tls and transport is None:
             if config.token is not None:
                 log.warning(
@@ -562,6 +577,8 @@ class ComputeClient:
             weakref.WeakKeyDictionary()
         )
         self._clients_lock = threading.Lock()
+        #: pools retired by a client-certificate reload, closed after a grace period (or by aclose/close)
+        self._retired_clients: list[tuple[asyncio.AbstractEventLoop, httpx.AsyncClient]] = []
         self._channels: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _StreamChannel] = (
             weakref.WeakKeyDictionary()
         )
@@ -667,10 +684,12 @@ class ComputeClient:
                 if direct is not None:
                     kw["create_connection"] = direct
                 if self._ssl is not None:
-                    if self._stream_ssl is None:  # the upgrade is HTTP/1.1: never let ALPN pick h2
-                        self._stream_ssl = build_ssl_context(cfg)
-                        self._stream_ssl.set_alpn_protocols(["http/1.1"])
-                    kw["ssl"] = self._stream_ssl
+                    stream_ssl = self._stream_ssl
+                    if stream_ssl is None:  # the upgrade is HTTP/1.1: never let ALPN pick h2
+                        stream_ssl = build_ssl_context(cfg, register=False)
+                        stream_ssl.set_alpn_protocols(["http/1.1"])
+                        self._stream_ssl = stream_ssl
+                    kw["ssl"] = stream_ssl
                 try:
                     ws = await connect(self._stream_url(), proxy=None, **kw)
                 except TypeError:  # websockets < 15 has no proxy support (and never uses one)
@@ -685,6 +704,50 @@ class ComputeClient:
             ch = _StreamChannel(ws, cfg.max_response_bytes)
             self._channels[loop] = ch
             return ch
+
+    def _reload_tls(self) -> None:
+        """Swap in a new TLS context built from the (renewed) certificate files and retire what used the old
+        one: the pooled HTTP clients (closed after a grace period covering calls still using them) and the
+        compute stream channels. Thread-safe.
+
+        Raises:
+            ConfigError: the files cannot be loaded (nothing is changed).
+        """
+        if self.config.uses_tls:
+            new = build_ssl_context(self.config, register=False)
+            with self._clients_lock:
+                self._ssl = new
+                self._stream_ssl = None
+                old = list(self._clients.items())
+                self._clients.clear()
+            # every call bounds itself (retries included) by request_timeout_s: past that no call uses the pool
+            grace = self.config.request_timeout_s + self.config.connect_timeout_s
+            for loop, c in old:
+                self._close_later(loop, c, grace)
+        self.retire_channels()
+
+    def _close_later(self, loop: asyncio.AbstractEventLoop, c: httpx.AsyncClient, delay: float) -> None:
+        with self._clients_lock:
+            self._retired_clients.append((loop, c))
+
+        def schedule() -> None:
+            def close() -> None:
+                with self._clients_lock:
+                    if (loop, c) in self._retired_clients:
+                        self._retired_clients.remove((loop, c))
+                if not c.is_closed:
+                    t = loop.create_task(c.aclose())
+                    _BACKGROUND.add(t)
+                    t.add_done_callback(_BACKGROUND.discard)
+
+            loop.call_later(delay, close)
+
+        if loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(schedule)
+        except RuntimeError:  # pragma: no cover - loop closed concurrently
+            pass
 
     def retire_channels(self) -> None:
         """Retire every open compute stream channel (thread-safe): each closes once its in-flight calls
@@ -1183,8 +1246,9 @@ class ComputeClient:
         self._closed = True
         await self._close_channels()
         with self._clients_lock:
-            items = list(self._clients.items())
+            items = list(self._clients.items()) + self._retired_clients
             self._clients.clear()
+            self._retired_clients = []
         current = asyncio.get_running_loop()
         for loop, c in items:
             if loop is current:
@@ -1213,9 +1277,11 @@ class ComputeClient:
                     asyncio.run_coroutine_threadsafe(ch.aclose(), loop).result(timeout=5)
             with self._clients_lock:
                 c = self._clients.pop(loop, None)
-            if c is not None:
+                pools = [r for lp, r in self._retired_clients if lp is loop] + ([c] if c is not None else [])
+                self._retired_clients = [(lp, r) for lp, r in self._retired_clients if lp is not loop]
+            for pool in pools:
                 try:
-                    asyncio.run_coroutine_threadsafe(c.aclose(), loop).result(timeout=5)
+                    asyncio.run_coroutine_threadsafe(pool.aclose(), loop).result(timeout=5)
                 except Exception:  # pragma: no cover - best effort
                     log.warning("could not close the sync connection pool cleanly")
         self._stop_loop()
