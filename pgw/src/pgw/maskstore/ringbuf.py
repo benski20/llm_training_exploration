@@ -57,6 +57,7 @@ import threading
 import time
 import uuid
 import weakref
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -85,6 +86,8 @@ __all__ = [
     "SeedRegistry",
     "SlabState",
     "harden_process",
+    "init_on_free_status",
+    "raise_memlock_limit",
     "ring_geometry",
     "seed_digest",
     "swap_status",
@@ -229,6 +232,21 @@ def swap_status(proc_swaps: str = "/proc/swaps", sys_block: str = "/sys/block") 
     return {"active": active, "unprotected": unprotected}
 
 
+def raise_memlock_limit(need: int | None = None) -> None:
+    """Raise the soft ``RLIMIT_MEMLOCK`` to the hard limit (best effort).
+
+    Used by every ``mlock`` of ring memory (v1 arena, v2 memfd slabs in the gateway and in the
+    factory child). ``need``: skip when the soft limit already covers this many bytes; ``None``
+    always raises it (v2 locks many slabs one at a time, so the total is not known up front).
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+    if soft == resource.RLIM_INFINITY or (need is not None and soft >= need):
+        return
+    if hard == resource.RLIM_INFINITY or hard > soft:
+        with contextlib.suppress(ValueError, OSError):
+            resource.setrlimit(resource.RLIMIT_MEMLOCK, (hard, hard))
+
+
 # =================================================================================================
 # arena
 # =================================================================================================
@@ -266,10 +284,7 @@ class LockedArena:
             raise
 
     def _lock_pages(self, mlock: Callable[[int, int], int] | None, allow_unlocked: bool) -> None:
-        soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
-        if soft != resource.RLIM_INFINITY and soft < self.size and (hard == resource.RLIM_INFINITY or hard > soft):
-            with contextlib.suppress(ValueError, OSError):
-                resource.setrlimit(resource.RLIMIT_MEMLOCK, (hard, hard))
+        raise_memlock_limit(self.size)
         rc = (mlock or _lib().mlock)(self.addr, self.size)
         if rc == 0:
             self.locked = True
@@ -399,6 +414,7 @@ class FdMapping:
         self.locked = False
         self._closed = False
         try:
+            raise_memlock_limit()
             if lib.mlock(self.addr, self.size) == 0:
                 self.locked = True
             elif not allow_unlocked:
@@ -450,8 +466,10 @@ class MemfdSlab:
     The factory child maps the fd read-write and fills it. At publish the gateway adds
     ``F_SEAL_WRITE``, which the kernel refuses (``EBUSY``) while any writable mapping exists, so a
     published slab can never be written again by anyone. Sealed pages cannot be zeroed either: they
-    are dropped (``munmap`` + ``close``) and the kernel zeroes them before reuse (``init_on_free=1``
-    zeroes them at free time).
+    are dropped (``munmap`` + ``close``); the kernel zeroes a page before handing it to any process,
+    but until then the freed physical page still holds the seed, ``uW`` and ``W r`` unless the kernel
+    runs with ``init_on_free=1`` (see :func:`init_on_free_status`, SPEC 7.8). Unsealed slabs (aborted
+    fills, refused publishes before the seal) are zeroed through the fd before they are dropped.
     """
 
     def __init__(self, size: int, *, allow_unlocked: bool = False):
@@ -494,44 +512,138 @@ class MemfdSlab:
         return self._map.copy_out(off, n)
 
     def close(self) -> None:
+        """Unmap and close. An unsealed slab is overwritten with zeros first (``pwrite`` on the memfd
+        reaches the same pages); a sealed one cannot be written and is only dropped."""
         self._map.close(wipe=False)
+        if not self.sealed:
+            try:
+                _zero_fd(self.fd, self.size)
+            except OSError as exc:  # pragma: no cover - EPERM if a write seal was added meanwhile
+                log.debug("could not zero an unsealed ring slab: %s", exc.strerror)
         with contextlib.suppress(OSError):
             os.close(self.fd)
+
+
+_ZERO_PIECE = bytes(1 << 20)
+
+
+def _zero_fd(fd: int, size: int) -> None:
+    """Overwrite ``[0, size)`` of a (memfd) file with zeros."""
+    off = 0
+    while off < size:
+        n = os.pwrite(fd, memoryview(_ZERO_PIECE)[: min(len(_ZERO_PIECE), size - off)], off)
+        if n <= 0:  # pragma: no cover
+            raise OSError(errno.EIO, "short write while zeroing a ring slab")
+        off += n
+
+
+def init_on_free_status(cmdline: str = "/proc/cmdline", config_paths: Sequence[str] | None = None) -> bool | None:
+    """Whether the kernel zeroes pages when they are freed (``init_on_free``).
+
+    v2 drops sealed memfd slabs without zeroing them (they cannot be written); only ``init_on_free``
+    clears the freed pages at once. Reads the boot command line, then the kernel config
+    (``CONFIG_INIT_ON_FREE_DEFAULT_ON``). Returns ``None`` when neither says.
+    """
+    try:
+        with open(cmdline, encoding="ascii", errors="replace") as f:
+            args = f.read().split()
+    except OSError:
+        args = []
+    for a in reversed(args):  # the last occurrence wins
+        if a.startswith("init_on_free="):
+            return a.split("=", 1)[1].strip().lower() in ("1", "on", "y", "yes", "true")
+    if config_paths is None:
+        config_paths = (f"/boot/config-{os.uname().release}", "/proc/config.gz")
+    for path in config_paths:
+        try:
+            if path.endswith(".gz"):
+                import gzip
+
+                with gzip.open(path, "rt", encoding="ascii", errors="replace") as g:
+                    text = g.read()
+            else:
+                with open(path, encoding="ascii", errors="replace") as f:
+                    text = f.read()
+        except OSError:
+            continue
+        return "CONFIG_INIT_ON_FREE_DEFAULT_ON=y" in text
+    return None
 
 
 # =================================================================================================
 # seeds
 # =================================================================================================
 class SeedRegistry:
-    """Seed hashes ever granted in this process (ring writers and guarded store writers).
+    """Seed hashes granted in this process (ring writers and guarded store writers), bounded.
 
-    A seed is claimed once, forever (32-byte hex per segment). Shared by every ring and by the
-    factory's store sink, so the same seed can never land in both tiers (I3).
+    Shared by every ring and by the factory's store sink, so the same seed can never land in both
+    tiers (I3). Seeds are 256-bit ``os.urandom`` values, so this registry only guards against bugs
+    (a seed passed twice, a generator that repeats); it does not need to remember forever:
+
+    * *live* digests (``claim(..., live=True)``: a ring slab being filled or still holding the
+      segment) are kept until :meth:`release` (the slab's wipe), so their number is bounded by the
+      slab count;
+    * every other digest (released ring seeds, store seeds, which the store's own ``seed_hash``
+      table also remembers forever) stays in a recent window of ``max_recent`` entries, oldest
+      evicted first.
+
+    Memory is therefore ``O(slabs + max_recent)`` (about 150 bytes per entry), not one entry per
+    segment for the gateway's lifetime.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_recent: int = 1 << 16) -> None:
+        if max_recent < 1:
+            raise ValueError("max_recent must be >= 1")
+        self.max_recent = int(max_recent)
         self._lock = threading.Lock()
-        self._seen: dict[str, str] = {}
+        self._live: dict[str, str] = {}
+        self._recent: OrderedDict[str, str] = OrderedDict()
+        self.evicted = 0
 
-    def claim(self, digest: str, owner: str) -> None:
-        """Record ``digest`` for ``owner``; :class:`MaskReuseError` if it was ever claimed."""
+    def claim(self, digest: str, owner: str, *, live: bool = False) -> None:
+        """Record ``digest`` for ``owner``; :class:`MaskReuseError` if it is known.
+
+        ``live=True`` pins it until :meth:`release` (ring slabs)."""
         with self._lock:
-            if digest in self._seen:
+            if digest in self._live or digest in self._recent:
                 raise MaskReuseError("this seed was already used for a mask segment in this process (mask reuse)")
-            self._seen[digest] = owner
+            if live:
+                self._live[digest] = owner
+            else:
+                self._remember_locked(digest, owner)
+
+    def release(self, digest: str | None) -> None:
+        """Unpin a live digest (its slab was wiped); it stays in the recent window."""
+        if digest is None:
+            return
+        with self._lock:
+            owner = self._live.pop(digest, None)
+            if owner is not None:
+                self._remember_locked(digest, owner)
+
+    def _remember_locked(self, digest: str, owner: str) -> None:
+        self._recent[digest] = owner
+        while len(self._recent) > self.max_recent:
+            self._recent.popitem(last=False)
+            self.evicted += 1
 
     def owned_by(self, digest: str, owner: str) -> bool:
-        """True if ``digest`` was claimed by ``owner``."""
+        """True if ``digest`` is pinned (live) for ``owner``."""
         with self._lock:
-            return self._seen.get(digest) == owner
+            return self._live.get(digest) == owner
+
+    @property
+    def live(self) -> int:
+        with self._lock:
+            return len(self._live)
 
     def __contains__(self, digest: object) -> bool:
         with self._lock:
-            return digest in self._seen
+            return digest in self._live or digest in self._recent
 
     def __len__(self) -> int:
         with self._lock:
-            return len(self._seen)
+            return len(self._live) + len(self._recent)
 
 
 #: Process-wide default registry.
@@ -871,8 +983,12 @@ class MaskRing:
     def _release_slab_memory(self, slab: _Slab) -> None:
         """Wipe (arena) or drop (memfd: unmap and close; sealed pages cannot be written) a slab's bytes."""
         if slab.mem is not None:
-            mem, slab.mem = slab.mem, None
-            mem.close()
+            # Under the slab lock: a concurrent copy (publish_shared, decrypt_into) holds it while it
+            # reads the mapping, so the munmap never runs under a reader.
+            with slab.lock:
+                mem, slab.mem = slab.mem, None
+                if mem is not None:
+                    mem.close()
         elif self._arena is not None:
             self._arena.zero(slab.off, self.geometry.slab_bytes)
 
@@ -994,11 +1110,12 @@ class MaskRing:
             slab = next((s for s in self._slabs if s.state == SlabState.FREE), None)
             if slab is None:
                 raise RingFull("no free ring slab", details={"ring": self.ring.name})
-            self.seeds.claim(digest, token)  # at grant: a seed fills at most one slab, ever
+            self.seeds.claim(digest, token, live=True)  # at grant: pinned until the slab's wipe
             with slab.lock:
                 slab.state = SlabState.FILLING
                 slab.gen += 1
                 slab.reset()
+                slab.digest = digest  # released from the registry's live set when this slab is wiped
                 slab.slots = slots
                 slab.chunk_slots = min(int(chunk_slots), slots)
             w = RingSegmentWriter(self, slab, slab.gen, seed=seed, digest=digest, token=token, slots=slots,
@@ -1124,8 +1241,11 @@ class MaskRing:
         secrets: bytearray | None = None
         token = uuid.uuid4().hex
         try:
-            mem.seal()
-            secrets = mem.copy_out(0, secrets_len)
+            with slab.lock:  # the mapping cannot be dropped (close, abort) while it is read
+                if slab.mem is not mem or slab.gen != gen or slab.state != SlabState.FILLING:
+                    raise MaskStoreError("ring slab was revoked before publish")
+                mem.seal()
+                secrets = mem.copy_out(0, secrets_len)
             seed = memoryview(secrets)[:SEED_BYTES]
             zero_seed = _all_zero(seed)
             digest = seed_digest(seed)
@@ -1149,10 +1269,11 @@ class MaskRing:
             with self._lock:
                 if self._closed:
                     raise MaskStoreError("mask ring is closed")
-                self.seeds.claim(digest, token)  # unique across both tiers and every ring
                 with slab.lock:
                     if slab.gen != gen or slab.state != SlabState.FILLING:
                         raise MaskStoreError("ring slab was revoked before publish")
+                    # unique across both tiers and every ring; pinned until this slab's wipe
+                    self.seeds.claim(digest, token, live=True)
                     slab.header = header
                     slab.layout = SegmentLayout(header, 0)
                     slab.digest = digest
@@ -1345,6 +1466,7 @@ class MaskRing:
                     return
                 for slab in todo:
                     with slab.lock:
+                        self.seeds.release(slab.digest)
                         slab.reset()
                         slab.refs = 0
                         slab.wipe_queued = False
@@ -1415,6 +1537,7 @@ class MaskRing:
         for slab in self._slabs:
             if slab.mem is not None:
                 self._release_slab_memory(slab)
+            self.seeds.release(slab.digest)
         if self._arena is not None:
             self._arena.close()
         log.info("mask ring %s closed and wiped (%d unreserved slots lost)", self.name, self.lost_total)

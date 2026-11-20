@@ -167,14 +167,16 @@ class FactoryState:
             finally:
                 os.close(dfd)
 
-    def record_segment(self, fingerprint: str, ring: str, slots: int, seconds: float, segment_id: str) -> None:
-        """Account a committed segment."""
+    def record_segment(self, fingerprint: str, ring: str, slots: int, seconds: float, segment_id: str | None) -> None:
+        """Account a committed segment. ``segment_id=None`` (in-memory ring segments, whose ids must
+        never reach ``factory-state.json``) updates the counts only."""
         t = self.totals.setdefault(self.key(fingerprint, ring), {"segments": 0, "slots": 0, "seconds": 0.0})
         t["segments"] = int(t.get("segments", 0)) + 1
         t["slots"] = int(t.get("slots", 0)) + slots
         t["seconds"] = float(t.get("seconds", 0.0)) + seconds
         self.throughput[self.key(fingerprint, ring)] = slots / seconds if seconds > 0 else 0.0
-        self.last_segment_id = segment_id
+        if segment_id is not None:
+            self.last_segment_id = segment_id
 
 
 class FactoryLock:
@@ -541,7 +543,8 @@ class FactoryScheduler:
             chunk_slots=self.settings.chunk_slots, factory_id=self.settings.factory_id, throttle=self.throttle, **kw,
         )
         dt = time.perf_counter() - t0
-        st.record_segment(plan.fingerprint, plan.ring, plan.slots_per_segment, dt, seg_id)
+        # Ring segment ids stay in memory: no file (factory-state.json included) names a ring segment.
+        st.record_segment(plan.fingerprint, plan.ring, plan.slots_per_segment, dt, None if ring_tier else seg_id)
         st.last_run_at = time.time()
         st.last_error = None
         if ring_tier:

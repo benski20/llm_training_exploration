@@ -27,10 +27,17 @@ from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
 from pgw.maskstore.format import auto_chunk_slots, chunk_cache_bytes
-from pgw.maskstore.ringbuf import MaskRing, RingShort, SeedRegistry, harden_process, swap_status
+from pgw.maskstore.ringbuf import (
+    MaskRing,
+    RingShort,
+    SeedRegistry,
+    harden_process,
+    init_on_free_status,
+    swap_status,
+)
 from pgw.maskstore.store import Inventory, SlotExtent
 
-__all__ = ["ChainedReservation", "TieredMaskSource", "build_tiered_source"]
+__all__ = ["ChainedReservation", "TieredMaskSource", "build_tiered_source", "check_init_on_free"]
 
 log = logging.getLogger(__name__)
 
@@ -210,6 +217,8 @@ class TieredMaskSource:
         self._rings: dict[tuple[str, str], MaskRing] = {}
         self._lock = threading.Lock()
         self.fallback_reservations = 0
+        #: Per ``(fingerprint, ring)`` count of reservations the other tier served (metric labels).
+        self.fallback_by_key: dict[tuple[str, str], int] = {}
         self.spanning_reservations = 0
         self._ring_listeners: list[Callable[[MaskRing], None]] = []
 
@@ -341,8 +350,7 @@ class TieredMaskSource:
             except MaskExhaustedError as exc:
                 store_av = int(exc.details.get("available", 0))
             else:
-                with self._lock:
-                    self.fallback_reservations += 1
+                self._count_fallback(mr)
                 return res
         else:
             try:
@@ -354,10 +362,14 @@ class TieredMaskSource:
             except RingShort as exc:
                 ring_av = int(exc.details.get("available", 0))
             else:
-                with self._lock:
-                    self.fallback_reservations += 1
+                self._count_fallback(mr)
                 return res
         return self._span(mr, fingerprint, ring, slots, session_id, ring_av, store_av)
+
+    def _count_fallback(self, mr: MaskRing) -> None:
+        with self._lock:
+            self.fallback_reservations += 1
+            self.fallback_by_key[mr.key] = self.fallback_by_key.get(mr.key, 0) + 1
 
     def reserve_extension(self, fingerprint: str, ring: RingParams | str, slots: int, *, session_id: str = "") -> Any:
         """A window extension: like :meth:`reserve` but never waits (fails fast)."""
@@ -446,7 +458,9 @@ class TieredMaskSource:
             out.setdefault("pgw_masks_available_slots", {})[key] = float(total)
             lw = low if self.store is not None else int(mr.capacity_slots * frac)
             out.setdefault("pgw_masks_low_water", {})[key] = 1.0 if total < lw else 0.0
-            out.setdefault("pgw_masks_ring_fallback_reservations_total", {})[key] = float(self.fallback_reservations)
+            with self._lock:
+                fb = self.fallback_by_key.get(key, 0)
+            out.setdefault("pgw_masks_ring_fallback_reservations_total", {})[key] = float(fb)
             locked += mr.locked_bytes
         out["pgw_masks_ring_locked_bytes"] = {(): float(locked)}
         return out
@@ -485,6 +499,23 @@ class TieredMaskSource:
             mr.close()
 
 
+def check_init_on_free(policy: str = "warn", *,
+                       status_fn: Callable[[], bool | None] = init_on_free_status) -> bool | None:
+    """v2 drops sealed slabs without zeroing them (SPEC 7.8): warn, or refuse (``policy='refuse'``),
+    unless the kernel zeroes freed pages (``init_on_free=1``). Returns the detected status."""
+    on = status_fn()
+    if on:
+        return True
+    msg = ("mask_ring.factory_process: the kernel does not zero freed pages (init_on_free=1 "
+           f"{'is off' if on is False else 'not detected'}): consumed shared slabs are dropped unzeroed (sealed, "
+           "not writable), so their seed, uW and W r stay in freed physical pages until the kernel reuses them; "
+           "boot with init_on_free=1")
+    if policy == "refuse":
+        raise ConfigError(msg + " (or set mask_ring.init_on_free_policy=warn)")
+    log.warning(msg)
+    return on
+
+
 def build_tiered_source(store: Any, ring_settings: Any, *, min_soundness_bits: float, masked_models: int,
                         harden: bool = True) -> TieredMaskSource:
     """The gateway hook: process hardening, swap policy, then a :class:`TieredMaskSource`.
@@ -501,6 +532,8 @@ def build_tiered_source(store: Any, ring_settings: Any, *, min_soundness_bits: f
             if str(getattr(ring_settings, "swap_policy", "refuse")) == "refuse":
                 raise ConfigError(msg + " (or set mask_ring.swap_policy=warn)")
             log.warning(msg)
+        if getattr(ring_settings, "factory_process", False):
+            check_init_on_free(str(getattr(ring_settings, "init_on_free_policy", "warn")))
     if getattr(ring_settings, "ring_only", False):
         store = None
     return TieredMaskSource(store, ring_settings, min_soundness_bits=min_soundness_bits,

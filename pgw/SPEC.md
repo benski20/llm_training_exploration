@@ -361,20 +361,33 @@ locked RAM (`pgw.maskstore.ringbuf`, design `research/plans/mask-ringbuffer-desi
   `MADV_DONTDUMP`, `MADV_DONTFORK` memory (each fails closed). No path leads from a ring slab to a
   file, the store, an export or a socket payload. A crash loses ring masks; nothing can be restored, so
   the external counter (7.6) applies only to persisted segments.
-- **Slab rules.** R1: only FREE slabs are granted; only WIPING becomes FREE, after the wipe. R2:
+- **Slab rules.** R1: only FREE slabs are granted; only WIPING becomes FREE, after the wipe (v1:
+  the arena slice is zeroed; v2: see below). R2:
   `reserve()` advances a slab's in-memory cursor under the ring lock **before** any byte is copied out
   (7.5); a fully reserved slab never becomes READY again. R3: a slab with open handles is never
   recycled. R4: every read checks, under the slab's own lock, that the ring is open, the slab
   generation matches and the slab is READY/DRAINING, and copies while holding that lock; closing the
   ring marks every slab WIPING first, so a late reader raises instead of reading zeros.
 - **Seeds.** A fresh `os.urandom` seed per segment, unique across the ring and the store tier
-  (shared registry plus the store's seed table). Every secrets read checks the seed against its hash
-  recorded at publish and refuses an all-zero seed.
+  (shared registry plus the store's seed table). The registry pins the hashes of live ring slabs and
+  keeps a bounded window of recent ones (memory does not grow with uptime). Every secrets read checks
+  the seed against its hash recorded at publish and refuses an all-zero seed.
 - **Process.** The gateway is non-dumpable (`PR_SET_DUMPABLE=0`) and refuses unencrypted disk swap
   (`swap_policy=warn` to override) whenever the ring is enabled. v2 (`factory_process`): the factory
   child gets one sealed-size memfd per granted slab over a private socketpair (no listening socket);
   publishing adds `F_SEAL_WRITE`, which fails while the child still maps the slab writable; the child
   is non-dumpable too, and on EOF the gateway kills and reaps it before dropping its slabs.
+  **v2 freed slabs are not zeroed by the gateway**: a sealed slab cannot be written, so a consumed
+  slab is only unmapped and closed, and its seed, `uW` and `W r` stay in the freed physical pages
+  until the kernel reuses them (the kernel always zeroes a page before giving it to a process, but
+  kernel-level readers can see it until then). Only a kernel booted with `init_on_free=1` clears
+  them at free time; with v2 enabled the gateway warns at start-up when it cannot detect it
+  (`init_on_free_policy=refuse` to refuse instead). Unsealed v2 slabs (aborted fills) are zeroed
+  through the memfd before they are dropped. The supervisor takes the same host-wide per-device
+  factory lock as the embedded factory, and the child inherits only `PGW_FACTORY_*` and runtime
+  variables (no gateway secrets).
+- **Persistence of ids.** Ring segment ids never reach a file: the factory's `factory-state.json`
+  records ring segments as counts only.
 - Freivalds vectors that are all zero (a reservation closed during a step) verify nothing: the
   engine treats them as `MaskReuseError`, never as a pass.
 

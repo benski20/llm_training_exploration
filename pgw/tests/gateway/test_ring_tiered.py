@@ -91,9 +91,12 @@ def test_ring_short_falls_back_to_store(store: Any, model: ToyModel) -> None:
         assert isinstance(a, RingReservation)
         b = src.reserve(model.fingerprint, RING, 30)  # ring has 6 left: the store serves it whole
         assert src.fallback_reservations == 1 and not isinstance(b, ChainedReservation)
+        other = make_model(fingerprint="cd" * 32, seed=1)
+        src.attach_model("other", other.fingerprint, RING, other.specs)  # a second model: its own series
         m = src.metrics()
         key = (model.fingerprint, RING.name)
         assert m["pgw_masks_ring_fallback_reservations_total"][key] == 1
+        assert m["pgw_masks_ring_fallback_reservations_total"][(other.fingerprint, RING.name)] == 0
         assert m["pgw_masks_available_slots"][key] == SEG + 80 - 40
         assert m["pgw_masks_ring_capacity_slots"][key] == 4 * SEG
         assert m["pgw_masks_ring_locked_bytes"][()] > 0
@@ -403,3 +406,37 @@ def test_windows_reserved_ahead_in_background(model: ToyModel) -> None:
         assert all(p.closed for p in win.parts)
     finally:
         src.close()
+
+
+def test_sync_extension_counts_background_slots_against_the_cap() -> None:
+    """ensure()'s synchronous extension never overshoots cap while a background one is in flight."""
+    from pgw.gateway.masks import WindowedReservation
+
+    class Part:
+        def __init__(self, n: int):
+            self.slots = n
+            self.left = n
+            self.linear_keys = ("a",)
+
+        def remaining(self, lid: Any) -> int:
+            return self.left
+
+        def close(self) -> None:
+            pass
+
+    asked: list[int] = []
+
+    def reserve(n: int) -> Part:
+        asked.append(n)
+        return Part(n)
+
+    win = WindowedReservation(Part(4), reserve, cap=10, window=4)
+    win._parts[0].left = 0
+    win._pending = 4  # a background extension of 4 slots is in flight (simulated)
+    win.ensure("a", 2)
+    assert asked == [2]  # room = 10 - 4 reserved - 4 pending: never more than the cap in total
+    win._parts[-1].left = 0
+    from pgw.core.errors import MaskExhaustedError
+
+    with pytest.raises(MaskExhaustedError):
+        win.ensure("a", 1)  # 4 + 2 + 4 pending = cap

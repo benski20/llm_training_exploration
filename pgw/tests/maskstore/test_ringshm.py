@@ -189,3 +189,59 @@ def test_child_process_fills_ring_and_crash_is_reaped(tmp_path: Path, fake_pack:
     finally:
         broker.stop()
         src.close()
+
+
+# ---- implementation review, round 2 ---------------------------------------------------------------
+def test_grant_racing_the_reap_is_aborted(fake_pack: FakePack) -> None:
+    """A GRANT_REQ handled after the child was reaped never leaves its slab FILLING."""
+    src = _source(fake_pack)
+    ring = _ring(src, fake_pack)
+    gw, ch = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    broker = RingBroker(src)
+    broker.attach(gw)
+    chan = _Channel(ch)
+    try:
+        chan.wait_hello()
+        broker._kill_and_reap()  # no child process here: only closes the grant table
+        sink = RemoteRingSink(chan)
+        with pytest.raises(MaskStoreError, match="gone"):
+            sink.writer(fake_pack.fingerprint, RING, fake_pack.linear_specs(), slots=SEG, seed=os.urandom(32))
+        assert ring.wait_idle()
+        assert SlabState.FILLING not in ring.slab_states() and not broker._grants
+    finally:
+        broker._stopping = True
+        gw.shutdown(socket.SHUT_RDWR)
+        ch.close()
+        gw.close()
+        src.close()
+
+
+def test_memfd_unmap_waits_for_a_copy_under_the_slab_lock(fake_pack: FakePack) -> None:
+    import threading
+
+    src = _source(fake_pack)
+    ring = _ring(src, fake_pack)
+    sig = [[s.id.key, s.out_features, s.in_features] for s in fake_pack.linear_specs()]
+    try:
+        idx, _gen, _fd = ring.grant_shared(fake_pack.fingerprint, RING, sig, slots=4, checks=2, chunk_slots=4)
+        slab = ring._slabs[idx]
+        done = threading.Event()
+        with slab.lock:  # a reader (publish_shared / decrypt_into) is copying out of the mapping
+            t = threading.Thread(target=lambda: (ring._release_slab_memory(slab), done.set()))
+            t.start()
+            assert not done.wait(0.2)  # the munmap waits for the copy
+            assert slab.mem is not None
+        assert done.wait(5) and slab.mem is None
+        t.join(5)
+    finally:
+        src.close()
+
+
+def test_child_env_has_no_gateway_secrets() -> None:
+    from pgw.maskstore.ringshm import child_env
+
+    base = {"PATH": "/usr/bin", "PGW_GATEWAY_ADMIN_TOKEN": "s3cret", "PGW_MASKSTORE_KEK": "k", "AWS_SECRET_ACCESS_KEY": "a",
+            "PGW_FACTORY_DEVICE": "cuda:1", "CUDA_VISIBLE_DEVICES": "1", "PGW_LOG_LEVEL": "DEBUG", "HOME": "/root"}
+    env = child_env(base, PGW_FACTORY_DEVICE="cpu", PGW_FACTORY_RINGS='["K32A12C27"]')
+    assert env == {"PATH": "/usr/bin", "PGW_FACTORY_DEVICE": "cuda:1", "CUDA_VISIBLE_DEVICES": "1",
+                   "PGW_LOG_LEVEL": "DEBUG", "HOME": "/root", "PGW_FACTORY_RINGS": '["K32A12C27"]'}

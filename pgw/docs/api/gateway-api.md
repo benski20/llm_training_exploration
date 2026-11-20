@@ -280,7 +280,7 @@ Labels never contain prompt data. Gateway series:
 | `pgw_masks_ring_leaked_slots_total` | counter | ring slots of reservations garbage-collected without `close()` |
 | `pgw_masks_ring_lost_slots_total` | counter | published ring slots wiped unreserved (shutdown, reload) |
 | `pgw_masks_ring_reservations_total` | counter | ring reservations (ids-only audit count) |
-| `pgw_masks_ring_fallback_reservations_total` | counter | reservations the store served because the ring was short |
+| `pgw_masks_ring_fallback_reservations_total` | counter | reservations of this model the other tier served because the preferred one was short |
 | `pgw_masks_ring_locked_bytes` | gauge | locked ring bytes (0 = unlocked, dev only) |
 
 ## 10. Compatibility notes

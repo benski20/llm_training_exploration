@@ -257,6 +257,10 @@ class MaskRingSettings(BaseModel):
     swap_policy: Literal["refuse", "warn"] = Field(
         "refuse", description="Unencrypted disk swap at start-up: refuse to start, or only warn"
     )
+    init_on_free_policy: Literal["refuse", "warn"] = Field(
+        "warn", description="factory_process (v2) when the kernel does not zero freed pages (init_on_free=1): "
+        "consumed sealed slabs are dropped unzeroed; refuse to start, or only warn"
+    )
     allow_unlocked: bool = Field(False, description="DEV ONLY (needs allow_dev_modes): run when mlock/madvise fail")
 
 

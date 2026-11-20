@@ -199,13 +199,25 @@ class StoreSink:
 
 # ---- in-memory ring (embedded factory) -----------------------------------------------------------
 def store_knows_seed(store: Any, digest: str) -> bool:
-    """True if ``store``'s seed table holds ``digest`` (``SHA-256`` seed id; read-only query)."""
+    """True if ``store``'s seed table holds ``digest`` (``SHA-256`` seed id; read-only query).
+
+    Uses the store's public ``has_seed(digest)`` when it has one; otherwise queries the store's
+    ``segments`` table under its process lock. Fails closed: a store that offers neither (its
+    internals changed) raises :class:`MaskStoreError` instead of answering "unknown seed".
+    """
+    has_seed = getattr(store, "has_seed", None)
+    if callable(has_seed):
+        return bool(has_seed(digest))
     lock = getattr(store, "_lock", None)
     conn = getattr(store, "conn", None)
     if lock is None or conn is None or not hasattr(lock, "hold"):
-        return False
-    with lock.hold():
-        row = conn.execute("SELECT 1 FROM segments WHERE seed_hash=?", (digest,)).fetchone()
+        raise MaskStoreError("cannot check the mask store's seed table (store API changed): refusing the seed")
+    try:
+        with lock.hold():
+            row = conn.execute("SELECT 1 FROM segments WHERE seed_hash=?", (digest,)).fetchone()
+    except Exception as exc:  # sqlite3.Error, schema drift, ...
+        raise MaskStoreError(f"cannot check the mask store's seed table ({type(exc).__name__}): refusing the seed") \
+            from exc
     return row is not None
 
 

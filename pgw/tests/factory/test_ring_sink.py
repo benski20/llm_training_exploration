@@ -109,13 +109,26 @@ def test_scheduler_ring_first_then_store(tmp_path: Path, fake_pack: FakePack) ->
         gen = MaskGenerator(fake_pack, RING)
         sch = FactoryScheduler(_settings(tmp_path), StoreSink(store, seeds=seeds), {gen.key: gen},
                                ring_sink=RingSink({ring.key: ring}, store=store), metrics=False)
+        snapshots: list[str] = []  # every factory-state.json the run writes, not only the last one
+        orig_save = sch._save_state
+
+        def save() -> None:
+            orig_save()
+            snapshots.append((sch.state_dir / "factory-state.json").read_text())
+
+        sch._save_state = save  # type: ignore[method-assign]
         plans = sch.plan()
         assert [(p.tier, p.priority) for p in plans] == [("ring", 0), ("store", 1)]
         assert plans[0].segments == 4 and plans[0].slots_per_segment == ring.segment_slots
         produced = sch.run_once()
         assert len(produced) == 4 + plans[1].segments
         assert ring.available == ring.capacity_slots
-        assert not (sch.state_dir / "factory-state.json").read_text().count(produced[0])  # ring ids never on disk
+        state_text = "\n".join(snapshots)
+        assert len(snapshots) >= 2  # the store plan saved state (in_progress) right after the ring plans
+        ring_ids = produced[:4]
+        assert ring_ids and not any(i in state_text for i in ring_ids)  # ring ids never on disk ...
+        assert sch.state.last_segment_id == produced[-1]  # ... even when a store plan saves state after them
+        assert sch.status()["last_segment_id"] not in ring_ids
         assert sch.ring_segments == 4
         # the next plan: ring full (no ring plan), store refilling to target
         assert all(p.tier == "store" for p in sch.plan())
@@ -227,3 +240,54 @@ def test_ring_sink_refuses(fake_pack: FakePack) -> None:
             b"\x01" * 32)
     finally:
         ring.close()
+
+
+def test_store_knows_seed_prefers_public_api_and_fails_closed(tmp_path: Path) -> None:
+    from pgw.core.errors import MaskStoreError
+    from pgw.factory.sinks import store_knows_seed
+
+    class Public:
+        def has_seed(self, digest: str) -> bool:
+            return digest == "known"
+
+    assert store_knows_seed(Public(), "known") and not store_knows_seed(Public(), "other")
+    with pytest.raises(MaskStoreError, match="seed table"):
+        store_knows_seed(object(), "x")  # internals changed: refuse, never "unknown seed"
+
+    class Broken:
+        class _lock:  # noqa: N801
+            @staticmethod
+            def hold() -> Any:
+                import contextlib
+
+                return contextlib.nullcontext()
+
+        class conn:  # noqa: N801
+            @staticmethod
+            def execute(*a: Any) -> Any:
+                raise RuntimeError("no such column: seed_hash")
+
+    with pytest.raises(MaskStoreError, match="seed table"):
+        store_knows_seed(Broken(), "x")
+    store = _store(tmp_path)
+    try:
+        seed = os.urandom(32)
+        assert not store_knows_seed(store, seed_digest(seed))
+        MaskGenerator(FakePack(), RING).generate_into_store(StoreSink(store), 8, checks=2, chunk_slots=8, seed=seed)
+        assert store_knows_seed(store, seed_digest(seed))
+    finally:
+        store.close()
+
+
+def test_device_lock_shared_by_v1_and_v2(tmp_path: Path) -> None:
+    from pgw.factory.embedded import acquire_device_lock
+
+    lock = acquire_device_lock("cuda", tmp_path)
+    try:
+        with pytest.raises(ConfigError):
+            acquire_device_lock("cuda:0", tmp_path)  # same GPU, other spelling
+        other = acquire_device_lock("cuda:1", tmp_path)
+        other.release()
+    finally:
+        lock.release()
+    acquire_device_lock("CUDA:0", tmp_path).release()

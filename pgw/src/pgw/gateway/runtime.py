@@ -1437,17 +1437,27 @@ class InferenceRuntime:
         run_dir = cfg.run_dir or Path(self.settings.data_dir) / "maskring"
         if cfg.factory_process:  # v2: supervised child over a private socketpair, shared sealed slabs
             import json
-            import os
 
-            from pgw.maskstore.ringshm import RingBroker
+            from pgw.factory.embedded import acquire_device_lock
+            from pgw.maskstore.ringshm import RingBroker, child_env
 
-            env = dict(os.environ)
-            env.setdefault("PGW_FACTORY_PACK_PATH", str(defaults["pack_path"]))
-            env.setdefault("PGW_FACTORY_EXTRA_PACK_PATHS", json.dumps([str(p) for p in defaults["extra_pack_paths"]]))
-            env.setdefault("PGW_FACTORY_RINGS", json.dumps(list(defaults["rings"])))
-            env.setdefault("PGW_FACTORY_STATE_DIR", str(run_dir))
-            broker = RingBroker(self.mask_store, env=env)
-            broker.start()
+            env = child_env(  # PGW_FACTORY_* and runtime variables only: no gateway secrets in the child
+                PGW_FACTORY_PACK_PATH=str(defaults["pack_path"]),
+                PGW_FACTORY_EXTRA_PACK_PATHS=json.dumps([str(p) for p in defaults["extra_pack_paths"]]),
+                PGW_FACTORY_RINGS=json.dumps(list(defaults["rings"])),
+                PGW_FACTORY_STATE_DIR=str(run_dir),
+            )
+            try:  # one factory per GPU on this host (v1 embedded, v2 child) - same lock as v1
+                lock = acquire_device_lock(env.get("PGW_FACTORY_DEVICE", "auto"))
+            except ConfigError as exc:
+                log.error("mask factory child not started: %s; serving from the mask store only", exc.message)
+                return
+            broker = RingBroker(self.mask_store, env=env, device_lock=lock)
+            try:
+                broker.start()
+            except BaseException:
+                lock.release()
+                raise
             self.embedded_factory = broker
             return
         from pgw.factory.embedded import EmbeddedFactory

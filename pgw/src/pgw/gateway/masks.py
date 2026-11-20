@@ -169,7 +169,9 @@ class WindowedReservation:
             have = self._reserved_left(lid)
             if have >= rows:
                 return
-            room = self.cap - self.slots
+            # Slots a background extension is still reserving count against the cap too (only one
+            # thread calls ensure() per session today, so _pending is 0 here; this keeps it exact).
+            room = self.cap - self.slots - self._pending
             missing = rows - have
             if missing > room:
                 raise MaskExhaustedError(

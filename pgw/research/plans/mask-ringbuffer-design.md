@@ -707,12 +707,27 @@ Changes against the text above:
 * Accounting (I9): `published = reserved + available + lost` and
   `reserved = taken + burned + leaked + open`; aborted fills are counted separately (`aborted`).
 * v2 slabs are dropped, not zeroed: the write seal that makes them immutable also forbids the wipe.
-  The kernel zeroes freed pages before handing them to any process (`init_on_free=1` zeroes at free).
+  The kernel zeroes freed pages before handing them to any process (`init_on_free=1` zeroes at free;
+  the gateway checks for it at start-up, see below). Unsealed slabs are zeroed before the drop.
   The gateway maps each slab read-only through a read-only reopen of the memfd, so its locked
   mapping does not block the seal; pages stay locked from grant to drop.
 * Config: `mask_ring.factory_process` (v2) is mutually exclusive with `embed_factory` and
   `factory_env_file`; `ring_only` needs one of the two factories. The Kubernetes sidecar layout is
   not supported (it would need a listening socket).
+* Implementation review round 2 (all fixed): ring segment ids are never written to
+  `factory-state.json` (counts only); the `SeedRegistry` is bounded (live slab seeds pinned until
+  their wipe, plus a 65,536-entry recent window; the store's seed table remembers store seeds
+  forever); v2 drops sealed slabs unzeroed, which SPEC 7.8 now states, the gateway warns (or with
+  `init_on_free_policy=refuse` refuses) at start-up unless `init_on_free=1` is detected, and
+  unsealed (aborted) slabs are zeroed through the memfd before they are dropped; every ring `mlock`
+  (v1 arena, v2 slabs in both processes) raises `RLIMIT_MEMLOCK` soft-to-hard first
+  (`raise_memlock_limit`); `store_knows_seed` prefers a public `store.has_seed()` and fails closed
+  when neither it nor the expected internals exist; the memfd unmap and the publish copy both run
+  under the slab lock, and `RingBroker.stop()` joins its reader before reaping (a grant that races
+  the reap is aborted at once); the v2 supervisor takes the same host-wide per-device lock as the
+  embedded factory; `WindowedReservation.ensure` counts in-flight background slots against the cap;
+  `pgw_masks_ring_fallback_reservations_total` is per model; the v2 child gets only
+  `PGW_FACTORY_*` and runtime environment variables (`ringshm.child_env`).
 * Not done: the `view_rows` fast path in `_read_wr` (needs `store.py`, owned by another package),
   Helm values and `docs/operations/sizing.md` (owned by WP9).
 

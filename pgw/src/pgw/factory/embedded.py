@@ -8,8 +8,9 @@ over the gateway's :class:`pgw.maskstore.tiered.TieredMaskSource`. Overflow goes
 
 Exclusivity: one GPU must never run two factories. Besides the scheduler's ``factory.lock`` on its
 state directory (the store root, or ``run_dir`` in ring-only mode), the embedded factory takes a
-host-wide lock per device (``<lock_dir>/pgw-factory-<device>.lock``). When it cannot, it logs an
-error and the gateway serves from the store only (availability, not safety).
+host-wide lock per device (``<lock_dir>/pgw-factory-<device>.lock``, :func:`acquire_device_lock`; the
+v2 factory child's supervisor takes the same lock). When it cannot, it logs an error and the gateway
+serves from the store only (availability, not safety).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from pgw.factory.scheduler import FactoryLock, FactoryScheduler
 from pgw.factory.sinks import RingSink, StoreSink
 from pgw.maskstore.ringbuf import GLOBAL_SEEDS
 
-__all__ = ["EmbeddedFactory", "default_lock_dir"]
+__all__ = ["EmbeddedFactory", "acquire_device_lock", "default_lock_dir"]
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,21 @@ def default_lock_dir() -> Path:
         if os.access(cand, os.W_OK):
             return cand
     raise ConfigError("no writable directory for the factory device lock")
+
+
+def acquire_device_lock(device: str, lock_dir: Path | None = None) -> FactoryLock:
+    """Take the host-wide lock ``<lock_dir>/pgw-factory-<device>.lock`` (v1 embedded factory and the
+    v2 factory child's supervisor alike); :class:`ConfigError` if another factory holds it.
+
+    ``cuda`` and ``cuda:0`` name the same GPU and share one lock.
+    """
+    name = str(device).strip().lower()
+    if name == "cuda":
+        name = "cuda:0"
+    dev = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    lock = FactoryLock(Path(lock_dir or default_lock_dir()) / f"pgw-factory-{dev}.lock")
+    lock.acquire()
+    return lock
 
 
 class EmbeddedFactory:
@@ -92,10 +108,8 @@ class EmbeddedFactory:
     def start(self) -> bool:
         """Build and start; returns False (gateway keeps serving from the store) if another factory runs."""
         settings = self._build_settings()
-        dev = re.sub(r"[^A-Za-z0-9_.-]", "_", str(settings.device))
-        lock = FactoryLock(Path(self.lock_dir or default_lock_dir()) / f"pgw-factory-{dev}.lock")
         try:
-            lock.acquire()
+            lock = acquire_device_lock(str(settings.device), self.lock_dir)
         except ConfigError as exc:
             self.error = exc.message
             log.error("embedded mask factory not started: %s; serving from the mask store only", exc.message)

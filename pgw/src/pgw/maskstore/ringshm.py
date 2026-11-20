@@ -62,7 +62,7 @@ from pgw.maskstore.ringbuf import (
     harden_process,
 )
 
-__all__ = ["RemoteRingSink", "RingBroker", "serve"]
+__all__ = ["RemoteRingSink", "RingBroker", "child_env", "serve"]
 
 log = logging.getLogger(__name__)
 
@@ -124,8 +124,11 @@ class RingBroker:
         env: Child environment (``PGW_FACTORY_*``).
     """
 
-    def __init__(self, source: Any, argv: Sequence[str] | None = None, *, env: dict[str, str] | None = None):
+    def __init__(self, source: Any, argv: Sequence[str] | None = None, *, env: dict[str, str] | None = None,
+                 device_lock: Any = None):
         self.source = source
+        #: Host-wide per-device lock (``pgw.factory.embedded.acquire_device_lock``), released by :meth:`stop`.
+        self.device_lock = device_lock
         self.argv = list(argv) if argv is not None else [sys.executable, "-m", "pgw.maskstore.ringshm"]
         self.env = env
         self._sock: socket.socket | None = None
@@ -133,6 +136,7 @@ class RingBroker:
         self._proc: subprocess.Popen[bytes] | None = None
         self._pidfd: int | None = None
         self._grants: dict[tuple[str, str, int, int], MaskRing] = {}
+        self._grants_open = True  #: False once the child was reaped: a late grant is aborted at once
         self._glock = threading.Lock()
         self._reap_lock = threading.Lock()
         self._reader: threading.Thread | None = None
@@ -187,7 +191,12 @@ class RingBroker:
             _send(sock, self._send_lock, {"t": "FREE", "fp": ring.fingerprint, "ring": ring.ring.name}, nowait=True)
 
     def stop(self, timeout: float = 10.0) -> None:
-        """Ask the child to stop, then kill and reap it; drop every slab it was still filling."""
+        """Ask the child to stop, then kill and reap it; drop every slab it was still filling.
+
+        Order: BYE, wait for the child, shut the channel down and join the reader (no grant or
+        publish can be in flight after that), kill and reap, release the device lock. Slabs the
+        reader was still copying are protected by their slab lock when the rings close later.
+        """
         self._stopping = True
         sock = self._sock
         if sock is not None:
@@ -199,13 +208,19 @@ class RingBroker:
                 proc.wait(timeout)
             except subprocess.TimeoutExpired:
                 pass
-        self._kill_and_reap()
         if sock is not None:
             with contextlib.suppress(OSError):
                 sock.shutdown(socket.SHUT_RDWR)
-            sock.close()
         if self._reader is not None and self._reader is not threading.current_thread():
             self._reader.join(timeout)
+            if self._reader.is_alive():  # pragma: no cover - a handler stuck in a syscall
+                log.error("ring broker reader did not stop within %.0fs", timeout)
+        self._kill_and_reap()
+        if sock is not None:
+            sock.close()
+        lock, self.device_lock = self.device_lock, None
+        if lock is not None:
+            lock.release()
 
     def _kill_and_reap(self) -> None:
         with self._reap_lock:
@@ -228,6 +243,7 @@ class RingBroker:
         # Only now (child reaped: no writer can remain) drop the slabs it had been granted.
         with self._glock:
             grants, self._grants = self._grants, {}
+            self._grants_open = False
         for (_, _, idx, gen), ring in grants.items():
             ring.abort_shared(idx, gen)
 
@@ -290,7 +306,12 @@ class RingBroker:
                 idx, gen, fd = r.grant_shared(r.fingerprint, r.ring, msg["specs"], slots=int(msg["slots"]),
                                               checks=int(msg["checks"]), chunk_slots=int(msg["chunk_slots"]))
                 with self._glock:
-                    self._grants[(r.fingerprint, r.ring.name, idx, gen)] = r
+                    late = not self._grants_open
+                    if not late:
+                        self._grants[(r.fingerprint, r.ring.name, idx, gen)] = r
+                if late:  # the child was reaped while this grant was made: never leave it FILLING
+                    r.abort_shared(idx, gen)
+                    raise MaskStoreError("factory child is gone")
                 self._reply(sock, {"t": "GRANT", "rid": rid, "slab": idx, "gen": gen,
                                    "slab_bytes": r.geometry.slab_bytes, "wr_base": r.geometry.wr_base}, [fd])
             elif t == "PUBLISH":
@@ -323,6 +344,23 @@ class RingBroker:
             self.errors += 1
             log.exception("ring broker failed to handle %s", t)
             self._reply(sock, {"t": "ERR", "rid": rid, "kind": "store", "msg": type(exc).__name__})
+
+
+#: Environment the factory child inherits besides ``PGW_FACTORY_*`` (runtime only, never secrets).
+CHILD_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "PYTHONPATH", "VIRTUAL_ENV", "LD_LIBRARY_PATH",
+                  "PGW_LOG_LEVEL", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+CHILD_ENV_PREFIXES = ("PGW_FACTORY_", "CUDA_", "NVIDIA_", "PYTORCH_")
+
+
+def child_env(base: dict[str, str] | None = None, **extra: str) -> dict[str, str]:
+    """The factory child's environment: ``PGW_FACTORY_*``, GPU runtime variables and the basic
+    process variables of ``base`` (default ``os.environ``) only, so gateway-only secrets (admin
+    token, API keys, KEKs) never reach it. ``extra`` adds defaults that ``base`` does not set."""
+    src = dict(os.environ if base is None else base)
+    env = {k: v for k, v in src.items() if k in CHILD_ENV_KEYS or k.startswith(CHILD_ENV_PREFIXES)}
+    for k, v in extra.items():
+        env.setdefault(k, v)
+    return env
 
 
 # =================================================================================================

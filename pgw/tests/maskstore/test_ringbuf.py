@@ -621,41 +621,64 @@ def _try(fn: Callable[[], Any]) -> Any:
 
 
 def test_concurrent_takes_during_close_raise_or_are_exact(rings: Any, model: ToyModel) -> None:
+    """Reads racing close(): reservations stay open across close() and every take after it either
+    raises or returns exactly the factory's rows (never zeros, never another slot's masks)."""
     ring = rings(model, slabs=6)
-    seeds = dict(publish(ring, model) for _ in range(5))
+    seeds = dict(publish(ring, model, chunk_slots=1) for _ in range(5))  # one chunk per row: every take reads
     key = model.specs[1].id.key
+    n_readers, per = 6, 13
+    held = [ring.reserve(per) for _ in range(n_readers)]  # open before close() and held across it
+    handles = [e.seg for res in held for e in res._extents]
+    ready = threading.Barrier(n_readers + 1)
+    go = threading.Event()
+    exact = [0] * n_readers
+    raised = [0] * n_readers
     bad: list[str] = []
-    stop = threading.Event()
 
-    def reader() -> None:
-        while not stop.is_set():
-            try:
-                res = ring.reserve(3)
-            except (RingShort, MaskStoreError):
-                return
-            slots = slot_list(res)
-            try:
-                for i in range(3):
-                    r, wr = res.take(key, 1)
-                    sid, slot = slots[i]
-                    if not torch.equal(r, expected_r(seeds[sid], model, key, ring.ring, slot, 1)):
-                        bad.append("r")
-                    if not torch.equal(wr, model.wr(key, r, ring.ring)) or not wr.any():
-                        bad.append("wr")
-            except (MaskStoreError, MaskReuseError):
-                pass
-            finally:
-                res.close()
+    def reader(i: int) -> None:
+        res = held[i]
+        slots = slot_list(res)
+        pos = 0
 
-    ts = [threading.Thread(target=reader) for _ in range(4)]
+        def take_one() -> None:
+            nonlocal pos
+            r, wr = res.take(key, 1)
+            sid, slot = slots[pos]
+            pos += 1
+            if not torch.equal(r, expected_r(seeds[sid], model, key, ring.ring, slot, 1)):
+                bad.append("r")
+            elif not wr.any() or not torch.equal(wr, model.wr(key, r, ring.ring)):
+                bad.append("wr")
+            else:
+                exact[i] += 1
+
+        take_one()
+        take_one()
+        ready.wait(10)
+        go.wait(10)
+        try:
+            while pos < per:
+                take_one()
+                time.sleep(0.001)  # 11 more rows take >= 11 ms: close() always lands mid-take
+        except (MaskStoreError, MaskReuseError):
+            raised[i] += 1
+
+    ts = [threading.Thread(target=reader, args=(i,)) for i in range(n_readers)]
     for t in ts:
         t.start()
-    time.sleep(0.05)
+    ready.wait(10)
+    go.set()
     ring.close()
-    stop.set()
     for t in ts:
         t.join(10)
     assert not bad
+    assert sum(raised) >= 1, (exact, raised)  # close() really raced the takes
+    assert all(exact[i] == per or raised[i] == 1 for i in range(n_readers)), (exact, raised)
+    assert sum(exact) >= 2 * n_readers
+    for h in handles:  # every handle is revoked: a late read raises instead of reading wiped memory
+        with pytest.raises(MaskStoreError):
+            h.decrypt_into(h.layout.wr_chunk(1, 0))
+    assert ring._arena.closed
 
 
 def test_seed_check_on_secrets_read(rings: Any, model: ToyModel) -> None:
@@ -759,3 +782,81 @@ def test_copy_out_makes_no_immutable_copy(rings: Any, model: ToyModel) -> None:
         arena._mm = real_mm
 
 
+
+
+# ---- implementation review, round 2 ---------------------------------------------------------------
+def test_seed_registry_is_bounded_and_pins_live_slabs(rings: Any, model: ToyModel) -> None:
+    reg = SeedRegistry(max_recent=4)
+    for i in range(10):
+        reg.claim(f"store-{i}", "store")
+    assert len(reg) == 4 and reg.evicted == 6  # a fixed window, not one entry per segment forever
+    with pytest.raises(MaskReuseError):
+        reg.claim("store-9", "store")
+    ring = rings(model, slabs=4, seeds=reg)
+    seeds = [publish(ring, model)[1] for _ in range(3)]
+    digests = [ringbuf.seed_digest(s) for s in seeds]
+    assert reg.live == 3
+    for i in range(20):  # flood the recent window: live ring seeds stay pinned
+        reg.claim(f"more-{i}", "store")
+    assert all(d in reg for d in digests)
+    ring.reserve(SLOTS).close()  # drain one slab -> wipe -> its seed is unpinned
+    assert ring.wait_idle()
+    assert reg.live == 2
+    assert digests[0] in reg  # still remembered in the recent window ...
+    for seed in seeds[:2]:  # a free slab exists now: duplicates are refused by the registry
+        with pytest.raises(MaskReuseError):
+            publish(ring, model, seed=seed)
+    for i in range(4):
+        reg.claim(f"later-{i}", "store")
+    assert digests[0] not in reg and digests[1] in reg  # ... until it ages out; live ones never do
+    ring.close()
+    assert reg.live == 0
+
+
+def test_init_on_free_status(tmp_path: Path) -> None:
+    from pgw.maskstore.tiered import check_init_on_free
+
+    cmd = tmp_path / "cmdline"
+    cfg = tmp_path / "config"
+    cfg.write_text("CONFIG_INIT_ON_FREE_DEFAULT_ON=y\n")
+    cmd.write_text("ro quiet init_on_free=1\n")
+    assert ringbuf.init_on_free_status(str(cmd), [str(cfg)]) is True
+    cmd.write_text("init_on_free=1 init_on_free=0\n")  # the last one wins
+    assert ringbuf.init_on_free_status(str(cmd), [str(cfg)]) is False
+    cmd.write_text("ro quiet\n")
+    assert ringbuf.init_on_free_status(str(cmd), [str(cfg)]) is True  # kernel default
+    cfg.write_text("# CONFIG_INIT_ON_FREE_DEFAULT_ON is not set\n")
+    assert ringbuf.init_on_free_status(str(cmd), [str(cfg)]) is False
+    assert ringbuf.init_on_free_status(str(cmd), [str(tmp_path / "missing")]) is None
+    assert check_init_on_free("refuse", status_fn=lambda: True) is True
+    assert check_init_on_free("warn", status_fn=lambda: None) is None
+    with pytest.raises(ConfigError, match="init_on_free"):
+        check_init_on_free("refuse", status_fn=lambda: False)
+
+
+def test_memlock_raised_for_arena_and_memfd_slabs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v1 arenas and v2 slab mappings both raise RLIMIT_MEMLOCK soft-to-hard before mlock."""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(ringbuf.resource, "getrlimit", lambda _r: (1 << 16, 1 << 30))
+    monkeypatch.setattr(ringbuf.resource, "setrlimit", lambda _r, lim: calls.append(lim))
+    LockedArena(1 << 20, allow_unlocked=True, mlock=lambda a, n: 0).close()
+    assert calls == [(1 << 30, 1 << 30)]
+    calls.clear()
+    slab = ringbuf.MemfdSlab(1 << 16, allow_unlocked=True)
+    slab.close()
+    assert calls == [(1 << 30, 1 << 30)]
+
+
+def test_unsealed_memfd_slab_is_zeroed_on_drop() -> None:
+    slab = ringbuf.MemfdSlab(1 << 16, allow_unlocked=True)
+    os.pwrite(slab.fd, b"\xa5" * 4096, 100)
+    keep = os.dup(slab.fd)
+    try:
+        slab.close()
+        assert os.pread(keep, 1 << 16, 0) == bytes(1 << 16)
+    finally:
+        os.close(keep)
+    sealed = ringbuf.MemfdSlab(1 << 16, allow_unlocked=True)
+    os.pwrite(sealed.fd, b"\x5a", 0)
+    sealed.seal()
+    sealed.close()  # sealed: cannot be written, only dropped (SPEC 7.8)
