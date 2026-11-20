@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
+import threading
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
+import numpy as np
 import torch
 
 from pgw.core.errors import ConfigError, MaskExhaustedError, PGWError
@@ -19,7 +22,16 @@ from pgw.engine.model import SequenceInput, TransformerModel
 from pgw.engine.sampling import Sampler, SamplingParams
 from pgw.engine.tokenizer import ChatTokenizer, IncrementalDecoder
 
-__all__ = ["FinishReason", "GenerationResult", "Generator", "SessionFactory", "TokenEvent"]
+__all__ = [
+    "BuiltinDrafter",
+    "DraftJob",
+    "Drafter",
+    "FinishReason",
+    "GenerationResult",
+    "Generator",
+    "SessionFactory",
+    "TokenEvent",
+]
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +113,17 @@ class _SeqState:
     spec_accepted: int = 0
     spec_passes: int = 0
     draft_ms: float = 0.0  # wall time of the draft-model passes this sequence took part in
+    # fixed-row speculation (``spec_rows``) and strict-pass mode
+    limit: int = 0  # LENGTH limit (positions); in fixed mode the KV cache has spare room for the fixed rows
+    dstate: Any = None  # the drafter's per-sequence state
+    fill: list[int] = field(default_factory=list)  # filler rows after the drafts (padding or masked fillers)
+    pad: int = 0  # trailing rows of this pass sent as padding (random payload, no masks; pad-capable models)
+    rows: int = 0  # rows of this pass (fixed mode, after the prefill pass)
+    passes: int = 0  # target passes (provider-visible) this sequence took part in, prefill and dummies included
+    dummy: bool = False  # this pass is a strict-mode dummy pass (no output)
+    conv: str | None = None  # conversation key (strict mode queues a follow-up turn behind the dummy passes)
+    conv_held: bool = False
+    t_lane: float = 0.0  # when the sequence joined the prefill lane queue
 
     @property
     def done(self) -> bool:
@@ -141,6 +164,314 @@ def _lookup_drafts(seq: Sequence[int], k: int, max_n: int, min_n: int = 3) -> li
 def _dcache(st: _SeqState) -> KVCache:
     assert st.draft_cache is not None
     return st.draft_cache
+
+
+def _lookup_drafts_fixed(seq: Sequence[int], k: int, max_n: int, min_n: int = 3) -> list[int]:
+    """:func:`_lookup_drafts` with a fixed amount of work (same result).
+
+    The search runs over a fixed-size window (the last ``_LOOKUP_WINDOW`` tokens, left-padded with a
+    sentinel) for every n-gram length from ``max_n`` down to ``min_n``, with whole-array numpy operations
+    and no early exit, so its running time does not depend on whether, where or how often the context
+    repeats itself (fixed-row speculation keeps the gateway's per-pass work independent of the text).
+    """
+    w = _LOOKUP_WINDOW
+    lo = max(1, min_n)
+    if k <= 0 or max_n < lo:
+        return []
+    tail_seq = list(seq[-w:])
+    size = len(tail_seq)
+    arr = np.full(w + k, -1, dtype=np.int64)  # real tokens at [w - size, w); sentinels never match one
+    if size:
+        arr[w - size : w] = np.asarray(tail_seq, dtype=np.int64)
+    pos = np.arange(w, dtype=np.int64)
+    best_full: tuple[int, int] | None = None  # (n, start) of the chosen full-length match
+    best_short: tuple[int, int] | None = None
+    for n in range(max_n, lo - 1, -1):  # every length, always (no early exit)
+        m = w - n  # candidate starts in [0, w - n): never the tail itself
+        tail = arr[w - n : w]
+        match = np.ones(m, dtype=bool)
+        for j in range(n):
+            match &= arr[j : j + m] == tail[j]
+        full = match & (pos[:m] + n + k <= w)
+        last_full = int(np.max(np.where(full, pos[:m], -1)))
+        last_any = int(np.max(np.where(match, pos[:m], -1)))
+        if n > size - 1:  # the tail would include sentinels: not a candidate length
+            continue
+        if best_full is None and last_full >= 0:
+            best_full = (n, last_full)
+        if best_short is None and last_any >= 0:
+            best_short = (n, last_any)
+    pick = best_full if best_full is not None else best_short
+    if pick is None:
+        return []
+    n, i = pick
+    return [int(t) for t in arr[i + n : min(i + n + k, w)]]
+
+
+@dataclass
+class DraftJob:
+    """One sequence's draft request in a fixed-row speculative pass (see :class:`Drafter`).
+
+    Attributes:
+        state: The drafter's per-sequence state (from :meth:`Drafter.open`).
+        context: Every token the target has processed so far plus the pending token: the drafts continue
+            this sequence. In a strict-mode dummy pass the last token is a random filler.
+        k: Number of draft tokens wanted.
+        sampler: For sampled requests a fork of the request's sampler (same RNG state, penalties and
+            filters): drawing draft ``j`` (1-based) with the fork advanced ``j - 1`` times uses exactly the
+            noise the target's sample at that position will use. ``None`` for greedy requests.
+        generated: Tokens generated so far (for penalties).
+        out: Filled by the drafter: up to ``k`` proposals (the generator completes fewer with filler rows).
+    """
+
+    state: Any
+    context: list[int]
+    k: int
+    sampler: Sampler | None = None
+    generated: list[int] = field(default_factory=list)
+    out: list[int] = field(default_factory=list)
+
+
+@runtime_checkable
+class Drafter(Protocol):
+    """Draft source of fixed-row speculation (``Generator(spec_rows=R)``).
+
+    Drafts are proposals only: every emitted token is decided by the masked target, so a drafter can
+    never change the output, only how many tokens a pass yields. A drafter runs on the gateway in
+    plaintext. Privacy contract: :meth:`propose` does the same work for every job whatever the text
+    (a fixed number of model steps per pass, no early exit when a proposal is found or ends), so the
+    gap the provider sees between two passes does not depend on how predictable the text is.
+
+    ``needs_prefill``: :meth:`prefill` does real work (it then runs in a worker thread alongside the
+    target's prefill pass, and ping-pong is not used).
+    """
+
+    needs_prefill: bool
+
+    def open(self, prompt: Sequence[int], max_len: int) -> Any:
+        """Per-sequence state for a request whose drafts continue ``prompt`` (``max_len`` positions)."""
+        ...
+
+    def prefill(self, states: Sequence[Any], prompts: Sequence[Sequence[int]]) -> None:
+        """Read the prompts (runs alongside the target's prefill pass)."""
+        ...
+
+    def propose(self, jobs: Sequence[DraftJob]) -> None:
+        """Fill ``job.out`` (up to ``job.k`` tokens) for every job, with content-independent work."""
+        ...
+
+    def close(self, state: Any) -> None:
+        """Release a sequence's state."""
+        ...
+
+
+@dataclass
+class _BuiltinState:
+    cache: KVCache | None
+    fed: list[int] = field(default_factory=list)  # tokens held in ``cache``, in order
+
+
+class BuiltinDrafter:
+    """Prompt lookup and/or a small local draft model, with a fixed number of draft-model steps per pass.
+
+    Every :meth:`propose` call runs prompt lookup over the whole fixed window (:func:`_lookup_drafts_fixed`)
+    and exactly ``k`` draft-model forward steps per job, each followed by exactly one sampler draw (or
+    argmax): a lookup hit, a proposal cut short by an id the target does not have, or a full lookup match
+    still runs the remaining steps on a filler token (cache rolled back, result dropped). A lookup match
+    shorter than ``k`` is completed by the draft model (or by the generator's filler rows without one).
+
+    The first model step of a job also feeds the tokens the draft has not seen yet (1 or 2 after a pass,
+    plus lookup tokens); its row count is not padded. A draft model is memory-bound at these sizes (its
+    weights are read once per step), so the step time hardly depends on it; the residual is listed in
+    the timing audit.
+
+    Args:
+        model: Draft model (same tokenizer as the target) or ``None`` (prompt lookup only).
+        lookup: Longest n-gram prompt lookup tries (0: no lookup).
+        lookup_min_n: Shortest n-gram accepted.
+        target_vocab: The target's vocabulary size (a proposal ends at the first id at or above it).
+    """
+
+    def __init__(self, model: TransformerModel | None, *, lookup: int = 0, lookup_min_n: int = 3,
+                 target_vocab: int | None = None):
+        if model is None and lookup <= 0:
+            raise ConfigError("BuiltinDrafter needs a draft model or prompt lookup")
+        self.model = model
+        self.lookup = int(lookup)
+        self.lookup_min_n = int(lookup_min_n)
+        self.target_vocab = target_vocab
+        dv = getattr(getattr(model, "arch", None), "vocab_size", None) if model is not None else None
+        self.draft_vocab = int(dv) if dv is not None else None
+        self.needs_prefill = model is not None
+        #: ``calls`` propose calls that ran the model, ``steps`` draft forward steps, ``ms`` their wall time.
+        self.stats: dict[str, float] = {"calls": 0.0, "steps": 0.0, "ms": 0.0}
+
+    def _din(self, ids: Sequence[int]) -> list[int]:
+        dv = self.draft_vocab
+        return [int(t) for t in ids] if dv is None else [int(t) if t < dv else dv - 1 for t in ids]
+
+    def _filler(self) -> int:
+        return secrets.randbelow(self.draft_vocab or self.target_vocab or 1)
+
+    def open(self, prompt: Sequence[int], max_len: int) -> _BuiltinState:
+        return _BuiltinState(self.model.new_cache(max_len) if self.model is not None else None)
+
+    def prefill(self, states: Sequence[Any], prompts: Sequence[Sequence[int]]) -> None:
+        live = [(st, p) for st, p in zip(states, prompts, strict=True) if st.cache is not None]
+        if not live or self.model is None:
+            return
+        try:
+            for st, _ in live:  # a retried prefill pass starts over
+                st.cache.truncate(0)
+                st.fed = []
+            self.model.forward_batch([SequenceInput(self._din(p), st.cache) for st, p in live])
+            for st, p in live:
+                st.fed = [int(t) for t in p]
+        except Exception:
+            log.warning("draft prefill failed; model drafts disabled for %d sequence(s)", len(live), exc_info=True)
+            for st, _ in live:
+                self.close(st)
+
+    def close(self, state: Any) -> None:
+        if state.cache is not None:
+            state.cache.clear()
+        state.cache = None
+        state.fed = []
+
+    def _lookup(self, context: list[int], k: int) -> list[int]:
+        if not self.lookup:
+            return []
+        found = _lookup_drafts_fixed(context, k, max(self.lookup, self.lookup_min_n), self.lookup_min_n)
+        tv = self.target_vocab
+        if tv is not None:
+            cut = next((j for j, t in enumerate(found) if t >= tv), len(found))
+            found = found[:cut]
+        return found
+
+    def propose(self, jobs: Sequence[DraftJob]) -> None:
+        seeds = [self._lookup(j.context, j.k) for j in jobs]
+        for job, seed in zip(jobs, seeds, strict=True):
+            job.out = list(seed[: job.k])
+        mjobs = [(job, seed) for job, seed in zip(jobs, seeds, strict=True)
+                 if job.k > 0 and isinstance(job.state, _BuiltinState) and job.state.cache is not None]
+        if self.model is None or not mjobs:
+            return
+        t0 = time.perf_counter()
+        try:
+            self._model_steps(mjobs)
+        except Exception:
+            log.warning("draft model failed; model drafts disabled for %d sequence(s)", len(mjobs), exc_info=True)
+            for job, seed in mjobs:
+                self.close(job.state)
+                job.out = list(seed[: job.k])
+        finally:
+            self.stats["calls"] += 1
+            self.stats["ms"] += (time.perf_counter() - t0) * 1e3
+
+    def _model_steps(self, mjobs: Sequence[tuple[DraftJob, list[int]]]) -> None:
+        """Exactly ``job.k`` draft forward steps and ``job.k`` proposals (real or dropped) per job.
+
+        Per job with a lookup seed of ``s`` tokens: ``d = min(s, k - 1)`` dummy steps first (their draws
+        advance the coupled sampler past the seed positions), then the catch-up step (the context tokens
+        the draft has not seen, plus the seed), then one-token steps; once the proposal is complete or has
+        ended, the remaining steps are dummies on a filler token.
+        """
+        assert self.model is not None
+        tv = self.target_vocab
+        plan: list[dict[str, Any]] = []
+        for mj, seed in mjobs:
+            s = min(len(seed), mj.k)
+            plan.append({"job": mj, "seed": seed[:s], "d": min(s, mj.k - 1), "stopped": s >= mj.k, "base": 0})
+        steps = max(p["job"].k for p in plan)
+        for t in range(steps):
+            feeds: list[SequenceInput] = []
+            kinds: list[tuple[dict[str, Any], str]] = []
+            for p in plan:
+                job: DraftJob = p["job"]
+                st: _BuiltinState = job.state
+                if t >= job.k:
+                    continue
+                cache = st.cache
+                assert cache is not None
+                if t < p["d"] or (t > p["d"] and p["stopped"]):  # dummy step on a filler token
+                    p["base"] = cache.length
+                    feeds.append(SequenceInput(self._din([self._filler()]), cache))
+                    kinds.append((p, "dummy"))
+                elif t == p["d"]:  # catch up with the context (dropping rejected drafts), then the seed
+                    ctx = job.context
+                    n = min(len(st.fed), len(ctx))
+                    lcp = 0
+                    while lcp < n and st.fed[lcp] == ctx[lcp]:
+                        lcp += 1
+                    lcp = min(lcp, len(ctx) - 1)  # always feed at least the last context token
+                    cache.truncate(lcp)
+                    del st.fed[lcp:]
+                    new = [int(x) for x in ctx[lcp:]] + [int(x) for x in p["seed"]]
+                    st.fed.extend(new)
+                    feeds.append(SequenceInput(self._din(new), cache))
+                    kinds.append((p, "full" if p["stopped"] else "real"))
+                else:  # continue the proposal
+                    last = int(job.out[-1])
+                    st.fed.append(last)
+                    feeds.append(SequenceInput(self._din([last]), cache))
+                    kinds.append((p, "real"))
+            if not feeds:
+                break
+            outs = self.model.forward_batch(feeds)
+            self.stats["steps"] += 1
+            for (p, kind), lg in zip(kinds, outs, strict=True):
+                job = p["job"]
+                tok = self._pick(job, lg)  # one draw (or argmax) per step and job, used or not
+                if kind == "dummy":
+                    job.state.cache.truncate(p["base"])
+                    continue
+                if kind == "full":  # the seed already completes the proposal; this step only catches up
+                    continue
+                if tok < 0 or (tv is not None and tok >= tv):  # not a target token: the proposal ends
+                    p["stopped"] = True
+                    continue
+                job.out.append(tok)
+                if len(job.out) >= job.k:
+                    p["stopped"] = True
+
+    def _pick(self, job: DraftJob, lg: torch.Tensor) -> int:
+        fk = job.sampler
+        if fk is None:
+            return int(torch.argmax(lg))
+        tv = self.target_vocab
+        if tv is not None and lg.numel() != tv:  # align with the target's vocabulary (RNG draws)
+            lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
+        return fk.propose(lg, job.generated + job.out)
+
+
+class _ConvGate:
+    """Per-conversation FIFO: a follow-up turn starts only after the previous turn has left the engine
+    (strict mode: after its dummy passes), so the provider never sees a new turn overlap them."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, tuple[asyncio.Lock, int]] = {}
+
+    async def acquire(self, key: str) -> None:
+        lock, users = self._locks.get(key, (asyncio.Lock(), 0))
+        self._locks[key] = (lock, users + 1)
+        try:
+            await lock.acquire()
+        except BaseException:
+            self._drop(key)
+            raise
+
+    def release(self, key: str) -> None:
+        if key not in self._locks:  # pragma: no cover - defensive
+            return
+        self._locks[key][0].release()
+        self._drop(key)
+
+    def _drop(self, key: str) -> None:
+        lock, users = self._locks[key]
+        if users <= 1:
+            del self._locks[key]
+        else:
+            self._locks[key] = (lock, users - 1)
 
 
 class Generator:
@@ -187,13 +518,42 @@ class Generator:
             isolation of a plain step. Used only when every sequence of the step has its own mask reservation
             (rows of one reservation are never taken by two passes at once) and there is no draft model.
         pingpong_min_sessions: Smallest step (sequences) that is split (at least 2; default 5: more than 4).
+        spec_rows: Fixed-row speculation (``None``: off, the variable-row mode described below). Every pass
+            after the prefill pass carries exactly ``spec_rows`` rows per sequence (2..8) in steps of at most
+            ``spec_max_batch`` sequences, and 1 row in larger steps (a function of the public session count):
+            the pending token, the drafts, then filler rows. It never falls back to 1 row because of the
+            text, the drafts, the token budget or the mask reservation. On a model that supports padding
+            rows (``supports_pad_rows``; the backend sends uniform random payloads that take no masks) the
+            filler rows are padding and drafts use only spare mask rows; otherwise filler rows are ordinary
+            masked rows (random tokens) and the request needs a reservation of
+            ``prompt + (max_tokens - 1) * spec_rows`` rows, checked before any pass. Per-pass gateway work
+            is fixed: the drafter runs a fixed number of steps (:class:`Drafter`), the LM head covers every
+            row, and rows after the accepted ones are sampled with a throw-away sampler. Needs a draft
+            source (``draft``, ``lookup`` or ``drafter``); the adaptive draft length is not used.
+        spec_strict: Strict-pass mode (needs ``spec_rows``): after a sequence ends (or is cancelled), dummy
+            passes on random data run through the same code path (drafter, every linear, LM head, sampling;
+            mask-free on pad-capable models) until the provider has seen exactly as many passes as tokens
+            were generated, which it already sees without speculation. The answer streams first; a
+            follow-up turn of the same ``conversation`` waits until the dummy passes are done.
+        drafter: Custom :class:`Drafter` for fixed-row speculation (default: :class:`BuiltinDrafter` over
+            ``draft`` and ``lookup``).
+        prefill_lane: Run prompt prefills in a lane of their own, concurrently with the decode steps of
+            running streams (off by default), so a long prompt does not freeze them for its whole prefill.
+            Waiting prompts are taken shortest first with aging (a prompt's length minus
+            ``prefill_aging`` tokens per second waited), up to ``prefill_lane_rows`` prompt rows per lane
+            pass. A prompt uses the lane only with at least ``prefill_lane_min_tokens`` tokens and its own
+            mask reservation (no running sequence shares it); others prefill in the decode step as before.
+            Each sequence's tokens are unchanged (its logits do not depend on what shares a pass); the
+            provider sees prefill items in passes of their own, whose sizes are the public prompt lengths.
 
     Privacy of speculation: the compute service sees how many rows each pass carries. Every pass of a
     sequence carries 1 or ``1 + k`` rows, ``k`` one fixed size (or, with the adaptive draft length, one of
     two fixed sizes): a prompt-lookup proposal is exactly ``k`` tokens (a short match is completed by the
     draft model or dropped), and near the end of the token budget, the context or the mask reservation the
     draft length drops to 0 rather than to a size that depends on how many drafts were accepted. So a pass
-    tells the service at most about one bit about how predictable the text is.
+    tells the service at most about one bit about how predictable the text is, and the number of passes
+    tells it how many tokens the drafts saved. ``spec_rows`` with ``spec_strict`` removes both: fixed rows
+    and exactly as many passes as generated tokens (SPEC 3.4).
     """
 
     def __init__(
@@ -213,6 +573,13 @@ class Generator:
         spec_max_batch: int = 1,
         pingpong: bool = False,
         pingpong_min_sessions: int = 5,
+        spec_rows: int | None = None,
+        spec_strict: bool = False,
+        drafter: Drafter | None = None,
+        prefill_lane: bool = False,
+        prefill_lane_min_tokens: int = 16,
+        prefill_lane_rows: int = 2048,
+        prefill_aging: float = 256.0,
     ):
         if max_batch < 1:
             raise ConfigError("max_batch must be >= 1")
@@ -274,7 +641,60 @@ class Generator:
         self.pingpong_min_sessions = int(pingpong_min_sessions)
         #: Batching-loop counters (read by the gateway status and benchmarks): ``steps`` engine steps,
         #: ``pingpong_steps`` of them split in two cohorts, ``step_sequences`` sequences over all steps.
-        self.sched_stats: dict[str, float] = {"steps": 0.0, "pingpong_steps": 0.0, "step_sequences": 0.0}
+        self.sched_stats: dict[str, float] = {"steps": 0.0, "pingpong_steps": 0.0, "step_sequences": 0.0,
+                                              "lane_steps": 0.0, "lane_sequences": 0.0}
+        # ---- fixed-row speculation and strict-pass mode -----------------------------------------------
+        if spec_strict and spec_rows is None:
+            raise ConfigError("spec_strict needs spec_rows (a fixed row count per pass)")
+        if drafter is not None and spec_rows is None:
+            raise ConfigError("a drafter is used by fixed-row speculation only (set spec_rows)")
+        self.spec_rows: int | None = None
+        self.spec_strict = False
+        self._drafter: Drafter | None = None
+        #: Filler rows are padding (random payload, no masks): the model passes ``pad_rows`` to its backend.
+        self._pad_ok = False
+        if spec_rows is not None:
+            if not 2 <= int(spec_rows) <= 8:
+                raise ConfigError("spec_rows must be in [2, 8]")
+            if drafter is None:
+                if draft is None and lookup <= 0:
+                    raise ConfigError("spec_rows needs a draft source (draft, lookup or drafter)")
+                drafter = BuiltinDrafter(draft, lookup=lookup, lookup_min_n=lookup_min_n,
+                                         target_vocab=self._target_vocab)
+            self.spec_rows = int(spec_rows)
+            self.spec_strict = bool(spec_strict)
+            self._drafter = drafter
+            # the variable-row machinery stays inert in fixed mode
+            self.draft = None
+            self.lookup = 0
+            self.spec_tokens = self.spec_rows - 1
+            self.spec_min_tokens = self.spec_tokens
+            self.draft_confidence = 0.0
+            self._pad_ok = bool(getattr(model, "supports_pad_rows", False)) and "pad_rows" in getattr(
+                SequenceInput, "__dataclass_fields__", {})
+            self.spec_stats.update({"dummy_passes": 0.0, "fill_rows": 0.0, "pad_rows": 0.0})
+        tv_fill = self._target_vocab if self._target_vocab is not None else getattr(model, "vocab_size", None)
+        self._fill_vocab = int(tv_fill) if tv_fill is not None else 1
+        #: Serializes the draft model between the decode loop and draft prefills in worker threads (the
+        #: prefill lane runs them concurrently); a decode step that finds it busy plans no model drafts.
+        self._draft_lock = threading.Lock()
+        self._conv_gate = _ConvGate()
+        #: Strict-mode drains of non-batching streams (dummy passes after the answer).
+        self._draining: set[asyncio.Task[None]] = set()
+        # ---- prefill lane --------------------------------------------------------------------------------
+        if prefill_lane_min_tokens < 1:
+            raise ConfigError("prefill_lane_min_tokens must be >= 1")
+        if prefill_lane_rows < 1:
+            raise ConfigError("prefill_lane_rows must be >= 1")
+        if prefill_aging < 0:
+            raise ConfigError("prefill_aging must be >= 0")
+        self.prefill_lane = bool(prefill_lane)
+        self.prefill_lane_min_tokens = int(prefill_lane_min_tokens)
+        self.prefill_lane_rows = int(prefill_lane_rows)
+        self.prefill_aging = float(prefill_aging)
+        self._lane_wait: list[_SeqState] = []
+        self._lane_busy: list[_SeqState] = []
+        self._lane_task: asyncio.Task[None] | None = None
 
     # ---- state management ---------------------------------------------------------------------
     def _new_state(
@@ -304,29 +724,75 @@ class Generator:
                     f"prompt of {len(prompt)} tokens leaves no room in the {ctx}-token context",
                     details={"prompt_tokens": len(prompt), "max_len": ctx},
                 )
-            cap = min(len(prompt) + params.max_tokens + self.spec_tokens, ctx)
+            fixed = self.spec_rows
+            if fixed is None:
+                cap = min(len(prompt) + params.max_tokens + self.spec_tokens, ctx)
+                alloc = cap
+            else:  # LENGTH at the plain limit; the cache has room for a full pass of fixed rows beyond it
+                cap = min(len(prompt) + params.max_tokens, ctx)
+                alloc = cap + fixed
+            need = self.mask_rows_needed(len(prompt), params.max_tokens)
             if session is None and self.session_factory is not None:
-                session = self.session_factory(len(prompt) + params.max_tokens)
+                session = self.session_factory(need)
                 own = session is not None
+            if fixed is not None and not self._pad_ok and session is not None:
+                self._check_fixed_reservation(session, need)
             stop_ids = set(params.stop_token_ids)
             if not params.ignore_eos:
                 stop_ids.update(self._eos)
-            return _SeqState(
+            st = _SeqState(
                 prompt=prompt,
                 params=params,
                 session=session,
                 own_session=own,
-                cache=self.model.new_cache(cap),
+                cache=self.model.new_cache(alloc),
                 draft_cache=self.draft.new_cache(cap) if self.draft is not None else None,
                 sampler=Sampler(params, prompt),
                 decoder=self.tokenizer.incremental_decoder() if self.tokenizer is not None else None,
                 stop_ids=frozenset(stop_ids),
                 pending=list(prompt),
+                limit=cap,
             )
+            if self._drafter is not None and fixed is not None:
+                st.dstate = self._drafter.open(prompt, cap + 2 * fixed)
+            return st
         except BaseException:
             if own and session is not None:
                 self._close_session(session)
             raise
+
+    def mask_rows_needed(self, prompt_tokens: int, max_tokens: int) -> int:
+        """Mask rows a request's reservation must hold: ``prompt + max_tokens`` (as without speculation:
+        speculation only uses spare rows), or, with ``spec_rows`` on a model without padding rows (filler
+        rows are masked rows), ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)``: every pass
+        after the prefill then takes ``spec_rows`` rows (strict-mode dummy passes too)."""
+        base = int(prompt_tokens) + int(max_tokens)
+        if self.spec_rows is None or self._pad_ok:
+            return base
+        ctx = int(self.model.arch.max_position_embeddings)
+        passes = max(0, min(int(max_tokens), ctx - int(prompt_tokens)) - 1)  # decode (and dummy) passes
+        return base + passes * (self.spec_rows - 1)
+
+    @staticmethod
+    def _check_fixed_reservation(session: object, need: int) -> None:
+        """Fixed rows with masked filler rows: refuse up front (before the provider sees anything) a
+        reservation that could run out mid-request, rather than ever sending a pass of fewer rows."""
+        remaining = getattr(session, "remaining", None)
+        if not callable(remaining):
+            return
+        try:
+            rows = int(remaining(_FIRST_LINEAR))
+        except Exception:
+            return
+        if rows < need:
+            raise MaskExhaustedError(
+                "mask reservation too small for fixed-row speculation",
+                details={"rows": rows, "needed": need},
+            )
+
+    def _filler(self) -> int:
+        """A random token id (filler rows and dummy passes; masked or padding, never emitted)."""
+        return secrets.randbelow(self._fill_vocab)
 
     @staticmethod
     def _close_session(session: object) -> None:
@@ -337,17 +803,29 @@ class Generator:
             except Exception:  # pragma: no cover - defensive
                 log.exception("closing session reservation failed")
 
-    @staticmethod
-    def _release(st: _SeqState) -> None:
+    def _release_local(self, st: _SeqState) -> None:
+        """Free a sequence's caches, drafter state and conversation slot (no reservation close)."""
+        st.cache.clear()
+        if st.draft_cache is not None:
+            st.draft_cache.clear()
+        if st.dstate is not None and self._drafter is not None:
+            dstate, st.dstate = st.dstate, None
+            try:
+                self._drafter.close(dstate)
+            except Exception:  # pragma: no cover - defensive
+                log.exception("closing drafter state failed")
+        if st.conv_held and st.conv is not None:
+            st.conv_held = False
+            self._conv_gate.release(st.conv)
+
+    def _release(self, st: _SeqState) -> None:
         """Synchronous release (blocking API only: closes an owned session on this thread)."""
         if st.t_end is None:
             st.t_end = time.perf_counter()
         if st.own_session and st.session is not None:
             st.own_session = False
             Generator._close_session(st.session)
-        st.cache.clear()
-        if st.draft_cache is not None:
-            st.draft_cache.clear()
+        self._release_local(st)
 
     def _arelease(self, st: _SeqState) -> None:
         """Release from async code without blocking the event loop.
@@ -361,9 +839,7 @@ class Generator:
             st.t_end = time.perf_counter()
         session = st.session if st.own_session else None
         st.own_session = False
-        st.cache.clear()
-        if st.draft_cache is not None:
-            st.draft_cache.clear()
+        self._release_local(st)
         if session is None:
             return
         try:
@@ -435,7 +911,7 @@ class Generator:
         text, hit = self._scan_stop(st, final=False)
         if hit:
             st.finish = FinishReason.STOP
-        elif len(st.generated) >= st.params.max_tokens or st.cache.length + 1 >= st.cache.max_len:
+        elif len(st.generated) >= st.params.max_tokens or st.cache.length + 1 >= st.limit:
             st.finish = FinishReason.LENGTH
         if st.finish == FinishReason.LENGTH:
             st.held += st.decoder.flush() if st.decoder is not None else ""
@@ -466,6 +942,8 @@ class Generator:
             timings["spec_accepted"] = float(st.spec_accepted)
         if st.draft_ms:
             timings["draft_ms"] = st.draft_ms
+        if self.spec_rows is not None:
+            timings["passes"] = float(st.passes)  # provider-visible passes (dummy passes included)
         return GenerationResult(
             token_ids=list(st.output_ids),
             text="".join(st.text_parts),
@@ -515,6 +993,9 @@ class Generator:
         when there is none. Otherwise the draft model (plaintext, local) proposes all ``k``. Steps with more
         than ``spec_max_batch`` sequences do not speculate.
         """
+        if self.spec_rows is not None:
+            self._plan_fixed(batch)
+            return
         if not self.spec_tokens:
             return
         over = len(batch) > self.spec_max_batch
@@ -547,10 +1028,15 @@ class Generator:
                 active.append((st, k, seed))
         if not active or self.draft is None:
             return
+        if not self._draft_lock.acquire(blocking=False):  # a draft prefill (prefill lane) holds the draft
+            for st, _, _ in active:
+                st.drafts = []  # no drafts this step (a lookup seed alone would reveal its length)
+            return
         t0 = time.perf_counter()
         try:
             self._draft_tokens(active)
         finally:
+            self._draft_lock.release()
             ms = (time.perf_counter() - t0) * 1e3
             for st, _, _ in active:
                 st.draft_ms += ms
@@ -629,6 +1115,9 @@ class Generator:
     def _needs_draft_prefill(self, st: _SeqState) -> bool:
         """First step of a request: the draft has not seen the prompt yet. That step carries no model
         drafts; the draft reads the prompt while the target's prefill runs (:meth:`_draft_prefill`)."""
+        if self.spec_rows is not None:
+            return (st.dstate is not None and not st.passes
+                    and bool(getattr(self._drafter, "needs_prefill", True)))
         return st.draft_cache is not None and st.draft_cache.length == 0 and not st.ctx and not st.drafts
 
     async def _forward_with_draft_prefill(self, batch: Sequence[_SeqState], warm: Sequence[_SeqState]) -> list[Any]:
@@ -655,23 +1144,202 @@ class Generator:
                 if st.draft_cache is not None:
                     st.draft_cache.clear()
                     st.draft_cache = None
+                if st.dstate is not None and self._drafter is not None:
+                    dstate, st.dstate = st.dstate, None  # fixed mode: filler rows from now on
+                    with contextlib.suppress(Exception):
+                        self._drafter.close(dstate)
 
     def _draft_prefill(self, states: Sequence[_SeqState]) -> None:
         """Feed the prompt to the draft (its logits are not needed); runs alongside the target's prefill."""
-        if self.draft is None or not states:
+        if not states:
+            return
+        if self.spec_rows is not None:
+            if self._drafter is None:
+                return
+            live = [st for st in states if st.dstate is not None]
+            with self._draft_lock:
+                self._drafter.prefill([st.dstate for st in live], [st.prompt for st in live])
+            return
+        if self.draft is None:
             return
         dv = self._draft_vocab
         feeds = [SequenceInput([t if dv is None or t < dv else dv - 1 for t in st.pending], _dcache(st))
                  for st in states]
-        self.draft.forward_batch(feeds)
+        with self._draft_lock:
+            self.draft.forward_batch(feeds)
 
     def _inputs(self, batch: Sequence[_SeqState]) -> list[SequenceInput]:
+        if self.spec_rows is not None:
+            return [self._input_fixed(st) for st in batch]
         return [SequenceInput(st.pending + st.drafts, st.cache, st.session, last_logits=len(st.drafts) + 1,
                               serial_tail=len(st.drafts))
                 if st.drafts else SequenceInput(st.pending, st.cache, st.session) for st in batch]
 
+    # ---- fixed-row speculation (spec_rows) and strict-pass mode -----------------------------------
+    def _owes(self, st: _SeqState) -> bool:
+        """Strict mode: the sequence has ended (or was cancelled) and the provider has seen fewer passes
+        than tokens generated, so dummy passes are still due. Never after an error."""
+        return (self.spec_strict and (st.done or st.cancelled) and st.finish != FinishReason.ERROR
+                and st.passes < len(st.generated))
+
+    def _wants_pass(self, st: _SeqState) -> bool:
+        return (not st.done and not st.cancelled) or self._owes(st)
+
+    def _plan_fixed(self, batch: Sequence[_SeqState]) -> None:
+        """Rows of this pass per sequence: the prompt (prefill pass), else exactly ``rows``: the pending
+        token, up to ``rows - 1`` drafts, then filler rows. A strict-mode dummy pass feeds a random token
+        and only filler rows. The drafter runs for every sequence of a pass that has rows > 1 (dummy passes
+        too), always with the same ``k``. ``rows`` is ``spec_rows`` in steps of at most ``spec_max_batch``
+        sequences, else 1 (both public)."""
+        assert self.spec_rows is not None
+        rows = self.spec_rows if len(batch) <= self.spec_max_batch else 1
+        k = rows - 1
+        jobs: list[DraftJob] = []
+        owners: list[_SeqState] = []
+        for st in batch:
+            st.drafts = []
+            st.fill = []
+            st.pad = 0
+            st.dummy = st.done or st.cancelled
+            if not st.passes:  # prefill pass: the prompt rows only (a public length)
+                st.rows = len(st.pending)
+                continue
+            if st.dummy:
+                st.pending = [self._filler()]
+            st.rows = rows
+            if k > 0 and st.dstate is not None:
+                fork = None if st.params.greedy else st.sampler.fork()
+                jobs.append(DraftJob(st.dstate, st.ctx + st.pending, k, fork, list(st.generated)))
+                owners.append(st)
+        if jobs and self._drafter is not None:
+            if self._draft_lock.acquire(blocking=False):  # busy: a prefill-lane draft prefill (public event)
+                t0 = time.perf_counter()
+                try:
+                    self._drafter.propose(jobs)
+                except Exception:
+                    log.warning("drafter failed; filler rows only this pass", exc_info=True)
+                    for job in jobs:
+                        job.out = []
+                finally:
+                    self._draft_lock.release()
+                    ms = (time.perf_counter() - t0) * 1e3
+                    for st in owners:
+                        st.draft_ms += ms
+                    self.spec_stats["draft_calls"] += 1
+                    self.spec_stats["draft_ms"] += ms
+        proposals = {id(st): job.out for st, job in zip(owners, jobs, strict=True)}
+        tv = self._target_vocab
+        for st in batch:
+            if not st.passes or st.rows <= 1:
+                if st.dummy and self._pad_ok:
+                    st.pad = st.rows
+                continue
+            prop = [int(t) for t in proposals.get(id(st), [])][:k]
+            cut = next((j for j, t in enumerate(prop) if t < 0 or (tv is not None and t >= tv)), len(prop))
+            prop = prop[:cut]
+            if st.dummy:
+                n_real = 0
+            elif self._pad_ok:  # drafts take masks, padding does not: only spare rows, never past the budget
+                n_real = min(len(prop), self._spare_rows(st))
+            else:  # every row is a masked row anyway (reserved up front)
+                n_real = len(prop)
+            st.drafts = prop[:n_real]
+            st.fill = prop[n_real:] + [self._filler() for _ in range(k - len(prop))]
+            if self._pad_ok:
+                st.pad = len(st.fill) + (1 if st.dummy else 0)
+
+    def _spare_rows(self, st: _SeqState) -> int:
+        """Pad-capable models: drafts this pass may use (mask rows not needed to finish without drafts,
+        already held by the reservation; positions inside the token budget and the context)."""
+        left = st.params.max_tokens - len(st.generated)
+        cap = min(left - 1, st.limit - st.cache.length - len(st.pending))
+        remaining = getattr(st.session, "remaining", None)
+        if callable(remaining):
+            try:
+                rows = int(remaining(_FIRST_LINEAR))
+                reserved = getattr(st.session, "reserved_rows", None)
+                held = int(reserved(_FIRST_LINEAR)) if callable(reserved) else rows
+            except Exception:
+                return 0
+            cap = min(cap, rows - (len(st.pending) + left - 1), held - len(st.pending))
+        return max(0, cap)
+
+    def _input_fixed(self, st: _SeqState) -> SequenceInput:
+        if not st.passes or st.rows <= 1:  # prefill pass, or a 1-row step
+            if st.pad:
+                return SequenceInput(st.pending, st.cache, st.session, pad_rows=st.pad)  # type: ignore[call-arg]
+            return SequenceInput(st.pending, st.cache, st.session)
+        ids = st.pending + st.drafts + st.fill
+        n = len(ids)
+        if self._pad_ok:
+            return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1,  # type: ignore[call-arg]
+                                 pad_rows=st.pad)
+        return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1)
+
+    def _dummy_samples(self, st: _SeqState, logits: Any, start: int, rows: int) -> None:
+        """Sample rows ``start..rows-1`` with a throw-away fork of the request's sampler: the same work
+        per pass whatever the number of accepted drafts (the output never sees these draws)."""
+        if start >= rows:
+            return
+        fork = st.sampler.fork()
+        gen = list(st.generated)
+        for j in range(start, rows):
+            fork.sample(logits if rows == 1 else logits[j], gen)
+
+    def _consume_fixed(self, st: _SeqState, logits: Any) -> list[TokenEvent]:
+        stats = self.spec_stats
+        first = not st.passes
+        st.passes += 1
+        pending = st.pending
+        if first or (st.rows <= 1 and not st.dummy):  # prefill pass, or a 1-row decode pass
+            st.masks += len(pending) - st.pad
+            st.ctx.extend(pending)
+            return [self._consume(st, logits)]
+        rows = st.rows
+        base = st.cache.length - rows
+        st.masks += rows - st.pad
+        stats["fill_rows"] += len(st.fill)
+        stats["pad_rows"] += st.pad
+        if st.dummy:  # no output; the cache goes back to where it was
+            self._dummy_samples(st, logits, 0, rows)
+            st.cache.set_length(base)
+            st.pending = []
+            stats["dummy_passes"] += 1
+            return []
+        drafts = st.drafts
+        events: list[TokenEvent] = []
+        i = 0
+        for i in range(len(drafts) + 1):
+            st.cache.set_length(base + len(pending) + i)  # the cache holds pending + drafts[:i]
+            events.append(self._consume(st, logits[i]))
+            if st.done or i == len(drafts) or st.generated[-1] != drafts[i]:
+                break
+        self._dummy_samples(st, logits, i + 1, rows)
+        st.ctx.extend(pending)
+        st.ctx.extend(drafts[:i])
+        st.spec_passes += 1
+        st.spec_proposed += len(drafts)
+        st.spec_accepted += i
+        stats["spec_passes"] += 1
+        stats["spec_rows"] += len(drafts)
+        stats["spec_accepted"] += i
+        st.drafts = []
+        st.fill = []
+        return events
+
+    def _drain_sync(self, states: Sequence[_SeqState]) -> None:
+        """Strict mode, blocking API: run the dummy passes still due (see ``spec_strict``)."""
+        while True:
+            owing = [st for st in states if self._owes(st)]
+            if not owing:
+                return
+            for i in range(0, len(owing), self.max_batch):
+                self._step_sync(owing[i : i + self.max_batch])
+
     def _consume_step(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
         """Emit this step's tokens: one, or (speculative) every draft the sampler agrees with plus one."""
+        if self.spec_rows is not None:
+            return self._consume_fixed(st, logits)
         pending = st.pending
         n_in = len(pending) + len(st.drafts)
         st.masks += n_in
@@ -719,16 +1387,29 @@ class Generator:
     ) -> Iterator[TokenEvent]:
         """Blocking token stream. Closing the iterator early stops generation.
 
-        ``own_session=True`` hands ``session`` to the generator, which closes it at the end.
+        ``own_session=True`` hands ``session`` to the generator, which closes it at the end. In strict
+        mode the dummy passes still due run after the last event (or after an early close).
         """
         st = self._new_state(prompt_ids, params, session, own_session)
+        drain = False
         try:
             while not st.done:
                 yield from self._step_sync([st])[0]
+            drain = True
+        except GeneratorExit:
+            drain = True
+            raise
         finally:
             if st.finish is None:
                 st.finish = FinishReason.CANCELLED
-            self._release(st)
+                st.cancelled = True
+            try:
+                if drain:
+                    self._drain_sync([st])
+            except Exception:
+                log.exception("strict-mode dummy passes failed")
+            finally:
+                self._release(st)
 
     def generate(
         self,
@@ -743,6 +1424,7 @@ class Generator:
         try:
             while not st.done:
                 self._step_sync([st])
+            self._drain_sync([st])
         finally:
             if st.finish is None:
                 st.finish = FinishReason.ERROR
@@ -766,7 +1448,7 @@ class Generator:
             for p, sp, ss in zip(prompts, plist, slist, strict=True):
                 states.append(self._new_state(p, sp, ss))
             while True:
-                active = [s for s in states if not s.done]
+                active = [s for s in states if self._wants_pass(s)]  # strict mode: dummy passes too
                 if not active:
                     break
                 for i in range(0, len(active), self.max_batch):
@@ -786,13 +1468,16 @@ class Generator:
         *,
         session: object | None = None,
         own_session: bool = False,
+        conversation: str | None = None,
     ) -> AsyncIterator[TokenEvent]:
         """Async token stream (used by the gateway SSE endpoint); cancellation stops generation.
 
         With ``own_session=True`` the generator closes ``session`` (burning unused slots) at a safe
-        point: never while a batched step that uses it is in flight.
+        point: never while a batched step that uses it is in flight. ``conversation``: in strict mode a
+        request waits until the previous request of the same conversation has finished its dummy passes.
         """
         st = self._new_state(prompt_ids, params, session, own_session)
+        st.conv = conversation if self.spec_strict else None
         inner = self._astream_state(st)
         try:
             async for ev in inner:
@@ -807,9 +1492,15 @@ class Generator:
         *,
         session: object | None = None,
         own_session: bool = False,
+        conversation: str | None = None,
     ) -> GenerationResult:
-        """Async full generation (batched with other concurrent requests; see :meth:`astream`)."""
+        """Async full generation (batched with other concurrent requests; see :meth:`astream`).
+
+        In strict mode the result is returned with the answer; the dummy passes still due run in the
+        background (:meth:`wait_drained`).
+        """
         st = self._new_state(prompt_ids, params, session, own_session)
+        st.conv = conversation if self.spec_strict else None
         inner = self._astream_state(st)
         try:
             async for _ in inner:
@@ -818,8 +1509,21 @@ class Generator:
             await inner.aclose()
         return self._result(st)
 
+    def _engine_holds(self, st: _SeqState) -> bool:
+        """The batching loop or the prefill lane owns the state (and releases it)."""
+        return st in self._active or st in self._lane_wait or st in self._lane_busy
+
     async def _astream_state(self, st: _SeqState) -> AsyncGenerator[TokenEvent, None]:
+        if st.conv is not None:
+            try:
+                await self._conv_gate.acquire(st.conv)
+            except BaseException:
+                st.finish = FinishReason.CANCELLED
+                self._arelease(st)
+                raise
+            st.conv_held = True
         if not self.batching:
+            drain = False
             try:
                 while not st.done:
                     await self._run_plain(self._plan_drafts, [st])
@@ -827,10 +1531,20 @@ class Generator:
                     logits = (await self._forward_with_draft_prefill([st], warm))[0]
                     for ev in await self._run_plain(self._consume_step, st, logits):
                         yield ev
+                drain = True
+            except GeneratorExit:
+                drain = True
+                raise
             finally:
                 if st.finish is None:
                     st.finish = FinishReason.CANCELLED
-                self._arelease(st)
+                    st.cancelled = True
+                if drain and self._owes(st):  # the answer is out; the dummy passes run in the background
+                    task = asyncio.ensure_future(self._drain_async(st))
+                    self._draining.add(task)
+                    task.add_done_callback(self._draining.discard)
+                else:
+                    self._arelease(st)
             return
         st.queue = asyncio.Queue()
         self._enqueue(st)
@@ -846,8 +1560,35 @@ class Generator:
             if st.finish is None:
                 st.cancelled = True
                 st.finish = FinishReason.CANCELLED
-            if st not in self._active:
+            if not self._engine_holds(st):
                 self._arelease(st)
+
+    async def _drain_async(self, st: _SeqState) -> None:
+        """Strict mode without the batching loop: the dummy passes still due, then the release."""
+        try:
+            while self._owes(st):
+                await self._run_plain(self._plan_drafts, [st])
+                logits = (await self.model.aforward_batch(self._inputs([st])))[0]
+                await self._run_plain(self._consume_step, st, logits)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("strict-mode dummy passes failed", exc_info=True)
+            st.finish = FinishReason.ERROR
+        finally:
+            self._arelease(st)
+
+    async def wait_drained(self) -> None:
+        """Wait until no sequence is generating or owes dummy passes, and every close has finished."""
+        while self._active or self._lane_wait or self._lane_busy or self._draining:
+            if self._draining:
+                await asyncio.wait(set(self._draining))
+                continue
+            task = self._task if self._task is not None and not self._task.done() else self._lane_task
+            if task is None or task.done():
+                break
+            await asyncio.wait({task}, timeout=0.05)
+        await self.wait_closed()
 
     def _enqueue(self, st: _SeqState) -> None:
         loop = asyncio.get_running_loop()
@@ -855,13 +1596,24 @@ class Generator:
             self._loop = loop
             self._wake = asyncio.Event()
             self._task = None
+            self._lane_task = None
+        if self._lane_eligible(st):
+            st.t_lane = time.perf_counter()
+            self._lane_wait.append(st)
+            if self._lane_task is None or self._lane_task.done():
+                self._lane_task = loop.create_task(self._run_lane(), name="pgw-engine-prefill-lane")
+            return
         self._active.append(st)
+        self._ensure_loop()
+
+    def _ensure_loop(self) -> None:
+        assert self._wake is not None and self._loop is not None
         self._wake.set()
         if self._task is None or self._task.done():
-            self._task = loop.create_task(self._run_loop(), name="pgw-engine-batcher")
+            self._task = self._loop.create_task(self._run_loop(), name="pgw-engine-batcher")
 
     def _pick_batch(self) -> list[_SeqState]:
-        live = [s for s in self._active if not s.cancelled and not s.done]
+        live = [s for s in self._active if self._wants_pass(s)]
         if len(live) <= self.max_batch:
             return live
         start = self._rr % len(live)
@@ -898,7 +1650,7 @@ class Generator:
         """Background continuous-batching loop (one per event loop)."""
         try:
             while True:
-                for st in [s for s in self._active if s.cancelled or s.done]:
+                for st in [s for s in self._active if not self._wants_pass(s)]:
                     self._active.remove(st)
                     self._arelease(st)
                 if not self._active:
@@ -932,6 +1684,75 @@ class Generator:
         finally:
             if not self._active:
                 self._task = None
+
+    # ---- prefill lane ----------------------------------------------------------------------------
+    def _lane_eligible(self, st: _SeqState) -> bool:
+        return (self.prefill_lane and not st.passes and not st.ctx and st.session is not None
+                and len(st.prompt) >= self.prefill_lane_min_tokens)
+
+    def _pick_prefill(self) -> list[_SeqState]:
+        """The next lane pass: waiting prompts shortest first with aging (length minus ``prefill_aging``
+        tokens per second waited; ties in arrival order), up to ``prefill_lane_rows`` prompt rows (at least
+        one prompt). A prompt whose reservation a running sequence (or another prompt of the pass) also
+        uses cannot run concurrently with it: it joins the decode steps instead (the old behaviour)."""
+        now = time.perf_counter()
+        for st in [s for s in self._lane_wait if s.cancelled or s.done]:
+            self._lane_wait.remove(st)
+            self._active.append(st)  # released by the batching loop
+        held = {id(s.session) for s in self._active if s.session is not None}
+        order = sorted(self._lane_wait, key=lambda s: (len(s.prompt) - self.prefill_aging * (now - s.t_lane), s.t_lane))
+        group: list[_SeqState] = []
+        rows = 0
+        for st in order:
+            sid = id(st.session)
+            if sid in held:
+                self._lane_wait.remove(st)
+                self._active.append(st)
+                continue
+            if group and rows + len(st.prompt) > self.prefill_lane_rows:
+                continue
+            group.append(st)
+            held.add(sid)
+            rows += len(st.prompt)
+        for st in group:
+            self._lane_wait.remove(st)
+        return group
+
+    async def _run_lane(self) -> None:
+        """Prefill lane: prompt passes run concurrently with the batching loop's decode steps; a prefilled
+        sequence then joins the decode steps (where its first token was already streamed)."""
+        try:
+            while self._lane_wait:
+                group = self._pick_prefill()
+                if self._active:
+                    self._ensure_loop()
+                if not group:
+                    await asyncio.sleep(0)
+                    continue
+                self.sched_stats["lane_steps"] += 1
+                self.sched_stats["lane_sequences"] += len(group)
+                self._lane_busy = group
+                try:
+                    await self._step_isolated(group)
+                except asyncio.CancelledError:
+                    for st in group:
+                        self._fail(st, PGWError("generation loop cancelled"))
+                        self._arelease(st)
+                    raise
+                finally:
+                    self._lane_busy = []
+                self._active.extend(group)  # live ones decode; ended ones are released there
+                self._ensure_loop()
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            for st in self._lane_wait:
+                self._fail(st, PGWError("generation loop cancelled"))
+                self._arelease(st)
+            self._lane_wait.clear()
+            raise
+        finally:
+            if not self._lane_wait:
+                self._lane_task = None
 
     async def _step_isolated(self, batch: list[_SeqState], plan: bool = True) -> None:
         """One step of ``batch``; a failure ends only the sequences it concerns.
@@ -973,7 +1794,9 @@ class Generator:
         which cohort a sequence is in depends only on how many sequences are live, never on data.
         """
         n = len(batch)
-        if not self.pingpong or n < self.pingpong_min_sessions or self.draft is not None:
+        prefills = self.draft is not None or (
+            self._drafter is not None and bool(getattr(self._drafter, "needs_prefill", True)))
+        if not self.pingpong or n < self.pingpong_min_sessions or prefills:
             return None
         sessions = [st.session for st in batch]
         if any(s is None for s in sessions) or len({id(s) for s in sessions}) != n:
@@ -1013,11 +1836,16 @@ class Generator:
             raise asyncio.CancelledError
 
     async def aclose(self) -> None:
-        """Cancel the batching loop and fail outstanding streams."""
-        task = self._task
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        """Cancel the prefill lane, the batching loop and strict-mode drains; fail outstanding streams."""
+        for task in (self._lane_task, self._task, *self._draining):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._lane_task = None
         self._task = None
+        for st in self._active:  # handed over by the lane after the loop stopped
+            self._fail(st, PGWError("generation loop cancelled"))
+            self._arelease(st)
+        self._active.clear()
         await self.wait_closed()
