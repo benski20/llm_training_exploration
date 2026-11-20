@@ -25,8 +25,7 @@ from collections.abc import Callable
 import numpy as np
 import torch
 
-from pgw.hemask import DEGREE, HEParams, public_matrix, secret_matrix
-from pgw.hemask import fastmm, ntt
+from pgw.hemask import DEGREE, HEParams, fastmm, ntt, public_matrix, secret_matrix
 
 PRESETS = {  # (layers, {kind: (m, n)})
     "qwen2.5-0.5b": (24, {"qkv": (1152, 896), "o": (896, 896), "gate_up": (9728, 896), "down": (896, 4864)}),
@@ -79,8 +78,14 @@ def main() -> None:
     s4 = np.concatenate(smats[:4], axis=1)
     rn, rd = args.rows, args.dense_rows
     res: dict[str, object] = {
-        "preset": args.preset, "rank": args.rank, "groups": g, "sum_n": sum_n, "sum_m": sum_m,
-        "dense_engine": fastmm.engine(), "ntt": ntt.info(), "threads": torch.get_num_threads(),
+        "preset": args.preset,
+        "rank": args.rank,
+        "groups": g,
+        "sum_n": sum_n,
+        "sum_m": sum_m,
+        "dense_engine": fastmm.engine(),
+        "ntt": ntt.info(),
+        "threads": torch.get_num_threads(),
     }
     # per row and group, seconds
     t: dict[str, float] = {}
@@ -98,8 +103,10 @@ def main() -> None:
     t["ntt_decrypt_pre"] = best(lambda: pub_h.mm(sg), args.reps) / (rn * g)
     # bit-identity spot check on the timed shapes
     assert np.array_equal(ntt.big_planes_mm_small(ap8[:rd], s1), fastmm.big_planes_mm_small(ap8[:rd], s1))
-    assert np.array_equal(ntt.big_planes_mm_small(hint[:rd], sg, first_byte=1) & np.uint64(2**56 - 1),
-                          fastmm.big_planes_mm_small(hint[:rd], sg, first_byte=1) & np.uint64(2**56 - 1))
+    assert np.array_equal(
+        ntt.big_planes_mm_small(hint[:rd], sg, first_byte=1) & np.uint64(2**56 - 1),
+        fastmm.big_planes_mm_small(hint[:rd], sg, first_byte=1) & np.uint64(2**56 - 1),
+    )
     per_slot = {k: 1e3 * v * (sum_n if "encrypt" in k else sum_m) / DEGREE for k, v in t.items()}
     res["us_per_row_group"] = {k: round(v * 1e6, 3) for k, v in t.items()}
     res["ms_per_slot"] = {k: round(v, 2) for k, v in per_slot.items()}

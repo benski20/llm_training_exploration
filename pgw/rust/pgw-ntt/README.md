@@ -26,3 +26,11 @@ AVX2 and baseline x86-64) are picked at run time; all give the same bits.
 Build: `python rust/tools/build_ntt.py` (installs `src/pgw_ntt.abi3.so`). Microbenchmark:
 `cargo run --release -p pgw-ntt --no-default-features --example ntt_bench -- 512 1 [avx512|avx2|scalar]`.
 Model-level comparison with the dense path: `python benchmarks/hemask_ntt_bench.py`.
+
+Threads: `PGW_NTT_THREADS=n` fixes the worker threads per call (`0`: all cores). Unset, the Python
+wrappers share the cores among the NTT calls in flight, so the factory backend's pipelined encrypt
+and decrypt do not oversubscribe a 4-vCPU host.
+
+Secret hygiene: the native side copies the secrets into buffers zeroed (volatile stores) on drop,
+and zeroes the transformed secrets on drop; the Python wrappers zero their copies of the compact
+secret. The exactness error does not report the secret's L1 norm (its Hamming weight).

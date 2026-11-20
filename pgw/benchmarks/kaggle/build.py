@@ -31,7 +31,7 @@ QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
-#: Builds the Rust gateway kernels (pgw_fast) on the Kaggle VM.
+#: Builds the Rust gateway kernels (pgw_fast) and the HE customer's NTT products (pgw_ntt) on the Kaggle VM.
 BUILD_NATIVE = {
     "kind": "shell", "name": "build_native", "required": True,
     # rust-version is 1.89 (stable AVX-512 intrinsics): install rustup when cargo is missing or older.
@@ -40,7 +40,9 @@ BUILD_NATIVE = {
            "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && "
            "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && "
            "python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; "
-           "print(\"pgw_fast\", native.fast.version())'",
+           "print(\"pgw_fast\", native.fast.version())' && python rust/tools/build_ntt.py && "
+           "python -c 'from pgw.hemask import ntt; assert ntt.available(), \"pgw_ntt not loaded\"; "
+           "print(\"pgw_ntt\", ntt.info())'",
     "timeout": 1200,
 }
 

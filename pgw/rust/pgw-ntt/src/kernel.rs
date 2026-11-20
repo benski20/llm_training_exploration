@@ -250,13 +250,53 @@ fn transform_block<K: Kern>(big: &Big, row0: usize, rank: usize, out: &mut [Lane
     }
 }
 
+/// Overwrites secret-derived memory with zeros. Volatile stores plus a compiler fence, so the
+/// writes are not elided as dead stores before the memory is freed.
+pub fn wipe<T: Copy + Default>(v: &mut [T]) {
+    for x in v.iter_mut() {
+        // SAFETY: `x` is a valid, aligned, exclusive reference.
+        unsafe { std::ptr::write_volatile(x, T::default()) };
+    }
+    std::sync::atomic::compiler_fence(Ordering::SeqCst);
+}
+
+/// A buffer of secret material that is wiped (see [`wipe`]) when dropped.
+pub struct Wiping<T: Copy + Default>(pub Vec<T>);
+
+impl<T: Copy + Default> Wiping<T> {
+    /// The contents, handing the wiping duty to the caller.
+    pub fn into_inner(mut self) -> Vec<T> {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl<T: Copy + Default> Drop for Wiping<T> {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
+impl<T: Copy + Default> std::ops::Deref for Wiping<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+impl<T: Copy + Default> std::ops::DerefMut for Wiping<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.0
+    }
+}
+
 /// Secrets in NTT form: `shat[prime][(j * rank + l) * gp + g]` (scaled by `R / 256`, `< p`).
+/// The transformed secrets are wiped when dropped.
 pub struct Secrets {
     pub g: usize,
     pub gp: usize,
     pub rank: usize,
     pub l1: u64,
-    pub(crate) shat: Vec<u32>,
+    pub(crate) shat: Wiping<u32>,
 }
 
 impl Secrets {
@@ -270,9 +310,9 @@ impl Secrets {
             l1 = l1.max(n);
         }
         let ps = &params().primes;
-        let mut shat = vec![0u32; NP * N * rank * gp];
+        let mut shat = Wiping(vec![0u32; NP * N * rank * gp]);
         let polys = g * rank;
-        let mut buf = vec![[0u32; L]; N];
+        let mut buf = Wiping(vec![[0u32; L]; N]);
         for (pi, pr) in ps.iter().enumerate() {
             let (p, pn) = (pr.p, pr.pn);
             let sh = &mut shat[pi * N * rank * gp..(pi + 1) * N * rank * gp];
@@ -300,6 +340,7 @@ impl Secrets {
                 }
             }
         }
+        drop(buf);
         Secrets { g, gp, rank, l1, shat }
     }
 }
@@ -595,16 +636,20 @@ pub fn default_threads() -> usize {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     Shape(String),
-    Bound { big_bits: u32, l1: u64 },
+    /// The secrets' L1 norm is too large for an exact product (the norm itself is not reported: for a
+    /// ternary secret it is its Hamming weight).
+    Bound {
+        big_bits: u32,
+    },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Shape(s) => f.write_str(s),
-            Error::Bound { big_bits, l1 } => write!(
+            Error::Bound { big_bits } => write!(
                 f,
-                "exactness bound exceeded: big operand < 2^{big_bits} times secret L1 norm {l1} exceeds the CRT range"
+                "exactness bound exceeded: a big operand < 2^{big_bits} times these secrets exceeds the CRT range"
             ),
         }
     }
@@ -618,7 +663,7 @@ pub fn product(big: Big, dim: usize, sec: &Secrets, threads: usize, isa: Isa) ->
     }
     check_shape(&big, sec.rank)?;
     if !crate::arith::bound_ok(big.bits(), sec.l1) {
-        return Err(Error::Bound { big_bits: big.bits(), l1: sec.l1 });
+        return Err(Error::Bound { big_bits: big.bits() });
     }
     let rows = big.rows();
     let total = rows * sec.g * N;
@@ -678,7 +723,8 @@ pub fn extract_secrets(smat: &[i8], dim: usize, cols: usize) -> Option<Vec<i8>> 
         return None;
     }
     let (rank, g) = (dim / N, cols / N);
-    let mut s = vec![0i8; g * rank * N];
+    // dropped (and wiped) on every early return; handed over unwiped only on success
+    let mut s = Wiping(vec![0i8; g * rank * N]);
     for gi in 0..g {
         for l in 0..rank {
             let first = &smat[(l * N) * cols + gi * N..(l * N) * cols + gi * N + N];
@@ -701,7 +747,7 @@ pub fn extract_secrets(smat: &[i8], dim: usize, cols: usize) -> Option<Vec<i8>> 
             }
         }
     }
-    Some(s)
+    Some(s.into_inner())
 }
 
 #[doc(hidden)]
@@ -766,6 +812,7 @@ unsafe fn profile_parts_k<K: Kern>(reps: usize) -> Vec<(&'static str, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arith::bound_ok;
 
     fn rng(seed: &mut u64) -> u64 {
         *seed ^= *seed << 13;
@@ -827,6 +874,57 @@ mod tests {
     #[test]
     fn rank16_all_max_at_bound() {
         check(1, 16, 1, true, Isa::Auto);
+    }
+
+    /// The largest products the CRT admits, not just the protocol's (`2^76` at rank 16): rank 129 with
+    /// every secret coefficient at `+-127` (L1 = 129 * 256 * 127, the largest rank whose 64-bit
+    /// products fit) and `A = 2^64 - 1`, so coefficient 255 is `Z = +-(2^64 - 1) L1 = +-0.99998 HALF`.
+    /// Several MAC chunks (`MAC_CHUNK = 48 < 129`), every instruction set; rank 130 is refused.
+    #[test]
+    fn near_half_products_are_exact() {
+        let (rank, rows) = (129usize, 2usize);
+        let dim = rank * N;
+        let half = params().crt.half;
+        let l1 = (rank * N * 127) as u128;
+        let z = (u64::MAX as u128) * l1;
+        assert!(z <= half && z * 100_000 >= half * 99_997, "Z = {z}, HALF = {half}");
+        assert!(bound_ok(64, l1 as u64) && !bound_ok(64, (130 * N * 127) as u64));
+        let mut seed = 0x5eed_0129u64;
+        // row 0 all-max, row 1 random words
+        let a: Vec<u64> = (0..rows * dim).map(|i| if i < dim { u64::MAX } else { rng(&mut seed) }).collect();
+        for case in 0..3 {
+            let s: Vec<i8> = (0..rank * N)
+                .map(|_| match case {
+                    0 => 127,
+                    1 => -127,
+                    _ => {
+                        if rng(&mut seed) & 1 == 0 {
+                            127
+                        } else {
+                            -127
+                        }
+                    }
+                })
+                .collect();
+            let sec = Secrets::new(&s, 1, rank);
+            assert_eq!(sec.l1 as u128, l1);
+            let want: Vec<u64> = (0..rows).flat_map(|r| reference(&a[r * dim..(r + 1) * dim], &s, rank)).collect();
+            if case < 2 {
+                // Z_255 = a * sum(s) exactly; mod 2^64 that is -sum(s)
+                let zs = (u64::MAX as i128) * s.iter().map(|&v| v as i128).sum::<i128>();
+                assert_eq!(want[N - 1], zs as u64);
+            }
+            for isa in [Isa::Scalar, Isa::Avx2, Isa::Avx512] {
+                let got = product(Big::U64 { data: &a, rows }, dim, &sec, 2, isa).unwrap();
+                assert_eq!(got, want, "case {case} isa {isa:?}");
+            }
+        }
+        let s130 = vec![127i8; 130 * N];
+        let sec = Secrets::new(&s130, 1, 130);
+        let a130 = vec![u64::MAX; 130 * N];
+        let r = product(Big::U64 { data: &a130, rows: 1 }, 130 * N, &sec, 1, Isa::Auto);
+        assert_eq!(r, Err(Error::Bound { big_bits: 64 }));
+        assert!(!r.unwrap_err().to_string().contains(&(130 * N * 127).to_string()));
     }
 
     #[test]

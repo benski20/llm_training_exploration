@@ -44,14 +44,17 @@ image = (
     .add_local_file(PGW / "README.md", "/opt/pgw-src/README.md", copy=True)
     .add_local_file(PGW / "deploy/hf-space/constraints.txt", "/opt/pgw-src/constraints.txt", copy=True)
     .run_commands("pip install --no-cache-dir -c /opt/pgw-src/constraints.txt '/opt/pgw-src[gateway,factory,pack]'")
-    # native gateway kernels (pgw_fast); without them pgw runs its much slower pure-Python path
+    # native gateway kernels (pgw_fast); without them pgw runs its much slower pure-Python path.
+    # pgw_ntt: exact NTT products for the encrypted mask factory (pgw.hemask.ntt); without it the
+    # HE customer silently stays on the dense products.
     .apt_install("curl", "build-essential")
     .add_local_dir(PGW / "rust", "/opt/pgw-src/rust", copy=True, ignore=["target/**", "**/target/**"])
     .run_commands(
         "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable",
         "cd /opt/pgw-src && . $HOME/.cargo/env && python rust/tools/build_fast.py --site && "
-        "rm -rf rust/target $HOME/.cargo/registry",
+        "python rust/tools/build_ntt.py --site && rm -rf rust/target $HOME/.cargo/registry",
         "cd / && python -c 'from pgw.core import native; assert native.fast is not None; print(native.fast.version())'",
+        "cd / && python -c 'from pgw.hemask import ntt; assert ntt.available(); print(\"pgw_ntt\", ntt.info())'",
     )
     .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", "OMP_WAIT_POLICY": "PASSIVE"})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")

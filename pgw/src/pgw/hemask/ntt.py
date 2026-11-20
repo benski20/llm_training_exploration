@@ -30,11 +30,22 @@ missing, ``PGW_NTT=0`` / ``PGW_NATIVE=0``, or ``small`` is not a block-negacycli
 For operands reused across calls, :class:`TransformedOperand` keeps the forward NTTs (12 bytes per
 coefficient instead of 8 for ``A``): the public matrix (every linear multiplies a prefix ``A[:n]``),
 or a hint held in NTT form.
+
+Threads: ``PGW_NTT_THREADS=n`` fixes the worker threads per call (``0``: all cores). Unset, the cores
+are shared among the NTT calls in flight (``cores // calls``, at least 1), so the factory backend's
+pipelined encrypt and decrypt do not oversubscribe a small host.
+
+Secret hygiene: the compact secret copies this module makes (``secrets_of`` inside the wrappers, the
+int64 temporary of :func:`exact`) are zeroed before they are dropped; the native side zeroes its
+copies and the transformed secrets on drop.
 """
 
 from __future__ import annotations
 
 import os
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -88,11 +99,37 @@ def info() -> dict[str, Any]:
     return d
 
 
-def _threads() -> int:
+def _cores() -> int:
     try:
-        return max(0, int(os.environ.get("PGW_NTT_THREADS", "0")))
-    except ValueError:
-        return 0
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+_inflight = 0
+_inflight_lock = threading.Lock()
+
+
+@contextmanager
+def _threads() -> Iterator[int]:
+    """Worker threads for one native call: ``PGW_NTT_THREADS`` if set (``0``: all cores), else the
+    cores shared among the NTT calls in flight (counting this one)."""
+    global _inflight
+    raw = os.environ.get("PGW_NTT_THREADS", "").strip()
+    if raw:
+        try:
+            yield max(0, int(raw))
+        except ValueError:
+            yield 0
+        return
+    with _inflight_lock:
+        _inflight += 1
+        n = max(1, _cores() // _inflight)
+    try:
+        yield n
+    finally:
+        with _inflight_lock:
+            _inflight -= 1
 
 
 def _isa() -> str:
@@ -108,11 +145,18 @@ def secrets_of(small: np.ndarray) -> np.ndarray | None:
     s = np.asarray(small)
     if s.ndim != 2 or s.size == 0 or s.shape[0] % DEGREE or s.shape[1] % DEGREE:
         return None
+    copy = None  # a converted copy of the secret matrix, zeroed below
     if s.dtype != np.int8:
-        if not np.issubdtype(s.dtype, np.integer) or int(np.abs(s.astype(np.int64)).max()) > 127:
+        if not np.issubdtype(s.dtype, np.integer) or int(s.max()) > 127 or int(s.min()) < -127:
             return None
-        s = s.astype(np.int8)
-    out: np.ndarray | None = native.extract_secrets(np.ascontiguousarray(s))
+        s = copy = s.astype(np.int8)
+    elif not s.flags.c_contiguous:
+        s = copy = np.ascontiguousarray(s)
+    try:
+        out: np.ndarray | None = native.extract_secrets(s)
+    finally:
+        if copy is not None:
+            copy.fill(0)
     return out
 
 
@@ -121,7 +165,12 @@ def exact(big_bits: int, secrets: np.ndarray) -> bool:
     (``(2^big_bits - 1) * max_g L1(s_g) <= HALF``; checked again natively on every call)."""
     if native is None:
         return False
-    l1 = int(np.abs(secrets.astype(np.int64)).reshape(secrets.shape[0], -1).sum(1).max())
+    t = secrets.astype(np.int64)
+    try:
+        np.abs(t, out=t)
+        l1 = int(t.reshape(secrets.shape[0], -1).sum(1).max())
+    finally:
+        t.fill(0)
     return bool(native.exact_for(int(big_bits), l1))
 
 
@@ -135,10 +184,15 @@ def big_planes_mm_small(
     first = 8 - npl if first_byte is None else first_byte
     if native is not None and 1 <= npl <= 8 and 0 <= first and first + npl <= 8 and np.asarray(small).shape[0] == k:
         sec = secrets_of(small)
-        if sec is not None and exact(8 * (first + npl), sec):
-            p = planes if planes.dtype == np.int8 else np.asarray(planes).view(np.int8)
-            out: np.ndarray = native.mm_planes(np.ascontiguousarray(p), sec, first, _threads(), _isa())
-            return out
+        if sec is not None:
+            try:
+                if exact(8 * (first + npl), sec):
+                    p = planes if planes.dtype == np.int8 else np.asarray(planes).view(np.int8)
+                    with _threads() as nt:
+                        out: np.ndarray = native.mm_planes(np.ascontiguousarray(p), sec, first, nt, _isa())
+                    return out
+            finally:
+                sec.fill(0)
     return _dense_planes_mm_small(planes, small, block_rows=block_rows, first_byte=first_byte)
 
 
@@ -152,9 +206,14 @@ def matmul_mod64(
         b = np.asarray(big)
         if b.ndim == 2 and b.shape[1] == np.asarray(small).shape[0]:
             sec = secrets_of(small)
-            if sec is not None and exact(64, sec):
-                out: np.ndarray = native.mm_u64(np.ascontiguousarray(b, dtype=np.uint64), sec, _threads(), _isa())
-                return out
+            if sec is not None:
+                try:
+                    if exact(64, sec):
+                        with _threads() as nt:
+                            out: np.ndarray = native.mm_u64(np.ascontiguousarray(b, dtype=np.uint64), sec, nt, _isa())
+                        return out
+                finally:
+                    sec.fill(0)
     return _dense_matmul_mod64(small, big, small_left=small_left, fast=fast)
 
 
@@ -174,7 +233,8 @@ class TransformedOperand:
     def from_u64(cls, big: np.ndarray) -> TransformedOperand:
         if native is None:
             raise ConfigError("pgw_ntt is not available (build it with rust/tools/build_ntt.py)")
-        return cls(native.Transformed.from_u64(np.ascontiguousarray(big, dtype=np.uint64), _threads(), _isa()))
+        with _threads() as nt:
+            return cls(native.Transformed.from_u64(np.ascontiguousarray(big, dtype=np.uint64), nt, _isa()))
 
     @classmethod
     def from_planes(cls, planes: np.ndarray, first_byte: int | None = None) -> TransformedOperand:
@@ -182,7 +242,8 @@ class TransformedOperand:
             raise ConfigError("pgw_ntt is not available (build it with rust/tools/build_ntt.py)")
         first = 8 - planes.shape[1] if first_byte is None else first_byte
         p = planes if planes.dtype == np.int8 else np.asarray(planes).view(np.int8)
-        return cls(native.Transformed.from_planes(np.ascontiguousarray(p), first, _threads(), _isa()))
+        with _threads() as nt:
+            return cls(native.Transformed.from_planes(np.ascontiguousarray(p), first, nt, _isa()))
 
     @property
     def rows(self) -> int:
@@ -200,7 +261,13 @@ class TransformedOperand:
         """``U[:rows] @ S mod 2^64`` for secrets ``(G, rank, 256)`` int8."""
         if not exact(int(self._h.big_bits), secrets):
             raise ConfigError("secret too large for an exact NTT product")
-        out: np.ndarray = self._h.mm(np.ascontiguousarray(secrets, dtype=np.int8), rows, _threads(), _isa())
+        s = np.ascontiguousarray(secrets, dtype=np.int8)
+        try:
+            with _threads() as nt:
+                out: np.ndarray = self._h.mm(s, rows, nt, _isa())
+        finally:
+            if not np.may_share_memory(s, secrets):  # only a copy made here, never the caller's array
+                s.fill(0)
         return out
 
     def mm(self, small: np.ndarray, rows: int | None = None) -> np.ndarray:
@@ -208,4 +275,7 @@ class TransformedOperand:
         sec = secrets_of(small)
         if sec is None:
             raise ConfigError("small is not a block-negacyclic secret matrix (lwe.secret_matrix)")
-        return self.mm_secrets(sec, rows)
+        try:
+            return self.mm_secrets(sec, rows)
+        finally:
+            sec.fill(0)

@@ -3,7 +3,7 @@
 //! `pgw.hemask.fastmm` / `pgw.hemask.lwe.matmul_mod64`.
 
 use crate::arith::{bound_ok, params, N};
-use crate::kernel::{self, Big, Isa, Secrets};
+use crate::kernel::{self, Big, Isa, Secrets, Wiping};
 use numpy::ndarray::{Array2, Array3};
 use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -22,15 +22,15 @@ fn kerr(e: kernel::Error) -> PyErr {
     verr(e.to_string())
 }
 
-/// Secrets `(G, rank, 256)` int8, C-contiguous.
-fn secrets_of(s: &Bound<'_, PyAny>) -> PyResult<(Vec<i8>, usize, usize)> {
+/// Secrets `(G, rank, 256)` int8, C-contiguous (copied into a buffer wiped on drop).
+fn secrets_of(s: &Bound<'_, PyAny>) -> PyResult<(Wiping<i8>, usize, usize)> {
     let a: PyReadonlyArray3<'_, i8> =
         s.extract().map_err(|_| verr("secrets must be a 3-D int8 array (G, rank, 256)"))?;
     let sh = a.shape();
     if sh[2] != N || sh[0] == 0 || sh[1] == 0 {
         return Err(verr(format!("secrets must be (G, rank, {N}), got {sh:?}")));
     }
-    let v = a.as_slice().map_err(|_| verr("secrets must be C-contiguous"))?.to_vec();
+    let v = Wiping(a.as_slice().map_err(|_| verr("secrets must be C-contiguous"))?.to_vec());
     Ok((v, sh[0], sh[1]))
 }
 
