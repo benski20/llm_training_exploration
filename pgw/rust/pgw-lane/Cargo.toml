@@ -1,7 +1,7 @@
 [package]
 name = "pgw-lane"
 version = "0.1.0"
-description = "Service trip lane of the PGW compute service (chat-speed plan WP-A1): binary-header listener on UDS/TCP+TLS, per-(linear, rows) CUDA-graph replay and hybrid wait. Stub until WP-A1 lands."
+description = "Service trip lane of the PGW compute service (chat-speed plan WP-A1): binary-header listener on a Unix domain socket (peer uid and single-use ticket checks), admission shared with the Python service, per-(linear, rows) CUDA-graph replay through a dlopen'ed driver with a hybrid wait. Python bindings live in pgw-fast."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -12,3 +12,4 @@ name = "pgw_lane"
 crate-type = ["rlib"]
 
 [dependencies]
+libc = "0.2"

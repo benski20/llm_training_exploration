@@ -2,6 +2,8 @@
 
 Routes (SPEC.md section 6.2):
     POST /pgw/v1/compute   msgpack ComputeRequest -> ComputeResponse
+    POST /pgw/v1/lane/open JSON {fingerprint} -> trip-lane ticket and tables (when ``lane`` is on;
+                           see :mod:`pgw.service.lane`)
     GET  /pgw/v1/models    ModelsResponse
     GET  /healthz          liveness;  GET /readyz  readiness (packs loaded, device OK, not draining)
     GET  /metrics          Prometheus (optionally only on a separate port, see :mod:`pgw.service.server`)
@@ -58,6 +60,8 @@ class ServiceState:
     started_at: float = field(default_factory=time.time)
     _device_ok: dict[str, bool] = field(default_factory=dict)
     _device_checked_at: float = 0.0
+    #: the native trip lane (``lane != "off"``), started with the batcher
+    lane: Any = None
 
     @property
     def draining(self) -> bool:
@@ -69,6 +73,8 @@ class ServiceState:
         if not self.handler.draining:
             log.info("compute service draining: no new requests admitted")
         self.handler.draining = True
+        if self.lane is not None:
+            self.lane.set_draining()
 
     async def device_ok(self) -> dict[str, bool]:
         """Cached device probe (re-run at most every few seconds, off the event loop)."""
@@ -92,6 +98,8 @@ class ServiceState:
         }
         if self.load_error:
             details["error"] = self.load_error
+        if self.lane is not None:
+            details["lane"] = self.lane.status()
         ready = self.loaded and not self.draining and len(self.registry) > 0 and self.batcher.running
         if self.loaded:
             dev = await self.device_ok()
@@ -174,7 +182,11 @@ def _build_state(
         inline_max_rows=s.batch_inline_max_rows,
     )
     handler = ServiceHandler(s, registry, batcher, authenticator, metrics)
-    return ServiceState(settings=s, registry=registry, metrics=metrics, batcher=batcher, handler=handler)
+    state = ServiceState(settings=s, registry=registry, metrics=metrics, batcher=batcher, handler=handler)
+    from pgw.service.lane import LaneManager
+
+    state.lane = LaneManager.from_settings(s, state)
+    return state
 
 
 def create_app(
@@ -220,6 +232,8 @@ def create_app(
             raise
         await state.batcher.start()
         await state.device_ok()
+        if state.lane is not None:
+            await state.lane.start()
         state.loaded = True
         log.info(
             "compute service ready: %d model(s), devices=%s, startup %.2fs",
@@ -241,6 +255,9 @@ def create_app(
     wire_router = create_router(state.handler, limits=limits, max_deadline_s=s.max_deadline_s,
                                 max_inflight_bytes=max(s.max_inflight_bytes, s.max_request_bytes))
     app.include_router(wire_router)
+    from pgw.service.lane import add_lane_routes
+
+    add_lane_routes(app, state)
     from pgw.hemask.server import add_maskgen_route
 
     # Encrypted mask generation: W8 times MLWE ciphertexts (the provider never sees the masks).
@@ -301,6 +318,9 @@ async def shutdown(state: ServiceState) -> None:
     t0 = time.monotonic()
     if not await state.handler.wait_idle(timeout):
         log.warning("drain timeout: %d request(s) still in flight", state.handler.inflight)
+    if state.lane is not None:
+        # lane calls finish (graph replays need no event loop) before the listener stops
+        await state.lane.stop(max(0.5, timeout - (time.monotonic() - t0)))
     remaining = max(0.0, timeout - (time.monotonic() - t0))
     await state.batcher.stop(drain=True, timeout=remaining)
     log.info("compute service stopped")

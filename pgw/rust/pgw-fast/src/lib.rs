@@ -11,6 +11,7 @@
 //! | [`writer`] | `SegmentWriter.write_linear` / `RawSegmentWriter.write_chunk`: pack, AES-256-GCM, `pwrite` (Unix only) |
 //! | [`lmhead`] | `h @ lm_head^T` (float32, several rows per pass over the head, fixed summation order; same bits as `pgw.engine.lm_head.lm_head_reference`) |
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
+//! | [`lane_service`] | chat-speed WP-A1: Python bindings of the service trip lane (`rust/pgw-lane`): `LaneService`, `LaneDeviceLock` |
 //! | [`trip`] | stub (chat-speed WP-A4a): `prepare_into` / `finish_into` for the TripEngine; registers nothing yet |
 //! | [`layer`] | stub (chat-speed WP-B1): opt-in native deterministic layer float path; registers nothing yet |
 //! | [`attn`] | stub (chat-speed WP-B1): opt-in row-deterministic attention; registers nothing yet |
@@ -24,6 +25,7 @@ pub mod attn;
 pub mod finish;
 pub mod hemask;
 pub mod lane;
+pub mod lane_service;
 pub mod layer;
 pub mod lmhead;
 pub mod prepare;
@@ -46,6 +48,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     finish::register(m)?;
     hemask::register(m)?;
     lane::register(m)?;
+    lane_service::register(m)?;
     layer::register(m)?;
     lmhead::register(m)?;
     prepare::register(m)?;

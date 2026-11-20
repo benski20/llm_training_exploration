@@ -26,9 +26,7 @@ __all__ = ["PENDING_SPEED_SETTINGS", "ServiceSettings"]
 #: Chat-speed settings of :class:`ServiceSettings` whose implementation has not landed yet, with the
 #: work package that builds it. A value other than the default (today's behaviour) is refused while the
 #: field is listed; the implementing package removes its entry.
-PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "lane": "WP-A1 (service trip lane, rust/pgw-lane)",
-}
+PENDING_SPEED_SETTINGS: dict[str, str] = {}
 
 
 class ServiceSettings(PGWSettings):
@@ -208,7 +206,7 @@ class ServiceSettings(PGWSettings):
     lane: Literal["off", "uds", "tcp"] = Field(
         "off", description="Native trip lane next to the stream channel (binary header, same masked bytes, CUDA-graph "
         "replay for rows 1..lane_max_rows). 'off' (default) = no lane; 'uds' = a Unix domain socket at lane_socket "
-        "(peer credentials checked); 'tcp' = lane_port, TLS required",
+        "(peer credentials checked); 'tcp' = lane_port, TLS required (not built yet: the service refuses to start)",
     )
     lane_socket: Path | None = Field(None, description="Unix domain socket path of the lane (lane = 'uds')")
     lane_port: int | None = Field(None, ge=0, le=65535, description="TCP port of the lane (lane = 'tcp')")
