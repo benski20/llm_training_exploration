@@ -1,0 +1,514 @@
+.................................FFFFFFFFFFFFFFFFF....FF............     [100%]
+=================================== FAILURES ===================================
+_____________ test_graph_equals_eager_equals_reference[576x448-40] _____________
+
+k = 40, shape = (576, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=576, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  pgw.service.gpu_exec:gpu_exec.py:388 CUDA graph capture failed on cuda:0 (K=40, rows<=6, n=448, m=576): RuntimeError: it->second->use_count > 0 INTERNAL ASSERT FAILED at "/pytorch/c10/cuda/CUDACachingAllocator.cpp":2799, please report a bug to PyTorch. ; running eagerly
+_____________ test_graph_equals_eager_equals_reference[576x448-48] _____________
+
+k = 48, shape = (576, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=576, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[448x448-32] _____________
+
+k = 32, shape = (448, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[448x448-40] _____________
+
+k = 40, shape = (448, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[448x448-48] _____________
+
+k = 48, shape = (448, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[4736x448-32] _____________
+
+k = 32, shape = (4736, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=4736, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[4736x448-40] _____________
+
+k = 40, shape = (4736, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=4736, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[4736x448-48] _____________
+
+k = 48, shape = (4736, 448)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=4736, n=448, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[448x2368-32] _____________
+
+k = 32, shape = (448, 2368)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=2368, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[448x2368-40] _____________
+
+k = 40, shape = (448, 2368)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=2368, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+____________ test_graph_equals_eager_equals_reference[448x2368-48] _____________
+
+k = 48, shape = (448, 2368)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=448, n=2368, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[77x100-32] ______________
+
+k = 32, shape = (77, 100)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=77, n=100, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[77x100-40] ______________
+
+k = 40, shape = (77, 100)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=77, n=100, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+_____________ test_graph_equals_eager_equals_reference[77x100-48] ______________
+
+k = 48, shape = (77, 100)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=77, n=100, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+______________ test_graph_equals_eager_equals_reference[5x33-32] _______________
+
+k = 32, shape = (5, 33)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=5, n=33, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+______________ test_graph_equals_eager_equals_reference[5x33-40] _______________
+
+k = 40, shape = (5, 33)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=5, n=33, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+______________ test_graph_equals_eager_equals_reference[5x33-48] _______________
+
+k = 48, shape = (5, 33)
+
+    @pytest.mark.parametrize("k", [32, 40, 48])
+    @pytest.mark.parametrize("shape", SHAPES_SMALL, ids=lambda s: f"{s[0]}x{s[1]}")
+    def test_graph_equals_eager_equals_reference(k: int, shape: tuple[int, int]) -> None:
+        m, n = shape
+        ring = RINGS[k]
+        w, graph, eager = _kernels(m, n, seed=m + n + k)
+        for rows in range(1, 9):
+            for rep in range(2):  # capture, then replay
+                x = _x(rows, n, k, seed=rows * 7 + rep)
+                ref = _ref(w, x, k)
+                yg = graph.run(x, ring)
+                ye = eager.run(x, ring)
+                assert yg.dtype == torch.int64 and yg.device.type == "cpu"
+                assert torch.equal(ye, ref), ("eager", k, shape, rows)
+                assert torch.equal(yg, ref), ("graph", k, shape, rows, rep)
+                yc = graph.run_compact(x, ring)
+                assert yc.dtype == (torch.int32 if k <= 32 else torch.int64)
+                assert pack_ring(yc, ring) == pack_ring(ref, ring)
+                assert torch.equal(from_compact(yc, k), ref)
+>       assert graph.cuda_graphs >= 1 and eager.cuda_graphs == 0
+E       assert (0 >= 1)
+E        +  where 0 = ComputeKernel(0.o, m=5, n=33, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:78: AssertionError
+________ test_warmup_captures_every_bucket_and_rows_beyond_run_eagerly _________
+
+    def test_warmup_captures_every_bucket_and_rows_beyond_run_eagerly() -> None:
+        ring = RINGS[32]
+        w, graph, _ = _kernels(64, 96, seed=2)
+        graph.warmup(ring, all_buckets=True)
+>       assert graph.cuda_graphs == 3  # 32, 64, 128
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       assert 0 == 3
+E        +  where 0 = ComputeKernel(0.o, m=64, n=96, device=cuda:0, backend=cuda_int8).cuda_graphs
+
+tests/service/test_gpu_graphs.py:112: AssertionError
+__________________ test_randomized_stress_interleaved_linears __________________
+
+    def test_randomized_stress_interleaved_linears() -> None:
+        rng = np.random.default_rng(123)
+        lins = [_kernels(m, n, seed=i) for i, (m, n) in enumerate(SHAPES_SMALL[:4])]
+        ex = device_executor("cuda:0")
+        replays0 = ex.stats.replays
+        for i in range(400):
+            w, graph, _ = lins[int(rng.integers(0, len(lins)))]
+            k = int(rng.choice([32, 40, 48]))
+            rows = int(rng.choice([1, 1, 1, 2, 3, 5, 8, 12, 20, 40]))
+            x = _x(rows, int(w.shape[1]), k, seed=i)
+            assert torch.equal(graph.run(x, RINGS[k]), _cpu_exact(w, x, k)), (i, k, rows)
+>       assert ex.stats.replays - replays0 > 300
+E       assert (32 - 32) > 300
+E        +  where 32 = ExecutorStats(replays=32, eager=1290, captures=1, capture_failures=76, pinned_copies=1398).replays
+E        +    where ExecutorStats(replays=32, eager=1290, captures=1, capture_failures=76, pinned_copies=1398) = <pgw.service.gpu_exec.DeviceExecutor object at 0x7b3b861db0e0>.stats
+
+tests/service/test_gpu_graphs.py:131: AssertionError
+19 failed, 49 passed, 1908 deselected in 324.40s (0:05:24)
+
+---stderr---

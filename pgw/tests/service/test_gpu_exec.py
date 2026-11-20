@@ -68,7 +68,9 @@ def test_validate_buckets() -> None:
 
 def test_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     s = ServiceSettings()
-    assert s.cuda_graphs is True and s.cuda_graph_buckets == [32, 64, 128]
+    assert s.cuda_graphs is False and s.cuda_graph_buckets == [32, 64, 128]
+    monkeypatch.setenv("PGW_SERVICE_CUDA_GRAPHS", "true")
+    assert ServiceSettings().cuda_graphs is True
     monkeypatch.setenv("PGW_SERVICE_CUDA_GRAPHS", "false")
     monkeypatch.setenv("PGW_SERVICE_CUDA_GRAPH_BUCKETS", "[64, 32]")
     s = ServiceSettings()

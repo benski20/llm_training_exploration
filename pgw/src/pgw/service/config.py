@@ -70,10 +70,12 @@ class ServiceSettings(PGWSettings):
     cache_float_weights: bool = Field(True, description="CPU float backends keep float weight copies")
     warmup: bool = Field(True, description="Run one dummy product per linear at startup")
     cuda_graphs: bool = Field(
-        True,
+        False,
         description="CUDA devices: replay captured CUDA graphs for small calls (rows * K/8 <= the largest of "
         "`cuda_graph_buckets`), one graph per (linear, K, bucket), captured at warm-up or on first use and checked "
-        "against the eager result. Falls back to eager per shape if a capture fails. No effect on CPU",
+        "against the eager result. "
+        "Off by default: capture is unreliable on some torch builds (2.11 + T4). "
+        "Falls back to eager per shape if a capture fails. No effect on CPU",
     )
     cuda_graph_buckets: list[int] = Field(
         default_factory=lambda: [32, 64, 128],
