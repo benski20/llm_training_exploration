@@ -66,6 +66,114 @@ class SequenceInput:
     serial_tail: int = 0
 
 
+def _sdpa_gqa_supported() -> bool:
+    """True when ``F.scaled_dot_product_attention`` takes ``enable_gqa`` (torch >= 2.5)."""
+    try:
+        major, minor = (int(p) for p in torch.__version__.split("+")[0].split(".")[:2])
+    except ValueError:  # pragma: no cover - unusual version strings: keep the proven path
+        return False
+    return (major, minor) >= (2, 5)
+
+
+def _attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, start: int, scale: float, groups: int,
+            gqa: bool) -> torch.Tensor:
+    """Causal attention of ``q (T, H, hd)`` over ``k, v (L, KVH, hd)``; returns ``(T, H*hd)``.
+
+    ``gqa``: let SDPA broadcast each KV head over its ``groups`` query heads (``enable_gqa``) instead
+    of materializing ``repeat_interleave`` copies of the cache. Only used where
+    :func:`gqa_self_check` showed both forms give the same bits.
+    """
+    t = q.shape[0]
+    length = k.shape[0]
+    if groups > 1 and not gqa:
+        k = k.repeat_interleave(groups, dim=1)
+        v = v.repeat_interleave(groups, dim=1)
+    qh, kh, vh = q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1)  # (heads, *, hd)
+    mask = None
+    if t > 1:
+        qpos = torch.arange(start, start + t, device=q.device)[:, None]
+        kpos = torch.arange(length, device=q.device)[None, :]
+        mask = kpos <= qpos
+    if groups > 1 and gqa:
+        out = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=mask, scale=scale, enable_gqa=True)
+    else:
+        out = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=mask, scale=scale)
+    return out.transpose(0, 1).reshape(t, q.shape[1] * q.shape[2])
+
+
+#: Cache lengths the GQA self-check covers (crosses the CPU flash kernel's 512-key block).
+GQA_CHECK_LENGTHS = (1, 37, 100, 513)
+_gqa_verdicts: dict[tuple[Any, ...], bool] = {}
+_gqa_lock = threading.Lock()
+
+
+def gqa_self_check(heads: int, kv_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device | str,
+                   scale: float, lengths: Sequence[int] = GQA_CHECK_LENGTHS) -> bool:
+    """True when the ``enable_gqa`` SDPA form is bit-identical to the ``repeat_interleave`` form here.
+
+    Runs both forms at the current torch thread count over a decode row (T=1), a short chunk and a
+    whole prefill (T>1, causal mask), a speculative serial tail (rows one at a time over growing
+    views) and cache-like views (a slice of a ``(layers, cap, kvh, hd)`` buffer, as
+    :meth:`KVCache.append` returns), for every length in ``lengths``. Any difference or error: False.
+    """
+    groups = heads // kv_heads
+    if groups <= 1:
+        return True
+    if not _sdpa_gqa_supported():
+        return False
+    dev = torch.device(device)
+    gen = torch.Generator().manual_seed(0x6A7)
+    cap = max(lengths) + 3
+
+    def rand(*shape: int) -> torch.Tensor:
+        return torch.randn(shape, generator=gen).to(dtype=dtype, device=dev)
+
+    try:
+        with torch.no_grad():
+            for length in lengths:
+                kbuf, vbuf = rand(2, cap, kv_heads, head_dim), rand(2, cap, kv_heads, head_dim)
+                k, v = kbuf[1, :length], vbuf[1, :length]
+                cases = [(1, length - 1)]
+                if length > 1:
+                    cases += [(length, 0), (min(length - 1, 5), length - min(length - 1, 5))]
+                for t, start in cases:
+                    q = rand(t, heads, head_dim) * 2.0
+                    if not torch.equal(_attend(q, k, v, start, scale, groups, False),
+                                       _attend(q, k, v, start, scale, groups, True)):
+                        return False
+                tail = min(length, 3)
+                st0 = length - tail
+                q = rand(tail, heads, head_dim)
+                for j in range(tail):
+                    kj, vj = k[: st0 + j + 1], v[: st0 + j + 1]
+                    if not torch.equal(_attend(q[j : j + 1], kj, vj, st0 + j, scale, groups, False),
+                                       _attend(q[j : j + 1], kj, vj, st0 + j, scale, groups, True)):
+                        return False
+    except Exception as exc:  # e.g. a backend without enable_gqa support for these inputs
+        log.debug("GQA SDPA self-check raised: %r", exc)
+        return False
+    return True
+
+
+def _gqa_verdict(heads: int, kv_heads: int, head_dim: int, dtype: torch.dtype, device: torch.device,
+                 scale: float) -> bool:
+    """Cached :func:`gqa_self_check` per (shape, dtype, device, thread count) and process."""
+    key = (heads, kv_heads, head_dim, dtype, str(device), scale, torch.get_num_threads())
+    hit = _gqa_verdicts.get(key)
+    if hit is not None:
+        return hit
+    with _gqa_lock:
+        hit = _gqa_verdicts.get(key)
+        if hit is None:
+            hit = _gqa_verdicts[key] = gqa_self_check(heads, kv_heads, head_dim, dtype, device, scale)
+            if hit:
+                log.info("attention: SDPA enable_gqa (bit-identical to repeat_interleave; %d threads)", key[-1])
+            else:
+                log.warning("attention: enable_gqa SDPA is not bit-identical here (torch %s, %s, %s, %d "
+                            "threads); keeping repeat_interleave", torch.__version__, dtype, device, key[-1])
+        return hit
+
+
 def _norm_rows(h: torch.Tensor, norm: torch.Tensor, eps: float) -> torch.Tensor:
     """Final norm of each row on its own (as a 1-row decode step would), float32."""
     return torch.cat([rms_norm(h[i : i + 1], norm, eps) for i in range(int(h.shape[0]))]).to(torch.float32)
@@ -148,14 +256,23 @@ class TransformerModel:
         load = self.pack.load_plain
         self.embed_tokens = load("embed_tokens", dtype=dtype, device=self.device)
         self.final_norm = load("final_norm", dtype=dtype, device=self.device)
-        if a.tie_word_embeddings:
-            self.lm_head = self.embed_tokens if dtype == torch.float32 else load("lm_head", torch.float32, self.device)
+        # On a GPU the deterministic head would be the per-chunk torch reference (about 17k kernel
+        # launches per pass); the native CPU kernel gives the same bits much faster, so the head
+        # stays in host memory there (normalized rows are copied over; logits come back on the CPU).
+        head_dev = self.device
+        if self.device.type != "cpu" and native_lm_head():
+            head_dev = torch.device("cpu")
+            log.warning("model on %s: the LM head stays on the CPU (deterministic native kernel; same "
+                        "logits, bit for bit)", self.device)
+        self._head: torch.Tensor
+        if a.tie_word_embeddings and dtype == torch.float32 and head_dev == self.device:
+            self._head = self.embed_tokens
         else:
-            self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
-        self.lm_head = self.lm_head.contiguous()  # no-op normally; the native LM head reads it in place
+            self._head = load("lm_head", dtype=torch.float32, device=head_dev)
+        self._head = self._head.contiguous()  # no-op normally; the native LM head reads it in place
         # bfloat16 checkpoints: keep the head in bfloat16 when that is lossless (same logits, bit for
         # bit; half the bytes read per token). A tied head keeps its float32 embedding for lookups.
-        self.lm_head = compact_head(self.lm_head)
+        self._head = compact_head(self._head)
         #: Optional replacement for ``h @ lm_head^T`` (draft models only: e.g. an int8 product).
         #: Without it the float32 head is :func:`pgw.engine.lm_head.lm_head_logits`: a fixed
         #: summation order, so each row's logits are bit-identical however rows are grouped.
@@ -174,6 +291,9 @@ class TransformerModel:
             raise ShapeError(f"embed_tokens shape {tuple(self.embed_tokens.shape)} does not match the architecture")
         self.rope = RotaryEmbedding(a.head_dim, a.rope_theta, a.rope_scaling, a.max_position_embeddings, self.device)
         self.scale = a.head_dim**-0.5
+        self._gqa = False
+        self._gqa_threads = -1
+        self._use_gqa()  # the GQA self-check runs at load (cached per process; again if threads change)
         #: Single worker thread for the plaintext parts of async forward passes (see run_plain).
         self._plain_pool: ThreadPoolExecutor | None = None
         self._plain_lock = threading.Lock()
@@ -186,6 +306,22 @@ class TransformerModel:
             "engine model ready: arch=%s layers=%d hidden=%d heads=%d/%d vocab=%d backend=%s",
             a.arch, a.num_layers, a.hidden_size, a.num_heads, a.num_kv_heads, a.vocab_size, type(backend).__name__,
         )
+
+    @property
+    def lm_head(self) -> torch.Tensor:
+        """The LM head ``(vocab, hidden)``.
+
+        Normally the tensor the model uses. When the model runs on a GPU and the head is kept on the
+        CPU (see ``__init__``), this returns a float32 copy on the model's device instead, so callers
+        that build their own product on that device (e.g. a float16 GPU draft head) keep working.
+        """
+        if self._head.device.type == "cpu" and self.device.type != "cpu":
+            return self._head.to(device=self.device, dtype=torch.float32)
+        return self._head
+
+    @lm_head.setter
+    def lm_head(self, value: torch.Tensor) -> None:
+        self._head = value
 
     def _check_parts(self) -> None:
         """Cross-check derived split sizes against manifest ``parts`` when the pack has a manifest."""
@@ -219,22 +355,22 @@ class TransformerModel:
             raise ShapeError(f"token id out of range [0, {self.vocab_size})")
         return t
 
+    #: Use SDPA's ``enable_gqa`` (no ``repeat_interleave`` copy of the cache per layer) where a
+    #: per-process self-check shows it gives the same bits; False always keeps the old form.
+    gqa_sdpa = True
+
+    def _use_gqa(self) -> bool:
+        threads = torch.get_num_threads()
+        if threads != self._gqa_threads:  # verdicts are per thread count (kernels may split by it)
+            self._gqa = bool(self.num_heads != self.num_kv_heads and _gqa_verdict(
+                self.num_heads, self.num_kv_heads, self.head_dim, self.dtype, self.device, self.scale))
+            self._gqa_threads = threads
+        return self._gqa and self.gqa_sdpa
+
     def _attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, start: int) -> torch.Tensor:
         """Causal GQA attention of ``q (T, H, hd)`` over ``k, v (L, KVH, hd)``; returns ``(T, H*hd)``."""
-        t = q.shape[0]
-        length = k.shape[0]
         groups = self.num_heads // self.num_kv_heads
-        if groups > 1:
-            k = k.repeat_interleave(groups, dim=1)
-            v = v.repeat_interleave(groups, dim=1)
-        qh, kh, vh = q.transpose(0, 1), k.transpose(0, 1), v.transpose(0, 1)  # (H, *, hd)
-        mask = None
-        if t > 1:
-            qpos = torch.arange(start, start + t, device=q.device)[:, None]
-            kpos = torch.arange(length, device=q.device)[None, :]
-            mask = kpos <= qpos
-        out = F.scaled_dot_product_attention(qh, kh, vh, attn_mask=mask, scale=self.scale)
-        return out.transpose(0, 1).reshape(t, self.num_heads * self.head_dim)
+        return _attend(q, k, v, start, self.scale, groups, groups > 1 and self._use_gqa())
 
     def _steps(self, seqs: Sequence[SequenceInput]) -> _Steps:
         """Forward coroutine: yields backend call lists, receives their results, returns logits."""
@@ -304,7 +440,7 @@ class TransformerModel:
         if self.lm_head_fn is not None:  # approximate head (draft models): one product per sequence
             for s, h in zip(seqs, hs, strict=True):
                 if s.last_logits > 0:
-                    out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head))
+                    out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self._head))
                     continue
                 hn = rms_norm(h if s.all_logits else h[-1:], self.final_norm, self.eps).to(torch.float32)
                 logits = self.lm_head_fn(hn)
@@ -322,17 +458,17 @@ class TransformerModel:
         given = [x for x in hns if x is not None]
         logits_of: list[torch.Tensor | None] = []
         if shared and len(given) > 1:  # one pass over the head for every row of the step
-            flat = lm_head_logits(torch.cat(given), self.lm_head)
+            flat = lm_head_logits(torch.cat(given), self._head)
             at = 0
             for x in hns:
                 n = 0 if x is None else int(x.shape[0])
                 logits_of.append(None if x is None else flat[at : at + n])
                 at += n
         else:
-            logits_of = [None if x is None else lm_head_logits(x, self.lm_head) for x in hns]
+            logits_of = [None if x is None else lm_head_logits(x, self._head) for x in hns]
         for s, h, lg in zip(seqs, hs, logits_of, strict=True):
             if s.last_logits > 0:
-                out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head, lg))
+                out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self._head, lg))
             elif lg is None:  # pragma: no cover - every other sequence has normalized rows
                 raise AssertionError("missing logits")
             else:
@@ -438,9 +574,11 @@ class TransformerModel:
         finally:
             gen.close()  # drop references to activations promptly on failure
 
-    #: Round trips with at least this many rows (prefill) are split in two halves that overlap: the
-    #: gateway masks the second half while the service computes the first, and verifies the first
-    #: while the service computes the second. Rows are independent, so results are identical.
+    #: Round trips with at least this many rows in calls of 2+ rows (prefill) are split in two halves
+    #: that overlap: the gateway masks the second half while the service computes the first, and
+    #: verifies the first while the service computes the second. Rows are independent, so results
+    #: are identical. 1-row calls in the same round trip (decode steps of other streams) go wholly
+    #: into the first half. Each session's masks are taken in row order (the first half first).
     pipeline_min_rows = 16
 
     #: Round trips of at most this many rows (decode) run their local half (finish the previous
@@ -495,16 +633,25 @@ class TransformerModel:
             owned.append(prep)
             return prep
 
-        def hop(prev: Any, response: Any, remote_s: float, extra: list[torch.Tensor] | None) -> tuple[bool, Any]:
+        def hop(prev: Any, response: Any, remote_s: float,
+                extra: tuple[list[torch.Tensor], list[int]] | None) -> tuple[bool, Any]:
             res = None
             if prev is not None:
                 res = finish(prev, response, remote_s)
-                if extra is not None:  # second half of a pipelined round trip
-                    res = [torch.cat([a, b], dim=0) for a, b in zip(extra, res, strict=True)]
+                if extra is not None:  # second half of a pipelined round trip: rejoin by call position
+                    first, in_b = extra
+                    if len(res) != len(in_b):  # pragma: no cover - finish() checked the half's calls
+                        raise ShapeError(f"second half returned {len(res)} results for {len(in_b)} calls")
+                    joined = list(first)
+                    for j, i in enumerate(in_b):
+                        joined[i] = torch.cat([first[i], res[j]], dim=0)
+                    res = joined
             finished, out = self._advance(gen, res)
             if finished:
                 return True, out
-            if big and rows(out) >= big and all(int(c.x.shape[0]) >= 2 for c in out):
+            # Calls of 2+ rows are split in halves; 1-row calls (decode next to prefills) go wholly
+            # into the first half. Pipelined only when the split rows are many enough to pay.
+            if big and sum(n for n in (int(c.x.shape[0]) for c in out) if n >= 2) >= big:
                 return False, ("split", out)
             return False, prepare(out)
 
@@ -520,10 +667,16 @@ class TransformerModel:
                 if isinstance(out, tuple):  # pipelined halves
                     calls = out[1]
                     halves = [[], []]  # type: list[list[LinearCall]]
-                    for c in calls:
-                        h = int(c.x.shape[0]) // 2
+                    in_b: list[int] = []  # positions of the calls that have rows in the second half
+                    for i, c in enumerate(calls):
+                        n = int(c.x.shape[0])
+                        if n < 2:  # whole call in half A (half B has no item for it)
+                            halves[0].append(c)
+                            continue
+                        h = n // 2
                         halves[0].append(LinearCall(c.id, c.x[:h], c.session, c.meta))
                         halves[1].append(LinearCall(c.id, c.x[h:], c.session, c.meta))
+                        in_b.append(i)
                     pa = await self.run_plain(prepare, halves[0])
                     ta = asyncio.ensure_future(backend.send_prepared(pa))
                     try:
@@ -540,7 +693,7 @@ class TransformerModel:
                         tb.cancel()
                         raise
                     rt += 1
-                    finished, out = await self.run_plain(hop, pb, rb, sb, ya)
+                    finished, out = await self.run_plain(hop, pb, rb, sb, (ya, in_b))
                     continue
                 prep = out
                 response, remote_s = await backend.send_prepared(prep)
