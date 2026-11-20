@@ -113,7 +113,9 @@ config:
   maxSlotsPerHour: 0           # 0 = unlimited
   dutyCycle: 1.0
   nice: 10                     # low CPU priority next to the gateway
-  cpuThreads: 0
+  # torch intra-op threads: keep equal to resources.limits.cpu (0 = one per visible core, which with
+  # a CFS quota of 2 CPUs on a large node oversubscribes and throttles). Change both together.
+  cpuThreads: 2
   pollIntervalSeconds: 30
   factoryId: ""                # recorded in segment headers; default = release name
   extraEnv: {}

@@ -13,7 +13,9 @@ Checks (run when relevant to ``--role`` and the given options):
 * ``cpu_int8`` / ``cuda``: fast exact int8 paths and GPU presence.
 * ``memory``: available RAM.
 * ``settings.<role>``: the ``PGW_*`` settings for the role parse and pass the production policy.
-* ``pack``: full SHA-256 verification of a model pack, ring headroom, mask bytes per slot.
+* ``pack``: full SHA-256 verification of a model pack, ring headroom, mask bytes per slot; with
+  ``--deep`` also the weight-row norms (manifest ``row_norm_sq_max`` and any ``wnorm`` sidecar) against
+  the int8 weights.
 * ``maskstore``: KEK file permissions, store integrity/inventory, free disk space.
 * ``service``: the compute service answers ``/readyz`` and ``/pgw/v1/models`` and serves the
   pack's fingerprint and ring.
@@ -21,7 +23,7 @@ Checks (run when relevant to ``--role`` and the given options):
   the network when ``PGW_FACTORY_HE_SERVICE_URL`` is set and the hint is built, else local GEMMs),
   so the rate is bounded by the measured link throughput; compares it with the expected load
   (``expected_tokens_per_second`` / ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``) and checks that the store
-  volume holds ``target_slots``. Runs for ``--role factory|gateway`` with ``--pack``.
+  volume holds ``target_slots``. Opt-in: ``--mask-supply`` with ``--pack``.
 * ``tls_certs``: certificate files from the role's settings and the given CA file; warns when one
   expires within :data:`CERT_WARN_DAYS` days, fails when one has expired.
 """
@@ -341,7 +343,22 @@ def _check_role_settings(role: str) -> tuple[Status, str, dict[str, Any]]:
     return "ok", "settings valid", data
 
 
-def _check_pack(path: Path, ring: str | None) -> tuple[Status, str, dict[str, Any]]:
+def _check_row_norm_sidecar(pack: Any) -> tuple[int, list[str]]:
+    """Compare a weight-norm sidecar (older packs, see ``MaskedBackend.warm_weight_norms``) found in
+    the pack directory or the default cache directory with norms recomputed from the weights.
+    Returns ``(entries checked, linears whose value differs)``."""
+    from pgw.engine.backends import _read_norm_sidecar
+    from pgw.modelpack.loader import row_norm_sq_max
+
+    found = _read_norm_sidecar(pack, None)
+    if not found:
+        return 0, []
+    weights = {e.id: e.weight for e in pack.manifest.linears}
+    bad = [key for key, v in sorted(found.items()) if row_norm_sq_max(pack.load_tensor(weights[key])) != v]
+    return len(found), bad
+
+
+def _check_pack(path: Path, ring: str | None, deep: bool = False) -> tuple[Status, str, dict[str, Any]]:
     from pgw.core.ring import RingParams
     from pgw.modelpack import ModelPack
 
@@ -349,13 +366,24 @@ def _check_pack(path: Path, ring: str | None) -> tuple[Status, str, dict[str, An
         rings = pack.supported_rings()
         m_total = sum(s.out_features for s in pack.linear_specs())
         slot_bytes = {name: m_total * RingParams.from_name(name).k // 8 for name in rings}
-        data = {"name": pack.name, "fingerprint": pack.fingerprint, "arch": pack.arch.arch,
-                "layers": pack.num_layers, "supported_rings": rings, "mask_bytes_per_slot": slot_bytes}
+        data: dict[str, Any] = {"name": pack.name, "fingerprint": pack.fingerprint, "arch": pack.arch.arch,
+                                "layers": pack.num_layers, "supported_rings": rings, "mask_bytes_per_slot": slot_bytes}
         if ring is not None:
             pack.check_ring(RingParams.from_name(ring))
+        if deep:
+            # Install-time only (reads every weight): the capped-ring output bound relies on these values,
+            # and the request path trusts them. Raises FingerprintMismatchError on a manifest mismatch.
+            data["row_norms_checked"] = pack.verify_row_norms()
+            n_side, bad = _check_row_norm_sidecar(pack)
+            data["row_norm_sidecar_checked"] = n_side
+            if bad:
+                data["row_norm_sidecar_mismatch"] = bad
+                return "fail", (f"weight-norm sidecar for fp {pack.short_fingerprint} disagrees with the weights "
+                                f"({', '.join(bad[:5])}); delete it, it is recomputed at the next start"), data
         if not rings:
             return "fail", "no ring preset has enough headroom for this pack", data
-        return "ok", f"{pack.name} fp {pack.short_fingerprint} verified; rings {', '.join(rings)}", data
+        extra = "; row norms verified" if deep else ""
+        return "ok", f"{pack.name} fp {pack.short_fingerprint} verified; rings {', '.join(rings)}{extra}", data
 
 
 def _check_key_file(key_file: Path) -> tuple[Status, str, dict[str, Any]]:
@@ -475,6 +503,14 @@ def _mask_supply_backend(fs: Any, pack: Any, ring: str) -> tuple[Any, str]:
     return build_he_backend(fs, pack, ring), "encrypted"
 
 
+def _nearest_existing(path: Path) -> Path:
+    """``path`` or its nearest existing ancestor (the volume a store about to be created would use)."""
+    p = Path(path).absolute()
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return p
+
+
 def _check_mask_supply(pack_path: Path, ring: str | None, maskstore_root: Path | None,
                        expected_tps: float | None, slots: int | None = None) -> tuple[Status, str, dict[str, Any]]:
     """Time one mask chunk into a temporary store and compare the supply rate with the expected load."""
@@ -517,8 +553,13 @@ def _check_mask_supply(pack_path: Path, ring: str | None, maskstore_root: Path |
                             f"({need_tmp / 1e9:.2f} GB); set TMPDIR to a larger volume"), {"mode": mode}
         with tempfile.TemporaryDirectory(prefix="pgw-doctor-") as tmp:
             # Never the production counter or free-space floor: a throw-away store in a temporary directory.
-            store = MaskStore.open(Path(tmp) / "store", FileKeyProvider(Path(tmp) / "kek", create=True),
-                                   counter="none", min_free_bytes=0)
+            # Explicit settings (model_validate skips the env sources), so no PGW_MASKSTORE_* override
+            # (counter, KEK provider, network-filesystem policy, ...) reaches this store.
+            tmp_settings = MaskStoreSettings.model_validate(
+                {"root": Path(tmp) / "store", "key_provider": "file", "key_file": Path(tmp) / "kek",
+                 "counter": "none", "min_free_bytes": 0}
+            )
+            store = MaskStore(tmp_settings, FileKeyProvider(Path(tmp) / "kek", create=True))
             try:
                 seconds, _gemm, _chk = _time_generation(gen, n, min(n, 256), 2, store, warmup=False)
             finally:
@@ -560,7 +601,7 @@ def _check_mask_supply(pack_path: Path, ring: str | None, maskstore_root: Path |
         except Exception:  # invalid store settings are reported by the maskstore check
             target, min_free = 0, 0
         if target:
-            total = shutil.disk_usage(maskstore_root).total
+            total = shutil.disk_usage(_nearest_existing(maskstore_root)).total
             need = target * bps + min_free
             data.update(disk_total=total, disk_needed_for_target=need)
             if total < need:
@@ -657,7 +698,8 @@ def run_doctor(
     include_gpu: bool = True,
     check_settings: bool = False,
     strict: bool = False,
-    mask_supply: bool | None = None,
+    mask_supply: bool = False,
+    deep: bool = False,
     expected_tokens_per_second: float | None = None,
     cert_files: Iterable[Path] = (),
 ) -> DoctorReport:
@@ -673,8 +715,10 @@ def run_doctor(
         include_gpu: Include ``cuda_int8`` in the arithmetic self test when available.
         check_settings: Also validate the role's ``PGW_*`` settings (implied for a specific role).
         strict: Treat warnings as failures.
-        mask_supply: Time one mask chunk (``None``: when ``pack`` is given and the role is ``factory``
-            or ``gateway``).
+        deep: With ``pack``: also recompute every linear's ``row_norm_sq_max`` from the int8 weights and
+            compare it with the manifest and any weight-norm sidecar (reads every weight; install time).
+        mask_supply: Time one mask chunk (opt-in, ``--mask-supply``; needs ``pack``). Off by default:
+            it runs real mask generation, far too heavy for a gateway pod's start-up check.
         expected_tokens_per_second: Expected mask consumption for the supply check (default from
             ``PGW_DOCTOR_EXPECTED_TOKENS_PER_S``; unset = report the rate only).
         cert_files: Extra PEM certificate files whose expiry is checked (plus those in the settings).
@@ -696,7 +740,7 @@ def run_doctor(
         _run(report, f"settings.{role}", lambda: _check_role_settings(role))
     fingerprint: str | None = None
     if pack is not None:
-        c = _run(report, "pack", lambda: _check_pack(pack, ring))
+        c = _run(report, "pack", lambda: _check_pack(pack, ring, deep))
         fingerprint = c.data.get("fingerprint")
     if key_file is not None:
         _run(report, "maskstore.key_file", lambda: _check_key_file(key_file))
@@ -705,8 +749,6 @@ def run_doctor(
     if service_url is not None:
         _run(report, "service", lambda: _check_service(service_url, service_token_file, service_ca_file,
                                                         fingerprint, ring))
-    if mask_supply is None:
-        mask_supply = pack is not None and role in ("factory", "gateway")
     if mask_supply and pack is not None:
         _run(report, "mask_supply", lambda: _check_mask_supply(pack, ring, maskstore_root,
                                                                 expected_tokens_per_second))

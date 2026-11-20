@@ -47,6 +47,25 @@ def test_mask_supply_disk_and_first_segment(tiny_pack_dir: Path, tmp_path: Path,
     assert status == "ok" and data["disk_needed_for_target"] <= data["disk_total"]
 
 
+def test_mask_supply_temp_store_ignores_maskstore_env(tiny_pack_dir: Path, tmp_path: Path,
+                                                     no_pgw_env: pytest.MonkeyPatch) -> None:
+    # Production overrides must not reach the throw-away store (a TPM counter, a KEK provider or a huge
+    # free-space floor would make the check fail or touch production state).
+    no_pgw_env.setenv("PGW_MASKSTORE_COUNTER", "tpm")
+    no_pgw_env.setenv("PGW_MASKSTORE_KEY_PROVIDER", "pkcs11")
+    no_pgw_env.setenv("PGW_MASKSTORE_MIN_FREE_BYTES", str(10**15))
+    status, detail, _ = _check_mask_supply(tiny_pack_dir, None, None, None, slots=8)
+    assert status == "ok", detail
+
+
+def test_mask_supply_store_root_not_created_yet(tiny_pack_dir: Path, tmp_path: Path,
+                                                no_pgw_env: pytest.MonkeyPatch) -> None:
+    no_pgw_env.setenv("PGW_MASKSTORE_TARGET_SLOTS", "16")
+    status, detail, data = _check_mask_supply(tiny_pack_dir, None, tmp_path / "a" / "b", None, slots=8)
+    assert status == "ok", detail
+    assert data["disk_total"] > 0
+
+
 def test_mask_supply_encrypted_without_hint_warns(tiny_pack_dir: Path, tmp_path: Path,
                                                   no_pgw_env: pytest.MonkeyPatch) -> None:
     no_pgw_env.setenv("PGW_FACTORY_HE_SERVICE_URL", "https://compute.invalid:8443")
@@ -55,9 +74,9 @@ def test_mask_supply_encrypted_without_hint_warns(tiny_pack_dir: Path, tmp_path:
     assert status == "warn" and "hint is not built" in detail and data["mode"].startswith("encrypted")
 
 
-def test_run_doctor_runs_mask_supply_for_factory_role(tiny_pack_dir: Path, no_pgw_env: pytest.MonkeyPatch) -> None:
+def test_run_doctor_mask_supply_is_opt_in(tiny_pack_dir: Path, no_pgw_env: pytest.MonkeyPatch) -> None:
     rep = run_doctor(role="pack", pack=tiny_pack_dir, include_gpu=False)
-    assert rep.get("mask_supply") is None  # only for factory / gateway roles unless asked
+    assert rep.get("mask_supply") is None  # opt-in (--mask-supply): never part of a pod's start-up check
     rep = run_doctor(role="pack", pack=tiny_pack_dir, include_gpu=False, mask_supply=True,
                      expected_tokens_per_second=0.001)
     c = rep.get("mask_supply")

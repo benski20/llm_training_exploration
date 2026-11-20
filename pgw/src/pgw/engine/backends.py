@@ -737,6 +737,12 @@ class MaskedBackend(LinearBackend):
         to that sidecar, so the next start reads no weights. Call it at startup, in a worker thread,
         before the model is marked ready; requests afterwards never read a weight.
 
+        Trust: a sidecar is trusted exactly like the pack directory. It is only checked for format,
+        version, fingerprint and the manifest bound ``0 <= v <= 127^2 * in_features``, not against the
+        weights, so the cache directory must be writable only by the service account (like the pack
+        dir). ``pgw doctor --pack P --deep`` recomputes the norms and compares them with the manifest
+        and any sidecar in the pack or default cache directory (install-time check).
+
         Returns:
             The number of linears whose norm was computed from the weights in this call.
         """
@@ -1429,6 +1435,7 @@ def _run_coro_blocking(coro: Any) -> Any:
 
 # ---- weight-row norm sidecar (packs written before the manifest carried row_norm_sq_max) ----------
 _NORM_SIDECAR_FORMAT = "pgw-wnorm"
+_NORM_SIDECAR_VERSION = 1
 
 
 def _norm_sidecar_dirs(pack: Any, cache_dir: str | Path | None) -> list[Path]:
@@ -1461,10 +1468,13 @@ def _read_norm_sidecar(pack: Any, cache_dir: str | Path | None) -> dict[str, int
         try:
             if doc.get("format") != _NORM_SIDECAR_FORMAT or doc.get("fingerprint") != fp:
                 raise ValueError("wrong format or fingerprint")
+            version = doc.get("version")
+            if not isinstance(version, int) or isinstance(version, bool) or version != _NORM_SIDECAR_VERSION:
+                raise ValueError(f"unsupported version {version!r}")
             out: dict[str, int] = {}
-            for key, v in doc["row_norm_sq_max"].items():
+            for key, v in doc["row_norm_sq_max"].items():  # same bound as the manifest (127^2 * n)
                 n = widths.get(key)
-                if n is None or not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 128 * 128 * n:
+                if n is None or not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 127 * 127 * n:
                     raise ValueError(f"bad entry {key!r}")
                 out[key] = v
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
@@ -1477,7 +1487,7 @@ def _read_norm_sidecar(pack: Any, cache_dir: str | Path | None) -> dict[str, int
 def _write_norm_sidecar(pack: Any, norms: dict[str, int], cache_dir: str | Path | None) -> Path | None:
     """Write the sidecar atomically into the first writable directory; returns its path or ``None``."""
     fp = str(pack.fingerprint)
-    body = json.dumps({"format": _NORM_SIDECAR_FORMAT, "version": 1, "fingerprint": fp,
+    body = json.dumps({"format": _NORM_SIDECAR_FORMAT, "version": _NORM_SIDECAR_VERSION, "fingerprint": fp,
                        "row_norm_sq_max": norms}, sort_keys=True)
     for d in _norm_sidecar_dirs(pack, cache_dir):
         p = d / f"wnorm.{fp}.json"

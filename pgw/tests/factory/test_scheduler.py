@@ -62,19 +62,15 @@ def test_first_segment_of_a_new_store_is_small(tmp_path: Path, fake_store: FakeM
     p = sch.plan()[0]
     assert (p.segments, p.slots_per_segment, p.available) == (1, 20, 0) and "first segment" in p.reason
     assert len(sch.run_once()) == 1 and [s.slots for s in fake_store.segments.values()] == [20]
-    p = sch.plan()[0]  # below low water: one ramp segment at a time (min(50, next_pow2(40)))
-    assert (p.segments, p.slots_per_segment, p.available) == (1, 50, 20)
-    sch.run_once()
-    p = sch.plan()[0]  # 70 < 100: still one segment per plan
-    assert (p.segments, p.slots_per_segment, p.available) == (1, 50, 70)
-    sch.run_once()
-    p = sch.plan()[0]  # 120 >= low water: full segments up to the target
-    assert (p.segments, p.slots_per_segment, p.available) == (4, 50, 120)
+    # Below low water, but the ramp (min(50, next_pow2(40))) has reached segment_slots: full segments
+    # up to the target at once, not one segment per plan.
+    p = sch.plan()[0]
+    assert (p.segments, p.slots_per_segment, p.available) == (6, 50, 20)
     sch.run_once()
     assert sch.plan() == [] and len(fake_store.segments) == 7
-    fake_store.consume(fake_pack.fingerprint, 290)  # 30 left: below low water -> ramp (capped at segment_slots)
+    fake_store.consume(fake_pack.fingerprint, 290)  # 30 left: ramp size capped at segment_slots -> full plan
     p = sch.plan()[0]
-    assert (p.segments, p.slots_per_segment) == (1, 50)
+    assert (p.segments, p.slots_per_segment) == (6, 50)
     sch.close()
 
 
@@ -92,7 +88,7 @@ class _FixedSink:
 
 @pytest.mark.parametrize(("avail", "expected"), [
     (0, (1, 256)), (256, (1, 512)), (512, (1, 1024)), (1000, (1, 2048)),
-    (2047, (1, 4096)), (4095, (1, 4096)),  # just below low water: capped at segment_slots
+    (2047, (16, 4096)), (4095, (16, 4096)),  # ramp reached segment_slots: full segments up to the target
     (4096, (15, 4096)), (5000, (15, 4096)),  # at/above low water: back to full segments up to the target
 ])
 def test_segment_ramp(tmp_path: Path, fake_pack: FakePack, avail: int, expected: tuple[int, int]) -> None:
@@ -107,6 +103,27 @@ def test_segment_ramp(tmp_path: Path, fake_pack: FakePack, avail: int, expected:
     assert len(plans) == 1
     assert (plans[0].segments, plans[0].slots_per_segment) == expected
     assert plans[0].available == avail
+    sch.close()
+
+
+def test_ramp_converges_when_low_water_is_many_segments(tmp_path: Path, fake_pack: FakePack) -> None:
+    """low_water >> segment_slots: one segment per ramp step (256, 512, 2048), then one plan covering
+    the whole deficit with full segments (not one 4096-slot segment per plan up to low water)."""
+    sink = _FixedSink()
+    g = MaskGenerator(fake_pack, RING_K40_A12)
+    settings = _settings(tmp_path, segment_slots=4096, first_segment_slots=256, low_water_slots=100_000,
+                         target_slots=200_000)
+    sch = FactoryScheduler(settings, sink, {g.key: g}, metrics=False)
+    steps: list[tuple[int, int]] = []
+    for _ in range(10):
+        plans = sch.plan()
+        if not plans:
+            break
+        p = plans[0]
+        steps.append((p.segments, p.slots_per_segment))
+        sink.avail += p.segments * p.slots_per_segment
+    assert steps == [(1, 256), (1, 512), (1, 2048), (49, 4096)]  # ceil((200000 - 2816) / 4096)
+    assert sink.avail >= 200_000
     sch.close()
 
 
