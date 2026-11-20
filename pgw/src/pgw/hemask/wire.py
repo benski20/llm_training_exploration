@@ -39,6 +39,8 @@ __all__ = [
     "encode_maskgen_response",
     "pack_y",
     "unpack_y",
+    "y_round_offset",
+    "y_wire_bytes",
 ]
 
 MASKGEN_PATH = "/pgw/v1/maskgen"
@@ -179,16 +181,37 @@ def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRe
 
 
 def _to_bytes(v: np.ndarray, nb: int) -> bytes:
+    """Low ``nb`` little-endian bytes of each element of ``v`` (``(rows, cols)``), row-major."""
     a = np.ascontiguousarray(v, dtype="<u8")
-    return np.ascontiguousarray(a.view(np.uint8).reshape(*a.shape, 8)[..., :nb]).tobytes()
+    if nb == 8:
+        return a.tobytes()
+    return a.view(np.uint8).reshape(*a.shape, 8)[..., :nb].tobytes()  # one strided copy
 
 
 def _from_bytes(data: bytes | bytearray | memoryview, shape: tuple[int, int], nb: int) -> np.ndarray:
     if nb == 8:
-        return np.frombuffer(data, dtype="<u8").reshape(shape).astype(np.uint64)
+        return np.frombuffer(data, dtype="<u8").reshape(shape).astype(np.uint64)  # writable copy
     buf = np.zeros((*shape, 8), dtype=np.uint8)
     buf[..., :nb] = np.frombuffer(data, dtype=np.uint8).reshape(*shape, nb)
-    return buf.view("<u8").reshape(shape).astype(np.uint64)
+    return buf.view("<u8").reshape(shape).astype(np.uint64, copy=False)  # no copy on little-endian hosts
+
+
+def y_wire_bytes(q_bits: int, drop_bits: int) -> tuple[int, int]:
+    """Byte range ``[lo, hi)`` of each little-endian 64-bit word that :func:`pack_y` sends.
+
+    For byte-aligned ``q`` and ``drop`` (the only ones the wire allows), ``pack_y(y)`` is exactly bytes
+    ``drop/8 .. q/8 - 1`` of ``(y + y_round_offset(drop)) mod 2^64``: rounding by ``2^drop`` and the
+    reduction mod ``2^(q - drop)`` only keep bits ``drop .. q-1`` of ``y + 2^(drop-1)``, and those
+    depend on ``y mod 2^q`` only. Device kernels use this to cut the reply out without a separate pass.
+    """
+    if q_bits % 8 or drop_bits % 8 or not 0 <= drop_bits < q_bits <= 64:
+        raise ValueError(f"q_bits={q_bits}, drop_bits={drop_bits} are not byte-aligned wire values")
+    return drop_bits // 8, q_bits // 8
+
+
+def y_round_offset(drop_bits: int) -> int:
+    """The rounding term :func:`pack_y` adds before dropping ``drop_bits`` low bits (0 for none)."""
+    return 1 << (drop_bits - 1) if drop_bits else 0
 
 
 def pack_b(b: np.ndarray, q_bits: int = 64) -> bytes:
@@ -202,6 +225,13 @@ def unpack_b(data: bytes | bytearray | memoryview, shape: tuple[int, int], q_bit
 
 def pack_y(y: np.ndarray, drop_bits: int, q_bits: int = 64) -> bytes:
     """Provider side: ``y mod 2^q``, rounded by ``2^drop_bits``, as ``(q - drop)/8`` little-endian bytes."""
+    if q_bits % 8 == 0 and drop_bits % 8 == 0 and 0 <= drop_bits < q_bits <= 64:
+        # Byte-aligned (every wire value): the masking and the shift are a byte slice (y_wire_bytes).
+        lo, hi = y_wire_bytes(q_bits, drop_bits)
+        yv = np.array(y, dtype="<u8", order="C", copy=True)
+        if drop_bits:
+            yv += np.uint64(y_round_offset(drop_bits))  # wraps mod 2^64; only bits drop..q-1 are kept
+        return yv.view(np.uint8).reshape(*yv.shape, 8)[..., lo:hi].tobytes()
     yv = np.asarray(y, dtype=np.uint64)
     if q_bits < 64:
         yv = yv & np.uint64((1 << q_bits) - 1)
@@ -214,4 +244,6 @@ def unpack_y(data: bytes | bytearray | memoryview, shape: tuple[int, int], drop_
              q_bits: int = 64) -> np.ndarray:
     """Client side: inverse of :func:`pack_y` (the dropped low bits come back as zeros)."""
     v = _from_bytes(data, shape, (q_bits - drop_bits) // 8)
-    return v << np.uint64(drop_bits) if drop_bits else v
+    if drop_bits:
+        v <<= np.uint64(drop_bits)  # v is a fresh array: shift in place
+    return v

@@ -36,7 +36,11 @@ Future: fused CUDA/Triton kernel doing digit split + K/8 GEMMs + shift-accumulat
 from __future__ import annotations
 
 import logging
+import os
+import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
 import numpy as np
@@ -45,6 +49,7 @@ import torch
 from pgw.core.errors import BackendUnavailableError, ConfigError, ShapeError
 from pgw.core.ring import RingParams
 from pgw.core.ringmm import (
+    INT_MM_MAX_INNER_CPU,
     PreparedWeight,
     cpu_int8_available,
     cpu_int8_fast,
@@ -75,6 +80,137 @@ log = logging.getLogger(__name__)
 
 ServiceBackend = Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"]
 SERVICE_BACKENDS: tuple[str, ...] = ("auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32")
+
+#: Byte budget of one maskgen GEMM's int32 partial sums (a request is processed in column blocks
+#: that fit it, which bounds the working memory per concurrent request).
+MASKGEN_PART_BYTES_CPU = 64 << 20
+MASKGEN_PART_BYTES_CUDA = 512 << 20
+
+
+def _maskgen_block_cols(rows: int, planes: int, cols: int, budget: int, align: int) -> int:
+    """Columns per maskgen block: ``rows x planes x cols`` int32 partials within ``budget`` bytes,
+    split evenly (no small tail block)."""
+    step = max(align, budget // max(1, rows * planes * 4) // align * align)
+    nblk = -(-cols // step)
+    even = -(-cols // nblk)
+    return -(-even // align) * align
+
+
+def _combine_planes(planes: list[torch.Tensor], const: torch.Tensor) -> torch.Tensor:
+    """``sum_d planes[d] << 8d + const mod 2^64`` as int64 bits (``planes``: int32 ``(m, c)`` views).
+
+    Planes 0-3 and 4-7 are summed separately without overflow (``|plane| < 2^31``, so every term
+    is below ``2^55``); only ``const`` (any int64 bit pattern) and the final ``hi << 32`` wrap, and
+    int64 wrap-around is two's complement, i.e. reduction mod 2^64.
+    """
+    m, c = planes[0].shape
+    acc = torch.empty((m, c), dtype=torch.int64, device=planes[0].device)
+    acc.copy_(planes[0])
+    for d in range(1, min(len(planes), 4)):
+        acc.add_(planes[d], alpha=1 << (8 * d))
+    acc.add_(const)
+    if len(planes) > 4:
+        hi = torch.empty((m, c), dtype=torch.int64, device=acc.device)
+        hi.copy_(planes[4])
+        for d in range(5, len(planes)):
+            hi.add_(planes[d], alpha=1 << (8 * (d - 4)))
+        acc.add_(hi.bitwise_left_shift_(32))
+    return acc
+
+
+def _combine_planes_np(planes: list[np.ndarray], const: np.ndarray) -> np.ndarray:
+    """NumPy twin of :func:`_combine_planes` for the CPU path: uint64 ``(m, c)``, wrap-around in uint64
+    (well defined). ``const`` is ``(m, 1)`` uint64. Faster than torch's strided int64 kernels on CPU."""
+    acc = planes[0].astype(np.int64)
+    tmp = np.empty_like(acc)
+    for d in range(1, min(len(planes), 4)):
+        np.multiply(planes[d], 1 << (8 * d), out=tmp, dtype=np.int64)  # |.| < 2^55: exact
+        acc += tmp
+    out = acc.view(np.uint64)
+    out += const
+    if len(planes) > 4:
+        hi = planes[4].astype(np.int64)
+        for d in range(5, len(planes)):
+            np.multiply(planes[d], 1 << (8 * (d - 4)), out=tmp, dtype=np.int64)
+            hi += tmp
+        hu = hi.view(np.uint64)
+        hu <<= np.uint64(32)
+        out += hu
+    return out
+
+
+_COMBINE_ROWS = 128  # row chunk of the CPU combine (keeps its int64 temporaries in L2)
+_combine_pool: ThreadPoolExecutor | None = None
+_combine_pool_lock = threading.Lock()
+
+
+def _combine_rows_np(part: np.ndarray, nb: int, const: np.ndarray, out: np.ndarray, ylo: int, yhi: int) -> None:
+    """``out[r, c, :] = bytes ylo..yhi-1 of (sum_d part[r, d*cb + c] << 8d + const[r]) mod 2^64``.
+
+    ``part`` is ``(m, nb * cb)`` int32 (plane-major column blocks), ``out`` a ``(m, cb, yhi - ylo)``
+    uint8 view. Rows go in L2-sized chunks; large calls are split over a small thread pool (NumPy
+    releases the GIL).
+    """
+    m = part.shape[0]
+    cb = part.shape[1] // nb
+
+    def rows(r0: int, r1: int) -> None:
+        for a in range(r0, r1, _COMBINE_ROWS):
+            b = min(a + _COMBINE_ROWS, r1)
+            y = _combine_planes_np([part[a:b, d * cb:(d + 1) * cb] for d in range(nb)], const[a:b])
+            out[a:b] = y.view(np.uint8).reshape(b - a, cb, 8)[:, :, ylo:yhi]
+
+    workers = min(torch.get_num_threads(), max(1, (m * cb) // (1 << 16)), -(-m // _COMBINE_ROWS))
+    if workers <= 1:
+        rows(0, m)
+        return
+    global _combine_pool
+    with _combine_pool_lock:
+        if _combine_pool is None:
+            _combine_pool = ThreadPoolExecutor(max(2, os.cpu_count() or 2), thread_name_prefix="pgw-maskgen")
+        pool = _combine_pool
+    per = -(-m // workers)
+    for f in [pool.submit(rows, r0, min(m, r0 + per)) for r0 in range(0, m, per)]:
+        f.result()
+
+
+def _maskgen_block_tn(wpad: torch.Tensor, raw: torch.Tensor, m: int, n: int, const: torch.Tensor,
+                      ylo: int, yhi: int) -> torch.Tensor:
+    """One maskgen column block on ``wpad``'s device (the CUDA path; device-agnostic, so testable on CPU).
+
+    ``wpad``: ``(mp, np_)`` int8 weight zero-padded to multiples of 32; ``raw``: ``(n, cb, nb)`` uint8
+    coefficient bytes on the same device. Returns the ``(m, cb, yhi - ylo)`` uint8 view of bytes
+    ``ylo..yhi-1`` of ``(W8 b + const) mod 2^64``. The planes are laid out ``(nb, cbp, np_)`` and used as
+    the column-major right operand (the TN form cuBLASLt int8 GEMMs need); the padding is left
+    uninitialised: padded inputs meet zero weight columns (any int8 times 0 is 0) and padded output
+    columns are dropped.
+    """
+    _, cb, nb = raw.shape
+    mp, np_ = wpad.shape
+    cbp = -(-cb // 32) * 32
+    planes = torch.empty((nb, cbp, np_), dtype=torch.uint8, device=wpad.device)
+    torch.bitwise_xor(raw.permute(2, 1, 0), 0x80, out=planes[:, :cb, :n])
+    part = torch._int_mm(wpad, planes.view(torch.int8).view(nb * cbp, np_).t()).view(mp, nb, cbp)
+    y = _combine_planes([part[:m, d, :cb] for d in range(nb)], const)
+    return y.view(torch.uint8).view(m, cb, 8)[:, :, ylo:yhi]
+
+
+_STREAMS: dict[torch.device, list[torch.cuda.Stream]] = {}
+_STREAMS_LOCK = threading.Lock()
+
+
+def _borrow_stream(dev: torch.device) -> torch.cuda.Stream:  # pragma: no cover - GPU only
+    """A CUDA stream for one maskgen call (pooled per device; one per concurrent call)."""
+    with _STREAMS_LOCK:
+        pool = _STREAMS.setdefault(dev, [])
+        if pool:
+            return pool.pop()
+    return torch.cuda.Stream(dev)  # type: ignore[no-untyped-call]
+
+
+def _return_stream(dev: torch.device, stream: torch.cuda.Stream) -> None:  # pragma: no cover - GPU only
+    with _STREAMS_LOCK:
+        _STREAMS.setdefault(dev, []).append(stream)
 
 def resolve_device(device: str | torch.device) -> torch.device:
     """``"auto"`` -> ``cuda`` (device 0) when available, else ``cpu``. Validates explicit devices.
@@ -176,6 +312,7 @@ class ComputeKernel:
         self._buckets = validate_buckets(graph_buckets)
         self._gemv = False
         self._gemv_checked: set[tuple[int, int]] = set()
+        self._mg_consts: dict[tuple[int, int], torch.Tensor] = {}  # maskgen per-row constants (cached rowsum)
         # Own the memory: a pack's tensors may be memory-mapped views of files.
         wd = w8.detach().to(self.device)
         if wd.data_ptr() == w8.data_ptr():
@@ -303,47 +440,172 @@ class ComputeKernel:
 
     __call__ = run
 
+    # ---- encrypted mask generation (POST /pgw/v1/maskgen) ---------------------------------
     def mulmod64(self, b: np.ndarray, nbytes: int = 8) -> np.ndarray:
         """``W8 b mod 2^64`` for MLWE mask ciphertexts ``b`` (``(n, cols)`` uint64 -> ``(m, cols)``).
 
-        Used by ``POST /pgw/v1/maskgen`` (:mod:`pgw.hemask`). On CUDA, ``b`` is split into eight
-        unsigned byte planes, offset to signed int8, multiplied with int8 tensor-core GEMMs
-        (``|partial| <= 127 * 128 * n < 2^31``) and recombined with wrapping int64 shifts. With
-        ``nbytes < 8`` (coefficients below ``2^(8 nbytes)``, e.g. q = 2^56) the zero top planes are skipped.
+        Used by ``POST /pgw/v1/maskgen`` (:mod:`pgw.hemask`; the service itself calls
+        :meth:`mulmod64_wire`). ``b`` is split into unsigned byte planes, offset to signed int8,
+        multiplied with one int8 GEMM (``|partial| <= 128 * 128 * n < 2^31``) and recombined with
+        wrapping int64 shifts (see :meth:`mulmod64_wire`). With ``nbytes < 8`` (coefficients below
+        ``2^(8 nbytes)``, e.g. q = 2^56) the zero top planes are skipped.
         """
         if not 1 <= nbytes <= 8:
             raise ShapeError("nbytes must be in [1, 8]")
         if b.ndim != 2 or b.shape[0] != self.in_features or b.dtype != np.uint64:
             raise ShapeError(f"{self.linear}: maskgen operand must be ({self.in_features}, cols) uint64, "
                              f"got {b.dtype} {tuple(b.shape)}")
-        w8 = self._w if self._w is not None else self._pw.w8  # type: ignore[union-attr]
-        if self.device.type != "cuda":
-            from pgw.hemask.fastmm import engine, small_mm_big
-            from pgw.hemask.lwe import matmul_mod64
+        n, cols = b.shape
+        if cols == 0:
+            return np.zeros((self.out_features, 0), dtype=np.uint64)
+        if not self._maskgen_planes_ok():
+            return self._mulmod64_f64(b)
+        raw = np.ascontiguousarray(b, dtype="<u8").view(np.uint8).reshape(n, cols, 8)[:, :, :nbytes]
+        out = self._maskgen_planes(raw, 0, 8, 0)
+        return out.view("<u8").reshape(self.out_features, cols).astype(np.uint64, copy=False)
 
-            if engine() == "cpu_f64":
-                return matmul_mod64(w8.cpu().numpy(), b, fast=False)
-            return small_mm_big(w8.cpu().numpy(), b, nbytes=nbytes)
-        return self._mulmod64_cuda(b, nbytes)  # pragma: no cover - GPU only
+    def mulmod64_wire(self, data: bytes | bytearray | memoryview, cols: int, q_bits: int = 64,
+                      drop_bits: int = 0) -> bytes:
+        """Wire to wire: ``pack_y(W8 unpack_b(data) mod 2^64, drop_bits, q_bits)``, byte for byte.
 
-    def _mulmod64_cuda(self, b: np.ndarray, nbytes: int = 8) -> np.ndarray:  # pragma: no cover - GPU only
+        ``data`` is a maskgen item's ``b``: ``(n, cols)`` coefficients as ``q/8`` little-endian bytes
+        each (row-major). The bytes go to the device as they are; byte ``d`` of every coefficient is
+        a GEMM plane (``byte ^ 0x80 == byte - 128`` as int8), all planes in one int8 GEMM. The
+        result is recombined in int64 (planes 0-3 and 4-7 exactly, only the final ``hi << 32`` and
+        the constant wrap, two's complement == mod 2^64) with one cached per-row constant:
+        ``128 * rowsum(W8) * sum_d 2^(8d)`` (the -128 plane offset) plus the rounding term
+        ``2^(drop-1)``. The reply is bytes ``drop/8 .. q/8 - 1`` of each little-endian word (the
+        bits of ``round(y / 2^drop) mod 2^(q - drop)``), cut out on the device so only
+        ``(q - drop)/8`` bytes per element come back. On CUDA each call runs on its own stream
+        (any number of threads may call concurrently; the service bounds how many).
+        """
+        n, m = self.in_features, self.out_features
+        if q_bits % 8 or not 8 <= q_bits <= 64 or drop_bits % 8 or not 0 <= drop_bits < q_bits:
+            raise ShapeError(f"{self.linear}: maskgen q_bits={q_bits}, drop_bits={drop_bits} unsupported")
+        if isinstance(cols, bool) or not isinstance(cols, int) or cols <= 0:
+            raise ShapeError(f"{self.linear}: maskgen cols must be a positive integer, got {cols!r}")
+        nb = q_bits // 8
+        if len(data) != nb * n * cols:
+            raise ShapeError(f"{self.linear}: maskgen b has {len(data)} bytes, expected {nb * n * cols}")
+        from pgw.hemask.wire import pack_y, unpack_b, y_round_offset, y_wire_bytes
+
+        if not self._maskgen_planes_ok():
+            return pack_y(self._mulmod64_f64(unpack_b(data, (n, cols), q_bits)), drop_bits, q_bits)
+        ylo, yhi = y_wire_bytes(q_bits, drop_bits)  # pack_y == these bytes of y + round offset
+        raw = np.frombuffer(data, dtype=np.uint8).reshape(n, cols, nb)
+        out = self._maskgen_planes(raw, ylo, yhi, y_round_offset(drop_bits))
+        assert out.shape == (m, cols, yhi - ylo)
+        return out.tobytes()
+
+    def _maskgen_planes_ok(self) -> bool:
+        """True when the byte-plane int8 GEMM path serves maskgen here (CUDA, or exact CPU int8 GEMMs)."""
+        if sys.byteorder != "little":  # pragma: no cover - the byte slicing assumes little-endian words
+            return False
+        if self.device.type == "cuda":  # pragma: no cover - GPU only
+            return True
+        from pgw.hemask.fastmm import engine
+
+        eng = engine()  # PGW_HEMASK_ENGINE=cpu_f64 forces the float64 path, as before
+        if self.in_features > INT_MM_MAX_INNER_CPU:  # beyond the probed exact inner length
+            return False
+        # A CPU-device kernel with engine() == "cuda" and slow CPU int8 takes the float64 path
+        # (exact, possibly slower than the old small_mm_big, which ran its GEMMs on the GPU).
+        return (eng == "cpu_int8" or (eng == "cuda" and cpu_int8_fast())) and cpu_int8_available()
+
+    def _mulmod64_f64(self, b: np.ndarray) -> np.ndarray:
+        """Float64 bit-slice reference (CPUs without exact fast int8 GEMMs); reuses the cached float weight."""
+        from pgw.hemask.lwe import matmul_mod64
+
+        pw = self._pw
+        if pw is not None and pw._w_float is not None and pw._w_float.dtype == torch.float64 \
+                and pw._w_float.device.type == "cpu":
+            small = pw._w_float.numpy().T  # (m, n) view of the cached (n, m) float64 copy
+        else:
+            w8 = self._w if self._w is not None else pw.w8  # type: ignore[union-attr]
+            small = w8.cpu().numpy()
+        return matmul_mod64(small, b, fast=False)
+
+    def _maskgen_const(self, nb: int, rnd: int) -> torch.Tensor:
+        """Cached ``(m, 1)`` int64 bits of ``128 * rowsum * sum_{d<nb} 2^(8d) + rnd mod 2^64`` on the device."""
+        key = (nb, rnd)
+        c = self._mg_consts.get(key)
+        if c is not None:
+            return c
+        m = self.out_features
+        if self.device.type == "cuda":  # pragma: no cover - GPU only
+            assert self._pw is not None and self._pw._w_dev is not None
+            cached = self._pw._w_rowsum  # the compute path's cached rowsum, if it already exists
+            rs_dev = cached if cached is not None else self._pw._w_dev.sum(1, dtype=torch.int64)
+            rs = rs_dev[:m].cpu().numpy()  # padded rows are 0; sum(dtype=) avoids an int64 weight copy
+        else:
+            rs = self._maskgen_w_cpu().sum(1, dtype=torch.int64).numpy()  # no int64 copy of the weight
+        scale = (128 * sum(1 << (8 * d) for d in range(nb))) % (1 << 64)
+        cu = rs.astype(np.int64).view(np.uint64) * np.uint64(scale) + np.uint64(rnd)  # wraps mod 2^64
+        t = torch.from_numpy(cu.view(np.int64).reshape(m, 1).copy())
+        if self.device.type == "cuda":  # pragma: no cover - GPU only
+            t = t.to(self.device)
+            torch.cuda.current_stream(self.device).synchronize()  # visible to every maskgen stream
+        self._mg_consts[key] = t
+        return t
+
+    def _maskgen_w_cpu(self) -> torch.Tensor:
+        w = self._w if self._w is not None else self._pw.w8  # type: ignore[union-attr]
+        return w if w.is_contiguous() else w.contiguous()
+
+    def _maskgen_planes(self, raw: np.ndarray, ylo: int, yhi: int, rnd: int) -> np.ndarray:
+        """``(m, cols, yhi - ylo)`` uint8: bytes ``ylo..yhi-1`` of ``(W8 b + rnd) mod 2^64``.
+
+        ``raw`` is ``(n, cols, nb)`` uint8, byte ``d`` of coefficient ``b[i, c]`` at ``[i, c, d]``
+        (``b < 2^(8 nb)``); it may be a strided view. The result may be a strided view too.
+        """
+        n, cols, nb = raw.shape
+        const = self._maskgen_const(nb, rnd)
+        if self.device.type == "cuda":  # pragma: no cover - GPU only
+            return self._maskgen_planes_cuda(raw, ylo, yhi, const)
+        m = self.out_features
+        w = self._maskgen_w_cpu()
+        cnp = const.numpy().view(np.uint64)
+        nbo = yhi - ylo
+        out = np.empty((m, cols, nbo), dtype=np.uint8)
+        step = _maskgen_block_cols(m, nb, cols, MASKGEN_PART_BYTES_CPU, 1)
+        xor = np.uint8(0x80)
+        for c0 in range(0, cols, step):
+            cb = min(step, cols - c0)
+            # Row-major (n, nb * cb) right operand: the wire's (n, cb, nb) bytes with the two inner
+            # axes swapped (cache-local), so the planes come out as contiguous column blocks.
+            rhs = torch.empty((n, nb * cb), dtype=torch.int8)
+            np.bitwise_xor(raw[:, c0:c0 + cb].transpose(0, 2, 1), xor,
+                           out=rhs.numpy().view(np.uint8).reshape(n, nb, cb))
+            part = torch._int_mm(w, rhs).numpy()  # (m, nb * cb) int32
+            _combine_rows_np(part, nb, cnp, out[:, c0:c0 + cb], ylo, yhi)
+        return out
+
+    def _maskgen_planes_cuda(self, raw: np.ndarray, ylo: int, yhi: int,
+                             const: torch.Tensor) -> np.ndarray:  # pragma: no cover - GPU only
         assert self._pw is not None and self._pw._w_dev is not None
         wpad = self._pw._w_dev  # (mp, np_) int8, zero padded to multiples of 32
-        n, cols = b.shape
+        n, cols, nb = raw.shape
         m = self.out_features
-        mp, np_ = wpad.shape
-        colp = -(-cols // 32) * 32
-        bt = torch.from_numpy(np.ascontiguousarray(b).view(np.int64)).to(self.device)
-        rowsum = wpad.to(torch.int64).sum(1, keepdim=True)  # for the -128 digit offset
-        acc = torch.zeros((mp, colp), dtype=torch.int64, device=self.device)
-        plane = torch.zeros((colp, np_), dtype=torch.int8, device=self.device)
-        for d in range(nbytes):  # coefficients < 2^(8 nbytes): the top planes are zero
-            byte = (bt >> (8 * d)) & 0xFF  # arithmetic shift is fine: the mask keeps the byte
-            plane[:cols, :n] = (byte - 128).to(torch.int8).t()
-            part = torch._int_mm(wpad, plane.t()).to(torch.int64) + 128 * rowsum
-            acc += part << (8 * d)  # int64 two's-complement wrap == mod 2^64
-        out = acc[:m, :cols].contiguous().cpu().numpy().view(np.uint64)
-        return np.asarray(out)
+        mp = wpad.shape[0]
+        dev = self.device
+        nbo = yhi - ylo
+        stream = _borrow_stream(dev)
+        try:
+            with torch.cuda.device(dev), torch.cuda.stream(stream):
+                host = torch.empty((n, cols, nb), dtype=torch.uint8, pin_memory=True)
+                host.numpy()[...] = raw  # the only host-side pass over the request bytes
+                draw = host.to(dev, non_blocking=True)
+                dout = torch.empty((m, cols, nbo), dtype=torch.uint8, device=dev)
+                step = _maskgen_block_cols(mp, nb, cols, MASKGEN_PART_BYTES_CUDA, 32)
+                for c0 in range(0, cols, step):
+                    cb = min(step, cols - c0)
+                    dout[:, c0:c0 + cb] = _maskgen_block_tn(wpad, draw[:, c0:c0 + cb], m, n, const, ylo, yhi)
+                res = torch.empty((m, cols, nbo), dtype=torch.uint8, pin_memory=True)
+                res.copy_(dout, non_blocking=True)
+                stream.synchronize()
+            return res.numpy()
+        finally:
+            _return_stream(dev, stream)
 
     def synchronize(self) -> None:
         """Wait for queued device work (no-op on CPU)."""
