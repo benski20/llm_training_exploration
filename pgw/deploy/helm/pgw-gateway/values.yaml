@@ -20,7 +20,14 @@ serviceAccount:
 
 podAnnotations: {}
 podLabels: {}
+# The gateway sits on every token's critical path (112 sequential round trips per token plus the
+# masking work between them): give it a PriorityClass so it is not preempted by batch work, e.g.
+#   kubectl create priorityclass pgw-gateway --value=100000 --description="PGW gateway"
 priorityClassName: ""
+# Put the gateway in the same zone as the compute service's endpoint (every token pays 112 network
+# round trips; cross-zone adds about 0.05-0.1 s per token). Example:
+#   nodeSelector:
+#     topology.kubernetes.io/zone: us-east-1a
 nodeSelector: {}
 tolerations: []
 affinity: {}
@@ -50,11 +57,17 @@ securityContext:
   capabilities:
     drop: [ALL]
 
+# Guaranteed QoS: integer CPU requests equal to the limits and memory requests equal to the limits.
+# With the kubelet's CPU manager set to `cpuManagerPolicy: static` (a node setting, see
+# deploy/helm/README.md), a Guaranteed pod with integer CPUs gets exclusive cores: the masking work
+# is not interrupted by the mask factory or other pods on the node (the factory has a hard CPU limit).
+# The native kernels size their thread pools from the cgroup CPU quota.
 resources:
   requests:
-    cpu: "2"
-    memory: 4Gi
+    cpu: "4"
+    memory: 8Gi
   limits:
+    cpu: "4"
     memory: 8Gi
 
 service:
@@ -246,3 +259,19 @@ serviceMonitor:
   enabled: false
   interval: 30s
   labels: {}
+
+# Client addresses: CIDRs of reverse proxies / load balancers whose X-Forwarded-For header is trusted
+# for the client IP (rate limits, audit log). Empty (default) trusts no proxy. Sets
+# PGW_TRUSTED_PROXY_CIDRS. Example: ["10.0.0.0/16"] for an in-VPC ingress controller.
+trustedProxyCidrs: []
+
+# PrometheusRule with the gateway and mask-supply alerts (rendered when serviceMonitor.enabled and
+# alerts.enabled; the same rules as deploy/monitoring/pgw-alerts.yml).
+alerts:
+  enabled: true
+  labels: {}                 # e.g. {release: kube-prometheus-stack} to match the operator's ruleSelector
+  # Alert when the masks left last less than this at the current consumption rate (seconds). Set it
+  # above the time the factory needs to deliver one segment (pgw doctor prints it), with margin.
+  runwayMinSeconds: 7200
+  # Alert when more than this share of the consumed mask slots was reserved but never used.
+  burnRatioMax: 0.5

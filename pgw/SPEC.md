@@ -491,6 +491,23 @@ round-trip floor is about 0.13 s per token for 8B). The mask store uses an encry
 and delivers HPKE-wrapped segments (7.7) to customers' stores. This is the cheapest option for
 customers without GPUs (T4 spot: about $0.36 per million 8B tokens at K48).
 
+**Placement for latency (B).** A token's 112-128 round trips run one after another, so the gateway
+should call a service replica in its own Availability Zone: the zonal endpoint DNS name first, the
+regional name as fallback, cross-zone load balancing off and one service replica per AZ
+(`deploy/marketplace/aws/README.md`). Same-AZ RTT adds an estimated 0.01-0.035 s per 7B token,
+cross-AZ 0.05-0.11 s. The gateway pod runs with Guaranteed QoS (integer CPUs, requests equal to
+limits) and, where the node uses `cpuManagerPolicy: static`, on exclusive cores; the factory has a
+hard CPU limit (`deploy/helm/README.md`).
+
+**Mask supply and alerts.** A new store is refilled with a ramp of small segments (one segment at a
+time while below low water, sized `min(segment_slots, max(first_segment_slots, next_pow2(2·available)))`).
+Encrypted mask generation (`pgw.hemask`, docs/operations/encrypted-masks.md) is link-bound: over slow links (for example the public tunnel of the
+Modal demo) it cannot feed a decoding stream, so production supply runs over a private link or from a
+local factory. `pgw doctor` times one mask chunk over the real path and checks certificate expiry. The
+charts ship PrometheusRules (also `deploy/monitoring/pgw-alerts.yml`) for mask runway, low water,
+factory stalls, burn ratio, model readiness, and paging alerts for integrity failures and the noise
+alarm.
+
 In every topology the service operator never receives seeds, masks or `u`.
 
 Shipped artefacts live in `deploy/`: Docker images and entrypoint (`deploy/docker`), a docker-compose

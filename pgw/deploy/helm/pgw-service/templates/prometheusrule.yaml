@@ -1,0 +1,24 @@
+{{- if and .Values.metrics.serviceMonitor.enabled .Values.alerts.enabled }}
+{{- /* Same rules as deploy/monitoring/pgw-alerts.yml (group pgw-service). */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pgw-service.fullname" . }}
+  labels:
+    {{- include "pgw-service.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: pgw-service
+      rules:
+        - alert: PGWServiceErrorRatioHigh
+          expr: sum by (namespace, job) (rate(pgw_service_requests_total{code!="ok"}[10m])) / (sum by (namespace, job) (rate(pgw_service_requests_total[10m])) > 0) > {{ .Values.alerts.errorRatioMax }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Too many PGW compute requests fail"
+            description: "Check the service logs (the code label of pgw_service_requests_total) and the GPU."
+{{- end }}

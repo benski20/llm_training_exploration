@@ -80,9 +80,59 @@ helm install compute deploy/helm/pgw-service \
 * The service has **no egress** at all; packs are mounted read-only and verified (`verifyPacks: full`).
 * `terminationGracePeriodSeconds` exceeds the drain timeout, so rolling updates finish in-flight work.
 
+## Placement and CPU (latency)
+
+Every generated token makes 112 round trips to the compute service one after another, with gateway
+masking work between them, so the gateway is latency-bound on a few cores:
+
+* **Gateway: Guaranteed QoS.** The default `resources` have integer CPU requests equal to the limits
+  and memory requests equal to the limits. Keep it that way. On nodes whose kubelet runs with
+  `cpuManagerPolicy: static` (kubelet config `cpuManagerPolicy: static` plus a `reservedSystemCPUs` or
+  `kubeReserved` CPU reservation; on EKS/GKE/AKS set it in the node pool's kubelet configuration), a
+  Guaranteed pod with integer CPUs gets exclusive cores, so the masking work is not preempted by the
+  factory or other pods. Set `priorityClassName` to a PriorityClass you create for the gateway.
+* **Factory: hard CPU limit.** The factory's `resources.limits.cpu` equals its request. With
+  `output: store` it must run on the gateway's node (the store volume is ReadWriteOnce); the CPU
+  limit and the gateway's exclusive cores keep them apart. With `output: export` it can run elsewhere:
+  `separateFromGateway: preferred` (or `required`) adds a pod anti-affinity to gateway nodes.
+* **Zones.** Run the gateway in the zone of the compute-service endpoint it calls (same-zone round
+  trips add about 0.01-0.035 s per token, cross-zone about 0.05-0.11 s; estimates). The gateway's
+  `nodeSelector` comment in values.yaml shows `topology.kubernetes.io/zone`; the service chart's
+  `topologySpreadConstraints` comment shows a zone spread for its replicas.
+* **Client IPs behind a proxy.** `trustedProxyCidrs` (gateway and service) sets
+  `PGW_TRUSTED_PROXY_CIDRS`: only peers in these ranges may set the client IP with X-Forwarded-For.
+  Empty (default) trusts nobody.
+
+## Alerts
+
+With the chart's ServiceMonitor enabled (`serviceMonitor.enabled` for the gateway,
+`metrics.serviceMonitor.enabled` for the factory and the service) each chart also renders a
+`PrometheusRule` (turn off with `alerts.enabled: false`; add `alerts.labels` to match your Prometheus
+operator's `ruleSelector`). The same rules for a plain Prometheus are in
+[deploy/monitoring/pgw-alerts.yml](../monitoring/pgw-alerts.yml):
+
+| alert | chart | severity | fires when |
+|---|---|---|---|
+| PGWMaskRunwayLow | gateway | warning | masks left / consumption rate < `alerts.runwayMinSeconds` (default 7200 s) |
+| PGWMaskStoreEmpty | gateway | page | no masks left for 5 m |
+| PGWMaskStoreBelowLowWater | gateway | warning | below low water for 30 m |
+| PGWMaskBurnRatioHigh | gateway | warning | burned / consumed slots > `alerts.burnRatioMax` over 1 h |
+| PGWIntegrityCheckFailed | gateway | page | any Freivalds or range check failure |
+| PGWNoiseAlarm | gateway | page | the outbound-noise monitor alarms |
+| PGWModelNotReady | gateway | warning | a model not ready for 10 m |
+| PGWFactoryStalled | factory | warning | no plan or segment for `alerts.factoryStallSeconds` |
+| PGWFactoryNotRefilling | factory | warning | below low water and nothing generated in 1 h |
+| PGWFactoryErrors | factory | warning | more than 2 failed runs in 30 m |
+| PGWServiceErrorRatioHigh | service | warning | error share > `alerts.errorRatioMax` over 10 m |
+
+Mask-supply alerts aggregate by `(fingerprint, ring)`. Set `alerts.runwayMinSeconds` above the time
+one segment takes to arrive (`pgw doctor` prints the measured mask-supply rate), with margin.
+
 ## Testing the charts
 
 `tests/cli/test_deploy_helm.py` renders every chart in many value combinations (with a small Go-template
 renderer when `helm` is not installed), validates the manifests, checks the security context, probes,
 selectors and network policies, and checks that every `PGW_*` variable is a real setting that parses.
-CI additionally runs `helm lint --strict`, `helm template` and kubeconform.
+CI additionally runs `helm lint --strict`, `helm template` and kubeconform. `tests/deploy/test_alert_rules.py`
+checks the alert rules (every metric exists in `METRIC_NAMES`, the charts match the standalone file, and
+`promtool check rules` when promtool is installed) and the placement values above.

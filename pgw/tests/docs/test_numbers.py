@@ -128,6 +128,7 @@ _ANALYTIC = {
     "rounds_8b": ("llama-3-8b", "K40A12", "rounds_per_token"),
     "rounds_70b": ("llama-3-70b", "K40A12", "rounds_per_token"),
     "slots_per_tb_8b_k48": ("llama-3-8b", "K48A20", "slots_per_tb"),
+    "mask_store_7b_k32c27": ("qwen2.5-7b", "K32A12C27", "wire_down_per_token"),
 }
 
 
@@ -152,7 +153,8 @@ def test_sizing_reference_table_recomputes(docs: dict[str, str], sizing: ModuleT
              "Llama-3-70B": "llama-3-70b"}
     sec = section(docs["operations/sizing.md"], "1. Per-token formulas")
     rows = [r for r in table_rows(sec) if r[0] in names]
-    assert len(rows) == 7
+    assert len(rows) == 10
+    assert sum(r[1] == "K32A12C27" for r in rows) == 3  # the default ring has its own rows
     for model, ring, up, down, total, masks, per_tb, rounds in rows:
         f = sizing.size(sizing.MODELS[names[model]], sizing.RINGS[ring]).figures
         for cell, key, tol in ((up, "wire_up_per_token", 0.01), (down, "wire_down_per_token", 0.01),

@@ -19,6 +19,22 @@ Two listings cover the customer side; the compute service stays in our AWS accou
   `networkPolicy.egress.computeService.cidrs` = the endpoint ENI addresses (/32 each).
   The gateway then has no other egress path. On the AMI, the instance security group allows
   outbound 443/8443 to the endpoint's security group only (plus DNS via the VPC resolver).
+* **Stay in one zone.** A token makes 112 round trips (Qwen2.5-7B) one after another, so every
+  millisecond of RTT costs about 0.11 s per token. Point `serviceUrl` at the endpoint's **zonal** DNS
+  name for the gateway's own Availability Zone (`vpce-<id>-<suffix>-<az>.vpce-svc-<id>.<region>.vpce.amazonaws.com`;
+  listed under the endpoint's DNS names) so the connection never leaves the zone. Keep the regional
+  name (`vpce-<id>-<suffix>.vpce-svc-<id>.<region>.vpce.amazonaws.com`, or the private DNS name) as the
+  fallback for when that zone's endpoint ENI is unavailable: it resolves to every zone's ENI and can
+  cross zones. The service certificate must list both names. Pin the gateway to its zone with the
+  Helm `nodeSelector` (`topology.kubernetes.io/zone`).
+* **Cross-zone load balancing off, one replica per AZ.** With NLB cross-zone load balancing off (the
+  NLB default) a zonal endpoint only reaches service replicas in its own zone, which keeps the round
+  trip in-zone and avoids cross-AZ data charges. The cost: we must run at least one compute-service
+  replica (one GPU) in **every** AZ that customers' endpoints use, even when one zone's load would
+  fit on fewer GPUs, and a zone whose replicas are all down fails over only through the regional
+  name. Spread replicas with the service chart's zone `topologySpreadConstraints`. Turning
+  cross-zone on removes the per-AZ replica requirement but adds cross-AZ hops (estimated +0.05 to
+  +0.11 s per token) and inter-AZ transfer charges.
 
 ## Keys
 

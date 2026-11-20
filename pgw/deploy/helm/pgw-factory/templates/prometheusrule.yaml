@@ -1,0 +1,39 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled .Values.alerts.enabled }}
+{{- /* Same rules as deploy/monitoring/pgw-alerts.yml (group pgw-factory). */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "pgw-factory.fullname" . }}
+  labels:
+    {{- include "pgw-factory.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: pgw-factory
+      rules:
+        - alert: PGWFactoryStalled
+          expr: time() - max by (namespace, job) (pgw_factory_last_success_timestamp) > {{ int .Values.alerts.factoryStallSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{ printf "PGW mask factory made no progress for over %v s" (int .Values.alerts.factoryStallSeconds) | quote }}
+            description: "No scheduler plan or segment completed. Check pgw factory status and the factory logs."
+        - alert: PGWFactoryNotRefilling
+          expr: max by (fingerprint, ring) (pgw_masks_low_water) == 1 unless on (fingerprint, ring) (sum by (fingerprint, ring) (increase(pgw_factory_slots_generated_total[1h])) > 0)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PGW store below low water and no new masks"
+            description: "Check the disk budget (disk_limited in pgw factory status), the encrypted-mask link and the factory errors."
+        - alert: PGWFactoryErrors
+          expr: sum by (namespace, job) (increase(pgw_factory_errors_total[30m])) > 2
+          labels:
+            severity: warning
+          annotations:
+            summary: "PGW mask factory runs are failing"
+            description: "Several failed factory runs in 30 m. The factory backs off; see its logs."
+{{- end }}

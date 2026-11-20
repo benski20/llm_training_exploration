@@ -62,14 +62,70 @@ def test_first_segment_of_a_new_store_is_small(tmp_path: Path, fake_store: FakeM
     p = sch.plan()[0]
     assert (p.segments, p.slots_per_segment, p.available) == (1, 20, 0) and "first segment" in p.reason
     assert len(sch.run_once()) == 1 and [s.slots for s in fake_store.segments.values()] == [20]
-    p = sch.plan()[0]  # then full segments up to the target
-    assert (p.segments, p.slots_per_segment, p.available) == (6, 50, 20)
+    p = sch.plan()[0]  # below low water: one ramp segment at a time (min(50, next_pow2(40)))
+    assert (p.segments, p.slots_per_segment, p.available) == (1, 50, 20)
+    sch.run_once()
+    p = sch.plan()[0]  # 70 < 100: still one segment per plan
+    assert (p.segments, p.slots_per_segment, p.available) == (1, 50, 70)
+    sch.run_once()
+    p = sch.plan()[0]  # 120 >= low water: full segments up to the target
+    assert (p.segments, p.slots_per_segment, p.available) == (4, 50, 120)
     sch.run_once()
     assert sch.plan() == [] and len(fake_store.segments) == 7
-    fake_store.consume(fake_pack.fingerprint, 290)  # 30 left: below low water, but not empty -> full segments
+    fake_store.consume(fake_pack.fingerprint, 290)  # 30 left: below low water -> ramp (capped at segment_slots)
     p = sch.plan()[0]
-    assert p.slots_per_segment == 50
+    assert (p.segments, p.slots_per_segment) == (1, 50)
     sch.close()
+
+
+class _FixedSink:
+    """Sink stub whose inventory is set by the test (no local volume: no disk budget)."""
+
+    kind = "stub"
+
+    def __init__(self) -> None:
+        self.avail = 0
+
+    def available_slots(self, fingerprint: str, ring: Any) -> int:
+        return self.avail
+
+
+@pytest.mark.parametrize(("avail", "expected"), [
+    (0, (1, 256)), (256, (1, 512)), (512, (1, 1024)), (1000, (1, 2048)),
+    (2047, (1, 4096)), (4095, (1, 4096)),  # just below low water: capped at segment_slots
+    (4096, (15, 4096)), (5000, (15, 4096)),  # at/above low water: back to full segments up to the target
+])
+def test_segment_ramp(tmp_path: Path, fake_pack: FakePack, avail: int, expected: tuple[int, int]) -> None:
+    sink = _FixedSink()
+    g = MaskGenerator(fake_pack, RING_K40_A12)
+    settings = _settings(tmp_path, segment_slots=4096, first_segment_slots=256, low_water_slots=4096,
+                         target_slots=65536)
+    sch = FactoryScheduler(settings, sink, {g.key: g}, metrics=False)
+    sch.plan()  # empty store: starts refilling (hysteresis keeps it refilling up to the target)
+    sink.avail = avail
+    plans = sch.plan()
+    assert len(plans) == 1
+    assert (plans[0].segments, plans[0].slots_per_segment) == expected
+    assert plans[0].available == avail
+    sch.close()
+
+
+def test_ramp_segment_slots_function() -> None:
+    from pgw.factory.scheduler import ramp_segment_slots
+
+    sizes = []
+    avail = 0
+    while True:
+        s = ramp_segment_slots(avail, 256, 4096)
+        sizes.append(s)
+        if s == 4096:
+            break
+        avail += s
+    # Inventory 0, 256, 768, 2816: 2 * 768 = 1536 rounds up to 2048, so 1024 is skipped.
+    assert sizes == [256, 512, 2048, 4096]
+    assert ramp_segment_slots(0, 300, 4096) == 300  # first segment not a power of two
+    assert ramp_segment_slots(10_000, 256, 4096) == 4096
+    assert ramp_segment_slots(0, 256, 128) == 128  # never above segment_slots
 
 
 def test_first_segment_slots_not_larger_than_segment_slots(tmp_path: Path, fake_store: FakeMaskStore,

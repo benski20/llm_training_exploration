@@ -9,7 +9,11 @@ number is labelled:
 * **estimate**: rests on an assumption. Validate it in your environment before committing capacity.
 
 Calculator: `python docs/tools/pgw_sizing.py --model llama-3-8b --ring K48A20 --tokens-per-day 1000000`.
-It needs only the Python standard library, and `--json` gives machine-readable output.
+It needs only the Python standard library, and `--json` gives machine-readable output. The default ring
+is the product default, K32A12C27. `--encrypted` adds the encrypted mask-supply figures (traffic, hint,
+link-bound rate; see [encrypted-masks.md](encrypted-masks.md)) and `--spec-row-budget` the worst-case
+mask use with speculative decoding:
+`python docs/tools/pgw_sizing.py --model qwen2.5-7b --ring K32A12C27 --encrypted --spec-row-budget --tokens-per-day 1000000`.
 
 ## 1. Per-token formulas (analytic)
 
@@ -36,6 +40,9 @@ blobs. Masked data is uniform, so **compression gains nothing**.
 
 | model | ring | up MB/token | down MB/token | total MB/token | masks MB/slot | slots per TB | rounds |
 |---|---|---|---|---|---|---|---|
+| Qwen2.5-0.5B | K32A12C27 | 0.73 | 1.22 | 1.94 | 1.22 | 822k | 96 |
+| Qwen2.5-7B | K32A12C27 | 3.33 | 5.56 | 8.89 | 5.56 MB | 180k | 112 |
+| Llama-3-8B | K32A12C27 | 3.41 | 5.51 | 8.91 | 5.51 | 182k | 128 |
 | Qwen2.5-0.5B | K40A12 | 0.91 | 1.52 | 2.43 | 1.52 | 657k | 96 |
 | Qwen2.5-7B | K40A12 | 4.16 | 6.95 | 11.1 | 6.95 | 144k | 112 |
 | Llama-3-8B | K32A8 | 3.41 | 5.51 | 8.91 | 5.51 | 182k | 128 |
@@ -46,6 +53,11 @@ blobs. Masked data is uniform, so **compression gains nothing**.
 
 These are analytic values, confirmed for 8B and 70B by the prototype run (5.1 MB up and 8.3 MB down
 per 8B token at K=48).
+
+**K32A12C27 is the default ring** (4 bytes per element; the output cap lets it decode any width). The
+K40 and K48 rows describe the older presets. Sizing a K32A12C27 deployment from a K40 row
+**over-sizes** the store and the links by 25% (5 instead of 4 bytes per element); it never
+under-sizes them. Qwen2.5-7B at the default ring needs 5.56 MB of masks per slot.
 
 ## 2. Bandwidth
 
@@ -65,6 +77,20 @@ true for all supported architectures (the `gate_up` group dominates).
 ```
 latency per generated token ≈ 4·L × (RTT + service time per round) + gateway time
 ```
+
+Round-trip cost by placement tier (*estimates*; the round trips of one token run one after another, so
+each adds `rounds × RTT`; 112 round trips for Qwen2.5-7B, 128 for Llama-3-8B):
+
+| tier | RTT (estimate) | added per token, Qwen2.5-7B | basis |
+|---|---|---|---|
+| same host or same AZ, co-located | 0.1-0.3 ms | +0.01 to +0.035 s | estimate |
+| same region, other AZ (cross-AZ) | 0.5-1 ms | +0.05 to +0.11 s | estimate |
+| same region over PrivateLink / PSC | ~1 ms | about +0.11 s | estimate |
+| internet, same continent | 10-30 ms | +1.1 to +3.4 s | estimate |
+
+Keep the gateway in the zone of the service endpoint it calls (zonal endpoint DNS; see
+`deploy/marketplace/aws/README.md`). The service's own time per round trip comes on top; on a T4 the
+measured single-row call is about 1.4 ms (`STATUS.md`, run 25).
 
 | component | value | basis |
 |---|---|---|
@@ -100,9 +126,24 @@ slots_on_hand ≥ tokens_per_day × buffer_days       (buffer ≥ refill outage 
 * Read throughput: the gateway reads `masks_per_slot` per token (8.3 MB for 8B at K48A20). At 100
   tokens/s that is 830 MB/s of sustained random-ish reads. Use NVMe.
 * Consumed segments are shredded (deleted, DEK destroyed), so capacity is recycled.
+* **Speculative decoding** (off by default; a draft model or prompt lookup on the gateway) reserves
+  up to `spec_row_budget` mask slots per requested token (default 3) and burns the unused ones when the
+  request ends. Size the store and the factory for up to `spec_row_budget ×` the token volume while it
+  is on (`--spec-row-budget` in the calculator); the burn metric shows what is actually used.
+* With **encrypted mask generation** the store holds minutes to hours instead of days, but every slot
+  also crosses the network once more; see the costs in
+  [encrypted-masks.md](encrypted-masks.md#costs-per-token-measured).
 
 Low water and target: set `PGW_MASKSTORE_LOW_WATER_SLOTS` to at least
-`refill_lead_time × peak_tokens_per_second`, and `PGW_MASKSTORE_TARGET_SLOTS` to your buffer.
+`time to deliver one segment × peak_tokens_per_second` (`pgw doctor --role factory --pack ...` times
+one chunk and prints the segment time), and `PGW_MASKSTORE_TARGET_SLOTS` to your buffer. The Helm
+alert `PGWMaskRunwayLow` fires when the masks left last less than `alerts.runwayMinSeconds`
+(default 7200 s) at the current consumption rate; set it above the segment delivery time.
+
+A new or drained store is refilled with a ramp when `PGW_FACTORY_FIRST_SEGMENT_SLOTS` is set (the
+setup wizard sets 256): while below low water, one segment of `min(segment_slots,
+max(first_segment_slots, next_pow2(2 × available)))` slots is made at a time (256, 512, 2048, 4096
+with the defaults), so the gateway can serve after the first small segment.
 
 ## 5. Mask-factory throughput
 
@@ -125,6 +166,22 @@ after outages. Example (*derived*): 10 million 8B tokens/day at K48A20 needs 10M
 ≈ 0.76 T4. One T4 is enough, at three quarters of its time.
 
 Measure your own hardware with `pgw factory benchmark --pack <pack> --ring <ring>`.
+
+### One model, one ring: Qwen2.5-7B at K32A12C27
+
+The rates above mix models and rings. For the default deployment, in slots (= tokens) per hour:
+
+| mask source | rate | basis |
+|---|---|---|
+| local T4 factory | about 895k slots/h (0.0040 s/slot) | estimate (8B K32 T4 measurement scaled by weights) |
+| local 4 vCPU factory (fbgemm int8) | about 21k slots/h (0.174 s/slot) | derived (GEMM time only) |
+| encrypted, gateway encrypt + decrypt (4 vCPU with AMX) | about 31k slots/h (0.116 s/slot) | derived from measured |
+| encrypted, provider T4 | about 190k slots/h (0.019 s/slot) | derived from measured |
+| encrypted, 1 Gbit/s link (12.8 MB per slot) | about 35k slots/h | estimate |
+| encrypted over the Modal tunnel (1.5 MB/s) | about 420 slots/h | derived |
+
+The slowest stage sets the rate. One decode stream at 0.365 s/token consumes about 9.9k slots/h, so
+an encrypted supply on one 4-vCPU gateway feeds about three streams, and the Modal tunnel not even one.
 
 ## 6. Gateway host
 

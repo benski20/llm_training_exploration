@@ -4,6 +4,10 @@ Policy (hysteresis): a ``(fingerprint, ring)`` starts refilling when its availab
 below ``low_water_slots`` and keeps refilling until ``target_slots`` is reached. While several
 models need masks, the one with the lowest fill ratio gets the next segment.
 
+Ramp: when ``first_segment_slots`` is set (smaller than ``segment_slots``) and a store is below low
+water, each plan holds exactly one segment of :func:`ramp_segment_slots` slots (256, 512, 1024, ...),
+and the store is re-planned after it lands. At or above low water, full segments are planned.
+
 Crash safety and resume:
 
 * Segments are committed atomically by the store writer; a crash mid-segment leaves only a
@@ -37,7 +41,7 @@ from pgw.factory.governor import FactoryStopped, Throttle
 from pgw.factory.metrics import FactoryMetrics
 from pgw.factory.sinks import StoreSink
 
-__all__ = ["FactoryLock", "FactoryScheduler", "FactoryState", "RefillPlan"]
+__all__ = ["FactoryLock", "FactoryScheduler", "FactoryState", "RefillPlan", "ramp_segment_slots"]
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +74,21 @@ class RefillPlan:
     def fill_ratio(self) -> float:
         """``available / target`` (0 when the target is 0)."""
         return self.available / self.target if self.target > 0 else 1.0
+
+
+def _next_pow2(n: int) -> int:
+    """Smallest power of two >= ``n`` (1 for ``n <= 1``)."""
+    return 1 if n <= 1 else 1 << (int(n) - 1).bit_length()
+
+
+def ramp_segment_slots(available: int, first_segment_slots: int, segment_slots: int) -> int:
+    """Size of the next segment while a store is below low water and ``first_segment_slots`` is set.
+
+    ``min(segment_slots, max(first_segment_slots, next_pow2(2 * available)))``: with 256 / 4096 an empty
+    store gets 256, then 512, 1024, 2048 and 4096 as the inventory grows; a store with at least
+    ``segment_slots / 2`` slots already gets full segments.
+    """
+    return min(int(segment_slots), max(int(first_segment_slots), _next_pow2(2 * int(available))))
 
 
 # ---- persistent state ------------------------------------------------------------------------
@@ -342,10 +361,14 @@ class FactoryScheduler:
             if key not in self._refilling:
                 continue
             first = int(self.settings.first_segment_slots or seg)
-            if avail == 0 and first < seg:
-                # Nothing to serve with yet: one small segment first (re-planned after it is stored).
-                plans.append(RefillPlan(fp, ring, 1, first, f"no masks yet: a first segment of {first} slots",
-                                        avail, self.low_water_slots, self.target_slots))
+            if below and first < seg:
+                # Ramp: one segment at a time, sized to about double the inventory, so a new (or drained)
+                # store can serve after a small segment and supply grows geometrically
+                # (256 -> 512 -> 1024 -> ... -> segment_slots); re-planned after each segment lands.
+                size = ramp_segment_slots(avail, first, seg)
+                reason = (f"no masks yet: a first segment of {size} slots" if avail == 0 else
+                          f"{avail} slots available < low water {self.low_water_slots}: ramp segment of {size} slots")
+                plans.append(RefillPlan(fp, ring, 1, size, reason, avail, self.low_water_slots, self.target_slots))
                 continue
             deficit = max(self.target_slots - avail, 1)
             n = max(1, math.ceil(deficit / seg))
