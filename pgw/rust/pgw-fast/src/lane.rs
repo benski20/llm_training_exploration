@@ -710,6 +710,11 @@ mod chan {
                 return Err(PyValueError::new_err("rows must be >= 1"));
             }
             let body_len = u32::try_from(blen).map_err(|_| PyValueError::new_err("body too large"))?;
+            // `src` and `dst` below must not alias (a `&[u8]` and a `&mut [u8]` over shared bytes is UB).
+            let (bp, op) = (bb.buf_ptr() as usize, ob.buf_ptr() as usize);
+            if blen > 0 && olen > 0 && bp < op.saturating_add(olen) && op < bp.saturating_add(blen) {
+                return Err(PyValueError::new_err("body and out must not overlap"));
+            }
             // SAFETY: both buffers are C-contiguous exports held (`bb`, `ob`) until this function returns, so
             // the memory stays valid and the exporter cannot resize it (bytearray / numpy refuse while
             // exported); `out` is writable. Python code may still touch `out` concurrently from another

@@ -68,6 +68,7 @@ import asyncio
 import contextlib
 import dataclasses
 import enum
+import ipaddress
 import logging
 import os
 import re
@@ -167,7 +168,7 @@ REPLY_FIELDS: tuple[str, ...] = (
     "magic", "version", "kind", "status", "linear", "rows", "compute_us", "body_len", "request_id")
 
 _U32 = 0xFFFFFFFF
-_RID_RE = re.compile(r"^[0-9a-f]{32}$")
+_RID_RE = re.compile(r"[0-9a-f]{32}")  # used with fullmatch (``$`` would accept a trailing newline)
 
 
 class Status(enum.IntEnum):
@@ -209,7 +210,7 @@ class LaneRefusedError(ConnectionError):
 def request_id_bytes(request_id: str) -> bytes | None:
     """The 16 header bytes of ``request_id`` (32 lowercase hex characters), or ``None`` when the id has
     another form (such a call is not sent on the lane)."""
-    if type(request_id) is not str or _RID_RE.match(request_id) is None:
+    if type(request_id) is not str or _RID_RE.fullmatch(request_id) is None:
         return None
     return bytes.fromhex(request_id)
 
@@ -466,7 +467,13 @@ class LaneConfig(BaseModel):
                          "before blocking (0 = block at once)")
     connect_timeout_s: float = Field(2.0, gt=0)
     trip_timeout_s: float | None = Field(None, gt=0, description="Per-trip budget (None = the request's "
-                                         "deadline_ms, else the client's request_timeout_s)")
+                                         "deadline_ms, else the client's request_timeout_s). A lane call that "
+                                         "times out falls back with a fresh budget, so the worst case of one "
+                                         "call is about this plus the regular path's own timeout")
+    pool_wait_s: float = Field(0.01, ge=0, le=1.0, description="When every lane connection is busy and no "
+                               "more may be opened, wait this long for one before taking the regular path")
+    uds_dir: str | None = Field(None, description="Directory a UDS ticket's socket must be in. None = accept "
+                                "a UDS ticket only from a service on this host (a loopback base URL)")
     retry_s: float = Field(30.0, ge=0, description="After a lane failure, use the regular path this long")
     max_channels: int = Field(4, ge=1, le=64, description="Lane connections per client (one trip at a time each)")
     transports: tuple[str, ...] = Field(("uds", "tcp"), description="Transports this client may use")
@@ -498,10 +505,36 @@ class _Lane:
     """An accepted ticket, resolved for this client."""
 
     ticket: LaneTicket
-    secret: bytearray  # the ticket bytes (zeroized on close)
+    secret: bytearray = field(repr=False)  # the ticket bytes (zeroized on close; never in a repr)
     expires: float  # monotonic
     rings: Mapping[str, int]
     linears: Mapping[str, tuple[int, int, int]]  # id -> (index, m, n)
+
+
+_LOOPBACK_NAMES = frozenset({"localhost", "localhost.", "ip6-localhost"})
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    if host.lower() in _LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _uds_allowed(path: str, base_url: str | None, uds_dir: str | None) -> bool:
+    """A UDS ticket names a local socket the client will write the hello (ticket) and ``x_hat`` to. Accept
+    it only inside the configured ``uds_dir``, or, without one, from a service on this host."""
+    if not path or "\x00" in path or path.startswith("@"):
+        return False  # abstract sockets have no file-system owner to check
+    if uds_dir is not None:
+        root = os.path.realpath(uds_dir)
+        sock = os.path.realpath(path)
+        return sock != root and os.path.commonpath([root, sock]) == root
+    return base_url is not None and _is_loopback_host(urlsplit(base_url).hostname)
 
 
 def _service_host(base_url: str) -> str:
@@ -559,7 +592,9 @@ class LaneComputeClient:
     ``uuid4().hex``-form request id and ``len(x_hat) == rows * n * K/8``. Everything else, and every lane
     failure, goes to the wrapped client with the **same** request object (byte-identical body and id).
     After a failure that breaks the lane (connection error, closing status, refused hello, failed
-    ``lane_open``) the lane is off for :attr:`LaneConfig.retry_s`.
+    ``lane_open``) the lane is off for :attr:`LaneConfig.retry_s`. A failure seen on a lane that has since
+    been replaced never touches the newer one. A UDS ticket is accepted only from a service on this host
+    (loopback base URL) or for a socket inside :attr:`LaneConfig.uds_dir`.
 
     Every other attribute is the wrapped client's, so this is a drop-in where a client is expected.
     """
@@ -577,6 +612,7 @@ class LaneComputeClient:
         self._count = 0  # open channels (idle + in use)
         self._gen = 0  # bumped when the lane is dropped: channels of an older generation are closed on release
         self._open_lock = threading.Lock()
+        self._opening = False  # an async lane_open is in flight
         self._closed = False
 
     def __getattr__(self, name: str) -> Any:
@@ -595,6 +631,10 @@ class LaneComputeClient:
             raise LaneProtocolError("lane ticket is for another model or ring")
         if ticket.transport not in self.lane_config.transports:
             raise LaneProtocolError(f"lane transport {ticket.transport!r} not allowed by this client")
+        if ticket.transport == "uds" and not _uds_allowed(
+                ticket.path or "", getattr(getattr(self._client, "config", None), "base_url", None),
+                self.lane_config.uds_dir):
+            raise LaneProtocolError("UDS lane ticket from a remote service or outside lane uds_dir")
         if len(ticket.rings) > 256 or len(ticket.linears) > 0x10000:
             raise LaneProtocolError("lane ticket tables too large")
         rings = {r: i for i, r in enumerate(ticket.rings)}
@@ -614,8 +654,7 @@ class LaneComputeClient:
             lane = self._accept(ticket, fingerprint, ring)
         except LaneProtocolError as exc:
             return self._note_open(exc, fingerprint, ring)
-        self._drop_lane()
-        self._lane = lane
+        self._drop_lane(replace_with=lane)
         self.lane_stats.opens += 1
         return True
 
@@ -636,21 +675,38 @@ class LaneComputeClient:
                 t = exc
             return self._note_open(t, fingerprint, ring)
 
-    async def open(self, fingerprint: str, ring: str) -> bool:
-        """Async :meth:`open_sync`."""
-        try:
-            t: LaneTicket | BaseException = await self._client.lane_open(
-                fingerprint, ring, transports=tuple(self.lane_config.transports), lane_versions=LANE_VERSIONS)
-        except (PGWError, OSError) as exc:
-            t = exc
-        with self._open_lock:
-            if self._have(fingerprint, ring):  # another caller opened it meanwhile
-                return True
-            return self._note_open(t, fingerprint, ring)
-
-    def _drop_lane(self, *, cool_down: bool = False) -> None:
+    async def open(self, fingerprint: str, ring: str, *, if_needed: bool = False) -> bool:
+        """Async :meth:`open_sync`. One ``lane_open`` at a time: while another coroutine's is in flight
+        this returns at once (``False`` unless a lane is already open for them)."""
         with self._cv:
-            lane, self._lane = self._lane, None
+            if self._have(fingerprint, ring) and if_needed:
+                return True
+            if self._opening or (if_needed and time.monotonic() < self._off_until):
+                return self._have(fingerprint, ring)
+            self._opening = True
+        try:
+            try:
+                t: LaneTicket | BaseException = await self._client.lane_open(
+                    fingerprint, ring, transports=tuple(self.lane_config.transports), lane_versions=LANE_VERSIONS)
+            except (PGWError, OSError, RuntimeError) as exc:
+                t = exc
+            with self._open_lock:
+                if if_needed and self._have(fingerprint, ring):  # a sync caller opened it meanwhile
+                    return True
+                return self._note_open(t, fingerprint, ring)
+        finally:
+            with self._cv:
+                self._opening = False
+
+    def _drop_lane(self, *, cool_down: bool = False, only: _Lane | None = None,
+                   replace_with: _Lane | None = None) -> None:
+        """Drop the current lane (close its idle connections, wipe its ticket), or install
+        ``replace_with``. ``only``: do nothing unless ``only`` is still the current lane, so a failure
+        seen on an older lane never drops (or cools down) a newer one."""
+        with self._cv:
+            if only is not None and self._lane is not only:
+                return
+            lane, self._lane = self._lane, replace_with
             idle, self._idle = self._idle, []
             self._count -= len(idle)
             self._gen += 1
@@ -679,7 +735,7 @@ class LaneComputeClient:
 
     # ---------------------------------------------------------------- channel pool
     def _acquire(self, lane: _Lane, timeout_s: float) -> tuple[Any, int] | None:
-        end = time.monotonic() + timeout_s
+        end = time.monotonic() + min(timeout_s, self.lane_config.pool_wait_s)
         with self._cv:
             while True:
                 if self._lane is not lane:
@@ -693,18 +749,22 @@ class LaneComputeClient:
                     else:
                         self._count += 1
                         gen = self._gen
+                        # a private copy: _drop_lane may wipe lane.secret while the factory runs unlocked
+                        secret = bytearray(lane.secret)
                         break
                 left = end - time.monotonic()
                 if left <= 0:
                     return None
                 self._cv.wait(left)
         try:
-            ch = self._factory(lane.ticket, lane.secret)
+            ch = self._factory(lane.ticket, secret)
         except BaseException:
             with self._cv:
                 self._count -= 1
                 self._cv.notify()
             raise
+        finally:
+            secret[:] = bytes(len(secret))
         self.lane_stats.channels_opened += 1
         return ch, gen
 
@@ -777,25 +837,29 @@ class LaneComputeClient:
         try:
             got = self._acquire(lane, timeout)
         except Exception as exc:  # opening a connection failed: the lane is down for a while
-            self._drop_lane(cool_down=True)
+            self._drop_lane(cool_down=True, only=lane)
             self.lane_stats._fallback(f"error:{type(exc).__name__}")
             return None
         if got is None:
             with self._cv:
                 spent = self._lane is lane and self._count == 0 and time.monotonic() >= lane.expires
             if spent:  # ticket expired with no connection left: the next call asks for a new ticket
-                self._drop_lane()
+                self._drop_lane(only=lane)
                 self.lane_stats._fallback("expired")
             else:
                 self.lane_stats._fallback("busy:pool")
             return None
         ch, gen = got
+        if rows > int(ch.max_rows):  # the hello ack may serve fewer rows than the ticket says
+            self._release(ch, gen)
+            self.lane_stats._fallback("ineligible:rows")
+            return None
         t0 = time.monotonic()
         try:
             status, compute_us = ch.trip(ring_ix, lin_ix, rows, rid, deadline, body, buf, timeout)
         except Exception as exc:  # broken connection, timeout, protocol violation: channel closed
             self._release(ch, gen)
-            self._drop_lane(cool_down=True)
+            self._drop_lane(cool_down=True, only=lane)
             self.lane_stats._fallback(f"error:{type(exc).__name__}")
             return None
         self.lane_stats.trips += 1
@@ -805,7 +869,7 @@ class LaneComputeClient:
         if status != Status.OK:
             name = Status(status).name if status in Status._value2member_map_ else str(status)
             if status in CLOSING_STATUSES:
-                self._drop_lane(cool_down=True)
+                self._drop_lane(cool_down=True, only=lane)
             self.lane_stats._fallback(f"status:{name}")
             return None
         self.lane_stats.bytes_received += REPLY.size + out_len
@@ -823,7 +887,9 @@ class LaneComputeClient:
     def compute_into(self, request: ComputeRequest, out: Any) -> ComputeResponse:
         """:meth:`compute_sync` with the reply's ``y_hat`` read into ``out`` (a writable, C-contiguous
         buffer of exactly ``rows * m * K/8`` bytes) when the lane serves it; the response's ``y_hat`` is
-        then a memoryview of ``out``. A fallback returns the wrapped client's response (``out`` untouched).
+        then a memoryview of ``out``. A fallback returns the wrapped client's response, and ``out`` is then
+        unspecified (a lane attempt that broke mid-reply may have written part of it): always take ``y_hat``
+        from the returned response, never from ``out`` alone.
         """
         self._ensure_open_sync(request)
         resp = self._try_lane(request, out)
@@ -833,7 +899,7 @@ class LaneComputeClient:
         """Async compute: the lane trip runs in a worker thread; else the wrapped client."""
         if (self._lane is None and not self._closed and time.monotonic() >= self._off_until
                 and len(request.items) == 1):
-            await self.open(request.fingerprint, request.ring)
+            await self.open(request.fingerprint, request.ring, if_needed=True)
         if self._lane is not None:
             resp = await asyncio.to_thread(self._try_lane, request, None)
             if resp is not None:

@@ -183,6 +183,7 @@ class _NoClient:
     """A wrapped client that must not be used (every call takes the lane)."""
 
     class config:  # noqa: N801
+        base_url = "http://127.0.0.1:1"  # co-located: a UDS ticket is accepted
         request_timeout_s = 5.0
 
     def compute_sync(self, request):
@@ -270,3 +271,47 @@ def test_lane_open_rejects_unknown_transport() -> None:
     d["transports"] = ["tcp", "plain"]
     with pytest.raises(ProtocolError):
         decode_message(msgpack.packb(d, use_bin_type=True), LaneOpenRequest)
+
+
+# ------------------------------------------------------------------------------- review hardening
+@pytest.mark.parametrize("rid", ["a" * 32 + "\n", "a" * 32 + "\r\n", "A" * 32, "a" * 31, "a" * 33, " " + "a" * 32])
+def test_request_id_must_be_exactly_32_lowercase_hex(rid: str) -> None:
+    # `$` would accept a trailing newline, and the lane id would then differ from the msgpack id
+    assert L.request_id_bytes(rid) is None
+    assert L.request_id_bytes("0123456789abcdef" * 2) == bytes.fromhex("0123456789abcdef" * 2)
+
+
+def test_lane_secret_not_in_repr() -> None:
+    secret = bytearray(b"\xa5" * 32)
+    lane = L._Lane(LaneTicket("r1", 1, "uds", bytes(32), 60_000, 4, 8, FP, ("K32A12C27",),
+                              (LinearInfo("0.qkv", 24, 16),), path="/run/pgw/lane.sock"),
+                   secret, 0.0, {}, {})
+    text = repr(lane)
+    assert "secret" not in text and "a5" not in text.lower() and "\\xa5" not in text
+
+
+@pytest.mark.parametrize("base_url,uds_dir,path,ok", [
+    ("http://127.0.0.1:8080", None, "/run/pgw/lane.sock", True),
+    ("https://localhost:8443", None, "/run/pgw/lane.sock", True),
+    ("https://[::1]:8443", None, "/run/pgw/lane.sock", True),
+    ("https://compute.example.net:8443", None, "/run/pgw/lane.sock", False),  # remote service: no UDS
+    ("https://10.0.0.5:8443", None, "/run/pgw/lane.sock", False),
+    ("https://compute.example.net:8443", "/run/pgw", "/run/pgw/lane.sock", True),  # configured directory
+    ("http://127.0.0.1:8080", "/run/pgw", "/run/pgw/sub/lane.sock", True),
+    ("http://127.0.0.1:8080", "/run/pgw", "/run/pgw/../ssh/agent.sock", False),
+    ("http://127.0.0.1:8080", "/run/pgw", "/run/pgwx/lane.sock", False),
+    ("http://127.0.0.1:8080", "/run/pgw", "/run/pgw", False),
+    ("http://127.0.0.1:8080", None, "\x00abstract", False),
+])
+def test_uds_ticket_only_from_a_local_service(base_url: str, uds_dir: str | None, path: str, ok: bool) -> None:
+    from types import SimpleNamespace
+
+    t = LaneTicket("r1", 1, "uds", os.urandom(32), 60_000, 4, 8, FP, ("K32A12C27",),
+                   (LinearInfo("0.qkv", 24, 16),), path=path)
+    lc = L.LaneComputeClient(SimpleNamespace(config=SimpleNamespace(base_url=base_url)),
+                             L.LaneConfig(uds_dir=uds_dir))
+    if ok:
+        assert lc._accept(t, FP, "K32A12C27").ticket.path == path
+    else:
+        with pytest.raises(L.LaneProtocolError, match="UDS"):
+            lc._accept(t, FP, "K32A12C27")

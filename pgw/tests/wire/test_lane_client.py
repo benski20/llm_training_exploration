@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as dt
 import ipaddress
 import socket
@@ -295,7 +296,7 @@ def test_bad_ticket_falls_back(service: _Service, native: bool) -> None:
 
 @pytest.mark.parametrize("native", CHANNELS)
 def test_concurrent_callers_share_the_pool(service: _Service, native: bool) -> None:
-    _, lc = _clients(service, native, max_channels=2)
+    _, lc = _clients(service, native, max_channels=2, pool_wait_s=1.0)  # wait for a connection, never fall back
     errors: list[BaseException] = []
 
     def worker(k: int) -> None:
@@ -331,6 +332,133 @@ def test_async_compute(service: _Service) -> None:
             await lc.aclose()
 
     asyncio.run(main())
+
+
+@pytest.mark.parametrize("native", CHANNELS)
+def test_old_lane_failure_keeps_the_new_lane(service: _Service, native: bool) -> None:
+    """A failure seen on a lane that was already replaced neither drops nor cools down the current one."""
+    _, lc = _clients(service, native)
+    try:
+        assert lc.open_sync(FP, RING.name)
+        old = lc._lane
+        assert lc.open_sync(FP, RING.name)
+        new = lc._lane
+        assert new is not old and old is not None and bytes(old.secret) == bytes(32)  # replaced: wiped
+        lc._drop_lane(cool_down=True, only=old)
+        assert lc._lane is new and lc._off_until == 0.0
+        req = _request("0.o", 1, seed=1)
+        assert lc.compute_sync(req).items[0].y_hat == _expected(service, req)
+        assert lc.lane_stats.trips == 1 and lc.lane_stats.fallbacks == 0
+    finally:
+        lc.close()
+
+
+@pytest.mark.parametrize("native", CHANNELS)
+def test_drop_during_open_does_not_zero_the_hello(service: _Service, native: bool) -> None:
+    """The factory gets a private copy of the ticket: a concurrent drop (which wipes the lane's copy) cannot
+    turn the in-flight hello into a zero ticket (BAD_TICKET, then a drop of whatever lane is current)."""
+    cfg = ClientConfig(base_url=service.url)
+    lc_box: list[L.LaneComputeClient] = []
+    seen: list[bytes] = []
+
+    def factory(t: Any, secret: bytearray) -> Any:
+        lc = lc_box[0]
+        lane = lc._lane
+        lc._drop_lane()  # as if another thread dropped the lane right now
+        assert lane is not None and bytes(lane.secret) == bytes(32)
+        seen.append(bytes(secret))
+        return L.open_channel(t, secret, cfg, L.LaneConfig(native=native))
+
+    lc = L.LaneComputeClient(ComputeClient(cfg), L.LaneConfig(native=native), channel_factory=factory)
+    lc_box.append(lc)
+    try:
+        lc.connect_sync(FP, RING.name)
+        req = _request("0.o", 1, seed=1)
+        assert lc.compute_sync(req).items[0].y_hat == _expected(service, req)
+        assert seen and seen[0] != bytes(32) and service.lane.hellos == 1
+        assert lc.lane_stats.trips == 1 and not lc.lane_stats.fallback_reasons
+        assert lc._off_until == 0.0  # no failure, no cool-down
+    finally:
+        lc.close()
+
+
+@pytest.mark.parametrize("native", CHANNELS)
+def test_rows_above_the_hello_ack_fall_back(service: _Service, native: bool) -> None:
+    service.lane.max_rows = 2  # the ticket says 8 (issued below before the change), the connection 2
+    _, lc = _clients(service, native)
+    try:
+        ticket = service.lane.issue_ticket(LaneOpenRequest("r", FP, RING.name))
+        ticket = dataclasses.replace(ticket, max_rows=8)
+        assert lc._note_open(ticket, FP, RING.name)
+        assert lc.compute_sync(_request("0.o", 2, seed=1)).items[0].rows == 2
+        assert lc.lane_stats.trips == 1
+        req = _request("0.o", 4, seed=2)
+        assert lc.compute_sync(req).items[0].y_hat == _expected(service, req)
+        assert service.handler.calls[-1] == req and len(service.lane.trips) == 1  # never sent on the lane
+        assert lc.lane_stats.fallback_reasons == {"ineligible:rows": 1} and lc.lane_ticket is not None
+    finally:
+        lc.close()
+
+
+@pytest.mark.parametrize("native", CHANNELS)
+def test_full_pool_falls_back_without_waiting(service: _Service, native: bool) -> None:
+    _, lc = _clients(service, native, max_channels=1)
+    try:
+        lc.compute_sync(_request("0.o", 1, seed=1))
+        lane = lc._lane
+        assert lane is not None
+        held = lc._acquire(lane, 1.0)  # the only connection is busy
+        assert held is not None
+        t0 = time.monotonic()
+        req = _request("0.o", 1, seed=2)
+        assert lc.compute_sync(req).items[0].y_hat == _expected(service, req)
+        assert time.monotonic() - t0 < 5.0  # the 30 s deadline is not spent waiting for the pool
+        assert lc.lane_stats.fallback_reasons == {"busy:pool": 1} and service.handler.calls[-1] == req
+        lc._release(*held)
+        lc.compute_sync(_request("0.o", 1, seed=3))
+        assert lc.lane_stats.trips == 2
+    finally:
+        lc.close()
+
+
+def test_async_concurrent_calls_open_once(service: _Service) -> None:
+    async def main() -> None:
+        lc = L.LaneComputeClient(ComputeClient(ClientConfig(base_url=service.url)), L.LaneConfig())
+        try:
+            await lc.connect(FP, RING.name)
+            reqs = [_request("0.down", 1, seed=i) for i in range(6)]
+            resps = await asyncio.gather(*(lc.compute(r) for r in reqs))
+            for r, resp in zip(reqs, resps, strict=True):
+                assert resp.items[0].y_hat == _expected(service, r)
+            assert service.lane_opens == 1
+        finally:
+            await lc.aclose()
+
+    asyncio.run(main())
+
+
+@pytest.mark.skipif(not NATIVE, reason="pgw_fast lane missing")
+def test_native_trip_refuses_overlapping_buffers(service: _Service) -> None:
+    ticket = service.lane.issue_ticket(LaneOpenRequest("r", FP, RING.name))
+    ch = L.open_channel(ticket, bytearray(ticket.ticket), None, L.LaneConfig(native=True))
+    try:
+        req = _request("0.o", 1, seed=1)
+        m, n = DIMS["0.o"]
+        nb = RING.k // 8
+        buf = bytearray(max(m, n) * nb * 2)
+        buf[: n * nb] = req.items[0].x_hat
+        rid = bytes.fromhex(req.request_id)
+        mv = memoryview(buf)
+        with pytest.raises(ValueError, match="overlap"):
+            ch.trip(1, 3, 1, rid, 0, mv[: n * nb], mv[: m * nb], 5.0)
+        with pytest.raises(ValueError, match="overlap"):
+            ch.trip(1, 3, 1, rid, 0, mv[: n * nb], mv[n * nb - 1: n * nb - 1 + m * nb], 5.0)
+        assert not ch.closed and not service.lane.trips  # refused before anything was sent
+        out = bytearray(m * nb)
+        st, _ = ch.trip(1, list(DIMS).index("0.o"), 1, rid, 0, mv[: n * nb], out, 5.0)
+        assert st == L.Status.OK and bytes(out) == _expected(service, req)
+    finally:
+        ch.close()
 
 
 # ------------------------------------------------------------------------------- TLS on TCP
