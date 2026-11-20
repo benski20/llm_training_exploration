@@ -33,7 +33,8 @@ MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 min
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
-REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east-1") or None
+I6PN = os.environ.get("PGW_MODAL_I6PN", "1") != "0"  # private network to the provider (see provider.py)
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -99,7 +100,7 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float) -
 
 
 @app.function(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0,
-              region=REGION)
+              region=REGION, i6pn=I6PN)
 def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
     import sys
 

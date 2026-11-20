@@ -101,7 +101,7 @@ function MetaLine({ m }: { m: Meta }) {
 export function PlaygroundPage() {
   const { isAdmin } = useSession();
   const gw = useGateway();
-  const [p, setP] = useState<Params>({ model: "", system: "", temperature: 0.7, topP: 1, maxTokens: 256, seed: "", stream: true });
+  const [p, setP] = useState<Params>({ model: "", system: "", temperature: 0.7, topP: 1, maxTokens: 128, seed: "", stream: true });
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);

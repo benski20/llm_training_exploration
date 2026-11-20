@@ -79,6 +79,17 @@ def _ca(common_name: str, days: float) -> tuple[Any, Any]:
     return key, cert
 
 
+def i6pn_address() -> str | None:
+    """This container's private IPv6 address on Modal's i6pn network, or None when it has none."""
+    import socket
+
+    try:
+        return str(socket.getaddrinfo("i6pn.modal.local", None, socket.AF_INET6)[0][4][0])
+    except OSError as exc:
+        log(f"no i6pn address ({type(exc).__name__}); using the public tunnel")
+        return None
+
+
 def make_pki(pki_dir: Path, hostnames: list[str], days: float = 2.0) -> dict[str, Path]:
     """Service CA + server certificate for ``hostnames`` + client-issuing CA (all fresh, short-lived).
 

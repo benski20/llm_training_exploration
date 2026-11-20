@@ -75,8 +75,11 @@ export function MasksPage() {
         </Callout>
       ) : null}
       {low.length ? (
-        <Callout tone="warn" icon={<IconAlert />} title="Below low water">
-          {low.map(([n]) => n).join(", ")} {low.length === 1 ? "is" : "are"} below the low-water mark. Generate and import more masks with the mask factory.
+        <Callout tone="warn" icon={<IconAlert />} title="Mask stock is low">
+          {low.map(([n]) => n).join(", ")} {low.length === 1 ? "is" : "are"} below the low-water mark. The mask factory tops the
+          store up automatically when it runs (a new gateway starts with a small first batch and grows from there). Until it
+          catches up, a request is refused if its prompt plus max_tokens needs more slots than are available. If the stock
+          does not grow, check that the mask factory is running.
         </Callout>
       ) : null}
       {m && !store ? (

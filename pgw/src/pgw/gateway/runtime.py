@@ -1122,7 +1122,9 @@ class ModelRuntime:
             avail = await asyncio.to_thread(self._available_slots)
             if avail < need:
                 raise MaskExhaustedError(
-                    "not enough mask slots for this request",
+                    f"not enough mask slots for this request: it can use up to {need} ({len(ids)} prompt + "
+                    f"{params.max_tokens} max_tokens) and {avail} are available. Lower max_tokens, or retry when the "
+                    "mask factory has added more (the Masks page shows the stock)",
                     details={"needed": need, "available": avail, "model": self.name},
                 )
         res = await _reserve_shielded(self.mask_store, self.fingerprint, self.ring, first, rid)

@@ -29,7 +29,11 @@ MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 min
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
-REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east-1") or None
+# Private IPv6 networking between the two containers (same workspace, same region): the gateway reaches
+# the service directly instead of through the public TCP tunnel, which added about 5 ms to each of the
+# ~100 round trips per token. TLS stays end to end. PGW_MODAL_I6PN=0 uses the tunnel only.
+I6PN = os.environ.get("PGW_MODAL_I6PN", "1") != "0"
 # GPU type for the service, e.g. PGW_MODAL_GPU=T4 at deploy time. Default: none (CPU int8 backend), because
 # Modal only allows GPU functions on workspaces with a payment method. The image has CUDA torch either way.
 GPU = os.environ.get("PGW_MODAL_GPU") or None
@@ -62,7 +66,7 @@ app = modal.App("pgw-provider", image=image)
 
 
 @app.function(gpu=GPU, cpu=CPUS, memory=6144, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0,
-              retries=0, region=REGION)
+              retries=0, region=REGION, i6pn=I6PN)
 def serve(run_id: str, ttl_s: int = 80 * 60, tenant: str = "customer-demo", code_ttl: str = "90m") -> dict:
     import sys
 
@@ -80,8 +84,16 @@ def serve(run_id: str, ttl_s: int = 80 * 60, tenant: str = "customer-demo", code
         host, tport = tunnel.tcp_socket
         url = f"https://{host}:{tport}"
         boot.log(f"public TCP tunnel {host}:{tport} -> :{port} (TLS end to end; Modal does not terminate it)")
-        pki = boot.make_pki(work / "pki", [host, "localhost", "127.0.0.1"])
+        names = [host, "localhost", "127.0.0.1", "::1"]
+        v6 = boot.i6pn_address() if I6PN else None
+        if v6:
+            names.append(v6)
+            url = f"https://[{v6}]:{port}"
+            boot.log(f"i6pn private address {v6}: the enrollment code points the gateway there (no tunnel hop)")
+        pki = boot.make_pki(work / "pki", names)
         env = boot.service_env(work, Path(PACK), pki, url, port, device="auto")
+        if v6:
+            env["PGW_SERVICE_HOST"] = "::"  # dual stack: the tunnel (IPv4 loopback) and i6pn (IPv6)
         svc = boot.start_service(env, work / "service.log")
         t0 = time.time()
         boot.wait_ready(f"https://127.0.0.1:{port}/readyz", svc, verify=str(pki["service_ca"]), timeout_s=900)
