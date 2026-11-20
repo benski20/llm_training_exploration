@@ -19,6 +19,7 @@ use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::sync::Mutex;
 use zeroize::Zeroize;
 
 /// Relative slack on the float64 norm product (`pgw.core.ring._NORM_SLACK`).
@@ -506,9 +507,464 @@ fn quantize_mask_pack<'py>(
     Ok((payload, xhat, sx.into_pyarray(py)))
 }
 
+// ---- prepare_many: several calls (sessions) in one native call, over a persistent pool ----------
+
+/// A persistent worker pool for [`prepare_many_into`] (spawning threads per call costs about
+/// 20-50 us each, as much as a whole decode-sized prepare).
+///
+/// One job at a time: a caller that finds the pool busy (another Python thread released the GIL
+/// into it) runs its tasks on its own thread instead, which gives the same results.
+pub mod pool {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, OnceLock, TryLockError};
+    use std::time::{Duration, Instant};
+
+    /// Upper bound on worker threads (the gateway also runs the event loop and the wire client).
+    const MAX_WORKERS: usize = 7;
+    /// Workers poll for the next job this long before sleeping on the condvar (a condvar wake-up
+    /// costs 10-50 us; jobs of one step come back to back).
+    const SPIN: Duration = Duration::from_micros(50);
+
+    /// Lifetime-erased task function. Only called for task indices `< n`, while the submitting
+    /// caller waits in [`Pool::run`], so the borrow it points to is alive at every call.
+    struct FnPtr(*const (dyn Fn(usize) + Sync));
+    // SAFETY: the pointee is `Sync` and outlives every call (see `Pool::run`).
+    unsafe impl Send for FnPtr {}
+    // SAFETY: as above.
+    unsafe impl Sync for FnPtr {}
+
+    struct Job {
+        f: FnPtr,
+        n: usize,
+        next: AtomicUsize,
+        done: AtomicUsize,
+        panicked: AtomicBool,
+    }
+
+    impl Job {
+        /// Claim and run tasks until none is left.
+        fn work(&self) {
+            loop {
+                let i = self.next.fetch_add(1, Ordering::AcqRel);
+                if i >= self.n {
+                    return;
+                }
+                // SAFETY: `i < n`, so the submitter is still waiting for this task (FnPtr docs).
+                let f = unsafe { &*self.f.0 };
+                if catch_unwind(AssertUnwindSafe(|| f(i))).is_err() {
+                    self.panicked.store(true, Ordering::Release);
+                }
+                self.done.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+    }
+
+    struct Shared {
+        slot: Mutex<Option<Arc<Job>>>,
+        cv: Condvar,
+        generation: AtomicU64,
+    }
+
+    /// The pool (see the module docs).
+    pub struct Pool {
+        shared: Arc<Shared>,
+        busy: Mutex<()>,
+        workers: usize,
+    }
+
+    fn worker(shared: Arc<Shared>) {
+        let mut seen = 0u64;
+        loop {
+            let t0 = Instant::now();
+            while shared.generation.load(Ordering::Acquire) == seen && t0.elapsed() < SPIN {
+                std::hint::spin_loop();
+            }
+            let job = {
+                let mut slot = shared.slot.lock().unwrap_or_else(|e| e.into_inner());
+                while shared.generation.load(Ordering::Acquire) == seen {
+                    slot = shared.cv.wait(slot).unwrap_or_else(|e| e.into_inner());
+                }
+                seen = shared.generation.load(Ordering::Acquire);
+                slot.clone()
+            };
+            if let Some(job) = job {
+                job.work();
+            }
+        }
+    }
+
+    impl Pool {
+        /// A pool with `workers` threads (fewer if spawning fails).
+        pub fn new(workers: usize) -> Pool {
+            let shared = Arc::new(Shared { slot: Mutex::new(None), cv: Condvar::new(), generation: AtomicU64::new(0) });
+            let mut started = 0;
+            for i in 0..workers {
+                let s = Arc::clone(&shared);
+                let ok = std::thread::Builder::new().name(format!("pgw-prep-{i}")).spawn(move || worker(s)).is_ok();
+                started += usize::from(ok);
+            }
+            Pool { shared, busy: Mutex::new(()), workers: started }
+        }
+
+        /// Worker threads (the caller adds one more).
+        pub fn workers(&self) -> usize {
+            self.workers
+        }
+
+        /// Run `f(i)` for every `i in 0..n`, on the workers and the calling thread; returns when
+        /// all calls returned. `false` if a call panicked (every other call still ran).
+        pub fn run(&self, n: usize, f: &(dyn Fn(usize) + Sync)) -> bool {
+            if n == 0 {
+                return true;
+            }
+            let guard = match self.busy.try_lock() {
+                Ok(g) => Some(g),
+                Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+                Err(TryLockError::WouldBlock) => None,
+            };
+            if guard.is_none() || self.workers == 0 || n == 1 {
+                let mut ok = true;
+                for i in 0..n {
+                    ok &= catch_unwind(AssertUnwindSafe(|| f(i))).is_ok();
+                }
+                return ok;
+            }
+            let fp: *const (dyn Fn(usize) + Sync + '_) = f;
+            // SAFETY (lifetime erasure only): `f` is called only for indices < n, and this function
+            // does not return before all n calls completed (`done == n` below).
+            let fp: *const (dyn Fn(usize) + Sync + 'static) = unsafe { std::mem::transmute(fp) };
+            let job = Arc::new(Job {
+                f: FnPtr(fp),
+                n,
+                next: AtomicUsize::new(0),
+                done: AtomicUsize::new(0),
+                panicked: AtomicBool::new(false),
+            });
+            {
+                let mut slot = self.shared.slot.lock().unwrap_or_else(|e| e.into_inner());
+                *slot = Some(Arc::clone(&job));
+                self.shared.generation.fetch_add(1, Ordering::AcqRel);
+            }
+            self.shared.cv.notify_all();
+            job.work();
+            while job.done.load(Ordering::Acquire) < n {
+                std::hint::spin_loop();
+                std::thread::yield_now();
+            }
+            {
+                let mut slot = self.shared.slot.lock().unwrap_or_else(|e| e.into_inner());
+                *slot = None; // late workers find nothing (and would only touch the Job's counters)
+            }
+            drop(guard);
+            !job.panicked.load(Ordering::Acquire)
+        }
+    }
+
+    /// The process-wide pool: `min(available_parallelism, 8) - 1` workers (`available_parallelism`
+    /// honours the cgroup CPU quota), started on first use.
+    pub fn global() -> &'static Pool {
+        static POOL: OnceLock<Pool> = OnceLock::new();
+        POOL.get_or_init(|| {
+            let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+            Pool::new(cpus.min(MAX_WORKERS + 1).saturating_sub(1))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn runs_every_index_once() {
+            let p = Pool::new(3);
+            for n in [0usize, 1, 2, 7, 100] {
+                let hits: Vec<AtomicUsize> = (0..n).map(|_| AtomicUsize::new(0)).collect();
+                assert!(p.run(n, &|i| {
+                    hits[i].fetch_add(1, Ordering::Relaxed);
+                }));
+                assert!(hits.iter().all(|h| h.load(Ordering::Relaxed) == 1));
+            }
+        }
+
+        #[test]
+        fn concurrent_callers_and_panics() {
+            let p = Arc::new(Pool::new(2));
+            let hs: Vec<_> = (0..4)
+                .map(|_| {
+                    let p = Arc::clone(&p);
+                    std::thread::spawn(move || {
+                        for _ in 0..200 {
+                            let sum = AtomicUsize::new(0);
+                            assert!(p.run(16, &|i| {
+                                sum.fetch_add(i, Ordering::Relaxed);
+                            }));
+                            assert_eq!(sum.load(Ordering::Relaxed), 120);
+                        }
+                    })
+                })
+                .collect();
+            for h in hs {
+                h.join().unwrap();
+            }
+            let count = AtomicUsize::new(0);
+            let ok = p.run(8, &|i| {
+                count.fetch_add(1, Ordering::Relaxed);
+                assert!(i != 3, "task 3 fails");
+            });
+            assert!(!ok);
+            assert_eq!(count.load(Ordering::Relaxed), 8);
+        }
+    }
+}
+
+/// Below this many activation elements in total `quantize_mask_pack_many` stays on the calling
+/// thread (a decode step of a few sessions: waking workers would cost about what it saves).
+pub const MANY_PAR_MIN_ELEMS: usize = 48 * 1024;
+/// Rows are grouped into tasks of at least this many elements.
+const MANY_TASK_ELEMS: usize = 16 * 1024;
+
+/// One task of [`prepare_many_into`]: whole rows of one item.
+pub struct ManyTask<'a> {
+    /// Index of the item the rows belong to.
+    pub item: usize,
+    /// Activations `rows x n`.
+    pub x: &'a [f32],
+    /// Masks `rows x n`.
+    pub r: &'a [i64],
+    /// `x_hat` output (`rows x n`), or empty for a payload-only item.
+    pub xhat: &'a mut [i64],
+    /// Scales (`rows`).
+    pub sx: &'a mut [f64],
+    /// Wire bytes (`rows x n x K/8`).
+    pub payload: &'a mut [u8],
+}
+
+/// Non-finite input outranks a cap overflow within one item (the single-item kernel checks every
+/// row's finiteness before quantizing any row).
+fn is_nonfinite(e: &PrepareError) -> bool {
+    matches!(e, PrepareError::Overflow(m) if m.starts_with("non-finite"))
+}
+
+/// Run `tasks` (each: [`quantize_mask_pack_into`], or the payload-only variant when `xhat` is
+/// empty) with the parameters `params[item]` and width `widths[item]` of its item, in parallel on
+/// the global pool when `parallel`. Returns the error of the lowest failing item (the one the
+/// per-item calls in order would have raised), with every output zeroed after a failure.
+pub fn prepare_many_into(
+    tasks: Vec<ManyTask<'_>>,
+    params: &[PrepareParams],
+    widths: &[usize],
+    parallel: bool,
+) -> Result<(), PrepareError> {
+    let cells: Vec<Mutex<ManyTask<'_>>> = tasks.into_iter().map(Mutex::new).collect();
+    let errs: Vec<Mutex<Option<PrepareError>>> = (0..params.len()).map(|_| Mutex::new(None)).collect();
+    let run_one = |i: usize| {
+        let mut guard = cells[i].lock().unwrap_or_else(|e| e.into_inner());
+        let t = &mut *guard;
+        let (p, n) = (params[t.item], widths[t.item]);
+        let res = if t.xhat.is_empty() {
+            quantize_mask_pack_payload(t.x, t.r, n, p, t.sx, t.payload)
+        } else {
+            quantize_mask_pack_into(t.x, t.r, n, p, t.xhat, t.sx, t.payload)
+        };
+        if let Err(e) = res {
+            let mut slot = errs[t.item].lock().unwrap_or_else(|e| e.into_inner());
+            let replace = match &*slot {
+                None => true,
+                Some(old) => is_nonfinite(&e) && !is_nonfinite(old),
+            };
+            if replace {
+                *slot = Some(e);
+            }
+        }
+    };
+    let ok = if parallel {
+        pool::global().run(cells.len(), &run_one)
+    } else {
+        let mut ok = true;
+        for i in 0..cells.len() {
+            ok &= std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_one(i))).is_ok();
+        }
+        ok
+    };
+    let mut first = if ok { None } else { Some(PrepareError::Invalid("internal error in a prepare task".into())) };
+    if first.is_none() {
+        first = errs.iter().find_map(|e| e.lock().unwrap_or_else(|e| e.into_inner()).take());
+    }
+    match first {
+        None => Ok(()),
+        Some(err) => {
+            for c in &cells {
+                let mut t = c.lock().unwrap_or_else(|e| e.into_inner());
+                t.xhat.zeroize();
+                t.payload.zeroize();
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Rows per task for an item of `rows x n` (whole rows, at least [`MANY_TASK_ELEMS`] elements).
+fn rows_per_task(rows: usize, n: usize, parallel: bool) -> usize {
+    if !parallel {
+        return rows.max(1);
+    }
+    MANY_TASK_ELEMS.div_ceil(n.max(1)).clamp(1, rows.max(1))
+}
+
+/// `quantize_mask_pack_many(xs, rs, k, a, cap, wnorms, want_xhat) -> [(payload, x_hat | None, sx)]`.
+///
+/// [`quantize_mask_pack`] for several items (the wire items of one round trip: every session's
+/// call of a linear, row blocks of a prefill) in one call. Item `i` uses `wnorms[i]` and
+/// `want_xhat[i]`; results are bit-identical to calling `quantize_mask_pack` per item in order,
+/// including which error is raised (the lowest failing item's). Large batches are spread over a
+/// persistent worker pool (rows are independent, so the split changes no byte); small ones (decode
+/// of a few sessions) run on the calling thread. The GIL is released while computing.
+#[pyfunction]
+#[pyo3(signature = (xs, rs, k, a, cap, wnorms, want_xhat))]
+#[allow(clippy::too_many_arguments)]
+fn quantize_mask_pack_many<'py>(
+    py: Python<'py>,
+    xs: Vec<Bound<'py, PyAny>>,
+    rs: Vec<Bound<'py, PyAny>>,
+    k: u32,
+    a: u32,
+    cap: u32,
+    wnorms: Vec<f64>,
+    want_xhat: Vec<bool>,
+) -> PyResult<Vec<Prepared<'py>>> {
+    let m = xs.len();
+    if rs.len() != m || wnorms.len() != m || want_xhat.len() != m {
+        return Err(PyValueError::new_err("xs, rs, wnorms and want_xhat must have the same length"));
+    }
+    PrepareParams { k, a, cap, wnorm: 0.0 }.validate().map_err(PrepareError::into_py)?;
+    let params: Vec<PrepareParams> = wnorms.iter().map(|&wnorm| PrepareParams { k, a, cap, wnorm }).collect();
+    let nb = (k / 8) as usize;
+    let mut xro = Vec::with_capacity(m);
+    let mut rro = Vec::with_capacity(m);
+    for (x, r) in xs.iter().zip(&rs) {
+        let xa = x
+            .downcast::<PyArray2<f32>>()
+            .map_err(|_| PyValueError::new_err("x must be a 2-D float32 numpy array"))?
+            .readonly();
+        let ra = r
+            .downcast::<PyArray2<i64>>()
+            .map_err(|_| PyValueError::new_err("r must be a 2-D int64 numpy array"))?
+            .readonly();
+        if xa.shape() != ra.shape() {
+            return Err(PyValueError::new_err(format!(
+                "activation shape {:?} != mask shape {:?}",
+                xa.shape(),
+                ra.shape()
+            )));
+        }
+        xro.push(xa);
+        rro.push(ra);
+    }
+    let shapes: Vec<(usize, usize)> = xro.iter().map(|a| (a.shape()[0], a.shape()[1])).collect();
+    let widths: Vec<usize> = shapes.iter().map(|s| s.1).collect();
+    if shapes.iter().any(|&(rows, n)| rows > 0 && n == 0) {
+        return Err(PyValueError::new_err("activations must have at least one feature"));
+    }
+    let xd: Vec<Data<'_, f32>> = xro
+        .iter()
+        .map(|a| match a.as_slice() {
+            Ok(s) => Data::Borrowed(s),
+            Err(_) => Data::Owned(a.as_array().iter().copied().collect()),
+        })
+        .collect();
+    let mut rd: Vec<Data<'_, i64>> = rro
+        .iter()
+        .map(|a| match a.as_slice() {
+            Ok(s) => Data::Borrowed(s),
+            Err(_) => Data::Owned(a.as_array().iter().copied().collect()),
+        })
+        .collect();
+    // Outputs are allocated with the GIL held and filled without it.
+    let mut payloads: Vec<Bound<'py, PyBytes>> = Vec::with_capacity(m);
+    let mut xhats: Vec<Option<Bound<'py, PyArray2<i64>>>> = Vec::with_capacity(m);
+    let mut sxs: Vec<Bound<'py, numpy::PyArray1<f64>>> = Vec::with_capacity(m);
+    for (i, &(rows, n)) in shapes.iter().enumerate() {
+        let len = rows
+            .checked_mul(n)
+            .and_then(|e| e.checked_mul(nb))
+            .ok_or_else(|| PyValueError::new_err("activation shape too large"))?;
+        payloads.push(PyBytes::new_with(py, len, |_| Ok(()))?);
+        xhats.push(if want_xhat[i] { Some(PyArray2::<i64>::zeros(py, [rows, n], false)) } else { None });
+        sxs.push(numpy::PyArray1::<f64>::from_vec(py, vec![1.0f64; rows]));
+    }
+    let total: usize = shapes.iter().map(|s| s.0 * s.1).sum();
+    let parallel = total >= MANY_PAR_MIN_ELEMS && pool::global().workers() > 0;
+    let res = {
+        let mut tasks: Vec<ManyTask<'_>> = Vec::new();
+        for i in 0..m {
+            let (rows, n) = shapes[i];
+            if rows == 0 {
+                continue;
+            }
+            // SAFETY: a fresh bytes object of `rows * n * nb` bytes that no Python code has seen
+            // yet; it is written only here (by the tasks below), before it is returned.
+            let pl: &mut [u8] = unsafe {
+                let ptr = pyo3::ffi::PyBytes_AsString(payloads[i].as_ptr()).cast::<u8>();
+                std::slice::from_raw_parts_mut(ptr, rows * n * nb)
+            };
+            let xh: &mut [i64] = match &xhats[i] {
+                // SAFETY: fresh C-contiguous array, not shared with Python code yet.
+                Some(arr) => unsafe { arr.as_slice_mut() }.map_err(|e| PyValueError::new_err(e.to_string()))?,
+                None => &mut [],
+            };
+            // SAFETY: as above.
+            let sx: &mut [f64] = unsafe { sxs[i].as_slice_mut() }.map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let (xs_i, rs_i) = (xd[i].slice(), rd[i].slice());
+            let per = rows_per_task(rows, n, parallel);
+            let (mut xh_rest, mut sx_rest, mut pl_rest) = (xh, sx, pl);
+            let mut row = 0;
+            while row < rows {
+                let take = per.min(rows - row);
+                let (sx_t, sx_r) = sx_rest.split_at_mut(take);
+                let (pl_t, pl_r) = pl_rest.split_at_mut(take * n * nb);
+                let xh_t: &mut [i64] = if xh_rest.is_empty() {
+                    &mut []
+                } else {
+                    let (a_, b_) = xh_rest.split_at_mut(take * n);
+                    xh_rest = b_;
+                    a_
+                };
+                tasks.push(ManyTask {
+                    item: i,
+                    x: &xs_i[row * n..(row + take) * n],
+                    r: &rs_i[row * n..(row + take) * n],
+                    xhat: xh_t,
+                    sx: sx_t,
+                    payload: pl_t,
+                });
+                sx_rest = sx_r;
+                pl_rest = pl_r;
+                row += take;
+            }
+        }
+        py.allow_threads(|| prepare_many_into(tasks, &params, &widths, parallel))
+    };
+    for d in &mut rd {
+        if let Data::Owned(v) = d {
+            v.zeroize();
+        }
+    }
+    res.map_err(PrepareError::into_py)?;
+    Ok(payloads.into_iter().zip(xhats).zip(sxs).map(|((p, x), s)| (p, x, s)).collect())
+}
+
+/// Worker threads of the persistent prepare pool (0: every call runs on the calling thread).
+#[pyfunction]
+fn prepare_pool_workers() -> usize {
+    pool::global().workers()
+}
+
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(quantize_mask_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(quantize_mask_pack_many, m)?)?;
+    m.add_function(wrap_pyfunction!(prepare_pool_workers, m)?)?;
     Ok(())
 }
 
@@ -628,5 +1084,105 @@ mod tests {
         let q2 = &mut [0i64; 8];
         quant_row(&[0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 10.0, -10.0], 1.0, 3.0, q2);
         assert_eq!(q, q2);
+    }
+
+    /// Items of mixed widths split into row tasks (on the pool or not): the same bytes as one
+    /// `quantize_mask_pack_into` per item.
+    #[test]
+    fn many_matches_per_item() {
+        let mut st = 0x1234_5678_9abc_def1u64;
+        let shapes = [(40usize, 896usize), (1, 3584), (3, 7), (64, 1024), (0, 16)];
+        let xs: Vec<Vec<f32>> = shapes
+            .iter()
+            .map(|&(r, n)| (0..r * n).map(|_| ((rng(&mut st) >> 40) as f32 / 1e5) - 80.0).collect())
+            .collect();
+        let rs: Vec<Vec<i64>> =
+            shapes.iter().map(|&(r, n)| (0..r * n).map(|_| (rng(&mut st) >> 32) as i64).collect()).collect();
+        let params: Vec<PrepareParams> =
+            (0..shapes.len()).map(|i| PrepareParams { k: 32, a: 12, cap: 27, wnorm: 50.0 + i as f64 }).collect();
+        let widths: Vec<usize> = shapes.iter().map(|s| s.1).collect();
+        for parallel in [false, true] {
+            for with_xhat in [false, true] {
+                let mut outs: Vec<Out> = shapes
+                    .iter()
+                    .map(|&(r, n)| (vec![0; if with_xhat { r * n } else { 0 }], vec![1.0; r], vec![0u8; r * n * 4]))
+                    .collect();
+                let mut tasks = Vec::new();
+                for (i, ((xh, sx, pl), &(rows, n))) in outs.iter_mut().zip(&shapes).enumerate() {
+                    let per = rows_per_task(rows, n, parallel).min(7);
+                    let (mut xr, mut sr, mut pr) = (xh.as_mut_slice(), sx.as_mut_slice(), pl.as_mut_slice());
+                    let mut row = 0;
+                    while row < rows {
+                        let t = per.min(rows - row);
+                        let (sa, sb) = sr.split_at_mut(t);
+                        let (pa, pb) = pr.split_at_mut(t * n * 4);
+                        let xa: &mut [i64] = if xr.is_empty() {
+                            &mut []
+                        } else {
+                            let (a, b) = xr.split_at_mut(t * n);
+                            xr = b;
+                            a
+                        };
+                        tasks.push(ManyTask {
+                            item: i,
+                            x: &xs[i][row * n..(row + t) * n],
+                            r: &rs[i][row * n..(row + t) * n],
+                            xhat: xa,
+                            sx: sa,
+                            payload: pa,
+                        });
+                        sr = sb;
+                        pr = pb;
+                        row += t;
+                    }
+                }
+                prepare_many_into(tasks, &params, &widths, parallel).unwrap();
+                for (i, (xh, sx, pl)) in outs.iter().enumerate() {
+                    let n = shapes[i].1;
+                    let (wx, wsx, wpl) = run(&xs[i], &rs[i], n, params[i]).unwrap();
+                    assert_eq!(pl, &wpl, "item {i}");
+                    let bits = |v: &[f64]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(bits(sx), bits(&wsx), "item {i}");
+                    if with_xhat {
+                        assert_eq!(xh, &wx, "item {i}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The lowest failing item's error; inside an item a non-finite value outranks a cap overflow
+    /// (as in the single-item kernel), and outputs are zeroed.
+    #[test]
+    fn many_error_order() {
+        let bad_cap = PrepareParams { k: 32, a: 12, cap: 20, wnorm: 1e30 };
+        let ok = PrepareParams { k: 32, a: 12, cap: 0, wnorm: 0.0 };
+        let x = [1.0f32, 1.0, 1.0, f32::NAN];
+        let r = [0i64; 4];
+        for parallel in [false, true] {
+            let (mut s, mut p) = (vec![1.0; 2], vec![7u8; 16]);
+            let (sa, sb) = s.split_at_mut(1);
+            let (pa, pb) = p.split_at_mut(8);
+            let tasks = vec![
+                ManyTask { item: 0, x: &x[..2], r: &r[..2], xhat: &mut [], sx: sa, payload: pa },
+                ManyTask { item: 0, x: &x[2..], r: &r[2..], xhat: &mut [], sx: sb, payload: pb },
+            ];
+            let e = prepare_many_into(tasks, &[bad_cap], &[2], parallel).unwrap_err();
+            assert!(is_nonfinite(&e), "{e:?}");
+            assert!(p.iter().all(|b| *b == 0));
+            // item 0 fine, item 1 cap overflow, item 2 non-finite: item 1's error
+            let (mut s3, mut p3) = (vec![1.0; 3], vec![0u8; 12]);
+            let (s0, rest) = s3.split_at_mut(1);
+            let (s1, s2) = rest.split_at_mut(1);
+            let (p0, rest) = p3.split_at_mut(4);
+            let (p1, p2) = rest.split_at_mut(4);
+            let tasks = vec![
+                ManyTask { item: 0, x: &x[..1], r: &r[..1], xhat: &mut [], sx: s0, payload: p0 },
+                ManyTask { item: 1, x: &x[1..2], r: &r[1..2], xhat: &mut [], sx: s1, payload: p1 },
+                ManyTask { item: 2, x: &x[3..], r: &r[3..], xhat: &mut [], sx: s2, payload: p2 },
+            ];
+            let e = prepare_many_into(tasks, &[ok, bad_cap, ok], &[1, 1, 1], parallel).unwrap_err();
+            assert!(matches!(e, PrepareError::Overflow(ref m) if m.starts_with("K32A12C20")), "{e:?}");
+        }
     }
 }
