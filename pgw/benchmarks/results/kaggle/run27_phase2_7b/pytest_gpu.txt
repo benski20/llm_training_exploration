@@ -1,0 +1,8 @@
+..........................................sssssssssssssssss....ss....... [ 93%]
+.....                                                                    [100%]
+=========================== short test summary info ============================
+SKIPPED [18] tests/service/test_gpu_graphs.py:113: CUDA graph capture unsupported in this torch build; eager results verified exact
+SKIPPED [1] tests/service/test_gpu_graphs.py:141: CUDA graph capture unsupported in this torch build; eager results verified exact
+58 passed, 19 skipped, 1791 deselected in 797.54s (0:13:17)
+
+---stderr---

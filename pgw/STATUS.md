@@ -35,7 +35,7 @@ Run 26 (after the phase-1 merge) will be measured with corrected accounting; no 
   (`pgw.observability.metrics.METRIC_NAMES`) and the gateway API metrics table.
 - **Benches**: `benchmarks/net_floor_bench.py` (TCP ping-pong floor; loopback in this 4-vCPU container:
   p50 39 us at 64 B, 75 us at 80 KB, i.e. under 0.01 s/token over 112 trips). `profile_gateway.py`
-  warms every layer. Kaggle jobs `pgw-run26-7b` (4/8/16 streams, net floor, profile) and
+  warms every layer. Kaggle jobs `pgw-run26-7b` (now `pgw-run27-7b`, 4/8/16 streams, net floor, profile) and
   `pgw-spec-sweep-7b` (k = 1, 2, 3 on cpu and cuda:1, `--spec-max-batch 1`) replace `pgw-spec-7b`
   (`--spec-tokens 8`).
 
@@ -94,6 +94,37 @@ current extent; `MaskReservation.take_checked` (boundary + checks + take under o
 (`inline_max_rows`, default 8; never for window extensions, a reservation's first pass or the LM head).
 LM head (`benchmarks/lm_head_bench.py`, 7B float32): 47 ms per sequence, so 0.19 s per step with 4
 sequences; the opt-in `batch_lm_head` (default off, changes logprob bits, not quality) takes 0.11 s.
+
+## Update 2026-11-20: phase 2 of the speed plan (Kaggle run 27)
+
+Four packages, each reviewed (no blocking issues): lean wire lane (service frame lane, client
+`compute_fast`, zero-copy replies), native `prepare_many` plus single-use mask prefetch on a background
+thread, a faster exact LM head (register-blocked; AVX-512 where available), sampler and RoPE, and
+optional two-cohort ping-pong (`engine_pingpong`, off by default). Run 27, Qwen2.5-7B on one T4, same steps
+as run 26, all outputs bit-identical (text and logprobs):
+
+| metric | run 26 | run 27 |
+|---|---|---|
+| decode, 1 request | 0.339 s/token | 0.349 s/token (unchanged within noise) |
+| time to first token, 40-token prompt | 2.37 s | 2.35 s |
+| generated tokens/s, 4 / 8 / 16 streams | 4.16 / 4.70 / 4.61 | **4.80 / 5.72 / 5.74** (+15 / +22 / +25%) |
+| gateway CPU per generated token, 4 / 8 / 16 streams | 0.184 / 0.177 / 0.179 s | **0.145 / 0.131 / 0.132 s** |
+| decode round trip (remote), 1 request | 1.47 ms | 1.46 ms |
+
+The single-request path is bound by its 112 sequential round trips (0.163 s/token) and did not move;
+the gains are in gateway CPU, which is what limits aggregate throughput. Gateway plaintext work per token
+on the Kaggle CPU (`benchmarks/profile_token.py`, 28 layers, stub service; this host has AVX2, not
+AVX-512): 97.4 -> 82.5 ms at 1 row, 249 -> 227 ms at 4 rows, 967 -> 901 ms at 16 rows; sampling 1.6 ->
+0.65 ms. Spinning OpenMP workers (`OMP_WAIT_POLICY=ACTIVE`) cut the layer work 29 -> 20 ms at 1 row but
+slowed the LM head; a candidate for scoping to the layer ops only.
+
+Ping-pong A/B (`pgw-pingpong-7b`, 32 tokens, same service and store): 4 streams 4.25 vs 4.29 tok/s
+(control, not split), 8 streams 4.98 vs 5.10 (+2%), 16 streams 4.89 vs 5.29 (+8%), bit-identical. It stays
+off by default; it is worth enabling for gateways that regularly run 16 or more concurrent sessions.
+
+Raw outputs: `benchmarks/results/kaggle/run27_phase2_7b`, `pingpong_phase2_7b`, `run27_token_profile_cpu`.
+(A first run 27 attempt is not recorded: the Rust toolchain check passed without cargo, so it measured
+the pure-Python fallback. The check is fixed and a failed native build now stops the job.)
 
 ## Update 2026-11-20: phase 1 of the speed and readiness plan (Kaggle run 26)
 

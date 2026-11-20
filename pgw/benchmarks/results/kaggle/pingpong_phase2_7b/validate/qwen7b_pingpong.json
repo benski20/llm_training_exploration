@@ -1,0 +1,1105 @@
+{
+ "model": "Qwen/Qwen2.5-7B-Instruct",
+ "label": "qwen7b_pingpong",
+ "device": "cuda",
+ "ring": "K32A12C27",
+ "max_tokens": 32,
+ "prompt": "Explain in three sentences why the sky is blue.",
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "cpu": {
+  "cpu_count": 4,
+  "affinity_cpus": 4,
+  "cgroup_cpu_max": "400000 100000",
+  "lscpu": {
+   "Architecture": "x86_64",
+   "CPU op-mode(s)": "32-bit, 64-bit",
+   "Address sizes": "46 bits physical, 48 bits virtual",
+   "Byte Order": "Little Endian",
+   "CPU(s)": "4",
+   "On-line CPU(s) list": "0-3",
+   "Vendor ID": "GenuineIntel",
+   "Model name": "Intel(R) Xeon(R) CPU @ 2.00GHz",
+   "CPU family": "6",
+   "Model": "85",
+   "Thread(s) per core": "2",
+   "Core(s) per socket": "2",
+   "Socket(s)": "1",
+   "Stepping": "3",
+   "BogoMIPS": "4000.40",
+   "Flags": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch pti ssbd ibrs ibpb stibp fsgsbase tsc_adjust bmi1 hle avx2 smep bmi2 erms invpcid rtm mpx avx512f avx512dq rdseed adx smap clflushopt clwb avx512cd avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves arat md_clear arch_capabilities",
+   "Hypervisor vendor": "KVM",
+   "Virtualization type": "full",
+   "L1d cache": "64 KiB (2 instances)",
+   "L1i cache": "64 KiB (2 instances)",
+   "L2 cache": "2 MiB (2 instances)",
+   "L3 cache": "38.5 MiB (1 instance)",
+   "NUMA node(s)": "1",
+   "NUMA node0 CPU(s)": "0-3",
+   "Vulnerability Gather data sampling": "Not affected",
+   "Vulnerability Ghostwrite": "Not affected",
+   "Vulnerability Indirect target selection": "Mitigation; Aligned branch/return thunks",
+   "Vulnerability Itlb multihit": "Not affected",
+   "Vulnerability L1tf": "Mitigation; PTE Inversion",
+   "Vulnerability Mds": "Mitigation; Clear CPU buffers; SMT Host state unknown",
+   "Vulnerability Meltdown": "Mitigation; PTI",
+   "Vulnerability Mmio stale data": "Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown",
+   "Vulnerability Old microcode": "Not affected",
+   "Vulnerability Reg file data sampling": "Not affected",
+   "Vulnerability Retbleed": "Mitigation; IBRS",
+   "Vulnerability Spec rstack overflow": "Not affected",
+   "Vulnerability Spec store bypass": "Mitigation; Speculative Store Bypass disabled via prctl",
+   "Vulnerability Spectre v1": "Mitigation; usercopy/swapgs barriers and __user pointer sanitization",
+   "Vulnerability Spectre v2": "Mitigation; IBRS; IBPB conditional; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI SW loop, KVM SW loop",
+   "Vulnerability Srbds": "Not affected",
+   "Vulnerability Tsa": "Not affected",
+   "Vulnerability Tsx async abort": "Mitigation; Clear CPU buffers; SMT Host state unknown",
+   "Vulnerability Vmscape": "Not affected"
+  },
+  "topology": {
+   "logical_cpus": 4,
+   "cores": 2,
+   "sockets": 1,
+   "numa_nodes": 1
+  }
+ },
+ "cpu_count": 4,
+ "download_s": 71.8,
+ "pack_s": 293.9,
+ "fingerprint": "9e0f0980cc73c4d0b2c9f7230e1d0196c18575610563f3b112e9862bc867321e",
+ "pack_bytes": 8723799531,
+ "pack_info": {
+  "arch": "qwen2",
+  "fingerprint": "9e0f0980cc73c4d0b2c9f7230e1d0196c18575610563f3b112e9862bc867321e",
+  "hidden_size": 3584,
+  "layers": 28,
+  "max_in_features": 18944,
+  "name": "qwen7b_pingpong",
+  "per_token": {
+   "K32A8": {
+    "download_bytes": 5562368,
+    "mask_bytes": 5562368,
+    "round_trips": 112,
+    "upload_bytes": 3325952
+   },
+   "K40A12": {
+    "download_bytes": 6952960,
+    "mask_bytes": 6952960,
+    "round_trips": 112,
+    "upload_bytes": 4157440
+   },
+   "K48A20": {
+    "download_bytes": 8343552,
+    "mask_bytes": 8343552,
+    "round_trips": 112,
+    "upload_bytes": 4988928
+   }
+  },
+  "supported_rings": [
+   "K32A8",
+   "K40A12",
+   "K48A20"
+  ],
+  "verified": "fingerprint",
+  "vocab_size": 152064
+ },
+ "reference": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller",
+  "prompt_tokens": 40,
+  "seconds": 70.22,
+  "device": "cuda",
+  "wall_s": 86.3
+ },
+ "factory_generate": {
+  "slots": 4336,
+  "wall_s": 176.51,
+  "tokens_per_hour_wall_incl_startup": 88435,
+  "store_bytes": 24143011673,
+  "store_MB_per_token": 5.568,
+  "output": "9e0f0980cc73 K32A12C27 segment 1/1: d5499c2823564c62bd17c631191bba96 (4336 slots, 26.4 slots/s)\n"
+ },
+ "factory_bench": {
+  "model": "qwen7b_pingpong",
+  "mode": "pack",
+  "ring": "K32A12C27",
+  "device": "cuda",
+  "backend": "cuda_int8",
+  "slots_measured": 64,
+  "seconds": 5.002311149999969,
+  "slots_per_second": 89.96317888297745,
+  "tokens_per_hour": 323867.44397871883,
+  "seconds_per_token": 0.011115658788589305,
+  "gemm_fraction": 0.11959195001298914,
+  "bytes_per_token": 5562368,
+  "price_per_hour": 0.2,
+  "usd_per_million_tokens": 0.6175365993660725,
+  "storage_tb_per_million_tokens": 5.562368,
+  "layers_measured": 1,
+  "layers_total": 1,
+  "gpu_name": "Tesla T4"
+ },
+ "service_startup_s": 21.9,
+ "gpu_mem_MB_service_loaded": [
+  13983,
+  3
+ ],
+ "gateway_startup_s": 29.5,
+ "chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 32,
+   "total_tokens": 72
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 13.37,
+  "backend_delta": {
+   "calls": 3696,
+   "rows": 7952,
+   "round_trips": 3696,
+   "bytes_up": 236142592,
+   "bytes_down": 394928128,
+   "freivalds_checked": 3696,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 6.2416947199994866,
+   "local_seconds": 4.39531120600634,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 4.994817019998095,
+   "decode_local_seconds": 2.4818583110068175
+  },
+  "gateway_cpu_s": 13.34,
+  "service_cpu_s": 4.86,
+  "slots_used": 72,
+  "wire_bytes_per_token": 8764871,
+  "wire_up_bytes_per_token": 3279758,
+  "wire_down_bytes_per_token": 5485113,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1853,
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 224,
+    "rows_per_trip": 20.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 5.5245,
+    "queue_ms": 0.0402,
+    "compute_ms": 2.0666,
+    "wire_ms": 3.4177
+   },
+   "rows_1": {
+    "trips": 3472,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.4093,
+    "queue_ms": 0.0011,
+    "compute_ms": 0.7039,
+    "wire_ms": 0.7042
+   }
+  },
+  "status_after": {
+   "name": "qwen7b_pingpong",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "9e0f0980cc73c4d0b2c9f7230e1d0196c18575610563f3b112e9862bc867321e",
+   "fingerprint_short": "9e0f0980cc73",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 16,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:51679",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 4264,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 2764288,
+    "windows": 27,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 3696,
+    "attempts": 3697,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 236793028,
+    "bytes_received": 394930741,
+    "last_rtt_s": 0.0012617639999916719,
+    "stream_requests": 3696,
+    "stream_opens": 1,
+    "stream_open_failures": 0,
+    "lane_requests": 0
+   },
+   "client_timing": {
+    "9+": {
+     "trips": 224,
+     "rows": 4480,
+     "multi_item": 0,
+     "rtt_s": 1.2374851309987207,
+     "queue_s": 0.009009000000000007,
+     "compute_s": 0.4629090000000002,
+     "wire_s": 0.7655671309987208
+    },
+    "1": {
+     "trips": 3472,
+     "rows": 3472,
+     "multi_item": 0,
+     "rtt_s": 4.892917777998605,
+     "queue_s": 0.003699000000000141,
+     "compute_s": 2.4440870000000006,
+     "wire_s": 2.4451317779986024
+    }
+   },
+   "engine": {
+    "steps": 32.0,
+    "pingpong_steps": 0.0,
+    "step_sequences": 32.0
+   }
+  }
+ },
+ "stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 2.314,
+  "prefill_s_per_prompt_token": 0.0578,
+  "decode_s_per_token": 0.3333,
+  "decode_tokens_per_s": 3.0,
+  "wall_s": 12.68,
+  "gateway_cpu_s": 12.86,
+  "backend_delta": {
+   "calls": 3696,
+   "rows": 7952,
+   "round_trips": 3696,
+   "bytes_up": 236142592,
+   "bytes_down": 394928128,
+   "freivalds_checked": 3696,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 6.193402438000362,
+   "local_seconds": 3.97214841200514,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 4.997062156001107,
+   "decode_local_seconds": 2.530276073004984
+  },
+  "gateway_local_engine_s_per_token_incl_prefill": 0.0552,
+  "remote_s_per_token_incl_prefill": 0.086,
+  "decode_tokens": 31,
+  "decode_round_trips_per_token": 111.68,
+  "decode_rows_per_trip": 1.0,
+  "decode_after_first_token": {
+   "remote_s_per_token": 0.1607,
+   "local_s_per_token": 0.0814,
+   "remote_ms_per_trip": 1.4392,
+   "local_ms_per_trip": 0.7288,
+   "note": "backend stats delta from the first streamed token to the end; a step in flight at the first-token snapshot is partly counted"
+  },
+  "decode_counters": {
+   "calls": 3472,
+   "remote_ms_per_trip": 1.4392,
+   "local_ms_per_trip": 0.7288,
+   "remote_s_per_token": 0.1607,
+   "local_s_per_token": 0.0814
+  },
+  "decode_source": "backend decode counters",
+  "decode_remote_s_per_token": 0.1607,
+  "decode_local_s_per_token": 0.0814,
+  "decode_remote_ms_per_trip": 1.4392,
+  "decode_local_ms_per_trip": 0.7288,
+  "decode_accounted_s_per_token": 0.2421,
+  "decode_unaccounted_s_per_token": 0.0912,
+  "decode_accounted_fraction": 0.726,
+  "decode_trip_split": {
+   "rows_1": {
+    "trips": 3462,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.4097,
+    "queue_ms": 0.0011,
+    "compute_ms": 0.7042,
+    "wire_ms": 0.7044
+   }
+  },
+  "prefill_trip_split": {
+   "rows_9+": {
+    "trips": 224,
+    "rows_per_trip": 20.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 5.3004,
+    "queue_ms": 0.0215,
+    "compute_ms": 2.0,
+    "wire_ms": 3.2789
+   },
+   "rows_1": {
+    "trips": 10,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.4366,
+    "queue_ms": 0.001,
+    "compute_ms": 0.6605,
+    "wire_ms": 0.7751
+   }
+  }
+ },
+ "concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 30.09,
+  "generated_tokens_per_s": 4.254,
+  "all_tokens_per_s": 9.571,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1146,
+  "backend_delta": {
+   "calls": 14784,
+   "rows": 31808,
+   "round_trips": 3920,
+   "bytes_up": 944570368,
+   "bytes_down": 1579712512,
+   "freivalds_checked": 14784,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 12.22001345999172,
+   "local_seconds": 12.164559846999168,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 8.115816624992249,
+   "decode_local_seconds": 5.724909298997318
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 448,
+    "rows_per_trip": 40.25,
+    "multi_item_trips": 224,
+    "rtt_ms": 9.117,
+    "queue_ms": 0.0242,
+    "compute_ms": 3.4775,
+    "wire_ms": 5.6153,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 3472,
+    "rows_per_trip": 3.97,
+    "multi_item_trips": 3472,
+    "rtt_ms": 2.3002,
+    "queue_ms": 0.0013,
+    "compute_ms": 1.0947,
+    "wire_ms": 1.2042,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 128.0
+  }
+ },
+ "concurrent_4": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 30.09,
+  "generated_tokens_per_s": 4.254,
+  "all_tokens_per_s": 9.571,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1146,
+  "backend_delta": {
+   "calls": 14784,
+   "rows": 31808,
+   "round_trips": 3920,
+   "bytes_up": 944570368,
+   "bytes_down": 1579712512,
+   "freivalds_checked": 14784,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 12.22001345999172,
+   "local_seconds": 12.164559846999168,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 8.115816624992249,
+   "decode_local_seconds": 5.724909298997318
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 448,
+    "rows_per_trip": 40.25,
+    "multi_item_trips": 224,
+    "rtt_ms": 9.117,
+    "queue_ms": 0.0242,
+    "compute_ms": 3.4775,
+    "wire_ms": 5.6153,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 3472,
+    "rows_per_trip": 3.97,
+    "multi_item_trips": 3472,
+    "rtt_ms": 2.3002,
+    "queue_ms": 0.0013,
+    "compute_ms": 1.0947,
+    "wire_ms": 1.2042,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 128.0
+  }
+ },
+ "concurrent_8": {
+  "requests": 8,
+  "ok": 8,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 51.39,
+  "generated_tokens_per_s": 4.981,
+  "all_tokens_per_s": 11.208,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1033,
+  "backend_delta": {
+   "calls": 29568,
+   "rows": 63616,
+   "round_trips": 3920,
+   "bytes_up": 1889140736,
+   "bytes_down": 3159425024,
+   "freivalds_checked": 29568,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 17.954242327005886,
+   "local_seconds": 23.508145228981675,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 10.484624283002404,
+   "decode_local_seconds": 10.360421527979497
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 448,
+    "rows_per_trip": 80.25,
+    "multi_item_trips": 224,
+    "rtt_ms": 16.6255,
+    "queue_ms": 0.0251,
+    "compute_ms": 6.2296,
+    "wire_ms": 10.3708,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 3472,
+    "rows_per_trip": 7.97,
+    "multi_item_trips": 3472,
+    "rtt_ms": 2.9761,
+    "queue_ms": 0.0013,
+    "compute_ms": 1.2874,
+    "wire_ms": 1.6873,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 256.0
+  }
+ },
+ "concurrent_16": {
+  "requests": 16,
+  "ok": 16,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 104.67,
+  "generated_tokens_per_s": 4.891,
+  "all_tokens_per_s": 11.006,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1046,
+  "backend_delta": {
+   "calls": 59136,
+   "rows": 127232,
+   "round_trips": 3920,
+   "bytes_up": 3778281472,
+   "bytes_down": 6318850048,
+   "freivalds_checked": 59136,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 31.73549941199235,
+   "local_seconds": 50.899354130996244,
+   "decode_calls": 0,
+   "decode_remote_seconds": 0.0,
+   "decode_local_seconds": 0.0
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 3920,
+    "rows_per_trip": 32.46,
+    "multi_item_trips": 3696,
+    "rtt_ms": 8.0427,
+    "queue_ms": 0.0233,
+    "compute_ms": 2.9858,
+    "wire_ms": 5.0336,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 512.0
+  }
+ },
+ "pingpong_gateway_startup_s": 27.4,
+ "pingpong_chat": {
+  "text": "The sky appears blue because the Earth's atmosphere scatters sunlight in all directions, and blue light is scattered more than other colors because it travels as shorter, smaller",
+  "usage": {
+   "prompt_tokens": 40,
+   "completion_tokens": 32,
+   "total_tokens": 72
+  },
+  "tokens_identical": true,
+  "logprobs_identical": true,
+  "top2_identical": true,
+  "text_identical": true,
+  "max_abs_logprob_diff": 0.0,
+  "wall_s": 13.11,
+  "backend_delta": {
+   "calls": 3696,
+   "rows": 7952,
+   "round_trips": 3696,
+   "bytes_up": 236142592,
+   "bytes_down": 394928128,
+   "freivalds_checked": 3696,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 6.171924207995971,
+   "local_seconds": 4.10557366699345,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 4.972670228996094,
+   "decode_local_seconds": 2.531073677993618
+  },
+  "gateway_cpu_s": 13.44,
+  "service_cpu_s": 4.83,
+  "slots_used": 72,
+  "wire_bytes_per_token": 8764871,
+  "wire_up_bytes_per_token": 3279758,
+  "wire_down_bytes_per_token": 5485113,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1867,
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 224,
+    "rows_per_trip": 20.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 5.3062,
+    "queue_ms": 0.0265,
+    "compute_ms": 2.0023,
+    "wire_ms": 3.2773
+   },
+   "rows_1": {
+    "trips": 3472,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.4019,
+    "queue_ms": 0.0011,
+    "compute_ms": 0.7019,
+    "wire_ms": 0.699
+   }
+  },
+  "status_after": {
+   "name": "qwen7b_pingpong",
+   "mode": "masked",
+   "started": true,
+   "state": "ready",
+   "last_error": null,
+   "connect_attempts": 1,
+   "ready": true,
+   "reason": "ok",
+   "fingerprint": "9e0f0980cc73c4d0b2c9f7230e1d0196c18575610563f3b112e9862bc867321e",
+   "fingerprint_short": "9e0f0980cc73",
+   "ring": "K32A12C27",
+   "max_context": 32768,
+   "sessions": {
+    "active": 0,
+    "waiting": 0,
+    "max_active": 16,
+    "max_queue": 256,
+    "rejected": 0,
+    "draining": false,
+    "rejected_by_reason": {}
+   },
+   "breaker": {
+    "open": false,
+    "trips": 0,
+    "cooldown_s": null,
+    "open_for_s": null,
+    "last_code": null
+   },
+   "freivalds_rate": 1.0,
+   "service": {
+    "server": "pgw-service",
+    "origin": "http://127.0.0.1:51679",
+    "max_rows_per_item": 8192
+   },
+   "masks_available": 2104,
+   "noise_monitor": {
+    "state": "active",
+    "alarm": false,
+    "samples": 2779648,
+    "windows": 30,
+    "duplicate_rows": 0,
+    "reasons": []
+   },
+   "client": {
+    "requests": 3696,
+    "attempts": 3697,
+    "retries": 0,
+    "retries_denied": 0,
+    "failures": 0,
+    "splits": 0,
+    "bytes_sent": 236793028,
+    "bytes_received": 394930741,
+    "last_rtt_s": 0.0012969199999588454,
+    "stream_requests": 3696,
+    "stream_opens": 1,
+    "stream_open_failures": 0,
+    "lane_requests": 0
+   },
+   "client_timing": {
+    "9+": {
+     "trips": 224,
+     "rows": 4480,
+     "multi_item": 0,
+     "rtt_s": 1.1885820050003986,
+     "queue_s": 0.005933000000000006,
+     "compute_s": 0.44852400000000014,
+     "wire_s": 0.7341250050003989
+    },
+    "1": {
+     "trips": 3472,
+     "rows": 3472,
+     "multi_item": 0,
+     "rtt_s": 4.867540612999846,
+     "queue_s": 0.0036810000000001477,
+     "compute_s": 2.4368459999999987,
+     "wire_s": 2.427013612999851
+    }
+   },
+   "engine": {
+    "steps": 32.0,
+    "pingpong_steps": 0.0,
+    "step_sequences": 32.0
+   }
+  }
+ },
+ "pingpong_stream": {
+  "text_identical": true,
+  "logprobs_identical": true,
+  "ttft_s": 2.328,
+  "prefill_s_per_prompt_token": 0.0582,
+  "decode_s_per_token": 0.3404,
+  "decode_tokens_per_s": 2.938,
+  "wall_s": 12.93,
+  "gateway_cpu_s": 13.09,
+  "backend_delta": {
+   "calls": 3696,
+   "rows": 7952,
+   "round_trips": 3696,
+   "bytes_up": 236142592,
+   "bytes_down": 394928128,
+   "freivalds_checked": 3696,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 6.252061035002498,
+   "local_seconds": 4.0022228030002225,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 5.068105463001757,
+   "decode_local_seconds": 2.557473611998603
+  },
+  "gateway_local_engine_s_per_token_incl_prefill": 0.0556,
+  "remote_s_per_token_incl_prefill": 0.0868,
+  "decode_tokens": 31,
+  "decode_round_trips_per_token": 111.52,
+  "decode_rows_per_trip": 1.0,
+  "decode_after_first_token": {
+   "remote_s_per_token": 0.1627,
+   "local_s_per_token": 0.0821,
+   "remote_ms_per_trip": 1.4591,
+   "local_ms_per_trip": 0.7361,
+   "note": "backend stats delta from the first streamed token to the end; a step in flight at the first-token snapshot is partly counted"
+  },
+  "decode_counters": {
+   "calls": 3472,
+   "remote_ms_per_trip": 1.4597,
+   "local_ms_per_trip": 0.7366,
+   "remote_s_per_token": 0.1628,
+   "local_s_per_token": 0.0821
+  },
+  "decode_source": "backend decode counters",
+  "decode_remote_s_per_token": 0.1628,
+  "decode_local_s_per_token": 0.0821,
+  "decode_remote_ms_per_trip": 1.4597,
+  "decode_local_ms_per_trip": 0.7366,
+  "decode_accounted_s_per_token": 0.2449,
+  "decode_unaccounted_s_per_token": 0.0955,
+  "decode_accounted_fraction": 0.719,
+  "decode_trip_split": {
+   "rows_1": {
+    "trips": 3457,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.4279,
+    "queue_ms": 0.0011,
+    "compute_ms": 0.708,
+    "wire_ms": 0.7188
+   }
+  },
+  "prefill_trip_split": {
+   "rows_9+": {
+    "trips": 224,
+    "rows_per_trip": 20.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 5.2451,
+    "queue_ms": 0.0217,
+    "compute_ms": 2.002,
+    "wire_ms": 3.2214
+   },
+   "rows_1": {
+    "trips": 15,
+    "rows_per_trip": 1.0,
+    "multi_item_trips": 0,
+    "rtt_ms": 1.5584,
+    "queue_ms": 0.001,
+    "compute_ms": 0.7704,
+    "wire_ms": 0.787
+   }
+  }
+ },
+ "pingpong_concurrent": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 29.87,
+  "generated_tokens_per_s": 4.285,
+  "all_tokens_per_s": 9.641,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1133,
+  "backend_delta": {
+   "calls": 14784,
+   "rows": 31808,
+   "round_trips": 3920,
+   "bytes_up": 944570368,
+   "bytes_down": 1579712512,
+   "freivalds_checked": 14784,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 12.11245234699527,
+   "local_seconds": 12.041311404017279,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 8.034329352998611,
+   "decode_local_seconds": 5.694330049017253
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 448,
+    "rows_per_trip": 40.25,
+    "multi_item_trips": 224,
+    "rtt_ms": 9.0563,
+    "queue_ms": 0.0257,
+    "compute_ms": 3.4445,
+    "wire_ms": 5.5861,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 3472,
+    "rows_per_trip": 3.97,
+    "multi_item_trips": 3472,
+    "rtt_ms": 2.2756,
+    "queue_ms": 0.0012,
+    "compute_ms": 1.0875,
+    "wire_ms": 1.1869,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 128.0
+  }
+ },
+ "pingpong_concurrent_4": {
+  "requests": 4,
+  "ok": 4,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 29.87,
+  "generated_tokens_per_s": 4.285,
+  "all_tokens_per_s": 9.641,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1133,
+  "backend_delta": {
+   "calls": 14784,
+   "rows": 31808,
+   "round_trips": 3920,
+   "bytes_up": 944570368,
+   "bytes_down": 1579712512,
+   "freivalds_checked": 14784,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 12.11245234699527,
+   "local_seconds": 12.041311404017279,
+   "decode_calls": 3472,
+   "decode_remote_seconds": 8.034329352998611,
+   "decode_local_seconds": 5.694330049017253
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 448,
+    "rows_per_trip": 40.25,
+    "multi_item_trips": 224,
+    "rtt_ms": 9.0563,
+    "queue_ms": 0.0257,
+    "compute_ms": 3.4445,
+    "wire_ms": 5.5861,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 3472,
+    "rows_per_trip": 3.97,
+    "multi_item_trips": 3472,
+    "rtt_ms": 2.2756,
+    "queue_ms": 0.0012,
+    "compute_ms": 1.0875,
+    "wire_ms": 1.1869,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 0.0,
+   "step_sequences": 128.0
+  }
+ },
+ "pingpong_concurrent_8": {
+  "requests": 8,
+  "ok": 8,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 50.18,
+  "generated_tokens_per_s": 5.102,
+  "all_tokens_per_s": 11.479,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1207,
+  "backend_delta": {
+   "calls": 29568,
+   "rows": 63616,
+   "round_trips": 7616,
+   "bytes_up": 1889140736,
+   "bytes_down": 3159425024,
+   "freivalds_checked": 29568,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 41.77775777500074,
+   "local_seconds": 27.29528861400695,
+   "decode_calls": 6944,
+   "decode_remote_seconds": 33.512374972003045,
+   "decode_local_seconds": 13.547944768010211
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 672,
+    "rows_per_trip": 53.5,
+    "multi_item_trips": 448,
+    "rtt_ms": 12.2484,
+    "queue_ms": 0.0271,
+    "compute_ms": 4.4445,
+    "wire_ms": 7.7768,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 6944,
+    "rows_per_trip": 3.98,
+    "multi_item_trips": 6944,
+    "rtt_ms": 4.7833,
+    "queue_ms": 0.0014,
+    "compute_ms": 1.249,
+    "wire_ms": 3.5329,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 32.0,
+   "step_sequences": 256.0
+  }
+ },
+ "pingpong_concurrent_16": {
+  "requests": 16,
+  "ok": 16,
+  "tokens_identical": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true,
+   true
+  ],
+  "errors": [],
+  "wall_s": 96.76,
+  "generated_tokens_per_s": 5.291,
+  "all_tokens_per_s": 11.906,
+  "gateway_cpu_s_per_token_incl_prefill": 0.1103,
+  "backend_delta": {
+   "calls": 59136,
+   "rows": 127232,
+   "round_trips": 7616,
+   "bytes_up": 3778281472,
+   "bytes_down": 6318850048,
+   "freivalds_checked": 59136,
+   "freivalds_skipped": 0,
+   "integrity_failures": 0,
+   "remote_seconds": 77.06102246799787,
+   "local_seconds": 56.45260198301344,
+   "decode_calls": 6944,
+   "decode_remote_seconds": 61.82244104999609,
+   "decode_local_seconds": 28.052032339010566
+  },
+  "trip_split_incl_prefill": {
+   "rows_9+": {
+    "trips": 672,
+    "rows_per_trip": 106.83,
+    "multi_item_trips": 448,
+    "rtt_ms": 22.6211,
+    "queue_ms": 0.0354,
+    "compute_ms": 8.1164,
+    "wire_ms": 14.4693,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   },
+   "rows_2-8": {
+    "trips": 6944,
+    "rows_per_trip": 7.98,
+    "multi_item_trips": 6944,
+    "rtt_ms": 8.8539,
+    "queue_ms": 0.0016,
+    "compute_ms": 1.479,
+    "wire_ms": 7.3733,
+    "note": "multi-item trips: compute_ms sums the items, queue_ms is their max"
+   }
+  },
+  "engine_delta": {
+   "steps": 33.0,
+   "pingpong_steps": 32.0,
+   "step_sequences": 512.0
+  }
+ },
+ "service_loadtest": {
+  "1x1": {
+   "bytes_down": 11124736,
+   "bytes_up": 6651904,
+   "calls": 224,
+   "calls_per_s": 617.8481235254994,
+   "error_codes": {},
+   "errors": 0,
+   "latency_ms_p50": 1.3293929998781095,
+   "latency_ms_p95": 1.9903689999409835,
+   "latency_ms_p99": 2.3696660000496195,
+   "mismatches": 0,
+   "rows_per_call": 1,
+   "rows_per_s": 617.8481235254994,
+   "seconds": 0.3625486450000608,
+   "server_batch_rows_max": 1,
+   "server_batch_rows_mean": 1.0,
+   "server_compute_ms_mean": 0.6992901785714285,
+   "server_queue_ms_mean": 0.0011875,
+   "sessions": 1,
+   "tokens_per_s": 5.516501102906245,
+   "tokens_per_session": 2,
+   "s_per_decode_step": 0.1813,
+   "s_per_token_amortized": 0.18127
+  }
+ },
+ "gpu_mem_MB_end": [
+  14351,
+  3
+ ],
+ "ok": true
+}

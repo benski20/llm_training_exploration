@@ -1,0 +1,27 @@
+{
+ "host": "loopback",
+ "python": "3.13.16",
+ "machine": "x86_64",
+ "results": [
+  {
+   "bytes_each_way": 64,
+   "iters": 5000,
+   "p50_us": 55.3,
+   "p90_us": 64.6,
+   "p99_us": 82.2,
+   "min_us": 32.6,
+   "mean_us": 54.6,
+   "floor_s_per_token_112_trips": 0.0062
+  },
+  {
+   "bytes_each_way": 81920,
+   "iters": 5000,
+   "p50_us": 76.3,
+   "p90_us": 96.6,
+   "p99_us": 121.2,
+   "min_us": 55.6,
+   "mean_us": 81.4,
+   "floor_s_per_token_112_trips": 0.0085
+  }
+ ]
+}
