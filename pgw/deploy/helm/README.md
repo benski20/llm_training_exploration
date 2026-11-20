@@ -126,7 +126,8 @@ operator's `ruleSelector`). The same rules for a plain Prometheus are in
 | PGWServiceErrorRatioHigh | service | warning | error share > `alerts.errorRatioMax` over 10 m |
 
 Mask-supply alerts aggregate by `(fingerprint, ring)`. Set `alerts.runwayMinSeconds` above the time
-one segment takes to arrive (`pgw doctor` prints the measured mask-supply rate), with margin.
+one segment takes to arrive (`pgw doctor --pack <pack> --mask-supply` prints the measured mask-supply
+rate; opt-in, run it from a factory or admin pod, not as a start-up check), with margin.
 
 ## Testing the charts
 

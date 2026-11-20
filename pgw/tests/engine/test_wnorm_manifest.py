@@ -193,9 +193,15 @@ def test_invalid_sidecar_is_ignored(old_pack: ModelPack) -> None:
     MaskedBackend(view, None, LocalComputeClient(old_pack), RING, old_pack.fingerprint).warm_weight_norms()
     doc = json.loads(sidecar.read_text())
     key = next(iter(doc["row_norm_sq_max"]))
+    n = next(e.in_features for e in old_pack.manifest.linears if e.id == key)
+    no_version = {k: v for k, v in doc.items() if k != "version"}
     for tamper in ({"fingerprint": "00" * 32}, {"row_norm_sq_max": {**doc["row_norm_sq_max"], key: 10**12}},
-                   {"row_norm_sq_max": {**doc["row_norm_sq_max"], key: "1"}}):
-        sidecar.write_text(json.dumps({**doc, **tamper}))
+                   {"row_norm_sq_max": {**doc["row_norm_sq_max"], key: "1"}},
+                   # the manifest bound (127^2 * in_features), not 128^2
+                   {"row_norm_sq_max": {**doc["row_norm_sq_max"], key: 127 * 127 * n + 1}},
+                   {"version": 2}, {"version": True}, {"version": "1"}, None):
+        body = no_version if tamper is None else {**doc, **tamper}
+        sidecar.write_text(json.dumps(body))
         v = GatewayView(old_pack, allow_weights=True)
         be = MaskedBackend(v, None, LocalComputeClient(old_pack), RING, old_pack.fingerprint)
         assert be.warm_weight_norms() == len(old_pack.manifest.linears)  # recomputed
@@ -220,3 +226,52 @@ def test_decode_stats(tiny_pack: ModelPack) -> None:
     assert st["round_trips"] == 2 and st["decode_calls"] == 1
     assert 0 < st["decode_local_seconds"] <= st["local_seconds"]
     assert 0 <= st["decode_remote_seconds"] <= st["remote_seconds"]
+
+
+# ---- install-time verification (pgw doctor --deep) ---------------------------------------------------
+def test_doctor_deep_verifies_row_norms(tiny_pack_dir: Path, monkeypatch: pytest.MonkeyPatch,
+                                        tmp_path: Path) -> None:
+    from pgw.cli.doctor import _check_pack
+
+    monkeypatch.setenv("PGW_WNORM_CACHE_DIR", str(tmp_path / "cache"))
+    status, detail, data = _check_pack(tiny_pack_dir, None, deep=True)
+    assert status == "ok" and "row norms verified" in detail, detail
+    assert data["row_norms_checked"] > 0 and data["row_norm_sidecar_checked"] == 0
+    status, _, data = _check_pack(tiny_pack_dir, None)
+    assert status == "ok" and "row_norms_checked" not in data
+
+
+def test_doctor_deep_detects_wrong_sidecar(old_pack: ModelPack, monkeypatch: pytest.MonkeyPatch,
+                                           tmp_path: Path) -> None:
+    from pgw.cli.doctor import _check_pack
+
+    monkeypatch.setenv("PGW_WNORM_CACHE_DIR", str(tmp_path / "cache"))
+    view = GatewayView(old_pack, allow_weights=True)
+    MaskedBackend(view, None, LocalComputeClient(old_pack), RING, old_pack.fingerprint).warm_weight_norms()
+    status, _, data = _check_pack(old_pack.root, None, deep=True)
+    assert status == "ok" and data["row_norms_checked"] == 0
+    assert data["row_norm_sidecar_checked"] == len(old_pack.manifest.linears)
+    sidecar = old_pack.root / f"wnorm.{old_pack.fingerprint}.json"
+    doc = json.loads(sidecar.read_text())
+    key = next(iter(doc["row_norm_sq_max"]))
+    doc["row_norm_sq_max"][key] -= 1  # within bounds, but not what the weights give
+    sidecar.write_text(json.dumps(doc))
+    status, detail, data = _check_pack(old_pack.root, None, deep=True)
+    assert status == "fail" and key in detail and data["row_norm_sidecar_mismatch"] == [key]
+
+
+def test_doctor_deep_detects_wrong_manifest_norm(tiny_pack_dir: Path, tmp_path: Path) -> None:
+    from pgw.cli.doctor import run_doctor
+
+    dst = tmp_path / "bad"
+    shutil.copytree(tiny_pack_dir, dst)
+    m = Manifest.from_file(dst)
+    e0 = m.linears[0]
+    bad = m.model_copy(update={
+        "linears": (e0.model_copy(update={"row_norm_sq_max": e0.row_norm_sq_max - 1}), *m.linears[1:]),
+        "fingerprint": None,
+    }).with_fingerprint()
+    (dst / MANIFEST_FILE).write_text(bad.to_json(), encoding="utf-8")
+    rep = run_doctor(role="pack", pack=dst, include_gpu=False, deep=True)
+    c = rep.get("pack")
+    assert c is not None and c.status == "fail", c

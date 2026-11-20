@@ -5,8 +5,11 @@ below ``low_water_slots`` and keeps refilling until ``target_slots`` is reached.
 models need masks, the one with the lowest fill ratio gets the next segment.
 
 Ramp: when ``first_segment_slots`` is set (smaller than ``segment_slots``) and a store is below low
-water, each plan holds exactly one segment of :func:`ramp_segment_slots` slots (256, 512, 1024, ...),
-and the store is re-planned after it lands. At or above low water, full segments are planned.
+water, each plan holds exactly one segment of :func:`ramp_segment_slots` slots while that size is
+still below ``segment_slots`` (with 256 / 4096: 256, 512, 2048), and the store is re-planned after it
+lands. As soon as the ramp reaches ``segment_slots`` (or at/above low water) full segments up to the
+target are planned at once, so a store whose ``low_water_slots`` is many segments deep converges as
+fast as without a ramp.
 
 Crash safety and resume:
 
@@ -85,8 +88,9 @@ def ramp_segment_slots(available: int, first_segment_slots: int, segment_slots: 
     """Size of the next segment while a store is below low water and ``first_segment_slots`` is set.
 
     ``min(segment_slots, max(first_segment_slots, next_pow2(2 * available)))``: with 256 / 4096 an empty
-    store gets 256, then 512, 1024, 2048 and 4096 as the inventory grows; a store with at least
-    ``segment_slots / 2`` slots already gets full segments.
+    store gets 256, then 512 (inventory 256), 2048 (inventory 768: 2 * 768 rounds up past 1024) and
+    4096 (inventory 2816) as the inventory grows; a store with more than ``segment_slots / 4`` slots
+    already gets full segments.
     """
     return min(int(segment_slots), max(int(first_segment_slots), _next_pow2(2 * int(available))))
 
@@ -361,11 +365,12 @@ class FactoryScheduler:
             if key not in self._refilling:
                 continue
             first = int(self.settings.first_segment_slots or seg)
-            if below and first < seg:
+            size = ramp_segment_slots(avail, first, seg) if below and first < seg else seg
+            if size < seg:
                 # Ramp: one segment at a time, sized to about double the inventory, so a new (or drained)
                 # store can serve after a small segment and supply grows geometrically
-                # (256 -> 512 -> 1024 -> ... -> segment_slots); re-planned after each segment lands.
-                size = ramp_segment_slots(avail, first, seg)
+                # (256 -> 512 -> 2048 -> segment_slots); re-planned after each segment lands. Once the
+                # ramp reaches segment_slots, the full plan below covers the whole deficit at once.
                 reason = (f"no masks yet: a first segment of {size} slots" if avail == 0 else
                           f"{avail} slots available < low water {self.low_water_slots}: ramp segment of {size} slots")
                 plans.append(RefillPlan(fp, ring, 1, size, reason, avail, self.low_water_slots, self.target_slots))

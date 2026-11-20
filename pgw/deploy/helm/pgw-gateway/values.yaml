@@ -271,7 +271,7 @@ alerts:
   enabled: true
   labels: {}                 # e.g. {release: kube-prometheus-stack} to match the operator's ruleSelector
   # Alert when the masks left last less than this at the current consumption rate (seconds). Set it
-  # above the time the factory needs to deliver one segment (pgw doctor prints it), with margin.
+  # above the time the factory needs to deliver one segment (pgw doctor --mask-supply prints it), with margin.
   runwayMinSeconds: 7200
   # Alert when more than this share of the consumed mask slots was reserved but never used.
   burnRatioMax: 0.5

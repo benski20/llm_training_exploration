@@ -136,6 +136,14 @@ def test_chart_metadata(chart: str) -> None:
     assert (HELM / chart / "templates" / "_helpers.tpl").is_file()
 
 
+def test_factory_cpu_threads_match_cpu_limit() -> None:
+    """torch threads must not exceed the CFS quota (0 = one per visible core oversubscribes a 2-CPU limit)."""
+    values = yaml.safe_load((HELM / "pgw-factory" / "values.yaml").read_text())
+    limit = str(values["resources"]["limits"]["cpu"])
+    assert limit.isdigit(), limit
+    assert int(values["config"]["cpuThreads"]) == int(limit)
+
+
 @pytest.mark.parametrize("chart", CHARTS)
 def test_values_hold_no_secrets(chart: str) -> None:
     text = (HELM / chart / "values.yaml").read_text()

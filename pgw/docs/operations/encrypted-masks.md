@@ -89,7 +89,7 @@ of the two-party demo (`deploy/modal`, about 1.5 MB/s measured) that is about 42
 **the encrypted supply cannot keep up with even one decoding stream over that tunnel** (one 7B stream
 at 0.365 s/token consumes about 9.9k slots per hour). For sustained load, put the factory and the
 service on a private link of 1 Gbit/s or more (about 35k 7B slots per hour, estimate), or run a local
-factory. `pgw doctor --role factory --pack <pack>` times one encrypted chunk over the real link and
+factory. `pgw doctor --role factory --pack <pack> --mask-supply` times one encrypted chunk over the real link and
 compares the rate with `PGW_DOCTOR_EXPECTED_TOKENS_PER_S`. Offline, the calculator gives the same
 figures: `python docs/tools/pgw_sizing.py --model qwen2.5-7b --encrypted --link-mb-per-s 1.5`. See also
 [sizing.md](sizing.md#one-model-one-ring-qwen25-7b-at-k32a12c27).

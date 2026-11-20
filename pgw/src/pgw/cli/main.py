@@ -3,7 +3,7 @@
 ::
 
     pgw version [--json]
-    pgw doctor [--role R] [--pack P] [--maskstore ROOT] [--service-url URL] ...
+    pgw doctor [--role R] [--pack P [--deep] [--mask-supply]] [--maskstore ROOT] [--service-url URL] ...
     pgw pack SRC OUT                      HF checkpoint -> int8 model pack
     pgw inspect PACK                      manifest summary, rings, mask bytes per slot
     pgw factory generate|run|status|benchmark      (pgw.factory.cli)
@@ -82,11 +82,18 @@ def version(as_json: bool) -> None:
 @click.option("--settings", "check_settings", is_flag=True, help="Validate the role's PGW_* settings")
 @click.option("--no-gpu", is_flag=True, help="Skip the GPU arithmetic self test")
 @click.option("--strict", is_flag=True, help="Warnings count as failures (exit 1)")
+@click.option("--deep", is_flag=True,
+              help="With --pack: recompute weight-row norms from the int8 weights (install time; slow)")
+@click.option("--mask-supply", is_flag=True,
+              help="With --pack: time one mask chunk into a temporary store (heavy; not for start-up checks)")
+@click.option("--expected-tps", "expected_tps", type=float, default=None,
+              help="Expected mask consumption (tokens/s) for --mask-supply")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
 @handle_errors
 def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: Path | None, key_file: Path | None,
            service_url: str | None, service_token_file: Path | None, service_ca_file: Path | None,
-           check_settings: bool, no_gpu: bool, strict: bool, as_json: bool) -> None:
+           check_settings: bool, no_gpu: bool, strict: bool, deep: bool, mask_supply: bool,
+           expected_tps: float | None, as_json: bool) -> None:
     """Check the environment: dependencies, CSPRNG, exact ring arithmetic, devices, pack, store, service."""
     from pgw.cli.doctor import format_report, run_doctor
 
@@ -97,7 +104,8 @@ def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: 
     report = run_doctor(role=role, pack=pack_path, ring=ring, maskstore_root=maskstore_root, key_file=key_file,
                         service_url=service_url, service_token_file=service_token_file,
                         service_ca_file=service_ca_file, include_gpu=not no_gpu, check_settings=check_settings,
-                        strict=strict)
+                        strict=strict, deep=deep, mask_supply=mask_supply,
+                        expected_tokens_per_second=expected_tps)
     if as_json:
         echo_json(report.to_dict())
     else:
