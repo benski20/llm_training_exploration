@@ -682,7 +682,9 @@ def create_setup_app(
         return _err(PGWError("internal error"))
 
     def _client(request: Request) -> str:
-        return request.client.host if request.client is not None else "unknown"
+        from pgw.core.client_ip import client_ip
+
+        return client_ip(request)
 
     def _session(request: Request) -> Any:
         sid = request.cookies.get(COOKIE_NAME)
@@ -730,9 +732,10 @@ def create_setup_app(
     @app.post("/console/api/setup/login")
     async def setup_login(request: Request) -> Any:
         client = _client(request)
-        limiter.check(client)
+        limiter.blocked(client)  # only failed sign-ins count
         body = _parse(LoginBody, await _json(request))
         if sessions.authenticate(body.token) != "admin":
+            limiter.failure(client)
             log.warning("setup: wrong setup token from %s", client)
             raise AuthError("that setup token was not accepted; copy it from the gateway's log")
         sid, sess = sessions.create("admin")

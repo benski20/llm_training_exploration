@@ -181,7 +181,7 @@ async def test_endpoint_issues_working_token_once(tmp_path: Path, tiny_pack_dir:
         assert "client_cert_pem" not in data
         tok = data["service_token"]
         # the hash is in the tokens file and the running service accepts the token at once
-        assert f"acme:{hash_token(tok)}" in s.tokens_file.read_text()  # type: ignore[union-attr]
+        assert f":{hash_token(tok)}:" in s.tokens_file.read_text()  # type: ignore[union-attr]  # token-only
         assert stat.S_IMODE(s.tokens_file.stat().st_mode) == 0o600  # type: ignore[union-attr]
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://svc") as h:
             r2 = await h.get("/pgw/v1/models", headers={"authorization": f"Bearer {tok}",

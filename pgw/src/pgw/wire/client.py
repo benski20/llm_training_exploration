@@ -68,7 +68,8 @@ from pgw.wire.messages import (
 )
 from pgw.wire.server import validate_compute_response
 
-__all__ = ["ClientConfig", "ClientStats", "ComputeClient", "build_ssl_context"]
+__all__ = ["ClientConfig", "ClientStats", "ComputeClient", "build_ssl_context", "client_cert_validity",
+           "reload_client_cert"]
 
 log = logging.getLogger(__name__)
 
@@ -158,9 +159,52 @@ class ClientConfig(BaseModel):
         return self.base_url.startswith("https://")
 
 
-def build_ssl_context(config: ClientConfig) -> ssl.SSLContext:
+#: A client certificate that expires within this many seconds is not presented (token-only instead).
+CERT_EXPIRY_MARGIN_S = 60.0
+
+# Live client TLS contexts by (cert file, key file), so a renewed pair can be loaded into every context
+# built from those files (including transports that callers built with :func:`build_ssl_context`).
+_CERT_CONTEXTS: dict[tuple[str, str], weakref.WeakSet[ssl.SSLContext]] = {}
+_CERT_CLIENTS: weakref.WeakSet[ComputeClient] = weakref.WeakSet()
+_CERT_LOCK = threading.Lock()
+
+
+def client_cert_validity(cert_file: Path) -> tuple[float, float] | None:
+    """``(not_before, not_after)`` (unix seconds) of the first certificate in ``cert_file``; ``None`` if
+    unreadable."""
+    try:
+        from cryptography import x509
+
+        cert = x509.load_pem_x509_certificates(Path(cert_file).read_bytes())[0]
+        return float(cert.not_valid_before_utc.timestamp()), float(cert.not_valid_after_utc.timestamp())
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _usable_client_cert(config: ClientConfig, now: float) -> bool:
+    """False (logged as an error) when the configured client certificate has expired or expires within
+    :data:`CERT_EXPIRY_MARGIN_S` (or a tenth of its lifetime, for short-lived test certificates)."""
+    assert config.client_cert_file is not None
+    window = client_cert_validity(config.client_cert_file)
+    if window is None:  # let load_cert_chain report a broken file
+        return True
+    not_before, not_after = window
+    if not_after - now > min(CERT_EXPIRY_MARGIN_S, (not_after - not_before) / 10):
+        return True
+    log.error("client certificate %s %s; not presenting it (token-only authentication). Renew it or re-enroll "
+              "the gateway", config.client_cert_file,
+              "has expired" if not_after <= now else f"expires in {not_after - now:.0f}s")
+    return False
+
+
+def build_ssl_context(config: ClientConfig, *, now: float | None = None) -> ssl.SSLContext:
     """TLS context for ``config``: TLS >= 1.2, server verification against ``ca_file`` (or the
     system store), and the mTLS client certificate when configured.
+
+    A client certificate that has expired or expires within :data:`CERT_EXPIRY_MARGIN_S` is not
+    presented (an error is logged): the connection falls back to token-only authentication, which a
+    service with optional client certificates accepts, instead of failing every handshake. The context
+    is registered so :func:`reload_client_cert` can load a renewed pair into it.
 
     Raises:
         ConfigError: unreadable certificate/key files.
@@ -176,14 +220,49 @@ def build_ssl_context(config: ClientConfig) -> ssl.SSLContext:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         if config.client_cert_file is not None and config.client_key_file is not None:
-            pw = config.client_key_password.get_secret_value() if config.client_key_password else None
-            ctx.load_cert_chain(str(config.client_cert_file), str(config.client_key_file), password=pw)
+            if _usable_client_cert(config, time.time() if now is None else now):
+                pw = config.client_key_password.get_secret_value() if config.client_key_password else None
+                ctx.load_cert_chain(str(config.client_cert_file), str(config.client_key_file), password=pw)
+            key = (str(Path(config.client_cert_file).resolve()), str(Path(config.client_key_file).resolve()))
+            with _CERT_LOCK:
+                _CERT_CONTEXTS.setdefault(key, weakref.WeakSet()).add(ctx)
     except (OSError, ssl.SSLError) as exc:
         raise ConfigError(f"cannot load TLS material: {type(exc).__name__}: {exc}") from exc
     return ctx
 
 
-@dataclass
+def reload_client_cert(cert_file: Path, key_file: Path, *, password: str | None = None) -> int:
+    """Load a renewed client certificate/key pair into every live context built from these files.
+
+    New TLS handshakes present the new certificate; connections already open keep theirs (the service
+    checks the certificate at the handshake only). Every :class:`ComputeClient` using the pair also
+    retires its compute stream channels: each closes once its in-flight calls are answered (never during
+    a round trip) and the next call opens a fresh channel with the new certificate.
+
+    Returns:
+        The number of TLS contexts updated.
+
+    Raises:
+        ConfigError: the new pair cannot be loaded (the contexts keep the previous certificate).
+    """
+    key = (str(Path(cert_file).resolve()), str(Path(key_file).resolve()))
+    with _CERT_LOCK:
+        contexts = list(_CERT_CONTEXTS.get(key, ()))
+        clients = [c for c in _CERT_CLIENTS if c._cert_key == key]
+    try:  # validate the pair once before touching a live context
+        probe = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        probe.load_cert_chain(key[0], key[1], password=password)
+        for ctx in contexts:
+            ctx.load_cert_chain(key[0], key[1], password=password)
+    except (OSError, ssl.SSLError) as exc:
+        raise ConfigError(f"cannot load the renewed client certificate: {type(exc).__name__}: {exc}") from exc
+    for c in clients:
+        c.retire_channels()
+    log.info("loaded the renewed client certificate into %d TLS context(s) and %d client(s)", len(contexts),
+             len(clients))
+    return len(contexts)
+
+
 class ClientStats:
     """Counters (cumulative, process-local). Payloads are never recorded."""
 
@@ -500,6 +579,12 @@ class ComputeClient:
         self._loop_thread: threading.Thread | None = None
         self._loop_lock = threading.Lock()
         self._closed = False
+        self._cert_key: tuple[str, str] | None = None
+        if config.client_cert_file is not None and config.client_key_file is not None:
+            self._cert_key = (str(Path(config.client_cert_file).resolve()),
+                              str(Path(config.client_key_file).resolve()))
+            with _CERT_LOCK:
+                _CERT_CLIENTS.add(self)
 
     # -------------------------------------------------------------------------------- plumbing
     def _http(self) -> httpx.AsyncClient:
@@ -599,6 +684,17 @@ class ComputeClient:
             ch = _StreamChannel(ws, cfg.max_response_bytes)
             self._channels[loop] = ch
             return ch
+
+    def retire_channels(self) -> None:
+        """Retire every open compute stream channel (thread-safe): each closes once its in-flight calls
+        are answered and the next call opens a new channel (e.g. with a renewed client certificate)."""
+        for loop, ch in list(self._channels.items()):
+            if loop.is_closed() or ch.closed or ch.retiring:
+                continue
+            try:
+                loop.call_soon_threadsafe(ch.retire)
+            except RuntimeError:  # pragma: no cover - loop closed concurrently
+                pass
 
     async def _drop_channel(self, ch: _StreamChannel) -> None:
         loop = asyncio.get_running_loop()

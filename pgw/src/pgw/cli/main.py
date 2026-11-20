@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import sys
 from pathlib import Path
 from typing import Any
@@ -434,33 +433,82 @@ def service_token() -> None:
     """Tenant bearer tokens (the service stores SHA-256 hashes only)."""
 
 
+def _tokens_file(tokens_file: Path | None) -> Path:
+    if tokens_file is not None:
+        return tokens_file
+    env = os.environ.get("PGW_SERVICE_TOKENS_FILE")
+    if not env:
+        raise ConfigError("no tokens file: pass --tokens-file or set PGW_SERVICE_TOKENS_FILE")
+    return Path(env)
+
+
+_tokens_file_opt = click.option("--tokens-file", type=click.Path(path_type=Path), default=None,
+                                help="Tokens file (default PGW_SERVICE_TOKENS_FILE)")
+
+
 @service_token.command("create")
 @click.option("--tenant", required=True, help="Tenant id ([A-Za-z0-9._-], max 64)")
 @click.option("--tokens-file", type=click.Path(path_type=Path), default=None,
-              help="Append 'tenant:sha256' here (default PGW_SERVICE_TOKENS_FILE); created with mode 0600")
+              help="Append 'tenant:token_id:sha256' here (default PGW_SERVICE_TOKENS_FILE); created with mode 0600")
 @click.option("--out", "out_file", type=click.Path(path_type=Path), default=None,
               help="Write the plaintext token to this file (0600) instead of stdout")
+@click.option("--token-only", is_flag=True,
+              help="Valid without a client certificate even when the service requires mTLS for compute")
+@click.option("--ttl", "ttl", default=None, help="Lifetime, e.g. 90d, 12h (default: until revoked)")
 @handle_errors
-def service_token_create(tenant: str, tokens_file: Path | None, out_file: Path | None) -> None:
+def service_token_create(tenant: str, tokens_file: Path | None, out_file: Path | None, token_only: bool,
+                         ttl: str | None) -> None:
     """Create a tenant token; the plaintext is shown once (give it to the customer's gateway)."""
-    from pgw.service.auth import hash_token, valid_tenant_id
+    from pgw.enroll.store import parse_ttl
+    from pgw.service.auth import issue_token_record, new_token, valid_tenant_id
 
     if not valid_tenant_id(tenant):
         raise ConfigError("tenant id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-    if tokens_file is None:
-        env = os.environ.get("PGW_SERVICE_TOKENS_FILE")
-        if not env:
-            raise ConfigError("no tokens file: pass --tokens-file or set PGW_SERVICE_TOKENS_FILE")
-        tokens_file = Path(env)
-    token = "pgwt-" + secrets.token_urlsafe(32)
+    path = _tokens_file(tokens_file)
+    ttl_s = parse_ttl(ttl) if ttl else None
+    token = new_token()
     if out_file is not None:
         # Write the plaintext first: if this fails, no orphan hash is registered.
         _write_private(out_file, token + "\n", append=False)
-    _write_private(tokens_file, f"{tenant}:{hash_token(token)}\n", append=True)
+    _, rec = issue_token_record(tenant, path, token_only=token_only, ttl_s=ttl_s, token=token)
+    out: dict[str, Any] = {"tenant": tenant, "token_id": rec.token_id}
+    if rec.not_after is not None:
+        out["not_after"] = int(rec.not_after)
     if out_file is not None:
-        click.echo(json.dumps({"tenant": tenant, "token_file": str(out_file)}))
+        out["token_file"] = str(out_file)
     else:
-        click.echo(json.dumps({"tenant": tenant, "token": token}))
+        out["token"] = token
+    click.echo(json.dumps(out))
+
+
+@service_token.command("list")
+@_tokens_file_opt
+@handle_errors
+def service_token_list(tokens_file: Path | None) -> None:
+    """List tokens (id, tenant, expiry, flags; never the token or its hash)."""
+    import time as _time
+
+    from pgw.service.auth import read_token_records
+
+    now = _time.time()
+    rows = [{"token_id": r.token_id, "tenant": r.tenant,
+             "not_after": int(r.not_after) if r.not_after is not None else None,
+             "expired": r.expired(now), "token_only": r.token_only, "legacy_format": r.legacy}
+            for r in read_token_records(_tokens_file(tokens_file))]
+    click.echo(json.dumps(rows, indent=2))
+
+
+@service_token.command("revoke")
+@click.argument("token_id")
+@_tokens_file_opt
+@handle_errors
+def service_token_revoke(token_id: str, tokens_file: Path | None) -> None:
+    """Revoke a token by id (atomic rewrite of the tokens file). A running service stops accepting it
+    within its reload interval and closes the compute channels it opened."""
+    from pgw.service.auth import revoke_token
+
+    rec = revoke_token(_tokens_file(tokens_file), token_id)
+    click.echo(json.dumps({"revoked": rec.token_id, "tenant": rec.tenant}))
 
 
 def _write_private(path: Path, text: str, *, append: bool) -> None:

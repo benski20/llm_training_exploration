@@ -114,7 +114,10 @@ def _not_found() -> JSONResponse:
 
 
 def _client(request: Request) -> str:
-    return request.client.host if request.client is not None else "unknown"
+    """Client address (``X-Forwarded-For`` only from trusted proxies, see :mod:`pgw.core.client_ip`)."""
+    from pgw.core.client_ip import client_ip
+
+    return client_ip(request)
 
 
 def _static_file(root: Path, rel: str) -> Path | None:
@@ -276,7 +279,7 @@ def install_console(
             raise PGWError("console login is disabled: no admin token is configured (PGW_GATEWAY_ADMIN_TOKEN)",
                            code=ErrorCode.UNAVAILABLE)
         client = _client(request)
-        state.login_limiter.check(client)
+        state.login_limiter.blocked(client)  # only failed sign-ins count
         try:
             body = await request.json()
         except ValueError as exc:
@@ -286,6 +289,7 @@ def install_console(
             raise InvalidRequestError("body needs a string 'token'")
         role = store.authenticate(token.strip())
         if role is None:
+            state.login_limiter.failure(client)
             state.audit.event("console.login_failed", action="console_login", client=client, method="token",
                               code=str(ErrorCode.UNAUTHENTICATED))
             raise AuthError("invalid console token")
@@ -337,17 +341,22 @@ def install_console(
         q = request.query_params
         try:
             store = _sessions()
-            state.login_limiter.check(client)
+            cap = getattr(state, "oidc_callback_limiter", None)
+            if cap is not None:
+                cap.check("*")  # cheap global cap: every callback costs a token request to the IdP
+            state.login_limiter.blocked(client)
             try:
                 ident = await oidc.finish(code=q.get("code"), state=q.get("state"), error=q.get("error"),
                                           iss=q.get("iss"), binding=request.cookies.get(BINDING_COOKIE))
             except OIDCError as exc:
+                state.login_limiter.failure(client)
                 state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
                                   code=str(exc.code), reason=exc.reason, subject=exc.subject, email=exc.email)
                 raise
             except PGWError:
                 raise
             except Exception as exc:  # never leak details of a failed sign-in
+                state.login_limiter.failure(client)
                 err = as_auth_error(exc)
                 state.audit.event("console.login_failed", action="console_login", client=client, method="oidc",
                                   code=str(err.code), reason="oidc_error")

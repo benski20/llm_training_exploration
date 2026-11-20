@@ -352,6 +352,15 @@ def _wants_json(accept: str | None) -> bool:
     return "json" in a and "msgpack" not in a
 
 
+#: How often a compute stream re-checks that the token it was opened with is still valid.
+_CREDENTIAL_RECHECK_S = 2.0
+
+
+def client_cert_subject(scope: Mapping[str, Any]) -> str | None:
+    """Verified client-certificate subject the server (or a trusted proxy) put into the ASGI TLS extension."""
+    return _client_cert_subject(scope)
+
+
 def _client_cert_subject(scope: Mapping[str, Any]) -> str | None:
     ext = scope.get("extensions") or {}
     tls = ext.get("tls") or {}
@@ -673,6 +682,21 @@ def create_router(
             async with send_lock:
                 await send({"type": "websocket.close", "code": code, "reason": reason})
 
+        async def watch_credentials(still_valid: Callable[[], bool]) -> None:
+            """Close the channel (1008) once the token it was opened with is revoked or expires."""
+            while True:
+                await asyncio.sleep(_CREDENTIAL_RECHECK_S)
+                try:
+                    ok = await asyncio.to_thread(still_valid)
+                except Exception:  # noqa: S112 - keep the channel; the next check retries
+                    continue
+                if not ok:
+                    log.info("closing a compute stream: its credentials were revoked or expired")
+                    closing.set()
+                    with contextlib.suppress(Exception):
+                        await close(1008, "credentials revoked")
+                    return
+
         async def one(body: bytes) -> None:
             t0 = time.monotonic()
             box: list[Any] = [None, None]
@@ -711,6 +735,10 @@ def create_router(
                 slots.release()
                 await _done(box, t0, status, code)
 
+        watcher: asyncio.Task[None] | None = None
+        still_valid = getattr(identity, "still_valid", None)
+        if callable(still_valid) and getattr(identity, "token_id", None) is not None:
+            watcher = loop.create_task(watch_credentials(still_valid))
         try:
             while not closing.is_set():
                 msg = await receive()
@@ -734,12 +762,16 @@ def create_router(
                 if not t.done():
                     tasks.add(t)
                     t.add_done_callback(tasks.discard)
-            if closing.is_set():
+            if closing.is_set() and (watcher is None or not watcher.done()):
                 with contextlib.suppress(Exception):
                     await close(1008, "unreadable request")
         except Exception as exc:  # disconnects surface as exceptions on some servers
             log.debug("pgw stream closed: %s", type(exc).__name__)
         finally:
+            if watcher is not None:
+                watcher.cancel()
+                with contextlib.suppress(BaseException):
+                    await watcher
             for t in list(tasks):
                 t.cancel()
             if tasks:
