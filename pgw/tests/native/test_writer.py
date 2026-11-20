@@ -369,3 +369,74 @@ def test_python_fallback_when_native_missing(tmp_path: Path, monkeypatch: pytest
             assert torch.equal(res.take(s.id, 6)[1], rows[s.id.key][1])
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("use_native", [True, False])
+def test_failed_write_aborts_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_native: bool) -> None:
+    """A write that fails part-way closes the writer for good: the same rows can never be sealed
+    again under the same (DEK, nonce), the temp file is removed and the key copy wiped."""
+    import errno
+
+    from pgw.maskstore import segment_io
+
+    kp = StaticKeyProvider(os.urandom(32))
+    ring = RING_K40_A12
+    model = make_model(layers=1, seed=4)
+    slots = 9
+    seed = os.urandom(32)
+    rows = _segment_rows(model, ring, slots, seed, checks=2)
+    store = MaskStore.open(tmp_path / "s", kp, low_water_slots=0, fsync=False)
+    try:
+        header = store.writer(FP, ring, model.specs, slots=slots, seed=seed, checks=2, chunk_slots=3).header
+        dek = kp.unwrap(WrappedKey(header.kek_id, header.wrapped_dek_bytes))
+        path = store._segment_dir(FP, ring.name) / f"x{SEGMENT_SUFFIX}"
+        w = SegmentWriter(store, header, path, dek, seed, use_native=use_native)
+        assert w._raw.native is use_native
+        assert (w._raw._aead is None) is use_native  # one DEK copy per writer
+        spec = model.specs[0]
+        _, wr, uw = rows[spec.id.key]
+
+        def fail(*_a: object, **_k: object) -> None:
+            raise OSError(errno.EIO, "injected I/O error")
+
+        if use_native:
+            stub = type("Stub", (), {"seal_chunks": staticmethod(fail), "seal_ring_chunks": staticmethod(fail)})
+            monkeypatch.setattr(native, "fast", stub)
+        else:
+            monkeypatch.setattr(segment_io.os, "pwrite", fail)
+        with pytest.raises(MaskStoreError, match="segment write failed"):
+            w.write_linear(spec.id, wr, uw)
+        monkeypatch.undo()
+        assert w._state == "aborted" and w._raw.closed
+        assert not w._raw.tmp_path.exists()
+        assert w._raw._key == bytearray(len(w._raw._key)) and w._raw._aead is None
+        with pytest.raises(MaskStoreError, match="aborted"):  # no retry with other W r
+            w.write_linear(spec.id, (wr + 1) % ring.modulus, uw)
+        with pytest.raises(MaskStoreError, match="closed"):
+            w._raw.write_chunk(w._layout.secrets_chunk(), bytes(w._layout.secrets_chunk().plain_len))
+        w.abort()  # idempotent
+    finally:
+        store.close()
+
+
+def test_raw_writer_gc_wipes_key_and_temp_file(tmp_path: Path) -> None:
+    kp = StaticKeyProvider(os.urandom(32))
+    store = MaskStore.open(tmp_path / "s", kp, low_water_slots=0)
+    try:
+        header, dek = _header_and_dek(store, kp, make_model(), RING_K40_A12, slots=4, chunk_slots=2)
+    finally:
+        store.close()
+    raw = RawSegmentWriter(tmp_path / f"gc{SEGMENT_SUFFIX}", header, dek, fsync=False, use_native=True)
+    key, tmp = raw._key, raw.tmp_path
+    assert tmp.exists() and any(key)
+    del raw
+    assert not tmp.exists() and key == bytearray(len(key))
+    # A writer whose temp file already exists (another writer's) must not delete it on GC.
+    other = RawSegmentWriter(tmp_path / f"gc2{SEGMENT_SUFFIX}", header, dek, fsync=False, use_native=True)
+    with pytest.raises(MaskStoreError, match="cannot create"):
+        RawSegmentWriter(other.final_path, header, dek, fsync=False, use_native=True)
+    import gc
+
+    gc.collect()
+    assert other.tmp_path.exists()
+    other.abort()

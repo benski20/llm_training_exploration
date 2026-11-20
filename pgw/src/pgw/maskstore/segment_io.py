@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -60,10 +61,13 @@ class RawSegmentWriter:
         self.fsync = fsync
         self._digest = hashlib.sha256(self.header_raw).digest()
         self._nonce_prefix = bytes.fromhex(header.nonce_prefix)
-        self._aead: AESGCM | None = AESGCM(bytes(dek))
         #: Native fast path in use (``use_native=None``: whenever the extension provides it).
         self.native = NATIVE_WRITER if use_native is None else bool(use_native) and NATIVE_WRITER
-        self._key = bytearray(dek) if self.native else bytearray()  # wiped on publish/abort
+        # Exactly one copy of the DEK per writer: the native path's bytearray (wiped on publish,
+        # abort, a failed write or garbage collection) or the Python path's AESGCM object.
+        self._key = bytearray(dek) if self.native else bytearray()
+        self._aead: AESGCM | None = None if self.native else AESGCM(bytes(dek))
+        self._closed = False
         self._written: set[int] = set()
         self._expected = 1 + len(header.linears) * self.layout.chunks_per_linear
         final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,13 +84,18 @@ class RawSegmentWriter:
             raise MaskStoreError(f"cannot write segment header: {exc.strerror}") from exc
 
     @property
+    def closed(self) -> bool:
+        """True after publish, abort or a failed write (no further writes are accepted)."""
+        return self._closed
+
+    @property
     def size(self) -> int:
         """Final file size."""
         return self.layout.total_size
 
     def write_chunk(self, ref: ChunkRef, plaintext: bytes | bytearray | memoryview) -> None:
         """Encrypt and write one chunk."""
-        if self._fd is None or self._aead is None:
+        if self._closed or self._fd is None:
             raise MaskStoreError("segment writer is closed")
         if len(plaintext) != ref.plain_len:
             raise MaskStoreError(f"chunk {ref.index}: plaintext length {len(plaintext)} != {ref.plain_len}")
@@ -102,19 +111,23 @@ class RawSegmentWriter:
                     [(ref.index, ref.offset, 0, ref.plain_len)], WRITER_THREADS,
                 )
             except OSError as exc:
+                self._write_failed()
                 raise MaskStoreError(f"segment write failed: {exc.strerror}") from exc
             finally:
                 mv.release()
             self._written.add(ref.index)
             return
+        assert self._aead is not None
         ct = self._aead.encrypt(
             chunk_nonce(self._nonce_prefix, ref.index), bytes(plaintext), chunk_aad(self._digest, ref.index)
         )
         try:
             n = os.pwrite(self._fd, ct, ref.offset)
         except OSError as exc:
+            self._write_failed()
             raise MaskStoreError(f"segment write failed: {exc.strerror}") from exc
         if n != len(ct):
+            self._write_failed()
             raise MaskStoreError("short write to segment file")
         self._written.add(ref.index)
 
@@ -127,7 +140,7 @@ class RawSegmentWriter:
         :meth:`write_chunk` would. If any element of ``values`` (all rows, not only the jobs')
         lies outside ``[0, 2^k)`` nothing is written and the result is False.
         """
-        if self._fd is None or self._aead is None:
+        if self._closed or self._fd is None:
             raise MaskStoreError("segment writer is closed")
         if not self.native:
             raise MaskStoreError("native segment writer not available")
@@ -147,6 +160,7 @@ class RawSegmentWriter:
                 self._fd, self._key, self._nonce_prefix, self._digest, values, k, raw, WRITER_THREADS
             )
         except OSError as exc:
+            self._write_failed()
             raise MaskStoreError(f"segment write failed: {exc.strerror}") from exc
         if ok:
             self._written.update(j[0] for j in raw)
@@ -156,6 +170,20 @@ class RawSegmentWriter:
         if self._key:
             _zero_bytes(self._key)
 
+    def _write_failed(self) -> None:
+        """A write failed part-way: chunks already on disk are not tracked, so a retry with
+        different plaintext would reuse (DEK, nonce) pairs. Close the writer for good."""
+        self.abort()
+
+    def __del__(self) -> None:
+        # Garbage-collected without publish/abort: wipe the key, close the fd, drop the temp file.
+        # Only a writer that created its temp file (fd still open) may delete it.
+        with contextlib.suppress(Exception):  # interpreter shutdown: modules may be gone
+            if getattr(self, "_fd", None) is not None:
+                self.abort()
+            elif getattr(self, "_key", None):
+                self._wipe_key()
+
     def publish(self, *, replace: bool = False) -> int:
         """fsync, rename into place, fsync the directory; return the file size.
 
@@ -163,7 +191,7 @@ class RawSegmentWriter:
             replace: Atomically replace an existing file at the final path (re-encryption during
                 KEK rotation). By default an existing file is an error.
         """
-        if self._fd is None:
+        if self._closed or self._fd is None:
             raise MaskStoreError("segment writer is closed")
         if len(self._written) != self._expected:
             raise MaskStoreError(
@@ -186,12 +214,14 @@ class RawSegmentWriter:
         except MaskStoreError:
             self.abort()
             raise
+        self._closed = True
         self._aead = None
         self._wipe_key()
         return self.layout.total_size
 
     def abort(self) -> None:
         """Delete the temp file (idempotent)."""
+        self._closed = True
         self._aead = None
         self._wipe_key()
         if self._fd is not None:

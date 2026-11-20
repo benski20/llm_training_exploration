@@ -83,7 +83,10 @@ pub struct Sealer {
 
 impl Sealer {
     pub fn new(key: &[u8; 32], prefix: [u8; NONCE_PREFIX_BYTES], digest: [u8; DIGEST_BYTES]) -> Self {
-        Self { aead: Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key)), prefix, digest }
+        // Borrow the key as `&Key` (a reference cast, no copy) so no unzeroized stack copy of the
+        // DEK is left behind; the caller holds it in `Zeroizing`.
+        let key: &Key<Aes256Gcm> = key.into();
+        Self { aead: Aes256Gcm::new(key), prefix, digest }
     }
 
     /// `chunk_nonce(prefix, index)`.
@@ -440,7 +443,7 @@ fn seal_ring_chunks(
     threads: usize,
 ) -> PyResult<bool> {
     check_fd(fd)?;
-    if k % 8 != 0 || !(8..=64).contains(&k) {
+    if !k.is_multiple_of(8) || !(8..=64).contains(&k) {
         return Err(value_err(format!("bad ring width {k}")));
     }
     let sealer = sealer(key, nonce_prefix, header_digest)?;

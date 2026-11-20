@@ -881,42 +881,50 @@ class SegmentWriter:
         ``wr`` is int64 with values in ``[0, 2^K)``; for ``K <= 32`` it may also be int32 holding
         the low 32 bits of each element (the compact GPU form, as accepted by ``pack_ring``).
         """
-        key = str(lid)
         with self._lock:
             if self._state != "open":
                 raise MaskStoreError(f"segment writer is {self._state}")
-            if key not in self._linears:
-                raise ConfigError(f"linear {key} is not part of this segment")
-            li, lin = self._linears[key]
-            if wr.ndim != 2:
-                raise ShapeError(f"W r for {key} must be 2-D (rows, {lin.out_features})")
-            rows = int(wr.shape[0])
-            if rows <= 0:
-                raise ShapeError("W r chunk has no rows")
-            done = self._rows_done[key]
-            if done + rows > self.header.slots:
-                raise ShapeError(f"{key}: {done + rows} rows exceed the segment's {self.header.slots} slots")
-            if isinstance(wr, torch.Tensor) and wr.dtype == torch.int32 and self.ring.k <= 32:
-                if self._raw.native:
-                    self._write_linear_native(key, li, lin, wr, uw, rows, done)
-                    return
-                wr = wr.cpu().to(torch.int64) & 0xFFFFFFFF  # low 32 bits, unsigned
-            elif self._raw.native:
+            try:
+                self._write_linear_locked(str(lid), wr, uw)
+            except BaseException:
+                if self._raw.closed:  # a write failed part-way: never accept these rows again
+                    self._state = "aborted"
+                    self._wipe()
+                raise
+
+    def _write_linear_locked(self, key: str, wr: torch.Tensor, uw: torch.Tensor) -> None:
+        if key not in self._linears:
+            raise ConfigError(f"linear {key} is not part of this segment")
+        li, lin = self._linears[key]
+        if wr.ndim != 2:
+            raise ShapeError(f"W r for {key} must be 2-D (rows, {lin.out_features})")
+        rows = int(wr.shape[0])
+        if rows <= 0:
+            raise ShapeError("W r chunk has no rows")
+        done = self._rows_done[key]
+        if done + rows > self.header.slots:
+            raise ShapeError(f"{key}: {done + rows} rows exceed the segment's {self.header.slots} slots")
+        if isinstance(wr, torch.Tensor) and wr.dtype == torch.int32 and self.ring.k <= 32:
+            if self._raw.native:
                 self._write_linear_native(key, li, lin, wr, uw, rows, done)
                 return
-            self._check_tensor(wr.cpu(), (rows, lin.out_features), f"W r of {key}")
-            uw_c = uw.cpu()
-            self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
-            packed_uw = pack_ring(uw_c, self.ring)
-            prev = self._uw.get(key)
-            if prev is None:
-                self._uw[key] = packed_uw
-            elif not hmac.compare_digest(prev, packed_uw):
-                raise MaskStoreError(f"uW of {key} changed between chunks")
-            pend = self._pending[key]
-            pend += pack_ring(wr, self.ring)
-            self._rows_done[key] = done + rows
-            self._flush(key, li, lin)
+            wr = wr.cpu().to(torch.int64) & 0xFFFFFFFF  # low 32 bits, unsigned
+        elif self._raw.native:
+            self._write_linear_native(key, li, lin, wr, uw, rows, done)
+            return
+        self._check_tensor(wr.cpu(), (rows, lin.out_features), f"W r of {key}")
+        uw_c = uw.cpu()
+        self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
+        packed_uw = pack_ring(uw_c, self.ring)
+        prev = self._uw.get(key)
+        if prev is None:
+            self._uw[key] = packed_uw
+        elif not hmac.compare_digest(prev, packed_uw):
+            raise MaskStoreError(f"uW of {key} changed between chunks")
+        pend = self._pending[key]
+        pend += pack_ring(wr, self.ring)
+        self._rows_done[key] = done + rows
+        self._flush(key, li, lin)
 
     def _write_linear_native(
         self, key: str, li: int, lin: SegmentLinear, wr: torch.Tensor, uw: torch.Tensor, rows: int, done: int
