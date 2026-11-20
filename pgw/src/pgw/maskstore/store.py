@@ -832,6 +832,11 @@ class SegmentWriter:
 
     ``write_linear`` may be called several times per linear with consecutive row chunks of any size;
     linears may come in any order. ``uW`` must be identical on every call for a linear.
+
+    With the native extension (``pgw_fast.seal_ring_chunks``) the whole chunks of each call are
+    range-checked, packed, encrypted and written by Rust threads straight from the ``W r`` tensor
+    (GIL released, plaintext only in zeroized scratch buffers); only the rows of a chunk that
+    straddles two calls go through the pending buffer. The file is byte-identical either way.
     """
 
     def __init__(
@@ -841,6 +846,8 @@ class SegmentWriter:
         final_path: Path,
         dek: bytes,
         seed: bytes,
+        *,
+        use_native: bool | None = None,
     ):
         self._store = store
         self.header = header
@@ -848,7 +855,7 @@ class SegmentWriter:
         self.ring = header.ring_params
         self._seed = bytearray(seed)
         self._seed_hash = seed_hash(seed)
-        self._raw = RawSegmentWriter(final_path, header, dek, fsync=store.settings.fsync)
+        self._raw = RawSegmentWriter(final_path, header, dek, fsync=store.settings.fsync, use_native=use_native)
         self._layout = self._raw.layout
         self._linears = {lin.id: (i, lin) for i, lin in enumerate(header.linears)}
         self._rows_done: dict[str, int] = dict.fromkeys(self._linears, 0)
@@ -869,35 +876,125 @@ class SegmentWriter:
             raise ShapeError(f"{what} has values outside the canonical ring range [0, 2^{self.ring.k})")
 
     def write_linear(self, lid: LinearId | str, wr: torch.Tensor, uw: torch.Tensor) -> None:
-        """Encrypt and append ``W r`` rows (may be called in slot chunks, in order) and ``uW``."""
-        key = str(lid)
+        """Encrypt and append ``W r`` rows (may be called in slot chunks, in order) and ``uW``.
+
+        ``wr`` is int64 with values in ``[0, 2^K)``; for ``K <= 32`` it may also be int32 holding
+        the low 32 bits of each element (the compact GPU form, as accepted by ``pack_ring``).
+        """
         with self._lock:
             if self._state != "open":
                 raise MaskStoreError(f"segment writer is {self._state}")
-            if key not in self._linears:
-                raise ConfigError(f"linear {key} is not part of this segment")
-            li, lin = self._linears[key]
-            if wr.ndim != 2:
-                raise ShapeError(f"W r for {key} must be 2-D (rows, {lin.out_features})")
-            rows = int(wr.shape[0])
-            if rows <= 0:
-                raise ShapeError("W r chunk has no rows")
-            done = self._rows_done[key]
-            if done + rows > self.header.slots:
-                raise ShapeError(f"{key}: {done + rows} rows exceed the segment's {self.header.slots} slots")
-            self._check_tensor(wr.cpu(), (rows, lin.out_features), f"W r of {key}")
-            uw_c = uw.cpu()
-            self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
-            packed_uw = pack_ring(uw_c, self.ring)
+            try:
+                self._write_linear_locked(str(lid), wr, uw)
+            except BaseException:
+                if self._raw.closed:  # a write failed part-way: never accept these rows again
+                    self._state = "aborted"
+                    self._wipe()
+                raise
+
+    def _write_linear_locked(self, key: str, wr: torch.Tensor, uw: torch.Tensor) -> None:
+        if key not in self._linears:
+            raise ConfigError(f"linear {key} is not part of this segment")
+        li, lin = self._linears[key]
+        if wr.ndim != 2:
+            raise ShapeError(f"W r for {key} must be 2-D (rows, {lin.out_features})")
+        rows = int(wr.shape[0])
+        if rows <= 0:
+            raise ShapeError("W r chunk has no rows")
+        done = self._rows_done[key]
+        if done + rows > self.header.slots:
+            raise ShapeError(f"{key}: {done + rows} rows exceed the segment's {self.header.slots} slots")
+        if isinstance(wr, torch.Tensor) and wr.dtype == torch.int32 and self.ring.k <= 32:
+            if self._raw.native:
+                self._write_linear_native(key, li, lin, wr, uw, rows, done)
+                return
+            wr = wr.cpu().to(torch.int64) & 0xFFFFFFFF  # low 32 bits, unsigned
+        elif self._raw.native:
+            self._write_linear_native(key, li, lin, wr, uw, rows, done)
+            return
+        self._check_tensor(wr.cpu(), (rows, lin.out_features), f"W r of {key}")
+        uw_c = uw.cpu()
+        self._check_tensor(uw_c, (self.header.checks, lin.in_features), f"uW of {key}")
+        packed_uw = pack_ring(uw_c, self.ring)
+        prev = self._uw.get(key)
+        if prev is None:
+            self._uw[key] = packed_uw
+        elif not hmac.compare_digest(prev, packed_uw):
+            raise MaskStoreError(f"uW of {key} changed between chunks")
+        pend = self._pending[key]
+        pend += pack_ring(wr, self.ring)
+        self._rows_done[key] = done + rows
+        self._flush(key, li, lin)
+
+    def _write_linear_native(
+        self, key: str, li: int, lin: SegmentLinear, wr: torch.Tensor, uw: torch.Tensor, rows: int, done: int
+    ) -> None:
+        """:meth:`write_linear` through ``pgw_fast.seal_ring_chunks`` (same checks, same bytes).
+
+        Whole chunks are written straight from ``wr``; the rows that complete a chunk begun by the
+        previous call (head) or begin one finished by the next call (tail) go through the pending
+        buffer as in the Python path. Every check runs before anything is written or recorded.
+        """
+        what = f"W r of {key}"
+        k = self.ring.k
+        compact = isinstance(wr, torch.Tensor) and wr.dtype == torch.int32 and k <= 32
+        if not isinstance(wr, torch.Tensor) or not (wr.dtype == torch.int64 or compact):
+            raise ShapeError(f"{what} must be an int64 tensor")
+        if tuple(wr.shape) != (rows, lin.out_features):
+            raise ShapeError(f"{what} has shape {tuple(wr.shape)}, expected {(rows, lin.out_features)}")
+        vals = np.ascontiguousarray(wr.detach().cpu().numpy())
+        range_err = f"{what} has values outside the canonical ring range [0, 2^{k})"
+        try:  # uW checks first, but an out-of-range W r is reported first (as in the Python path)
+            # Same checks as _check_tensor, in numpy: torch's threaded min/max costs milliseconds per
+            # call on a busy host even for the small uW.
+            uw_what = f"uW of {key}"
+            uw_shape = (self.header.checks, lin.in_features)
+            if not isinstance(uw, torch.Tensor) or uw.dtype != torch.int64:
+                raise ShapeError(f"{uw_what} must be an int64 tensor")
+            if tuple(uw.shape) != uw_shape:
+                raise ShapeError(f"{uw_what} has shape {tuple(uw.shape)}, expected {uw_shape}")
+            uw_np = uw.detach().cpu().numpy()
+            if uw_np.size and (int(uw_np.min()) < 0 or int(uw_np.max()) > self.ring.mask):
+                raise ShapeError(f"{uw_what} has values outside the canonical ring range [0, 2^{k})")
+            packed_uw = pack_ring(uw_np, self.ring)
             prev = self._uw.get(key)
-            if prev is None:
-                self._uw[key] = packed_uw
-            elif not hmac.compare_digest(prev, packed_uw):
+            if prev is not None and not hmac.compare_digest(prev, packed_uw):
                 raise MaskStoreError(f"uW of {key} changed between chunks")
-            pend = self._pending[key]
-            pend += pack_ring(wr, self.ring)
-            self._rows_done[key] = done + rows
-            self._flush(key, li, lin)
+        except (ShapeError, MaskStoreError):
+            if not self._raw.write_ring_chunks(vals, k, []):  # range check only
+                raise ShapeError(range_err) from None
+            raise
+        lay = self._layout
+        cs = self.header.chunk_slots
+        row_bytes = lin.out_features * lay.bpe
+        pend = self._pending[key]
+        j0, partial = divmod(done, cs)
+        if len(pend) != partial * row_bytes:  # pragma: no cover - invariant of _flush
+            raise MaskStoreError(f"{key}: pending rows out of step")
+        head = min(rows, lay.chunk_rows(j0) - partial) if partial else 0
+        jobs = []
+        r = head
+        while r < rows:
+            j = (done + r) // cs
+            n = lay.chunk_rows(j)
+            if r + n > rows:
+                break
+            jobs.append((lay.wr_chunk(li, j), r, n))
+            r += n
+        if not self._raw.write_ring_chunks(vals, k, jobs):
+            raise ShapeError(range_err)
+        if prev is None:
+            self._uw[key] = packed_uw
+        self._rows_done[key] = done + rows
+        if head:
+            pend += pack_ring(vals[:head], self.ring)
+            need = lay.chunk_rows(j0) * row_bytes
+            if len(pend) == need:
+                self._raw.write_chunk(lay.wr_chunk(li, j0), pend)
+                _zero_prefix(pend, need)
+                del pend[:need]
+        if r < rows:
+            pend += pack_ring(vals[r:], self.ring)
 
     def _flush(self, key: str, li: int, lin: SegmentLinear) -> None:
         cs = self.header.chunk_slots

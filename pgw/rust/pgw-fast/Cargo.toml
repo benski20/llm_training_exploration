@@ -19,3 +19,12 @@ numpy = "0.23"
 # pgw_core_rs::prng); same versions as pgw-core-rs, already in Cargo.lock.
 chacha20 = "0.9"
 zeroize = "1"
+# writer.rs: AES-256-GCM of the segment writer (RustCrypto; AES-NI / PCLMULQDQ picked at run time).
+# 0.11 (aes 0.9, polyval 0.7) measured 2.5x faster than 0.10 here; `zeroize` wipes the key schedule on drop.
+# Note: these pull in crates that need Rust 1.89 (the workspace MSRV); Cargo.lock is format v4,
+# which needs cargo >= 1.78.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "zeroize"] }
+
+[dev-dependencies]
+# writer.rs tests: the allocating `Aead::encrypt` as an independent reference.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
