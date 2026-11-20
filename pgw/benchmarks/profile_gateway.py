@@ -12,6 +12,12 @@ Prints per-linear-group and per-token gateway CPU (extrapolated to the full laye
 with ``--profile``, the top functions by cumulative time. ``--sessions N`` makes N reservations and
 sends one call per session in each ``forward_many`` (as the batching engine does); the per-call
 numbers are then per round trip (all sessions), and ``gateway_ms_per_session_call`` divides by N.
+
+Speculation-shaped sweep (chat-speed plan WP-A0): ``--sessions 1 --rows 1,2,4,8`` measures one session's
+verify pass at each row count R (the same masks, checks and unmasking a fixed-R pass does) and adds
+``per_extra_row`` (gateway ms per full-model pass per extra row, against the first ``--rows`` value, given
+as ``per_extra_row_baseline_rows``; start the list with 1 to measure against decode). With one ``--rows``
+value the output is the single result as before. ``--profile`` tables print after the JSON, as before.
 """
 
 from __future__ import annotations
@@ -71,7 +77,8 @@ def main() -> None:
     ap.add_argument("--preset", default="7b", choices=sorted(PRESETS))
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--steps", type=int, default=8)
-    ap.add_argument("--rows", type=int, default=1, help="rows per call (1 = decode, >1 = prefill/batch)")
+    ap.add_argument("--rows", default="1", help="rows per call (1 = decode, >1 = prefill/batch/verify); a comma "
+                    "list sweeps them (e.g. 1,2,4,8 with --sessions 1: speculative verify passes)")
     ap.add_argument("--sessions", type=int, default=1, help="reservations per round trip (one call each)")
     ap.add_argument("--ring", default="K40A12")
     ap.add_argument("--workdir", default=None)
@@ -88,14 +95,14 @@ def main() -> None:
     args = ap.parse_args()
 
     from pgw.core import RingParams
-    from pgw.core.types import LinearId
     from pgw.engine import LocalComputeClient
-    from pgw.engine.backends import LinearCall, MaskedBackend
+    from pgw.engine.backends import MaskedBackend
     from pgw.factory import MaskGenerator
     from pgw.maskstore import FileKeyProvider, MaskStore
     from pgw.modelpack import ModelPack, pack_checkpoint
 
     preset = PRESETS[args.preset]
+    rows_list = [int(r) for r in str(args.rows).split(",") if r]
     ring = RingParams.from_name(args.ring)
     work = Path(args.workdir or tempfile.mkdtemp(prefix="pgw-prof-"))
     work.mkdir(parents=True, exist_ok=True)
@@ -109,7 +116,7 @@ def main() -> None:
     pack = ModelPack.open(pk)
     print(f"pack ready in {time.perf_counter() - t0:.1f}s")
 
-    slots = args.steps * args.rows + 4
+    slots = args.steps * sum(rows_list) + 4
     nses = max(1, args.sessions)
     counter = work / "counter"
     kp = FileKeyProvider(work / "kek", create=True)
@@ -163,12 +170,43 @@ def main() -> None:
         noise = OutboundNoiseMonitor(ring)
     be = MaskedBackend(pack, None, client, ring, pack.fingerprint, min_soundness_bits=20, noise_monitor=noise)
     sessions = [store.reserve(pack.fingerprint, ring, slots) for _ in range(nses)]
-    groups = ["qkv", "o", "gate_up", "down"]
     in_dim = {sp.id.kind.value: sp.in_features
               for sp in pack.linear_specs() if sp.id.layer == 0}
 
+    measured = [_measure(args, rows, be, client, sessions, in_dim, preset, nses, TimedClient) for rows in rows_list]
+    results = [m[0] for m in measured]
+    out = results[0] if len(results) == 1 else {
+        "preset": args.preset, "ring": args.ring, "sessions": nses, "sweep": results,
+        "per_extra_row_baseline_rows": results[0]["rows"],
+        "per_extra_row": {
+            str(r["rows"]): {
+                "gateway_ms_per_step_full_model": round(
+                    (r["gateway_s_per_step_full_model"] - results[0]["gateway_s_per_step_full_model"]) * 1e3
+                    / max(1, r["rows"] - results[0]["rows"]), 4)}
+            for r in results[1:]},
+    }
+    print(json.dumps(out, indent=2))
+    if args.json:
+        Path(args.json).write_text(json.dumps(out, indent=2))
+    for _, tables in measured:
+        if tables:
+            print(tables)
+    for r in sessions:
+        r.close()
+    store.close()
+
+
+def _measure(args: Any, rows: int, be: Any, client: Any, sessions: list[Any], in_dim: dict[str, int],
+             preset: dict[str, int], nses: int, TimedClient: Any) -> tuple[dict[str, Any], str]:
+    """Gateway ms per call at ``rows`` rows per session call (warm-up step + ``steps - 1`` measured), and the
+    ``--profile`` tables as text (empty without ``--profile``); the caller prints them after the JSON."""
+    from pgw.core.types import LinearId
+    from pgw.engine.backends import LinearCall
+
+    groups = ["qkv", "o", "gate_up", "down"]
+
     def calls_for(lid: Any) -> list[Any]:
-        return [LinearCall(lid, torch.randn(args.rows, in_dim[lid.kind.value]), session=r) for r in sessions]
+        return [LinearCall(lid, torch.randn(rows, in_dim[lid.kind.value]), session=r) for r in sessions]
 
     # warm up every layer (weight norms, chunk and stream-key caches are per linear), i.e. one full step:
     # warming only layer 0 left the first measured step paying the other layers' first-call costs
@@ -213,7 +251,7 @@ def main() -> None:
     scale = preset["full_layers"] / 1
     ncalls = max(1, n * len(groups))
     out = {
-        "preset": args.preset, "ring": args.ring, "rows": args.rows, "sessions": nses,
+        "preset": args.preset, "ring": args.ring, "rows": rows, "sessions": nses,
         "gateway_ms_per_call": {g: 1000 * v / n for g, v in per_group.items()},
         "gateway_ms_per_call_avg": 1000 * sum(per_group.values()) / ncalls,
         "gateway_ms_per_session_call": 1000 * sum(per_group.values()) / ncalls / nses,
@@ -225,19 +263,15 @@ def main() -> None:
         "wall_s": wall,
         "wall_ms_per_call": 1000 * wall / ncalls,
     }
-    print(json.dumps(out, indent=2))
-    if args.json:
-        Path(args.json).write_text(json.dumps(out, indent=2))
+    tables = ""
     if prof:
         s = io.StringIO()
         pstats.Stats(prof, stream=s).sort_stats("cumulative").print_stats(35)
-        print(s.getvalue())
+        tables += s.getvalue() + "\n"
         s = io.StringIO()
         pstats.Stats(prof, stream=s).sort_stats("tottime").print_stats(25)
-        print(s.getvalue())
-    for r in sessions:
-        r.close()
-    store.close()
+        tables += s.getvalue()
+    return out, tables
 
 
 if __name__ == "__main__":
