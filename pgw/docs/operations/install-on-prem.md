@@ -141,6 +141,16 @@ without a draft model and helps most when answers quote their input (RAG, code e
 structured output). Output is unchanged. Rejected proposals use mask rows, so it raises mask use
 somewhat on text that does not repeat.
 
+Two per-model throughput settings. `"inline_max_rows"` (default 8) lets decode round trips do their
+gateway-side work on the event loop instead of handing it to the model's worker thread, which saves
+two thread switches per round trip; it never applies to steps that could block (a mask window
+extension, a reservation's first pass) or to the LM head. Set 0 to turn it off. `"batch_lm_head":
+true` computes the float32 LM head of all concurrently decoding requests in one product, so the head
+weights are read once per step instead of once per request (with 4 requests on a 4-vCPU host about
+0.19 s to 0.11 s per step for a 7B head). It is off by default because it changes logits in the last
+float32 bits: a request's logprobs then depend on which other requests shared its steps. The
+distribution, and so output quality, is the same, and greedy tokens only change on exact near-ties.
+
 Environment (`/etc/pgw/gateway.env`):
 
 ```bash

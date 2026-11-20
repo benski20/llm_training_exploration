@@ -118,6 +118,19 @@ class GatewayModelConfig(BaseModel):
     max_queue: int = Field(256, ge=0, description="Requests waiting for a session slot before 503")
     queue_timeout_s: float = Field(30.0, gt=0, description="Max wait in the request queue")
     device: str = "cpu"
+    inline_max_rows: int = Field(
+        8, ge=0, description="Masked round trips of at most this many rows (decode) run their gateway-side work "
+        "(verify and unmask the results, the plaintext step, mask the next calls) on the event loop when the model's "
+        "worker thread is idle, saving two thread switches per round trip (about 0.3 ms each measured on a busy "
+        "4-vCPU host). Steps with the LM head always use the worker thread. 0 = always use the worker thread",
+    )
+    batch_lm_head: bool = Field(
+        False, description="Opt-in: one LM-head matrix product for all sequences of a batched decode step (reads "
+        "the float32 head weights once per step instead of once per sequence: with N concurrent requests about N "
+        "times less LM-head time). Logits then change in the last float32 bits (summation order), so logprobs of a "
+        "request depend on which requests shared its steps; quality is unchanged. Off: outputs are bit-identical "
+        "whatever the batch",
+    )
 
     @field_validator("ring")
     @classmethod

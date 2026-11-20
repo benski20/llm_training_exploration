@@ -322,12 +322,73 @@ fn unpack_rows<'py>(
     Ok(arr)
 }
 
+/// [`unpack_rows`] as uint32 (`K <= 32`): half the memory of the int64 form, same values. The
+/// gateway's fused finish (`finish_group`) reads `W r` in this form.
+#[pyfunction]
+#[pyo3(signature = (buf, row_offset, rows, cols, k))]
+fn unpack_rows_u32<'py>(
+    py: Python<'py>,
+    buf: &Bound<'py, PyAny>,
+    row_offset: i64,
+    rows: i64,
+    cols: i64,
+    k: u32,
+) -> PyResult<Bound<'py, PyArray2<u32>>> {
+    if k % 8 != 0 || !(8..=32).contains(&k) {
+        return Err(value_err(format!("bad ring width {k} for uint32 rows")));
+    }
+    if row_offset < 0 || rows < 0 || cols < 0 {
+        return Err(value_err("row_offset, rows and cols must be >= 0"));
+    }
+    let nb = (k / 8) as usize;
+    let (rows, cols) = (rows as usize, cols as usize);
+    let pb = PyBuffer::<u8>::get(buf)?;
+    if !pb.is_c_contiguous() {
+        return Err(value_err("buffer must be C-contiguous"));
+    }
+    let len = pb.len_bytes();
+    let row_bytes = cols.checked_mul(nb).ok_or_else(|| value_err("row size overflows"))?;
+    let a = (row_offset as usize).checked_mul(row_bytes);
+    let b = rows.checked_mul(row_bytes).and_then(|n| a.and_then(|a| a.checked_add(n)));
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) if b <= len => (a, b),
+        _ => {
+            return Err(value_err(format!(
+                "rows [{row_offset}, {row_offset}+{rows}) of {cols}x{nb}-byte elements exceed the {len}-byte buffer"
+            )))
+        }
+    };
+    let arr = PyArray2::<u32>::zeros(py, [rows, cols], false);
+    // SAFETY: freshly allocated, C-contiguous, not yet shared with Python code.
+    let out = unsafe { arr.as_slice_mut() }.map_err(|e| value_err(e.to_string()))?;
+    // SAFETY: `pb` holds a buffer export of `len` contiguous bytes; `a..b` is within it.
+    let src: &[u8] = unsafe { std::slice::from_raw_parts(pb.buf_ptr().cast::<u8>(), len) };
+    let src = &src[a..b];
+    py.allow_threads(|| match nb {
+        4 => {
+            for (o, c) in out.iter_mut().zip(src.chunks_exact(4)) {
+                *o = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            }
+        }
+        _ => {
+            for (o, c) in out.iter_mut().zip(src.chunks_exact(nb)) {
+                let mut w = [0u8; 4];
+                w[..nb].copy_from_slice(c);
+                *o = u32::from_le_bytes(w);
+            }
+        }
+    });
+    drop(pb);
+    Ok(arr)
+}
+
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mask_rows, m)?)?;
     m.add_function(wrap_pyfunction!(mask_key, m)?)?;
     m.add_function(wrap_pyfunction!(mask_rows_with_key, m)?)?;
     m.add_function(wrap_pyfunction!(unpack_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(unpack_rows_u32, m)?)?;
     Ok(())
 }
 

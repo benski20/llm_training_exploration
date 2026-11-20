@@ -305,6 +305,12 @@ class MaskReservation:
         # (extent index, linear key) -> (chunk index, packed plaintext)
         self._chunk_cache: dict[tuple[int, str], tuple[int, bytearray]] = {}
         self._uw_cache: dict[tuple[int, str], tuple[torch.Tensor, torch.Tensor]] = {}
+        # (extent index, linear key) -> (token, u, uw) in the narrowest word width (see checks_compact)
+        self._compact_cache: dict[tuple[int, str], tuple[tuple[str, str], np.ndarray, np.ndarray]] = {}
+        # (extent index, linear key) -> ChaCha20 key of that extent's "r" stream (HKDF once, not per take)
+        self._rkey_cache: dict[tuple[int, str], bytearray] = {}
+        # linear key -> index of the extent its cursor is in (cursors only move forward)
+        self._cur_ext: dict[str, int] = dict.fromkeys(self._linears, 0)
 
     def __repr__(self) -> str:
         return (
@@ -334,7 +340,7 @@ class MaskReservation:
         return tuple(self._linears)
 
     def _key(self, lid: LinearId | str) -> str:
-        key = str(lid)
+        key = lid if type(lid) is str else lid.key if type(lid) is LinearId else str(lid)
         if key not in self._linears:
             raise ConfigError(f"linear {key} is not covered by this reservation")
         return key
@@ -348,6 +354,16 @@ class MaskReservation:
             if e.first_row <= row < e.end_row:
                 return i
         raise MaskExhaustedError("mask reservation exhausted", details={"slots": self._slots})
+
+    def _cursor_extent(self, key: str, cur: int) -> int:
+        """Extent index of row ``cur`` (the cursor of ``key``); call with the lock held."""
+        i = self._cur_ext[key]
+        ex = self._extents
+        if i < len(ex) and ex[i].first_row <= cur < ex[i].end_row:
+            return i
+        i = self._extent_index(cur)
+        self._cur_ext[key] = i
+        return i
 
     def remaining(self, lid: LinearId | str) -> int:
         """Rows not yet taken for ``lid``."""
@@ -368,7 +384,7 @@ class MaskReservation:
             cur = self._cursor[key]
             if cur >= self._slots:
                 return 0
-            return self._extents[self._extent_index(cur)].end_row - cur
+            return self._extents[self._cursor_extent(key, cur)].end_row - cur
 
     # ---- masks -----------------------------------------------------------------------------------
     def take(self, lid: LinearId | str, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -394,32 +410,77 @@ class MaskReservation:
                     "mask reservation exhausted",
                     details={"linear": key, "needed": rows, "remaining": self._slots - start},
                 )
-            ei = self._extent_index(start)
+            ei = self._cursor_extent(key, start)
             ex = self._extents[ei]
             if start + rows > ex.end_row:
                 raise ConfigError(
                     f"take({key}, {rows}) crosses a segment extent boundary; split at rows_until_boundary()",
                     details={"rows_until_boundary": ex.end_row - start},
                 )
-            # Advance first: whatever happens below, these rows are never handed out again.
-            self._cursor[key] = start + rows
-            li, lin = self._linears[key]
-            slot0 = ex.ext.start + (start - ex.first_row)
-            seed, _ = ex.secrets()
-            r = _mask_rows(seed, lin.in_features, self.ring.k, slot0, rows, key)
-            wr = self._read_wr(ei, ex, li, lin, slot0, rows)
-            if slot0 + rows >= ex.ext.start + ex.ext.count:
-                done = self._chunk_cache.pop((ei, key), None)  # this linear is done with the extent
-                if done is not None:
-                    _zero(done[1])  # decrypted W r rows (incl. slots other reservations may still use)
+            return self._take_locked(key, ei, ex, start, rows)
+
+    def take_checked(
+        self, lid: LinearId | str, max_rows: int, checks: bool
+    ) -> tuple[int, torch.Tensor, torch.Tensor, tuple[tuple[str, str], np.ndarray, np.ndarray] | None]:
+        """Gateway hot path: :meth:`rows_until_boundary`, :meth:`checks_compact` and :meth:`take` in one step.
+
+        Takes ``min(max_rows, rows left in the current extent)`` rows of ``lid`` and returns
+        ``(rows, r, W r, checks)``, where ``checks`` is :meth:`checks_compact` of the extent the rows
+        came from (``None`` unless ``checks``). Same errors as :meth:`take`.
+        """
+        key = self._key(lid)
+        if not isinstance(max_rows, int) or isinstance(max_rows, bool) or max_rows <= 0:
+            raise ConfigError(f"rows must be a positive int, got {max_rows!r}")
+        with self._lock:
+            self._alive()
+            start = self._cursor[key]
+            if start >= self._slots:
+                raise MaskExhaustedError(
+                    "mask reservation exhausted", details={"linear": key, "needed": max_rows, "remaining": 0}
+                )
+            ei = self._cursor_extent(key, start)
+            ex = self._extents[ei]
+            rows = min(max_rows, ex.end_row - start)
+            chk = self._compact_locked(key, ei) if checks else None
+            r, wr = self._take_locked(key, ei, ex, start, rows, compact=True)
+        return rows, r, wr, chk
+
+    def _take_locked(
+        self, key: str, ei: int, ex: _Extent, start: int, rows: int, compact: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Advance first: whatever happens below, these rows are never handed out again.
+        self._cursor[key] = start + rows
+        li, lin = self._linears[key]
+        slot0 = ex.ext.start + (start - ex.first_row)
+        r = self._mask_rows_locked(ei, ex, key, lin.in_features, slot0, rows)
+        wr = self._read_wr(ei, ex, li, lin, slot0, rows, compact)
+        if slot0 + rows >= ex.ext.start + ex.ext.count:
+            done = self._chunk_cache.pop((ei, key), None)  # this linear is done with the extent
+            if done is not None:
+                _zero(done[1])  # decrypted W r rows (incl. slots other reservations may still use)
+            rkey = self._rkey_cache.pop((ei, key), None)
+            if rkey is not None:
+                _zero(rkey)
         return r, wr
 
-    def _read_wr(self, ei: int, ex: _Extent, li: int, lin: SegmentLinear, slot0: int, rows: int) -> torch.Tensor:
+    def _mask_rows_locked(self, ei: int, ex: _Extent, key: str, cols: int, slot0: int, rows: int) -> torch.Tensor:
+        """``_mask_rows(seed, ...)`` with the stream key derived once per (extent, linear)."""
+        k = self.ring.k
+        rkey = self._rkey_cache.get((ei, key))
+        if rkey is None:
+            seed, _ = ex.secrets()
+            rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
+        return _mask_rows_keyed(rkey, cols, k, slot0, rows)
+
+    def _read_wr(
+        self, ei: int, ex: _Extent, li: int, lin: SegmentLinear, slot0: int, rows: int, compact: bool = False
+    ) -> torch.Tensor:
+        """``W r`` rows as int64, or (``compact``, K <= 32, native) uint32: same values, half the bytes."""
         layout = ex.seg.layout
         cs = ex.seg.header.chunk_slots
         bpe = layout.bpe
         row_bytes = lin.out_features * bpe
-        out = bytearray(rows * row_bytes)
+        out: bytearray | None = None  # only when the rows span chunks (or no native unpack)
         done = 0
         while done < rows:
             slot = slot0 + done
@@ -434,10 +495,15 @@ class MaskReservation:
             in_chunk = slot - j * cs
             n = min(rows - done, layout.chunk_rows(j) - in_chunk)
             if done == 0 and n == rows and _native_unpack:  # all rows in one cached chunk: no copy
-                _zero(out)
+                if compact and _native_unpack32 and self.ring.k <= 32:
+                    return torch.from_numpy(native.fast.unpack_rows_u32(buf, in_chunk, rows, lin.out_features,
+                                                                        self.ring.k))
                 return torch.from_numpy(native.fast.unpack_rows(buf, in_chunk, rows, lin.out_features, self.ring.k))
+            if out is None:
+                out = bytearray(rows * row_bytes)
             out[done * row_bytes : (done + n) * row_bytes] = buf[in_chunk * row_bytes : (in_chunk + n) * row_bytes]
             done += n
+        assert out is not None
         t = unpack_ring(out, (rows, lin.out_features), self.ring)
         _zero(out)
         return t
@@ -466,26 +532,57 @@ class MaskReservation:
         uw64.flags.writeable = False
         return u64, uw64
 
+    def checks_compact(self, lid: LinearId | str) -> tuple[tuple[str, str], np.ndarray, np.ndarray]:
+        """``(token, u, uw)``: :meth:`checks` as read-only numpy arrays of the narrowest word that holds
+        ``K`` bits (uint32 for ``K <= 32``, else uint64), cached, plus a token naming the vectors.
+
+        The vectors depend only on the segment and the linear, so any two reservations (or extents)
+        with equal tokens have identical vectors: the gateway checks rows of several sessions
+        against them in one pass. The arrays are wiped when the reservation closes.
+        """
+        key = self._key(lid)
+        with self._lock:
+            self._alive()
+            cur = self._cursor[key]
+            ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
+            return self._compact_locked(key, ei)
+
+    def _compact_locked(self, key: str, ei: int) -> tuple[tuple[str, str], np.ndarray, np.ndarray]:
+        hit = self._compact_cache.get((ei, key))
+        if hit is None:
+            u, uw = self._uw_locked(key, ei)
+            dt = np.uint32 if self.ring.k <= 32 else np.uint64
+            un = u.numpy().astype(dt)
+            uwn = uw.numpy().astype(dt)
+            un.flags.writeable = False
+            uwn.flags.writeable = False
+            hit = ((self._extents[ei].ext.segment_id, key), un, uwn)
+            self._compact_cache[(ei, key)] = hit
+        return hit
+
     def _checks_cached(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
         key = self._key(lid)
         with self._lock:
             self._alive()
-            if self._checks == 0:
-                raise ConfigError("segments of this reservation carry no Freivalds vectors (checks=0)")
             cur = self._cursor[key]
             # Before take(): the extent the next rows come from. Once every row of the linear was
             # taken: the last extent (so a caller may also verify after taking).
-            ei = self._extent_index(cur) if cur < self._slots else len(self._extents) - 1
-            hit = self._uw_cache.get((ei, key))
-            if hit is None:
-                ex = self._extents[ei]
-                li, lin = self._linears[key]
-                seed, uw_views = ex.secrets()
-                u = SeedExpander(seed).ring_uniform((self._checks, lin.out_features), self.ring.k, "u", key)
-                uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
-                hit = (u, uw)
-                self._uw_cache[(ei, key)] = hit
-            return hit
+            ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
+            return self._uw_locked(key, ei)
+
+    def _uw_locked(self, key: str, ei: int) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._checks == 0:
+            raise ConfigError("segments of this reservation carry no Freivalds vectors (checks=0)")
+        hit = self._uw_cache.get((ei, key))
+        if hit is None:
+            ex = self._extents[ei]
+            li, lin = self._linears[key]
+            seed, uw_views = ex.secrets()
+            u = SeedExpander(seed).ring_uniform((self._checks, lin.out_features), self.ring.k, "u", key)
+            uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
+            hit = (u, uw)
+            self._uw_cache[(ei, key)] = hit
+        return hit
 
     # ---- lifecycle -------------------------------------------------------------------------------
     def close(self) -> None:
@@ -501,6 +598,14 @@ class MaskReservation:
                 u.zero_()
                 uw.zero_()
             self._uw_cache.clear()
+            for _, cu, cuw in self._compact_cache.values():
+                for a in (cu, cuw):  # read-only to callers; this owner may zero them
+                    a.flags.writeable = True
+                    a.fill(0)
+            self._compact_cache.clear()
+            for rk in self._rkey_cache.values():
+                _zero(rk)
+            self._rkey_cache.clear()
             for e in self._extents:
                 e.wipe()
             used = max(self._cursor.values(), default=0)
@@ -526,6 +631,8 @@ class MaskReservation:
 
 _native_unpack = native.native_available("unpack_rows")
 _native_mask_rows = native.native_available("mask_rows")
+_native_mask_rows_key = native.native_available("mask_rows_with_key")
+_native_unpack32 = native.native_available("unpack_rows_u32")
 
 
 def _mask_rows(seed: bytes, cols: int, k: int, slot0: int, rows: int, key: str) -> torch.Tensor:
@@ -536,6 +643,13 @@ def _mask_rows(seed: bytes, cols: int, k: int, slot0: int, rows: int, key: str) 
     if _native_mask_rows and (rows * cols * 8 >= 512 * 1024 or cols <= 4096):
         return torch.from_numpy(native.fast.mask_rows(seed, ["r", key], cols, k, slot0, rows))
     return SeedExpander(seed).ring_uniform_rows(cols, k, slot0, rows, "r", key)
+
+
+def _mask_rows_keyed(key: bytearray, cols: int, k: int, slot0: int, rows: int) -> torch.Tensor:
+    """:func:`_mask_rows` from the stream key (``SeedExpander.stream_key(seed, "r", linear)``)."""
+    if _native_mask_rows_key and (rows * cols * 8 >= 512 * 1024 or cols <= 4096):
+        return torch.from_numpy(native.fast.mask_rows_with_key(key, cols, k, slot0, rows))
+    return SeedExpander.ring_uniform_rows_with_key(key, cols, k, slot0, rows)
 
 
 def _decrypt_buf(seg: Any, ref: Any) -> bytearray:

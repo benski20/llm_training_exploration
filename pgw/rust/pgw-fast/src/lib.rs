@@ -5,7 +5,7 @@
 //!
 //! | module | Python counterpart it replaces |
 //! |---|---|
-//! | [`finish`] | `MaskedBackend._finish`: unpack `y_hat`, Freivalds check, unmask, range check, dequantize |
+//! | [`finish`] | `MaskedBackend._finish`: unpack `y_hat`, Freivalds check, unmask, range check, dequantize (`finish_group`: several sessions' chunks of one linear in one pass over the shared check vectors) |
 //! | [`prepare`] | `MaskedBackend._prepare`: quantize (capped), mask, pack |
 //! | [`store`] | `MaskReservation.take`: decrypt `W r` chunks, derive `r` |
 //!
