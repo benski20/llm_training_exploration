@@ -354,6 +354,30 @@ shared by two stores. `pgw maskstore import` removes each imported file and its 
 (`--keep-source` opts out). Segments whose Freivalds checks give fewer than `min_soundness_bits`
 (default 20) for any linear are refused on import and by the gateway.
 
+### 7.8 In-memory mask ring (optional; off by default)
+`PGW_GATEWAY_MASK_RING__ENABLED=true` hands masks from a co-located factory to the gateway through
+locked RAM (`pgw.maskstore.ringbuf`, design `research/plans/mask-ringbuffer-design.md`). Normative:
+- **Never persisted, never exported, never demoted.** Ring bytes live only in `mlock`-ed,
+  `MADV_DONTDUMP`, `MADV_DONTFORK` memory (each fails closed). No path leads from a ring slab to a
+  file, the store, an export or a socket payload. A crash loses ring masks; nothing can be restored, so
+  the external counter (7.6) applies only to persisted segments.
+- **Slab rules.** R1: only FREE slabs are granted; only WIPING becomes FREE, after the wipe. R2:
+  `reserve()` advances a slab's in-memory cursor under the ring lock **before** any byte is copied out
+  (7.5); a fully reserved slab never becomes READY again. R3: a slab with open handles is never
+  recycled. R4: every read checks, under the slab's own lock, that the ring is open, the slab
+  generation matches and the slab is READY/DRAINING, and copies while holding that lock; closing the
+  ring marks every slab WIPING first, so a late reader raises instead of reading zeros.
+- **Seeds.** A fresh `os.urandom` seed per segment, unique across the ring and the store tier
+  (shared registry plus the store's seed table). Every secrets read checks the seed against its hash
+  recorded at publish and refuses an all-zero seed.
+- **Process.** The gateway is non-dumpable (`PR_SET_DUMPABLE=0`) and refuses unencrypted disk swap
+  (`swap_policy=warn` to override) whenever the ring is enabled. v2 (`factory_process`): the factory
+  child gets one sealed-size memfd per granted slab over a private socketpair (no listening socket);
+  publishing adds `F_SEAL_WRITE`, which fails while the child still maps the slab writable; the child
+  is non-dumpable too, and on EOF the gateway kills and reaps it before dropping its slabs.
+- Freivalds vectors that are all zero (a reservation closed during a step) verify nothing: the
+  engine treats them as `MaskReuseError`, never as a pass.
+
 ## 8. Model pack
 
 ### 8.1 Layout

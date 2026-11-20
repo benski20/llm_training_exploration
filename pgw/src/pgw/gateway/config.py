@@ -248,6 +248,10 @@ class MaskRingSettings(BaseModel):
     )
     ring_low_fraction: float = Field(0.5, gt=0, le=1, description="Factory priority threshold")
     embed_factory: bool = Field(False, description="Run the mask factory in-process (v1)")
+    factory_process: bool = Field(
+        False, description="Run the mask factory as a supervised child filling shared-memory slabs (v2: one sealed "
+        "memfd per slab over a private socketpair; separate process and CPU budget). Excludes embed_factory",
+    )
     run_dir: Path | None = Field(None, description="Factory state/lock directory in ring_only mode "
                                  "(default <data_dir>/maskring)")
     swap_policy: Literal["refuse", "warn"] = Field(
@@ -468,8 +472,13 @@ class GatewaySettings(PGWSettings):
         if mr.embed_factory and self.factory_env_file is not None:
             raise ValueError("mask_ring.embed_factory and factory_env_file are mutually exclusive "
                              "(one GPU must never run two factories)")
-        if mr.ring_only and not mr.embed_factory:
-            raise ValueError("mask_ring.ring_only needs mask_ring.embed_factory (nothing else fills the ring)")
+        if mr.embed_factory and mr.factory_process:
+            raise ValueError("mask_ring.embed_factory and mask_ring.factory_process are mutually exclusive")
+        if mr.factory_process and self.factory_env_file is not None:
+            raise ValueError("mask_ring.factory_process and factory_env_file are mutually exclusive "
+                             "(one GPU must never run two factories)")
+        if mr.ring_only and not (mr.embed_factory or mr.factory_process):
+            raise ValueError("mask_ring.ring_only needs embed_factory or factory_process (nothing else fills the ring)")
         if mr.allow_unlocked and not self.allow_dev_modes:
             raise ValueError("mask_ring.allow_unlocked is a dev-only setting (needs allow_dev_modes)")
 

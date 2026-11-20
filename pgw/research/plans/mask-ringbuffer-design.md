@@ -1,6 +1,9 @@
 # In-memory mask ring: design (WP8, plan item L5)
 
-Status: design, 2026-11-20. Scope: hand masks from a co-located factory to the gateway through
+Status: **implemented** (v1 and v2), 2026-11-20, with every design-review fix applied; see §15 for the
+review resolution and what changed against the text below (§15 wins where they differ). Code:
+`src/pgw/maskstore/ringbuf.py`, `tiered.py`, `ringshm.py`, `src/pgw/factory/{sinks,scheduler,embedded}.py`,
+`src/pgw/gateway/{config,runtime,masks}.py`. Scope: hand masks from a co-located factory to the gateway through
 locked RAM. This skips the disk, the at-rest AES-GCM layer and the SQLite cursor transaction for
 those masks. The disk store stays as a fallback and overflow tier.
 
@@ -136,7 +139,7 @@ mm.madvise(MADV_DONTFORK)           # children (FactorySupervisor, subprocess) n
   * systemd: `LimitMEMLOCK=`;
   * docker: `--ulimit memlock=-1` or `--cap-add IPC_LOCK`.
 
-  `allow_unlocked=true` (dev only) logs a warning and sets `pgw_maskring_locked_bytes = 0`. This
+  `allow_unlocked=true` (dev only) logs a warning and sets `pgw_masks_ring_locked_bytes = 0`. This
   host's default is 8 MiB, which is enough for the unit tests.
 * Locked memory counts against the cgroup memory limit. `MAP_POPULATE` plus `mlock` commit every
   page at start-up, so an undersized pod fails at start, not mid-request. The memory limit must be
@@ -210,8 +213,10 @@ The rules:
   Once fully reserved it is `DRAINING`, and it never returns to `READY`.
 * **R3.** A slab with `refs > 0` is never wiped or granted. Every `RamSegment` handle holds a
   reference from `reserve()` until `MaskReservation` closes it (`_Extent.wipe` → `seg.close()`).
-* **R4.** `RamSegment.decrypt_into` checks that the slab's `gen` and `state` still match the handle
-  and raises `MaskStoreError` otherwise. This is a defensive guard; R3 should make it unreachable.
+* **R4 (primary guard).** `RamSegment.decrypt_into` checks `ring.closed`, `slab.gen == handle.gen` and
+  `state in {READY, DRAINING}` and copies, all under a **per-slab lock**. Every transition out of
+  `READY`/`DRAINING`/`FILLING` (drain, abort, close, reload) takes the same lock, and `close()` moves
+  every slab to `WIPING` before anything is wiped, so a late reader always raises (§15, B1).
 
 ## 4. Reservations (gateway side)
 
@@ -254,7 +259,7 @@ engine _take → WindowedReservation.take_checked → MaskReservation.take_check
       r:   _mask_rows_locked: seed = RamSegment.decrypt_into(secrets_chunk)[:32] (once per extent),
            HKDF stream key cached per (extent, linear), pgw_fast.mask_rows_with_key (bit-identical)
       W r: _read_wr → _decrypt_buf(seg, wr_chunk(li, j)) → RamSegment.decrypt_into(ref)
-           = bytearray(slab[off : off + plain_len])     # memcpy instead of pread + AES-GCM
+           = out = bytearray(n); ctypes.memmove(out, arena + off, n)  # no immutable bytes (§15, B4)
            → pgw_fast.unpack_rows_u32 / unpack_rows
 ```
 
@@ -281,7 +286,9 @@ engine _take → WindowedReservation.take_checked → MaskReservation.take_check
 `MaskReservation.close()` runs in this order:
 
 1. it zeroes its caches;
-2. `_Extent.wipe()` calls `RamSegment.close()`, which does `refs -= 1` under the ring lock;
+2. `_Extent.wipe()` calls `RamSegment.close()`, which only queues the handle on a lock-free
+   `queue.SimpleQueue` (it may run from a GC finalizer); the ring applies `refs -= 1` when it next
+   takes its lock (§15, B2);
 3. if the slab is `DRAINING` and `refs == 0`, it becomes `WIPING` and goes to the wiper queue;
 4. `owner._on_reservation_closed(res, burned)` adds `burned` to `burned_total`.
 
@@ -381,16 +388,16 @@ a new class in `src/pgw/maskstore/tiered.py`:
 
 | method | behaviour |
 |---|---|
-| `reserve(fp, ring, n, session_id=)` | ring first: on `RingShort`, count `pgw_maskring_fallback_reservations_total` and call `store.reserve`. A reservation comes entirely from one tier (windows are 64 tokens, so the case where the request only fits across both tiers is rare). If both tiers are short, raise `MaskExhaustedError` with `available = ring + store`. `prefer="store"` reverses the order. |
+| `reserve(fp, ring, n, session_id=)` | ring first: on `RingShort`, count `pgw_masks_ring_fallback_reservations_total` and call `store.reserve`. When neither tier alone holds `n`, return a `ChainedReservation` (ring part + store part, both closed if either fails; §15, B7). If both tiers together are short, raise `MaskExhaustedError` with `available = ring + store`. `prefer="store"` reverses the order. |
 | `inventory(fp, ring)` | store inventory with `slots_available += ring.available`; `bytes_on_disk` stays store-only |
 | `available_slots`, `reservation_cache_bytes` | sum and max of both tiers |
-| `metrics()` | store metrics with `pgw_masks_available_slots` and `pgw_masks_low_water` computed on the total supply, plus the `pgw_maskring_*` series (§8) |
+| `metrics()` | store metrics with `pgw_masks_available_slots` and `pgw_masks_low_water` computed on the total supply, plus the `pgw_masks_ring_*` series (§8) |
 | `status()` | store status plus `"ring": {fp/ring: ring.status()}` (ids, counts and sizes only) |
 | `gc`, `claim_owner`, `add_low_water_listener`, `settings`, `_require_external_counter` | delegated to the store (no-ops when `store is None`) |
 | `close()` | close the rings (store closing stays with its owner) |
 
-Hook in `src/pgw/gateway/runtime.py`, `InferenceRuntime.__init__`, right after the store is
-resolved (about 6 lines):
+Hooks (the gateway **does** change: `runtime.py` and `masks.py`, §15 B6). In
+`InferenceRuntime.__init__`, right after the store is resolved:
 
 ```python
 if settings.mask_ring.enabled:
@@ -442,20 +449,20 @@ New names in `pgw.observability.metrics.METRIC_NAMES`. All carry the labels
 
 | name | type | meaning |
 |---|---|---|
-| `pgw_maskring_capacity_slots` | gauge | `n_slabs × segment_slots` |
-| `pgw_maskring_available_slots` | gauge | unreserved slots in `READY` slabs |
-| `pgw_maskring_free_slabs` | gauge | slabs ready to be granted |
-| `pgw_maskring_draining_slabs` | gauge | fully reserved slabs waiting for reservations to close or for the wipe. If this stays high, reservations are leaking |
-| `pgw_maskring_published_slots_total` | counter | slots committed into the ring |
-| `pgw_maskring_reserved_slots_total` | counter | slots reserved from the ring |
-| `pgw_maskring_burned_slots_total` | counter | reserved but never taken |
-| `pgw_maskring_lost_slots_total` | counter | written but never reserved and then wiped (abort, shutdown, reload) |
-| `pgw_maskring_fallback_reservations_total` | counter | reservations served by the store because the ring was short |
-| `pgw_maskring_locked_bytes` | gauge, no labels | locked arena bytes (0 means unlocked, dev) |
+| `pgw_masks_ring_capacity_slots` | gauge | `n_slabs × segment_slots` |
+| `pgw_masks_ring_available_slots` | gauge | unreserved slots in `READY` slabs |
+| `pgw_masks_ring_free_slabs` | gauge | slabs ready to be granted |
+| `pgw_masks_ring_draining_slabs` | gauge | fully reserved slabs waiting for reservations to close or for the wipe. If this stays high, reservations are leaking |
+| `pgw_masks_ring_published_slots_total` | counter | slots committed into the ring |
+| `pgw_masks_ring_reserved_slots_total` | counter | slots reserved from the ring |
+| `pgw_masks_ring_burned_slots_total` | counter | reserved but never taken |
+| `pgw_masks_ring_lost_slots_total` | counter | written but never reserved and then wiped (abort, shutdown, reload) |
+| `pgw_masks_ring_fallback_reservations_total` | counter | reservations served by the store because the ring was short |
+| `pgw_masks_ring_locked_bytes` | gauge, no labels | locked arena bytes (0 means unlocked, dev) |
 
 * `pgw_masks_available_slots` becomes the total supply (store plus ring), so the existing runway
   and low-water alerts keep their meaning in `ring_only` mode.
-* New alert: `pgw_maskring_draining_slabs == n_slabs for 5m` (all slabs pinned by open
+* New alert: `pgw_masks_ring_draining_slabs == n_slabs for 5m` (all slabs pinned by open
   reservations).
 * Logs: segment ids, slot counts, slab indices, sizes and timings only. Never seeds, `uW`, rows or
   addresses (SPEC 11.2).
@@ -608,7 +615,11 @@ Acceptance (WP9 runs it):
 The trust boundary is unchanged. The gateway already sees prompts, activations and `x` in
 plaintext (SPEC 3.1), and anyone who can read its memory already has everything the masks protect.
 At-rest encryption only ever protected against disk theft, snapshots and backups. The ring has no
-at-rest state to protect, and `mlock` plus `DONTDUMP` keep it off swap and out of dumps.
+at-rest state to protect. **Scope of the swap/dump protection:** only the arena (v1) and the slab
+mappings (v2) are `mlock`ed and `DONTDUMP`. Reservation chunk caches, prefetch stages, returned
+tensors, the writer's seed copy and the generator's buffers live on the ordinary heap. That is why
+the ring makes `PR_SET_DUMPABLE=0` mandatory (no core dumps, no same-uid ptrace or `/proc/<pid>/mem`)
+and refuses to start with unencrypted disk swap (`swap_policy=refuse`; zram and dm-crypt swap pass).
 
 ## 13. SPEC and docs changes (with the implementation)
 
@@ -636,7 +647,7 @@ at-rest state to protect, and `mlock` plus `DONTDUMP` keep it off swap and out o
 | 8. factory and gateway tests | new `tests/factory/test_ring_sink.py`, `tests/gateway/test_ring_tiered.py` | ~350 lines |
 | 9. SPEC 7.8, sizing, Helm values | `SPEC.md`, `docs/operations/sizing.md`, `deploy/helm/pgw-gateway` | docs |
 
-The implementation needs **no edits** to `store.py`, `segment_io.py`, `generator.py`,
+The implementation needs no edits to `store.py`, `segment_io.py`, `generator.py`,
 `factory/kernels.py`, `hemask/*`, `service/*` or `rust/pgw-fast`. It depends on these existing
 contracts staying stable:
 
@@ -650,3 +661,62 @@ A contract test pins the first one (a `RamSegment` round-trip through `take_chec
 `checks_compact` and `close`), so a later `store.py` refactor that breaks it fails loudly.
 
 The v2 shared-memory transport (§9) is a separate follow-up of 2-3 days.
+
+## 15. Design-review resolution and implementation notes (2026-11-20)
+
+The review (verdict `merge_with_fixes`, privacy and exactness blocked) raised seven blocking issues.
+All are fixed in code and covered by tests (`tests/maskstore/test_ringbuf.py`, `test_ringshm.py`,
+`tests/factory/test_ring_sink.py`, `tests/gateway/test_ring_tiered.py`).
+
+| # | issue | resolution | test |
+|---|---|---|---|
+| B1 | reserve/close race could serve a zero or stale seed | R4 is the primary guard (per-slab lock around check + copy, every transition takes it); `close()`/reload set `closed` and mark every slab `WIPING` under its lock before any wipe; the reservation (or a placeholder with its handles) is registered in `_open` inside the step-2 critical section; every secrets read verifies `seed_hash` against the hash recorded at publish and refuses an all-zero seed | `test_reserve_interleaved_with_close_never_serves_zero_rows`, `test_concurrent_takes_during_close_raise_or_are_exact`, `test_seed_check_on_secrets_read` |
+| B2 | finalizer could deadlock the ring lock | `RamSegment.close()` takes no lock: it queues the handle on a `queue.SimpleQueue`; the ring reconciles under its lock (any public call, `_on_reservation_closed`, or the wiper every 250 ms). Free listeners run on the wiper thread with no lock held. Handles closed by `MaskReservation.__del__` (`RingReservation` marks them) count as `leaked` | `test_finalizer_close_while_ring_lock_held` |
+| B3 | wiper could write into unmapped memory | the ctypes export is held for the arena lifetime; `close()`: set closed + WIPING, force-close reservations, join the wiper, wipe the whole arena synchronously, `munlock`, `munmap` (stop the factory first: the runtime does) | `test_close_joins_wiper_before_unmap`, `test_new_ring_is_empty_and_close_wipes_all` |
+| B4 | copy-out left an immutable plaintext copy | `ctypes.memmove` from the arena into a fresh `bytearray`; the writer packs with `np.copyto` into the arena; uW is packed into a zeroable `bytearray` (no `pack_ring` bytes) | `test_copy_out_makes_no_immutable_copy` |
+| B5 | v2 handed the whole arena to any same-uid process | v2 (`ringshm.py`) uses a `SOCK_SEQPACKET` socketpair created before spawning the child (`pass_fds`, no listening socket); one fresh memfd per grant (never reused, never the arena); both processes `PR_SET_DUMPABLE=0` (the child reports it, a dumpable child is killed); the child `mlock`s (fail closed) and sets `DONTDUMP`/`DONTFORK`; on EOF the gateway kills the child through its pidfd and reaps it before dropping its slabs; `PR_SET_PDEATHSIG` kills the child with the gateway | `test_child_process_fills_ring_and_crash_is_reaped`, `test_runtime_ring_only_embedded_factory[factory_process]` |
+| B6 | long sessions pinned every slab; `ring_only` waits stalled the batch | `WindowedReservation` closes fully used parts at the start of the next token step (the first linear's `ensure()`), never mid-step; extensions never wait (`reserve_extension`), and the next window is reserved ahead in a background thread once fewer than `window/2` rows are left | `test_long_session_does_not_pin_the_ring`, `test_retire_only_at_step_start`, `test_windows_reserved_ahead_in_background` |
+| B7 | requests that fit only across tiers were refused | `TieredMaskSource.reserve` returns a `ChainedReservation` (ring part, then store part; both closed if either fails); `ring_only` start-up refuses models with `max_context + mask_window_tokens > max_session_fraction (0.5) x capacity_slots` | `test_spanning_reservation_larger_than_either_tier`, `test_spanning_failure_closes_ring_part`, `test_ring_only_waits_then_exhausts_and_extensions_fail_fast` |
+
+Minor issues:
+
+* **Swap/dump scope**: §12 rewritten; `PR_SET_DUMPABLE=0` is mandatory with the ring and swap is
+  checked at start-up (`swap_policy`, default `refuse`).
+* **Seed uniqueness across tiers**: one `SeedRegistry` (process-wide) is shared by every ring and by
+  the embedded factory's `StoreSink` (which claims each store seed); `RingSink` also checks the store's
+  seed table. Seeds are claimed at grant (v1) or publish (v2).
+* **Freivalds hardening**: the engine treats all-zero check vectors as `MaskReuseError` in the
+  soundness check, in `finish_group` and in `finish_chunk` (also when the kernel reported success).
+  The ring's soundness floor is the store's `min_soundness_bits`, or the gateway's in `ring_only`.
+* **Integrity of W r**: v2 publishes by `F_SEAL_WRITE` (the kernel refuses while the child maps the
+  slab writable), so a post-publish write is impossible. v1 is one address space; no checksum was
+  added (RAM faults are an ECC matter; the factory self-check and the gateway's range check stay).
+* **K < 32 wrap**: compact 32-bit input is range-checked for K < 32; int64 input is always
+  range-checked before the wrapping copy.
+* **mmap flags**: `MAP_POPULATE`, `MADV_DONTDUMP`, `MADV_DONTFORK` exist on Python 3.13 / Linux 6.x;
+  `madvise` failure is fail-closed like `mlock`; `allow_unlocked` needs `allow_dev_modes`.
+* **Two embedded factories on one GPU**: besides `factory.lock` in the state directory (`run_dir` in
+  `ring_only`), the embedded factory takes a host-wide per-device lock (`/run/lock/pgw/pgw-factory-<device>.lock`).
+* **Audit**: `pgw_masks_ring_reservations_total` (ids-only counter) per model; reservations are
+  logged at debug level with their ids.
+
+Changes against the text above:
+
+* Metric names are `pgw_masks_ring_*` (the metric contract allows `pgw_masks_*`), plus
+  `pgw_masks_ring_leaked_slots_total` and `pgw_masks_ring_reservations_total`.
+* Accounting (I9): `published = reserved + available + lost` and
+  `reserved = taken + burned + leaked + open`; aborted fills are counted separately (`aborted`).
+* v2 slabs are dropped, not zeroed: the write seal that makes them immutable also forbids the wipe.
+  The kernel zeroes freed pages before handing them to any process (`init_on_free=1` zeroes at free).
+  The gateway maps each slab read-only through a read-only reopen of the memfd, so its locked
+  mapping does not block the seal; pages stay locked from grant to drop.
+* Config: `mask_ring.factory_process` (v2) is mutually exclusive with `embed_factory` and
+  `factory_env_file`; `ring_only` needs one of the two factories. The Kubernetes sidecar layout is
+  not supported (it would need a listening socket).
+* Not done: the `view_rows` fast path in `_read_wr` (needs `store.py`, owned by another package),
+  Helm values and `docs/operations/sizing.md` (owned by WP9).
+
+Local measurements (4 vCPU, one Qwen2.5-7B-shaped layer at K32, 64 slots; a 7B slot is 28 layers)
+[m]: factory write 0.11 ms/layer-slot into the ring vs 4.12 ms into the store (Python AES-GCM,
+fsync off), i.e. about 3 ms vs 115 ms per 7B slot; gateway take (decode, one row per linear per step,
+`r` regenerated with ChaCha20) 0.23 vs 0.51 ms/layer-slot, i.e. about 6.4 vs 14.3 ms per 7B slot.

@@ -1147,7 +1147,7 @@ class ModelRuntime:
                 return reserve_ext(fp, ring, slots, session_id=rid)
             return store.reserve(fp, ring, slots, session_id=rid)
 
-        return WindowedReservation(res, extend, cap=cap, window=window), first
+        return WindowedReservation(res, extend, cap=cap, window=window, ahead=reserve_ext is not None), first
 
     async def generate(self, prompt_ids: Sequence[int], params: SamplingParams) -> GenerationResult:
         """Admit, run and close (convenience)."""
@@ -1426,18 +1426,34 @@ class InferenceRuntime:
 
     def _start_embedded_factory(self) -> None:
         cfg = self.settings.mask_ring
-        if not (cfg.enabled and cfg.embed_factory) or self.embedded_factory is not None:
+        if not (cfg.enabled and (cfg.embed_factory or cfg.factory_process)) or self.embedded_factory is not None:
             return
         if not hasattr(self.mask_store, "attach_model"):
             return
-        from pgw.factory.embedded import EmbeddedFactory
-
         masked = [m for m in self.settings.all_models() if m.mode == "masked"]
         paths = list(dict.fromkeys(m.pack_path for m in masked))
-        defaults = {"pack_path": paths[0], "extra_pack_paths": tuple(paths[1:]),
+        defaults: dict[str, Any] = {"pack_path": paths[0], "extra_pack_paths": tuple(paths[1:]),
                     "rings": tuple(dict.fromkeys(m.ring for m in masked))}
+        run_dir = cfg.run_dir or Path(self.settings.data_dir) / "maskring"
+        if cfg.factory_process:  # v2: supervised child over a private socketpair, shared sealed slabs
+            import json
+            import os
+
+            from pgw.maskstore.ringshm import RingBroker
+
+            env = dict(os.environ)
+            env.setdefault("PGW_FACTORY_PACK_PATH", str(defaults["pack_path"]))
+            env.setdefault("PGW_FACTORY_EXTRA_PACK_PATHS", json.dumps([str(p) for p in defaults["extra_pack_paths"]]))
+            env.setdefault("PGW_FACTORY_RINGS", json.dumps(list(defaults["rings"])))
+            env.setdefault("PGW_FACTORY_STATE_DIR", str(run_dir))
+            broker = RingBroker(self.mask_store, env=env)
+            broker.start()
+            self.embedded_factory = broker
+            return
+        from pgw.factory.embedded import EmbeddedFactory
+
         fac = EmbeddedFactory(self.mask_store, defaults=defaults, ring_low_fraction=cfg.ring_low_fraction,
-                              run_dir=cfg.run_dir or Path(self.settings.data_dir) / "maskring")
+                              run_dir=run_dir)
         fac.start()
         self.embedded_factory = fac
 

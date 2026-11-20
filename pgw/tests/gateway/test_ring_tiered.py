@@ -338,9 +338,11 @@ def test_harden_process_in_subprocess() -> None:
     assert out.stdout.strip() == "0"  # no longer dumpable
 
 
+@pytest.mark.parametrize("mode", ["embed_factory", "factory_process"])
 async def test_runtime_ring_only_embedded_factory(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
-                                                  monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gateway hook end to end: ring_only + embedded factory serve a masked chat; stop wipes."""
+                                                  monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """The gateway hook end to end: ring_only + an embedded factory (v1 threads, or v2 supervised child on
+    shared sealed slabs) serve a masked chat; stop wipes (and reaps the child)."""
     import asyncio
 
     from pgw.engine import SamplingParams
@@ -355,7 +357,7 @@ async def test_runtime_ring_only_embedded_factory(tiny_pack_dir: Path, tmp_path:
     g = ring_geometry(gw_pack.linear_specs(), RING, 1 << 30, segment_slots=64)
     settings = masked_settings(
         tiny_pack_dir, tmp_path, data_dir=tmp_path / "data", model_kw={"max_context": 64},
-        mask_ring={"enabled": True, "ring_only": True, "embed_factory": True, "capacity_bytes": 6 * g.slab_bytes,
+        mask_ring={"enabled": True, "ring_only": True, mode: True, "capacity_bytes": 6 * g.slab_bytes,
                    "segment_slots": 64, "run_dir": str(tmp_path / "run")},
     )
     svc = InProcessService(gw_pack)
@@ -373,8 +375,31 @@ async def test_runtime_ring_only_embedded_factory(tiny_pack_dir: Path, tmp_path:
         rt = rt_all.get(MODEL)
         params = SamplingParams(max_tokens=6, temperature=0, ignore_eos=True)
         await rt.chat([{"role": "user", "content": "hi"}], params)
-        assert mr.counts()["reservations"] >= 1
+        assert mr.counts()["reservations"] >= 1 and mr.shared == (mode == "factory_process")
         assert "ring" in rt_all.masks_status()["store"]
     finally:
         await rt_all.stop()
     assert mr.closed
+    if mode == "factory_process":
+        assert fac.exit_code is not None and not fac.running  # the child was stopped and reaped
+
+
+def test_windows_reserved_ahead_in_background(model: ToyModel) -> None:
+    src = _source(None, model, ring_only_wait_s=0.0)
+    try:
+        _publish(src, model, 3)
+        fp = model.fingerprint
+        keys = [s.id.key for s in model.specs]
+        win = WindowedReservation(src.reserve(fp, RING, 4), lambda n: src.reserve_extension(fp, RING, n),
+                                  cap=40, window=4, ahead=True)
+        for _ in range(30):
+            _step(win, keys)
+            t = win._ahead_thread
+            if t is not None:
+                t.join(5)
+        assert win.ahead_reservations >= 5
+        assert sum(int(p.slots) for p in win.parts) <= 40  # the cap holds with background extensions
+        win.close()
+        assert all(p.closed for p in win.parts)
+    finally:
+        src.close()

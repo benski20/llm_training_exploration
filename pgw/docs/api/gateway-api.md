@@ -270,6 +270,18 @@ Labels never contain prompt data. Gateway series:
 | `pgw_masks_low_water` | gauge | 1 below low water (**alert**) |
 | `pgw_masks_consumed_slots_total` | counter | slots used |
 | `pgw_masks_burned_slots_total` | counter | reserved but unused slots |
+| `pgw_masks_ring_capacity_slots` | gauge | in-memory mask ring capacity per model (only with `mask_ring.enabled`) |
+| `pgw_masks_ring_available_slots` | gauge | unreserved slots in the ring |
+| `pgw_masks_ring_free_slabs` | gauge | ring slabs ready for the factory |
+| `pgw_masks_ring_draining_slabs` | gauge | fully reserved slabs waiting for reservations to close (**alert** when it equals the slab count for minutes: reservations leak) |
+| `pgw_masks_ring_published_slots_total` | counter | slots the factory published into the ring |
+| `pgw_masks_ring_reserved_slots_total` | counter | slots reserved from the ring |
+| `pgw_masks_ring_burned_slots_total` | counter | ring slots reserved but never used |
+| `pgw_masks_ring_leaked_slots_total` | counter | ring slots of reservations garbage-collected without `close()` |
+| `pgw_masks_ring_lost_slots_total` | counter | published ring slots wiped unreserved (shutdown, reload) |
+| `pgw_masks_ring_reservations_total` | counter | ring reservations (ids-only audit count) |
+| `pgw_masks_ring_fallback_reservations_total` | counter | reservations the store served because the ring was short |
+| `pgw_masks_ring_locked_bytes` | gauge | locked ring bytes (0 = unlocked, dev only) |
 
 ## 10. Compatibility notes
 

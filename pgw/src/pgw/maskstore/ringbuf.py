@@ -138,6 +138,12 @@ def _lib() -> Any:
             pass
         lib.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
         lib.prctl.restype = ctypes.c_int
+        lib.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+        lib.mmap.restype = ctypes.c_void_p
+        lib.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        lib.munmap.restype = ctypes.c_int
+        lib.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        lib.madvise.restype = ctypes.c_int
         _libc = lib
     return _libc
 
@@ -367,6 +373,133 @@ class LockedArena:
 
 
 # =================================================================================================
+# shared-memory slabs (v2): one memfd per grant, mapped through libc (no Python buffer exports)
+# =================================================================================================
+_MAP_FAILED = ctypes.c_void_p(-1).value
+# fcntl(2) memfd sealing (linux/fcntl.h); not every Python build exports them
+_F_ADD_SEALS = 1024 + 9
+_F_SEAL_SEAL, _F_SEAL_SHRINK, _F_SEAL_GROW, _F_SEAL_WRITE = 0x1, 0x2, 0x4, 0x8
+
+
+class FdMapping:
+    """A ``MAP_SHARED`` mapping of a memfd made with libc ``mmap`` (``mlock``, ``MADV_DONTDUMP`` and
+    ``MADV_DONTFORK``, all fail closed unless ``allow_unlocked``). Used by the gateway (read-only)
+    and by the factory child (read-write)."""
+
+    def __init__(self, fd: int, size: int, *, writable: bool, allow_unlocked: bool = False):
+        lib = _lib()
+        prot = mmap.PROT_READ | (mmap.PROT_WRITE if writable else 0)
+        addr = lib.mmap(None, size, prot, mmap.MAP_SHARED | getattr(mmap, "MAP_POPULATE", 0), fd, 0)
+        if addr is None or addr == _MAP_FAILED:
+            e = ctypes.get_errno()
+            raise ConfigError(f"cannot map a mask ring slab: {os.strerror(e)}")
+        self.addr = int(addr)
+        self.size = int(size)
+        self.writable = writable
+        self.locked = False
+        self._closed = False
+        try:
+            if lib.mlock(self.addr, self.size) == 0:
+                self.locked = True
+            elif not allow_unlocked:
+                raise ConfigError(f"cannot mlock a mask ring slab ({os.strerror(ctypes.get_errno())}); "
+                                  "raise the memlock limit (IPC_LOCK)")
+            for name in ("MADV_DONTDUMP", "MADV_DONTFORK"):
+                flag = getattr(mmap, name, None)
+                if (flag is None or lib.madvise(self.addr, self.size, flag) != 0) and not allow_unlocked:
+                    raise ConfigError(f"madvise({name}) failed for a mask ring slab")
+        except BaseException:
+            self.close(wipe=False)
+            raise
+
+    def view(self, off: int, n: int) -> memoryview:
+        if self._closed or off < 0 or off + n > self.size:
+            raise MaskStoreError("mask ring slab access out of range")
+        return memoryview((ctypes.c_char * n).from_address(self.addr + off)).cast("B")
+
+    def copy_out(self, off: int, n: int) -> bytearray:
+        if self._closed or off < 0 or off + n > self.size:
+            raise MaskStoreError("mask ring slab read out of range")
+        out = bytearray(n)
+        if n:
+            dst = (ctypes.c_char * n).from_buffer(out)
+            ctypes.memmove(dst, self.addr + off, n)
+            del dst
+        return out
+
+    def zero(self) -> None:
+        if not self._closed and self.writable:
+            _bzero(self.addr, self.size)
+
+    def close(self, *, wipe: bool = True) -> None:
+        if self._closed:
+            return
+        if wipe:
+            self.zero()
+        self._closed = True
+        lib = _lib()
+        if self.locked:
+            lib.munlock(self.addr, self.size)
+            self.locked = False
+        lib.munmap(self.addr, self.size)
+
+
+class MemfdSlab:
+    """Gateway side of one shared slab: a fresh sealed-size memfd, mapped read-only and locked.
+
+    The factory child maps the fd read-write and fills it. At publish the gateway adds
+    ``F_SEAL_WRITE``, which the kernel refuses (``EBUSY``) while any writable mapping exists, so a
+    published slab can never be written again by anyone. Sealed pages cannot be zeroed either: they
+    are dropped (``munmap`` + ``close``) and the kernel zeroes them before reuse (``init_on_free=1``
+    zeroes them at free time).
+    """
+
+    def __init__(self, size: int, *, allow_unlocked: bool = False):
+        import fcntl
+
+        self.size = int(size)
+        self.fd = os.memfd_create("pgw-maskslab", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        try:
+            os.ftruncate(self.fd, self.size)
+            fcntl.fcntl(self.fd, _F_ADD_SEALS, _F_SEAL_SHRINK | _F_SEAL_GROW)
+            # Map through a read-only reopen: a shared mapping of the O_RDWR memfd would count as
+            # "may write" and block F_SEAL_WRITE at publish. This one stays locked through the fill.
+            ro = os.open(f"/proc/self/fd/{self.fd}", os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                self._map = FdMapping(ro, self.size, writable=False, allow_unlocked=allow_unlocked)
+            finally:
+                os.close(ro)
+        except BaseException:
+            os.close(self.fd)
+            raise
+        self.sealed = False
+
+    @property
+    def locked(self) -> bool:
+        return self._map.locked
+
+    def seal(self) -> None:
+        """Forbid every future write (``EBUSY`` while the factory still maps the slab writable)."""
+        import fcntl
+
+        try:
+            fcntl.fcntl(self.fd, _F_ADD_SEALS, _F_SEAL_WRITE | _F_SEAL_SEAL)
+        except OSError as exc:
+            raise MaskStoreError(
+                f"cannot seal a published ring slab ({exc.strerror}): the factory still maps it writable",
+            ) from exc
+        self.sealed = True
+
+    def copy_out(self, off: int, n: int) -> bytearray:
+        return self._map.copy_out(off, n)
+
+    def close(self) -> None:
+        self._map.close(wipe=False)
+        with contextlib.suppress(OSError):
+            os.close(self.fd)
+
+
+# =================================================================================================
 # seeds
 # =================================================================================================
 class SeedRegistry:
@@ -479,6 +612,7 @@ class _Slab:
         "index",
         "layout",
         "lock",
+        "mem",
         "next_slot",
         "off",
         "refs",
@@ -505,6 +639,8 @@ class _Slab:
         self.secrets_len = 0
         self.wr_offsets: list[int] = []
         self.wipe_queued = False
+        #: Shared-memory (v2) slabs: the per-grant memfd mapping; ``None`` = this ring's arena.
+        self.mem: Any = None
 
     def reset(self) -> None:
         self.header = None
@@ -557,7 +693,7 @@ class RamSegment:
                     details={"segment_id": self.header.segment_id},
                 )
             off, n = ring._chunk_span(slab, ref)
-            out = ring._arena.copy_out(slab.off + off, n)
+            out = ring._copy_out(slab, off, n)
             digest = slab.digest
         if ref.index == 0:
             seed = memoryview(out)[:SEED_BYTES]
@@ -649,9 +785,13 @@ class MaskRing:
         seeds: SeedRegistry | None = None,
         max_checks: int = DEFAULT_MAX_CHECKS,
         name: str | None = None,
+        shared: bool = False,
         _mlock: Callable[[int, int], int] | None = None,
     ):
         self.fingerprint = validate_fingerprint(fingerprint)
+        #: v2: slabs live in per-grant memfds filled by a factory child (pgw.maskstore.ringshm).
+        self.shared = bool(shared)
+        self.allow_unlocked = bool(allow_unlocked)
         self.ring = ring_from_setting(ring)
         self.specs = list(specs)
         if not self.specs:
@@ -666,7 +806,9 @@ class MaskRing:
         g = self.geometry
         self.segment_slots = g.segment_slots
         self.seeds = seeds if seeds is not None else GLOBAL_SEEDS
-        self._arena = LockedArena(g.n_slabs * g.slab_bytes, allow_unlocked=allow_unlocked, mlock=_mlock)
+        self._arena: LockedArena | None = (
+            None if self.shared else LockedArena(g.n_slabs * g.slab_bytes, allow_unlocked=allow_unlocked, mlock=_mlock)
+        )
         self._slabs = [_Slab(i, i * g.slab_bytes) for i in range(g.n_slabs)]
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
@@ -695,7 +837,8 @@ class MaskRing:
         log.info(
             "mask ring for %s (%s) %s: %d slabs x %d slots (%.1f MiB each), %.1f MiB %s",
             self.name, short_fingerprint(self.fingerprint), self.ring.name, g.n_slabs, g.segment_slots,
-            g.slab_bytes / 2**20, self._arena.size / 2**20, "locked" if self._arena.locked else "UNLOCKED",
+            g.slab_bytes / 2**20, g.n_slabs * g.slab_bytes / 2**20,
+            "shared" if self.shared else "locked" if self._arena and self._arena.locked else "UNLOCKED",
         )
 
     def __repr__(self) -> str:
@@ -713,7 +856,25 @@ class MaskRing:
 
     @property
     def locked_bytes(self) -> int:
+        if self._arena is None:
+            return sum(s.mem.size for s in self._slabs if s.mem is not None and s.mem.locked)
         return self._arena.size if self._arena.locked else 0
+
+    # ---- slab memory (arena slice in v1, per-grant memfd mapping in v2) -------------------------
+    def _copy_out(self, slab: _Slab, off: int, n: int) -> bytearray:
+        if slab.mem is not None:
+            return slab.mem.copy_out(off, n)  # type: ignore[no-any-return]
+        if self._arena is None:
+            raise MaskStoreError("ring slab has no memory")
+        return self._arena.copy_out(slab.off + off, n)
+
+    def _release_slab_memory(self, slab: _Slab) -> None:
+        """Wipe (arena) or drop (memfd: unmap and close; sealed pages cannot be written) a slab's bytes."""
+        if slab.mem is not None:
+            mem, slab.mem = slab.mem, None
+            mem.close()
+        elif self._arena is not None:
+            self._arena.zero(slab.off, self.geometry.slab_bytes)
 
     @property
     def capacity_slots(self) -> int:
@@ -811,6 +972,8 @@ class MaskRing:
         """
         if destination is not None:
             raise ConfigError("ring segments are never exported (destination is not allowed)")
+        if self.shared:
+            raise ConfigError("a shared-memory ring is filled by its factory child (pgw.maskstore.ringshm)")
         self.check_specs(fingerprint, ring, specs)
         if not isinstance(slots, int) or isinstance(slots, bool) or not 0 < slots <= self.segment_slots:
             raise ConfigError(f"ring segments hold 1..{self.segment_slots} slots, got {slots!r}")
@@ -851,7 +1014,7 @@ class MaskRing:
         bpe = g.bpe
         off = slab.off + g.wr_base + w._wr_rel[li] + row0 * m * bpe
         with slab.lock:
-            if self._closed or slab.gen != w.gen or slab.state != SlabState.FILLING:
+            if self._closed or slab.gen != w.gen or slab.state != SlabState.FILLING or self._arena is None:
                 raise MaskStoreError("ring slab was revoked while writing (ring closed)")
             mv = self._arena.view(off, a.shape[0] * m * bpe)
             try:
@@ -869,6 +1032,7 @@ class MaskRing:
             with slab.lock:
                 if slab.gen != w.gen or slab.state != SlabState.FILLING:
                     raise MaskStoreError("ring slab was revoked before commit")
+                assert self._arena is not None
                 self._arena.copy_in(slab.off, secrets)
                 slab.header = header
                 slab.layout = SegmentLayout(header, 0)
@@ -891,6 +1055,134 @@ class MaskRing:
                 del self._writers[slab.index]
             with slab.lock:
                 if slab.gen != w.gen or slab.state != SlabState.FILLING:
+                    return
+                slab.state = SlabState.WIPING
+            self.aborted_total += slab.slots
+            self._queue_wipe_locked(slab)
+
+    # ---- v2: shared-memory slabs filled by the factory child (pgw.maskstore.ringshm) -------------
+    def grant_shared(self, fingerprint: str, ring: RingParams | str, spec_sig: Sequence[Sequence[Any]], *,
+                     slots: int, checks: int, chunk_slots: int) -> tuple[int, int, int]:
+        """Grant a FREE slab as a fresh memfd; returns ``(slab index, generation, fd)``.
+
+        The fd stays owned by the ring (the broker sends a copy to the child). Raises like
+        :meth:`writer` (``RingFull`` when no slab is free)."""
+        if not self.shared:
+            raise ConfigError("grant_shared needs a shared-memory ring")
+        rp = ring_from_setting(ring)
+        if fingerprint != self.fingerprint or rp.name != self.ring.name:
+            raise ConfigError("ring grant for a different model or ring")
+        if tuple(tuple(x) for x in spec_sig) != tuple(tuple(x) for x in self._lin_sig):
+            raise ConfigError("ring grant: linear specs differ from the ring's model")
+        if not isinstance(slots, int) or not 0 < slots <= self.segment_slots:
+            raise ConfigError(f"ring segments hold 1..{self.segment_slots} slots, got {slots!r}")
+        if not 0 <= int(checks) <= self.max_checks or int(chunk_slots) <= 0:
+            raise ConfigError("ring grant: bad checks or chunk_slots")
+        with self._lock:
+            if self._closed:
+                raise MaskStoreError("mask ring is closed")
+            self._reconcile_locked()
+            slab = next((s for s in self._slabs if s.state == SlabState.FREE), None)
+            if slab is None:
+                raise RingFull("no free ring slab", details={"ring": self.ring.name})
+            with slab.lock:
+                slab.state = SlabState.FILLING
+                slab.gen += 1
+                slab.reset()
+                slab.slots = slots
+                slab.chunk_slots = min(int(chunk_slots), slots)
+                slab.secrets_len = SEED_BYTES + int(checks) * sum(lin.in_features for lin in self.linears) * \
+                    self.geometry.bpe
+            gen = slab.gen
+        try:
+            mem = MemfdSlab(self.geometry.slab_bytes, allow_unlocked=self.allow_unlocked)
+        except BaseException:
+            self._abort_index(slab.index, gen)
+            raise
+        with self._lock, slab.lock:
+            if self._closed or slab.gen != gen or slab.state != SlabState.FILLING:
+                mem.close()
+                raise MaskStoreError("ring slab was revoked during the grant")
+            slab.mem = mem
+        return slab.index, gen, mem.fd
+
+    def publish_shared(self, index: int, gen: int, *, slots: int, checks: int, chunk_slots: int,
+                       factory_id: str) -> str:
+        """Seal, validate and publish a slab the factory child filled; returns the segment id.
+
+        Refused (and the slab dropped) when the child still maps it writable, the seed is zero or
+        was used before, the soundness floor is not met, or the geometry differs from the grant."""
+        slab = self._slabs[int(index)]
+        with self._lock:
+            ok = (not self._closed and slab.gen == gen and slab.state == SlabState.FILLING and slab.mem is not None
+                  and slab.slots == slots and slab.chunk_slots == min(int(chunk_slots), slots))
+            mem = slab.mem
+            secrets_len = slab.secrets_len
+        if not ok or mem is None:
+            self._abort_index(index, gen)
+            raise MaskStoreError("ring publish does not match its grant")
+        secrets: bytearray | None = None
+        token = uuid.uuid4().hex
+        try:
+            mem.seal()
+            secrets = mem.copy_out(0, secrets_len)
+            seed = memoryview(secrets)[:SEED_BYTES]
+            zero_seed = _all_zero(seed)
+            digest = seed_digest(seed)
+            seed.release()
+            if zero_seed:
+                raise MaskReuseError("refusing an all-zero segment seed")
+            if int(checks) != (secrets_len - SEED_BYTES) // max(
+                    1, sum(lin.in_features for lin in self.linears) * self.geometry.bpe):
+                raise MaskStoreError("ring publish: checks differ from the grant")
+            _check_floor(self, int(checks))
+            header = SegmentHeader(
+                segment_id=uuid.uuid4().hex, fingerprint=self.fingerprint, ring=self.ring.name, slots=slots,
+                chunk_slots=slab.chunk_slots, checks=int(checks), linears=self.linears, kek_id="ram",
+                wrapped_dek="", nonce_prefix="00000000", factory_id=str(factory_id)[:64],
+                created_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            wr_rel, off = [], 0
+            for lin in self.linears:
+                wr_rel.append(off)
+                off += slots * lin.out_features * self.geometry.bpe
+            with self._lock:
+                if self._closed:
+                    raise MaskStoreError("mask ring is closed")
+                self.seeds.claim(digest, token)  # unique across both tiers and every ring
+                with slab.lock:
+                    if slab.gen != gen or slab.state != SlabState.FILLING:
+                        raise MaskStoreError("ring slab was revoked before publish")
+                    slab.header = header
+                    slab.layout = SegmentLayout(header, 0)
+                    slab.digest = digest
+                    slab.wr_offsets = wr_rel
+                    slab.next_slot = 0
+                    slab.refs = 0
+                    slab.state = SlabState.READY
+                self._fifo.append(slab)
+                self.published_total += slab.slots
+                self.published_segments += 1
+                self._cv.notify_all()
+        except BaseException:
+            self._abort_index(index, gen)
+            raise
+        finally:
+            if secrets is not None:
+                _zero(secrets)
+        log.info("ring %s: published shared segment %s (%d slots, slab %d)", self.name, header.segment_id, slots,
+                 slab.index)
+        return header.segment_id
+
+    def abort_shared(self, index: int, gen: int) -> None:
+        """The child aborted (or died): the slab is dropped and freed."""
+        self._abort_index(int(index), int(gen))
+
+    def _abort_index(self, index: int, gen: int) -> None:
+        slab = self._slabs[index]
+        with self._lock:
+            with slab.lock:
+                if slab.gen != gen or slab.state != SlabState.FILLING:
                     return
                 slab.state = SlabState.WIPING
             self.aborted_total += slab.slots
@@ -1046,7 +1338,7 @@ class MaskRing:
             if not todo:
                 continue
             for slab in todo:
-                self._arena.zero(slab.off, self.geometry.slab_bytes)
+                self._release_slab_memory(slab)
             listeners: list[Callable[[], None]] = []
             with self._lock:
                 if self._stop:
@@ -1120,7 +1412,11 @@ class MaskRing:
             self._wiper.join()
         with self._lock:
             self._reconcile_locked()
-        self._arena.close()
+        for slab in self._slabs:
+            if slab.mem is not None:
+                self._release_slab_memory(slab)
+        if self._arena is not None:
+            self._arena.close()
         log.info("mask ring %s closed and wiped (%d unreserved slots lost)", self.name, self.lost_total)
 
     def __enter__(self) -> MaskRing:
@@ -1186,6 +1482,24 @@ def _as_ring_array(t: torch.Tensor, shape: tuple[int, int], ring: RingParams, wh
     else:
         raise ShapeError(f"{what} must be an int64 tensor (or 32-bit at K <= 32)")
     return a
+
+
+def _check_floor(ring: MaskRing, checks: int) -> None:
+    """``MaskStore._check_soundness`` for ring segments (the gateway's floor in ring-only mode)."""
+    floor = ring.min_soundness_bits
+    if floor <= 0:
+        return
+    from pgw.core.freivalds import soundness_bits
+
+    rp = ring.ring
+    weakest = min(ring.linears, key=lambda lin: soundness_bits(rp, lin.in_features, checks))
+    bits = soundness_bits(rp, weakest.in_features, checks)
+    if bits < floor:
+        raise MaskStoreError(
+            f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
+            f"(checks={checks}); the ring requires {floor:.0f}",
+            details={"checks": checks, "min_soundness_bits": floor},
+        )
 
 
 class RingSegmentWriter:
@@ -1296,20 +1610,7 @@ class RingSegmentWriter:
         return self.segment_id
 
     def _check_soundness(self) -> None:
-        floor = self._ring.min_soundness_bits
-        if floor <= 0:
-            return
-        from pgw.core.freivalds import soundness_bits
-
-        rp = self._ring.ring
-        weakest = min(self._ring.linears, key=lambda lin: soundness_bits(rp, lin.in_features, self.checks))
-        bits = soundness_bits(rp, weakest.in_features, self.checks)
-        if bits < floor:
-            raise MaskStoreError(
-                f"segment gives only {bits:.0f} bits of Freivalds soundness for {weakest.id} "
-                f"(checks={self.checks}); the ring requires {floor:.0f}",
-                details={"checks": self.checks, "min_soundness_bits": floor},
-            )
+        _check_floor(self._ring, self.checks)
 
     def abort(self) -> None:
         """Discard the partial segment: the slab is wiped and freed."""

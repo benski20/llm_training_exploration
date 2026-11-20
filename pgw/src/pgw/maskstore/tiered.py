@@ -271,7 +271,7 @@ class TieredMaskSource:
             fingerprint, rname, specs, capacity_bytes=self.capacity_for(name),
             segment_slots=getattr(self.cfg, "segment_slots", None), min_soundness_bits=self.min_soundness_bits,
             allow_unlocked=bool(getattr(self.cfg, "allow_unlocked", False)), seeds=self.seeds, name=name,
-            _mlock=self._mlock,
+            shared=bool(getattr(self.cfg, "factory_process", False)), _mlock=self._mlock,
         )
         try:
             self._check_fit(mr, max_session_slots)
