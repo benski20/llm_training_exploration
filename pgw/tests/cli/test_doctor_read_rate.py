@@ -132,3 +132,33 @@ def test_run_doctor_takes_slot_bytes_from_the_pack(tiny_pack_dir: Path, tmp_path
     per_ring = pack.data["mask_bytes_per_slot"]
     assert c.data["bytes_per_slot"] in per_ring.values()
     assert c.status == "fail"  # 1 MB/s cannot feed 1e9 tokens/s
+
+
+def test_cli_maskstore_read_mb_reaches_the_probe(runner: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``pgw doctor --maskstore-read-mb N`` sets the probe size (0 skips it); --expected-tps documents it."""
+    from pgw.cli.main import cli
+
+    seen: dict[str, Any] = {}
+
+    def fake_run_doctor(**kw: Any) -> Any:
+        seen.update(kw)
+
+        class _R:
+            ok = True
+
+            def to_dict(self) -> dict[str, Any]:
+                return {}
+
+        return _R()
+
+    monkeypatch.setattr(doctor, "run_doctor", fake_run_doctor)
+    monkeypatch.setattr(doctor, "format_report", lambda r: "ok")
+    r = runner.invoke(cli, ["doctor", "--maskstore-read-mb", "8", "--expected-tps", "40"])
+    assert r.exit_code == 0, r.output
+    assert seen["maskstore_read_bytes"] == 8 << 20 and seen["expected_tokens_per_second"] == 40.0
+    r = runner.invoke(cli, ["doctor", "--maskstore-read-mb", "0"])
+    assert r.exit_code == 0 and seen["maskstore_read_bytes"] == 0
+    r = runner.invoke(cli, ["doctor"])
+    assert r.exit_code == 0 and seen["maskstore_read_bytes"] is None
+    help_text = runner.invoke(cli, ["doctor", "--help"]).output
+    assert "--maskstore-read-mb" in help_text and "maskstore.read_rate" in help_text

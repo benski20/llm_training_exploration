@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import logging
 import math
+import os
 import random
 import threading
 import time
@@ -286,6 +287,9 @@ class ActiveSession:
     ttft_s: float | None = None
     finish_reason: str | None = None
     handed_over: bool = False
+    #: Strict speculation: requests of one conversation run one after another, each after the previous
+    #: one's dummy passes (the engine's per-conversation FIFO); ``None`` outside strict mode.
+    conversation: str | None = None
     _closed: bool = False
     _outer: Any = None
     _outer_done: bool = False
@@ -303,7 +307,10 @@ class ActiveSession:
         if self.handed_over:
             raise ConfigError("mask reservation already handed to the engine")
         self.handed_over = True
-        return {"session": self.reservation, "own_session": True}
+        kw: dict[str, Any] = {"session": self.reservation, "own_session": True}
+        if self.conversation is not None:
+            kw["conversation"] = self.conversation
+        return kw
 
     async def run(self) -> GenerationResult:
         """Non-streaming generation."""
@@ -389,7 +396,7 @@ class ActiveSession:
                 close = getattr(self.reservation, "close", None)
                 if close is not None:
                     try:
-                        await asyncio.shield(asyncio.to_thread(close))
+                        await asyncio.shield(asyncio.to_thread(self.runtime._release_and_close, self.reservation))
                     except Exception:
                         log.exception("closing mask reservation failed", extra={"request_id": self.request_id})
         finally:
@@ -461,6 +468,10 @@ class ModelRuntime:
         self.started = False
         self.started_at: float | None = None
         self.service_info: dict[str, Any] = {}
+        #: Trip lane: ``off`` / ``open`` / ``unavailable`` (``lane`` setting; public configuration).
+        self.lane_state = "off"
+        #: Start-up round trip measured for ``local_linears = 'auto'`` (seconds; None: not measured).
+        self.measured_rtt_s: float | None = None
         self._sessions: set[ActiveSession] = set()
         self._lock = asyncio.Lock()
         self._integrity = self.metrics.get("pgw_gateway_integrity_failures_total")
@@ -582,8 +593,15 @@ class ModelRuntime:
             raise ConfigError("service URL is not on the egress allowlist")
         guard = EgressGuardTransport(inner, allowed)
         # The compute stream connects only to service_url, which is on the egress allowlist (checked above).
-        return ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt,
-                             stream_with_transport=real_network)
+        client = ComputeClient(cc, transport=guard, on_attempt=self._on_service_attempt,
+                               stream_with_transport=real_network)
+        if c.lane == "off":
+            return client
+        from pgw.wire.service_lane import build_lane_client
+
+        # The lane socket is local (UDS only; a TCP ticket is refused): the egress allowlist is unaffected.
+        return build_lane_client(client, uds_dir=str(c.lane_uds_dir) if c.lane_uds_dir is not None else None,
+                                 pool_wait_s=c.lane_pool_wait_s)
 
     def _on_service_attempt(self, path: str, status: int | None, seconds: float, code: str | None) -> None:
         """``ComputeClient`` hook: every HTTP attempt (incl. retries) by outcome."""
@@ -727,7 +745,29 @@ class ModelRuntime:
         except Exception as exc:
             await _aclose(client)
             raise ServiceUnavailableError(f"cannot reach the compute service: {type(exc).__name__}") from exc
+        await self._open_lane(client)
         return client, models
+
+    async def _open_lane(self, client: Any) -> None:
+        """``lane`` = auto/required: ask the service for a trip-lane ticket now (start-up, not on the first
+        token). ``required`` refuses to start without one (the model stays ``connecting`` and retries)."""
+        lane = self.config.lane
+        opener = getattr(client, "open", None)
+        if lane == "off" or not callable(opener) or self.fingerprint is None:
+            self.lane_state = "off"
+            return
+        ok = bool(await opener(self.fingerprint, self.ring.name))
+        ticket = getattr(client, "lane_ticket", None)
+        self.lane_state = "open" if ok else "unavailable"
+        if ok:
+            log.info("model %s: trip lane open (%s, up to %s rows per trip)", self.name,
+                     getattr(ticket, "transport", "?"), getattr(ticket, "max_rows", "?"))
+        elif lane == "required":
+            await _aclose(client)
+            raise ServiceUnavailableError("lane = 'required' but the compute service offers no trip lane to this "
+                                          "gateway (service lane = 'uds' on this host, or lane_uds_dir)")
+        else:
+            log.info("model %s: no trip lane from the service; using the stream channel", self.name)
 
     async def _connect_loop(self) -> None:
         """Background reconnect with exponential back-off until connected or permanently failed."""
@@ -799,6 +839,7 @@ class ModelRuntime:
                 min_soundness_bits=self.settings.min_soundness_bits,
             )
             await self._warm_weight_norms()
+            await self._configure_local_linears()
             avail = await asyncio.to_thread(self._available_slots)
             if avail == 0:
                 log.warning("no mask slots available for model %s (%s %s)",
@@ -812,6 +853,52 @@ class ModelRuntime:
             else:
                 await _aclose(client)
             raise
+
+    async def _configure_local_linears(self) -> None:
+        """``local_linears``: decide once, at start-up, which linears the gateway computes itself.
+
+        ``auto`` compares the calibrated local cost with ``local_rtt_ms`` or, without it, the median of a
+        few start-up round trips made of mask-free dummy calls (uniform random payloads on the real code
+        path; the service sees content-free 1-row calls at start-up only, and no mask is used).
+        """
+        mode = self.config.local_linears
+        configure = getattr(self.backend, "configure_local_linears", None)
+        if mode == "off" or not callable(configure):
+            return
+        rtt_s: float | None = None
+        if mode == "auto":
+            if self.config.local_rtt_ms is not None:
+                rtt_s = self.config.local_rtt_ms / 1e3
+            else:
+                rtt_s = await asyncio.to_thread(self._measure_rtt)
+            self.measured_rtt_s = rtt_s
+        kinds = await asyncio.to_thread(configure, mode, rtt_s=rtt_s)
+        policy = dict(getattr(self.backend, "local_policy", {}) or {})
+        log.info("model %s: local linears %s -> %s (%s)", self.name, mode, ", ".join(sorted(kinds)) or "none",
+                 policy.get("reason", "fixed"))
+
+    def _measure_rtt(self, trips: int = 7) -> float | None:
+        """Median round trip of ``trips`` mask-free 1-row dummy calls (after one warm-up); None on failure."""
+        import torch
+
+        from pgw.core.types import LinearId, LinearKind
+        from pgw.engine.backends import DUMMY, LinearCall
+
+        backend = self.backend
+        try:
+            spec = next(s for s in backend.pack.linear_specs() if s.id == LinearId(0, LinearKind.QKV))  # type: ignore[union-attr]
+            call = LinearCall(spec.id, torch.zeros(1, spec.in_features), None, {DUMMY: True})
+            backend.forward_many([call])  # type: ignore[union-attr]
+            times = []
+            for _ in range(trips):
+                t0 = time.perf_counter()
+                backend.forward_many([call])  # type: ignore[union-attr]
+                times.append(time.perf_counter() - t0)
+        except Exception as exc:  # no measurement: 'auto' then keeps every linear remote
+            log.warning("model %s: round-trip measurement failed (%s); local linears stay off", self.name,
+                        type(exc).__name__)
+            return None
+        return sorted(times)[len(times) // 2]
 
     async def _warm_weight_norms(self) -> None:
         """Compute every linear's weight norm before the model reports ready (plan interface C1).
@@ -836,17 +923,32 @@ class ModelRuntime:
         self._finish_engine(pack, tokenizer)
 
     def _finish_engine(self, pack: Any, tokenizer: ChatTokenizer) -> None:
-        self.model = TransformerModel(pack, self.backend, device=self.config.device)
-        self.model.inline_max_rows = self.config.inline_max_rows
-        if self.config.batch_lm_head is not None:
-            self.model.batch_lm_head = self.config.batch_lm_head
+        c = self.config
+        self.model = TransformerModel(pack, self.backend, device=c.device)
+        self.model.inline_max_rows = c.inline_max_rows
+        if c.batch_lm_head is not None:
+            self.model.batch_lm_head = c.batch_lm_head
+        if getattr(self.backend, "trip_engine", False):
+            # the TripEngine prepares/finishes each prefill block on its native pool: quarters overlap better
+            # than halves (rows are independent and masks are taken in row order: same bits)
+            self.model.pipeline_blocks = max(2, int(getattr(self.backend, "pipeline_blocks", 2)))
+        if c.lane != "off" and os.environ.get("PGW_SYNC_DECODE", "").strip() == "":
+            # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
+            self.model.sync_decode = True
+        if c.float_threads is not None:
+            self.model.enable_float_threads(c.float_threads)  # self-checked: stays off if the bits differ
         self.draft_model = self._load_draft()
+        spec: dict[str, Any] = {}
+        if c.spec_rows is not None:
+            spec = {"spec_rows": c.spec_rows, "spec_strict": c.spec_strict_passes}
         self.generator = Generator(
-            self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
-            draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
-            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence,
-            spec_max_batch=self.config.spec_max_batch,  # plan interface C3 (per-model GatewayModelConfig)
-            pingpong=self.config.engine_pingpong, pingpong_min_sessions=self.config.engine_pingpong_min_sessions,
+            self.model, tokenizer, max_batch=c.max_concurrent_sessions, batching=True,
+            draft=self.draft_model, spec_tokens=c.spec_tokens, lookup=c.spec_lookup,
+            lookup_min_n=c.spec_lookup_min_n,
+            spec_min_tokens=c.spec_min_tokens, draft_confidence=c.spec_confidence,
+            spec_max_batch=c.spec_max_batch,  # plan interface C3 (per-model GatewayModelConfig)
+            pingpong=c.engine_pingpong, pingpong_min_sessions=c.engine_pingpong_min_sessions,
+            **spec,
         )
         self.tokenizer = tokenizer
         self.pack = pack
@@ -1070,14 +1172,23 @@ class ModelRuntime:
             )
         return max(1, min(want, room))
 
+    def _release_and_close(self, reservation: Any) -> None:
+        """Close a reservation the engine never took: drop the backend's deferred checks of it first."""
+        release = getattr(self.backend, "release_session_checks", None)
+        if callable(release):
+            release(reservation)
+        reservation.close()
+
     async def open_session(
-        self, prompt_ids: Sequence[int], params: SamplingParams, *, request_id: str | None = None
+        self, prompt_ids: Sequence[int], params: SamplingParams, *, request_id: str | None = None,
+        conversation: str | None = None,
     ) -> ActiveSession:
         """Admit a request and reserve its masks (fails fast with ``mask_exhausted`` before compute)."""
-        return (await self.open_sessions([prompt_ids], params, request_id=request_id))[0]
+        return (await self.open_sessions([prompt_ids], params, request_id=request_id, conversation=conversation))[0]
 
     async def open_sessions(
-        self, prompts: Sequence[Sequence[int]], params: SamplingParams, *, request_id: str | None = None
+        self, prompts: Sequence[Sequence[int]], params: SamplingParams, *, request_id: str | None = None,
+        conversation: str | None = None,
     ) -> list[ActiveSession]:
         """Admit ``len(prompts)`` sequences atomically, then reserve their masks.
 
@@ -1102,6 +1213,10 @@ class ModelRuntime:
                 if self.mode == "masked":
                     reservation, slots = await self._reserve_for(ids, params, srid)
                 sess = ActiveSession(self, srid, ids, params, reservation, slots, queue_s)
+                if self.config.spec_strict_passes:
+                    # a request's follow-up must not overlap its dummy passes; requests without a
+                    # conversation key are keyed by their request id (no ordering with other requests)
+                    sess.conversation = conversation if conversation is not None else f"request:{srid}"
                 sessions.append(sess)
                 released += 1  # from now on the session releases its own slot
                 self._sessions.add(sess)
@@ -1123,6 +1238,11 @@ class ModelRuntime:
         window = int(self.settings.mask_window_tokens)
         if window <= 0:  # everything up front: reserve what the request needs (speculation uses slack only)
             cap = need
+        fixed = getattr(self.generator, "mask_rows_needed", None) if self.config.spec_rows is not None else None
+        if fixed is not None:
+            # strict speculation: every decode pass (dummy passes too) takes spec_rows rows, whatever the text;
+            # the engine refuses a reservation that could run short before the provider sees a pass
+            need = cap = int(fixed(len(ids), params.max_tokens))
         first = cap if window <= 0 else min(cap, len(ids) + window)
         if first < cap:
             # Fail fast (before any compute) when the store could not serve the whole request.
@@ -1208,6 +1328,28 @@ class ModelRuntime:
                 return False, "no mask slots"
         return True, "ok"
 
+    def _speed_status(self) -> dict[str, Any]:
+        """Chat-speed settings in effect (public configuration and counters; no payloads)."""
+        c = self.config
+        be = self.backend
+        out: dict[str, Any] = {
+            "lane": c.lane, "lane_state": self.lane_state,
+            "local_linears": dict(getattr(be, "local_policy", {}) or {"mode": c.local_linears}),
+            "measured_rtt_ms": round(self.measured_rtt_s * 1e3, 3) if self.measured_rtt_s is not None else None,
+            "trip_engine": bool(getattr(be, "trip_engine", False)),
+            "deferred_check": bool(getattr(be, "deferred_check", False)),
+            "sync_decode": bool(getattr(self.model, "sync_decode", False)),
+            "pipeline_blocks": getattr(self.model, "pipeline_blocks", None),
+            "float_threads": getattr(self.model, "float_threads", None),
+            "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes,
+        }
+        out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
+        stats = getattr(self.client, "lane_stats", None)
+        if stats is not None:
+            out["lane_stats"] = {k: v for k, v in vars(stats).items() if isinstance(v, int | float | bool)}
+            out["lane_fallbacks"] = dict(getattr(stats, "fallback_reasons", {}) or {})
+        return out
+
     def status(self) -> dict[str, Any]:
         """Admin status: fingerprint, ring, mask inventory, sessions, service health."""
         ok, reason = self.ready()
@@ -1230,6 +1372,7 @@ class ModelRuntime:
         }
         if self.mode == "masked":
             out["service"] = dict(self.service_info)
+            out["speed"] = self._speed_status()
             if self.config.client_cert_file is not None:
                 left = self.refresh_cert_expiry()
                 out["client_cert_expires_in_s"] = round(left) if left is not None else None

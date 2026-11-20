@@ -29,9 +29,20 @@ from pgw.core.errors import ConfigError
 from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings, TLSConfig
 
-__all__ = ["PENDING_SPEED_SETTINGS", "GatewayModelConfig", "GatewaySettings", "load_models_file", "origin_of"]
+__all__ = [
+    "PENDING_SPEED_SETTINGS", "SETUP_MODEL_OPTION_KEYS", "GatewayModelConfig", "GatewaySettings", "load_models_file",
+    "origin_of",
+]
 
 log = logging.getLogger(__name__)
+
+#: :attr:`GatewaySettings.setup_model_options` keys: speed settings that never change outputs or weaken a
+#: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
+SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
+    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_rtt_ms", "float_threads",
+    "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
+    "batch_lm_head", "engine_pingpong", "max_concurrent_sessions",
+})
 
 #: Modes that run without the compute service (no privacy protocol involved). Development only.
 DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
@@ -44,10 +55,6 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
 #: speculation) that silently does not happen. The implementing package removes its entry.
 PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "lane": "WP-A3/A4b (native trip lane client)",
-    "local_linears": "WP-A4b/A5 (exact local linears)",
-    "spec_rows": "WP-A4b/A7 (fixed-row speculation)",
-    "spec_strict_passes": "WP-A7 (strict-pass speculation)",
     "float_ops": "WP-B1 (native deterministic float path)",
     "head_mode": "WP-B2 (provider int8 LM head)",
     "schedule": "WP-B4 (fused2 schedule)",
@@ -183,26 +190,54 @@ class GatewayModelConfig(BaseModel):
     # ---- chat-speed plan (WP-A0 scaffold). Every default is today's behaviour; a value other than the
     # default is refused while its package is listed in PENDING_SPEED_SETTINGS (not built yet).
     lane: Literal["off", "auto", "required"] = Field(
-        "off", description="Native trip lane to the service (binary header over UDS or TCP+TLS; the provider sees the "
-        "same masked bytes as on the stream channel). 'off' (default) = the WebSocket stream channel only; 'auto' = "
-        "the lane when the service offers it, else the stream channel (byte-identical request bodies); 'required' = "
-        "refuse to serve without it",
+        "off", description="Native trip lane to the service (a binary header over a Unix domain socket; the provider "
+        "sees the same masked bytes as on the stream channel). 'off' (default) = the WebSocket stream channel only; "
+        "'auto' = the lane when the service offers one (lane = 'uds' on a service on this host, or a socket inside "
+        "lane_uds_dir), else the stream channel; any call the lane cannot take is resent byte-identically on the "
+        "stream channel. 'required' = as 'auto', but the model does not start (stays 'connecting') until the "
+        "service grants a lane ticket. Only the UDS lane exists: a TCP lane ticket is refused. With the lane the "
+        "gateway also uses the native trip engine (constant-time masking kernels, deferred Freivalds output half) "
+        "and runs decode passes synchronously on its plaintext thread",
+    )
+    lane_uds_dir: Path | None = Field(
+        None, description="Directory the service's lane socket must be in (for a service on this host that is not "
+        "reached on a loopback URL). None = accept a lane socket only from a service on a loopback URL",
+    )
+    lane_pool_wait_s: float = Field(
+        0.01, ge=0, le=1.0, description="When every lane connection is busy, wait this long for one before sending "
+        "the call on the stream channel",
     )
     local_linears: Literal["off", "attention", "auto"] = Field(
         "off", description="Exact local linears: 'off' (default) = every linear goes to the service; 'attention' = "
         "qkv and o are computed exactly on the gateway from the int8 pack (same integers, so the same bits) and only "
-        "gate_up/down are sent; 'auto' = decided once at start-up from a calibration (public configuration, never "
-        "per token). Pays off only on high-latency links",
+        "gate_up/down are sent (half the round trips per token; the gateway then holds the attention int8 weights "
+        "in memory); 'auto' = 'attention' when one layer's local qkv + o costs less than two round trips, decided "
+        "once at start-up (local_rtt_ms, else a start-up measurement of a few content-free round trips; public "
+        "configuration, never per token). Pays off on links slower than about 2 ms",
+    )
+    local_rtt_ms: float | None = Field(
+        None, gt=0, description="Round trip (ms) local_linears = 'auto' compares with. None = measured at start-up "
+        "with a few mask-free dummy round trips (uniform random payloads; no mask is used)",
     )
     spec_rows: int | None = Field(
-        None, ge=2, le=8, description="Speculation with a fixed row count: every verify pass sends exactly this many "
-        "rows (the real row, draft rows, then uniform random padding rows that take no masks), so the provider never "
-        "sees how many drafts were proposed. None (default) = today's behaviour (1 + the drafts of that pass)",
+        None, ge=2, le=8, description="Strict speculation with a fixed row count: every decode pass sends exactly "
+        "this many rows per sequence (the pending token, the drafts, then masked random filler rows), so the "
+        "provider never sees how many drafts were proposed. Needs spec_strict_passes and a draft source "
+        "(spec_lookup or draft_pack_path). Each pass then uses spec_rows mask rows per sequence, so a request "
+        "reserves prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1) mask slots. None (default) = today's "
+        "variable-row speculation (1 + the drafts of that pass) when spec_lookup / draft_pack_path is set",
     )
     spec_strict_passes: bool = Field(
-        False, description="Strict-pass speculation (needs spec_rows): after the answer, mask-free dummy passes run "
-        "the real code path on random data until the provider has seen as many passes as tokens generated, so the "
-        "pass count reveals nothing beyond the length L it already sees. False (default) = today's behaviour",
+        False, description="Strict-pass speculation (needs spec_rows): after the answer, dummy passes on random "
+        "data run the real code path until the provider has seen as many passes as tokens generated, so the pass "
+        "count reveals nothing beyond the length L it already sees. The answer streams first; the next request "
+        "of the same conversation (API key and OpenAI 'user') starts after those passes. False (default) = off",
+    )
+    float_threads: int | None = Field(
+        None, ge=1, le=256, description="Torch threads for the gateway's plaintext float ops of decode passes "
+        "(norms, RoPE, attention); enabled only when a start-up self-check shows the same bits as the default "
+        "thread count. 1 measured 2-5 ms per token faster on a 4-vCPU gateway. None (default) = the process "
+        "thread count, or PGW_FLOAT_THREADS",
     )
     float_ops: Literal["torch", "native"] = Field(
         "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
@@ -264,6 +299,17 @@ class GatewayModelConfig(BaseModel):
         _refuse_pending_speed_settings(self, PENDING_SPEED_SETTINGS, f"model {self.name!r}: ")
         if self.spec_strict_passes and self.spec_rows is None:
             raise ValueError(f"model {self.name!r}: spec_strict_passes needs spec_rows (a fixed row count per pass)")
+        if self.spec_rows is not None:
+            if not self.spec_strict_passes:
+                raise ValueError(f"model {self.name!r}: spec_rows needs spec_strict_passes (without it the pass count "
+                                 "reveals how many drafts were accepted)")
+            if self.spec_lookup <= 0 and self.draft_pack_path is None:
+                raise ValueError(f"model {self.name!r}: spec_rows needs a draft source "
+                                 "(spec_lookup or draft_pack_path)")
+            if self.spec_tokens == 0:
+                raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
+        if self.lane != "off" and self.mode != "masked":
+            raise ValueError(f"model {self.name!r}: lane needs masked mode")
         return self
 
     def resolved_service_token(self) -> SecretStr | None:
@@ -463,6 +509,12 @@ class GatewaySettings(PGWSettings):
         Path("/var/lib/pgw"), description="Data directory the setup wizard uses for model packs, the mask "
         "store and gateway state",
     )
+    setup_model_options: dict[str, Any] = Field(
+        default_factory=dict, description="Speed settings the setup wizard writes into the model's models.json "
+        "entry, e.g. {\"local_linears\": \"auto\", \"float_threads\": 1} (PGW_GATEWAY_SETUP_MODEL_OPTIONS as "
+        "JSON). Only the speed settings in SETUP_MODEL_OPTION_KEYS are accepted (never a security setting such "
+        "as freivalds_rate); the entry is validated like any models.json entry",
+    )
     factory_env_file: Path | None = Field(
         None, description="Run the encrypted mask factory as a supervised child process of the gateway with the "
         "PGW_FACTORY_* / PGW_MASKSTORE_* settings in this file (written by the setup wizard)",
@@ -518,6 +570,15 @@ class GatewaySettings(PGWSettings):
         if not text or any(c.isspace() for c in text):
             raise ValueError("admin_token_file must contain exactly one token")
         return {**data, "admin_token": text}
+
+    @field_validator("setup_model_options")
+    @classmethod
+    def _setup_model_options(cls, v: dict[str, Any]) -> dict[str, Any]:
+        bad = sorted(set(v) - SETUP_MODEL_OPTION_KEYS)
+        if bad:
+            raise ValueError(f"setup_model_options: {', '.join(bad)} cannot be preset (allowed: "
+                             f"{', '.join(sorted(SETUP_MODEL_OPTION_KEYS))})")
+        return v
 
     @field_validator("admin_token")
     @classmethod

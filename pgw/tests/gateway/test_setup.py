@@ -212,7 +212,8 @@ async def test_wizard_happy_path(svc: EnrollService, tmp_path: Path, tiny_hf_dir
         factories.append(InThreadFactory(env))
         return factories[-1]
 
-    settings = _settings(tmp_path)
+    # deployment presets for models.json (the Modal demo's speed settings), validated like the entry itself
+    settings = _settings(tmp_path, setup_model_options={"local_linears": "auto", "float_threads": 1})
     app = create_setup_app(settings, setup_token=SETUP_TOKEN,
                            options=SetupOptions(checkpoint_resolver=resolver, factory_launcher=launcher))
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 5000))
@@ -274,6 +275,10 @@ async def test_wizard_happy_path(svc: EnrollService, tmp_path: Path, tiny_hf_dir
             admin = {"Authorization": f"Bearer {admin_token}"}
             st = await _wait_status(c, admin)
             assert st["models"][0]["fingerprint"] == tiny_pack.fingerprint
+            (entry,) = json.loads((tmp_path / "etc" / "models.json").read_text())
+            assert entry["local_linears"] == "auto" and entry["float_threads"] == 1
+            assert st["models"][0]["speed"]["local_linears"]["mode"] == "auto"
+            assert st["models"][0]["speed"]["measured_rtt_ms"] is not None
             r = await c.post("/admin/keys", headers=admin, json={"name": "first-app"})
             assert r.status_code == 201, r.text
             key = r.json()["key"]
@@ -328,3 +333,12 @@ async def test_wizard_refuses_a_pack_that_differs_from_the_service(svc: EnrollSe
     # state survives a restart (the wizard resumes where it was)
     again = SetupController(settings).view()
     assert again["enroll"]["tenant"] == "acme" and again["model"]["pack_status"] == "failed"
+
+
+def test_setup_model_options_accept_only_speed_settings(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    assert _settings(tmp_path, setup_model_options={"lane": "auto", "spec_rows": 2}).setup_model_options
+    for bad in ({"freivalds_rate": 0.5}, {"mode": "plain"}, {"service_url": "https://evil.example"}):
+        with pytest.raises(ValidationError, match="cannot be preset"):
+            _settings(tmp_path, setup_model_options=bad)

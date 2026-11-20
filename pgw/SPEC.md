@@ -533,6 +533,27 @@ Each request gets one `MaskReservation` of `prompt_len + max_tokens` slots, pass
 segment-extent boundaries. If the store has too few slots, the request fails fast with
 `mask_exhausted` before any compute.
 
+### 9.4a Chat-speed settings (phase A; per model, off by default)
+None changes a bit of any answer (each is tested gateway-level against the plaintext reference) and none
+sends the service anything it does not already see (`docs/operations/install-on-prem.md` has the list).
+- `local_linears` (`attention` | `auto`): `qkv` and `o` computed exactly on the gateway (same int8 product,
+  quantization and range check as the masked path); the service sees only `gate_up`/`down`. `auto` is
+  decided once at start-up (public configuration) from `local_rtt_ms` or a few mask-free 1-row dummy trips.
+- `lane` (`auto` | `required`): decode calls over the service's UDS trip lane (`PGW_SERVICE_LANE=uds`),
+  the same `x_hat` bytes and public header fields; any refusal resends the byte-identical request on
+  the stream channel. Turns on the TripEngine (constant-time masking kernels, deferred Freivalds output
+  half joined before the session's next payload; the model's last linear always checked synchronously)
+  and synchronous decode passes. No TCP lane.
+- `spec_rows` + `spec_strict_passes` (both required together): every decode pass carries exactly
+  `spec_rows` rows per sequence (masked random filler rows), and after the answer dummy passes run until
+  the pass count equals the generated length, so neither row counts nor pass counts depend on the text
+  (closes the speculation leak of 3.4). The reservation is `prompt + max_tokens + (max_tokens-1)(spec_rows-1)`.
+  Requests of one API key and OpenAI `user` run as one conversation (each after the previous one's dummy passes).
+- `float_threads`: decode float ops on that many torch threads, enabled only after a bit-identity self-check.
+- Ending or aborting a session waits for and drops its deferred checks (`release_session_checks`) before
+  the reservation is burned; a deferred-check failure is an integrity failure (9.5) and the session and its
+  KV cache are discarded, never resumed.
+
 ### 9.5 Failure handling
 - Service unavailable: retry with backoff (wire client), then fail the request (`unavailable`). KV
   state is per session, so nothing else is affected.

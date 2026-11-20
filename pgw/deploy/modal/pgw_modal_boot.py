@@ -243,7 +243,26 @@ def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str
 _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 
 
-def gateway_env(config_dir: Path, data_dir: Path, port: int) -> dict[str, str]:
+#: Speed settings the setup wizard writes into the customer's ``models.json`` (``setup_model_options``).
+#: Each keeps the answer bit-identical to the plaintext quantized reference (the e2e check compares) and
+#: shows the provider nothing new:
+#:
+#: * ``local_linears = "auto"``: qkv and o computed exactly on the gateway when one layer's local cost is
+#:   below two round trips. Decided once at start-up from a few mask-free dummy round trips; over the
+#:   public tunnel (about 7-26 ms per trip) that is "attention" (break-even about 1.6 ms), which halves the
+#:   sequential round trips per token. On i6pn the measurement decides.
+#: * ``float_threads = 1``: the gateway's decode float ops on one torch thread (self-checked bit-identical;
+#:   2-5 ms per token less on 4 vCPUs). Same effect as ``PGW_FLOAT_THREADS=1``.
+#:
+#: Not set: ``lane`` (the provider is remote: the service lane is a local Unix socket only) and strict
+#: speculation (``spec_rows`` / ``spec_strict_passes``). The demo has no draft model and its chat barely
+#: repeats the prompt, so prompt lookup accepts almost nothing: the provider sees as many passes either
+#: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
+GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1}
+
+
+def gateway_env(config_dir: Path, data_dir: Path, port: int,
+                model_options: dict[str, Any] | None = None) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
     env.update({
         "PGW_LOG_LEVEL": "INFO",
@@ -251,6 +270,10 @@ def gateway_env(config_dir: Path, data_dir: Path, port: int) -> dict[str, str]:
         "PGW_GATEWAY_PORT": str(port),
         "PGW_GATEWAY_CONFIG_DIR": str(config_dir),
         "PGW_GATEWAY_DATA_DIR": str(data_dir),
+        "PGW_GATEWAY_SETUP_MODEL_OPTIONS": json.dumps(GATEWAY_MODEL_OPTIONS if model_options is None
+                                                      else model_options),
+        # also for models the gateway process builds outside models.json (the setup wizard's checks)
+        "PGW_FLOAT_THREADS": "1",
     })
     return env
 

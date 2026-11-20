@@ -815,8 +815,16 @@ class Generator:
         """A random token id (filler rows and dummy passes; masked or padding, never emitted)."""
         return secrets.randbelow(self._fill_vocab)
 
-    @staticmethod
-    def _close_session(session: object) -> None:
+    def _close_session(self, session: object) -> None:
+        """Close (burn) a mask reservation. First the backend's deferred integrity checks of that session are
+        waited for and dropped (``release_session_checks``: a session that ends or aborts between a deferred
+        check and its join); a failure there is reported by the backend (breaker), never raised here."""
+        release = getattr(getattr(self.model, "backend", None), "release_session_checks", None)
+        if callable(release):
+            try:
+                release(session)
+            except Exception:  # pragma: no cover - the hook reports, never raises
+                log.exception("releasing deferred checks of a session failed")
         close = getattr(session, "close", None)
         if close is not None:
             try:
@@ -845,7 +853,7 @@ class Generator:
             st.t_end = time.perf_counter()
         if st.own_session and st.session is not None:
             st.own_session = False
-            Generator._close_session(st.session)
+            self._close_session(st.session)
         self._release_local(st)
 
     def _arelease(self, st: _SeqState) -> None:

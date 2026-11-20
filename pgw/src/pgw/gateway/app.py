@@ -634,14 +634,15 @@ def create_app(
 
     # ---- inference core -------------------------------------------------------------------------------
     async def _admit(
-        rt: ModelRuntime, key: ApiKey, prompts: list[list[int]], params: SamplingParams, rid: str
+        rt: ModelRuntime, key: ApiKey, prompts: list[list[int]], params: SamplingParams, rid: str,
+        conversation: str | None = None,
     ) -> tuple[_KeyLease, list[ActiveSession]]:
         est = sum(len(p) + params.max_tokens for p in prompts)
         rt.check_available()
         lease = state.lease(key, est)
         try:
             # all admission slots at once (no hold-and-wait); masks are reserved only afterwards
-            sessions = await rt.open_sessions(prompts, params, request_id=rid)
+            sessions = await rt.open_sessions(prompts, params, request_id=rid, conversation=conversation)
         except BaseException:
             lease.finish(0)
             raise
@@ -709,7 +710,11 @@ def create_app(
                 raise InvalidRequestError("streaming supports a single prompt")
             max_tokens = min(rt.clamp_max_tokens(len(p), req.requested_max_tokens) for p in prompts)
             params = _sampling(req, max_tokens, logprobs)
-            lease, sessions = await _admit(rt, key, prompts, params, rid)
+            # Strict speculation orders the requests of one conversation behind the previous one's dummy
+            # passes. The API has no conversation id: requests of one API key (and OpenAI ``user``) count as
+            # one conversation (gateway-local key, never sent to the service).
+            conversation = f"key:{key.key_id}\x00user:{getattr(req, 'user', None) or ''}"
+            lease, sessions = await _admit(rt, key, prompts, params, rid, conversation)
         except PGWError as exc:
             _audit_request(endpoint, rid, key, rt, exc.http_status, str(exc.code), t0, sessions, req.stream)
             raise

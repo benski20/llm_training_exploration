@@ -121,6 +121,11 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
     cmp = wiz.compare(out, ref)
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
+    model_status = next((m for m in status.get("models", []) if m.get("name") == boot.MODEL_NAME), {})
+    speed = dict(model_status.get("speed") or {})
+    warm_tokens = int(((out2.get("usage") or {}).get("completion_tokens")) or 0)
+    if warm_tokens and trips["warm"].get("trips"):
+        speed["warm_trips_per_token"] = round(trips["warm"]["trips"] / warm_tokens, 2)
     return {
         "timings": res["timings"], "verify": res["verify"], "enroll": {k: res["enroll"].get(k) for k in (
             "tenant", "service_url", "client_cert", "ca_fingerprint")},
@@ -130,7 +135,7 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
         and [x["logprob"] for x in out["choices"][0]["logprobs"]["content"]]
         == [x["logprob"] for x in out2["choices"][0]["logprobs"]["content"]],
         "reference_text": ref["text"], "reference_s": ref_s, "compare": cmp,
-        "admin_status": status, "admin_masks": masks, "trip_latency": trips,
+        "admin_status": status, "admin_masks": masks, "trip_latency": trips, "speed": speed,
     }
 
 
@@ -139,18 +144,18 @@ _FN: dict = dict(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1,
 
 
 @app.function(**_FN, i6pn=False)
-def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
+def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
     """The customer gateway; reaches the provider through its public TCP tunnel."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=False)
+    return _gateway(run_id, ttl_s, e2e, i6pn=False, local_linears=local_linears)
 
 
 @app.function(**_FN, i6pn=True)
-def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
+def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
     """The same gateway on Modal's private IPv6 network (pairs with the provider's ``serve_i6pn``)."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=True)
+    return _gateway(run_id, ttl_s, e2e, i6pn=True, local_linears=local_linears)
 
 
-def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool) -> dict:
+def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: str = "auto") -> dict:
     import sys
 
     t_boot = time.time()
@@ -166,7 +171,9 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool) -> dict:
     result: dict = {"run_id": run_id}
     with modal.forward(port) as tunnel:
         url = tunnel.url
-        env = boot.gateway_env(root / "config", root / "data", port)
+        # speed settings for the wizard's models.json (boot.GATEWAY_MODEL_OPTIONS; launch.py --local-linears)
+        env = boot.gateway_env(root / "config", root / "data", port,
+                               {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears})
         gw, token = boot.start_gateway(env, root / "gateway.log")
         boot.wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
         info = {"run_id": run_id, "console_url": url.rstrip("/") + "/console/", "base_url": url,

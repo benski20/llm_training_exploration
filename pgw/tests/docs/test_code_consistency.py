@@ -100,6 +100,7 @@ def _settings_classes() -> dict[str, type[BaseModel]]:
 _NON_FIELD_ENV = {
     "PGW_MASKSTORE_KEK",  # default value of MaskStoreSettings.key_env_var
     "PGW_DOCTOR_EXPECTED_TOKENS_PER_S",  # input of `pgw doctor`'s mask-supply check (pgw.cli.doctor), not a setting
+    "PGW_FLOAT_THREADS",  # engine switch read by pgw.engine.model (per model: GatewayModelConfig.float_threads)
 }
 
 

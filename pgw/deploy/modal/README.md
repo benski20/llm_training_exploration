@@ -146,24 +146,32 @@ why. The window counts every trip of the warm chat, all linear kinds and prefill
 `rows_1_*` split covers single-row (decode) trips only.
 The measurement is local to the gateway: nothing new reaches the provider.
 
-## Exact local linears (E2): placeholder
+## Gateway speed settings (exact local linears, float threads)
 
-The chat-speed plan's exact local linears compute `qkv` and `o` on the gateway from the int8 pack (the
-same integers, so the same bits) and send only `gate_up`/`down`, halving the round trips of
-Qwen2.5-0.5B from 96 to 48 per token at a local read of about 1.8 MB per layer. That is the right
-setting for this demo on either network (it is off for co-located 7B deployments, where it is a net
-loss). It is **not in this build**: the per-model setting `local_linears` (`off` by default,
-`attention` or `auto`) is refused until WP-A4b/A5 land, and `launch.py --local-linears attention`
-stops with the same message. When they land:
+The customer gateway's `models.json` is written by the setup wizard; `pgw_modal_boot.gateway_env` presets
+its speed settings through `PGW_GATEWAY_SETUP_MODEL_OPTIONS` (`GATEWAY_MODEL_OPTIONS` there). Each keeps
+the answer bit-identical to the plaintext reference (the `--e2e` check still compares greedy text and
+logprobs) and shows the provider nothing new:
 
-1. the setting leaves `PENDING_SPEED_SETTINGS` (`pgw/gateway/config.py`);
-2. the setup wizard writes `local_linears` into the model configuration it creates (it has no field for
-   it yet);
-3. `launch.py --local-linears attention` passes the value to the customer function, the `--e2e` check
-   stays the greedy bit-identity against the plaintext reference, and `trip_latency` should show
-   half the trips per token.
+* `local_linears = "auto"` (`launch.py --local-linears auto|attention|off`, default `auto`): exact local
+  linears compute `qkv` and `o` on the gateway from the int8 pack (the same integers, so the same
+  bits) and send only `gate_up`/`down`, halving the round trips of Qwen2.5-0.5B from 96 to 48 per
+  token at a local read of about 1.8 MB per layer. `auto` decides once at start-up from a few mask-free
+  dummy round trips: over the tunnel (about 7-26 ms per trip; break-even about 1.6 ms) it picks
+  `attention`; on i6pn the measurement decides. The provider then sees only the `gate_up`/`down` items
+  (plus those start-up dummy trips: 1-row, uniform random, no mask).
+* `float_threads = 1` (and `PGW_FLOAT_THREADS=1`): the gateway's decode float ops on one torch thread,
+  self-checked bit-identical at start-up.
 
-The provider then sees only the `gate_up`/`down` items: strictly less than today.
+Not used here: the trip lane (`lane`; it is a Unix socket for a service on the gateway's host, and the
+provider is remote) and strict speculation (`spec_rows` + `spec_strict_passes`). The demo has no draft
+model and its chat barely repeats the prompt, so prompt lookup would accept almost nothing; strict mode
+shows the provider as many passes either way, while each pass would carry `spec_rows` masked rows
+(that many times the mask supply of the encrypted factory).
+
+`launch.py --e2e` prints the settings in effect (`local_linears` decision, start-up RTT, round trips
+per token of the warm chat) next to `trip_latency`; the per-trip gate is unchanged (fewer trips per
+token, same per-trip latency).
 
 ## Configuration choices
 

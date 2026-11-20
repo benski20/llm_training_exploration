@@ -1230,7 +1230,10 @@ class TransformerModel:
         which is a durable store transaction, and no first use of another segment)."""
         if not self._lids:
             return False
-        first = self._lids[0][0]
+        # the first linear that takes masks (with local qkv / o that is layer 0's gate_up: a local
+        # linear's rows are never taken, so it would never count as "already served a pass")
+        is_local = getattr(backend, "local_linear", None)
+        first = next((lid for lid in self._lids[0] if not (callable(is_local) and is_local(lid))), self._lids[0][0])
         for s in seqs:
             res = s.session if s.session is not None else getattr(backend, "mask_source", None)
             if res is None:

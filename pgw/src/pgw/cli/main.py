@@ -87,13 +87,17 @@ def version(as_json: bool) -> None:
 @click.option("--mask-supply", is_flag=True,
               help="With --pack: time one mask chunk into a temporary store (heavy; not for start-up checks)")
 @click.option("--expected-tps", "expected_tps", type=float, default=None,
-              help="Expected mask consumption (tokens/s) for --mask-supply")
+              help="Expected mask consumption (tokens/s) for --mask-supply and the maskstore.read_rate check "
+                   "(with --maskstore; default PGW_DOCTOR_EXPECTED_TOKENS_PER_S)")
+@click.option("--maskstore-read-mb", "maskstore_read_mb", type=click.IntRange(min=0), default=None,
+              help="Size in MiB of the maskstore.read_rate probe written and read next to the --maskstore store "
+                   "(default 64; 0 skips the check)")
 @click.option("--json", "as_json", is_flag=True, help="Machine-readable output")
 @handle_errors
 def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: Path | None, key_file: Path | None,
            service_url: str | None, service_token_file: Path | None, service_ca_file: Path | None,
            check_settings: bool, no_gpu: bool, strict: bool, deep: bool, mask_supply: bool,
-           expected_tps: float | None, as_json: bool) -> None:
+           expected_tps: float | None, maskstore_read_mb: int | None, as_json: bool) -> None:
     """Check the environment: dependencies, CSPRNG, exact ring arithmetic, devices, pack, store, service."""
     from pgw.cli.doctor import format_report, run_doctor
 
@@ -105,7 +109,8 @@ def doctor(role: str, pack_path: Path | None, ring: str | None, maskstore_root: 
                         service_url=service_url, service_token_file=service_token_file,
                         service_ca_file=service_ca_file, include_gpu=not no_gpu, check_settings=check_settings,
                         strict=strict, deep=deep, mask_supply=mask_supply,
-                        expected_tokens_per_second=expected_tps)
+                        expected_tokens_per_second=expected_tps,
+                        maskstore_read_bytes=None if maskstore_read_mb is None else maskstore_read_mb << 20)
     if as_json:
         echo_json(report.to_dict())
     else:

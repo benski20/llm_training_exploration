@@ -152,6 +152,36 @@ uses a fixed summation order (`pgw.engine.lm_head`), so a row's logits are bit-i
 rows share its pass: the setting only trades speed. Default (unset): on when the native extension
 `pgw_fast` is built, off with its slower pure-torch fallback.
 
+Chat-speed settings (per model; all off by default, all keep every answer bit-identical to the
+plaintext quantized reference, none shows the provider anything new):
+
+* `"local_linears"`: `"attention"` computes `qkv` and `o` exactly on the gateway from the int8 pack and
+  sends only `gate_up`/`down` (half the round trips per token; the gateway holds the attention int8
+  weights). `"auto"` decides once at start-up: on when one layer's local `qkv` + `o` costs less than two
+  round trips of `"local_rtt_ms"`, or, without it, of a start-up measurement made of a few mask-free
+  dummy round trips (uniform random payloads; no mask is used). It pays off on links slower than
+  about 2 ms; `/admin/status` shows the decision under `speed.local_linears`.
+* `"lane"`: `"auto"` sends decode-sized calls over the compute service's trip lane (a binary header over
+  a Unix domain socket; the service needs `PGW_SERVICE_LANE=uds` and runs on the same host) and
+  everything else, or any call the lane refuses, byte-identically over the stream channel.
+  `"required"` keeps the model `connecting` until the service grants a lane. `"lane_uds_dir"` accepts
+  a lane socket in that directory when the service URL is not a loopback address;
+  `"lane_pool_wait_s"` bounds the wait for a free lane connection. There is no TCP lane.
+* `"spec_rows"` with `"spec_strict_passes": true` (and `"spec_lookup"` or `"draft_pack_path"`): strict
+  speculation. Every decode pass carries exactly `spec_rows` rows and, after the answer, dummy passes
+  run until the provider has seen as many passes as tokens were generated, so it learns neither how
+  many drafts were accepted nor how many passes the answer took. Filler rows are masked rows, so a
+  request reserves `prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)` mask slots. Requests of
+  one API key (and OpenAI `user` value) are one conversation: each starts after the previous one's
+  dummy passes. `spec_rows` without `spec_strict_passes` is refused.
+* `"float_threads"`: torch threads of the gateway's decode float ops (`1` saved 2-5 ms per token on a
+  4-vCPU host); enabled only if a start-up self-check gives the same bits (`PGW_FLOAT_THREADS` does
+  the same for every model).
+
+`float_ops`, `head_mode`, `schedule` and `prefix_cache` are refused in this build (phase B).
+`PGW_GATEWAY_SETUP_MODEL_OPTIONS` (JSON) presets the speed settings above for the model entry the setup
+wizard writes; security settings cannot be preset there.
+
 Environment (`/etc/pgw/gateway.env`):
 
 ```bash

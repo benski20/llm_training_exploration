@@ -518,6 +518,16 @@ class SetupController:
         state_dir = self.data_dir / "gateway"
         entry = model_entry({"name": model["name"], "fingerprint": model["fingerprint"], "ring": model.get("ring")},
                             Path(model["pack_path"]), en["service_url"], files)
+        if self.settings.setup_model_options:  # deployment presets (speed settings only; validated below)
+            from pgw.gateway.config import GatewayModelConfig
+
+            entry = {**entry, **{k: (str(v) if isinstance(v, Path) else v)
+                                 for k, v in self.settings.setup_model_options.items()}}
+            try:
+                GatewayModelConfig(**entry)
+            except ValidationError as exc:
+                raise PGWError(f"setup_model_options is not valid: {exc.errors()[0].get('msg')}",
+                               code=ErrorCode.CONFIG) from exc
         models_file = self.config_dir / "models.json"
         atomic_write_text(models_file, json.dumps([entry], indent=2) + "\n", mode=0o600)
         factory_env_file = self.config_dir / "factory.env"

@@ -29,6 +29,10 @@ latency over the warm chat (median, from its ``/metrics`` histogram; see ``trip_
 above ``X``, stops the pair and launches a fresh one, at most ``--tries`` pairs in all (default 3). A
 pair whose masked answer is not bit-identical to the reference is never retried, and a tunnel pair is
 not relaunched for a limit below :data:`TUNNEL_FLOOR_MS` (the tunnel alone adds about 5 ms per trip).
+
+Gateway speed settings: ``--local-linears`` (default ``auto``) is written into the customer's
+``models.json`` by the setup wizard together with ``float_threads = 1`` (``pgw_modal_boot.GATEWAY_MODEL_OPTIONS``);
+``--e2e`` prints the decision and the round trips per token of the warm chat.
 """
 
 from __future__ import annotations
@@ -187,7 +191,7 @@ class Pair:
 
 
 def spawn_pair(live: Any, i6pn: bool, ttl_s: int, e2e: bool,
-               lookup: Callable[[str, str], Any] | None = None) -> Pair:
+               lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto") -> Pair:
     """Clear the per-run Dict keys and spawn one call of each party on the chosen network."""
     lookup = lookup or modal.Function.from_name
     run_id = secrets.token_hex(4)
@@ -196,7 +200,7 @@ def spawn_pair(live: Any, i6pn: bool, ttl_s: int, e2e: bool,
     pfn, cfn = FUNCTIONS[i6pn]
     prov, cust = lookup("pgw-provider", pfn), lookup("pgw-customer", cfn)
     pcall = prov.spawn(run_id, ttl_s)
-    ccall = cust.spawn(run_id, ttl_s, e2e)
+    ccall = cust.spawn(run_id, ttl_s, e2e, local_linears)
     print(f"run {run_id} ({'i6pn' if i6pn else 'tunnel'}): spawned provider ({pcall.object_id}) and "
           f"customer ({ccall.object_id})", flush=True)
     return Pair(run_id, i6pn, pcall, ccall, time.time())
@@ -297,7 +301,20 @@ def e2e_verdict(res: dict[str, Any], max_trip_ms: float | None) -> tuple[str, st
     return ("ok" if passed else "gate_failed"), why
 
 
+def _print_speed(res: dict[str, Any]) -> None:
+    sp = (res.get("e2e") or {}).get("speed") or {}
+    if not sp:
+        return
+    ll = sp.get("local_linears") or {}
+    print(f"gateway speed settings: local_linears {ll.get('mode')} -> {ll.get('kinds') or 'none'} "
+          f"(start-up rtt {sp.get('measured_rtt_ms')} ms; {ll.get('reason', '')}), float_threads "
+          f"{sp.get('float_threads')}, lane {sp.get('lane')} ({sp.get('lane_state')}), strict speculation "
+          f"{sp.get('spec_rows') or 'off'}; {sp.get('warm_trips_per_token', '?')} round trips per token "
+          "(warm chat)", flush=True)
+
+
 def _print_latency(res: dict[str, Any], pair: Pair) -> None:
+    _print_speed(res)
     lat = ((res.get("e2e") or {}).get("trip_latency") or {}).get("warm") or {}
     if not lat.get("trips"):
         print(f"trip latency ({pair.network}): not measured", flush=True)
@@ -308,6 +325,16 @@ def _print_latency(res: dict[str, Any], pair: Pair) -> None:
           f"rest {lat.get('rows_1_wire_ms')}", flush=True)
 
 
+def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
+    """:func:`spawn_pair` with the customer gateway's ``--local-linears`` choice."""
+    local = getattr(args, "local_linears", "auto")
+
+    def spawn(live: Any, i6pn: bool, ttl_s: int, e2e: bool) -> Pair:
+        return spawn_pair(live, i6pn, ttl_s, e2e, local_linears=local)
+
+    return spawn
+
+
 def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
     """One or more end-to-end pairs (relaunched while the latency gate fails); returns the exit code."""
     t_all = time.time()
@@ -315,7 +342,7 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
     code = 1
     for attempt in range(1, tries + 1):
         pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=True,
-                           schedule_timeout_s=args.i6pn_schedule_timeout_min * 60)
+                           schedule_timeout_s=args.i6pn_schedule_timeout_min * 60, spawn=_spawner(args))
         res = wait_e2e(live, pair, ttl_s)
         print(json.dumps({k: v for k, v in res.items() if k != "log_tail"}, indent=1, default=str))
         print("---- gateway log tail ----\n" + res.get("log_tail", ""))
@@ -380,8 +407,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="with --e2e: relaunch while the median client-reported round trip of the warm chat "
                          "is above this (off by default)")
     ap.add_argument("--tries", type=int, default=3, help="with --max-trip-ms: pairs to try in all (default 3)")
-    ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="off",
-                    help="placeholder for exact local linears (E2); only 'off' until WP-A4b/A5 land")
+    ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="auto",
+                    help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
+                         "gateway when its start-up round-trip measurement says they are cheaper than two trips "
+                         "(the tunnel: yes); 'attention' = always; 'off' = every linear on the provider")
     args = ap.parse_args(argv)
     try:  # also validates a PGW_MODAL_GPU default, which argparse would not check against choices
         args.gpu = normalize_gpu(args.gpu)
@@ -395,9 +424,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
         ap.error("--max-trip-ms must be positive")
-    if args.local_linears != "off":
-        ap.error(f"--local-linears {args.local_linears}: exact local linears (E2) are not available in this build "
-                 "(pending WP-A4b/A5); see 'Exact local linears' in deploy/modal/README.md")
     return args
 
 
@@ -420,7 +446,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.e2e:
         sys.exit(run_e2e(live, args, ttl_s))
     pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=False,
-                       schedule_timeout_s=args.i6pn_schedule_timeout_min * 60)
+                       schedule_timeout_s=args.i6pn_schedule_timeout_min * 60, spawn=_spawner(args))
     watch = pair.watch(live)
     while True:
         p, c = live.get("provider") or {}, live.get("customer") or {}

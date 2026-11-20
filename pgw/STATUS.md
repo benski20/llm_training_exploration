@@ -15,6 +15,27 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-20: chat-speed phase A wired into the gateway
+
+The phase-A packages now run on the gateway's production path (all per-model settings, off by default;
+SPEC 9.4a). `local_linears`, `lane`, `spec_rows` + `spec_strict_passes` left `PENDING_SPEED_SETTINGS`;
+`float_ops`, `head_mode`, `schedule` and `prefix_cache` stay refused (phase B). New per-model settings:
+`local_rtt_ms`, `lane_uds_dir`, `lane_pool_wait_s`, `float_threads`. `/admin/status` reports them under
+`speed` (lane state and fallbacks, local-linear decision, start-up RTT). Gateway-level tests show each
+setting bit-identical to the plaintext reference on the tiny model in masked mode, including the lane
+against the real service UDS lane (`tests/gateway/test_speed_wiring.py`).
+
+- The lane client (WP-A3) and the service lane (WP-A1) were built against different framings
+  (`/pgw/v1/lane_open` + `PGWT` vs `/pgw/v1/lane/open` + `PGWL`). `pgw.wire.service_lane` bridges them
+  (Python channel; the native `TripChannel` speaks only the A3 framing, so the lane runs at the Python
+  channel's cost until one side is changed).
+- Strict speculation pads with masked filler rows (the model does not use the backend's mask-free padding
+  rows yet), so it costs `spec_rows` times the mask rows per token.
+- Modal demo: the customer's `models.json` gets `local_linears = "auto"` and `float_threads = 1` via
+  `PGW_GATEWAY_SETUP_MODEL_OPTIONS`; no lane (remote provider) and no strict speculation (no draft model,
+  little prompt overlap). Not run on Modal or Kaggle yet.
+- `pgw doctor --maskstore-read-mb` sets the `maskstore.read_rate` probe size.
+
 ## Update 2026-11-20 (measurement and telemetry for run 26)
 
 Run 26 (after the phase-1 merge) will be measured with corrected accounting; no new speed numbers yet.

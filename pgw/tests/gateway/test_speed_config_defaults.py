@@ -63,8 +63,6 @@ def test_every_new_gateway_field_is_gated_until_built() -> None:
     assert set(gw_config.PENDING_SPEED_SETTINGS) <= set(GATEWAY_DEFAULTS)
     for name in gw_config.PENDING_SPEED_SETTINGS:
         kw: dict[str, object] = {name: GATEWAY_ON[name]}
-        if name == "spec_strict_passes":
-            kw["spec_rows"] = 4
         with pytest.raises(ValidationError, match="not available in this build"):
             masked(**kw)
     # the default spelled out explicitly is fine
@@ -73,14 +71,16 @@ def test_every_new_gateway_field_is_gated_until_built() -> None:
 
 def test_gateway_speed_fields_validate_once_built(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gw_config, "PENDING_SPEED_SETTINGS", {})
-    m = masked(**{**GATEWAY_ON, "spec_strict_passes": False})
+    m = masked(**GATEWAY_ON, spec_lookup=3)
     assert m.spec_rows == 4 and m.lane == "auto"
-    assert masked(spec_rows=4, spec_strict_passes=True).spec_strict_passes
+    assert masked(spec_rows=4, spec_strict_passes=True, spec_lookup=3).spec_strict_passes
     with pytest.raises(ValidationError, match="spec_strict_passes needs spec_rows"):
         masked(spec_strict_passes=True)
+    with pytest.raises(ValidationError, match="spec_rows needs spec_strict_passes"):
+        masked(spec_rows=4, spec_lookup=3)
     for bad in (1, 9):
         with pytest.raises(ValidationError):
-            masked(spec_rows=bad)
+            masked(spec_rows=bad, spec_strict_passes=True, spec_lookup=3)
     with pytest.raises(ValidationError):
         masked(lane="sometimes")
 

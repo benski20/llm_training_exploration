@@ -1,5 +1,5 @@
 """Modal demo launcher (``deploy/modal/launch.py``): ``--max-trip-ms`` relaunch loop, i6pn scheduling
-fallback to the tunnel, GPU switch and the E2 placeholder.
+fallback to the tunnel, GPU switch and the --local-linears setting.
 
 Nothing here talks to Modal: the launcher's Modal calls are replaced by fakes."""
 
@@ -62,13 +62,14 @@ def test_args_gate_needs_e2e_and_gpu_choices(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("PGW_MODAL_I6PN", raising=False)
     a = launch.parse_args([])
     assert a.gpu is None and a.i6pn is False and a.max_trip_ms is None and a.tries == 3
-    assert a.local_linears == "off"
+    assert a.local_linears == "auto"
     with pytest.raises(SystemExit):
         launch.parse_args(["--max-trip-ms", "1"])
     with pytest.raises(SystemExit):
         launch.parse_args(["--gpu", "L4"])  # never L4
+    assert launch.parse_args(["--local-linears", "attention"]).local_linears == "attention"
     with pytest.raises(SystemExit):
-        launch.parse_args(["--local-linears", "attention"])  # placeholder until WP-A4b/A5
+        launch.parse_args(["--local-linears", "always"])
     a = launch.parse_args(["--e2e", "--max-trip-ms", "1", "--gpu", "A10G", "--i6pn"])
     assert a.gpu == "A10G" and a.i6pn and a.max_trip_ms == 1.0
     monkeypatch.setenv("PGW_MODAL_GPU", "T4")
@@ -145,7 +146,7 @@ def test_spawn_pair_picks_functions_by_network() -> None:
     live = FakeDict(stop="x", provider={"run_id": "old"}, customer_boot={"run_id": "old"})
     p = launch.spawn_pair(live, False, 600, True, lookup=lambda app, name: FakeFunction(app, name, log))
     assert [(a, n) for a, n, _ in log] == [("pgw-provider", "serve"), ("pgw-customer", "gateway")]
-    assert log[1][2] == (p.run_id, 600, True) and p.network == "tunnel"
+    assert log[1][2] == (p.run_id, 600, True, "auto") and p.network == "tunnel"
     assert not any(k in live for k in launch.RUN_KEYS)  # stale per-run keys cleared
     log.clear()
     p = launch.spawn_pair(live, True, 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
