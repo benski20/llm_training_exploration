@@ -150,7 +150,8 @@ def _build_state(
     if authenticator is None and (has_creds or not s.allow_unauthenticated):
         authenticator = TenantAuthenticator(
             s.tokens_file, allow_unauthenticated=s.allow_unauthenticated, mtls_tenants_file=s.mtls_tenants_file,
-            allow_empty=s.enrollment_file is not None,
+            allow_empty=s.enrollment_file is not None, require_client_cert=s.compute_requires_client_cert,
+            reload_interval_s=s.tokens_reload_interval_s,
         )
     metrics = metrics or ServiceMetrics(enabled=s.metrics_enabled)
     batcher = BatchScheduler(

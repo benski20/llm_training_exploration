@@ -180,7 +180,8 @@ def test_service_token_create_compatible_with_authenticator(runner: CliRunner, t
     assert r.exit_code == 0, r.output
     token = json.loads(r.stdout)["token"]
     assert stat.S_IMODE(tf.stat().st_mode) == 0o600
-    assert tf.read_text().strip() == f"acme:{hash_token(token)}"
+    tenant, token_id, digest = tf.read_text().strip().split(":")
+    assert (tenant, digest) == ("acme", hash_token(token)) and token_id == json.loads(r.stdout)["token_id"]
     out = tmp_path / "tok2"
     r = runner.invoke(cli, ["service", "token", "create", "--tenant", "beta", "--tokens-file", str(tf),
                             "--out", str(out)])

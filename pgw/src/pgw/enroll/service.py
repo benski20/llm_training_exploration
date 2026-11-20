@@ -192,7 +192,7 @@ class _Audit:
     """JSON-lines audit of enrollment attempts. Fields are fixed; no secret ever reaches them."""
 
     FIELDS = ("ts", "event", "enrollment_id", "tenant", "gateway_name", "client", "reason", "cert_serial",
-              "prev_cert_serial", "models")
+              "prev_cert_serial", "token_id", "models")
 
     def __init__(self, path: Path | None):
         self.path = path
@@ -293,9 +293,12 @@ class EnrollmentService:
             except PGWError as exc:
                 self.audit.event("enroll.failed", client=client, gateway_name=name, reason=str(exc.code))
                 raise
-            token, digest = _issue_token(rec.tenant, Path(s.tokens_file))
+            # Without a client certificate the token is marked token-only: it stays usable when the
+            # service requires mTLS for compute (require_client_cert_for_compute).
+            token, trec = _issue_token(rec.tenant, Path(s.tokens_file), token_only=not sign)
             if self.authenticator is not None:
-                self.authenticator.add_token_hash(digest, rec.tenant)
+                self.authenticator.add_token_hash(trec.digest_hex, rec.tenant, token_id=trec.token_id,
+                                                  token_only=trec.token_only)
             out: dict[str, Any] = {
                 "tenant": rec.tenant, "service_token": token, "ca_bundle_pem": self.ca_pem,
                 "service_url": s.public_url, "models": models,
@@ -314,6 +317,7 @@ class EnrollmentService:
                 if self.authenticator is not None:
                     self.authenticator.add_subject(cn, rec.tenant)
         self.audit.event("enroll.ok", client=client, gateway_name=name, enrollment_id=rec.id, tenant=rec.tenant,
+                         token_id=trec.token_id,
                          cert_serial=f"{serial:x}" if serial is not None else None,
                          models=",".join(m["name"] for m in models))
         return out
@@ -353,6 +357,7 @@ class EnrollmentService:
             self.audit.event("enroll.renew_failed", client=client, reason=str(exc.code))
             raise
         tenant = ident.tenant_id
+        token_id = getattr(ident, "token_id", None)
         if not isinstance(body, dict):
             raise PGWError("body must be a JSON object", code=ErrorCode.PROTOCOL)
         csr, cert_pem = body.get("csr_pem"), body.get("cert_pem")
@@ -382,15 +387,15 @@ class EnrollmentService:
                        tenant)
         new_pem, serial = sign_client_csr(str(csr), s.client_issuing_ca_cert_file, s.client_issuing_ca_key_file,
                                           cn, s.client_cert_validity_days)
-        self.audit.event("enroll.renewed", client=client, tenant=tenant, gateway_name=cn,
+        self.audit.event("enroll.renewed", client=client, tenant=tenant, gateway_name=cn, token_id=token_id,
                          cert_serial=f"{serial:x}", prev_cert_serial=f"{cur.serial_number:x}")
         return {"client_cert_pem": new_pem, "client_cert_cn": cn}
 
 
-def _issue_token(tenant: str, tokens_file: Path) -> tuple[str, str]:
-    from pgw.service.auth import issue_tenant_token
+def _issue_token(tenant: str, tokens_file: Path, *, token_only: bool) -> tuple[str, Any]:
+    from pgw.service.auth import issue_token_record
 
-    return issue_tenant_token(tenant, tokens_file)
+    return issue_token_record(tenant, tokens_file, token_only=token_only)
 
 
 def _manifest_meta(pack_path: Any) -> dict[str, Any]:

@@ -143,6 +143,18 @@ class ServiceSettings(PGWSettings):
         "Only set when every request passes through that proxy.",
     )
     allow_unauthenticated: bool = Field(False, description="Dev only")
+    require_client_cert_for_compute: bool | None = Field(
+        None,
+        description="Compute and model calls need a verified client certificate mapped to the token's tenant; a "
+        "token alone gets 403 unless it was issued token-only (enrolled without a CSR, or 'pgw service token create "
+        "--token-only'). The TLS layer keeps client certificates optional so enrollment, renewal and probes work "
+        "without one. None (default) = on when client_issuing_ca_cert_file is set (enrolled gateways get "
+        "certificates) and client certificates can be verified (tls.ca_file or trusted_client_cert_header), else off",
+    )
+    tokens_reload_interval_s: float = Field(
+        2.0, gt=0, description="How often (at most) tokens_file is checked for changes (revocations take effect "
+        "and channels of revoked tokens close within this interval)",
+    )
 
     # ---- enrollment (pgw service enroll ..., POST /pgw/v1/enroll) --------------------------
     enrollment_file: Path | None = Field(
@@ -217,6 +229,13 @@ class ServiceSettings(PGWSettings):
                 "mtls_tenants_file needs verified client certificates: set tls.cert_file, tls.key_file and "
                 "tls.ca_file (native mTLS) or trusted_client_cert_header (TLS-terminating proxy)"
             )
+        if (
+            self.require_client_cert_for_compute
+            and not self.trusted_client_cert_header
+            and (not self.tls.enabled or self.tls.ca_file is None)
+        ):
+            raise ValueError("require_client_cert_for_compute needs verified client certificates: set "
+                             "tls.cert_file, tls.key_file and tls.ca_file, or trusted_client_cert_header")
         if (self.client_issuing_ca_cert_file is None) != (self.client_issuing_ca_key_file is None):
             raise ValueError("client_issuing_ca_cert_file and client_issuing_ca_key_file must be set together")
         if self.public_url is not None:
@@ -237,6 +256,14 @@ class ServiceSettings(PGWSettings):
         if self.metrics_port is not None and self.metrics_port == self.port and self.port != 0:
             raise ValueError("metrics_port must differ from port")
         return self
+
+    @property
+    def compute_requires_client_cert(self) -> bool:
+        """Effective ``require_client_cert_for_compute`` (default: on with a client-issuing CA)."""
+        if self.require_client_cert_for_compute is not None:
+            return self.require_client_cert_for_compute
+        verifiable = bool(self.trusted_client_cert_header) or (self.tls.enabled and self.tls.ca_file is not None)
+        return self.client_issuing_ca_cert_file is not None and verifiable
 
     @property
     def ring_params(self) -> list[RingParams]:
