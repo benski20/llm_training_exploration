@@ -585,7 +585,9 @@ def test_fixed_rows_config_validation(qwen_pack: InMemoryPack, tiny_tokenizer: C
         Generator(target, tiny_tokenizer, spec_rows=3)
     with pytest.raises(ConfigError, match="set spec_rows"):
         Generator(target, tiny_tokenizer, drafter=_RandomDrafter(10))
-    gen = Generator(target, tiny_tokenizer, lookup=3, spec_rows=4)
+    with pytest.raises(ConfigError, match="spec_rows needs spec_strict"):
+        Generator(target, tiny_tokenizer, lookup=3, spec_rows=4)
+    gen = Generator(target, tiny_tokenizer, lookup=3, spec_rows=4, spec_nonstrict_for_tests=True)
     assert gen.spec_rows == 4 and not gen.spec_strict and gen.spec_tokens == 3
     # masked filler rows (no padding support here): the reservation covers R rows per decode pass
     assert gen.mask_rows_needed(10, 20) == 10 + 20 + 19 * 3
@@ -605,7 +607,7 @@ def test_fixed_rows_output_identical(qwen_pack: InMemoryPack, other_draft_pack: 
     target = _plain(qwen_pack)
     prompt = LONG * 2
     base = Generator(target, tiny_tokenizer).generate(prompt, params)
-    gen = Generator(target, tiny_tokenizer, spec_rows=rows, spec_strict=strict,
+    gen = Generator(target, tiny_tokenizer, spec_rows=rows, spec_strict=strict, spec_nonstrict_for_tests=True,
                     **_sources(qwen_pack, other_draft_pack)[source])
     seen = _gen_rows(gen)
     spec = gen.generate(prompt, params)
@@ -627,7 +629,7 @@ def test_fixed_rows_perfect_draft_saves_passes_and_strict_restores_count(
     target = _plain(qwen_pack)
     params = SamplingParams(max_tokens=30, temperature=0.0, ignore_eos=True)
     base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
-    fast = Generator(target, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4)
+    fast = Generator(target, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4, spec_nonstrict_for_tests=True)
     out = fast.generate(PROMPT, params)
     assert out.token_ids == base.token_ids
     assert out.timings_ms["passes"] <= 1 + -(-(params.max_tokens - 1) // 4) + 1  # ~4 tokens per pass
@@ -664,7 +666,8 @@ def test_strict_provider_pass_count_equals_length(qwen_pack: InMemoryPack, other
     counts = {}
     for strict in (False, True):
         _, masked, client = plain_and_masked(qwen_pack, DEFAULT_RING, record=True)
-        gen = Generator(masked, tiny_tokenizer, draft=_plain(draft), spec_rows=rows, spec_strict=strict)
+        gen = Generator(masked, tiny_tokenizer, draft=_plain(draft), spec_rows=rows, spec_strict=strict,
+                        spec_nonstrict_for_tests=True)
         need = gen.mask_rows_needed(len(PROMPT), params.max_tokens)
         res = LocalMaskReservation(qwen_pack, DEFAULT_RING, need)
         out = gen.generate(PROMPT, params, session=res)
@@ -687,7 +690,7 @@ def test_fixed_rows_reservation_too_small_refused_before_any_pass(qwen_pack: InM
 
     params = SamplingParams(max_tokens=10, temperature=0.0, ignore_eos=True)
     _, masked, client = plain_and_masked(qwen_pack, DEFAULT_RING, record=True)
-    gen = Generator(masked, tiny_tokenizer, lookup=3, spec_rows=4)
+    gen = Generator(masked, tiny_tokenizer, lookup=3, spec_rows=4, spec_nonstrict_for_tests=True)
     need = gen.mask_rows_needed(len(PROMPT), params.max_tokens)
     res = LocalMaskReservation(qwen_pack, DEFAULT_RING, need - 1)
     with pytest.raises(MaskExhaustedError):
@@ -781,7 +784,7 @@ def test_draft_with_another_vocab_size_fixed_rows(qwen_pack: InMemoryPack, other
     base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
     small = tv - 40
     draft = _OddVocabDraft(_plain(other_draft_pack), small, tv)
-    gen = Generator(target, tiny_tokenizer, draft=draft, spec_rows=3)  # type: ignore[arg-type]
+    gen = Generator(target, tiny_tokenizer, draft=draft, spec_rows=3, spec_nonstrict_for_tests=True)  # type: ignore[arg-type]
     seen = _gen_rows(gen)
     out = gen.generate(PROMPT, params)
     assert out.token_ids == base.token_ids
@@ -876,7 +879,8 @@ def test_padding_rows_keep_r_rows_at_mask_exhaustion(qwen_pack: InMemoryPack, ti
     params = SamplingParams(max_tokens=20, temperature=0.0, ignore_eos=True, logprobs=1)
     base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
     model = _pad_capable(monkeypatch, target)
-    gen = Generator(model, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4, spec_strict=strict)
+    gen = Generator(model, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4, spec_strict=strict,
+                    spec_nonstrict_for_tests=True)
     assert gen._pad_ok
     need = gen.mask_rows_needed(len(PROMPT), params.max_tokens)
     assert need == len(PROMPT) + params.max_tokens
@@ -979,3 +983,103 @@ def test_strict_non_batching_drains_in_background(qwen_pack: InMemoryPack, tiny_
     res = asyncio.run(main())
     assert res.token_ids == base.token_ids
     assert len(seen) == params.max_tokens
+    # returned before the background dummy passes: the final provider-visible count, not a partial one
+    assert res.timings_ms["passes"] == params.max_tokens
+    assert 0 <= res.timings_ms.get("passes_pending", 0) < params.max_tokens
+
+
+def test_fixed_rows_mask_exhaustion_retry_keeps_plan(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer,
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """A MaskExhaustedError in a multi-sequence step retries each sequence alone with the step's plan: its
+    rows stay those of the step (a function of the public session count, never R because of the retry)
+    and strict-mode dummy passes are retried too. Outputs unchanged, L passes per sequence."""
+    from pgw.core.errors import MaskExhaustedError
+
+    target = _plain(qwen_pack)
+    prompts = [PROMPT, [256, 65, 66, 67], [256, 120, 121]]
+    params = [SamplingParams(max_tokens=n, temperature=0.0, ignore_eos=True) for n in (16, 6, 11)]
+    base = [Generator(target, tiny_tokenizer).generate(p, sp).token_ids
+            for p, sp in zip(prompts, params, strict=True)]
+    gen = Generator(target, tiny_tokenizer, draft=_plain(qwen_pack), lookup=3, spec_rows=3, spec_strict=True,
+                    spec_max_batch=2)
+    seen = _gen_rows(gen)  # one entry per forward call, failed ones included
+    sessions = [type("_S", (), {})() for _ in prompts]
+    who = {id(s): i for i, s in enumerate(sessions)}
+    calls: list[tuple[list[int], bool]] = []  # (sequence index per input, failed)
+    multi = 0
+    orig = target.aforward_batch
+
+    async def spy(inputs: Any) -> Any:
+        nonlocal multi
+        idx = [who[id(si.session)] for si in inputs]
+        if len(inputs) > 1:
+            multi += 1
+            if multi % 3 == 1:  # transient exhaustion: nothing consumed
+                calls.append((idx, True))
+                raise MaskExhaustedError("injected")
+        calls.append((idx, False))
+        return await orig(inputs)
+
+    monkeypatch.setattr(target, "aforward_batch", spy)
+
+    async def one(i: int) -> list[int]:
+        return [ev.token_id async for ev in gen.astream(prompts[i], params[i], session=sessions[i])]
+
+    async def main() -> list[list[int]]:
+        try:
+            out = list(await asyncio.gather(*(one(i) for i in range(len(prompts)))))
+            await gen.wait_drained()
+            return out
+        finally:
+            await gen.aclose()
+
+    assert asyncio.run(main()) == base
+    assert len(calls) == len(seen)
+    failures = [j for j, (_, failed) in enumerate(calls) if failed]
+    assert failures
+    retried_dummy = retried_r = False
+    for j in failures:
+        idx, _ = calls[j]
+        for n, i in enumerate(idx):  # each sequence of the failed step, alone, with the step's rows
+            assert calls[j + 1 + n] == ([i], False)
+            assert seen[j + 1 + n] == [seen[j][n]]
+            retried_dummy |= seen[j][n][2]
+            retried_r |= seen[j][n][0] == 3 and seen[j][n][1] > 0
+        assert all(r == (3 if len(idx) <= 2 else 1) for r, p, _ in seen[j] if p > 0)
+    assert retried_dummy and retried_r
+    for i, sp in enumerate(params):  # strict: the provider saw L passes per sequence
+        assert sum(idx.count(i) for idx, failed in calls if not failed) == sp.max_tokens
+
+
+def test_builtin_drafter_catch_up_compares_only_new_tokens(qwen_pack: InMemoryPack,
+                                                           tiny_tokenizer: ChatTokenizer) -> None:
+    """The drafter's catch-up starts at the prefix already confirmed (O(accepted drafts), not O(context)),
+    and its draft cache always ends up holding the context exactly as a full comparison would."""
+    from pgw.engine.generate import BuiltinDrafter
+
+    target = _plain(qwen_pack)
+    params = SamplingParams(max_tokens=24, temperature=0.0, ignore_eos=True)
+    base = Generator(target, tiny_tokenizer).generate(LONG * 3, params)
+    d = BuiltinDrafter(_plain(qwen_pack), lookup=3, target_vocab=qwen_pack.arch.vocab_size)
+    checked: list[tuple[int, int]] = []
+    orig = d.propose
+
+    def propose(jobs: Any) -> None:
+        for job in jobs:
+            st = job.state
+            if st.cache is not None:
+                ctx = job.context
+                assert st.fed[: st.ok] == list(ctx[: st.ok])  # the invariant the shortcut relies on
+                checked.append((st.ok, len(ctx)))
+        orig(jobs)
+        for job in jobs:
+            st = job.state
+            if st.cache is not None:
+                assert st.cache.length == len(st.fed) and st.ok == len(job.context) - 1
+                assert st.fed[: len(job.context)] == [int(t) for t in job.context]
+
+    d.propose = propose  # type: ignore[method-assign]
+    gen = Generator(target, tiny_tokenizer, drafter=d, spec_rows=4, spec_strict=True)
+    out = gen.generate(LONG * 3, params)
+    assert out.token_ids == base.token_ids
+    assert checked and all(len_ctx - ok <= 4 + 1 for ok, len_ctx in checked)  # at most the last pass's rows

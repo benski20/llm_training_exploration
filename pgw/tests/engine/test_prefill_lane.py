@@ -189,7 +189,8 @@ def test_lane_with_draft_model_identical(qwen_pack: InMemoryPack, tiny_tokenizer
     draft = TransformerModel(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING))
     prompts = [_prompt(30, 1), _prompt(70, 2), _prompt(45, 3)]
     base = [Generator(model, tiny_tokenizer).generate(p, GREEDY).token_ids for p in prompts]
-    for kw in ({"spec_tokens": 3}, {"spec_rows": 3}, {"spec_rows": 3, "spec_strict": True}):
+    for kw in ({"spec_tokens": 3}, {"spec_rows": 3, "spec_nonstrict_for_tests": True},
+               {"spec_rows": 3, "spec_strict": True}):
         gen = Generator(model, tiny_tokenizer, draft=draft, prefill_lane=True, spec_max_batch=4, **kw)  # type: ignore[arg-type]
 
         async def one(i: int, g: Generator = gen) -> list[int]:
@@ -205,3 +206,44 @@ def test_lane_with_draft_model_identical(qwen_pack: InMemoryPack, tiny_tokenizer
                 await g.aclose()
 
         assert asyncio.run(main()) == base, kw
+
+
+def test_lane_holds_back_decode_sharing_its_reservation(qwen_pack: InMemoryPack,
+                                                        tiny_tokenizer: ChatTokenizer) -> None:
+    """A short prompt (not lane-eligible) that shares a reservation with a prompt in a lane pass waits for
+    that pass: one reservation is never used by two passes at once. Outputs unchanged."""
+    model = TransformerModel(qwen_pack, _SlowBackend(qwen_pack, DEFAULT_RING))
+    prompts = [_prompt(90, 1), _prompt(5, 2)]
+    base = [Generator(model, tiny_tokenizer).generate(p, GREEDY).token_ids for p in prompts]
+    gen = Generator(model, tiny_tokenizer, prefill_lane=True, prefill_lane_min_tokens=16)
+    shared = _Session()
+    inflight: dict[int, int] = {}
+    overlaps: list[int] = []
+    orig = model.aforward_batch
+
+    async def spy(inputs: Any) -> Any:
+        ids = {id(si.session) for si in inputs if si.session is not None}
+        overlaps.extend(i for i in ids if inflight.get(i, 0))
+        for i in ids:
+            inflight[i] = inflight.get(i, 0) + 1
+        try:
+            return await orig(inputs)
+        finally:
+            for i in ids:
+                inflight[i] -= 1
+
+    model.aforward_batch = spy  # type: ignore[method-assign]
+
+    async def one(i: int) -> list[int]:
+        await asyncio.sleep(0.004 * i)  # the short prompt arrives during the long prompt's lane pass
+        return [ev.token_id async for ev in gen.astream(prompts[i], GREEDY, session=shared)]
+
+    async def main() -> list[list[int]]:
+        try:
+            return list(await asyncio.gather(*(one(i) for i in range(len(prompts)))))
+        finally:
+            await gen.aclose()
+
+    assert asyncio.run(main()) == base
+    assert gen.sched_stats["lane_steps"] >= 1
+    assert not overlaps

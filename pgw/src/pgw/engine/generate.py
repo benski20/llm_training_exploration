@@ -215,7 +215,8 @@ class DraftJob:
     Attributes:
         state: The drafter's per-sequence state (from :meth:`Drafter.open`).
         context: Every token the target has processed so far plus the pending token: the drafts continue
-            this sequence. In a strict-mode dummy pass the last token is a random filler.
+            this sequence. In a strict-mode dummy pass the last token is a random filler. Between two calls
+            for the same ``state``, ``context[:-1]`` only grows (the processed tokens are append-only).
         k: Number of draft tokens wanted.
         sampler: For sampled requests a fork of the request's sampler (same RNG state, penalties and
             filters): drawing draft ``j`` (1-based) with the fork advanced ``j - 1`` times uses exactly the
@@ -269,6 +270,9 @@ class Drafter(Protocol):
 class _BuiltinState:
     cache: KVCache | None
     fed: list[int] = field(default_factory=list)  # tokens held in ``cache``, in order
+    #: Leading tokens of ``fed`` known to equal the context's processed prefix (it only grows), so the
+    #: catch-up compares only the tokens after it: O(accepted drafts), not O(context).
+    ok: int = 0
 
 
 class BuiltinDrafter:
@@ -324,9 +328,11 @@ class BuiltinDrafter:
             for st, _ in live:  # a retried prefill pass starts over
                 st.cache.truncate(0)
                 st.fed = []
+                st.ok = 0
             self.model.forward_batch([SequenceInput(self._din(p), st.cache) for st, p in live])
             for st, p in live:
                 st.fed = [int(t) for t in p]
+                st.ok = len(st.fed)
         except Exception:
             log.warning("draft prefill failed; model drafts disabled for %d sequence(s)", len(live), exc_info=True)
             for st, _ in live:
@@ -337,6 +343,7 @@ class BuiltinDrafter:
             state.cache.clear()
         state.cache = None
         state.fed = []
+        state.ok = 0
 
     def _lookup(self, context: list[int], k: int) -> list[int]:
         if not self.lookup:
@@ -400,7 +407,7 @@ class BuiltinDrafter:
                 elif t == p["d"]:  # catch up with the context (dropping rejected drafts), then the seed
                     ctx = job.context
                     n = min(len(st.fed), len(ctx))
-                    lcp = 0
+                    lcp = min(st.ok, n)  # fed[:ok] == ctx[:ok] (the processed prefix only grows)
                     while lcp < n and st.fed[lcp] == ctx[lcp]:
                         lcp += 1
                     lcp = min(lcp, len(ctx) - 1)  # always feed at least the last context token
@@ -408,6 +415,7 @@ class BuiltinDrafter:
                     del st.fed[lcp:]
                     new = [int(x) for x in ctx[lcp:]] + [int(x) for x in p["seed"]]
                     st.fed.extend(new)
+                    st.ok = len(ctx) - 1  # the last context token may be a dummy pass's filler
                     feeds.append(SequenceInput(self._din(new), cache))
                     kinds.append((p, "full" if p["stopped"] else "real"))
                 else:  # continue the proposal
@@ -534,7 +542,13 @@ class Generator:
             passes on random data run through the same code path (drafter, every linear, LM head, sampling;
             mask-free on pad-capable models) until the provider has seen exactly as many passes as tokens
             were generated, which it already sees without speculation. The answer streams first; a
-            follow-up turn of the same ``conversation`` waits until the dummy passes are done.
+            follow-up turn of the same ``conversation`` waits until the dummy passes are done. ``spec_rows``
+            is refused without ``spec_strict`` (non-strict fixed rows reveal the content-dependent pass count
+            P instead of the generation length L; SPEC 3.4) unless ``spec_nonstrict_for_tests`` is set.
+            Strict mode keeps a follow-up turn from overlapping the dummy passes only when the caller
+            passes ``conversation=`` (the gateway must, before strict mode is enabled there).
+        spec_nonstrict_for_tests: Allow ``spec_rows`` without ``spec_strict`` (tests and benchmarks only;
+            never for served traffic).
         drafter: Custom :class:`Drafter` for fixed-row speculation (default: :class:`BuiltinDrafter` over
             ``draft`` and ``lookup``).
         prefill_lane: Run prompt prefills in a lane of their own, concurrently with the decode steps of
@@ -542,7 +556,9 @@ class Generator:
             Waiting prompts are taken shortest first with aging (a prompt's length minus
             ``prefill_aging`` tokens per second waited), up to ``prefill_lane_rows`` prompt rows per lane
             pass. A prompt uses the lane only with at least ``prefill_lane_min_tokens`` tokens and its own
-            mask reservation (no running sequence shares it); others prefill in the decode step as before.
+            mask reservation (no running sequence shares it); others prefill in the decode step as before,
+            and a sequence that shares the reservation of a prompt in a lane pass waits for that pass. Without
+            a reservation (``session=None``: plain/dev mode) the lane is never used.
             Each sequence's tokens are unchanged (its logits do not depend on what shares a pass); the
             provider sees prefill items in passes of their own, whose sizes are the public prompt lengths.
 
@@ -553,7 +569,8 @@ class Generator:
     draft length drops to 0 rather than to a size that depends on how many drafts were accepted. So a pass
     tells the service at most about one bit about how predictable the text is, and the number of passes
     tells it how many tokens the drafts saved. ``spec_rows`` with ``spec_strict`` removes both: fixed rows
-    and exactly as many passes as generated tokens (SPEC 3.4).
+    and exactly as many passes as generated tokens (SPEC 3.4). The variable-row mode is kept for
+    compatibility only (follow-up: deprecate it and steer the gateway to strict mode).
     """
 
     def __init__(
@@ -575,6 +592,7 @@ class Generator:
         pingpong_min_sessions: int = 5,
         spec_rows: int | None = None,
         spec_strict: bool = False,
+        spec_nonstrict_for_tests: bool = False,
         drafter: Drafter | None = None,
         prefill_lane: bool = False,
         prefill_lane_min_tokens: int = 16,
@@ -661,6 +679,9 @@ class Generator:
                     raise ConfigError("spec_rows needs a draft source (draft, lookup or drafter)")
                 drafter = BuiltinDrafter(draft, lookup=lookup, lookup_min_n=lookup_min_n,
                                          target_vocab=self._target_vocab)
+            if not spec_strict and not spec_nonstrict_for_tests:
+                raise ConfigError("spec_rows needs spec_strict: non-strict fixed rows reveal the pass count "
+                                  "(spec_nonstrict_for_tests=True allows it in tests only)")
             self.spec_rows = int(spec_rows)
             self.spec_strict = bool(spec_strict)
             self._drafter = drafter
@@ -943,7 +964,12 @@ class Generator:
         if st.draft_ms:
             timings["draft_ms"] = st.draft_ms
         if self.spec_rows is not None:
-            timings["passes"] = float(st.passes)  # provider-visible passes (dummy passes included)
+            # provider-visible passes (dummy passes included); a strict-mode result returned before its
+            # background dummy passes have run reports the final count and how many are still due
+            owed = len(st.generated) - st.passes if self._owes(st) else 0
+            timings["passes"] = float(st.passes + owed)
+            if owed:
+                timings["passes_pending"] = float(owed)
         return GenerationResult(
             token_ids=list(st.output_ids),
             text="".join(st.text_parts),
@@ -1614,6 +1640,9 @@ class Generator:
 
     def _pick_batch(self) -> list[_SeqState]:
         live = [s for s in self._active if self._wants_pass(s)]
+        if self._lane_busy:  # a reservation is never used by two passes at once: wait for the lane pass
+            lane = {id(s.session) for s in self._lane_busy if s.session is not None}
+            live = [s for s in live if s.session is None or id(s.session) not in lane]
         if len(live) <= self.max_batch:
             return live
         start = self._rr % len(live)
@@ -1657,7 +1686,11 @@ class Generator:
                     return
                 batch = self._pick_batch()
                 if not batch:
-                    await asyncio.sleep(0)
+                    lane = self._lane_task
+                    if self._lane_busy and lane is not None and not lane.done():
+                        await asyncio.wait({lane}, timeout=0.005)  # held back behind a lane pass
+                    else:
+                        await asyncio.sleep(0)
                     continue
                 self.sched_stats["steps"] += 1
                 self.sched_stats["step_sequences"] += len(batch)
@@ -1759,7 +1792,9 @@ class Generator:
 
         A :class:`MaskExhaustedError` consumed nothing (the backend pre-checks every reservation before
         taking rows), so each sequence is retried alone and only the exhausted one fails. Any other error
-        fails every sequence of the batch. Cancellation propagates.
+        fails every sequence of the batch. Cancellation propagates. With ``spec_rows`` the retry reuses the
+        batch's plan (rows, drafts, filler; strict-mode dummy passes included), so a sequence's row count
+        stays a function of the step's public session count, not of a mask-exhaustion event.
         """
         try:
             await self._run_step(batch, plan)
@@ -1768,11 +1803,13 @@ class Generator:
                 self._fail(batch[0], exc)
                 return
             # Nothing was consumed (the backend pre-checks); isolate the exhausted session.
+            fixed = self.spec_rows is not None
             for st in batch:
-                if st.done or st.cancelled:
+                skip = not self._wants_pass(st) if fixed else (st.done or st.cancelled)
+                if skip:
                     continue
                 try:
-                    await self._run_step([st])
+                    await self._run_step([st], plan=not fixed)
                 except asyncio.CancelledError:
                     raise
                 except Exception as one:
