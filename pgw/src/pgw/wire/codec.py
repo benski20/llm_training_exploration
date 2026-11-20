@@ -48,6 +48,7 @@ __all__ = [
     "decode_message",
     "encode_error_json",
     "encode_message",
+    "encode_message_parts",
     "message_to_dict",
     "validate_request_id",
 ]
@@ -250,9 +251,31 @@ _V_COMPUTE, _V_COMPUTE_RESULT = _mp_str("compute"), _mp_str("compute_result")
 _K_QUEUE, _K_COMPUTE_MS, _K_BATCH_ROWS = (_mp_str(k) for k in ("queue_ms", "compute_ms", "batch_rows"))
 
 
+def encode_message_parts(msg: object) -> list[bytes | bytearray | memoryview]:
+    """:func:`encode_message` as a list of buffers whose concatenation is exactly its bytes.
+
+    Compute requests/responses come back as their msgpack framing pieces with every payload
+    (``x_hat`` / ``y_hat``) as its own, uncopied buffer, so a transport that writes a buffer list
+    (``writelines``: one ``writev``) sends a multi-megabyte prefill reply without assembling it
+    first. Any other message is one buffer.
+    """
+    tm = type(msg)
+    if tm is ComputeRequest or tm is ComputeResponse:
+        fast = _compute_parts(cast(ComputeRequest | ComputeResponse, msg))
+        if fast is not None:
+            return fast
+    return [encode_message(msg)]
+
+
 def _encode_compute(msg: ComputeRequest | ComputeResponse) -> bytes | None:
     """msgpack bytes of a compute request/response, identical to ``packb(message_to_dict(msg))``;
     ``None`` when a field is outside what this encoder handles (the generic path then runs)."""
+    parts = _compute_parts(msg)
+    return None if parts is None else b"".join(parts)
+
+
+def _compute_parts(msg: ComputeRequest | ComputeResponse) -> list[bytes | bytearray | memoryview] | None:
+    """The buffers of :func:`_encode_compute` (payloads not copied); ``None`` like it."""
     parts: list[bytes | bytearray | memoryview] = []
     if isinstance(msg, ComputeRequest):
         if (not _uint_ok(msg.version) or (msg.deadline_ms is not None and not _uint_ok(msg.deadline_ms))
@@ -270,7 +293,7 @@ def _encode_compute(msg: ComputeRequest | ComputeResponse) -> bytes | None:
                       _K_XHAT, _mp_bin_header(len(data)), data]
         if msg.deadline_ms is not None:
             parts += [_K_DEADLINE, _mp_uint(msg.deadline_ms)]
-        return b"".join(parts)
+        return parts
     t = msg.timing
     if (not _uint_ok(msg.version, t.batch_rows) or type(t.queue_ms) is not float
             or type(t.compute_ms) is not float or not _str_ok(msg.request_id)):
@@ -285,7 +308,7 @@ def _encode_compute(msg: ComputeRequest | ComputeResponse) -> bytes | None:
                   _K_YHAT, _mp_bin_header(len(data)), data]
     parts += [_K_TIMING, b"\x83", _K_QUEUE, b"\xcb" + _FLOAT64.pack(t.queue_ms),
               _K_COMPUTE_MS, b"\xcb" + _FLOAT64.pack(t.compute_ms), _K_BATCH_ROWS, _mp_uint(t.batch_rows)]
-    return b"".join(parts)
+    return parts
 
 
 def encode_error_json(err: ErrorResponse) -> bytes:

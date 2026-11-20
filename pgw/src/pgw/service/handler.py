@@ -159,6 +159,8 @@ class ServiceHandler:
         self._idle.set()
         self._maskgen_lock = asyncio.Lock()  # one encrypted GEMM at a time (large, memory-heavy)
         self.group_min_rows = max(0, int(group_min_rows)) if group_min_rows is not None else _group_min_rows_default()
+        #: requests answered by :meth:`compute_inline` (the stream channel's frame lane)
+        self.inline_requests = 0
 
     # ---- ComputeHandler protocol -------------------------------------------------------------
     def authenticate(self, authorization: str | None, client_cert_subject: str | None) -> TenantIdentity:
@@ -201,6 +203,63 @@ class ServiceHandler:
             self.metrics.inflight(self.inflight)
             if self.inflight == 0:
                 self._idle.set()
+
+    def inline_ready(self, request: ComputeRequest) -> bool:
+        """True when :meth:`compute_inline` can answer ``request`` right now: one item, whose kernel
+        call the batcher would run inline (idle device, at most ``batch_inline_max_rows`` rows) and
+        whose payloads the regular path would not offload to a thread. No side effects (quotas are
+        charged by :meth:`compute_inline`). Raises for an unknown model or linear."""
+        if self.draining or len(request.items) != 1:
+            return False
+        it = request.items[0]
+        ring = RingParams.from_name(request.ring)
+        m, _n = self.registry.get(request.fingerprint).linear_dims[it.linear]
+        rows = int(it.rows)
+        offload = self.settings.codec_offload_bytes
+        if len(it.x_hat) > offload or rows * m * ring.bytes_per_element > offload:
+            return False
+        return self.batcher.can_run_inline(request.fingerprint, ring, it.linear, rows)
+
+    def compute_inline(self, request: ComputeRequest, ctx: RequestContext) -> ComputeResponse:
+        """:meth:`compute` for a request :meth:`inline_ready` accepted, run synchronously (the stream
+        channel's frame lane): the same admission, tenant limits and quotas, in-flight accounting,
+        kernel call (inline on the idle device), metrics and response."""
+        ident: TenantIdentity | None = ctx.identity if isinstance(ctx.identity, TenantIdentity) else None
+        tenant = ident.tenant_id if ident is not None else "anonymous"
+        self._admit(tenant, request.total_rows)
+        st = self._tenants.get(tenant)
+        if st is None:
+            st = self._tenants.setdefault(tenant, _TenantState())
+        self.inflight += 1
+        st.inflight += 1
+        self._idle.clear()
+        self.metrics.inflight(self.inflight)
+        try:
+            ring = RingParams.from_name(request.ring)
+            it = request.items[0]
+            m, n = self.registry.get(request.fingerprint).linear_dims[it.linear]
+            rows = int(it.rows)
+            x = unpack_ring(it.x_hat, (rows, n), ring)
+            y, timing = self.batcher.run_inline(request.fingerprint, ring, it.linear, x, compact=True)
+            if y.shape != (rows, m):  # pragma: no cover - kernel contract
+                raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
+            self.inline_requests += 1
+            return self._single_response(request, tenant, pack_ring(y, ring), timing)
+        finally:
+            self.inflight -= 1
+            st.inflight -= 1
+            self.metrics.inflight(self.inflight)
+            if self.inflight == 0:
+                self._idle.set()
+
+    def _single_response(self, request: ComputeRequest, tenant: str, data: bytes,
+                         bt: BatchTiming) -> ComputeResponse:
+        """Response (and metrics) of a one-item request whose result packs to ``data``."""
+        it0 = request.items[0]
+        self.metrics.rows(tenant, it0.linear.split(".", 1)[1], int(it0.rows))
+        self.metrics.bytes_io(tenant, request.payload_bytes, len(data))
+        return ComputeResponse(request.request_id, (ComputeResult(it0.linear, int(it0.rows), data),), ServerTiming(
+            queue_ms=round(bt.queue_ms, 3), compute_ms=round(bt.compute_ms, 3), batch_rows=bt.batch_rows))
 
     async def maskgen(self, request: Any, identity: Any) -> Any:
         """``POST /pgw/v1/maskgen``: ``W8 b mod 2^64`` for MLWE-encrypted masks (see :mod:`pgw.hemask`).
@@ -287,8 +346,8 @@ class ServiceHandler:
         offload = self.settings.codec_offload_bytes
         bytes_in = request.payload_bytes
 
-        async def one(i: int) -> tuple[ComputeResult, BatchTiming]:
-            it = request.items[i]
+        if len(request.items) == 1:  # decode calls: no extra task per item, no per-kind tallies
+            it = request.items[0]
             m, n = dims[it.linear]
             rows = int(it.rows)
             if len(it.x_hat) > offload:
@@ -296,22 +355,14 @@ class ServiceHandler:
             else:
                 x = unpack_ring(it.x_hat, (rows, n), ring)
             # compact: 32-bit results for K <= 32 on CUDA (packed as-is, half the device-to-host bytes)
-            y, timing = await self.batcher.submit_timed(request.fingerprint, ring, it.linear, x, compact=True)
+            y, bt = await self.batcher.submit_timed(request.fingerprint, ring, it.linear, x, compact=True)
             if y.shape != (rows, m):  # pragma: no cover - kernel contract
                 raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
             if rows * m * ring.bytes_per_element > offload:
                 data = await asyncio.to_thread(pack_ring, y, ring)
             else:
                 data = pack_ring(y, ring)
-            return ComputeResult(it.linear, rows, data), timing
-
-        if len(request.items) == 1:  # decode calls: no extra task per item, no per-kind tallies
-            res, bt = await one(0)
-            it0 = request.items[0]
-            self.metrics.rows(tenant, it0.linear.split(".", 1)[1], int(it0.rows))
-            self.metrics.bytes_io(tenant, bytes_in, len(res.y_hat))
-            return ComputeResponse(request.request_id, (res,), ServerTiming(
-                queue_ms=round(bt.queue_ms, 3), compute_ms=round(bt.compute_ms, 3), batch_rows=bt.batch_rows))
+            return self._single_response(request, tenant, data, bt)
         groups = self._groups(request, model)
         if len(groups) == 1:
             results = await self._run_group(request, groups[0], ring, dims, offload)

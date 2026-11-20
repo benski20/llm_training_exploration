@@ -14,8 +14,10 @@ import contextlib
 import functools
 import logging
 import math
+import os
 import random
 import ssl
+import struct
 import threading
 import time
 import uuid
@@ -23,7 +25,7 @@ import weakref
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Any, Self, TypeVar, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -83,6 +85,11 @@ _MAX_ERROR_BODY = 1 << 20
 _MAX_MODELS_BODY = 16 << 20
 
 
+def _fast_lane_default() -> bool:
+    """Default of :attr:`ClientConfig.fast_lane`: on unless ``PGW_WIRE_FAST_LANE`` is ``0``/``false``/``off``."""
+    return os.environ.get("PGW_WIRE_FAST_LANE", "").strip().lower() not in ("0", "false", "no", "off")
+
+
 async def _read_capped(resp: httpx.Response, limit: int) -> bytes | None:
     """Read a streamed body; ``None`` (and stop reading) once it exceeds ``limit`` bytes."""
     cl = resp.headers.get("content-length")
@@ -117,6 +124,13 @@ class ClientConfig(BaseModel):
         "request each (lower per-call latency). Falls back to HTTP for a while if the channel cannot be opened",
     )
     stream_retry_s: float = Field(60.0, ge=0, description="After a failed channel open, use HTTP this long")
+    fast_lane: bool = Field(
+        default_factory=_fast_lane_default,
+        description="Lean stream lane: single-item calls on an open channel take one direct attempt (frame written "
+        "straight to the socket, reply parsed from the socket buffers without intermediate copies) and fall back "
+        "to the regular retry loop with a byte-identical resend. Same validation, retries, budget and stats. "
+        "Default from PGW_WIRE_FAST_LANE (on unless 0)",
+    )
     connect_timeout_s: float = Field(5.0, gt=0)
     request_timeout_s: float = Field(60.0, gt=0, description="Overall budget per compute() incl. retries")
     pool_timeout_s: float = Field(10.0, gt=0)
@@ -294,6 +308,8 @@ class ClientStats:
     stream_requests: int = 0
     stream_opens: int = 0
     stream_open_failures: int = 0
+    #: calls whose first attempt took the lean lane (:meth:`ComputeClient.compute_fast`)
+    lane_requests: int = 0
 
 
 _STATUS_CODES: dict[int, ErrorCode] = {
@@ -338,6 +354,46 @@ class _StreamReply(Exception):  # noqa: N818 - internal control flow
         self.error = error
 
 
+#: Largest receive buffer a lean channel keeps between frames; larger frames are assembled in a buffer
+#: that grows with the data received (nothing allocated up front on a header's word).
+_RX_BUFFER_KEEP = 32 << 20
+
+
+def _frame_head(b: bytes | memoryview) -> tuple[int, int, int, int] | None:
+    """``(header length, byte 0, byte 1, payload length)`` of a WebSocket frame header at the start of
+    ``b`` (without the masking key: masked frames are refused by the caller); ``None`` if incomplete."""
+    if len(b) < 2:
+        return None
+    b0, b1 = b[0], b[1]
+    n = b1 & 0x7F
+    if n < 126:
+        return 2, b0, b1, n
+    if n == 126:
+        return (4, b0, b1, int.from_bytes(b[2:4], "big")) if len(b) >= 4 else None
+    return (10, b0, b1, int.from_bytes(b[2:10], "big")) if len(b) >= 10 else None
+
+
+def _ws_apply_mask() -> Callable[[Any, bytes], bytes]:
+    try:
+        from websockets.speedups import apply_mask
+    except ImportError:  # pragma: no cover - pure-Python websockets build
+        from websockets.utils import apply_mask
+    return cast(Callable[[Any, bytes], bytes], apply_mask)
+
+
+_U16 = struct.Struct("!BBH")
+_U64 = struct.Struct("!BBQ")
+
+
+def _masked_binary_head(n: int) -> bytes:
+    """Header (without the masking key) of one masked, unfragmented binary client frame of ``n`` bytes."""
+    if n < 126:
+        return bytes((0x82, 0x80 | n))
+    if n < 1 << 16:
+        return _U16.pack(0x82, 0xFE, n)
+    return _U64.pack(0x82, 0xFF, n)
+
+
 @functools.cache
 def _direct_connection_class() -> type[Any] | None:
     """A ``websockets`` client connection class that hands complete binary messages to a sink
@@ -359,10 +415,130 @@ def _direct_connection_class() -> type[Any] | None:
     ):  # pragma: no cover - other websockets releases
         return None
 
+    from websockets.protocol import State
+
     class _DirectConnection(ClientConnection):
         pgw_direct = True
-        pgw_sink: Callable[[bytes | str], None] | None = None
+        pgw_sink: Callable[[bytes | bytearray | memoryview | str], None] | None = None
+        #: parse the server's frames here (see :meth:`data_received`); set by the channel
+        pgw_rx = False
+        pgw_max_size: int | None = None
         _pgw_frags: list[bytes] | None = None
+        _pgw_on = False  # own parsing active (frame boundary reached with websockets idle)
+        _pgw_off = False  # handed back to websockets for good
+        _pgw_head: bytes = b""  # partial frame header carried over to the next chunk
+        _pgw_buf: memoryview | None = None  # payload being filled (a view of _pgw_rx)
+        _pgw_rx: bytearray | None = None  # receive buffer, reused across frames
+        _pgw_big: bytearray | None = None  # payload of a frame above _RX_BUFFER_KEEP
+        _pgw_need = 0
+        _pgw_have = 0
+
+        def data_received(self, data: bytes) -> None:
+            """Binary frames are parsed here and their payload handed to the sink with at most one copy
+            (into one buffer of the frame's size when it spans several reads; none when it fits in one),
+            instead of websockets' growing buffer and its copies per frame. Control frames are handed
+            to websockets whole; anything else (text, fragments, oversize, masked or extension frames,
+            a closing connection) hands the stream back to websockets for good."""
+            if self._pgw_off or not self.pgw_rx:
+                super().data_received(data)
+                return
+            if not self._pgw_on:
+                p = self.protocol
+                if (self.pgw_sink is None or p.state is not State.OPEN or p.reader.buffer
+                        or getattr(p, "current_size", getattr(p, "cur_size", None)) is not None):
+                    self._pgw_off = True
+                    super().data_received(data)
+                    return
+                self._pgw_on = True
+            self._pgw_feed(data)
+
+        def _pgw_handoff(self, rest: bytes | bytearray | memoryview) -> None:
+            self._pgw_off = True
+            self._pgw_head = b""
+            self._pgw_buf = None
+            self._pgw_big = None
+            self._pgw_rx = None
+            super().data_received(bytes(rest))
+
+        def _pgw_deliver(self, payload: bytes | bytearray | memoryview) -> None:
+            sink = self.pgw_sink
+            if sink is not None:
+                sink(payload)
+
+        def _pgw_feed(self, data: bytes) -> None:
+            mv = memoryview(data)
+            n = len(mv)
+            pos = 0
+            while pos < n:
+                big = self._pgw_big
+                if big is not None:  # a frame above the kept buffer size: grows with what arrives
+                    take = min(self._pgw_need - len(big), n - pos)
+                    big += mv[pos:pos + take]
+                    pos += take
+                    if len(big) == self._pgw_need:
+                        self._pgw_big = None
+                        self._pgw_deliver(big)
+                    continue
+                buf = self._pgw_buf
+                if buf is not None:  # filling a payload that spans reads
+                    take = min(len(buf) - self._pgw_have, n - pos)
+                    buf[self._pgw_have:self._pgw_have + take] = mv[pos:pos + take]
+                    self._pgw_have += take
+                    pos += take
+                    if self._pgw_have == len(buf):
+                        self._pgw_buf = None
+                        try:
+                            self._pgw_deliver(buf)  # decoded (copied out) before the sink returns
+                        finally:
+                            buf.release()
+                    continue
+                head = self._pgw_head + bytes(mv[pos:pos + 10]) if self._pgw_head else mv[pos:pos + 10]
+                parsed = _frame_head(head)
+                if parsed is None:  # header incomplete: keep it for the next read
+                    self._pgw_head = bytes(head)
+                    return
+                hl, b0, b1, length = parsed
+                carried = len(self._pgw_head)
+                raw_head = bytes(head[:hl])
+                self._pgw_head = b""
+                start = pos + hl - carried  # payload start in this read
+                op = b0 & 0x0F
+                p = self.protocol
+                limit = self.pgw_max_size
+                ws_limit = getattr(p, "max_message_size", getattr(p, "max_size", None))
+                if ws_limit is not None:
+                    limit = ws_limit if limit is None else min(limit, ws_limit)
+                if b1 & 0x80 or b0 & 0x70 or p.state is not State.OPEN:  # masked, RSV bits, closing
+                    self._pgw_handoff(raw_head + bytes(mv[start:]))
+                    return
+                if op == 0x2 and b0 & 0x80:  # complete binary message
+                    if limit is not None and length > limit:
+                        self._pgw_handoff(raw_head + bytes(mv[start:]))  # websockets fails it (too big)
+                        return
+                    if n - start >= length:
+                        pos = start + length
+                        self._pgw_deliver(mv[start:pos])
+                    elif length > _RX_BUFFER_KEEP:  # nothing allocated up front for what has not arrived
+                        self._pgw_big = bytearray()
+                        self._pgw_need = length
+                        pos = start
+                    else:  # spans reads: assemble it in the connection's receive buffer (reused)
+                        rx = self._pgw_rx
+                        if rx is None or len(rx) < length:
+                            rx = self._pgw_rx = bytearray(length)
+                        self._pgw_buf = memoryview(rx)[:length]
+                        self._pgw_have = 0
+                        pos = start
+                    continue
+                if op >= 0x8 and length <= 125 and n - start >= length:  # whole control frame: websockets
+                    pos = start + length
+                    super().data_received(raw_head + bytes(mv[start:pos]))
+                    if p.reader.buffer:  # pragma: no cover - it consumed less than a frame
+                        self._pgw_off = True
+                        return
+                    continue
+                self._pgw_handoff(raw_head + bytes(mv[start:]))
+                return
 
         def process_event(self, event: Any) -> None:
             sink = self.pgw_sink
@@ -399,7 +575,7 @@ class _StreamChannel:
     by a reader task.
     """
 
-    def __init__(self, ws: Any, max_response_bytes: int):
+    def __init__(self, ws: Any, max_response_bytes: int, *, lean: bool = False):
         self.ws = ws
         self.max_response_bytes = max_response_bytes
         # request id -> waiters in send order (ids are unique in practice; duplicates are answered FIFO)
@@ -409,12 +585,33 @@ class _StreamChannel:
         self._send_lock = asyncio.Lock()
         loop = asyncio.get_running_loop()
         if getattr(ws, "pgw_direct", False):
+            ws.pgw_max_size = max_response_bytes
+            ws.pgw_rx = lean
             ws.pgw_sink = self._on_message
             self.reader = loop.create_task(self._watch())
         else:
             self.reader = loop.create_task(self._read())
+        #: lean lane: requests may be written to the socket directly (see :meth:`_write_direct`)
+        self.lean = lean and getattr(ws, "pgw_direct", False) and all(
+            hasattr(ws, a) for a in ("protocol", "transport", "send_in_progress", "paused"))
+        self._apply_mask = _ws_apply_mask() if self.lean else None
 
-    def _dispatch(self, msg: bytes | str) -> str | None:
+    def _write_direct(self, body: bytes) -> bool:
+        """Write ``body`` as one masked binary frame straight to the transport (buffer list, one copy
+        for the mask) when websockets has nothing in progress on the connection; False otherwise
+        (the caller then sends through websockets). The frame is what websockets would write."""
+        ws = self.ws
+        p = ws.protocol
+        tr = ws.transport
+        if (p.state is not _ws_open() or ws.send_in_progress is not None or ws.paused or self._send_lock.locked()
+                or getattr(p, "expect_continuation_frame", False) or p.extensions or tr.is_closing()):
+            return False
+        mask = os.urandom(4)
+        assert self._apply_mask is not None
+        tr.writelines([_masked_binary_head(len(body)) + mask, self._apply_mask(body, mask)])
+        return True
+
+    def _dispatch(self, msg: bytes | bytearray | memoryview | str) -> str | None:
         """Hand one received message to its waiter; returns why the channel must close, if it must."""
         if isinstance(msg, str):
             return "compute stream sent a text frame"
@@ -432,7 +629,7 @@ class _StreamChannel:
         # nothing waiting: a late reply to a request that already gave up - drop it
         return None
 
-    def _on_message(self, msg: bytes | str) -> None:
+    def _on_message(self, msg: bytes | bytearray | memoryview | str) -> None:
         """Direct dispatch (runs inside the connection's ``data_received``; must not raise)."""
         if self.closed:
             return
@@ -506,6 +703,40 @@ class _StreamChannel:
             if self.retiring and not self.pending and not self.closed:
                 asyncio.get_running_loop().create_task(self.aclose())
 
+    async def request_fast(self, request_id: str, body: bytes, timeout: float) -> Any:
+        """:meth:`request` for the lean lane: the frame is written directly when possible, and the
+        deadline is a timer on the reply future (``TimeoutError`` when it fires)."""
+        if self.closed:
+            raise ServiceUnavailableError("compute stream closed")
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[Any] = loop.create_future()
+        waiters = self.pending.get(request_id)
+        if waiters is None:
+            self.pending[request_id] = [fut]
+        else:
+            waiters.append(fut)
+        timer = loop.call_later(max(0.0, timeout), _expire, fut)
+        try:
+            if not self._write_direct(body):
+                try:
+                    async with self._send_lock:
+                        await self.ws.send(body)
+                except Exception as exc:
+                    raise ServiceUnavailableError(f"compute stream send failed ({type(exc).__name__})") from exc
+            return await fut
+        finally:
+            timer.cancel()
+            futs = self.pending.get(request_id)
+            if futs is not None:
+                if fut in futs:
+                    futs.remove(fut)
+                if not futs:
+                    del self.pending[request_id]
+            if self.retiring and not self.pending and not self.closed:
+                t = loop.create_task(self.aclose())
+                _BACKGROUND.add(t)
+                t.add_done_callback(_BACKGROUND.discard)
+
     def retire(self) -> None:
         self.retiring = True
         if not self.pending and not self.closed:
@@ -520,6 +751,18 @@ class _StreamChannel:
         self.reader.cancel()
         with contextlib.suppress(BaseException):
             await self.reader
+
+
+def _expire(fut: asyncio.Future[Any]) -> None:
+    if not fut.done():
+        fut.set_exception(TimeoutError())
+
+
+@functools.cache
+def _ws_open() -> Any:
+    from websockets.protocol import State
+
+    return State.OPEN
 
 
 class ComputeClient:
@@ -701,7 +944,7 @@ class ComputeClient:
                          cfg.stream_retry_s)
                 return None
             self.stats.stream_opens += 1
-            ch = _StreamChannel(ws, cfg.max_response_bytes)
+            ch = _StreamChannel(ws, cfg.max_response_bytes, lean=cfg.fast_lane)
             self._channels[loop] = ch
             return ch
 
@@ -847,18 +1090,27 @@ class ComputeClient:
         decode: Callable[[bytes], T],
         max_response_bytes: int,
         stream_check: Callable[[ComputeResponse], T] | None = None,
+        resume: PGWError | None = None,
     ) -> T:
         """One logical call with retries until success, a non-retryable error or the deadline.
 
         Response bodies are streamed and capped (``max_response_bytes`` for 200 replies,
         ``_MAX_ERROR_BODY`` for errors), so a broken or hostile server cannot exhaust memory.
+
+        ``resume``: attempt 1 was already made (by :meth:`compute_fast`, which also deposited the
+        call's retry token) and failed with this error; the loop continues with it as if its own
+        first attempt had failed (same retry decision, backoff and budget), resending ``body``.
         """
-        cfg = self.config
         if self._closed:
             raise ServiceUnavailableError("compute client is closed")
         http: httpx.AsyncClient | None = None  # opened on first HTTP use (stream calls never need it)
-        self._deposit_retry_token()
         attempt = 0
+        if resume is not None:
+            attempt = 1
+            await self._retry_or_raise(resume, attempt, deadline, request_id)
+        else:
+            self._deposit_retry_token()
+        cfg = self.config
         while True:
             attempt += 1
             remaining = deadline - time.monotonic()
@@ -944,28 +1196,33 @@ class ComputeClient:
                 self._hook(path, status, t0, str(e.code))
                 raise
             self._hook(path, status, t0, str(exc.code))
-            retry_after = exc.details.get("retry_after_s")
-            ra = float(retry_after) if isinstance(retry_after, int | float) else None
-            if exc.retryable and attempt <= cfg.max_retries:
-                delay = self._backoff(attempt, ra)
-                if time.monotonic() + delay < deadline and not self._take_retry_token():
-                    self.stats.retries_denied += 1
-                    exc.details.setdefault("retry_budget_exhausted", True)
-                elif time.monotonic() + delay < deadline:
-                    self.stats.retries += 1
-                    log.info(
-                        "pgw wire retry",
-                        extra={
-                            "request_id": request_id,
-                            "attempt": attempt,
-                            "code": str(exc.code),
-                            "delay_s": round(delay, 4),
-                        },
-                    )
-                    await self._sleep(delay)
-                    continue
-            exc.details.setdefault("attempts", attempt)
-            raise exc
+            await self._retry_or_raise(exc, attempt, deadline, request_id)
+
+    async def _retry_or_raise(self, exc: PGWError, attempt: int, deadline: float, request_id: str) -> None:
+        """After failed attempt ``attempt``: wait the backoff and return (retry), or raise ``exc``."""
+        cfg = self.config
+        retry_after = exc.details.get("retry_after_s")
+        ra = float(retry_after) if isinstance(retry_after, int | float) else None
+        if exc.retryable and attempt <= cfg.max_retries:
+            delay = self._backoff(attempt, ra)
+            if time.monotonic() + delay < deadline and not self._take_retry_token():
+                self.stats.retries_denied += 1
+                exc.details.setdefault("retry_budget_exhausted", True)
+            elif time.monotonic() + delay < deadline:
+                self.stats.retries += 1
+                log.info(
+                    "pgw wire retry",
+                    extra={
+                        "request_id": request_id,
+                        "attempt": attempt,
+                        "code": str(exc.code),
+                        "delay_s": round(delay, 4),
+                    },
+                )
+                await self._sleep(delay)
+                return
+        exc.details.setdefault("attempts", attempt)
+        raise exc
 
     def _hook(self, path: str, status: int | None, t0: float, code: str | None) -> None:
         if self._on_attempt is not None:
@@ -1046,8 +1303,109 @@ class ComputeClient:
         """Send one compute request (with retries); raises typed :class:`pgw.core.PGWError` on failure.
 
         Requests above the limits are split by items and rows, sent concurrently (at most
-        ``max_concurrency`` at a time) and reassembled transparently.
+        ``max_concurrency`` at a time) and reassembled transparently. With :attr:`ClientConfig.fast_lane`
+        single-item requests go through :meth:`compute_fast`.
         """
+        if self.config.fast_lane and len(request.items) == 1:
+            return await self.compute_fast(request)
+        return await self._compute(request)
+
+    def _lane_channel(self, request: ComputeRequest) -> _StreamChannel | None:
+        """The open lean stream channel of the running loop for ``request``, or ``None`` when the
+        request is not for the lane (several items, above the limits, no open channel yet)."""
+        if self._closed or len(request.items) != 1:
+            return None
+        ch = self._channels.get(asyncio.get_running_loop())
+        if ch is None or not ch.lean or ch.closed or ch.retiring:
+            return None
+        max_bytes, max_items, max_rows = self._effective_limits()
+        it0 = request.items[0]
+        budget = max_bytes - _REQUEST_OVERHEAD - len(request.request_id) - len(request.ring)
+        if it0.rows > max_rows or len(it0.x_hat) + _ITEM_OVERHEAD > budget or max_items < 1:
+            return None
+        return ch
+
+    def _out_features_for(self, req: ComputeRequest) -> dict[str, int] | None:
+        """``{linear: out_features}`` of the connected model when ``req`` is for it (else ``None``)."""
+        model = self._model
+        if model is None or model.fingerprint != req.fingerprint:
+            return None
+        cached = self._out_features
+        if cached is None or cached[0] is not model:
+            cached = self._out_features = (model, {k: m for k, (m, _) in model.linear_dims().items()})
+        return cached[1]
+
+    async def compute_fast(self, request: ComputeRequest) -> ComputeResponse:
+        """:meth:`compute` for a single-item request on an open stream channel, with one lean attempt.
+
+        The request frame is written straight to the socket and the reply dispatched from the socket
+        callback; the reply is validated exactly like on the regular path. Any failure of this first
+        attempt hands over to the regular retry loop (:meth:`_call` with ``resume``), which resends the
+        byte-identical body under the same request id (no new information for the service, no extra
+        mask), with the same retry decision, backoff, retry budget, deadline and stats. Requests the
+        lane does not take (several items, no open channel yet, above the limits) go to :meth:`compute`'s
+        regular path.
+        """
+        ch = self._lane_channel(request)
+        if ch is None:
+            return await self._compute(request)
+        self.stats.requests += 1
+        budget = request.deadline_ms / 1000.0 if request.deadline_ms is not None else self.config.request_timeout_s
+        deadline = time.monotonic() + budget
+        body = encode_message(request)
+        out_features = self._out_features_for(request)
+
+        def check(resp: ComputeResponse) -> ComputeResponse:
+            validate_compute_response(request, resp, out_features)
+            return resp
+
+        def decode(b: bytes) -> ComputeResponse:
+            return check(decode_message(b, ComputeResponse, max_bytes=self.config.max_response_bytes))
+
+        self._deposit_retry_token()
+        self.stats.attempts += 1
+        self.stats.stream_requests += 1
+        self.stats.lane_requests += 1
+        t0 = time.monotonic()
+        exc: PGWError
+        try:
+            try:
+                obj: Any = await ch.request_fast(request.request_id, body, deadline - t0)
+            except ServiceUnavailableError as e:  # the channel failed: retry (reconnects or HTTP)
+                obj = e
+            except TimeoutError as e:
+                obj = PGWError(f"compute service timed out ({type(e).__name__})", code=ErrorCode.DEADLINE_EXCEEDED,
+                               details={"request_id": request.request_id})
+            self.stats.bytes_sent += len(body)
+            self.stats.last_rtt_s = time.monotonic() - t0
+            if isinstance(obj, ComputeResponse):
+                self.stats.bytes_received += obj.payload_bytes
+                try:
+                    check(obj)
+                except PGWError as e:  # an invalid reply: not retryable
+                    self._hook(COMPUTE_PATH, None, t0, str(e.code))
+                    raise
+                self._hook(COMPUTE_PATH, 200, t0, None)
+                return obj
+            if isinstance(obj, PGWError):
+                exc = obj
+            elif isinstance(obj, ErrorResponse):
+                exc = obj.to_exception()
+            else:
+                exc = ProtocolError("unexpected message on the compute stream")
+            if exc.code == ErrorCode.UNAVAILABLE:
+                ch.retire()  # e.g. draining: the next attempt opens a new connection
+            self._hook(COMPUTE_PATH, None, t0, str(exc.code))
+            return await self._call(
+                "POST", COMPUTE_PATH, body=body, request_id=request.request_id, deadline=deadline, decode=decode,
+                max_response_bytes=self.config.max_response_bytes, stream_check=check, resume=exc,
+            )
+        except PGWError:
+            self.stats.failures += 1
+            raise
+
+    async def _compute(self, request: ComputeRequest) -> ComputeResponse:
+        """The regular path of :meth:`compute` (split, retry loop)."""
         self.stats.requests += 1
         budget = request.deadline_ms / 1000.0 if request.deadline_ms is not None else self.config.request_timeout_s
         deadline = time.monotonic() + budget
@@ -1077,13 +1435,7 @@ class ComputeClient:
 
     async def _send_one(self, req: ComputeRequest, deadline: float) -> ComputeResponse:
         body = encode_message(req)
-        out_features = None
-        model = self._model
-        if model is not None and model.fingerprint == req.fingerprint:
-            cached = self._out_features
-            if cached is None or cached[0] is not model:
-                cached = self._out_features = (model, {k: m for k, (m, _) in model.linear_dims().items()})
-            out_features = cached[1]
+        out_features = self._out_features_for(req)
 
         def check(resp: ComputeResponse) -> ComputeResponse:
             validate_compute_response(req, resp, out_features)
@@ -1195,7 +1547,9 @@ class ComputeClient:
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         with self._loop_lock:
             if self._loop is None or self._loop.is_closed():
-                loop = asyncio.new_event_loop()
+                from pgw.core.proc_tuning import new_event_loop
+
+                loop = new_event_loop()  # uvloop when installed (PGW_UVLOOP=0: asyncio's)
                 t = threading.Thread(target=loop.run_forever, name="pgw-wire-client", daemon=True)
                 t.start()
                 self._loop, self._loop_thread = loop, t

@@ -349,6 +349,47 @@ class BatchScheduler:
         )
         return (ys[0] if len(ys) == 1 else torch.cat(ys, dim=0)), timing
 
+    def can_run_inline(self, fingerprint: str, ring: RingParams, linear: str, rows: int) -> bool:
+        """True when a ``rows``-row submission for ``linear`` would run inline right now (what
+        :meth:`_submit` decides): scheduler accepting, room in the queue, at most ``inline_max_rows``
+        rows, no batching window, no open batch for the key and the kernel's device idle.
+
+        No side effects. Raises like :meth:`submit_timed` for an unknown model or linear.
+        """
+        if not self._accepting or rows <= 0 or rows > self.inline_max_rows or self.window_s > 0:
+            return False
+        if self._queued_rows + rows > self.max_queued_rows or (fingerprint, ring.name, linear) in self._open:
+            return False
+        kernel: ComputeKernel = self.registry.get(fingerprint).kernel(linear)  # type: ignore[attr-defined]
+        d = self._devices.get(str(kernel.device))
+        return d is None or (d.busy == 0 and not d.ready)
+
+    def run_inline(
+        self, fingerprint: str, ring: RingParams, linear: str, x_hat: torch.Tensor, *, compact: bool = False
+    ) -> tuple[torch.Tensor, BatchTiming]:
+        """:meth:`submit_timed` for a submission that :meth:`can_run_inline`, run synchronously:
+        the same validation, stats, metrics, error mapping and result (for the frame lane, which
+        answers inside the connection's frame callback).
+
+        Raises:
+            Same as :meth:`submit_timed`; ``PGWError`` (internal) if it cannot run inline now
+            (the caller checks :meth:`can_run_inline` first, with no suspension in between).
+        """
+        if not self._accepting:
+            raise ServiceUnavailableError("compute scheduler is not accepting work", details={"retry_after_s": 1.0})
+        kernel: ComputeKernel = self.registry.get(fingerprint).kernel(linear)  # type: ignore[attr-defined]
+        if x_hat.ndim != 2 or x_hat.shape[1] != kernel.in_features or x_hat.dtype != torch.int64:
+            raise ShapeError(
+                f"{linear}: x_hat must be int64 (rows, {kernel.in_features}), got {x_hat.dtype} {tuple(x_hat.shape)}",
+                details={"linear": linear},
+            )
+        rows = int(x_hat.shape[0])
+        if not self.can_run_inline(fingerprint, ring, linear, rows):
+            raise PGWError("inline compute requested while the device is busy")
+        dev = str(kernel.device)
+        d = self._devices.get(dev) or self._ensure_device(dev)
+        return self._run_inline(d, kernel, ring, (x_hat,), rows, compact)
+
     def _run_inline(self, d: _Device, kernel: ComputeKernel, ring: RingParams,
                     parts: Sequence[torch.Tensor], rows: int, compact: bool) -> tuple[torch.Tensor, BatchTiming]:
         """A one-submission batch on an idle device, run synchronously on the event loop.

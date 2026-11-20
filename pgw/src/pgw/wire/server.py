@@ -21,8 +21,10 @@ import contextlib
 import inspect
 import logging
 import math
+import os
+import struct
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -43,6 +45,7 @@ from pgw.wire.codec import (
     decode_message,
     encode_error_json,
     encode_message,
+    encode_message_parts,
     validate_request_id,
 )
 from pgw.wire.messages import (
@@ -64,9 +67,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from fastapi import APIRouter
 
 __all__ = [
+    "FRAME_LANE_EXTENSION",
     "ByteBudget",
     "ComputeFastPath",
     "ComputeHandler",
+    "FrameLane",
     "LinearDims",
     "RequestContext",
     "WireLimits",
@@ -76,14 +81,24 @@ __all__ = [
     "decode_compute_request",
     "error_headers",
     "error_response_bytes",
+    "frame_lane_default",
     "response_headers",
     "validate_compute_response",
+    "ws_binary_header",
 ]
 
 log = logging.getLogger(__name__)
 
 #: ``{linear_id: (out_features m, in_features n)}`` or a resolver ``(fingerprint, ring) -> dims``.
 LinearDims = Mapping[str, tuple[int, int]] | Callable[[str, str], Mapping[str, tuple[int, int]]]
+
+#: A reply as a list of buffers (one WebSocket frame / HTTP body is their concatenation).
+Parts = list[bytes | bytearray | memoryview]
+
+
+def frame_lane_default() -> bool:
+    """Default of :attr:`WireLimits.frame_lane`: on unless ``PGW_SERVICE_FRAME_LANE`` is ``0``/``false``/``off``."""
+    return os.environ.get("PGW_SERVICE_FRAME_LANE", "").strip().lower() not in ("0", "false", "no", "off")
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,12 @@ class WireLimits:
     stream: bool = True
     #: Requests one stream connection may have in flight (further frames wait: backpressure).
     max_stream_inflight: int = 64
+    #: Lean stream lane where the server's WebSocket protocol offers a :class:`FrameLane` (the
+    #: service's uvicorn protocol does): small single-item requests on an idle device are answered
+    #: synchronously inside the frame callback, and replies are written as one frame from their
+    #: buffers without copies. Same identity, checks, limits, metrics and replies as the regular
+    #: path. ``PGW_SERVICE_FRAME_LANE=0`` turns it off (A/B switch).
+    frame_lane: bool = field(default_factory=frame_lane_default)
 
     def __post_init__(self) -> None:
         if (self.max_request_bytes <= 0 or self.max_items <= 0 or self.max_rows_per_item <= 0
@@ -277,6 +298,60 @@ def error_response_bytes(
     return status, body
 
 
+#: ASGI scope extension under which a WebSocket server protocol offers a :class:`FrameLane`.
+FRAME_LANE_EXTENSION = "pgw.frame_lane"
+
+_U16 = struct.Struct("!BBH")
+_U64 = struct.Struct("!BBQ")
+
+
+def ws_binary_header(n: int) -> bytes:
+    """Header of one unmasked, unfragmented binary WebSocket frame (server to client) of ``n`` bytes,
+    as RFC 6455 encodes it (the shortest length form, as every server writes it)."""
+    if n < 126:
+        return bytes((0x82, n))
+    if n < 1 << 16:
+        return _U16.pack(0x82, 126, n)
+    return _U64.pack(0x82, 127, n)
+
+
+class FrameLane:
+    """What a WebSocket server protocol offers the stream channel of one connection (published in
+    ``scope["extensions"][FRAME_LANE_EXTENSION]`` before the app runs).
+
+    * ``ready()``: the connection can take a frame now (open, not closing, not flow-controlled).
+    * ``write(parts)``: send one binary frame whose payload is the concatenation of ``parts``,
+      written as a buffer list (no copy where the transport supports ``writelines``); returns False,
+      writing nothing, when it is not ready.
+    * :attr:`handler`: set by the stream channel once the connection is accepted and authenticated:
+      ``handler(payload) -> parts | None``. The protocol calls it for every complete binary message
+      while ``ready()``; ``parts`` is the reply, which the protocol writes right away. ``None`` means
+      "not for the lane" and has no side effect: the message then takes the regular path (the ASGI
+      receive queue). The channel clears it when it ends.
+    """
+
+    __slots__ = ("handler", "ready", "write")
+
+    def __init__(self, ready: Callable[[], bool], write: Callable[[Sequence[bytes | bytearray | memoryview]], bool]):
+        self.ready = ready
+        self.write = write
+        self.handler: Callable[[bytes], Parts | None] | None = None
+
+
+def _items_hint(body: bytes | bytearray | memoryview) -> int | None:
+    """Item count of a compute frame read from its ``items`` array header without decoding the body
+    (``None``: not found where encoders put it). Only a pre-filter: the lane decodes and checks
+    every frame it takes."""
+    head = bytes(body[:512])
+    i = head.find(b"\xa5items")
+    if i < 0 or i + 6 >= len(head):
+        return None
+    b = head[i + 6]
+    if 0x90 <= b <= 0x9F:
+        return b - 0x90
+    return 16 if b in (0xDC, 0xDD) else None
+
+
 # ---------------------------------------------------------------------------------------------
 # handler protocol + FastAPI router
 # ---------------------------------------------------------------------------------------------
@@ -313,6 +388,11 @@ class ComputeHandler(Protocol):
     called before the body is read and must raise :class:`pgw.core.AuthError` (or
     ``PGWError(code=PERMISSION_DENIED)``) to reject. Handlers may also implement
     ``on_request_done(ctx, status, code)`` for metrics (optional).
+
+    Optional, for the stream channel's frame lane (:attr:`WireLimits.frame_lane`), both synchronous:
+    ``inline_ready(request) -> bool`` (no side effects: True when ``compute_inline`` can answer the
+    request now without waiting for anything) and ``compute_inline(request, ctx) -> ComputeResponse``
+    (exactly what ``compute`` returns or raises for it, computed before returning).
     """
 
     def linear_dims(self, fingerprint: str, ring: str) -> Mapping[str, tuple[int, int]]:
@@ -354,6 +434,11 @@ def _wants_json(accept: str | None) -> bool:
 
 #: How often a compute stream re-checks that the token it was opened with is still valid.
 _CREDENTIAL_RECHECK_S = 2.0
+#: Strong references to metrics-hook tasks started from synchronous code (the frame lane).
+_HOOK_TASKS: set[asyncio.Future[Any]] = set()
+#: Largest frame the lane considers (decode and speculative-verify calls are far smaller; larger
+#: frames, e.g. prefill, take the regular path without being decoded twice).
+LANE_MAX_FRAME_BYTES = 1 << 20
 
 
 def client_cert_subject(scope: Mapping[str, Any]) -> str | None:
@@ -524,15 +609,10 @@ def create_router(
         else:
             log.error("pgw wire %s internal error", path, extra={"request_id": rid}, exc_info=exc)
 
-    async def _process(body: bytes | bytearray, identity: Any, t0: float, attempt: int,
-                       header_budget_s: float | None, box: list[Any]) -> bytes:
-        """Decode, run and encode one compute request (shared by HTTP and the stream channel).
-
-        ``box`` receives ``[request_id, RequestContext]`` as soon as they are known (for error
-        replies and the metrics hook).
-        """
-        req, dims = _decode_compute_request(body, lim, handler.linear_dims)
-        box[0] = req.request_id
+    def _context(req: ComputeRequest, identity: Any, t0: float, attempt: int, header_budget_s: float | None,
+                 body_bytes: int) -> RequestContext:
+        """The request's context; its deadline is the tightest of the request's ``deadline_ms``, what is
+        left of the client's budget for this attempt (header) and the server cap."""
         budget: float | None = None
         if req.deadline_ms is not None:
             budget = req.deadline_ms / 1000.0
@@ -540,19 +620,57 @@ def create_router(
             budget = header_budget_s if budget is None else min(budget, header_budget_s)
         if max_deadline_s is not None:
             budget = max_deadline_s if budget is None else min(budget, max_deadline_s)
-        ctx = RequestContext(
+        return RequestContext(
             request_id=req.request_id,
             identity=identity,
             received_at=t0,
             deadline=None if budget is None else t0 + budget,
-            body_bytes=len(body),
+            body_bytes=body_bytes,
             attempt=attempt,
         )
+
+    def _expired() -> PGWError:
+        return PGWError("deadline exceeded before compute", code=ErrorCode.DEADLINE_EXCEEDED)
+
+    def _encode_reply(req: ComputeRequest, resp: ComputeResponse, dims: Mapping[str, tuple[int, int]], t0: float,
+                      body_bytes: int) -> Parts:
+        """Self-check ``resp`` against ``req`` and encode it (payloads stay uncopied buffers)."""
+        if validate_responses:
+            # out_features of the request's own linears (decoding checked that each one is served)
+            try:
+                validate_compute_response(req, resp, {it.linear: int(dims[it.linear][0]) for it in req.items})
+            except ProtocolError as exc:  # our own bug: never send a malformed result
+                raise PGWError(f"service produced an invalid response: {exc.message}") from exc
+        out = encode_message_parts(resp)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "pgw compute ok",
+                extra={
+                    "request_id": req.request_id,
+                    "items": len(req.items),
+                    "rows": req.total_rows,
+                    "bytes_in": body_bytes,
+                    "bytes_out": sum(len(p) for p in out),
+                    "ms": round((time.monotonic() - t0) * 1e3, 3),
+                },
+            )
+        return out
+
+    async def _process(body: bytes | bytearray, identity: Any, t0: float, attempt: int,
+                       header_budget_s: float | None, box: list[Any]) -> Parts:
+        """Decode, run and encode one compute request (shared by HTTP and the stream channel).
+
+        ``box`` receives ``[request_id, RequestContext]`` as soon as they are known (for error
+        replies and the metrics hook).
+        """
+        req, dims = _decode_compute_request(body, lim, handler.linear_dims)
+        box[0] = req.request_id
+        ctx = _context(req, identity, t0, attempt, header_budget_s, len(body))
         box[1] = ctx
-        if budget is not None:
+        if ctx.deadline is not None:
             remaining = ctx.remaining_s() or 0.0
             if remaining <= 0:
-                raise PGWError("deadline exceeded before compute", code=ErrorCode.DEADLINE_EXCEEDED)
+                raise _expired()
             try:
                 # asyncio.timeout (not wait_for): no extra task per request on the hot path
                 async with asyncio.timeout(remaining):
@@ -565,26 +683,7 @@ def create_router(
                 ) from exc
         else:
             resp = await handler.compute(req, ctx)
-        if validate_responses:
-            # out_features of the request's own linears (decoding checked that each one is served)
-            try:
-                validate_compute_response(req, resp, {it.linear: int(dims[it.linear][0]) for it in req.items})
-            except ProtocolError as exc:  # our own bug: never send a malformed result
-                raise PGWError(f"service produced an invalid response: {exc.message}") from exc
-        out = encode_message(resp)
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug(
-                "pgw compute ok",
-                extra={
-                    "request_id": req.request_id,
-                    "items": len(req.items),
-                    "rows": req.total_rows,
-                    "bytes_in": len(body),
-                    "bytes_out": len(out),
-                    "ms": round((time.monotonic() - t0) * 1e3, 3),
-                },
-            )
-        return out
+        return _encode_reply(req, resp, dims, t0, len(body))
 
     async def _done(box: list[Any], t0: float, status: int, code: str | None) -> None:
         if done_hook is None:
@@ -595,6 +694,28 @@ def create_router(
                 await r
         except Exception:  # metrics must never break a reply
             log.exception("on_request_done hook failed")
+
+    def _done_now(box: list[Any], t0: float, status: int, code: str | None) -> None:
+        """:func:`_done` from synchronous code (an awaitable hook result runs as a task)."""
+        if done_hook is None:
+            return
+        try:
+            r = done_hook(box[1] or RequestContext(request_id=box[0] or "", received_at=t0), status, code)
+            if r is not None and inspect.isawaitable(r):
+                t = asyncio.ensure_future(r)
+                _HOOK_TASKS.add(t)
+                t.add_done_callback(_HOOK_TASKS.discard)
+        except Exception:  # metrics must never break a reply
+            log.exception("on_request_done hook failed")
+
+    inline_ready: Callable[[ComputeRequest], bool] | None = getattr(handler, "inline_ready", None)
+    compute_inline: Callable[[ComputeRequest, RequestContext], ComputeResponse] | None = getattr(
+        handler, "compute_inline", None)
+    lane_capable = bool(
+        lim.frame_lane and callable(inline_ready) and callable(compute_inline)
+        and not inspect.iscoroutinefunction(compute_inline) and not inspect.iscoroutinefunction(inline_ready)
+        and (precheck is None or not inspect.iscoroutinefunction(precheck))
+    )
 
     async def _authenticate(headers: Mapping[str, str], scope: Mapping[str, Any]) -> Any:
         check_protocol_header(headers.get(PROTOCOL_HEADER))
@@ -626,9 +747,10 @@ def create_router(
                 attempt = max(1, int(request.headers.get("pgw-attempt", "1")))
             except ValueError:
                 attempt = 1
-            out = await _process(body, identity, t0, attempt, _header_deadline_s(request.headers.get(DEADLINE_HEADER)),
-                                 box)
+            parts = await _process(body, identity, t0, attempt,
+                                   _header_deadline_s(request.headers.get(DEADLINE_HEADER)), box)
             status, code = 200, None
+            out = parts[0] if len(parts) == 1 else b"".join(parts)
             return Response(content=out, media_type=CONTENT_TYPE, headers=response_headers(box[0]))
         except Exception as exc:
             rid = box[0]
@@ -652,6 +774,10 @@ def create_router(
         A frame whose request id cannot be read closes the channel (the client cannot match a reply).
 
         A raw ASGI app (no per-message framework wrappers): it runs once per frame on the hot path.
+        Where the server protocol offers a :class:`FrameLane` (and :attr:`WireLimits.frame_lane` is
+        on), small single-item requests that the handler can answer at once are answered inside the
+        frame callback (``lane``, with this connection's identity and the same checks), and replies
+        are written from their buffers without copies.
         """
         if scope.get("type") != "websocket":  # pragma: no cover - routed by path and type
             return
@@ -673,8 +799,15 @@ def create_router(
         slots = asyncio.Semaphore(max(1, lim.max_stream_inflight))
         tasks: set[asyncio.Task[None]] = set()
         closing = asyncio.Event()
+        fl = (scope.get("extensions") or {}).get(FRAME_LANE_EXTENSION) if lim.frame_lane else None
+        frame_lane: FrameLane | None = fl if isinstance(fl, FrameLane) else None
 
-        async def reply(data: bytes) -> None:
+        async def reply(parts: Parts) -> None:
+            # One frame from the reply's buffers (no copy) when the protocol can take it right now;
+            # otherwise through ASGI, which waits for the transport (flow control).
+            if frame_lane is not None and frame_lane.write(parts):
+                return
+            data = parts[0] if len(parts) == 1 else b"".join(parts)
             async with send_lock:
                 await send({"type": "websocket.send", "bytes": data})
 
@@ -720,7 +853,8 @@ def create_router(
                     if rid is None:
                         rid = _peek_request_id(body)
                     _log_error(exc, rid, STREAM_PATH)
-                    status, out = error_response_bytes(exc, rid)
+                    status, err = error_response_bytes(exc, rid)
+                    out = [err]
                     code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
                     if rid is None:
                         await reply(out)
@@ -735,6 +869,61 @@ def create_router(
                 slots.release()
                 await _done(box, t0, status, code)
 
+        def lane(body: bytes) -> Parts | None:
+            """Frame-level synchronous handling (called by the server protocol inside its frame
+            callback): the reply of a single-item request the handler can answer at once, else
+            ``None`` with no side effect (the frame then takes the regular path, which repeats the
+            checks and replies with the precise error, if any).
+
+            What it does is :func:`one` with ``_process`` for a request that never suspends: the
+            byte budget, ``precheck``, decoding limits, deadline, handler admission and quotas,
+            response validation, error mapping and the metrics hook, with this connection's identity.
+            """
+            if closing.is_set() or len(body) > LANE_MAX_FRAME_BYTES or len(body) > lim.max_request_bytes:
+                return None
+            if _items_hint(body) != 1:
+                return None
+            t0 = time.monotonic()
+            try:
+                req, dims = _decode_compute_request(body, lim, handler.linear_dims)
+                if len(req.items) != 1:
+                    return None
+                if precheck is not None:
+                    precheck()  # refusal (draining, overload): the regular path replies with it
+                if not inline_ready(req):  # type: ignore[misc]
+                    return None
+            except Exception:
+                return None
+            box: list[Any] = [req.request_id, None]
+            status: int = 500
+            code: str | None = str(ErrorCode.INTERNAL)
+            held = 0
+            try:
+                try:
+                    if body_budget is not None:
+                        if not body_budget.try_acquire(len(body)):
+                            raise _budget_exhausted(body_budget, len(body))
+                        held = len(body)
+                    ctx = _context(req, identity, t0, 1, None, len(body))
+                    box[1] = ctx
+                    if ctx.deadline is not None and (ctx.remaining_s() or 0.0) <= 0:
+                        raise _expired()
+                    resp = compute_inline(req, ctx)  # type: ignore[misc]
+                    out = _encode_reply(req, resp, dims, t0, len(body))
+                    status, code = 200, None
+                except Exception as exc:
+                    _log_error(exc, req.request_id, STREAM_PATH)
+                    status, err = error_response_bytes(exc, req.request_id)
+                    out = [err]
+                    code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
+                return out
+            finally:
+                if body_budget is not None and held:
+                    body_budget.release(held)
+                _done_now(box, t0, status, code)
+
+        if frame_lane is not None and lane_capable:
+            frame_lane.handler = lane
         watcher: asyncio.Task[None] | None = None
         still_valid = getattr(identity, "still_valid", None)
         if callable(still_valid) and getattr(identity, "token_id", None) is not None:
@@ -768,6 +957,9 @@ def create_router(
         except Exception as exc:  # disconnects surface as exceptions on some servers
             log.debug("pgw stream closed: %s", type(exc).__name__)
         finally:
+            closing.set()  # the lane stops taking frames
+            if frame_lane is not None and frame_lane.handler is lane:
+                frame_lane.handler = None
             if watcher is not None:
                 watcher.cancel()
                 with contextlib.suppress(BaseException):

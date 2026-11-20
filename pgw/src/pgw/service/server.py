@@ -106,6 +106,8 @@ def _needs_peer_identity(settings: ServiceSettings) -> bool:
 
 #: Messages a WebSocket connection may have queued for the app before reading pauses.
 WS_QUEUE_PAUSE = 2
+#: Strong references to frame-lane replies that had to wait for the transport (never in practice).
+_LANE_SENDS: set[asyncio.Future[Any]] = set()
 
 
 def stream_ws_protocol(base: type[Any]) -> type[Any]:
@@ -127,8 +129,67 @@ def stream_ws_protocol(base: type[Any]) -> type[Any]:
         src = ""
     if "self.read_paused" not in src or "self.queue" not in src or "pause_reading" not in src:
         return base
+    # The frame lane (pgw.wire.FrameLane) needs these sans-I/O protocol internals; without them the
+    # protocol offers no lane and every frame takes the ASGI path, as before.
+    lane_ok = all(h in src for h in (
+        "def handle_bytes", "def handle_connect", "self.writable", "self.close_sent", "self.handshake_complete",
+        "self.handshake_initiated", "self.conn", "self.scope", "async def send",
+    ))
+    from websockets.protocol import State
+
+    from pgw.wire.server import FRAME_LANE_EXTENSION, FrameLane, ws_binary_header
 
     class StreamWebSocketProtocol(base):  # type: ignore[misc]
+        _pgw_lane: FrameLane | None = None
+
+        def handle_connect(self, event: Any) -> None:
+            super().handle_connect(event)
+            me = cast(Any, self)
+            scope = getattr(me, "scope", None) if lane_ok else None
+            if isinstance(scope, dict) and me.handshake_initiated and not me.close_sent:
+                # The app task was created but has not run yet: it sees the lane in its scope.
+                lane = FrameLane(self._pgw_ready, self._pgw_write)
+                ext = scope.get("extensions")
+                if not isinstance(ext, dict):
+                    ext = scope["extensions"] = {}
+                ext[FRAME_LANE_EXTENSION] = lane
+                self._pgw_lane = lane
+
+        def _pgw_ready(self) -> bool:
+            me = cast(Any, self)
+            return bool(me.handshake_complete and not me.close_sent and me.writable.is_set()
+                        and not me.transport.is_closing() and me.conn.state is State.OPEN
+                        and not me.conn.extensions)
+
+        def _pgw_write(self, parts: Any) -> bool:
+            """One unfragmented binary frame from ``parts``, written as a buffer list (the bytes
+            ``websockets`` would write for that message, without assembling them first)."""
+            if not self._pgw_ready():
+                return False
+            n = 0
+            for p in parts:
+                n += p.nbytes if isinstance(p, memoryview) else len(p)
+            cast(Any, self).transport.writelines([ws_binary_header(n), *parts])
+            return True
+
+        def handle_bytes(self, event: Any) -> None:
+            lane = self._pgw_lane
+            handler = lane.handler if lane is not None else None
+            if handler is not None and event.fin and self._pgw_ready():
+                try:
+                    parts = handler(event.data)
+                except Exception:  # pragma: no cover - the lane maps every error to a reply
+                    log.exception("compute stream frame lane failed; using the regular path")
+                    parts = None
+                if parts is not None:
+                    if not self._pgw_write(parts):  # pragma: no cover - ready() held a moment ago
+                        data = parts[0] if len(parts) == 1 else b"".join(parts)
+                        t = asyncio.ensure_future(cast(Any, self).send({"type": "websocket.send", "bytes": data}))
+                        _LANE_SENDS.add(t)
+                        t.add_done_callback(_LANE_SENDS.discard)
+                    return
+            super().handle_bytes(event)
+
         def send_receive_event_to_app(self) -> None:
             me = cast(Any, self)
             paused = bool(me.read_paused)
