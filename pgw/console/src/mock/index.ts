@@ -17,6 +17,15 @@ function loadSession(): { role: Role; csrf: string } | null {
   }
 }
 
+function store(v: string | null) {
+  try {
+    if (v === null) sessionStorage.removeItem(SESSION_KEY);
+    else sessionStorage.setItem(SESSION_KEY, v);
+  } catch {
+    /* storage blocked (sandboxed viewer): the session lives in memory only */
+  }
+}
+
 let session = loadSession();
 const keys: ApiKeyRecord[] = fx.keys.map((k) => ({ ...k }));
 const events = fx.auditEvents();
@@ -76,13 +85,13 @@ async function handle(method: string, url: URL, headers: Headers, body: unknown,
     const role: Role | null = token === "admin" ? "admin" : token === "viewer" ? "viewer" : null;
     if (!role) return err(401, "unauthenticated", "invalid token");
     session = { role, csrf: randHex(32) };
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    store(JSON.stringify(session));
     return json(session);
   }
   if (p === "/console/api/auth-methods") return json({ token: true, oidc: { enabled: false, label: "SSO" } });
   if (p === "/console/api/logout" && method === "POST") {
     session = null;
-    sessionStorage.removeItem(SESSION_KEY);
+    store(null);
     return json(null, 204);
   }
   if (!session) return err(401, "unauthenticated", "not signed in");
@@ -171,8 +180,17 @@ async function handle(method: string, url: URL, headers: Headers, body: unknown,
 export function installMock(): void {
   const real = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, window.location.origin);
-    if (url.origin !== window.location.origin || !(url.pathname.startsWith("/admin/") || url.pathname.startsWith("/console/api/"))) return real(input, init);
+    // Match on the path only: in a sandboxed viewer the page origin can be "null" or differ from
+    // the URL the app builds, so origin comparisons would let every API call escape the mock.
+    const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    let url: URL;
+    try {
+      url = new URL(raw, "http://pgw.mock");
+    } catch {
+      return real(input, init);
+    }
+    const local = raw.startsWith("/") || url.host === "pgw.mock" || url.host === window.location.host;
+    if (!local || !(url.pathname.startsWith("/admin/") || url.pathname.startsWith("/console/api/"))) return real(input, init);
     const method = (init?.method || "GET").toUpperCase();
     let body: unknown = undefined;
     if (typeof init?.body === "string") {

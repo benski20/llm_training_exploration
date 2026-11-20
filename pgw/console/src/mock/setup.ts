@@ -12,13 +12,14 @@ const GB = 1024 ** 3;
 
 export function setupActive(): boolean {
   try {
-    return sessionStorage.getItem(SETUP_FLAG) === "1";
+    return sessionStorage.getItem(SETUP_FLAG) === "1" || memFlag;
   } catch {
-    return false;
+    return memFlag;
   }
 }
 
 function setActive(on: boolean) {
+  memFlag = on;
   try {
     if (on) sessionStorage.setItem(SETUP_FLAG, "1");
     else sessionStorage.removeItem(SETUP_FLAG);
@@ -27,6 +28,7 @@ function setActive(on: boolean) {
   }
 }
 
+let memFlag = false;
 let csrf: string | null = null;
 let packStarted = 0;
 let hintStarted = 0;
@@ -127,7 +129,7 @@ export function handleSetup(method: string, p: string, headers: Headers, body: u
       return json(st.maskstore);
     case "/console/api/setup/admin":
       st.admin = { token_file: "/etc/pgw/admin-token", sso: (b.sso as Record<string, unknown>) ?? null };
-      return json({ admin_token: `pgwadm-${crypto.randomUUID().replace(/-/g, "")}`, token_file: st.admin.token_file, sso: Boolean(b.sso) });
+      return json({ admin_token: `pgwadm-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("")}`, token_file: st.admin.token_file, sso: Boolean(b.sso) });
     case "/console/api/setup/verify":
       if (!hintStarted) hintStarted = Date.now();
       st.verify = { checks: checks(false), ok: false, at: Date.now() / 1000 };
@@ -135,12 +137,28 @@ export function handleSetup(method: string, p: string, headers: Headers, body: u
     case "/console/api/setup/finish":
       st.finished = true;
       setActive(false);
+      setTimeout(() => exitHook?.(), 0);
       return json({ mode: "normal", message: "Setup is complete. The gateway is now serving qwen2.5-7b-instruct." });
   }
   return err(404, `mock: no handler for ${method} ${p}`);
 }
 
-export function startSetupDemo() {
+/** Switches the demo into first-run setup. Reloads when storage keeps the flag; otherwise the
+ *  caller re-renders (a sandboxed viewer may block both storage and reloads). */
+let exitHook: (() => void) | null = null;
+export function onExit(fn: () => void) {
+  exitHook = fn;
+}
+
+export function startSetupDemo(): boolean {
   setActive(true);
-  window.location.reload();
+  try {
+    if (sessionStorage.getItem(SETUP_FLAG) === "1") {
+      window.location.reload();
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  return false;
 }

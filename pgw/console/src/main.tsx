@@ -11,8 +11,12 @@ import "./styles/setup.css";
 
 applyInitialTheme();
 
+let root: ReturnType<typeof createRoot> | null = null;
+
 function render() {
-  createRoot(document.getElementById("root")!).render(
+  root?.unmount();
+  root = createRoot(document.getElementById("root")!);
+  root.render(
     <StrictMode>
       <App />
     </StrictMode>,
@@ -27,24 +31,38 @@ if (__MOCK__) {
     if (__DEMO__) {
       const tag = document.createElement("div");
       tag.className = "demo-banner";
-      void import("./mock/setup").then((setup) => {
-        if (setup.setupActive()) {
-          tag.classList.add("is-inline");
-          tag.append(`Demo of first-run setup. Setup token: "setup". Enrollment code: `);
-          const code = document.createElement("code");
-          code.textContent = setup.SAMPLE_CODE;
-          tag.append(code);
-        } else {
-          tag.append(`Demo with sample data. Sign in with the token "admin" (or "viewer"). `);
-          const link = document.createElement("button");
-          link.type = "button";
-          link.className = "demo-banner-link";
-          link.textContent = "Try the first-run setup wizard";
-          link.onclick = () => setup.startSetupDemo();
-          tag.append(link);
-        }
-      });
       document.body.prepend(tag);
+      void import("./mock/setup").then((setup) => {
+        const fill = () => {
+          tag.replaceChildren();
+          if (setup.setupActive()) {
+            tag.classList.add("is-inline");
+            tag.append(`Demo of first-run setup. Setup token: "setup". Enrollment code: `);
+            const code = document.createElement("code");
+            code.textContent = setup.SAMPLE_CODE;
+            tag.append(code);
+          } else {
+            tag.classList.remove("is-inline");
+            tag.append(`Demo with sample data. Sign in with the token "admin" (or "viewer"). `);
+            const link = document.createElement("button");
+            link.type = "button";
+            link.className = "demo-banner-link";
+            link.textContent = "Try the first-run setup wizard";
+            link.onclick = () => {
+              if (!setup.startSetupDemo()) {
+                window.location.hash = "";
+                fill();
+                render();
+              }
+            };
+            tag.append(link);
+          }
+        };
+        fill();
+        setup.onExit(() => {
+          fill();
+        });
+      });
     }
     render();
   });
