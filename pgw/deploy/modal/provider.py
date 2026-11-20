@@ -29,7 +29,7 @@ MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 min
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
-REGION = os.environ.get("PGW_MODAL_REGION", "us-east-1") or None
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 # Private IPv6 networking between the two containers (same workspace, same region): the gateway reaches
 # the service directly instead of through the public TCP tunnel, which added about 5 ms to each of the
 # ~100 round trips per token. TLS stays end to end. PGW_MODAL_I6PN=0 uses the tunnel only.

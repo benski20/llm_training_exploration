@@ -33,7 +33,7 @@ MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 min
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
-REGION = os.environ.get("PGW_MODAL_REGION", "us-east-1") or None
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 I6PN = os.environ.get("PGW_MODAL_I6PN", "1") != "0"  # private network to the provider (see provider.py)
 
 image = (
