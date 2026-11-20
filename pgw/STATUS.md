@@ -80,7 +80,8 @@ while half the bytes are read per token (1.1 GB instead of 2.2 GB for Qwen2.5-7B
 gateway memory). Local measurement, 7B shapes with 4 layers and a stub service (`benchmarks/e2e_local.py
 --preset 7b4 --null-service`): 56 ms -> 42 ms per decode step. Kaggle run 23 showed no change (0.436
 s/token) because its packs used `--plain-dtype float16`, which rounds the bfloat16 weights so the
-head cannot be compacted; the Kaggle jobs now pack with `--plain-dtype bfloat16` (lossless).
+head cannot be compacted; the Kaggle jobs now pack with `--plain-dtype bfloat16` (lossless). Run 24 with bfloat16 packs: 0.410 s/token
+(from 0.436), TTFT 2.94 s, outputs bit-identical.
 
 ## Update 2026-11-19
 
@@ -89,7 +90,7 @@ reference in every run).** Raw outputs are in `benchmarks/results/kaggle/run13_*
 
 | metric | 2026-11-17 | 2026-11-19 | what changed |
 |---|---|---|---|
-| decode, 1 request | 0.86 s/token | 0.44 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
+| decode, 1 request | 0.86 s/token | 0.41 s/token | persistent WebSocket channel (uvicorn), K=32 uint32 path, native (Rust) gateway kernels, numpy wipes, batcher fast path |
 | time to first token, 40-token prompt | 8.4 s | 3.0-3.3 s | pipelined prefill (gateway and service overlap) |
 | one service round trip, 1 row (load test) | 2.5 ms | 1.75 ms (0.80 ms GPU) | uvicorn WebSocket framing, inline small batches |
 | decode with speculative decoding, 0.5B draft on a gateway GPU | n/a | 0.43 s/token | exact verification, coupled drafts, adaptive draft length; 2.6x fewer round trips |
