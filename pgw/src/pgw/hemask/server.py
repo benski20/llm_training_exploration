@@ -3,10 +3,16 @@
 The handler must implement ``authenticate(authorization, client_cert_subject)`` (optional),
 ``precheck()`` (optional) and ``async maskgen(request, identity) -> MaskgenResponse``. Errors use the
 same msgpack error bodies and HTTP statuses as the compute path.
+
+Version negotiation: the handler's ``maskgen_versions`` (default ``(1,)``: a handler that does not
+declare it serves v1 only) are the wire versions accepted here. Every reply carries them as ``vs``
+and uses the request's version. A request in another version gets ``426 version_mismatch`` with
+the served versions in ``details``.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from typing import Any
@@ -44,6 +50,9 @@ def add_maskgen_route(app: Any, handler: Any, *, max_request_bytes: int = DEFAUL
     has_auth = callable(getattr(handler, "authenticate", None))
     precheck = getattr(handler, "precheck", None)
 
+    def served_versions() -> tuple[int, ...]:  # read per request: an operator may turn v2 off at runtime
+        return tuple(sorted(set(getattr(handler, "maskgen_versions", (1,))) | {1}))
+
     async def maskgen(request: Request) -> Response:
         t0 = time.monotonic()
         held = [0]
@@ -58,11 +67,13 @@ def add_maskgen_route(app: Any, handler: Any, *, max_request_bytes: int = DEFAUL
             if callable(precheck):
                 await _maybe_await(precheck())
             body = await _read_body(request, max_request_bytes, body_budget, held)
-            req = decode_maskgen_request(body)
+            versions = served_versions()
+            req = decode_maskgen_request(body, versions)
             rid = req.request_id
             resp = await handler.maskgen(req, identity)
-            out = encode_maskgen_response(resp)
-            log.debug("pgw maskgen ok", extra={"request_id": rid, "items": len(req.items), "bytes_in": len(body),
+            out = encode_maskgen_response(dataclasses.replace(resp, version=req.version, versions=versions))
+            log.debug("pgw maskgen ok", extra={"request_id": rid, "v": req.version, "items": len(req.items),
+                                               "bytes_in": len(body),
                                                "bytes_out": len(out), "ms": round((time.monotonic() - t0) * 1e3, 1)})
             return Response(content=out, media_type=CONTENT_TYPE, headers=response_headers(rid))
         except Exception as exc:

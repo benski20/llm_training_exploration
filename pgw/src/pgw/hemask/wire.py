@@ -1,43 +1,72 @@
 """Wire messages for ``POST /pgw/v1/maskgen``: the provider multiplies MLWE ciphertexts by ``W8``.
 
-Request (msgpack)::
+Two message versions share the path. **v1** is always supported and is the fallback::
 
-    {"v": 1, "type": "maskgen", "id": str, "fp": str,
-     "items": [{"linear": str, "cols": int, "b": bin}]}
+    {"v": 1, "type": "maskgen", "id": str, "fp": str, "vs": [int]?,
+     "items": [{"linear": str, "cols": int, "b": bin, "q": int?, "drop": int?}]}
 
-``b`` is the ``(n, cols)`` matrix of ciphertext coefficients as little-endian uint64 (row-major), with
-``n`` the linear's in_features and ``cols`` a multiple of 256 (one or more 256-slot groups). The
-response carries ``y = W8 b mod 2^64`` as ``(m, cols)`` uint64 per item, in request order::
+``b`` is the ``(n, cols)`` matrix of ciphertext coefficients as ``q/8`` little-endian bytes each
+(row-major, ``q`` 56 or 64, default 64), with ``n`` the linear's in_features and ``cols`` a multiple
+of 256 (one or more 256-slot groups). The response carries ``y = W8 b mod 2^q`` rounded by
+``2^drop`` (``drop`` 0 or 16) as ``(q - drop)/8`` bytes per element of the ``(m, cols)`` result,
+items in request order::
 
-    {"v": 1, "type": "maskgen_result", "id": str, "items": [{"linear": str, "cols": int, "y": bin}]}
+    {"v": 1, "type": "maskgen_result", "id": str, "vs": [int]?,
+     "items": [{"linear": str, "cols": int, "y": bin}]}
 
-The provider learns nothing from ``b`` (MLWE samples) beyond the linear ids and sizes, which are
-public metadata like on the compute path.
+**v2** is bit-packed and sized to what the customer needs. It is used only when both sides
+advertise it::
+
+    {"v": 2, "type": "maskgen", "id": str, "fp": str, "vs": [int]?,
+     "items": [{"linear": str, "cols": int, "bb": int, "yb": int, "b": bin}]}
+
+``b`` holds ``(n, cols)`` coefficients in ``[0, 2^bb)`` bit-packed at ``bb`` bits
+(:func:`pack_bits`). The provider computes ``Y = W8 b mod 2^bb`` and returns
+``floor((Y + 2^(d-1)) / 2^d) mod 2^yb`` with ``d = bb - yb`` (no offset when ``d = 0``),
+bit-packed at ``yb`` bits (:func:`pack_y_v2`). That is ``n·cols·bb/8`` bytes up and
+``m·cols·yb/8`` bytes down, ``8 <= yb <= bb <= 64`` and ``bb >= 32``. The v2 reply has the same shape as v1:
+``{"v": 2, "type": "maskgen_result", ...}``. When ``bb`` is below the ciphertext modulus, the
+customer has switched its own ciphertext down (:mod:`pgw.hemask.client`). The provider needs no
+other parameter.
+
+``vs`` lists the maskgen versions the sender speaks. A client advertises it on its requests and a
+server on its replies. Both are optional keys that v1-only peers ignore. A client sends v2 only
+after a reply has advertised 2, and it falls back to v1 when a v2 request is refused. A server
+rejects a version it does not serve with ``version_mismatch``.
+
+The provider learns nothing from ``b`` (MLWE samples, or a customer-side randomised rounding of
+them) beyond the linear ids and sizes, which are public metadata like on the compute path.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 
 import msgpack
 import numpy as np
 
-from pgw.core.errors import ProtocolError
+from pgw.core.errors import ProtocolError, VersionMismatchError
 from pgw.hemask.lwe import DEGREE
 
 __all__ = [
     "MASKGEN_PATH",
+    "MASKGEN_VERSIONS",
     "MAX_GROUPS_PER_ITEM",
     "MaskgenItem",
     "MaskgenRequest",
     "MaskgenResponse",
     "MaskgenResult",
+    "bit_fields",
     "decode_maskgen_request",
     "decode_maskgen_response",
     "encode_maskgen_request",
     "encode_maskgen_response",
+    "le_words",
+    "pack_bits",
     "pack_y",
+    "pack_y_v2",
+    "unpack_bits",
     "unpack_y",
     "y_round_offset",
     "y_wire_bytes",
@@ -47,26 +76,52 @@ MASKGEN_PATH = "/pgw/v1/maskgen"
 MAX_GROUPS_PER_ITEM = 16
 _MAX_ITEMS = 64
 _VERSION = 1
+#: Maskgen message versions this code speaks (a server may serve fewer, see ``vs``).
+MASKGEN_VERSIONS: tuple[int, ...] = (1, 2)
+#: Smallest v2 width (``8 <= yb <= bb <= 64``).
+V2_MIN_BITS = 8
+#: Smallest v2 upload width the provider accepts. The provider unpacks ``b`` into ``uint64``, so a
+#: ``bb``-bit body costs ``64/bb`` times its size in host memory; ``bb >= 32`` caps that at 2x
+#: (customers send ``q`` or ``q - 3``, i.e. 53..64).
+V2_MIN_B_BITS = 32
 
 
 @dataclass(frozen=True)
 class MaskgenItem:
     linear: str
     cols: int
-    b: bytes
-    #: Low bits of ``y`` the provider rounds away before replying (0 or 16). With 16, ``y`` is sent as
+    b: bytes | bytearray  # v2 payloads are built in place (pack_bits)
+    #: v1: low bits of ``y`` the provider rounds away before replying (0 or 16). With 16, ``y`` is sent as
     #: ``round(y / 2^16)`` in 6 bytes per element: 25% less download, decryption error +2^15.
     drop_bits: int = 0
-    #: Ciphertext modulus bits: ``b`` carries ``q/8`` bytes per coefficient and only ``y mod 2^q`` matters.
+    #: v1: ciphertext modulus bits: ``b`` carries ``q/8`` bytes per coefficient and only ``y mod 2^q`` matters.
     q_bits: int = 64
+    #: v2 only (0 in v1): bits per uploaded coefficient (``b`` bit-packed; ``Y = W8 b mod 2^b_bits``).
+    b_bits: int = 0
+    #: v2 only (0 in v1): bits per returned element (``round(Y / 2^(b_bits - y_bits))``, bit-packed).
+    y_bits: int = 0
+
+    @property
+    def v2(self) -> bool:
+        return self.b_bits > 0
 
     @property
     def y_bytes_per_element(self) -> int:
+        """v1: whole bytes per returned element (v2 uses :meth:`y_nbytes`)."""
         return (self.q_bits - self.drop_bits) // 8
 
     @property
     def b_bytes_per_element(self) -> int:
+        """v1: whole bytes per uploaded coefficient (v2 uses :meth:`b_nbytes`)."""
         return self.q_bits // 8
+
+    def b_nbytes(self, n: int) -> int:
+        """Expected ``len(b)`` for a linear with ``n`` inputs (either version)."""
+        return n * self.cols * self.b_bits // 8 if self.v2 else self.b_bytes_per_element * n * self.cols
+
+    def y_nbytes(self, m: int) -> int:
+        """Expected ``len(y)`` of the reply for a linear with ``m`` outputs (either version)."""
+        return m * self.cols * self.y_bits // 8 if self.v2 else self.y_bytes_per_element * m * self.cols
 
 
 @dataclass(frozen=True)
@@ -74,6 +129,10 @@ class MaskgenRequest:
     request_id: str
     fingerprint: str
     items: tuple[MaskgenItem, ...]
+    #: Message version (1 or 2). Every item of a v2 request has ``b_bits`` and ``y_bits`` set.
+    version: int = 1
+    #: Versions the sender speaks (``vs``; empty: not advertised).
+    versions: tuple[int, ...] = ()
 
     @property
     def payload_bytes(self) -> int:
@@ -84,13 +143,17 @@ class MaskgenRequest:
 class MaskgenResult:
     linear: str
     cols: int
-    y: bytes
+    y: bytes | bytearray
 
 
 @dataclass(frozen=True)
 class MaskgenResponse:
     request_id: str
     items: tuple[MaskgenResult, ...]
+    #: Message version (the request's).
+    version: int = 1
+    #: Versions the server speaks (``vs``; empty: not advertised, i.e. a v1-only server).
+    versions: tuple[int, ...] = ()
 
 
 def _check_cols(cols: Any, where: str) -> int:
@@ -107,57 +170,110 @@ def _str(v: Any, name: str, max_len: int = 128) -> str:
     return v
 
 
-def _load(data: bytes | bytearray | memoryview, kind: str) -> dict[str, Any]:
+def _int(v: Any) -> TypeGuard[int]:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _versions(v: Any) -> tuple[int, ...]:
+    """The optional ``vs`` list (unknown entries are kept; malformed lists read as not advertised)."""
+    if not isinstance(v, list) or len(v) > 16 or not all(_int(x) for x in v):
+        return ()
+    return tuple(int(x) for x in v)
+
+
+def _load(data: bytes | bytearray | memoryview, kind: str, versions: tuple[int, ...] = (_VERSION,)
+          ) -> dict[str, Any]:
     try:
         obj = msgpack.unpackb(bytes(data), raw=False, strict_map_key=True, max_bin_len=1 << 31)
     except Exception as exc:
         raise ProtocolError(f"maskgen: malformed msgpack ({type(exc).__name__})") from exc
-    if not isinstance(obj, dict) or obj.get("v") != _VERSION or obj.get("type") != kind:
-        raise ProtocolError(f"maskgen: expected a v{_VERSION} {kind!r} message")
+    if not isinstance(obj, dict) or obj.get("type") != kind:
+        raise ProtocolError(f"maskgen: expected a {kind!r} message")
+    v = obj.get("v")
+    if v not in versions or not _int(v):
+        if _int(v) and v > 0:
+            raise VersionMismatchError(f"maskgen: message version {v} is not supported",
+                                       details={"versions": list(versions)})
+        raise ProtocolError(f"maskgen: expected a v{'/v'.join(map(str, versions))} {kind!r} message")
     items = obj.get("items")
     if not isinstance(items, list) or not 1 <= len(items) <= _MAX_ITEMS:
         raise ProtocolError(f"maskgen: items must be a list of 1..{_MAX_ITEMS} entries")
     return obj
 
 
+def _vs(versions: tuple[int, ...]) -> dict[str, Any]:
+    return {"vs": list(versions)} if versions else {}
+
+
 def encode_maskgen_request(req: MaskgenRequest) -> bytes:
+    if req.version == 2:
+        if not all(it.v2 for it in req.items):
+            raise ValueError("every item of a v2 maskgen request needs b_bits and y_bits")
+        items = [{"linear": it.linear, "cols": it.cols, "bb": it.b_bits, "yb": it.y_bits, "b": it.b}
+                 for it in req.items]
+    elif req.version == 1:
+        if any(it.v2 for it in req.items):
+            raise ValueError("v1 maskgen items cannot carry b_bits/y_bits")
+        items = [{"linear": it.linear, "cols": it.cols, "b": it.b, **({"drop": it.drop_bits} if it.drop_bits else {}),
+                  **({"q": it.q_bits} if it.q_bits != 64 else {})} for it in req.items]
+    else:
+        raise ValueError(f"unknown maskgen version {req.version}")
     return bytes(msgpack.packb({
-        "v": _VERSION, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint,
-        "items": [{"linear": it.linear, "cols": it.cols, "b": it.b, **({"drop": it.drop_bits} if it.drop_bits else {}),
-                   **({"q": it.q_bits} if it.q_bits != 64 else {})} for it in req.items],
+        "v": req.version, "type": "maskgen", "id": req.request_id, "fp": req.fingerprint, **_vs(req.versions),
+        "items": items,
     }, use_bin_type=True))
 
 
-def decode_maskgen_request(data: bytes | bytearray | memoryview) -> MaskgenRequest:
-    obj = _load(data, "maskgen")
+def _decode_item_v1(i: int, it: dict[str, Any]) -> MaskgenItem:
+    cols = _check_cols(it.get("cols"), f"items[{i}]")
+    q = it.get("q", 64)
+    if q not in (56, 64) or isinstance(q, bool):
+        raise ProtocolError(f"maskgen: items[{i}].q must be 56 or 64")
+    if len(it["b"]) == 0 or len(it["b"]) % ((q // 8) * cols):
+        raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of (q/8)*cols")
+    drop = it.get("drop", 0)
+    if drop not in (0, 16) or isinstance(drop, bool):
+        raise ProtocolError(f"maskgen: items[{i}].drop must be 0 or 16")
+    return MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], int(drop), int(q))
+
+
+def _decode_item_v2(i: int, it: dict[str, Any]) -> MaskgenItem:
+    cols = _check_cols(it.get("cols"), f"items[{i}]")
+    bb, yb = it.get("bb"), it.get("yb")
+    if not (_int(bb) and _int(yb) and V2_MIN_BITS <= yb <= bb <= 64 and bb >= V2_MIN_B_BITS):
+        raise ProtocolError(f"maskgen: items[{i}] needs integer bb and yb with {V2_MIN_BITS} <= yb <= bb <= 64 "
+                            f"and bb >= {V2_MIN_B_BITS}")
+    # cols is a multiple of 256, so n*cols*bb/8 is a whole number of bytes for every n.
+    if len(it["b"]) == 0 or len(it["b"]) % (cols * bb // 8):
+        raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of cols*bb/8")
+    return MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], 0, 64, int(bb), int(yb))
+
+
+def decode_maskgen_request(data: bytes | bytearray | memoryview,
+                           versions: tuple[int, ...] = MASKGEN_VERSIONS) -> MaskgenRequest:
+    """Decode a maskgen request of any version in ``versions`` (others: ``version_mismatch``)."""
+    obj = _load(data, "maskgen", versions)
+    v = int(obj["v"])
     items = []
     for i, it in enumerate(obj["items"]):
         if not isinstance(it, dict) or not isinstance(it.get("b"), bytes):
             raise ProtocolError(f"maskgen: items[{i}] must be a map with binary 'b'")
-        cols = _check_cols(it.get("cols"), f"items[{i}]")
-        q = it.get("q", 64)
-        if q not in (56, 64) or isinstance(q, bool):
-            raise ProtocolError(f"maskgen: items[{i}].q must be 56 or 64")
-        if len(it["b"]) == 0 or len(it["b"]) % ((q // 8) * cols):
-            raise ProtocolError(f"maskgen: items[{i}].b length is not a multiple of (q/8)*cols")
-        drop = it.get("drop", 0)
-        if drop not in (0, 16) or isinstance(drop, bool):
-            raise ProtocolError(f"maskgen: items[{i}].drop must be 0 or 16")
-        items.append(MaskgenItem(_str(it.get("linear"), "linear", 64), cols, it["b"], int(drop), int(q)))
-    return MaskgenRequest(_str(obj.get("id"), "id"), _str(obj.get("fp"), "fp"), tuple(items))
+        items.append(_decode_item_v2(i, it) if v == 2 else _decode_item_v1(i, it))
+    return MaskgenRequest(_str(obj.get("id"), "id"), _str(obj.get("fp"), "fp"), tuple(items), v,
+                          _versions(obj.get("vs")))
 
 
 def encode_maskgen_response(resp: MaskgenResponse) -> bytes:
     return bytes(msgpack.packb({
-        "v": _VERSION, "type": "maskgen_result", "id": resp.request_id,
+        "v": resp.version, "type": "maskgen_result", "id": resp.request_id, **_vs(resp.versions),
         "items": [{"linear": it.linear, "cols": it.cols, "y": it.y} for it in resp.items],
     }, use_bin_type=True))
 
 
 def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,
                             out_features: dict[str, int] | None = None) -> MaskgenResponse:
-    """Decode and check the response against ``req`` (item order, sizes when ``out_features`` known)."""
-    obj = _load(data, "maskgen_result")
+    """Decode and check the response against ``req`` (version, item order, sizes when ``out_features`` known)."""
+    obj = _load(data, "maskgen_result", (req.version,))
     if obj.get("id") != req.request_id:
         raise ProtocolError("maskgen: response id does not match the request")
     raw = obj["items"]
@@ -169,15 +285,14 @@ def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRe
                 or not isinstance(it.get("y"), bytes):
             raise ProtocolError(f"maskgen: response items[{i}] does not match the request")
         y = it["y"]
-        nb = q.y_bytes_per_element
         if out_features is not None and q.linear in out_features:
-            if len(y) != nb * q.cols * out_features[q.linear]:
-                raise ProtocolError(f"maskgen: response items[{i}] has {len(y)} bytes, expected "
-                                    f"{nb * q.cols * out_features[q.linear]}")
-        elif len(y) == 0 or len(y) % (nb * q.cols):
-            raise ProtocolError(f"maskgen: response items[{i}] length is not a multiple of 8*cols")
+            want = q.y_nbytes(out_features[q.linear])
+            if len(y) != want:
+                raise ProtocolError(f"maskgen: response items[{i}] has {len(y)} bytes, expected {want}")
+        elif len(y) == 0 or len(y) % q.y_nbytes(1):
+            raise ProtocolError(f"maskgen: response items[{i}] length is not a multiple of one output row")
         items.append(MaskgenResult(q.linear, q.cols, y))
-    return MaskgenResponse(req.request_id, tuple(items))
+    return MaskgenResponse(req.request_id, tuple(items), req.version, _versions(obj.get("vs")))
 
 
 def _to_bytes(v: np.ndarray, nb: int) -> bytes:
@@ -247,3 +362,165 @@ def unpack_y(data: bytes | bytearray | memoryview, shape: tuple[int, int], drop_
     if drop_bits:
         v <<= np.uint64(drop_bits)  # v is a fresh array: shift in place
     return v
+
+
+# ---- v2 bit packing ------------------------------------------------------------------------------
+_FIELD_DTYPES: dict[int, np.dtype[Any]] = {
+    64: np.dtype("<u8"), 32: np.dtype("<u4"), 16: np.dtype("<u2"), 8: np.dtype(np.uint8)}
+
+
+def bit_fields(bits: int) -> tuple[list[tuple[int, int]], int]:
+    """The ``(offset, width)`` fields and the tail width of the :func:`pack_bits` layout for ``bits``.
+
+    Starting at bit 0, each field is the widest of 64, 32, 16 and 8 bits that still fits. The tail
+    is the last ``bits mod 8`` bits. Examples: 35 = [32] + tail 3, 53 = [32, 16] + tail 5,
+    56 = [32, 16, 8], 43 = [32, 8] + tail 3, 64 = [64].
+    """
+    if not 1 <= bits <= 64:
+        raise ValueError(f"bit width must be in [1, 64], got {bits}")
+    fields = []
+    off = 0
+    while bits - off >= 8:
+        width = next(c for c in (64, 32, 16, 8) if c <= bits - off)
+        fields.append((off, width))
+        off += width
+    return fields, bits - off
+
+
+def _rep(mask: int, lane: int) -> np.uint64:
+    return np.uint64(sum(mask << s for s in range(0, 64, lane)))
+
+
+def _compress_tails(x: np.ndarray, t: int) -> np.ndarray:
+    """Words whose byte ``k`` holds a ``t``-bit value -> the values at bits ``t·k`` (``8t`` bits per word)."""
+    lo = (1 << t) - 1
+    x = (x & _rep(lo, 16)) | ((x >> np.uint64(8 - t)) & _rep(lo << t, 16))
+    lo2 = (1 << 2 * t) - 1
+    x = (x & _rep(lo2, 32)) | ((x >> np.uint64(16 - 2 * t)) & _rep(lo2 << 2 * t, 32))
+    lo4 = (1 << 4 * t) - 1
+    return (x & np.uint64(lo4)) | ((x >> np.uint64(32 - 4 * t)) & np.uint64(lo4 << 4 * t))
+
+
+def _spread_tails(x: np.ndarray, t: int) -> np.ndarray:
+    """Inverse of :func:`_compress_tails`."""
+    lo4 = (1 << 4 * t) - 1
+    x = (x & np.uint64(lo4)) | ((x << np.uint64(32 - 4 * t)) & np.uint64(lo4 << 32))
+    lo2 = (1 << 2 * t) - 1
+    x = (x & _rep(lo2, 32)) | ((x << np.uint64(16 - 2 * t)) & _rep(lo2 << 16, 32))
+    lo = (1 << t) - 1
+    return (x & _rep(lo, 16)) | ((x << np.uint64(8 - t)) & _rep(lo << 8, 16))
+
+
+def pack_bits(v: np.ndarray, bits: int) -> bytearray:
+    """The low ``bits`` bits of every value of ``v`` (uint64, row-major), bit-packed: ``len(v)·bits/8`` bytes.
+
+    Layout (:func:`bit_fields`): for each field ``(offset, width)`` in order, bits
+    ``offset .. offset+width-1`` of every value as one contiguous little-endian ``uint{width}``
+    array. Then the tail of ``t = bits mod 8`` bits per value as an LSB-first bit stream: group
+    ``g`` of eight values is the ``t``-byte little-endian integer ``sum_k tail[8g + k] << (t·k)``.
+    Each field is a cast, so the format is fast to produce and read with vector code. The value
+    count must be a multiple of 8. Every maskgen operand qualifies, because ``cols`` is a multiple
+    of 256. The fields are written straight into the returned buffer, which msgpack sends as ``bin``.
+    """
+    a = np.ascontiguousarray(v, dtype=np.uint64).reshape(-1)
+    count = a.size
+    if count % 8:
+        raise ValueError(f"bit packing needs a multiple of 8 values, got {count}")
+    fields, t = bit_fields(bits)
+    buf = bytearray(count * bits // 8)
+    dst = np.frombuffer(buf, dtype=np.uint8)
+    tmp: np.ndarray | None = None  # one scratch array for the shifted values (no per-field allocation)
+
+    def shifted(off: int) -> np.ndarray:
+        nonlocal tmp
+        if off == 0:
+            return a
+        tmp = np.empty_like(a) if tmp is None else tmp
+        np.right_shift(a, np.uint64(off), out=tmp)
+        return tmp
+
+    pos = 0
+    for off, width in fields:
+        nb = count * width // 8
+        np.copyto(dst[pos:pos + nb].view(_FIELD_DTYPES[width]), shifted(off), casting="unsafe")  # cast truncates
+        pos += nb
+    if t:
+        tails = np.empty(count, dtype=np.uint8)
+        np.copyto(tails, shifted(bits - t), casting="unsafe")
+        tails &= np.uint8((1 << t) - 1)
+        words = _compress_tails(tails.view("<u8"), t)
+        dst[pos:].reshape(count // 8, t)[...] = words.view(np.uint8).reshape(count // 8, 8)[:, :t]
+    return buf
+
+
+def unpack_bits(data: bytes | bytearray | memoryview, count: int, bits: int) -> np.ndarray:
+    """Inverse of :func:`pack_bits`: ``(count,)`` uint64 values below ``2^bits`` (a fresh, writable array)."""
+    if count % 8:
+        raise ValueError(f"bit packing needs a multiple of 8 values, got {count}")
+    src = np.frombuffer(data, dtype=np.uint8)
+    if src.size != count * bits // 8:
+        raise ValueError(f"packed data has {src.size} bytes, expected {count * bits // 8}")
+    fields, t = bit_fields(bits)
+    out = np.empty(count, dtype=np.uint64)
+    tmp: np.ndarray | None = None
+    pos = 0
+    for off, width in fields:  # the first field has offset 0
+        nb = count * width // 8
+        part = src[pos:pos + nb].view(_FIELD_DTYPES[width])
+        pos += nb
+        if off == 0:
+            np.copyto(out, part)
+        else:
+            tmp = np.empty_like(out) if tmp is None else tmp
+            np.copyto(tmp, part)
+            tmp <<= np.uint64(off)
+            out |= tmp
+    if t:
+        tb = np.zeros((count // 8, 8), dtype=np.uint8)
+        tb[:, :t] = src[pos:].reshape(count // 8, t)
+        tails = _spread_tails(tb.view("<u8").reshape(count // 8), t).view(np.uint8)
+        if not fields:
+            np.copyto(out, tails)
+        else:
+            tmp = np.empty_like(out) if tmp is None else tmp
+            np.copyto(tmp, tails)
+            tmp <<= np.uint64(bits - t)
+            out |= tmp
+    return out
+
+
+def le_words(data: bytes | bytearray | memoryview, count: int, nb: int, *, copy: bool = True) -> np.ndarray:
+    """``count`` little-endian ``nb``-byte unsigned integers (``1 <= nb <= 8``) as uint64.
+
+    A fresh array, except with ``nb == 8`` and ``copy=False`` (a view of ``data``, read-only for ``bytes``).
+    """
+    if not 1 <= nb <= 8:
+        raise ValueError(f"word size must be in [1, 8] bytes, got {nb}")
+    if len(data) != count * nb:
+        raise ValueError(f"{len(data)} bytes is not {count} words of {nb} bytes")
+    if nb == 8:
+        return np.frombuffer(data, dtype="<u8").astype(np.uint64, copy=copy)
+    # Overlapping unaligned 8-byte reads at stride nb, then a mask: one pass, no per-byte copy.
+    buf = bytes(data) + bytes(8 - nb)
+    words = np.ndarray(shape=(count,), dtype="<u8", buffer=buf, offset=0, strides=(nb,))
+    return words & np.uint64((1 << (8 * nb)) - 1)
+
+
+def pack_y_v2(y: np.ndarray, b_bits: int, y_bits: int, *, inplace: bool = False) -> bytearray:
+    """Provider side of v2: ``floor((Y + 2^(d-1)) / 2^d) mod 2^y_bits`` bit-packed, with ``Y = y mod 2^b_bits``.
+
+    ``d = b_bits - y_bits``. ``y`` is ``W8 b`` modulo ``2^b_bits`` or modulo any multiple of it, for
+    example the ``mod 2^56`` result of a 7-byte GEMM. Only bits ``d .. b_bits - 1`` of ``Y + 2^(d-1)``
+    are sent, so a carry past bit ``b_bits`` is dropped. ``inplace=True`` lets the function overwrite
+    ``y`` (a uint64 array).
+    """
+    if not V2_MIN_BITS <= y_bits <= b_bits <= 64:
+        raise ValueError(f"b_bits={b_bits}, y_bits={y_bits} out of range")
+    d = b_bits - y_bits
+    own = inplace and y.dtype == np.uint64 and y.flags.c_contiguous and y.flags.writeable
+    if not d:
+        return pack_bits(y, y_bits)  # keeps bits 0 .. y_bits-1 only
+    y = np.asarray(y, dtype=np.uint64).reshape(-1)
+    v = np.add(y, np.uint64(1 << (d - 1)), out=y if own else None)  # wraps mod 2^64; one pass, also for read-only y
+    v >>= np.uint64(d)  # bits from b_bits up are not packed
+    return pack_bits(v, y_bits)

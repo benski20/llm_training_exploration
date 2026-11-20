@@ -96,8 +96,48 @@ def _maskgen_concurrency_default(settings: Any = None) -> int:
         return fallback
 
 
-def _maskgen_item(kern: Any, it: Any) -> bytes:
+def _maskgen_versions_default() -> tuple[int, ...]:
+    """Maskgen wire versions served: v1 always; v2 unless ``PGW_SERVICE_MASKGEN_V2`` is false."""
+    raw = os.environ.get("PGW_SERVICE_MASKGEN_V2", "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return (1,)
+    if raw and raw not in ("1", "true", "yes", "on"):
+        log.warning("ignoring PGW_SERVICE_MASKGEN_V2=%r (not a boolean)", raw)
+    return (1, 2)
+
+
+def _maskgen_item_v2(kern: Any, it: Any) -> bytes | bytearray:
+    """Wire v2 item: bit-packed ``b`` in, ``round(W8 b mod 2^bb)`` bit-packed at ``yb`` bits out.
+
+    The product runs on the kernel's wire entry point with whole-byte words: 8-byte words on CUDA
+    (zero-copy views of the unpacked values; the one extra byte plane is cheap on a GPU), and
+    ``ceil(bb/8)`` bytes on CPU, where every GEMM plane costs more than the byte copy. Both give
+    ``y`` modulo a multiple of ``2^bb``, which is all that :func:`pgw.hemask.wire.pack_y_v2` needs.
+    """
+    import numpy as np
+
+    from pgw.hemask.wire import le_words, pack_y_v2, unpack_bits
+
+    n, m, cols = kern.in_features, kern.out_features, it.cols
+    b = unpack_bits(it.b, n * cols, it.b_bits)  # values < 2^bb
+    fast = getattr(kern, "mulmod64_wire", None)
+    nb = -(-it.b_bits // 8)
+    if fast is None:  # kernels without the wire entry point
+        y = kern.mulmod64(b.reshape(n, cols), nb)
+    else:
+        dev = getattr(kern, "device", None)
+        if getattr(dev, "type", "cpu") == "cuda":
+            nb = 8
+        raw = b if nb == 8 else np.ascontiguousarray(b.view(np.uint8).reshape(n * cols, 8)[:, :nb])
+        # 8-byte words: a read-only view, pack_y_v2's first pass makes the working copy
+        y = le_words(fast(memoryview(raw).cast("B"), cols, 8 * nb, 0), m * cols, nb, copy=False)
+    return pack_y_v2(y, it.b_bits, it.y_bits, inplace=True)
+
+
+def _maskgen_item(kern: Any, it: Any) -> bytes | bytearray:
     """``y`` bytes of one maskgen item (runs in a worker thread)."""
+    if it.v2:
+        return _maskgen_item_v2(kern, it)
     fast = getattr(kern, "mulmod64_wire", None)
     if fast is not None:  # raw bytes in, packed bytes out (device-side unpack/pack on CUDA)
         return bytes(fast(it.b, it.cols, it.q_bits, it.drop_bits))
@@ -185,6 +225,9 @@ class ServiceHandler:
             GEMV, two one-row items run as two GEMV calls, which can beat one digit GEMM on 2 rows
             (T4). 0 turns grouping off (one kernel call per item, as before grouping existed).
             Default :data:`GROUP_MIN_ROWS` (``PGW_SERVICE_GROUP_MIN_ROWS``).
+        maskgen_versions: Maskgen wire versions served and advertised (``vs`` in every reply). v1
+            is always served; v2 (bit-packed, :mod:`pgw.hemask.wire`) unless turned off here or with
+            ``PGW_SERVICE_MASKGEN_V2=false``. Clients only send v2 after a reply advertised it.
     """
 
     def __init__(
@@ -197,6 +240,7 @@ class ServiceHandler:
         *,
         group_min_rows: int | None = None,
         maskgen_concurrency: int | None = None,
+        maskgen_versions: tuple[int, ...] | None = None,
     ):
         self.settings = settings
         self.registry = registry
@@ -211,6 +255,11 @@ class ServiceHandler:
         self.maskgen_concurrency = (max(1, int(maskgen_concurrency)) if maskgen_concurrency is not None
                                     else _maskgen_concurrency_default(settings))
         self._maskgen_slots = asyncio.Semaphore(self.maskgen_concurrency)  # bounded, not one global lock
+        if maskgen_versions is None:
+            maskgen_versions = _maskgen_versions_default()
+        if 1 not in maskgen_versions or not set(maskgen_versions) <= {1, 2}:
+            raise ValueError(f"maskgen_versions must contain 1 and only 1 or 2, got {maskgen_versions!r}")
+        self.maskgen_versions: tuple[int, ...] = tuple(sorted(set(maskgen_versions)))
         self.group_min_rows = max(0, int(group_min_rows)) if group_min_rows is not None else _group_min_rows_default()
         #: requests answered by :meth:`compute_inline` (the stream channel's frame lane)
         self.inline_requests = 0
@@ -319,8 +368,10 @@ class ServiceHandler:
 
         The provider sees only pseudorandom ciphertexts. Admission and tenant limits count every
         256-column group as 256 rows, like the compute path. Each item goes from its raw ``b`` bytes
-        to its packed ``y`` bytes in one worker-thread call (:meth:`ComputeKernel.mulmod64_wire`);
-        at most :attr:`maskgen_concurrency` items run at once, across all requests.
+        to its packed ``y`` bytes in one worker-thread call (:meth:`ComputeKernel.mulmod64_wire`;
+        wire v2 items also unpack and bit-pack on the CPU, :func:`_maskgen_item_v2`); at most
+        :attr:`maskgen_concurrency` items run at once, across all requests. The route stamps the
+        reply with the request's version and :attr:`maskgen_versions`.
         """
         from pgw.hemask.wire import MaskgenResponse, MaskgenResult
 
@@ -332,7 +383,7 @@ class ServiceHandler:
             if it.linear not in dims:
                 raise ProtocolError(f"unknown linear {it.linear!r}", details={"linear": it.linear})
             n = dims[it.linear][1]
-            want = it.b_bytes_per_element * n * it.cols
+            want = it.b_nbytes(n)  # v1: q/8 bytes per coefficient; v2: bb bits
             if len(it.b) != want:
                 raise ProtocolError(f"maskgen {it.linear}: b has {len(it.b)} bytes, expected {want}")
         self._admit(tenant, sum(it.cols for it in request.items))
@@ -350,7 +401,7 @@ class ServiceHandler:
             if self.inflight == 0:
                 self._idle.set()
 
-    async def _maskgen_in_slot(self, kern: Any, it: Any) -> bytes:
+    async def _maskgen_in_slot(self, kern: Any, it: Any) -> bytes | bytearray:
         """Run one maskgen item in a worker thread under :attr:`_maskgen_slots`.
 
         The slot is released when the thread finishes, not when the awaiting request goes away:
@@ -365,7 +416,7 @@ class ServiceHandler:
             slots.release()
             raise
 
-        def _done(f: asyncio.Future[bytes]) -> None:
+        def _done(f: asyncio.Future[bytes | bytearray]) -> None:
             slots.release()
             if not f.cancelled():
                 f.exception()  # retrieved: no "exception was never retrieved" for abandoned items

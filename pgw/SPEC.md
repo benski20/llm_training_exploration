@@ -391,6 +391,84 @@ locked RAM (`pgw.maskstore.ringbuf`, design `research/plans/mask-ringbuffer-desi
 - Freivalds vectors that are all zero (a reservation closed during a step) verify nothing: the
   engine treats them as `MaskReuseError`, never as a pass.
 
+### 7.9 Encrypted mask generation (`pgw.hemask`; wire normative)
+The factory can obtain `W8·r` from the compute service on module-LWE ciphertexts instead of
+computing it itself (docs/operations/encrypted-masks.md). For each group of 256 slots of one
+linear, the factory encrypts `b = A·s + e + 2^(q−K)·r mod 2^q`. A is public and expanded from a
+seed the customer chooses. `s` is a fresh ternary secret, and `e` is fresh CBD(21) noise. The
+modulus is q = 2^56 for K ≤ 32 and 2^64 for K = 40. The service returns `y = W8·b mod 2^q`. The
+factory subtracts `H·s`, using the hint H = W8·A, which it builds locally. It then rounds away the
+noise at the scaling factor Δ = 2^(q−K). Every decrypted row is verified with private check
+vectors before it is stored. The online Freivalds and range checks do not change.
+
+`POST /pgw/v1/maskgen` (msgpack, same headers, auth, limits and error bodies as compute):
+
+```
+v1 request  {"v":1,"type":"maskgen","id":str,"fp":hex64,"vs":[int]?,
+             "items":[{"linear":str,"cols":int,"b":bin(n·cols·q/8),"q":56|64?,"drop":0|16?}]}
+v1 reply    {"v":1,"type":"maskgen_result","id":str,"vs":[int]?,
+             "items":[{"linear":str,"cols":int,"y":bin(m·cols·(q−drop)/8)}]}       # bytes drop/8..q/8−1 of y + 2^(drop−1)
+v2 request  {"v":2,"type":"maskgen","id":str,"fp":hex64,"vs":[int]?,
+             "items":[{"linear":str,"cols":int,"bb":int,"yb":int,"b":bin(n·cols·bb/8)}]}
+v2 reply    {"v":2,"type":"maskgen_result","id":str,"vs":[int]?,
+             "items":[{"linear":str,"cols":int,"y":bin(m·cols·yb/8)}]}
+```
+
+- `cols` is a multiple of 256, at most 4096. Matrices are row-major `(n, cols)` and `(m, cols)`.
+- **v2 semantics.** The provider computes `Y = W8·b mod 2^bb` and returns
+  `floor((Y + 2^(d−1)) / 2^d) mod 2^yb` with `d = bb − yb` (no offset when `d = 0`), with
+  `8 ≤ yb ≤ bb ≤ 64` and `bb ≥ 32` (the provider unpacks `b` to 64-bit words; the lower bound
+  caps that expansion at 2x; a v2 item still needs about 2-3x a v1 item's provider host memory).
+- **v2 bit packing.** Both operands use the same packing. The `w`-bit values are split into fields
+  of 64, 32, 16 and 8 bits, from bit 0, taking the widest that fits each time. Each field is one
+  contiguous little-endian `uint{width}` array over all values. The last `t = w mod 8` bits of each
+  value follow as an LSB-first bit stream: eight values per `t` bytes. Examples: 35 bits = u32 +
+  3-bit tail, 53 bits = u32 + u16 + 5-bit tail.
+- **Negotiation.** `vs` lists the versions the sender speaks. The client sends it on requests, and
+  the service on every reply. A client sends v2 only after a reply has advertised 2. It falls back
+  to v1 when a v2 request fails with `protocol` or `version_mismatch` (for example after a rolling
+  downgrade), and then ignores advertisements for 300 s. A service rejects a version it does not
+  serve with `426 version_mismatch`, `details.versions`. `PGW_SERVICE_MASKGEN_V2=false` turns v2 off.
+  v1 is always served.
+- **Customer choice of `(bb, yb)`, per linear.** The reply carries `yb = K + 3` bits (35 for K32,
+  43 for K40). The upload is either `bb = q` or `bb = q − 3` (53 at q = 2^56). For `bb = q − 3`,
+  the customer switches its own ciphertext down with randomised rounding: `b' = floor((b + d) / 8)`,
+  where `d` is uniform in [0, 8), fresh from a CSPRNG-seeded generator for each coefficient, and
+  never stored. It decrypts `2^(q−yb)·reply mod 2^q` with the unchanged hint. Of the formats that
+  pass the noise budget, it picks the one with the fewest bytes.
+- **Noise budget (normative).** v2 is used for a linear only if
+  `tail·σ·‖w‖ + [bb<q]·tail·2^(q−bb−1)·‖w‖ + [yb<bb]·2^(q−yb−1) + 255·dim < 2^(q−K−1−margin)`,
+  with `tail = 24`, `margin = 1` bit, and `‖w‖` the largest int8 row norm of the linear (from the
+  hint store). The terms are, in order, `W8·e`, the upload switch, the reply rounding, and the
+  hint's dropped low byte. The client checks this for every linear at startup and otherwise uses
+  v1 for that linear. `‖w‖` comes from the customer's own hint store, not from the provider. The
+  re-check before each v2 request only asserts that the stored plan is consistent; it is not an
+  independent guard. For Qwen2.5-7B at K32 (rank 16), the
+  bound is about 2^21.3 for linears with hidden-size inputs and 2^21.6 for the down projection,
+  against a budget of 2^22. These figures are estimates from Qwen2.5-1.5B int8 row norms
+  (‖w‖ / (127·√n) ≤ 0.37). Every linear then uses `(53, 35)`. Even all-±127 rows pass, with
+  `(56, 35)` or `(53, 39)` on the down projection.
+- **Why the rounding leaks nothing.**
+  - The reply rounding is a deterministic function of `y`, which the provider computes anyway. It
+    reduces only what the customer receives.
+  - The upload switch is a randomised function of `b` alone. Its randomness `d` is independent of
+    `s`, `e`, `r` and the weights. A provider holding `b'` therefore learns nothing it could not
+    simulate from `b`, and `b` is an MLWE sample. Lattice security is that of the 2^q ciphertext.
+  - Correctness: `8·b' = b − ε`, where `ε ∈ {c−8, c}` for `c = b mod 8`, with `E[ε | b] = 0`. The
+    `ε` are independent across coefficients, so by Hoeffding `|W8·ε| < 24·4·‖w‖` except with
+    probability `2·e^(−288)`.
+  - The scaling factor is unchanged. Decrypted masks are exact and bit-identical to v1. The
+    every-row check and the Freivalds soundness argument do not change.
+  - Status: the `bb = q − 3` upload replaces the plan's q = 2^53 (E5, after WP7) with a
+    customer-side randomised switch. It needs explicit research-owner sign-off; until then
+    `upload_switch=False` keeps `bb = q`. The factory runtime does not yet pass `params` and
+    `row_norms` to `RemoteMulmod64`, so production factories still send v1.
+  - Not used: an upload that redefines the mask from a public value (the rejected 25-bit variant,
+    which leaks noise), and low-bit `W·r` downloads (these need a new Freivalds soundness argument).
+- **Bytes per Qwen2.5-7B slot (K32).** Σn = 831,488 and Σm = 1,390,592.
+  - v1: 7 B up and 5 B down, 12.77 MB in total.
+  - v2 (53/35): 6.625 B up and 4.375 B down, 11.59 MB in total (−9.2%).
+
 ## 8. Model pack
 
 ### 8.1 Layout
