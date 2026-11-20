@@ -63,6 +63,23 @@ JOBS: dict[str, dict] = {
             "--loadtest", "1x1", "1x5", "4x1", "8x1", "16x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
+    # phase 2 P2-b A/B: two-cohort ping-pong (engine_pingpong, steps of > 4 sequences) vs the default engine at
+    # 4 / 8 / 16 streams on the same service and mask store (results "concurrent_<n>" vs "pingpong_concurrent_<n>";
+    # at 4 streams ping-pong does not engage: a control). 32 tokens keep the store near run 26's size (two gateway
+    # runs: about 4.3k slots, 24 GB at 7B). Checks: tokens_identical everywhere; engine_delta.pingpong_steps > 0
+    # at 8 and 16 streams only.
+    "pgw-pingpong-7b": {"steps": [
+        BUILD_NATIVE,
+        {"kind": "pytest", "name": "pytest_sched", "args": ["tests/engine/test_generate.py",
+                                                            "tests/engine/test_scheduling_pingpong.py", "-q", "-rs",
+                                                            "--timeout", "900"], "timeout": 1500},
+        {"kind": "validate", "label": "qwen7b_pingpong", "args": [
+            "--model", QWEN7, "--label", "qwen7b_pingpong", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "32",
+            "--concurrent", "4", "8", "16", "--pingpong", "--loadtest", "1x1", "--loadtest-tokens", "2",
+            "--factory-bench-slots", "64"],
+         "timeout": 7800},
+    ]},
     # speculation sweep: k = 1, 2, 3 with a 0.5B draft on the gateway CPU and on the second T4 (cuda:1), one
     # fixed draft size per run (spec_min_tokens capped at k), spec_max_batch 1; single stream for every run and
     # 4 streams for no-spec and k=2 on cuda:1 (spec at 4 streams should equal no-spec). 48 tokens keep the

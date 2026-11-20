@@ -839,6 +839,7 @@ class ModelRuntime:
             draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
             spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence,
             spec_max_batch=self.config.spec_max_batch,  # plan interface C3 (per-model GatewayModelConfig)
+            pingpong=self.config.engine_pingpong, pingpong_min_sessions=self.config.engine_pingpong_min_sessions,
         )
         self.tokenizer = tokenizer
         self.pack = pack
@@ -1235,6 +1236,9 @@ class ModelRuntime:
                     out["client_timing"] = timing()
         if self.backend is not None and hasattr(self.backend, "stats"):
             out["backend"] = self.backend.stats.snapshot()
+        sched = getattr(getattr(self, "generator", None), "sched_stats", None)
+        if isinstance(sched, dict):
+            out["engine"] = dict(sched)
         return out
 
 

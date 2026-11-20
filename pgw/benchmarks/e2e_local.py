@@ -114,6 +114,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             """Service stub for zero weights (``W x_hat = 0``): no service CPU time at all."""
 
             async def compute(self, req: Any) -> Any:
+                if args.service_delay_ms > 0:  # stand-in for the network + GPU time of a round trip
+                    await asyncio.sleep(args.service_delay_ms / 1e3)
                 return ComputeResponse(req.request_id, tuple(
                     ComputeResult(i.linear, i.rows, bytes(i.rows * outm[i.linear] * nb)) for i in req.items))
 
@@ -129,7 +131,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             return res
         return WindowedReservation(res, lambda s: store.reserve(fp, ring, s), cap=n, window=args.window)
 
-    gen = Generator(model, None, max_batch=32, session_factory=factory)
+    gen = Generator(model, None, max_batch=32, session_factory=factory, pingpong=args.pingpong)
     params = SamplingParams(max_tokens=args.tokens, temperature=0.0, ignore_eos=True, logprobs=0)
     prompts = [[(7 * s + 3 * i) % (pack.arch.vocab_size - 1) + 1 for i in range(prompt_len)]
                for s in range(args.streams)]
@@ -164,7 +166,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             best = row
     await gen.aclose()
     assert best is not None
-    result = {"preset": args.preset, "ring": args.ring, "streams": args.streams, **best}
+    result = {"preset": args.preset, "ring": args.ring, "streams": args.streams, "pingpong": args.pingpong,
+              "sched_stats": dict(gen.sched_stats), **best}
     if args.check:
         plain = TransformerModel(pack, PlainBackend(pack, ring))
         pgen = Generator(plain, None, max_batch=32)
@@ -191,6 +194,9 @@ def main() -> None:
                     "returning zeros (no service CPU; isolates the gateway side: crypto, hops, model, sampling)")
     ap.add_argument("--service-backend", default="auto", help="ringmm backend of the in-process service")
     ap.add_argument("--check", action="store_true", help="compare with the plaintext reference")
+    ap.add_argument("--pingpong", action="store_true", help="engine two-cohort ping-pong (steps of > 4 sequences)")
+    ap.add_argument("--service-delay-ms", type=float, default=0.0,
+                    help="with --null-service: latency added to every round trip (network + GPU stand-in)")
     args = ap.parse_args()
     print(json.dumps(asyncio.run(run(args)), indent=2))
 

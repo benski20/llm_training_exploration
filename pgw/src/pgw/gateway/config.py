@@ -146,6 +146,15 @@ class GatewayModelConfig(BaseModel):
         "so a row's logits do not depend on the rows it shares a pass with); this only trades speed. None = "
         "automatic: on with the native kernel (pgw_fast), off with the slower torch fallback",
     )
+    engine_pingpong: bool = Field(
+        False, description="Two-cohort ping-pong: an engine step with at least engine_pingpong_min_sessions "
+        "sequences runs as two concurrent half-steps, so the gateway masks and unmasks one half while the other "
+        "half's round trip is with the service. Outputs and per-session mask use are identical; the service sees "
+        "two round trips per linear (half the rows each) instead of one. Not used with a draft model",
+    )
+    engine_pingpong_min_sessions: int = Field(
+        5, ge=2, le=1024, description="Smallest engine step (sequences) that ping-pong splits (default: more than 4)",
+    )
 
     @field_validator("ring")
     @classmethod
