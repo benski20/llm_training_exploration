@@ -34,7 +34,7 @@ DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
-I6PN = os.environ.get("PGW_MODAL_I6PN", "1") != "0"  # private network to the provider (see provider.py)
+I6PN = os.environ.get("PGW_MODAL_I6PN", "0") == "1"  # private network to the provider (see provider.py)
 
 image = (
     modal.Image.debian_slim(python_version="3.13")

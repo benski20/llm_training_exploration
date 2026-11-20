@@ -32,8 +32,9 @@ DICT_NAME = "pgw-live"
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 # Private IPv6 networking between the two containers (same workspace, same region): the gateway reaches
 # the service directly instead of through the public TCP tunnel, which added about 5 ms to each of the
-# ~100 round trips per token. TLS stays end to end. PGW_MODAL_I6PN=0 uses the tunnel only.
-I6PN = os.environ.get("PGW_MODAL_I6PN", "1") != "0"
+# ~100 round trips per token. TLS stays end to end. Off by default (PGW_MODAL_I6PN=1 turns it on): with
+# i6pn, Modal could not schedule a CPU container in us-east for 25 minutes on 2026-11-20.
+I6PN = os.environ.get("PGW_MODAL_I6PN", "0") == "1"
 # GPU type for the service, e.g. PGW_MODAL_GPU=T4 at deploy time. Default: none (CPU int8 backend), because
 # Modal only allows GPU functions on workspaces with a payment method. The image has CUDA torch either way.
 GPU = os.environ.get("PGW_MODAL_GPU") or None
