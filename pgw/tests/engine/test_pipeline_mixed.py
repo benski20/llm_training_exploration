@@ -158,3 +158,65 @@ def test_exhausted_second_half_wipes_and_raises(qwen_pack: InMemoryPack, monkeyp
     assert 50 - int(ok.remaining(lid)) == 20  # only its first half was taken
     assert 10 - int(dec.remaining(lid)) == 3
     assert 30 - int(short.remaining(lid)) == 20
+
+
+# ---- B-way prefill blocks (WP-A5: pipeline_blocks) ----------------------------------------------------
+@pytest.mark.parametrize("blocks", [2, 3, 4])
+def test_prefill_blocks_bitwise_equal(qwen_pack: InMemoryPack, blocks: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    """B in {2, 3, 4} blocks: same logits as unsplit and as plain; masks taken in row order (block j's rows
+    before block j+1's); each pipelined round trip counts once; 1-row calls only in block 0."""
+    plain, masked, _ = plain_and_masked(qwen_pack, DEFAULT_RING)
+    masked.pipeline_blocks = blocks
+    be = masked.backend
+    seen: list[list[tuple[int, int]]] = []
+    real = be.prepare_calls
+
+    def spy(calls: Any) -> Any:
+        seen.append([(id(c.session), int(c.x.shape[0])) for c in calls])
+        return real(calls)
+
+    monkeypatch.setattr(be, "prepare_calls", spy)
+    head, p1, p2 = _ids(5, 11), _ids(41, 12), _ids(23, 13)
+    refs = [_plain_ref(plain, [head, [7]]), _plain_ref(plain, [p1]), _plain_ref(plain, [p2])]
+    res = [LocalMaskReservation(qwen_pack, DEFAULT_RING, n) for n in (8, 45, 25)]
+    caches = [masked.new_cache(128) for _ in range(3)]
+
+    async def run() -> list[torch.Tensor]:
+        await masked.aforward_batch([SequenceInput(head, caches[0], res[0])])
+        seen.clear()
+        return await masked.aforward_batch([SequenceInput([7], caches[0], res[0], all_logits=True),
+                                            SequenceInput(p1, caches[1], res[1], all_logits=True),
+                                            SequenceInput(p2, caches[2], res[2], all_logits=True)])
+
+    trips0 = be.stats.round_trips
+    out = asyncio.run(run())
+    for got, ref in zip(out, refs, strict=True):
+        assert torch.equal(got, ref)
+    layers = qwen_pack.arch.num_layers
+    a, b, c = (id(r) for r in res)
+    want = [[(b, 41 * (j + 1) // blocks - 41 * j // blocks), (c, 23 * (j + 1) // blocks - 23 * j // blocks)]
+            for j in range(blocks)]
+    want[0].insert(0, (a, 1))
+    assert seen[:blocks] == want
+    assert len(seen) == blocks * 4 * layers
+    # the backend counts each block's request (plus the 1-row pass before)
+    assert be.stats.round_trips - trips0 == 4 * layers + blocks * 4 * layers
+    for r, used in zip(res, (6, 41, 23), strict=True):
+        for lid in _lids(qwen_pack):
+            assert r.slots - int(r.remaining(lid)) == used
+
+
+def test_split_blocks_layout() -> None:
+    """Row ranges n*j//B (B=2: the old halves n//2); 1-row calls wholly in block 0; empty blocks dropped."""
+    from pgw.engine.backends import LinearCall
+
+    lid = LinearId(0, LinearKind.QKV)
+    calls = [LinearCall(lid, torch.zeros(1, 4)), LinearCall(lid, torch.arange(10.0)[:, None]),
+             LinearCall(lid, torch.zeros(3, 4))]
+    parts, where = TransformerModel._split_blocks(calls, 2)
+    assert [[int(c.x.shape[0]) for c in p] for p in parts] == [[1, 5, 1], [5, 2]]
+    assert where == [[0, 1, 2], [1, 2]]
+    assert torch.equal(parts[1][0].x[:, 0], torch.arange(5.0, 10.0))
+    parts, where = TransformerModel._split_blocks([calls[2]], 4)  # 3 rows in 4 blocks: one empty block
+    assert [[int(c.x.shape[0]) for c in p] for p in parts] == [[1], [1], [1]]
+    assert where == [[0], [0], [0]]

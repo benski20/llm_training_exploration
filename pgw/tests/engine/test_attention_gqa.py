@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import torch
 
@@ -156,3 +158,93 @@ def test_cuda_model_keeps_head_on_cpu_and_matches(qwen_pack: InMemoryPack) -> No
     a = cpu.forward_batch([SequenceInput(ids, cpu.new_cache(16))])[0]
     b = gpu.forward_batch([SequenceInput(ids, gpu.new_cache(16))])[0]
     assert a.shape == b.shape and b.device.type == ("cpu" if native_lm_head() else "cuda")
+
+
+# ---- guarded is_causal SDPA for a whole prompt block (WP-A5) ------------------------------------------
+@pytest.mark.parametrize("gqa", [False, True])
+@pytest.mark.parametrize(("heads", "kv_heads", "head_dim"), [(4, 2, 16), (28, 4, 128)])
+def test_causal_equality_grid(gqa: bool, heads: int, kv_heads: int, head_dim: int) -> None:
+    """is_causal == explicit mask, bit for bit, across the CPU flash kernel's split sizes."""
+    if gqa and not model_mod._sdpa_gqa_supported():
+        pytest.skip("torch < 2.5 has no enable_gqa")
+    groups = heads // kv_heads
+    scale = head_dim**-0.5
+    gen = torch.Generator().manual_seed(heads + 7 * int(gqa))
+    for t in (2, 16, 31, 64, 191, 192, 257, 513, 768, 900):
+        kbuf = torch.randn((2, t + 5, kv_heads, head_dim), generator=gen)
+        vbuf = torch.randn((2, t + 5, kv_heads, head_dim), generator=gen)
+        q = torch.randn((t, heads, head_dim), generator=gen) * 2
+        k, v = kbuf[1, :t], vbuf[1, :t]
+        assert torch.equal(_attend(q, k, v, 0, scale, groups, gqa),
+                           _attend(q, k, v, 0, scale, groups, gqa, causal=True)), t
+    assert model_mod.causal_self_check(heads, kv_heads, head_dim, torch.float32, "cpu", scale, gqa)
+
+
+def test_causal_needs_a_whole_block_from_zero() -> None:
+    q, k = torch.randn(4, 4, 8), torch.randn(6, 2, 8)
+    with pytest.raises(ValueError, match="whole block"):
+        _attend(q, k, k, 2, 0.3, 2, False, causal=True)
+    with pytest.raises(ValueError, match="whole block"):
+        _attend(q, k[:5], k[:5], 0, 0.3, 2, False, causal=True)
+
+
+def _causal_spy(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int, bool]]:
+    """Records ``(query rows, start, causal)`` of every attention call."""
+    used: list[tuple[int, int, bool]] = []
+    real = model_mod._attend
+
+    def spy(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, start: int, *a: Any, **kw: Any) -> torch.Tensor:
+        used.append((int(q.shape[0]), int(start), bool(kw.get("causal", False))))
+        return real(q, k, v, start, *a, **kw)
+
+    monkeypatch.setattr(model_mod, "_attend", spy)
+    return used
+
+
+def test_causal_used_only_for_whole_prompt_blocks(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Used for a prompt block from position 0 of >= causal_min_rows rows; never for short prompts,
+    chunked prefill (start > 0), decode or verify rows; logits equal with it on and off."""
+    on = TransformerModel(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING))
+    off = TransformerModel(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING))
+    off.causal_sdpa = False
+    assert on._use_causal()  # the self-check passes for the tiny shapes on this CPU
+    ids = [int(t) for t in torch.randint(0, 250, (60,), generator=torch.Generator().manual_seed(9))]
+    used = _causal_spy(monkeypatch)
+    outs = []
+    for m in (on, off):
+        used.clear()
+        c1, c2 = m.new_cache(128), m.new_cache(128)
+        r = [m.forward_batch([SequenceInput(ids[:40], c1, all_logits=True)])[0],
+             m.forward_batch([SequenceInput(ids[40:], c1, all_logits=True)])[0],  # chunk at start 40
+             m.forward_batch([SequenceInput([5], c1)])[0],
+             m.forward_batch([SequenceInput(ids[:10], c2, all_logits=True)])[0]]  # short prompt
+        ver = m.forward_batch([SequenceInput([3, 4, 5], c1, last_logits=3, serial_tail=3)])[0]
+        r += [ver[i] for i in range(3)]
+        outs.append(r)
+        if m is on:
+            assert all(causal == (start == 0 and rows == 40) for rows, start, causal in used)
+            assert sum(causal for *_x, causal in used) == qwen_pack.arch.num_layers
+        else:
+            assert not any(causal for *_x, causal in used)
+    assert all(torch.equal(a, b) for a, b in zip(outs[0], outs[1], strict=True))
+
+
+def test_failed_causal_check_keeps_the_mask(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch,
+                                            caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch.setattr(model_mod, "_causal_verdicts", {})
+    monkeypatch.setattr(model_mod, "causal_self_check", lambda *a, **k: False)
+    with caplog.at_level("WARNING", logger="pgw.engine.model"):
+        m = TransformerModel(qwen_pack, PlainBackend(qwen_pack, DEFAULT_RING))
+    assert not m._use_causal()
+    assert any("is_causal SDPA is not bit-identical" in r.getMessage() for r in caplog.records)
+    used = _causal_spy(monkeypatch)
+    m.forward_batch([SequenceInput(list(range(1, 41)), m.new_cache(64))])
+    assert used and not any(c for *_x, c in used)
+
+
+def test_causal_check_failure_modes(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raises(*a: object, **k: object) -> torch.Tensor:
+        raise RuntimeError("no kernel")
+
+    monkeypatch.setattr(model_mod.F, "scaled_dot_product_attention", raises)
+    assert not model_mod.causal_self_check(4, 2, 16, torch.float32, "cpu", 0.25, False, lengths=(16,))
