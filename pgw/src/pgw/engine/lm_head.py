@@ -94,7 +94,13 @@ def lm_head_logits(h: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
 
     Row ``i`` of the result only depends on row ``i`` of ``h`` (bit for bit), so rows of different
     sequences and of a speculative verify pass can share one pass over ``w``.
+
+    A CPU head with rows on another device (a GPU model keeps its head on the CPU for the native
+    kernel) computes on the CPU and returns CPU logits: the same bits as the per-chunk reference on
+    the GPU (element-wise float32 products and sums are correctly rounded on both).
     """
+    if w.device.type == "cpu" and h.device.type != "cpu":
+        h = h.detach().to("cpu")
     if native_lm_head() and h.device.type == "cpu" and w.device.type == "cpu" and h.dtype == torch.float32:
         hn = h.detach().contiguous().numpy()
         if w.dtype == torch.float32:
