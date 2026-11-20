@@ -351,3 +351,129 @@ def test_input_errors() -> None:
     b = native_finish(replace(cs, wr=cs.wr.view(np.uint64), x_hat=cs.x_hat.view(np.uint64)))  # type: ignore[union-attr]
     assert a[1:] == b[1:] == (0, 0)
     np.testing.assert_array_equal(a[0].view(np.int32), b[0].view(np.int32))
+
+
+# ---- finish_group: several chunks (sessions) of one linear sharing check vectors -----------------
+group_only = pytest.mark.skipif(not native.native_available("finish_group"), reason="pgw_fast.finish_group not built")
+
+
+def make_group(rng: np.random.Generator, k: int, rows: list[int], m: int, n: int, c: int, *, bias: bool = True
+               ) -> list[Case]:
+    """Chunks of one linear (same sparse W8, u, uw, scale, bias), each with its own x_hat / W r."""
+    base = make_case(rng, k, sum(rows), m, n, c, bias=bias)
+    ring = RINGS[k]
+    y = unpack_ring_u64(base.y_hat, (sum(rows), m), ring)
+    parts, r0 = [], 0
+    for r in rows:
+        sl = slice(r0, r0 + r)
+        parts.append(replace(
+            base, y_hat=pack_ring(y[sl].view(np.int64), ring), wr=base.wr[sl].copy(),
+            x_hat=None if base.x_hat is None else base.x_hat[sl].copy(), sx=base.sx[sl].copy(),
+        ))
+        r0 += r
+    return parts
+
+
+def _narrow(a: np.ndarray | None, k: int) -> np.ndarray | None:
+    return None if a is None or k > 32 else a.astype(np.uint32)
+
+
+def group_finish(parts: list[Case], *, x_as: str = "array", narrow: bool = False, wipe: bool = False,
+                 threads: int = 0) -> tuple[np.ndarray | None, int, int]:
+    p0 = parts[0]
+    k = p0.ring.k
+    items = []
+    for cs in parts:
+        x: object
+        if cs.x_hat is None:
+            x = None
+        elif x_as == "bytes":
+            x = pack_ring(cs.x_hat, cs.ring)
+        else:
+            x = cs.x_hat
+        wr = cs.wr.astype(np.uint32) if narrow and k <= 32 else cs.wr
+        items.append((cs.y_hat, wr if wipe else wr.copy(), x, cs.sx))
+    u = _narrow(p0.u, k) if narrow else p0.u
+    uw = _narrow(p0.uw, k) if narrow else p0.uw
+    return native.fast.finish_group(items, u, uw, p0.scale, p0.bias, k, p0.bound, wipe, threads)
+
+
+@group_only
+@pytest.mark.parametrize("k", [32, 40, 48])
+def test_group_matches_per_chunk(k: int) -> None:
+    rng = np.random.default_rng(4000 + k)
+    for m, n in [(130, 70), (2051, 9), (37888, 3584)]:
+        for c in (0, 3, 7):
+            parts = make_group(rng, k, [1, 3, 1, 2], m, n, c, bias=bool(c % 2))
+            want = [native_finish(p) for p in parts]
+            assert all(st == 0 for _, st, _ in want)
+            ref = np.concatenate([o for o, _, _ in want])
+            for x_as in ("array", "bytes"):
+                for narrow in (False, True):
+                    for threads in (0, 1, 3):
+                        out, st, bad = group_finish(parts, x_as=x_as, narrow=narrow, threads=threads)
+                        assert (st, bad) == (0, 0) and out is not None
+                        np.testing.assert_array_equal(out.view(np.int32), ref.view(np.int32))
+            # one part alone is exactly finish_chunk
+            out, st, _ = group_finish(parts[1:2], x_as="bytes", narrow=True)
+            assert st == 0 and out is not None and want[1][0] is not None
+            np.testing.assert_array_equal(out.view(np.int32), want[1][0].view(np.int32))
+
+
+@group_only
+@pytest.mark.parametrize("k", [32, 48])
+def test_group_wipes_wr_and_verdicts(k: int) -> None:
+    rng = np.random.default_rng(77 + k)
+    parts = make_group(rng, k, [2, 1, 3], 300, 40, 3)
+    wrs = [p.wr.copy() for p in parts]
+    out, st, _ = group_finish(parts, wipe=True)
+    assert st == 0 and out is not None
+    assert all(not p.wr.any() for p in parts)  # zeroed in place
+    # Tamper with the second part only: Freivalds fails, its row is counted, every W r is still wiped.
+    ring = RINGS[k]
+    parts = [replace(p, wr=w.copy(), bound=2**62) for p, w in zip(parts, wrs, strict=True)]
+    y = unpack_ring_u64(parts[1].y_hat, (1, 300), ring)
+    y[0, 7] = (y[0, 7] + np.uint64(1)) & np.uint64(ring.mask)
+    parts[1] = replace(parts[1], y_hat=pack_ring(y.view(np.int64), ring))
+    out, st, bad = group_finish(parts, wipe=True)
+    assert out is None and (st, bad) == (1, 1)
+    assert all(not p.wr.any() for p in parts)
+    # All-zero u: status 3, W r wiped as well.
+    parts = [replace(p, wr=w.copy(), u=np.zeros_like(p.u)) for p, w in zip(parts, wrs, strict=True)]
+    out, st, _ = group_finish(parts, wipe=True)
+    assert out is None and st == 3 and all(not p.wr.any() for p in parts)
+    # Range failure (no checks).
+    parts = [replace(p, wr=w.copy(), u=None, uw=None, x_hat=None, bound=0) for p, w in zip(parts, wrs, strict=True)]
+    out, st, _ = group_finish(parts, wipe=True)
+    assert out is None and st == 2 and all(not p.wr.any() for p in parts)
+
+
+@group_only
+def test_group_input_errors() -> None:
+    rng = np.random.default_rng(5)
+    parts = make_group(rng, 32, [1, 2], 10, 4, 2)
+    p0 = parts[0]
+    assert p0.u is not None and p0.uw is not None
+    fin = native.fast.finish_group
+    good = [(p.y_hat, p.wr.copy(), p.x_hat, p.sx) for p in parts]
+    with pytest.raises(ValueError, match="part 1"):
+        fin([good[0], (good[1][0][:-1], *good[1][1:])], p0.u, p0.uw, p0.scale, p0.bias, 32, p0.bound)
+    with pytest.raises(ValueError, match="x_hat is required"):
+        fin([(good[0][0], good[0][1], None, good[0][3])], p0.u, p0.uw, p0.scale, p0.bias, 32, p0.bound)
+    with pytest.raises(ValueError):
+        fin(good, p0.u, None, p0.scale, p0.bias, 32, p0.bound)
+    with pytest.raises(ValueError):  # uint32 needs K <= 32
+        fin(good, p0.u.astype(np.uint32), p0.uw.astype(np.uint32), p0.scale, p0.bias, 40, p0.bound)
+    ro = p0.wr.copy()
+    ro.flags.writeable = False
+    with pytest.raises(ValueError, match="writable"):
+        fin([(p0.y_hat, ro, p0.x_hat, p0.sx)], p0.u, p0.uw, p0.scale, p0.bias, 32, p0.bound, True)
+    out, st, _ = fin([(p0.y_hat, ro, p0.x_hat, p0.sx)], p0.u, p0.uw, p0.scale, p0.bias, 32, p0.bound, False)
+    assert st == 0 and out is not None and ro.any()  # read-only W r is fine without wiping
+    # Errors raised before the kernel leave W r untouched (the caller wipes it).
+    w = p0.wr.copy()
+    with pytest.raises(ValueError):
+        fin([(p0.y_hat, w, p0.x_hat, p0.sx[:0])], p0.u, p0.uw, p0.scale, p0.bias, 32, p0.bound)
+    assert np.array_equal(w, p0.wr)
+    out, st, _ = fin([], None, None, p0.scale, p0.bias, 32, p0.bound)
+    assert st == 0 and out is not None and out.shape == (0, 10)

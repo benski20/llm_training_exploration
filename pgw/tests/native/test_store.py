@@ -140,3 +140,31 @@ def test_unpack_rows_errors() -> None:
         fast.unpack_rows(memoryview(bytes(700))[::2], 0, 1, 7, 40)
     with pytest.raises(TypeError):
         fast.unpack_rows("not bytes", 0, 1, 7, 40)
+
+
+@pytest.mark.skipif(not native.native_available("unpack_rows_u32"), reason="pgw_fast.unpack_rows_u32 not built")
+@pytest.mark.parametrize("k", (8, 16, 24, 32))
+def test_unpack_rows_u32_matches(k: int) -> None:
+    fast = native.fast
+    nb = k // 8
+    rng = np.random.default_rng(100 + k)
+    for cols in (1, 7, 3584):
+        data = rng.integers(0, 256, size=20 * cols * nb, dtype=np.uint8).tobytes()
+        for off, rows in ((0, 1), (3, 17), (19, 1), (20, 0)):
+            got = fast.unpack_rows_u32(bytearray(data), off, rows, cols, k)
+            assert got.dtype == np.uint32 and got.flags.c_contiguous and got.shape == (rows, cols)
+            np.testing.assert_array_equal(got.astype(np.int64), fast.unpack_rows(data, off, rows, cols, k))
+    with pytest.raises(ValueError):
+        fast.unpack_rows_u32(bytearray(8 * 5), 0, 1, 1, 40)
+    with pytest.raises(ValueError):
+        fast.unpack_rows_u32(bytearray(4 * 5), 5, 1, 1, 32)
+
+
+def test_mask_rows_with_stream_key_matches_python() -> None:
+    key = SeedExpander(SEED).stream_key("r", "1.o")
+    for cols, start, rows in ((7, 3, 2), (18944, 11, 1), (3584, 0, 40)):
+        want = _ref(SEED, ["r", "1.o"], cols, 32, start, rows)
+        _check(native.fast.mask_rows_with_key(bytearray(key), cols, 32, start, rows), want)
+        np.testing.assert_array_equal(
+            SeedExpander.ring_uniform_rows_with_key(bytearray(key), cols, 32, start, rows).numpy(), want
+        )

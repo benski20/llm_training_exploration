@@ -139,6 +139,13 @@ class TransformerModel:
             self.lm_head = load("lm_head", dtype=torch.float32, device=self.device)
         #: Optional replacement for ``h @ lm_head^T`` (draft models only: e.g. an int8 product).
         self.lm_head_fn: Callable[[torch.Tensor], torch.Tensor] | None = None
+        #: Opt-in: one LM-head product for the last positions of all sequences of a batched step
+        #: (the float32 head weights are read once per step instead of once per sequence). The
+        #: logits then differ from the per-sequence product in the last float32 bits (summation
+        #: order of a multi-row GEMM), so a sequence's logprobs depend on the batch it ran in; the
+        #: distribution, and hence quality, is the same. Off by default: outputs are bit-identical
+        #: across batch sizes (and to the plaintext reference run alone).
+        self.batch_lm_head = False
         layers = range(a.num_layers)
         self.input_norms = [load(f"layers.{i}.input_norm", dtype=dtype, device=self.device) for i in layers]
         self.post_norms = [load(f"layers.{i}.post_attn_norm", dtype=dtype, device=self.device) for i in layers]
@@ -149,6 +156,11 @@ class TransformerModel:
         #: Single worker thread for the plaintext parts of async forward passes (see run_plain).
         self._plain_pool: ThreadPoolExecutor | None = None
         self._plain_lock = threading.Lock()
+        #: run_plain calls submitted and not yet completed (as seen from the event loop).
+        self._plain_pending = 0
+        # LinearId objects per layer (hot path: four per layer per forward)
+        self._lids = [tuple(LinearId(i, k) for k in (LinearKind.QKV, LinearKind.O, LinearKind.GATE_UP,
+                                                       LinearKind.DOWN)) for i in range(a.num_layers)]
         log.info(
             "engine model ready: arch=%s layers=%d hidden=%d heads=%d/%d vocab=%d backend=%s",
             a.arch, a.num_layers, a.hidden_size, a.num_heads, a.num_kv_heads, a.vocab_size, type(backend).__name__,
@@ -225,8 +237,9 @@ class TransformerModel:
         nh, kvh, hd = self.num_heads, self.num_kv_heads, self.head_dim
         nq, nk, _ = self.split_qkv
         for layer in range(self.num_layers):
+            lid_qkv, lid_o, lid_gu, lid_down = self._lids[layer]
             normed = [rms_norm(h, self.input_norms[layer], self.eps) for h in hs]
-            lid = LinearId(layer, LinearKind.QKV)
+            lid = lid_qkv
             qkv = yield [LinearCall(lid, x, sess) for x, sess in zip(normed, sessions, strict=True)]
             attn_out = []
             for si, y_raw in enumerate(qkv):
@@ -248,21 +261,33 @@ class TransformerModel:
                     for j in range(head, rows):
                         parts.append(self._attention(q[j : j + 1], k_all[: st0 + j + 1], v_all[: st0 + j + 1], st0 + j))
                     attn_out.append(torch.cat(parts, dim=0))
-            lid = LinearId(layer, LinearKind.O)
+            lid = lid_o
             o = yield [LinearCall(lid, x, sess) for x, sess in zip(attn_out, sessions, strict=True)]
             hs = [h + y.to(self.dtype) for h, y in zip(hs, o, strict=True)]
             normed = [rms_norm(h, self.post_norms[layer], self.eps) for h in hs]
-            lid = LinearId(layer, LinearKind.GATE_UP)
+            lid = lid_gu
             gu = yield [LinearCall(lid, x, sess) for x, sess in zip(normed, sessions, strict=True)]
             inter = self.split_gate_up[0]
             acts = [F.silu(y[:, :inter].to(self.dtype)) * y[:, inter:].to(self.dtype) for y in gu]
-            lid = LinearId(layer, LinearKind.DOWN)
+            lid = lid_down
             down = yield [LinearCall(lid, x, sess) for x, sess in zip(acts, sessions, strict=True)]
             hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
         for t, c in zip(ids, caches, strict=True):
             c.advance(t.numel())
         out: list[Any] = []
-        for s, h in zip(seqs, hs, strict=True):
+        batched: dict[int, torch.Tensor] = {}
+        if self.batch_lm_head and self.lm_head_fn is None:
+            idx = [i for i, s in enumerate(seqs) if s.last_logits <= 0 and not s.all_logits]
+            if len(idx) > 1:
+                # norms per row (as unbatched); only the product is shared
+                hn = torch.cat([rms_norm(hs[i][-1:], self.final_norm, self.eps).to(torch.float32) for i in idx])
+                rows = hn @ self.lm_head.t()
+                batched = {i: rows[j] for j, i in enumerate(idx)}
+        for si, (s, h) in enumerate(zip(seqs, hs, strict=True)):
+            hit = batched.get(si)
+            if hit is not None:
+                out.append(hit)
+                continue
             if s.last_logits > 0:
                 out.append(RowLogits(h[-s.last_logits :], self.final_norm, self.eps, self.lm_head))
                 continue
@@ -315,6 +340,8 @@ class TransformerModel:
         """
         loop = asyncio.get_running_loop()
         fut = loop.run_in_executor(self._plain_executor(), functools.partial(fn, *args))
+        self._plain_pending += 1
+        fut.add_done_callback(self._plain_done)
         try:
             return await asyncio.shield(fut)
         except asyncio.CancelledError:
@@ -325,6 +352,9 @@ class TransformerModel:
                     if fut.done() and not fut.cancelled():
                         fut.exception()  # mark retrieved
             raise
+
+    def _plain_done(self, _fut: Any) -> None:
+        self._plain_pending -= 1
 
     def close(self) -> None:
         """Stop the plaintext worker thread (idempotent; it is recreated on next use)."""
@@ -351,7 +381,10 @@ class TransformerModel:
         backend = self.backend
         if getattr(backend, "split_hop", False):
             try:
-                return await self._aforward_split(gen, backend)
+                new_rows = sum(len(s.input_ids) for s in seqs)
+                if not self._inline_safe(seqs, backend):
+                    new_rows = -1  # no inline hops in this pass
+                return await self._aforward_split(gen, backend, new_rows)
             finally:
                 gen.close()
         try:
@@ -369,7 +402,36 @@ class TransformerModel:
     #: while the service computes the second. Rows are independent, so results are identical.
     pipeline_min_rows = 16
 
-    async def _aforward_split(self, gen: _Steps, backend: Any) -> list[torch.Tensor]:
+    #: Round trips of at most this many rows (decode) run their local half (finish the previous
+    #: calls, the plaintext step, prepare the next calls) directly on the event loop when the
+    #: plaintext thread is idle, instead of handing it to that thread: two thread switches less per
+    #: round trip. The step that computes the LM head always runs on the thread. 0 disables.
+    inline_max_rows = 8
+
+    def _inline_safe(self, seqs: Sequence[SequenceInput], backend: Any) -> bool:
+        """True when no mask operation of this pass can block for long, so its small hops may run on
+        the event loop: every reservation already served a pass (its current extent's check vectors
+        and keys are cached) and has the rows of this pass in its current extent (no window extension,
+        which is a durable store transaction, and no first use of another segment)."""
+        if not self._lids:
+            return False
+        first = self._lids[0][0]
+        for s in seqs:
+            res = s.session if s.session is not None else getattr(backend, "mask_source", None)
+            if res is None:
+                continue
+            until = getattr(res, "rows_until_boundary", None)
+            taken = getattr(res, "taken", None)
+            if until is None or taken is None:
+                return False
+            try:
+                if int(taken(first)) <= 0 or int(until(first)) < len(s.input_ids):
+                    return False
+            except Exception:  # any doubt: use the worker thread
+                return False
+        return True
+
+    async def _aforward_split(self, gen: _Steps, backend: Any, new_rows: int = 1 << 30) -> list[torch.Tensor]:
         """One plaintext-thread hop per round trip: finish(previous) + model step + prepare(next).
 
         The plaintext segment between two linears only needs the previous results, so verifying and
@@ -405,8 +467,14 @@ class TransformerModel:
                 return False, ("split", out)
             return False, prepare(out)
 
+        inline_rows = int(self.inline_max_rows) if new_rows >= 0 else 0
+        last_rt = 4 * self.num_layers  # the hop after this many round trips runs the LM head
+        rt = 0
         try:
-            finished, out = await self.run_plain(hop, None, None, 0.0, None)
+            if inline_rows and new_rows <= inline_rows and last_rt > 0 and self._plain_pending == 0:
+                finished, out = hop(None, None, 0.0, None)  # embedding + first norm + mask: small
+            else:
+                finished, out = await self.run_plain(hop, None, None, 0.0, None)
             while not finished:
                 if isinstance(out, tuple):  # pipelined halves
                     calls = out[1]
@@ -430,11 +498,17 @@ class TransformerModel:
                     except BaseException:
                         tb.cancel()
                         raise
+                    rt += 1
                     finished, out = await self.run_plain(hop, pb, rb, sb, ya)
                     continue
                 prep = out
                 response, remote_s = await backend.send_prepared(prep)
-                finished, out = await self.run_plain(hop, prep, response, remote_s, None)
+                rt += 1
+                if (inline_rows and rt < last_rt and self._plain_pending == 0
+                        and rows(getattr(prep, "calls", ())) <= inline_rows):
+                    finished, out = hop(prep, response, remote_s, None)  # small: no thread hand-off
+                else:
+                    finished, out = await self.run_plain(hop, prep, response, remote_s, None)
             return out  # type: ignore[no-any-return]
         finally:
             for prep in owned:

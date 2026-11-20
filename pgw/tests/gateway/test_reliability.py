@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from pgw.core import DEFAULT_RING, MaskExhaustedError, ServiceUnavailableError
+from pgw.core import DEFAULT_RING, MaskExhaustedError, MaskReuseError, ServiceUnavailableError
 from pgw.gateway import ApiKeyStore, create_app
 from pgw.gateway.auth import QuotaTracker
 from pgw.gateway.masks import WindowedReservation
@@ -288,3 +288,28 @@ async def test_streaming_still_works_with_windows(tiny_pack_dir: Path, tmp_path:
         ev = parse_sse(r.text)
         assert ev[-1] == "[DONE]" and ev[-2]["choices"][0]["finish_reason"] == "length"
         assert (await c.get("/admin/status", headers=ADMIN)).status_code == 200
+
+
+def test_windowed_take_checked_follows_parts() -> None:
+    made: list[_FakeRes] = []
+
+    def reserve(n: int) -> _FakeRes:
+        made.append(_FakeRes(n))
+        return made[-1]
+
+    first = _FakeRes(3)
+    w = WindowedReservation(first, reserve, cap=20, window=4)
+    rows, _, _, chk = w.take_checked("x", 5, False)
+    assert rows == 3 and chk is None and first.cur == 3  # never crosses a part
+    with pytest.raises(MaskExhaustedError):
+        w.take_checked("x", 1, False)  # nothing reserved beyond the first part yet
+    w.ensure("x", 2)
+    rows, *_ = w.take_checked("x", 5, False)
+    assert rows == 4 and made[0].cur == 4
+    for _ in range(5):  # many extensions: the current part is found without rescanning old ones
+        w.ensure("x", 1)
+        assert w.take_checked("x", 1, False)[0] == 1
+    assert w.taken("x") == 12 and w.remaining("x") == 8
+    w.close()
+    with pytest.raises(MaskReuseError):
+        w.take_checked("x", 1, False)

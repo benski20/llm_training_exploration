@@ -129,6 +129,20 @@ class SeedExpander:
 
         Uses ChaCha20 block-counter seeking, so regenerating a mask slice costs only its own size.
         """
+        return self.ring_uniform_rows_with_key(self._key(labels), cols, k, row_start, row_count)
+
+    def stream_key(self, *labels: Label) -> bytes:
+        """The 32-byte ChaCha20 key of the stream ``labels`` (as secret as the seed for that stream).
+
+        Lets a caller that reads many slices of one stream derive the key once
+        (:meth:`ring_uniform_rows_with_key`)."""
+        return self._key(labels)
+
+    @staticmethod
+    def ring_uniform_rows_with_key(
+        key: bytes | bytearray, cols: int, k: int, row_start: int, row_count: int
+    ) -> torch.Tensor:
+        """:meth:`ring_uniform_rows` of the stream whose key is ``key`` (:meth:`stream_key`)."""
         if cols <= 0 or row_start < 0 or row_count < 0:
             raise ConfigError("cols must be > 0 and row_start/row_count >= 0")
         offset = 8 * cols * row_start
@@ -137,7 +151,7 @@ class SeedExpander:
         if block >= 1 << 32:
             raise ConfigError("stream offset beyond the 2^32-block ChaCha20 counter range")
         nonce = block.to_bytes(4, "little") + bytes(12)
-        enc = Cipher(algorithms.ChaCha20(self._key(labels), nonce), mode=None).encryptor()
+        enc = Cipher(algorithms.ChaCha20(key, nonce), mode=None).encryptor()
         raw = np.frombuffer(enc.update(bytes(skip + length))[skip:], dtype="<u8")
         vals = (raw & np.uint64((1 << k) - 1)).astype(np.int64)
         return torch.from_numpy(vals.reshape(row_count, cols))

@@ -21,6 +21,7 @@ import secrets
 import threading
 import time
 import uuid
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -104,6 +105,20 @@ class BackendStats:
         with self._lock:
             for k, v in kw.items():
                 setattr(self, k, getattr(self, k) + v)
+
+    def add_many(self, calls: int, rows: int, round_trips: int, bytes_up: int, bytes_down: int,
+                 checked: int, skipped: int, remote_s: float, local_s: float) -> None:
+        """Per-round-trip update of the masked backend (one lock, no keyword dispatch)."""
+        with self._lock:
+            self.calls += calls
+            self.rows += rows
+            self.round_trips += round_trips
+            self.bytes_up += bytes_up
+            self.bytes_down += bytes_down
+            self.freivalds_checked += checked
+            self.freivalds_skipped += skipped
+            self.remote_seconds += remote_s
+            self.local_seconds += local_s
 
     def snapshot(self) -> dict[str, float]:
         """Plain dict copy."""
@@ -521,11 +536,13 @@ class _Chunk:
     row0: int
     rows: int
     lid: LinearId
-    x_hat: torch.Tensor
+    x_hat: torch.Tensor | None  # None when only the packed payload is kept (native lean path)
     wr: torch.Tensor
-    u: np.ndarray | None  # uint64 (c, m) read-only view, or None when this chunk is not checked
-    uw: np.ndarray | None  # uint64 (c, n)
-    payload: bytes | None = None  # packed x_hat (K=32 fast path)
+    u: np.ndarray | None  # uint64/uint32 (c, m) read-only view, or None when this chunk is not checked
+    uw: np.ndarray | None  # (c, n)
+    payload: bytes | None = None  # packed x_hat
+    token: Any = None  # names the check vectors (equal tokens: identical u/uw); None = unknown
+    wr_wiped: bool = False
 
 
 def _wipe(t: torch.Tensor) -> None:
@@ -537,11 +554,17 @@ def _wipe(t: torch.Tensor) -> None:
         t.zero_()
 
 
+def _wr_int64(wr: torch.Tensor) -> np.ndarray:
+    """``W r`` as an int64 array: the tensor's own buffer, or a copy of a uint32 one (zero it after use)."""
+    a = wr.numpy()
+    return a.astype(np.int64) if a.dtype == np.uint32 else a
+
+
 @dataclass
 class _Prepared:
     calls: Sequence[LinearCall]
     chunks: list[_Chunk]
-    sx: list[torch.Tensor]
+    sx: list[np.ndarray]  # float64 (T,) per call
     metas: list[_MaskedMeta]
     request: Any  # ComputeRequest, or None when every call has zero rows
     t_prepare: float
@@ -549,7 +572,9 @@ class _Prepared:
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
         for ch in self.chunks:
-            _wipe(ch.wr)
+            if not ch.wr_wiped:
+                _wipe(ch.wr)
+                ch.wr_wiped = True
 
 
 class MaskedBackend(LinearBackend):
@@ -630,6 +655,13 @@ class MaskedBackend(LinearBackend):
             raise ConfigError("min_soundness_bits must be >= 0")
         self.min_soundness_bits = float(min_soundness_bits)
         self._soundness_memo: dict[tuple[int, int], float] = {}
+        #: Check-vector tokens (segment, linear) already found sound enough.
+        self._sound_ok: set[Any] = set()
+        #: Reservations whose ring and fingerprint were validated (weak: never keeps one alive).
+        self._res_ok: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
+        self._native_prepare = native_available("quantize_mask_pack")
+        self._native_finish = native_available("finish_chunk")
+        self._native_group = native_available("finish_group")
         self.stats = BackendStats()
 
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
@@ -656,7 +688,14 @@ class MaskedBackend(LinearBackend):
     # ---- helpers -------------------------------------------------------------------------------
     def _reservation(self, call: LinearCall) -> Any:
         res = call.session if call.session is not None else self.mask_source
-        if res is None or not hasattr(res, "take"):
+        if res is None:
+            raise ConfigError(f"{call.id}: masked call without a mask reservation (session)")
+        try:
+            if self._res_ok.get(id(res)) is res:  # validated before (ring and fingerprint never change)
+                return res
+        except TypeError:  # pragma: no cover - defensive
+            pass
+        if not hasattr(res, "take"):
             raise ConfigError(f"{call.id}: masked call without a mask reservation (session)")
         res_ring = getattr(res, "ring", None)
         if res_ring is not None:
@@ -669,6 +708,8 @@ class MaskedBackend(LinearBackend):
                 "mask reservation belongs to a different model fingerprint",
                 details={"reservation": res_fp[:12], "backend": self.fingerprint[:12]},
             )
+        with contextlib.suppress(TypeError):  # not weak-referenceable: validated on every call
+            self._res_ok[id(res)] = res
         return res
 
     def _checks_u64(self, res: Any, lid: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -679,9 +720,18 @@ class MaskedBackend(LinearBackend):
         u, uw = res.checks(lid)
         return checks_to_u64(u, uw, self.ring)
 
-    def _check_soundness(self, lid: Any, n: int, u: Any) -> None:
+    def _current_checks(self, res: Any, lid: Any) -> tuple[Any, np.ndarray, np.ndarray]:
+        """``(token, u, uw)`` of the current extent; ``token`` names the vectors (``None``: unknown)."""
+        fn = getattr(res, "checks_compact", None)
+        if fn is not None:
+            return fn(lid)  # type: ignore[no-any-return]
+        return (None, *self._checks_u64(res, lid))
+
+    def _check_soundness(self, lid: Any, n: int, u: Any, token: Any = None) -> None:
         """Raise if the current extent's check vectors give less than ``min_soundness_bits``."""
         if self.min_soundness_bits <= 0:
+            return
+        if token is not None and token in self._sound_ok:
             return
         checks = 0 if u is None else int(u.shape[0])
         bits = self._soundness_bits(n, checks)
@@ -692,6 +742,10 @@ class MaskedBackend(LinearBackend):
                 "(regenerate masks with more checks)",
                 details={"linear": str(lid), "checks": checks, "min_soundness_bits": self.min_soundness_bits},
             )
+        if token is not None:
+            if len(self._sound_ok) > 65536:  # bounded: tokens are (segment, linear) pairs
+                self._sound_ok.clear()
+            self._sound_ok.add(token)
 
     def _soundness_bits(self, n: int, checks: int) -> float:
         key = (n, checks)
@@ -717,39 +771,41 @@ class MaskedBackend(LinearBackend):
         """
         reservations = [self._reservation(c) for c in calls]
         metas: list[_MaskedMeta] = []
-        for c in calls:
-            meta: _MaskedMeta = self._meta.get(c.id)
+        mget = self._meta.get
+        # (id(reservation), linear key) -> [reservation, linear id, in_features, rows needed]
+        need: dict[tuple[int, str], list[Any]] = {}
+        for c, res in zip(calls, reservations, strict=True):
+            meta: _MaskedMeta = mget(c.id)
             x = c.x
             if x.ndim != 2 or x.shape[1] != meta.in_features:
                 raise ShapeError(f"{c.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
             metas.append(meta)
-        need: dict[tuple[int, str], int] = {}
-        for c, res in zip(calls, reservations, strict=True):
             key = (id(res), c.id.key)
-            need[key] = need.get(key, 0) + int(c.x.shape[0])
+            hit = need.get(key)
+            if hit is None:
+                need[key] = [res, c.id, meta.in_features, int(x.shape[0])]
+            else:
+                hit[3] += int(x.shape[0])
         # Growing reservations (gateway windows) extend here, before any row of the batch is taken.
-        seen: set[tuple[int, str]] = set()
-        for c, res in zip(calls, reservations, strict=True):
-            key = (id(res), c.id.key)
+        for res, lid, _, rows in need.values():
             ensure = getattr(res, "ensure", None)
-            if ensure is not None and key not in seen:
-                seen.add(key)
-                ensure(c.id, need[key])
-        if self.min_soundness_bits > 0:
-            for c, res, meta in zip(calls, reservations, metas, strict=True):
-                if int(res.rows_until_boundary(c.id)) > 0:
-                    self._check_soundness(c.id, meta.in_features, self._checks_u64(res, c.id)[0])
-        for c, res in zip(calls, reservations, strict=True):
-            left = int(res.remaining(c.id))
-            if left < need[(id(res), c.id.key)]:
+            if ensure is not None:
+                ensure(lid, rows)
+        for res, lid, _, rows in need.values():
+            left = int(res.remaining(lid))
+            if left < rows:
                 raise MaskExhaustedError(
                     "session mask reservation exhausted",
-                    details={"linear": c.id.key, "needed": need[(id(res), c.id.key)], "remaining": left},
+                    details={"linear": lid.key, "needed": rows, "remaining": left},
                 )
+        if self.min_soundness_bits > 0:
+            for res, lid, n, _ in need.values():
+                token, u, _uw = self._current_checks(res, lid)
+                self._check_soundness(lid, n, u, token)
         return reservations, metas
 
     def _native_prepare_ok(self, calls: Sequence[LinearCall]) -> bool:
-        if not native_available("quantize_mask_pack") or self.ring.k % 8 or self.ring.k > 56:
+        if not self._native_prepare or self.ring.k % 8 or self.ring.k > 56:
             return False
         if self.ring.cap:  # capped rings need each linear's weight-row norm
             return all(self._meta.get(c.id).wnorm is not None for c in calls)
@@ -759,6 +815,20 @@ class MaskedBackend(LinearBackend):
         if self._native_prepare_ok(calls):
             return self._prepare_native(calls)
         return self._prepare_python(calls)
+
+    def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
+        """``(rows, r, W r, (token, u, uw) | None)``: the next rows of one extent (at most ``max_rows``)."""
+        fn = getattr(res, "take_checked", None)
+        if fn is not None:
+            return fn(lid, max_rows, want_checks)  # type: ignore[no-any-return]
+        boundary = int(res.rows_until_boundary(lid))
+        if boundary <= 0:
+            raise MaskExhaustedError("mask reservation has no rows left", details={"linear": lid.key})
+        rows = min(max_rows, boundary)
+        # vectors of the extent the next rows come from: read before take()
+        chk = (None, *self._checks_u64(res, lid)) if want_checks else None
+        r, wr = res.take(lid, rows)
+        return rows, r, wr, chk
 
     def _prepare_native(self, calls: Sequence[LinearCall]) -> _Prepared:
         """:meth:`_prepare_python` with quantize + mask + pack fused in ``pgw_fast`` (bit-identical)."""
@@ -770,49 +840,61 @@ class MaskedBackend(LinearBackend):
         # consume mask rows of earlier calls, so check every call before taking any row.
         xs: list[np.ndarray] = []
         for call in calls:
-            x = call.x.detach().to("cpu", torch.float32)
-            if x.numel() and not bool(torch.isfinite(x).all()):
+            x = call.x
+            if x.dtype != torch.float32 or x.device.type != "cpu":
+                x = x.to("cpu", torch.float32)
+            xn = x.detach().numpy()
+            if not xn.flags.c_contiguous:
+                xn = np.ascontiguousarray(xn)
+            if xn.size and not np.isfinite(xn).all():
                 raise RingOverflowError("non-finite activation values cannot be quantized")
-            xs.append(np.ascontiguousarray(x.numpy()))
+            xs.append(xn)
         ring = self.ring
-        sx_parts: list[list[torch.Tensor]] = [[] for _ in calls]
+        kbits, abits, cap = ring.k, ring.a, int(ring.cap or 0)
+        noise = self.noise_monitor
+        # x_hat is only materialized where something reads it (the noise monitor or an old kernel);
+        # the Freivalds check reads the request payload (the same values, packed).
+        lean = self._native_group and noise is None
+        qmp = native.fast.quantize_mask_pack
+        want_soundness = self.min_soundness_bits > 0
+        max_item = self.max_rows_per_item
+        sx_parts: list[list[np.ndarray]] = [[] for _ in calls]
         chunks: list[_Chunk] = []
         try:
             for ci, (call, res, meta, xn) in enumerate(zip(calls, reservations, metas, xs, strict=True)):
                 t = int(xn.shape[0])
+                lid = call.id
+                wn = float(meta.wnorm or 0.0)
                 row = 0
                 while row < t:
-                    boundary = int(res.rows_until_boundary(call.id))
-                    if boundary <= 0:
-                        raise MaskExhaustedError("mask reservation has no rows left", details={"linear": call.id.key})
-                    rows = min(t - row, boundary, self.max_rows_per_item)
                     check = self._should_check()
-                    u = uw = None
-                    if check or self.min_soundness_bits > 0:
-                        u, uw = self._checks_u64(res, call.id)
-                        self._check_soundness(call.id, meta.in_features, u)
-                        if not check:
-                            u = uw = None
-                    r, wr = res.take(call.id, rows)
+                    rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness)
+                    token = u = uw = None
                     try:
+                        if chk is not None:
+                            token, u, uw = chk
+                            self._check_soundness(lid, meta.in_features, u, token)
+                            if not check:
+                                token = u = uw = None
                         if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
                             raise ShapeError(
-                                f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
+                                f"{lid}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
                             )
-                        r_np = np.ascontiguousarray(r.numpy())
+                        r_np = r.numpy()
                         try:
-                            payload, xh, sx = native.fast.quantize_mask_pack(
-                                xn[row : row + rows], r_np, ring.k, ring.a, int(ring.cap or 0), float(meta.wnorm or 0.0)
-                            )
+                            if lean:
+                                payload, xh, sx = qmp(xn[row : row + rows], r_np, kbits, abits, cap, wn, False)
+                            else:
+                                payload, xh, sx = qmp(xn[row : row + rows], r_np, kbits, abits, cap, wn)
                         except ValueError as exc:
                             if str(exc).startswith("ring_overflow"):
                                 raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
                             raise ShapeError(str(exc)) from exc
-                        x_hat = torch.from_numpy(xh)
-                        if self.noise_monitor is not None:  # xq = centered(x_hat - r), only for its checks
+                        x_hat = None if xh is None else torch.from_numpy(xh)
+                        if noise is not None and x_hat is not None:  # xq = centered(x_hat - r), for its checks
                             xq = center(x_hat - r.to(torch.int64), ring)
                             try:
-                                self.noise_monitor.guard(x_hat, xq)  # type: ignore[attr-defined]
+                                noise.guard(x_hat, xq)  # type: ignore[attr-defined]
                             finally:
                                 _wipe(xq)
                     except BaseException:
@@ -820,14 +902,14 @@ class MaskedBackend(LinearBackend):
                         raise
                     finally:
                         _wipe(r)  # one-time pad: never keep it around
-                    chunks.append(_Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload))
-                    sx_parts[ci].append(torch.from_numpy(sx))
+                    chunks.append(_Chunk(ci, row, rows, lid, x_hat, wr, u, uw, payload, token))
+                    sx_parts[ci].append(sx)
                     row += rows
         except BaseException:
             for ch in chunks:
                 _wipe(ch.wr)
             raise
-        sxs = [torch.cat(p) if len(p) > 1 else (p[0] if p else torch.zeros(0, dtype=torch.float64))
+        sxs = [np.concatenate(p) if len(p) > 1 else (p[0] if p else np.zeros(0, dtype=np.float64))
                for p in sx_parts]
         request = None
         if chunks:
@@ -848,32 +930,29 @@ class MaskedBackend(LinearBackend):
         # Quantize everything first: a non-finite activation in a later call must not consume
         # mask rows of earlier calls.
         quantized: list[torch.Tensor] = []
-        sxs: list[torch.Tensor] = []
+        sxs: list[np.ndarray] = []
         for call in calls:
             wn = self._meta.get(call.id).wnorm if self.ring.cap else None
             xq, sx = quantize_activations(call.x.detach().to("cpu"), self.ring, wn)
             quantized.append(xq)
-            sxs.append(sx)
+            sxs.append(np.ascontiguousarray(sx.numpy(), dtype=np.float64))
         chunks: list[_Chunk] = []
+        want_soundness = self.min_soundness_bits > 0
         try:
             for ci, (call, res, meta, xq) in enumerate(zip(calls, reservations, metas, quantized, strict=True)):
                 t = int(xq.shape[0])
                 row = 0
                 while row < t:
-                    boundary = int(res.rows_until_boundary(call.id))
-                    if boundary <= 0:
-                        raise MaskExhaustedError("mask reservation has no rows left", details={"linear": call.id.key})
-                    rows = min(t - row, boundary, self.max_rows_per_item)
                     check = self._should_check()
-                    u = uw = None
-                    if check or self.min_soundness_bits > 0:
-                        # vectors of the extent the next rows come from: read before take()
-                        u, uw = self._checks_u64(res, call.id)
-                        self._check_soundness(call.id, meta.in_features, u)
-                        if not check:
-                            u = uw = None
-                    r, wr = res.take(call.id, rows)
+                    rows, r, wr, chk = self._take(res, call.id, min(t - row, self.max_rows_per_item),
+                                                  check or want_soundness)
+                    token = u = uw = None
                     try:
+                        if chk is not None:
+                            token, u, uw = chk
+                            self._check_soundness(call.id, meta.in_features, u, token)
+                            if not check:
+                                token = u = uw = None
                         if tuple(r.shape) != (rows, meta.in_features) or tuple(wr.shape) != (rows, meta.out_features):
                             raise ShapeError(
                                 f"{call.id}: mask shapes {tuple(r.shape)}/{tuple(wr.shape)} do not match the linear"
@@ -889,7 +968,7 @@ class MaskedBackend(LinearBackend):
                         raise
                     finally:
                         _wipe(r)  # one-time pad: never keep it around
-                    chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload)
+                    chunk = _Chunk(ci, row, rows, call.id, x_hat, wr, u, uw, payload, token)
                     chunks.append(chunk)
                     if self.noise_monitor is not None:
                         self.noise_monitor.guard(x_hat, xq[row : row + rows])  # type: ignore[attr-defined]
@@ -904,7 +983,8 @@ class MaskedBackend(LinearBackend):
         request = None
         if chunks:
             items = tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload if ch.payload is not None
-                                      else pack_ring(ch.x_hat, self.ring)) for ch in chunks)
+                                      else pack_ring(ch.x_hat, self.ring))  # type: ignore[arg-type]
+                          for ch in chunks)
             request = ComputeRequest(
                 request_id=uuid.uuid4().hex,
                 fingerprint=self.fingerprint,
@@ -920,7 +1000,7 @@ class MaskedBackend(LinearBackend):
         outs: list[list[torch.Tensor]] = [[] for _ in prep.calls]
         bytes_down = 0
         checked = skipped = 0
-        use_native = native_available("finish_chunk") and self.ring.k % 8 == 0 and self.ring.k <= 56
+        use_native = self._native_finish and self.ring.k % 8 == 0 and self.ring.k <= 56
         try:
             if req is not None:
                 if getattr(response, "request_id", None) != req.request_id:
@@ -933,49 +1013,25 @@ class MaskedBackend(LinearBackend):
             else:
                 results = ()
             for ch, res in zip(prep.chunks, results, strict=True):
-                meta: _MaskedMeta = prep.metas[ch.call_index]
                 if res.linear != ch.lid.key or int(res.rows) != ch.rows:
                     raise ProtocolError(
                         "compute response item does not match the request",
                         details={"expected": ch.lid.key, "got": str(res.linear)},
                     )
                 bytes_down += len(res.y_hat)
-                if use_native:
-                    outs[ch.call_index].append(self._finish_chunk_native(prep, ch, meta, res.y_hat))
-                    if ch.u is not None:
-                        checked += 1
-                    else:
-                        skipped += 1
-                    continue
-                if self._u32:
-                    y_hat = None
-                else:
-                    y_hat = unpack_ring_u64(res.y_hat, (ch.rows, meta.out_features), self.ring)
-                if ch.u is not None and ch.uw is not None:
-                    if y_hat is None:
-                        y_hat = np.frombuffer(res.y_hat, dtype="<u4").reshape(ch.rows, meta.out_features).astype(
-                            np.uint64)
-                    if not ch.u.any():
-                        # The reservation was closed (and its cached vectors wiped) while this call
-                        # was in flight: an all-zero u would make the check vacuous.
-                        raise MaskReuseError("mask reservation closed during a compute call")
-                    ok = freivalds_check_u64(ch.x_hat.numpy().view(np.uint64), y_hat, ch.u, ch.uw, self.ring)
-                    if not bool(ok.all()):
-                        raise IntegrityError(
-                            "compute service result failed the Freivalds check",
-                            details={"linear": ch.lid.key, "bad_rows": int((~ok).sum()), "rows": ch.rows},
-                        )
+                if ch.u is not None:
                     checked += 1
                 else:
                     skipped += 1
-                if self._u32:
-                    yq = torch.from_numpy(unmask_outputs_u32(res.y_hat, ch.wr.numpy(), self.ring, meta.in_features))
-                else:
-                    assert y_hat is not None
-                    yq = torch.from_numpy(unmask_outputs_u64(y_hat, ch.wr.numpy(), self.ring, meta.in_features))
-                _wipe(ch.wr)
-                sx = prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows]
-                outs[ch.call_index].append(dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32))
+            if use_native and self._native_group and all(ch.payload is not None for ch in prep.chunks):
+                self._finish_groups_native(prep, results, outs)
+            else:
+                for ch, res in zip(prep.chunks, results, strict=True):
+                    meta: _MaskedMeta = prep.metas[ch.call_index]
+                    if use_native:
+                        outs[ch.call_index].append(self._finish_chunk_native(prep, ch, meta, res.y_hat))
+                    else:
+                        outs[ch.call_index].append(self._finish_chunk_python(prep, ch, meta, res.y_hat))
         except IntegrityError as exc:
             self.stats.add(integrity_failures=1)
             log.error(
@@ -996,24 +1052,59 @@ class MaskedBackend(LinearBackend):
                 y = parts[0]
             else:
                 y = torch.cat(parts, dim=0) if parts else torch.zeros((0, meta.out_features), dtype=torch.float32)
-            result.append(y.to(call.x.device))
+            dev = call.x.device
+            result.append(y if dev.type == "cpu" else y.to(dev))
         bytes_up = sum(len(it.x_hat) for it in req.items) if req is not None else 0
-        self.stats.add(
-            calls=len(prep.calls),
-            rows=sum(ch.rows for ch in prep.chunks),
-            round_trips=1 if req is not None else 0,
-            bytes_up=bytes_up,
-            bytes_down=bytes_down,
-            freivalds_checked=checked,
-            freivalds_skipped=skipped,
-            remote_seconds=remote_s,
-            local_seconds=prep.t_prepare + time.perf_counter() - t0,
+        self.stats.add_many(
+            len(prep.calls),
+            sum(ch.rows for ch in prep.chunks),
+            1 if req is not None else 0,
+            bytes_up,
+            bytes_down,
+            checked,
+            skipped,
+            remote_s,
+            prep.t_prepare + time.perf_counter() - t0,
         )
         return result
 
-    def _finish_chunk_native(self, prep: _Prepared, ch: _Chunk, meta: _MaskedMeta, y_hat: bytes) -> torch.Tensor:
-        """Freivalds, unmask, range check and dequantize one chunk in ``pgw_fast`` (bit-identical)."""
-        key = ch.lid.key
+    def _finish_chunk_python(self, prep: _Prepared, ch: _Chunk, meta: _MaskedMeta, y_hat_bytes: bytes) -> torch.Tensor:
+        """Reference per-chunk finish (no native extension): Freivalds, unmask, range check, rescale."""
+        if self._u32:
+            y_hat = None
+        else:
+            y_hat = unpack_ring_u64(y_hat_bytes, (ch.rows, meta.out_features), self.ring)
+        if ch.u is not None and ch.uw is not None:
+            if y_hat is None:
+                y_hat = np.frombuffer(y_hat_bytes, dtype="<u4").reshape(ch.rows, meta.out_features).astype(np.uint64)
+            if not ch.u.any():
+                # The reservation was closed (and its cached vectors wiped) while this call
+                # was in flight: an all-zero u would make the check vacuous.
+                raise MaskReuseError("mask reservation closed during a compute call")
+            assert ch.x_hat is not None
+            ok = freivalds_check_u64(ch.x_hat.numpy().view(np.uint64), y_hat, ch.u.astype(np.uint64, copy=False),
+                                     ch.uw.astype(np.uint64, copy=False), self.ring)
+            if not bool(ok.all()):
+                raise IntegrityError(
+                    "compute service result failed the Freivalds check",
+                    details={"linear": ch.lid.key, "bad_rows": int((~ok).sum()), "rows": ch.rows},
+                )
+        wr = _wr_int64(ch.wr)
+        try:
+            if self._u32:
+                yq = torch.from_numpy(unmask_outputs_u32(y_hat_bytes, wr, self.ring, meta.in_features))
+            else:
+                assert y_hat is not None
+                yq = torch.from_numpy(unmask_outputs_u64(y_hat, wr, self.ring, meta.in_features))
+        finally:
+            wr.fill(0)
+        _wipe(ch.wr)
+        ch.wr_wiped = True
+        sx = torch.from_numpy(prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows])
+        return dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
+
+    def _consts(self, lid: LinearId, meta: _MaskedMeta) -> tuple[np.ndarray, np.ndarray | None, int]:
+        key = lid.key
         consts = self._native_consts.get(key)
         if consts is None:
             consts = self._native_consts[key] = (
@@ -1021,32 +1112,107 @@ class MaskedBackend(LinearBackend):
                 None if meta.bias is None else np.ascontiguousarray(meta.bias.numpy(), dtype=np.float32),
                 int(self.ring.output_bound(meta.in_features)),
             )
-        scale, bias, bound = consts
-        sx = np.ascontiguousarray(prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows].numpy(), dtype=np.float64)
-        checked = ch.u is not None and ch.uw is not None
-        try:
-            out, status, bad = native.fast.finish_chunk(
-                y_hat, ch.wr.numpy(), ch.x_hat.numpy() if checked else None, ch.u if checked else None,
-                ch.uw if checked else None, sx, scale, bias, self.ring.k, bound,
-            )
-        except ValueError as exc:
-            raise ProtocolError(f"compute response item is malformed: {exc}") from exc
-        finally:
-            _wipe(ch.wr)
-        if status in (1, 2) and checked and ch.u is not None and not ch.u.any():
-            status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
+        return consts
+
+    def _raise_status(self, status: int, bad: int, lid: LinearId, rows: int, bound: int) -> None:
         if status == 3:
             raise MaskReuseError("mask reservation closed during a compute call")
         if status == 1:
             raise IntegrityError(
                 "compute service result failed the Freivalds check",
-                details={"linear": key, "bad_rows": int(bad), "rows": ch.rows},
+                details={"linear": lid.key, "bad_rows": int(bad), "rows": rows},
             )
         if status == 2:
             raise IntegrityError(
                 "decoded linear output outside the representable range (corrupt or tampered result)",
                 details={"bound": bound, "ring": self.ring.name},
             )
+
+    def _finish_groups_native(self, prep: _Prepared, results: Sequence[Any], outs: list[list[torch.Tensor]]) -> None:
+        """Finish all chunks with ``pgw_fast.finish_group``: chunks of one linear whose rows come from
+        extents with the same check vectors (same segment; typically one chunk per session) are
+        verified, unmasked and rescaled in one pass that reads ``u``/``uW`` once. Every chunk keeps
+        its own ``W r``; nothing of one session's masks is applied to another's rows."""
+        groups: dict[tuple[Any, ...], list[int]] = {}
+        if len(prep.chunks) == 1:  # single-session decode
+            groups[()] = [0]
+        else:
+            for i, ch in enumerate(prep.chunks):
+                if ch.u is None:
+                    gk: tuple[Any, ...] = (ch.lid.key, False)
+                elif ch.token is not None:
+                    gk = (ch.lid.key, True, ch.token)
+                else:
+                    gk = (ch.lid.key, True, i)  # vectors of unknown origin: never shared
+                idxs = groups.get(gk)
+                if idxs is None:
+                    groups[gk] = [i]
+                else:
+                    idxs.append(i)
+        fin = native.fast.finish_group
+        k = self.ring.k
+        for idxs in groups.values():
+            first = prep.chunks[idxs[0]]
+            meta: _MaskedMeta = prep.metas[first.call_index]
+            scale, bias, bound = self._consts(first.lid, meta)
+            checked = first.u is not None and first.uw is not None
+            parts = []
+            in_place: list[int] = []  # chunks whose own W r buffer goes to the kernel (it zeroes them)
+            for i in idxs:
+                ch = prep.chunks[i]
+                sx = prep.sx[ch.call_index]
+                if ch.row0 or ch.rows != sx.shape[0]:
+                    sx = sx[ch.row0 : ch.row0 + ch.rows]
+                wn = ch.wr.numpy()
+                if wn.dtype in (np.int64, np.uint32) and wn.flags.c_contiguous and wn.flags.writeable:
+                    in_place.append(i)
+                else:  # e.g. a strided test double: a copy, zeroed by the kernel; prep.wipe() zeroes ch.wr
+                    wn = np.ascontiguousarray(wn, dtype=np.int64)
+                parts.append((results[i].y_hat, wn, ch.payload if checked else None, sx))
+            try:
+                out, status, bad = fin(parts, first.u if checked else None, first.uw if checked else None,
+                                       scale, bias, k, bound, True)
+            except ValueError as exc:
+                raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+            for i in in_place:  # the kernel zeroed every W r it was given (any returned status)
+                prep.chunks[i].wr_wiped = True
+            if status in (1, 2) and checked and first.u is not None and not first.u.any():
+                status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
+            if status:
+                self._raise_status(status, bad, first.lid, sum(prep.chunks[i].rows for i in idxs), bound)
+            ot = torch.from_numpy(out)
+            if len(idxs) == 1:
+                outs[first.call_index].append(ot)
+                continue
+            off = 0
+            for i in idxs:
+                ch = prep.chunks[i]
+                outs[ch.call_index].append(ot[off : off + ch.rows])
+                off += ch.rows
+
+    def _finish_chunk_native(self, prep: _Prepared, ch: _Chunk, meta: _MaskedMeta, y_hat: bytes) -> torch.Tensor:
+        """Freivalds, unmask, range check and dequantize one chunk in ``pgw_fast`` (bit-identical)."""
+        scale, bias, bound = self._consts(ch.lid, meta)
+        sx = np.ascontiguousarray(prep.sx[ch.call_index][ch.row0 : ch.row0 + ch.rows], dtype=np.float64)
+        u = uw = x_hat = None
+        if ch.u is not None and ch.uw is not None:
+            u, uw = ch.u.astype(np.uint64, copy=False), ch.uw.astype(np.uint64, copy=False)
+            x_hat = ch.x_hat.numpy() if ch.x_hat is not None else None
+        checked = u is not None
+        wr = _wr_int64(ch.wr)
+        try:
+            out, status, bad = native.fast.finish_chunk(
+                y_hat, wr, x_hat, u, uw, sx, scale, bias, self.ring.k, bound,
+            )
+        except ValueError as exc:
+            raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+        finally:
+            wr.fill(0)
+            _wipe(ch.wr)
+            ch.wr_wiped = True
+        if status in (1, 2) and checked and ch.u is not None and not ch.u.any():
+            status = 3  # the reservation was closed (vectors wiped) while the kernel ran: not tampering
+        self._raise_status(status, bad, ch.lid, ch.rows, bound)
         return torch.from_numpy(out)
 
     @staticmethod

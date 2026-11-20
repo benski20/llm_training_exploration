@@ -199,3 +199,30 @@ def test_inputs_not_modified() -> None:
     x0, r0 = x.copy(), r.copy()
     _native(x, r, ring, 3000.0)
     assert np.array_equal(x, x0) and np.array_equal(r, r0)
+
+
+@pytest.mark.skipif(not native.native_available("finish_group"), reason="needs the lean (want_xhat) kernel")
+@pytest.mark.parametrize("ring_name", RINGS)
+def test_payload_only_matches(ring_name: str) -> None:
+    """``want_xhat=False``: the same payload and scales, no x_hat array, the same errors."""
+    ring = RingParams.from_name(ring_name)
+    rng = np.random.default_rng(len(ring_name))
+    for rows, n in ((1, 3584), (5, 896), (3, 7), (0, 7)):
+        for kind in KINDS:
+            x = _activations(rng, rows, n, kind)
+            r = _mask(rng, x.shape, ring)
+            wn = _realistic_wnorm(rng, n)
+            args = (x, r, ring.k, ring.a, ring.cap, float(wn))
+            try:
+                full = native.fast.quantize_mask_pack(*args)
+            except ValueError as exc:
+                with pytest.raises(ValueError, match=str(exc).split(":")[0]):
+                    native.fast.quantize_mask_pack(*args, False)
+                continue
+            payload, xh, sx = native.fast.quantize_mask_pack(*args, False)
+            assert xh is None and payload == full[0]
+            assert np.array_equal(sx.view(np.uint64), full[2].view(np.uint64))
+    bad = np.ones((3, 8), dtype=np.float32)
+    bad[2, 5] = np.inf
+    with pytest.raises(ValueError, match=r"^ring_overflow:"):
+        native.fast.quantize_mask_pack(bad, _mask(rng, bad.shape, ring), ring.k, ring.a, ring.cap, 100.0, False)

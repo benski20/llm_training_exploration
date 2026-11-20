@@ -13,6 +13,13 @@
 //!
 //! Verdict order matches Python: all-zero `u` (status 3), Freivalds (status 1), range (status 2).
 //!
+//! [`finish_group`] runs the same pass over several chunks of one linear whose rows were masked
+//! from extents of the same segment (typically one chunk per concurrent session): the Freivalds
+//! vectors depend only on the segment and the linear, so they are read from memory once for all
+//! rows, while every chunk keeps its own `W r`. It also accepts the vectors and `W r` as 32-bit
+//! words (`K <= 32`, half the memory traffic), `x_hat` as the request's wire bytes, and zeroes each
+//! `W r` in place as soon as it has been used.
+//!
 //! Arithmetic is done in a machine word `W` (u32 for `K <= 32`, u64 above): every quantity only
 //! matters mod `2^K` and `2^K` divides `2^32` / `2^64`, so wrapping arithmetic in `W` followed by a
 //! final reduction is exact. Centering is a sign extension of the low `K` bits.
@@ -28,6 +35,7 @@ use std::sync::OnceLock;
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(finish_chunk, m)?)?;
+    m.add_function(wrap_pyfunction!(finish_group, m)?)?;
     Ok(())
 }
 
@@ -179,6 +187,193 @@ pub struct Checks<'a> {
 /// Result of [`finish`]: `(out, status, bad_rows)`; `out` is `Some` only for [`STATUS_OK`].
 pub type Finished = (Option<Vec<f32>>, u8, usize);
 
+/// Row-major ring elements: 64-bit words, 32-bit words (`K <= 32`), or wire bytes (`K/8` LE each).
+#[derive(Clone, Copy)]
+pub enum Src<'a> {
+    /// Words (only the low `K` bits are used).
+    U64(&'a [u64]),
+    /// 32-bit words (`K <= 32`).
+    U32(&'a [u32]),
+    /// Packed wire bytes, `K/8` little-endian bytes per element.
+    Bytes(&'a [u8]),
+}
+
+impl<'a> Src<'a> {
+    /// Number of elements (`nb` = bytes per packed element).
+    pub fn elems(&self, nb: usize) -> usize {
+        match self {
+            Src::U64(s) => s.len(),
+            Src::U32(s) => s.len(),
+            Src::Bytes(s) => s.len() / nb,
+        }
+    }
+
+    /// Elements `[a, b)` as words into `dst` (`dst.len() == b - a`).
+    #[inline(always)]
+    fn fill<W: Word, const NB: usize>(&self, a: usize, b: usize, dst: &mut [W]) {
+        match *self {
+            Src::U64(s) => {
+                for (d, v) in dst.iter_mut().zip(&s[a..b]) {
+                    *d = W::trunc(*v);
+                }
+            }
+            Src::U32(s) => {
+                for (d, v) in dst.iter_mut().zip(&s[a..b]) {
+                    *d = W::trunc(u64::from(*v));
+                }
+            }
+            Src::Bytes(s) => decode::<W, NB>(&s[a * NB..b * NB], dst),
+        }
+    }
+
+    /// Elements `[a, b)` as words without a copy, when they are stored at the word width.
+    #[inline(always)]
+    fn words<W: Word>(&self, a: usize, b: usize) -> Option<&'a [W]> {
+        let (ptr, ok) = match *self {
+            Src::U32(s) if W::BITS == 32 => (s[a..b].as_ptr().cast::<W>(), true),
+            Src::U64(s) if W::BITS == 64 => (s[a..b].as_ptr().cast::<W>(), true),
+            _ => (std::ptr::null(), false),
+        };
+        if !ok || std::mem::size_of::<W>() * 8 != W::BITS as usize || std::mem::align_of::<W>() > W::BITS as usize / 8 {
+            return None;
+        }
+        // SAFETY: `W` is a plain unsigned word of the same size (u32 / u64; every bit pattern is a
+        // valid value) and no stricter alignment; the range was bounds-checked above.
+        Some(unsafe { std::slice::from_raw_parts(ptr, b - a) })
+    }
+
+    /// True if every element is zero in its low `k` bits.
+    fn all_zero(&self, k: u32) -> bool {
+        let mask = u64::mask(k);
+        match *self {
+            Src::U64(s) => s.iter().all(|&v| v & mask == 0),
+            Src::U32(s) => s.iter().all(|&v| u64::from(v) & mask == 0),
+            Src::Bytes(s) => s.iter().all(|&v| v == 0),
+        }
+    }
+}
+
+/// `W r` of one part, read through a raw pointer so the kernel can also zero it (one-time-pad
+/// derived) right after each block is used, while it is still in cache.
+#[derive(Clone, Copy)]
+pub struct WrBuf {
+    ptr: *mut u8,
+    len: usize,
+    wide: bool,
+    wipe: bool,
+}
+
+// SAFETY: workers read (and, with `wipe`, zero) pairwise disjoint column ranges of each row; the
+// caller keeps the buffer alive and unaliased (no other references) until the kernel returns.
+unsafe impl Send for WrBuf {}
+unsafe impl Sync for WrBuf {}
+
+impl WrBuf {
+    /// A `(rows, m)` buffer of u64 words (`wide`) or u32 words, `len` elements.
+    ///
+    /// # Safety
+    /// `ptr` must point to `len` valid, aligned elements that nothing else reads or writes until
+    /// the kernel using this buffer returns.
+    pub unsafe fn new(ptr: *mut u8, len: usize, wide: bool, wipe: bool) -> Self {
+        WrBuf { ptr, len, wide, wipe }
+    }
+
+    /// Elements `[a, b)` into `dst`, then zero them if `wipe`.
+    #[inline(always)]
+    fn take<W: Word>(&self, a: usize, b: usize, dst: &mut [W]) {
+        debug_assert!(a <= b && b <= self.len);
+        if self.wide {
+            // SAFETY: in bounds (validated shapes), aligned, exclusively owned by this worker's columns.
+            let p = unsafe { self.ptr.cast::<u64>().add(a) };
+            {
+                let s = unsafe { std::slice::from_raw_parts(p, b - a) };
+                for (d, v) in dst.iter_mut().zip(s) {
+                    *d = W::trunc(*v);
+                }
+            }
+            if self.wipe {
+                for i in 0..b - a {
+                    // SAFETY: as above; no reference into the range is alive.
+                    unsafe { std::ptr::write_volatile(p.add(i), 0) };
+                }
+            }
+        } else {
+            let p = unsafe { self.ptr.cast::<u32>().add(a) };
+            {
+                let s = unsafe { std::slice::from_raw_parts(p, b - a) };
+                for (d, v) in dst.iter_mut().zip(s) {
+                    *d = W::trunc(u64::from(*v));
+                }
+            }
+            if self.wipe {
+                for i in 0..b - a {
+                    // SAFETY: as above.
+                    unsafe { std::ptr::write_volatile(p.add(i), 0) };
+                }
+            }
+        }
+    }
+
+    /// Zero the whole buffer (paths that return before the workers run).
+    fn wipe_all(&self) {
+        if !self.wipe {
+            return;
+        }
+        let bytes = self.len * if self.wide { 8 } else { 4 };
+        for i in 0..bytes {
+            // SAFETY: `bytes` bytes starting at `ptr` are valid and unaliased.
+            unsafe { std::ptr::write_volatile(self.ptr.add(i), 0) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// One part of a [`Group`]: consecutive rows of one call (one session's masks).
+#[derive(Clone, Copy)]
+pub struct Part<'a> {
+    /// Wire bytes `(rows, m)`.
+    pub y_hat: &'a [u8],
+    /// `W r` `(rows, m)`.
+    pub wr: WrBuf,
+    /// Masked inputs `(rows, n)` (required when the group has check vectors).
+    pub x_hat: Option<Src<'a>>,
+    /// Per-row activation scale.
+    pub sx: &'a [f64],
+}
+
+/// Freivalds vectors of a group: `u (c, m)` and `uw (c, n)`.
+#[derive(Clone, Copy)]
+pub struct GroupChecks<'a> {
+    /// `(c, m)`.
+    pub u: Src<'a>,
+    /// `(c, n)`.
+    pub uw: Src<'a>,
+    /// Number of check vectors.
+    pub c: usize,
+    /// Input features.
+    pub n: usize,
+}
+
+/// Several parts of the same linear whose rows were masked from extents with the same check
+/// vectors (or that are not checked). Each part keeps its own `W r` (its own one-time pads); only
+/// `u`/`uw`, which depend on the segment and the linear, are shared, so they are read once.
+pub struct Group<'a> {
+    /// Parts in output order.
+    pub parts: Vec<Part<'a>>,
+    /// Shared check vectors, or `None` (no check).
+    pub checks: Option<GroupChecks<'a>>,
+    /// Per-output weight scale `(m,)`.
+    pub scale: &'a [f32],
+    /// Optional bias `(m,)`.
+    pub bias: Option<&'a [f32]>,
+    /// Ring width.
+    pub k: u32,
+    /// Output bound (inclusive).
+    pub bound: u64,
+    /// Output features.
+    pub m: usize,
+}
+
 /// Column block size (elements) for the cache-blocked passes.
 const BLOCK: usize = 2048;
 /// Roughly this many element-operations per worker thread before going parallel.
@@ -229,19 +424,22 @@ fn decode<W: Word, const NB: usize>(src: &[u8], dst: &mut [W]) {
 /// Worker body: output columns `[ja, jb)` of every row, input columns `[na, nb)` of the RHS check.
 #[inline(always)]
 fn work<W: Word, const NB: usize>(
-    p: &Chunk<'_>,
+    g: &Group<'_>,
+    rows: &[(usize, usize)],
     out: OutPtr,
     ja: usize,
     jb: usize,
     na: usize,
     nb: usize,
 ) -> Partial<W> {
-    let (rows, m) = (p.rows, p.m);
-    let shift = W::BITS - p.k;
-    let c = p.checks.map_or(0, |ck| ck.c);
-    let mut lhs = vec![W::default(); rows * c];
-    let mut rhs = vec![W::default(); rows * c];
+    let m = g.m;
+    let nrows = rows.len();
+    let shift = W::BITS - g.k;
+    let c = g.checks.map_or(0, |ck| ck.c);
+    let mut lhs = vec![W::default(); nrows * c];
+    let mut rhs = vec![W::default(); nrows * c];
     let mut ybuf = vec![W::default(); BLOCK];
+    let mut wbuf = vec![W::default(); BLOCK];
     let mut ubuf = vec![W::default(); BLOCK * c];
     let (mut ymin, mut ymax) = (i64::MAX, i64::MIN);
 
@@ -249,28 +447,31 @@ fn work<W: Word, const NB: usize>(
     while b0 < jb {
         let b1 = (b0 + BLOCK).min(jb);
         let len = b1 - b0;
-        if let Some(ck) = p.checks {
-            for i in 0..c {
-                let src = &ck.u[i * m + b0..i * m + b1];
-                for (d, s) in ubuf[i * BLOCK..i * BLOCK + len].iter_mut().zip(src) {
-                    *d = W::trunc(*s);
+        let mut u_direct = false;
+        if let Some(ck) = g.checks {
+            u_direct = ck.u.words::<W>(0, 0).is_some();
+            if !u_direct {
+                for i in 0..c {
+                    ck.u.fill::<W, NB>(i * m + b0, i * m + b1, &mut ubuf[i * BLOCK..i * BLOCK + len]);
                 }
             }
         }
-        let scale = &p.scale[b0..b1];
-        for t in 0..rows {
+        let scale = &g.scale[b0..b1];
+        for (gt, &(pi, t)) in rows.iter().enumerate() {
+            let p = &g.parts[pi];
             let yb = &mut ybuf[..len];
             decode::<W, NB>(&p.y_hat[(t * m + b0) * NB..(t * m + b1) * NB], yb);
-            let wr = &p.wr[t * m + b0..t * m + b1];
+            let wb = &mut wbuf[..len];
+            p.wr.take::<W>(t * m + b0, t * m + b1, wb);
             let sxt = p.sx[t];
-            // SAFETY: row t, columns [b0, b1) lie in the allocation and are written by this worker only.
-            let o = unsafe { std::slice::from_raw_parts_mut(out.0.add(t * m + b0).cast::<MaybeUninit<f32>>(), len) };
+            // SAFETY: row gt, columns [b0, b1) lie in the allocation and are written by this worker only.
+            let o = unsafe { std::slice::from_raw_parts_mut(out.0.add(gt * m + b0).cast::<MaybeUninit<f32>>(), len) };
             let (mut lo, mut hi) = (i64::MAX, i64::MIN);
-            match p.bias {
+            match g.bias {
                 Some(bias) => {
                     let bias = &bias[b0..b1];
                     for j in 0..len {
-                        let yq = yb[j].wsub(W::trunc(wr[j])).sext(shift);
+                        let yq = yb[j].wsub(wb[j]).sext(shift);
                         lo = lo.min(yq);
                         hi = hi.max(yq);
                         o[j].write(((yq as f64 * sxt) * scale[j] as f64 + bias[j] as f64) as f32);
@@ -278,7 +479,7 @@ fn work<W: Word, const NB: usize>(
                 }
                 None => {
                     for j in 0..len {
-                        let yq = yb[j].wsub(W::trunc(wr[j])).sext(shift);
+                        let yq = yb[j].wsub(wb[j]).sext(shift);
                         lo = lo.min(yq);
                         hi = hi.max(yq);
                         o[j].write(((yq as f64 * sxt) * scale[j] as f64) as f32);
@@ -288,39 +489,50 @@ fn work<W: Word, const NB: usize>(
             ymin = ymin.min(lo);
             ymax = ymax.max(hi);
             for i in 0..c {
-                let s = dot(yb, &ubuf[i * BLOCK..i * BLOCK + len]);
-                lhs[t * c + i] = lhs[t * c + i].wadd(s);
+                let us = match (u_direct, g.checks) {
+                    (true, Some(ck)) => ck.u.words::<W>(i * m + b0, i * m + b1).unwrap_or(&[]),
+                    _ => &ubuf[i * BLOCK..i * BLOCK + len],
+                };
+                let s = dot(yb, us);
+                lhs[gt * c + i] = lhs[gt * c + i].wadd(s);
             }
         }
         b0 = b1;
     }
 
-    if let Some(ck) = p.checks {
+    if let Some(ck) = g.checks {
         let n = ck.n;
         let mut b0 = na;
         while b0 < nb {
             let b1 = (b0 + BLOCK).min(nb);
             let len = b1 - b0;
-            for i in 0..c {
-                let src = &ck.uw[i * n + b0..i * n + b1];
-                for (d, s) in ubuf[i * BLOCK..i * BLOCK + len].iter_mut().zip(src) {
-                    *d = W::trunc(*s);
+            let uw_direct = ck.uw.words::<W>(0, 0).is_some();
+            if !uw_direct {
+                for i in 0..c {
+                    ck.uw.fill::<W, NB>(i * n + b0, i * n + b1, &mut ubuf[i * BLOCK..i * BLOCK + len]);
                 }
             }
-            for t in 0..rows {
+            for (gt, &(pi, t)) in rows.iter().enumerate() {
                 let xb = &mut ybuf[..len];
-                for (d, s) in xb.iter_mut().zip(&ck.x_hat[t * n + b0..t * n + b1]) {
-                    *d = W::trunc(*s);
+                // validated: every part has x_hat when the group has checks
+                if let Some(x) = g.parts[pi].x_hat {
+                    x.fill::<W, NB>(t * n + b0, t * n + b1, xb);
                 }
                 for i in 0..c {
-                    let s = dot(xb, &ubuf[i * BLOCK..i * BLOCK + len]);
-                    rhs[t * c + i] = rhs[t * c + i].wadd(s);
+                    let us = if uw_direct {
+                        ck.uw.words::<W>(i * n + b0, i * n + b1).unwrap_or(&[])
+                    } else {
+                        &ubuf[i * BLOCK..i * BLOCK + len]
+                    };
+                    let s = dot(xb, us);
+                    rhs[gt * c + i] = rhs[gt * c + i].wadd(s);
                 }
             }
             b0 = b1;
         }
     }
     wipe(&mut ybuf);
+    wipe(&mut wbuf);
     wipe(&mut ubuf);
     Partial { lhs, rhs, ymin, ymax }
 }
@@ -329,7 +541,8 @@ fn work<W: Word, const NB: usize>(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn work_avx2<W: Word, const NB: usize>(
-    p: &Chunk<'_>,
+    g: &Group<'_>,
+    rows: &[(usize, usize)],
     out: OutPtr,
     ja: usize,
     jb: usize,
@@ -337,11 +550,12 @@ unsafe fn work_avx2<W: Word, const NB: usize>(
     nb: usize,
 ) -> Partial<W> {
     // `fma` only widens the instruction set: Rust never contracts `a * b + c` into an FMA.
-    work::<W, NB>(p, out, ja, jb, na, nb)
+    work::<W, NB>(g, rows, out, ja, jb, na, nb)
 }
 
 fn work_dispatch<W: Word, const NB: usize>(
-    p: &Chunk<'_>,
+    g: &Group<'_>,
+    rows: &[(usize, usize)],
     out: OutPtr,
     ja: usize,
     jb: usize,
@@ -352,10 +566,10 @@ fn work_dispatch<W: Word, const NB: usize>(
     {
         if std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma") {
             // SAFETY: the CPU supports the enabled features.
-            return unsafe { work_avx2::<W, NB>(p, out, ja, jb, na, nb) };
+            return unsafe { work_avx2::<W, NB>(g, rows, out, ja, jb, na, nb) };
         }
     }
-    work::<W, NB>(p, out, ja, jb, na, nb)
+    work::<W, NB>(g, rows, out, ja, jb, na, nb)
 }
 
 /// Automatic worker count: the available parallelism (queried once; it can read cgroup files).
@@ -370,48 +584,56 @@ fn split(len: usize, parts: usize, i: usize) -> (usize, usize) {
     ((i * per).min(len), ((i + 1) * per).min(len))
 }
 
-fn run<W: Word, const NB: usize>(p: &Chunk<'_>, threads: usize) -> Finished {
-    let (rows, m) = (p.rows, p.m);
-    let c = p.checks.map_or(0, |ck| ck.c);
-    let n = p.checks.map_or(0, |ck| ck.n);
-    if let Some(ck) = p.checks {
-        if ck.u.iter().all(|&v| v & u64::mask(p.k) == 0) {
+fn run_group<W: Word, const NB: usize>(g: &Group<'_>, threads: usize) -> Finished {
+    let m = g.m;
+    let rows: Vec<(usize, usize)> =
+        g.parts.iter().enumerate().flat_map(|(pi, p)| (0..p.sx.len()).map(move |t| (pi, t))).collect();
+    let nrows = rows.len();
+    let c = g.checks.map_or(0, |ck| ck.c);
+    let n = g.checks.map_or(0, |ck| ck.n);
+    if let Some(ck) = g.checks {
+        if ck.u.all_zero(g.k) {
+            for p in &g.parts {
+                p.wr.wipe_all();
+            }
             return (None, STATUS_U_ZERO, 0);
         }
     }
     // Uninitialised: workers write every element (their column ranges partition `[0, m)`), and a
     // plain malloc can reuse warm memory instead of faulting in fresh zeroed pages each call.
-    let mut out: Vec<f32> = Vec::with_capacity(rows * m);
+    let mut out: Vec<f32> = Vec::with_capacity(nrows * m);
     let ptr = OutPtr(out.as_mut_ptr());
-    let work_units = rows * (m * (c + 2) + n * c);
+    let work_units = nrows * (m * (c + 2) + n * c);
     let max_t = if threads == 0 { default_threads() } else { threads };
     let t = (work_units / WORK_PER_THREAD).clamp(1, max_t.max(1)).min(m.div_ceil(64).max(1));
 
     let mut parts: Vec<Partial<W>> = if t == 1 {
-        vec![work_dispatch::<W, NB>(p, ptr, 0, m, 0, n)]
+        vec![work_dispatch::<W, NB>(g, &rows, ptr, 0, m, 0, n)]
     } else {
+        let rows = &rows;
         std::thread::scope(|s| {
             let hs: Vec<_> = (0..t)
                 .map(|i| {
                     let (ja, jb) = split(m, t, i);
                     let (na, nb) = split(n, t, i);
-                    s.spawn(move || work_dispatch::<W, NB>(p, ptr, ja, jb, na, nb))
+                    s.spawn(move || work_dispatch::<W, NB>(g, rows, ptr, ja, jb, na, nb))
                 })
                 .collect();
-            hs.into_iter().map(|h| h.join().expect("finish_chunk worker panicked")).collect()
+            hs.into_iter().map(|h| h.join().expect("finish worker panicked")).collect()
         })
     };
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 
     // SAFETY: every element of `out` was written by exactly one worker (joined above).
-    unsafe { out.set_len(rows * m) };
+    unsafe { out.set_len(nrows * m) };
 
     let (mut ymin, mut ymax) = (i64::MAX, i64::MIN);
     let mut status = STATUS_OK;
     let mut bad_rows = 0usize;
     if c > 0 {
-        let mask = W::mask(p.k);
-        let mut lhs = vec![W::default(); rows * c];
-        let mut rhs = vec![W::default(); rows * c];
+        let mask = W::mask(g.k);
+        let mut lhs = vec![W::default(); nrows * c];
+        let mut rhs = vec![W::default(); nrows * c];
         for pt in &parts {
             for (a, b) in lhs.iter_mut().zip(&pt.lhs) {
                 *a = a.wadd(*b);
@@ -420,7 +642,7 @@ fn run<W: Word, const NB: usize>(p: &Chunk<'_>, threads: usize) -> Finished {
                 *a = a.wadd(*b);
             }
         }
-        for tr in 0..rows {
+        for tr in 0..nrows {
             let row_ok = (0..c).all(|i| lhs[tr * c + i].and(mask) == rhs[tr * c + i].and(mask));
             bad_rows += usize::from(!row_ok);
         }
@@ -436,8 +658,8 @@ fn run<W: Word, const NB: usize>(p: &Chunk<'_>, threads: usize) -> Finished {
         wipe(&mut pt.lhs);
         wipe(&mut pt.rhs);
     }
-    let bound = p.bound.min(i64::MAX as u64) as i64;
-    if status == STATUS_OK && rows * m > 0 && (ymax > bound || ymin < -bound) {
+    let bound = g.bound.min(i64::MAX as u64) as i64;
+    if status == STATUS_OK && nrows * m > 0 && (ymax > bound || ymin < -bound) {
         status = STATUS_RANGE;
     }
     if status != STATUS_OK {
@@ -447,18 +669,35 @@ fn run<W: Word, const NB: usize>(p: &Chunk<'_>, threads: usize) -> Finished {
     (Some(out), STATUS_OK, 0)
 }
 
-/// Run the fused finish on validated inputs (`threads = 0`: automatic).
-pub fn finish(p: &Chunk<'_>, threads: usize) -> Finished {
-    match p.k {
-        8 => run::<u32, 1>(p, threads),
-        16 => run::<u32, 2>(p, threads),
-        24 => run::<u32, 3>(p, threads),
-        32 => run::<u32, 4>(p, threads),
-        40 => run::<u64, 5>(p, threads),
-        48 => run::<u64, 6>(p, threads),
-        56 => run::<u64, 7>(p, threads),
+/// Run the fused finish of a validated group (`threads = 0`: automatic). Output rows are the
+/// parts' rows in order.
+pub fn finish_group_run(g: &Group<'_>, threads: usize) -> Finished {
+    match g.k {
+        8 => run_group::<u32, 1>(g, threads),
+        16 => run_group::<u32, 2>(g, threads),
+        24 => run_group::<u32, 3>(g, threads),
+        32 => run_group::<u32, 4>(g, threads),
+        40 => run_group::<u64, 5>(g, threads),
+        48 => run_group::<u64, 6>(g, threads),
+        56 => run_group::<u64, 7>(g, threads),
         k => panic!("unsupported ring width {k}"),
     }
+}
+
+/// Run the fused finish on validated inputs (`threads = 0`: automatic).
+pub fn finish(p: &Chunk<'_>, threads: usize) -> Finished {
+    // SAFETY: read-only use (`wipe = false`): the kernel never writes through the pointer.
+    let wr = unsafe { WrBuf::new(p.wr.as_ptr() as *mut u8, p.wr.len(), true, false) };
+    let g = Group {
+        parts: vec![Part { y_hat: p.y_hat, wr, x_hat: p.checks.map(|ck| Src::U64(ck.x_hat)), sx: &p.sx[..p.rows] }],
+        checks: p.checks.map(|ck| GroupChecks { u: Src::U64(ck.u), uw: Src::U64(ck.uw), c: ck.c, n: ck.n }),
+        scale: p.scale,
+        bias: p.bias,
+        k: p.k,
+        bound: p.bound,
+        m: p.m,
+    };
+    finish_group_run(&g, threads)
 }
 
 // ---- Python binding --------------------------------------------------------------------------
@@ -620,6 +859,247 @@ fn finish_chunk<'py>(
     let out = match out {
         Some(v) => {
             let a = Array2::from_shape_vec((rows, m), v).map_err(|e| verr(e.to_string()))?;
+            Some(a.into_pyarray(py))
+        }
+        None => None,
+    };
+    Ok((out, status, bad))
+}
+
+/// A read-only ring matrix argument of [`finish_group`]: int64/uint64/uint32 array or wire bytes.
+enum RoRing<'py> {
+    I(numpy::PyReadonlyArray2<'py, i64>),
+    U(numpy::PyReadonlyArray2<'py, u64>),
+    U32(numpy::PyReadonlyArray2<'py, u32>),
+    B(Bound<'py, PyBytes>),
+}
+
+impl<'py> RoRing<'py> {
+    fn extract(obj: &Bound<'py, PyAny>, name: &str, k: u32) -> PyResult<Self> {
+        if let Ok(b) = obj.downcast::<PyBytes>() {
+            return Ok(RoRing::B(b.clone()));
+        }
+        if let Ok(a) = obj.downcast::<PyArray2<i64>>() {
+            return Ok(RoRing::I(a.try_readonly().map_err(|e| verr(format!("{name}: {e}")))?));
+        }
+        if let Ok(a) = obj.downcast::<PyArray2<u64>>() {
+            return Ok(RoRing::U(a.try_readonly().map_err(|e| verr(format!("{name}: {e}")))?));
+        }
+        if let Ok(a) = obj.downcast::<PyArray2<u32>>() {
+            if k > 32 {
+                return Err(verr(format!("{name}: uint32 arrays need K <= 32")));
+            }
+            return Ok(RoRing::U32(a.try_readonly().map_err(|e| verr(format!("{name}: {e}")))?));
+        }
+        Err(verr(format!("{name} must be bytes or a 2-D int64/uint64/uint32 numpy array")))
+    }
+
+    /// Elements and, for arrays, the 2-D shape.
+    fn src(&self, name: &str) -> PyResult<(Src<'_>, Option<(usize, usize)>)> {
+        let cerr = || verr(format!("{name} must be C-contiguous"));
+        Ok(match self {
+            RoRing::I(a) => {
+                (Src::U64(i64_as_u64(a.as_slice().map_err(|_| cerr())?)), Some((a.shape()[0], a.shape()[1])))
+            }
+            RoRing::U(a) => (Src::U64(a.as_slice().map_err(|_| cerr())?), Some((a.shape()[0], a.shape()[1]))),
+            RoRing::U32(a) => (Src::U32(a.as_slice().map_err(|_| cerr())?), Some((a.shape()[0], a.shape()[1]))),
+            RoRing::B(b) => (Src::Bytes(b.as_bytes()), None),
+        })
+    }
+}
+
+/// The `W r` argument of [`finish_group`]: writable when the kernel wipes it.
+enum WrArg<'py> {
+    RwI(numpy::PyReadwriteArray2<'py, i64>),
+    RwU(numpy::PyReadwriteArray2<'py, u64>),
+    RwU32(numpy::PyReadwriteArray2<'py, u32>),
+    Ro(RoRing<'py>),
+}
+
+impl<'py> WrArg<'py> {
+    fn extract(obj: &Bound<'py, PyAny>, k: u32, wipe: bool) -> PyResult<Self> {
+        if !wipe {
+            let r = RoRing::extract(obj, "wr", k)?;
+            if matches!(r, RoRing::B(_)) {
+                return Err(verr("wr must be a 2-D int64/uint64/uint32 numpy array"));
+            }
+            return Ok(WrArg::Ro(r));
+        }
+        let rw = |e: numpy::BorrowError| verr(format!("wr must be writable to be wiped: {e}"));
+        if let Ok(a) = obj.downcast::<PyArray2<i64>>() {
+            return Ok(WrArg::RwI(a.try_readwrite().map_err(rw)?));
+        }
+        if let Ok(a) = obj.downcast::<PyArray2<u64>>() {
+            return Ok(WrArg::RwU(a.try_readwrite().map_err(rw)?));
+        }
+        if let Ok(a) = obj.downcast::<PyArray2<u32>>() {
+            if k > 32 {
+                return Err(verr("wr: uint32 arrays need K <= 32"));
+            }
+            return Ok(WrArg::RwU32(a.try_readwrite().map_err(rw)?));
+        }
+        Err(verr("wr must be a 2-D int64/uint64/uint32 numpy array"))
+    }
+
+    /// `(buffer, (rows, m))`.
+    fn buf(&mut self, wipe: bool) -> PyResult<(WrBuf, (usize, usize))> {
+        let cerr = || verr("wr must be C-contiguous");
+        // SAFETY (all arms): the borrow guard held in `self` keeps the array alive and excludes other
+        // numpy borrows until the kernel returns; the pointer covers exactly the slice's elements.
+        Ok(match self {
+            WrArg::RwI(a) => {
+                let sh = (a.shape()[0], a.shape()[1]);
+                let s = a.as_slice_mut().map_err(|_| cerr())?;
+                (unsafe { WrBuf::new(s.as_mut_ptr().cast(), s.len(), true, wipe) }, sh)
+            }
+            WrArg::RwU(a) => {
+                let sh = (a.shape()[0], a.shape()[1]);
+                let s = a.as_slice_mut().map_err(|_| cerr())?;
+                (unsafe { WrBuf::new(s.as_mut_ptr().cast(), s.len(), true, wipe) }, sh)
+            }
+            WrArg::RwU32(a) => {
+                let sh = (a.shape()[0], a.shape()[1]);
+                let s = a.as_slice_mut().map_err(|_| cerr())?;
+                (unsafe { WrBuf::new(s.as_mut_ptr().cast(), s.len(), false, wipe) }, sh)
+            }
+            WrArg::Ro(r) => {
+                let (src, sh) = r.src("wr")?;
+                let sh = sh.ok_or_else(|| verr("wr must be an array"))?;
+                // `wipe` is false here: the kernel only reads through the pointer.
+                match src {
+                    Src::U64(s) => (unsafe { WrBuf::new(s.as_ptr() as *mut u8, s.len(), true, false) }, sh),
+                    Src::U32(s) => (unsafe { WrBuf::new(s.as_ptr() as *mut u8, s.len(), false, false) }, sh),
+                    Src::Bytes(_) => return Err(verr("wr must be an array")),
+                }
+            }
+        })
+    }
+}
+
+/// Fused finish of several chunks of one linear that share Freivalds vectors (one session each).
+///
+/// Args:
+///     parts: sequence of ``(y_hat, wr, x_hat, sx)``: service wire bytes ``(rows_i, m)``; ``W r`` as a
+///         2-D int64/uint64/uint32 array ``(rows_i, m)``; masked inputs ``(rows_i, n)`` as wire bytes
+///         (the request payload) or a 2-D array, or None when unchecked; float64 ``sx (rows_i,)``.
+///     u, uw: shared check vectors ``(c, m)`` / ``(c, n)`` (uint64, int64 or, for K <= 32, uint32),
+///         or both None (no check).
+///     scale, bias, k, bound: as in :func:`finish_chunk`.
+///     wipe_wr: zero every ``wr`` in place (one-time-pad derived) as soon as it is used; the arrays
+///         must then be writable. On a raised error nothing is wiped; on any returned status all are.
+///     threads: worker threads (0 = automatic).
+///
+/// Returns ``(out, status, bad_rows)``: ``out`` float32 ``(sum rows_i, m)`` (parts' rows in order)
+/// when ``status == 0``; statuses as :func:`finish_chunk`.
+#[pyfunction]
+#[pyo3(signature = (parts, u, uw, scale, bias, k, bound, wipe_wr = true, threads = 0))]
+#[allow(clippy::too_many_arguments)]
+fn finish_group<'py>(
+    py: Python<'py>,
+    parts: &Bound<'py, PyAny>,
+    u: Option<&Bound<'py, PyAny>>,
+    uw: Option<&Bound<'py, PyAny>>,
+    scale: &Bound<'py, PyAny>,
+    bias: Option<&Bound<'py, PyAny>>,
+    k: u32,
+    bound: u64,
+    wipe_wr: bool,
+    threads: usize,
+) -> PyResult<PyFinished<'py>> {
+    if k % 8 != 0 || !(8..=56).contains(&k) {
+        return Err(verr(format!("ring width k={k} must be a multiple of 8 in [8, 56]")));
+    }
+    let nbytes = (k / 8) as usize;
+    let sc_a = arr1::<f32>(scale, "scale", "float32")?;
+    let sc_s = slice1(&sc_a, "scale")?;
+    let m = sc_s.len();
+    let bias_a = bias.map(|b| arr1::<f32>(b, "bias", "float32")).transpose()?;
+    let bias_s = bias_a.as_ref().map(|b| slice1(b, "bias")).transpose()?;
+    if let Some(b) = bias_s {
+        if b.len() != m {
+            return Err(verr(format!("bias has {} entries, expected {m}", b.len())));
+        }
+    }
+    let (ua, uwa) = match (u, uw) {
+        (None, None) => (None, None),
+        (Some(u), Some(uw)) => (Some(RoRing::extract(u, "u", k)?), Some(RoRing::extract(uw, "uw", k)?)),
+        _ => return Err(verr("u and uw must both be given or both be None")),
+    };
+    let checks = match (&ua, &uwa) {
+        (Some(ua), Some(uwa)) => {
+            let (us, ush) = ua.src("u")?;
+            let (uws, uwsh) = uwa.src("uw")?;
+            let ((c, um), (c2, n)) = match (ush, uwsh) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Err(verr("u and uw must be 2-D arrays")),
+            };
+            if um != m || c2 != c {
+                return Err(verr(format!("check shapes do not match: u ({c}, {um}), uw ({c2}, {n}), m={m}")));
+            }
+            if c < 1 {
+                return Err(verr("Freivalds check needs at least one check vector (c=0)"));
+            }
+            Some(GroupChecks { u: us, uw: uws, c, n })
+        }
+        _ => None,
+    };
+
+    // Borrow every part (guards live until the kernel returns), then build the kernel view.
+    let mut ys: Vec<Bound<'py, PyBytes>> = Vec::new();
+    let mut wrs: Vec<WrArg<'py>> = Vec::new();
+    let mut xs: Vec<Option<RoRing<'py>>> = Vec::new();
+    let mut sxs: Vec<numpy::PyReadonlyArray1<'py, f64>> = Vec::new();
+    for item in parts.try_iter()? {
+        let item = item?;
+        let (y, wr, x, sx): (Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>, Bound<'py, PyAny>) =
+            item.extract().map_err(|_| verr("each part must be a (y_hat, wr, x_hat, sx) tuple"))?;
+        ys.push(y.downcast::<PyBytes>().map_err(|_| verr("y_hat must be bytes"))?.clone());
+        wrs.push(WrArg::extract(&wr, k, wipe_wr)?);
+        xs.push(if x.is_none() { None } else { Some(RoRing::extract(&x, "x_hat", k)?) });
+        sxs.push(arr1::<f64>(&sx, "sx", "float64")?);
+    }
+    let mut kparts: Vec<Part<'_>> = Vec::with_capacity(ys.len());
+    for (i, ((y, wr), (x, sx))) in ys.iter().zip(wrs.iter_mut()).zip(xs.iter().zip(sxs.iter())).enumerate() {
+        let y_hat = y.as_bytes();
+        let sx_s = slice1(sx, "sx")?;
+        let rows = sx_s.len();
+        let (wrb, (wrows, wm)) = wr.buf(wipe_wr)?;
+        if wrows != rows || wm != m {
+            return Err(verr(format!("part {i}: wr shape ({wrows}, {wm}) != ({rows}, {m})")));
+        }
+        if y_hat.len() != rows * m * nbytes {
+            return Err(verr(format!(
+                "part {i}: ring payload has {} bytes, expected {} for shape ({rows}, {m}) K={k}",
+                y_hat.len(),
+                rows * m * nbytes
+            )));
+        }
+        let x_hat = match (x, &checks) {
+            (Some(x), Some(ck)) => {
+                let (s, sh) = x.src("x_hat")?;
+                if let Some((xr, xn)) = sh {
+                    if xr != rows || xn != ck.n {
+                        return Err(verr(format!("part {i}: x_hat shape ({xr}, {xn}) != ({rows}, {})", ck.n)));
+                    }
+                }
+                if s.elems(nbytes) != rows * ck.n || matches!(s, Src::Bytes(b) if b.len() != rows * ck.n * nbytes) {
+                    return Err(verr(format!("part {i}: x_hat has the wrong size for ({rows}, {})", ck.n)));
+                }
+                Some(s)
+            }
+            (None, Some(_)) => return Err(verr(format!("part {i}: x_hat is required with check vectors"))),
+            _ => None,
+        };
+        kparts.push(Part { y_hat, wr: wrb, x_hat, sx: sx_s });
+    }
+    let total: usize = kparts.iter().map(|p| p.sx.len()).sum();
+    let g = Group { parts: kparts, checks, scale: sc_s, bias: bias_s, k, bound, m };
+    let (out, status, bad) = py.allow_threads(|| finish_group_run(&g, threads));
+    drop(g);
+    drop(wrs);
+    let out = match out {
+        Some(v) => {
+            let a = Array2::from_shape_vec((total, m), v).map_err(|e| verr(e.to_string()))?;
             Some(a.into_pyarray(py))
         }
         None => None,

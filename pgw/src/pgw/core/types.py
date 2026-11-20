@@ -9,7 +9,7 @@ wire and in mask store segments, and must match byte for byte.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from pgw.core.errors import ConfigError
@@ -37,16 +37,19 @@ class LinearId:
 
     layer: int
     kind: LinearKind
+    #: Cached canonical string (hot path: dictionary keys of every masked call).
+    _key: str = field(init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
         if self.layer < 0:
             raise ConfigError(f"layer index must be >= 0, got {self.layer}")
         object.__setattr__(self, "kind", LinearKind(self.kind))
+        object.__setattr__(self, "_key", f"{self.layer}.{self.kind.value}")
 
     @property
     def key(self) -> str:
         """Canonical string form ``"<layer>.<kind>"``."""
-        return f"{self.layer}.{self.kind.value}"
+        return self._key
 
     @property
     def ordinal(self) -> int:

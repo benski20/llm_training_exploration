@@ -6,10 +6,12 @@ steps (T rows per linear) through ``MaskedBackend`` + an in-process ``LocalCompu
 compute time is measured separately and subtracted, so the numbers are gateway CPU only.
 
 Usage:
-    python benchmarks/profile_gateway.py --preset 7b --layers 2 --steps 8 [--rows 1] [--profile]
+    python benchmarks/profile_gateway.py --preset 7b --layers 2 --steps 8 [--rows 1] [--sessions 4] [--profile]
 
 Prints per-linear-group and per-token gateway CPU (extrapolated to the full layer count) and,
-with ``--profile``, the top functions by cumulative time.
+with ``--profile``, the top functions by cumulative time. ``--sessions N`` makes N reservations and
+sends one call per session in each ``forward_many`` (as the batching engine does); the per-call
+numbers are then per round trip (all sessions), and ``gateway_ms_per_session_call`` divides by N.
 """
 
 from __future__ import annotations
@@ -37,7 +39,7 @@ PRESETS: dict[str, dict[str, int]] = {
 }
 
 
-def build_checkpoint(out: Path, preset: dict[str, int], layers: int) -> Path:
+def build_checkpoint(out: Path, preset: dict[str, int], layers: int, zero_linears: bool = False) -> Path:
     from transformers import Qwen2Config, Qwen2ForCausalLM
 
     sys_path_tests = Path(__file__).resolve().parents[1] / "tests"
@@ -54,6 +56,11 @@ def build_checkpoint(out: Path, preset: dict[str, int], layers: int) -> Path:
     )
     torch.manual_seed(0)
     model = Qwen2ForCausalLM(cfg).to(torch.bfloat16)
+    if zero_linears:  # --null-service: W = 0, so the service result is all zeros (gateway work is unchanged)
+        with torch.no_grad():
+            for name, prm in model.named_parameters():
+                if "layers." in name and "proj" in name:
+                    prm.zero_()
     model.eval().save_pretrained(out, safe_serialization=True)
     _save_byte_tokenizer(out)
     return out
@@ -65,6 +72,7 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--rows", type=int, default=1, help="rows per call (1 = decode, >1 = prefill/batch)")
+    ap.add_argument("--sessions", type=int, default=1, help="reservations per round trip (one call each)")
     ap.add_argument("--ring", default="K40A12")
     ap.add_argument("--workdir", default=None)
     ap.add_argument("--profile", action="store_true")
@@ -72,6 +80,10 @@ def main() -> None:
     ap.add_argument("--noise", action="store_true", help="enable the outbound-noise monitor (gateway default)")
     ap.add_argument("--service-url", default=None, help="use a real compute service (ComputeClient) instead of "
                     "the in-process one; reports wall ms per call including the round trip")
+    ap.add_argument("--null-service", action="store_true", help="zero linear weights and a service stub that "
+                    "returns zeros: the gateway does exactly the same work (masking, checks, unmasking are "
+                    "data-independent), but no CPU matmul runs between its steps and evicts its caches (closer to "
+                    "a GPU service)")
     ap.add_argument("--token-file", default=None, help="service bearer token file (with --service-url)")
     args = ap.parse_args()
 
@@ -87,16 +99,18 @@ def main() -> None:
     ring = RingParams.from_name(args.ring)
     work = Path(args.workdir or tempfile.mkdtemp(prefix="pgw-prof-"))
     work.mkdir(parents=True, exist_ok=True)
-    ck, pk = work / "ckpt", work / "pack"
+    sfx = "-null" if args.null_service else ""
+    ck, pk = work / f"ckpt{sfx}", work / f"pack{sfx}"
     t0 = time.perf_counter()
     if not (pk / "manifest.json").exists():
         if not (ck / "config.json").exists():
-            build_checkpoint(ck, preset, args.layers)
+            build_checkpoint(ck, preset, args.layers, zero_linears=args.null_service)
         pack_checkpoint(ck, pk, name=f"synthetic-{args.preset}", overwrite=True)
     pack = ModelPack.open(pk)
     print(f"pack ready in {time.perf_counter() - t0:.1f}s")
 
     slots = args.steps * args.rows + 4
+    nses = max(1, args.sessions)
     counter = work / "counter"
     kp = FileKeyProvider(work / "kek", create=True)
     store_kw: dict[str, Any] = {"fsync": False}
@@ -108,8 +122,8 @@ def main() -> None:
         pass
     store = MaskStore.open(work / f"store-{time.time_ns()}", kp, **store_kw)
     t0 = time.perf_counter()
-    MaskGenerator(pack, ring).generate_into_store(store, slots, chunk_slots=16, factory_id="prof")
-    print(f"factory: {slots} slots in {time.perf_counter() - t0:.1f}s")
+    MaskGenerator(pack, ring).generate_into_store(store, slots * nses, chunk_slots=16, factory_id="prof")
+    print(f"factory: {slots * nses} slots in {time.perf_counter() - t0:.1f}s")
 
     class TimedClient(LocalComputeClient):
         service_s = 0.0
@@ -121,7 +135,21 @@ def main() -> None:
             finally:
                 TimedClient.service_s += time.perf_counter() - t
 
-    client: Any = TimedClient(pack)
+    class NullClient:
+        """Service stub for zero weights: ``y_hat = W x_hat = 0``."""
+
+        def __init__(self) -> None:
+            self.out = {sp.id.key: sp.out_features for sp in pack.linear_specs()}
+
+        def compute_sync(self, request: Any) -> Any:
+            from pgw.wire.messages import ComputeResponse, ComputeResult, ServerTiming
+
+            nb = ring.k // 8
+            items = tuple(ComputeResult(it.linear, it.rows, bytes(it.rows * self.out[it.linear] * nb))
+                          for it in request.items)
+            return ComputeResponse(request.request_id, items, ServerTiming(0.0, 0.0, 0))
+
+    client: Any = NullClient() if args.null_service else TimedClient(pack)
     if args.service_url:
         from pgw.wire.client import ClientConfig, ComputeClient
 
@@ -134,42 +162,66 @@ def main() -> None:
 
         noise = OutboundNoiseMonitor(ring)
     be = MaskedBackend(pack, None, client, ring, pack.fingerprint, min_soundness_bits=20, noise_monitor=noise)
-    res = store.reserve(pack.fingerprint, ring, slots)
-    a = pack.arch
+    sessions = [store.reserve(pack.fingerprint, ring, slots) for _ in range(nses)]
     groups = ["qkv", "o", "gate_up", "down"]
     in_dim = {sp.id.kind.value: sp.in_features
               for sp in pack.linear_specs() if sp.id.layer == 0}
 
+    def calls_for(lid: Any) -> list[Any]:
+        return [LinearCall(lid, torch.randn(args.rows, in_dim[lid.kind.value]), session=r) for r in sessions]
+
     # warm up (weight caches, chunk caches)
     for g in groups:
-        be.forward(LinearCall(LinearId(0, g), torch.randn(args.rows, in_dim[g]), session=res))
+        be.forward_many(calls_for(LinearId(0, g)))
     per_group = {g: 0.0 for g in groups}
+    t_prep = t_fin = 0.0
     prof = cProfile.Profile() if args.profile else None
     TimedClient.service_s = 0.0
     total0 = time.perf_counter()
     for _ in range(args.steps - 1):
         for layer in range(args.layers):
             for g in groups:
-                x = torch.randn(args.rows, in_dim[g])
-                s0 = TimedClient.service_s
+                calls = calls_for(LinearId(layer, g))
+                if args.service_url:  # real service: wall time of the whole round trip
+                    s0 = TimedClient.service_s
+                    t = time.perf_counter()
+                    be.forward_many(calls)
+                    per_group[g] += (time.perf_counter() - t) - (TimedClient.service_s - s0)
+                    continue
                 t = time.perf_counter()
                 if prof:
                     prof.enable()
-                be.forward(LinearCall(LinearId(layer, g), x, session=res))
+                prep = be.prepare_calls(calls)
                 if prof:
                     prof.disable()
-                per_group[g] += (time.perf_counter() - t) - (TimedClient.service_s - s0)
+                t1 = time.perf_counter()
+                resp = client.compute_sync(prep.request)
+                t2 = time.perf_counter()
+                if prof:
+                    prof.enable()
+                be.finish_prepared(prep, resp, t2 - t1)
+                if prof:
+                    prof.disable()
+                t3 = time.perf_counter()
+                t_prep += t1 - t
+                t_fin += t3 - t2
+                per_group[g] += (t1 - t) + (t3 - t2)
     wall = time.perf_counter() - total0
     n = (args.steps - 1) * args.layers
     scale = preset["full_layers"] / 1
+    ncalls = max(1, n * len(groups))
     out = {
-        "preset": args.preset, "ring": args.ring, "rows": args.rows,
+        "preset": args.preset, "ring": args.ring, "rows": args.rows, "sessions": nses,
         "gateway_ms_per_call": {g: 1000 * v / n for g, v in per_group.items()},
+        "gateway_ms_per_call_avg": 1000 * sum(per_group.values()) / ncalls,
+        "gateway_ms_per_session_call": 1000 * sum(per_group.values()) / ncalls / nses,
+        "prepare_ms_per_call": 1000 * t_prep / ncalls,
+        "finish_ms_per_call": 1000 * t_fin / ncalls,
         "gateway_ms_per_layer": 1000 * sum(per_group.values()) / n,
         "gateway_s_per_step_full_model": sum(per_group.values()) / n * scale,
         "service_s_per_step_full_model": TimedClient.service_s / n * scale,
         "wall_s": wall,
-        "wall_ms_per_call": 1000 * wall / max(1, (args.steps - 1) * args.layers * len(groups)),
+        "wall_ms_per_call": 1000 * wall / ncalls,
     }
     print(json.dumps(out, indent=2))
     if args.json:
@@ -181,7 +233,8 @@ def main() -> None:
         s = io.StringIO()
         pstats.Stats(prof, stream=s).sort_stats("tottime").print_stats(25)
         print(s.getvalue())
-    res.close()
+    for r in sessions:
+        r.close()
     store.close()
 
 

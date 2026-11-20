@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 
@@ -367,3 +368,47 @@ def test_state_db_records_reservations(store: MaskStore, model: ToyModel) -> Non
                        (rid,)).fetchone()
     conn.close()
     assert row == ("sess-1", 4, 1, 4)
+
+
+@pytest.mark.parametrize("ring", [RING_K32_A8, RING_K40_A12], ids=lambda r: r.name)
+def test_take_checked_and_compact_checks(store: MaskStore, model: ToyModel, ring: RingParams) -> None:
+    s1 = write_segment(store, model, 5, ring=ring)
+    s2 = write_segment(store, model, 7, ring=ring)
+    q = lid("1.down")
+    a = store.reserve(FP, ring, 3)  # s1[0:3]
+    b = store.reserve(FP, ring, 6)  # s1[3:5] + s2[0:4]
+    try:
+        ta, ua, uwa = a.checks_compact(q)
+        tb, ub, uwb = b.checks_compact(q)
+        assert ta == tb == (s1, q.key)  # same segment and linear: the same vectors, for any reservation
+        width = np.uint32 if ring.k <= 32 else np.uint64
+        assert ua.dtype == width and not ua.flags.writeable and not uwa.flags.writeable
+        assert np.array_equal(ua, ub) and np.array_equal(uwa, uwb)
+        u1, uw1 = b.checks(q)
+        assert np.array_equal(ub.astype(np.int64), u1.numpy()) and np.array_equal(uwb.astype(np.int64), uw1.numpy())
+
+        rows, r, wr, chk = b.take_checked(q, 5, True)  # stops at the extent boundary
+        assert rows == 2 and chk is not None and chk[0] == tb
+        _verify_rows(model, ring, q.key, r, wr.to(torch.int64), u1, uw1)
+        u2, uw2 = b.checks(q)
+        rows, r, wr, chk = b.take_checked(q, 5, True)
+        assert rows == 4 and chk is not None and chk[0] == (s2, q.key)
+        assert np.array_equal(chk[1].astype(np.int64), u2.numpy())
+        _verify_rows(model, ring, q.key, r, wr.to(torch.int64), u2, uw2)
+        assert b.take_checked(lid("0.qkv"), 1, False)[3] is None
+        with pytest.raises(MaskExhaustedError):
+            b.take_checked(q, 1, True)
+        with pytest.raises(ConfigError):
+            b.take_checked(q, 0, True)
+        # rows taken through take_checked are gone for take() too, and vice versa
+        assert b.remaining(q) == 0 and b.remaining(lid("0.qkv")) == 5
+        b.take(lid("0.qkv"), 1)
+        assert b.take_checked(lid("0.qkv"), 9, False)[0] == 4
+    finally:
+        a.close()
+        b.close()
+    assert not ub.any() and not uwb.any()  # wiped on close (views handed out earlier see zeros)
+    with pytest.raises(MaskReuseError):
+        b.take_checked(q, 1, True)
+    with pytest.raises(MaskReuseError):
+        b.checks_compact(q)

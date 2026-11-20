@@ -15,6 +15,28 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-20 (gateway CPU per call, multi-session throughput)
+
+Measured here (4 shared vCPUs, A/B interleaved, medians of 3; `benchmarks/profile_gateway.py --preset 7b
+--ring K32A12C27`, `benchmarks/e2e_local.py`), outputs bit-identical to the plaintext reference:
+
+| metric | before | after |
+|---|---|---|
+| gateway ms per decode call, 7B, 1 session (in-process CPU service) | 0.95 | 0.61 |
+| same, 4 sessions per round trip | 2.71 | 2.01 |
+| same, `--null-service` (no CPU matmul evicting caches; closer to a GPU service), 1 / 4 sessions | 0.57 / 1.86 | 0.30 / 1.01 |
+| e2e small model, null service, 1 / 4 streams (tokens/s) | 56 / 93 | 94 / 156 |
+
+What changed: `pgw_fast.finish_group` verifies and unmasks the chunks of all sessions whose masks come
+from the same segment in one pass over the shared Freivalds vectors (each keeps its own `W r`); check
+vectors and `W r` travel as 32-bit words for K=32; `W r` is zeroed inside the kernel; the request payload
+replaces the int64 `x_hat`; per-(extent, linear) caches for stream keys, compact check vectors and the
+current extent; `MaskReservation.take_checked` (boundary + checks + take under one lock);
+`WindowedReservation` no longer rescans old parts; small decode round trips run on the event loop
+(`inline_max_rows`, default 8; never for window extensions, a reservation's first pass or the LM head).
+LM head (`benchmarks/lm_head_bench.py`, 7B float32): 47 ms per sequence, so 0.19 s per step with 4
+sequences; the opt-in `batch_lm_head` (default off, changes logprob bits, not quality) takes 0.11 s.
+
 ## Update 2026-11-19
 
 **Speed (Qwen2.5-7B, one Kaggle T4, default ring K32A12C27, output bit-identical to the plaintext

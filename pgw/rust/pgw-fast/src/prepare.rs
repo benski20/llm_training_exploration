@@ -381,17 +381,70 @@ impl<T> Data<'_, T> {
     }
 }
 
-/// `(payload, x_hat, sx)` returned to Python.
-type Prepared<'py> = (Bound<'py, PyBytes>, Bound<'py, PyArray2<i64>>, Bound<'py, numpy::PyArray1<f64>>);
+/// `(payload, x_hat, sx)` returned to Python (`x_hat` is None with `want_xhat=False`).
+type Prepared<'py> = (Bound<'py, PyBytes>, Option<Bound<'py, PyArray2<i64>>>, Bound<'py, numpy::PyArray1<f64>>);
 
-/// `quantize_mask_pack(x, r, k, a, cap, wnorm) -> (payload, x_hat, sx)`.
+/// [`quantize_mask_pack_into`] without an `x_hat` output (one row-sized scratch buffer instead):
+/// the same checks, in the same order (every row's finiteness first), and the same payload.
+fn quantize_mask_pack_payload(
+    x: &[f32],
+    r: &[i64],
+    n: usize,
+    p: PrepareParams,
+    sx: &mut [f64],
+    payload: &mut [u8],
+) -> Result<(), PrepareError> {
+    p.validate()?;
+    let nb = (p.k / 8) as usize;
+    let rows = sx.len();
+    if x.len() != rows * n || r.len() != rows * n || payload.len() != rows * n * nb {
+        return Err(PrepareError::Invalid("buffer sizes do not match the shape".into()));
+    }
+    if rows == 0 {
+        return Ok(());
+    }
+    if n == 0 {
+        return Err(PrepareError::Invalid("activations must have at least one feature".into()));
+    }
+    let mut amax = vec![0.0f64; rows];
+    if !amax_rows(x, n, &mut amax) {
+        return Err(PrepareError::Overflow("non-finite activation values cannot be quantized".into()));
+    }
+    let mut scratch = vec![0i64; n];
+    let mut res = Ok(());
+    for t in 0..rows {
+        let (a, b) = (t * n, (t + 1) * n);
+        let row = quantize_mask_pack_into(
+            &x[a..b],
+            &r[a..b],
+            n,
+            p,
+            &mut scratch,
+            &mut sx[t..t + 1],
+            &mut payload[a * nb..b * nb],
+        );
+        if row.is_err() {
+            res = row;
+            break;
+        }
+    }
+    scratch.zeroize();
+    if res.is_err() {
+        payload.zeroize();
+    }
+    res
+}
+
+/// `quantize_mask_pack(x, r, k, a, cap, wnorm, want_xhat=True) -> (payload, x_hat, sx)`.
 ///
 /// `x`: float32 `(rows, n)`; `r`: int64 `(rows, n)` one-time mask in `[0, 2^K)`; `cap = 0` means an
 /// uncapped ring. Returns the wire bytes (`K/8` LE per element), `x_hat` int64 `(rows, n)` in
 /// `[0, 2^K)` and `sx` float64 `(rows,)`. Raises `ValueError("ring_overflow: ...")` for non-finite
-/// input or when no bit width fits the cap, `ValueError` for bad shapes/dtypes/parameters.
+/// input or when no bit width fits the cap, `ValueError` for bad shapes/dtypes/parameters. With
+/// `want_xhat=False`, `x_hat` is not materialized (None; the payload holds the same values).
 #[pyfunction]
-#[pyo3(signature = (x, r, k, a, cap, wnorm))]
+#[pyo3(signature = (x, r, k, a, cap, wnorm, want_xhat = true))]
+#[allow(clippy::too_many_arguments)]
 fn quantize_mask_pack<'py>(
     py: Python<'py>,
     x: &Bound<'py, PyAny>,
@@ -400,6 +453,7 @@ fn quantize_mask_pack<'py>(
     a: u32,
     cap: u32,
     wnorm: f64,
+    want_xhat: bool,
 ) -> PyResult<Prepared<'py>> {
     let p = PrepareParams { k, a, cap, wnorm };
     p.validate().map_err(PrepareError::into_py)?;
@@ -425,19 +479,30 @@ fn quantize_mask_pack<'py>(
         Ok(s) => Data::Borrowed(s),
         Err(_) => Data::Owned(ra.as_array().iter().copied().collect()),
     };
-    let mut xhat = vec![0i64; rows * n];
+    let mut xhat = if want_xhat { vec![0i64; rows * n] } else { Vec::new() };
     let mut sx = vec![1.0f64; rows];
     let payload = PyBytes::new_with(py, rows * n * nb, |buf| {
         let (xsl, rsl) = (xs.slice(), rs.slice());
-        py.allow_threads(|| quantize_mask_pack_into(xsl, rsl, n, p, &mut xhat, &mut sx, buf))
-            .map_err(PrepareError::into_py)
+        py.allow_threads(|| {
+            if want_xhat {
+                quantize_mask_pack_into(xsl, rsl, n, p, &mut xhat, &mut sx, buf)
+            } else {
+                quantize_mask_pack_payload(xsl, rsl, n, p, &mut sx, buf)
+            }
+        })
+        .map_err(PrepareError::into_py)
     });
     if let Data::Owned(v) = &mut rs {
         v.zeroize();
     }
     let payload = payload?;
-    let xhat =
-        Array2::from_shape_vec((rows, n), xhat).map_err(|e| PyValueError::new_err(e.to_string()))?.into_pyarray(py);
+    let xhat = if want_xhat {
+        Some(
+            Array2::from_shape_vec((rows, n), xhat).map_err(|e| PyValueError::new_err(e.to_string()))?.into_pyarray(py),
+        )
+    } else {
+        None
+    };
     Ok((payload, xhat, sx.into_pyarray(py)))
 }
 

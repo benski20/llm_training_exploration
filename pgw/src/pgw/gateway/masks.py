@@ -62,6 +62,9 @@ class WindowedReservation:
         self._lock = threading.Lock()
         self._closed = False
         self.extensions = 0
+        #: linear key -> index of the part its rows currently come from (parts are used in order,
+        #: so earlier, exhausted parts are never scanned again: per-call cost stays flat).
+        self._cur: dict[str, int] = {}
         self.ring = getattr(first, "ring", None)
         self.fingerprint = getattr(first, "fingerprint", None)
 
@@ -84,14 +87,26 @@ class WindowedReservation:
         """The chained reservations."""
         return tuple(self._parts)
 
+    @staticmethod
+    def _k(lid: LinearId | str) -> str:
+        return lid if type(lid) is str else lid.key if type(lid) is LinearId else str(lid)
+
+    def _current_index(self, lid: LinearId | str) -> int:
+        key = self._k(lid)
+        parts = self._parts
+        i = self._cur.get(key, 0)
+        last = len(parts) - 1
+        while i < last and int(parts[i].remaining(lid)) <= 0:
+            i += 1
+        self._cur[key] = i
+        return i
+
     def _current(self, lid: LinearId | str) -> Any:
-        for p in self._parts:
-            if int(p.remaining(lid)) > 0:
-                return p
-        return self._parts[-1]
+        return self._parts[self._current_index(lid)]
 
     def _reserved_left(self, lid: LinearId | str) -> int:
-        return sum(int(p.remaining(lid)) for p in self._parts)
+        i = self._current_index(lid)
+        return sum(int(p.remaining(lid)) for p in self._parts[i:])
 
     # ---- engine interface ----------------------------------------------------------------------
     def remaining(self, lid: LinearId | str) -> int:
@@ -148,6 +163,41 @@ class WindowedReservation:
             part = self._current(lid)
         return part.take(lid, rows)  # type: ignore[no-any-return]
 
+    def take_checked(self, lid: LinearId | str, max_rows: int, checks: bool) -> Any:
+        """``MaskReservation.take_checked`` of the current part (never crosses a part)."""
+        with self._lock:
+            if self._closed:
+                raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            part = self._current(lid)
+        fn = getattr(part, "take_checked", None)
+        if fn is not None:
+            return fn(lid, max_rows, checks)
+        rows = min(int(max_rows), int(part.rows_until_boundary(lid)))
+        if rows <= 0:
+            raise MaskExhaustedError("mask reservation has no rows left", details={"linear": str(lid)})
+        chk = (None, *self._part_checks_u64(part, lid)) if checks else None
+        r, wr = part.take(lid, rows)
+        return rows, r, wr, chk
+
+    def checks_compact(self, lid: LinearId | str) -> Any:
+        """``MaskReservation.checks_compact`` of the current part (token ``None`` if it has none)."""
+        with self._lock:
+            part = self._current(lid)
+        fn = getattr(part, "checks_compact", None)
+        if fn is not None:
+            return fn(lid)
+        return (None, *self._part_checks_u64(part, lid))
+
+    @staticmethod
+    def _part_checks_u64(part: Any, lid: LinearId | str) -> Any:
+        fn = getattr(part, "checks_u64", None)
+        if fn is not None:
+            return fn(lid)
+        from pgw.core.freivalds import checks_to_u64
+
+        u, uw = part.checks(lid)
+        return checks_to_u64(u, uw, part.ring if hasattr(part.ring, "mask") else _ring_of(part))
+
     def checks(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
         """Freivalds vectors of the extent the next :meth:`take` of ``lid`` reads from."""
         with self._lock:
@@ -158,13 +208,7 @@ class WindowedReservation:
         """Read-only uint64 views of the current extent's check vectors (see ``MaskReservation``)."""
         with self._lock:
             part = self._current(lid)
-        fn = getattr(part, "checks_u64", None)
-        if fn is None:
-            from pgw.core.freivalds import checks_to_u64
-
-            u, uw = part.checks(lid)
-            return checks_to_u64(u, uw, part.ring if hasattr(part.ring, "mask") else _ring_of(part))
-        return fn(lid)
+        return self._part_checks_u64(part, lid)
 
     # ---- lifecycle --------------------------------------------------------------------------------
     def close(self) -> None:
