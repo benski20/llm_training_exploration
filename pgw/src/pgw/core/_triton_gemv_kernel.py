@@ -2,13 +2,13 @@
 
 Kept in its own module because the Triton interpreter needs ``triton.language`` among the kernel's
 module globals, and so that importing :mod:`pgw.core.triton_gemv` never needs triton. The kernels
-are decorated with ``triton.jit`` by :func:`pgw.core.triton_gemv._kernel` (per interpreter mode);
-the small helpers they call are jitted here, at import, which happens lazily after the interpreter
-mode is fixed.
+are decorated with ``triton.jit`` by :func:`pgw.core.triton_gemv._kernel` (per interpreter mode), and so
+are the small device helpers of :data:`ROWS_HELPERS`: ``_kernel`` jits them in the same mode and binds
+them into a private copy of this module's globals for the stream kernel, so a process that switches
+``TRITON_INTERPRET`` never mixes interpreted and compiled helpers.
 """
 # mypy: ignore-errors
 
-import triton
 import triton.language as tl
 
 
@@ -108,14 +108,16 @@ def ring_gemv_dot_kernel(
         tl.store(y_ptrs, acc.to(tl.int32, bitcast=True), mask=y_ok)
 
 
-@triton.jit
+#: device helpers of :func:`ring_gemv_rows_kernel`, jitted per mode by ``pgw.core.triton_gemv._kernel``
+ROWS_HELPERS = ("_rows_mac", "_rows_put")
+
+
 def _rows_mac(acc, wu, x_row_ptr, offs_n, x_ok):
     """``acc + W * x_row`` elementwise (uint32, wraps mod 2^32); no reduction inside the inner loop."""
     xv = tl.load(x_row_ptr + offs_n, mask=x_ok, other=0).to(tl.uint32, bitcast=True)
     return acc + wu * xv[None, :]
 
 
-@triton.jit
 def _rows_put(y_row_ptr, acc, offs_m, ok, kmask, ATOMIC: tl.constexpr):
     """Reduce one row's ``(BLOCK_M, BLOCK_N)`` accumulator once and store (or atomically add) it."""
     s = tl.sum(acc, axis=1).to(tl.uint32) & kmask.to(tl.uint32, bitcast=True)

@@ -227,6 +227,33 @@ def test_json_table_round_trip_and_env(fresh: None, monkeypatch: pytest.MonkeyPa
     assert tg._multirow_mode() == "off"
 
 
+@pytest.mark.parametrize("content", ["[1, 2]", '{"devices": {"Tesla T4": 5}}', '{"devices": [1, 2]}', '"x"',
+                                     '{"devices": {"meta": "abc", "Tesla T4": {"rows": 1}}}', "{bad json"])
+def test_malformed_table_never_raises(fresh: None, monkeypatch: pytest.MonkeyPatch, tmp_path: object,
+                                      content: str) -> None:
+    """A malformed table file (wrong top level, a device entry that is no list) loads as no rules and the
+    self-check still runs: the service falls back to the heuristic instead of failing at startup."""
+    path = os.path.join(str(tmp_path), "t.json")
+    with open(path, "w") as f:
+        f.write(content)
+    monkeypatch.setenv(tg.ENV_TABLE, path)
+    assert tg.load_table(path) == {} or all(v == () for v in tg.load_table(path).values())
+    assert tg.device_rules(META) == ()
+    assert tg._checked_rules("meta", META) == ()
+    monkeypatch.setattr(tg, "_run_check", lambda key, device: (True, ""))
+    tg._reset("cpu")
+    assert tg.self_check("cpu") is True
+    assert tg._SELF_CHECK["cpu"] is True and tg._RULES["cpu"] == ()
+
+
+def test_checked_rules_survives_a_raising_table_lookup(fresh: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(device: object) -> tuple[TableRule, ...]:
+        raise AttributeError("bad table")
+
+    monkeypatch.setattr(tg, "device_rules", boom)
+    assert tg._checked_rules("meta", META) == ()
+
+
 def test_t4_table_matches_the_measured_shapes() -> None:
     """The built-in T4 rules cover the four 7B linears (one row) and are valid launch configs."""
     rules = tg.DEVICE_TABLES["Tesla T4"]
@@ -371,6 +398,22 @@ def test_t4_table_configs_equal_previous_heuristic_bitwise() -> None:
 
 
 @needs_triton
+def test_stream_helpers_are_jitted_per_mode() -> None:
+    """The stream kernel's device helpers are jitted with the kernel (per mode), in a private copy of the
+    kernel module's globals: the module keeps the plain functions, so another mode never inherits them."""
+    from pgw.core import _triton_gemv_kernel as km
+
+    k_a, k_b = tg._kernel(True, "stream"), tg._kernel(False, "stream")
+    for kern in (k_a, k_b):
+        g = kern.fn.__globals__
+        assert g is not vars(km)
+        for h in km.ROWS_HELPERS:
+            assert g[h] is not getattr(km, h) and g[h].fn is getattr(km, h)
+    assert k_a.fn.__globals__ is not k_b.fn.__globals__
+    assert all(callable(getattr(km, h)) and not hasattr(getattr(km, h), "fn") for h in km.ROWS_HELPERS)
+
+
+@needs_triton
 @pytest.mark.usefixtures("interp")
 def test_heuristic_stream_variants_pass_self_check_in_interpreter() -> None:
     """The self-check's stream entries (every heuristic row count, with and without split-K) pass."""
@@ -417,10 +460,9 @@ import json, os, re, subprocess, sys, tempfile
 import triton, triton.backends.nvidia as nv
 from triton.backends.compiler import GPUTarget
 from triton.compiler import ASTSource
-from pgw.core import _triton_gemv_kernel as km
+from pgw.core.triton_gemv import _kernel
 
 cc, configs = int(sys.argv[1]), json.loads(sys.argv[2])
-fns = {"sum": km.ring_gemv_kernel, "stream": km.ring_gemv_rows_kernel, "dot": km.ring_gemv_dot_kernel}
 sig = {"x_ptr": "*i32", "w_ptr": "*i8", "y_ptr": "*i32", "B": "i32", "N": "i32", "M": "i32", "NW": "i32",
        "n_per_split": "i32", "kmask": "i32", "stride_x": "i32", "stride_w": "i32", "stride_y": "i32",
        "BLOCK_R": "constexpr", "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "ATOMIC": "constexpr"}
@@ -432,7 +474,7 @@ ptxas = get_ptxas(cc).path  # the ptxas triton itself uses for this arch
 out = []
 for c in configs:
     consts = {"BLOCK_R": c["block_r"], "BLOCK_M": c["block_m"], "BLOCK_N": c["block_n"], "ATOMIC": c["split_k"] > 1}
-    src = ASTSource(fn=triton.jit(fns[c["variant"]]), signature=sig,
+    src = ASTSource(fn=_kernel(False, c["variant"]), signature=sig,  # the service's own jitted kernel
                     constexprs={(names.index(k),): v for k, v in consts.items()},
                     attrs={(names.index(n),): [["tt.divisibility", 16]] for n in div16})
     ptx = triton.compile(src, target=GPUTarget("cuda", cc, 32), options={"num_warps": c["num_warps"]}).asm["ptx"]

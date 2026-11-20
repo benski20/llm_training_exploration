@@ -68,6 +68,7 @@ import logging
 import os
 import sys
 import threading
+import types
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -145,8 +146,25 @@ def _kernel(interpret: bool, variant: str) -> Any:
 
     from pgw.core import _triton_gemv_kernel as kmod
 
-    fn = {"sum": kmod.ring_gemv_kernel, "dot": kmod.ring_gemv_dot_kernel, "stream": kmod.ring_gemv_rows_kernel}
-    return triton.jit(fn[variant])
+    fn = {"sum": kmod.ring_gemv_kernel, "dot": kmod.ring_gemv_dot_kernel, "stream": kmod.ring_gemv_rows_kernel}[variant]
+    if variant == "stream":
+        # the device helpers are jitted here too (same mode as the kernel), bound through a private copy
+        # of the module globals so kernels of different modes never share a helper wrapper
+        fn = _rebind(fn, {h: triton.jit(getattr(kmod, h)) for h in kmod.ROWS_HELPERS})
+    return triton.jit(fn)
+
+
+def _rebind(fn: Any, extra: dict[str, Any]) -> Any:
+    """A copy of ``fn`` whose globals are its module's globals plus ``extra`` (same code and source)."""
+    g = dict(fn.__globals__)
+    g.update(extra)
+    new = types.FunctionType(fn.__code__, g, fn.__name__, fn.__defaults__, fn.__closure__)
+    new.__kwdefaults__ = fn.__kwdefaults__
+    new.__annotations__ = dict(fn.__annotations__)  # tl.constexpr parameters
+    new.__doc__ = fn.__doc__
+    new.__qualname__ = fn.__qualname__
+    new.__module__ = fn.__module__
+    return new
 
 
 @dataclass(frozen=True)
@@ -293,14 +311,28 @@ def table_to_json(rules: dict[str, Iterable[TableRule]]) -> dict[str, Any]:
 
 
 def load_table(src: str | os.PathLike[str] | dict[str, Any]) -> dict[str, tuple[TableRule, ...]]:
-    """Parse a JSON table (path or dict). Malformed rules are skipped with a warning."""
+    """Parse a JSON table (path or dict). Never raises: a malformed file or top-level structure loads as
+    no rules, a malformed device entry as no rules for that device, and malformed rules are skipped,
+    each with a warning."""
     try:
-        data = src if isinstance(src, dict) else json.loads(open(src).read())
-    except (OSError, ValueError) as exc:
-        log.warning("triton GEMV table %s not loaded: %s", src, exc)
+        if isinstance(src, dict):
+            data = src
+        else:
+            with open(src) as f:
+                data = json.load(f)
+        devices = dict(data.get("devices", {}))
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        log.warning("triton GEMV table %s not loaded: %s: %s", src, type(exc).__name__, exc)
         return {}
     out: dict[str, tuple[TableRule, ...]] = {}
-    for name, entries in dict(data.get("devices", {})).items():
+    for name, raw in devices.items():
+        try:
+            if isinstance(raw, (str, bytes, dict)):
+                raise TypeError(f"expected a list of rules, got {type(raw).__name__}")
+            entries = list(raw)
+        except (TypeError, ValueError) as exc:
+            log.warning("triton GEMV table: skipping the rules for %s: %s", name, exc)
+            continue
         rules: list[TableRule] = []
         for e in entries:
             try:
@@ -525,6 +557,9 @@ def _reference(x: torch.Tensor, w8: torch.Tensor, k: int) -> torch.Tensor:
 
     CUDA: :class:`pgw.core.ringmm.PreparedWeight` (``cuda_int8``, the service's eager path). CPU: the
     Python-int reference for small operands, else the float digit GEMM (``cpu_f64``, always exact).
+    On CUDA the check therefore proves "bit-identical to today's path", not independent correctness:
+    a digit-path bug would be shared, so the digit path keeps its own tests against the Python-int
+    reference (``ringmm_reference``).
     """
     from pgw.core.ringmm import PreparedWeight, ringmm_reference
 
@@ -667,7 +702,13 @@ def _run_check(key: str, device: torch.device | str) -> tuple[bool, str]:
 def _checked_rules(key: str, device: torch.device | str) -> tuple[TableRule, ...]:
     """The device's table rules whose configuration passes the self-check (others are logged and dropped)."""
     ok: list[TableRule] = []
-    for rule in device_rules(device):
+    try:
+        candidates = device_rules(device)
+    except Exception as exc:  # e.g. a table file that changed under us; load_table itself never raises
+        log.error("fused ring GEMV: table rules for %s not loaded (%s: %s); using the heuristic", key,
+                  type(exc).__name__, str(exc)[:200])
+        return ()
+    for rule in candidates:
         try:
             rule.validate()
             if rule.config.dot and key in _NO_DOT:
