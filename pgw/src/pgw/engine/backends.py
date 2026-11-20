@@ -986,16 +986,16 @@ class MaskedBackend(LinearBackend):
                 self._prefetch_pending -= 1
 
     def _run_prefetch(self, items: Sequence[tuple[Any, LinearId, int]]) -> None:
+        staged = 0
         try:
-            staged = 0
             for res, lid, rows in items:
                 try:
                     staged += int(res.prefetch(lid, rows))
                 except Exception as exc:  # the next take derives the rows (and reports any error)
                     log.debug("mask prefetch for %s skipped: %s", lid, type(exc).__name__)
-            self.prefetched_rows += staged
         finally:
             with self._prefetch_lock:
+                self.prefetched_rows += staged
                 self._prefetch_pending -= 1
 
     def wait_prefetch(self, timeout: float = 5.0) -> bool:

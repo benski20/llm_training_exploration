@@ -719,8 +719,13 @@ class _StreamChannel:
         try:
             if not self._write_direct(body):
                 try:
-                    async with self._send_lock:
-                        await self.ws.send(body)
+                    # bounded like the regular path (asyncio.timeout around request): a paused transport
+                    # or a stuck concurrent sender cannot hold the call past its deadline
+                    async with asyncio.timeout(max(0.0, timeout)):
+                        async with self._send_lock:
+                            await self.ws.send(body)
+                except TimeoutError:
+                    raise
                 except Exception as exc:
                     raise ServiceUnavailableError(f"compute stream send failed ({type(exc).__name__})") from exc
             return await fut
@@ -1347,7 +1352,8 @@ class ComputeClient:
         regular path.
         """
         ch = self._lane_channel(request)
-        if ch is None:
+        if ch is None or (request.deadline_ms is not None and request.deadline_ms <= 0):
+            # no lane, or a deadline already spent: the regular path refuses it without sending anything
             return await self._compute(request)
         self.stats.requests += 1
         budget = request.deadline_ms / 1000.0 if request.deadline_ms is not None else self.config.request_timeout_s

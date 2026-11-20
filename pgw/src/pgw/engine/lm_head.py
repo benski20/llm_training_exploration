@@ -65,6 +65,11 @@ def lm_head_isa() -> str | None:
     return str(fn(ISA)) if callable(fn) else None
 
 
+def _takes_isa() -> bool:
+    """Whether the loaded native module accepts ``isa=`` (it has ``lm_head_isa``)."""
+    return native.fast is not None and callable(getattr(native.fast, "lm_head_isa", None))
+
+
 def native_lm_head() -> bool:
     """True when the native kernel is loaded (``PGW_NATIVE=0`` disables it)."""
     return native.native_available("lm_head")
@@ -135,7 +140,8 @@ def lm_head_logits(h: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         h = h.detach().to("cpu")
     if native_lm_head() and h.device.type == "cpu" and w.device.type == "cpu" and h.dtype == torch.float32:
         hn = h.detach().contiguous().numpy()
-        kw = {"isa": ISA} if ISA != "auto" else {}  # older builds take no isa (and pick AVX at best)
+        # older builds take no isa (and pick AVX at best): a forced ISA is dropped there, not an error
+        kw = {"isa": ISA} if ISA != "auto" and _takes_isa() else {}
         if w.dtype == torch.float32:
             wn = w.detach().contiguous().numpy()  # no copy for a contiguous head (the model keeps it so)
             return torch.from_numpy(native.fast.lm_head(hn, wn, **kw))

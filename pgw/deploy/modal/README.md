@@ -74,6 +74,10 @@ about 50-57 s.
   enough to use the service as that tenant (it is a secret file, 0600, on the gateway). Production
   should use a separate mTLS-required listener for compute once the service supports one, or an
   enrollment endpoint on its own port.
+* **Certificate renewal.** The tunnel is raw TCP (TLS end to end to the service), so the service sees
+  the gateway's certificate in the handshake and renews it without extra settings. Behind a
+  TLS-terminating proxy instead, set `PGW_SERVICE_TRUSTED_CLIENT_CERT_PEM_HEADER` (see
+  [onboarding.md](../../docs/operations/onboarding.md#6-for-operators-issuing-an-enrollment-code)).
 * **No volumes.** Config, secrets, packs and the mask store live on the customer container's local
   disk. The mask store must never be on network or snapshotted storage (a restored copy could hand out
   masks twice), and the pair is single-use. A restart of the customer container starts the wizard

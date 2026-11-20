@@ -159,6 +159,15 @@ default 30). With `PGW_SERVICE_MTLS_TENANTS_FILE` set, the certificate's name is
 tenant automatically. Gateways enroll before they have a client certificate, so the enrollment
 listener must not require one.
 
+Gateways renew their client certificate before it expires (`POST /pgw/v1/enroll/renew`). The
+service only renews the exact certificate presented in the TLS handshake. When the service
+terminates TLS itself, nothing more is needed. Behind a TLS-terminating proxy that sets
+`PGW_SERVICE_TRUSTED_CLIENT_CERT_HEADER`, also set `PGW_SERVICE_TRUSTED_CLIENT_CERT_PEM_HEADER` to
+the header that carries the verified certificate itself (URL-encoded PEM, for example nginx
+`$ssl_client_escaped_cert`). Without it, renewals behind the proxy are refused and gateways keep
+their certificate until it expires. Only set these headers when every request passes through that
+proxy, and have the proxy strip them from incoming requests.
+
 Create, list and revoke codes:
 
 ```bash

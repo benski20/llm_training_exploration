@@ -172,6 +172,13 @@ PGW_LOG_JSON=true
 Read the admin token (`PGW_GATEWAY_ADMIN_TOKEN`) from your secret manager, not from a world-readable
 file. Run `pgw config show gateway` to see every setting and its current value (secrets masked).
 
+Optional, for gateways serving more than 4 concurrent sessions: set `"engine_pingpong": true` on a
+model in `models.json`. Each engine step of at least `engine_pingpong_min_sessions` (default 5)
+sequences then runs as two half-steps, so the gateway masks and unmasks one half while the other
+half's round trip is with the service. Outputs and per-session mask use are identical. The service
+sees two round trips per layer with half the rows each instead of one. It is off by default and is
+not used with a draft model.
+
 Production policy is fail-closed. Leave `PGW_GATEWAY_ALLOW_DEV_MODES` unset: setting it permits
 plaintext dev models, sampled Freivalds checks and anonymous access. `/admin/status` reports
 `"production_policy": true` when it is off.

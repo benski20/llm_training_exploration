@@ -933,6 +933,9 @@ class ModelRuntime:
                 await self.generator.wait_closed()
             if self.model is not None:
                 await asyncio.to_thread(self.model.close)
+            backend_close = getattr(self.backend, "close", None)
+            if callable(backend_close):  # stops the mask prefetch thread
+                backend_close()
             if self.client is not None:
                 await _aclose(self.client)
                 self.client = None

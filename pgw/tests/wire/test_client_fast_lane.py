@@ -171,6 +171,23 @@ async def test_lane_deadline(serve: Any) -> None:
     await client.aclose()
 
 
+async def test_lane_spent_deadline_sends_nothing(serve: Any) -> None:
+    """deadline_ms=0: refused like the regular path (attempts 0), and the provider never sees the body."""
+    srv = serve(FakeHandler())
+    client = _client(srv.url, max_retries=0)
+    await client.connect(None, RING.name)
+    await client.compute(make_request(RING, [("0.qkv", 1)], rid="warm")[0])
+    calls = len(srv.handler.calls)
+    lane = client.stats.lane_requests
+    req, _ = make_request(RING, [("0.qkv", 1)], rid="spent", deadline_ms=0)
+    with pytest.raises(PGWError) as ei:
+        await client.compute(req)
+    assert ei.value.code == ErrorCode.DEADLINE_EXCEEDED
+    await asyncio.sleep(0.05)
+    assert len(srv.handler.calls) == calls and client.stats.lane_requests == lane
+    await client.aclose()
+
+
 async def test_lane_connection_lost_mid_call_is_retried(serve: Any) -> None:
     srv = serve(FakeHandler())
     client = _client(srv.url, max_retries=3, backoff_max_s=0.01)

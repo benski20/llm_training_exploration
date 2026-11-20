@@ -912,15 +912,28 @@ def create_router(
                     out = _encode_reply(req, resp, dims, t0, len(body))
                     status, code = 200, None
                 except Exception as exc:
-                    _log_error(exc, req.request_id, STREAM_PATH)
-                    status, err = error_response_bytes(exc, req.request_id)
+                    # The frame is taken (admission and quotas are charged): nothing below may raise,
+                    # or the protocol would hand the same frame to the regular path a second time.
+                    try:
+                        _log_error(exc, req.request_id, STREAM_PATH)
+                    except Exception:  # noqa: S110 - logging must not undo the reply
+                        pass
+                    try:
+                        status, err = error_response_bytes(exc, req.request_id)
+                        code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
+                    except Exception:
+                        status, err = error_response_bytes(
+                            PGWError("internal error", code=ErrorCode.INTERNAL), req.request_id)
+                        code = str(ErrorCode.INTERNAL)
                     out = [err]
-                    code = str(exc.code) if isinstance(exc, PGWError) else str(ErrorCode.INTERNAL)
                 return out
             finally:
                 if body_budget is not None and held:
                     body_budget.release(held)
-                _done_now(box, t0, status, code)
+                try:
+                    _done_now(box, t0, status, code)
+                except Exception:  # pragma: no cover - the metrics hook must not re-run the frame
+                    log.exception("compute stream metrics hook failed")
 
         if frame_lane is not None and lane_capable:
             frame_lane.handler = lane

@@ -34,17 +34,19 @@ QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 #: Builds the Rust gateway kernels (pgw_fast) on the Kaggle VM.
 BUILD_NATIVE = {
     "kind": "shell", "name": "build_native",
-    "cmd": "(command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) && "
-           ". $HOME/.cargo/env && python rust/tools/build_fast.py && "
+    # rust-version is 1.89 (stable AVX-512 intrinsics): install rustup when cargo is missing or older.
+    "cmd": "(cargo --version 2>/dev/null | awk '{split($2,v,\".\"); exit !(v[1]>1 || v[2]>=89)}' || "
+           "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && "
+           "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && "
            "python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
     "timeout": 1200,
 }
 
 JOBS: dict[str, dict] = {
-    # run 26 (after the phase-1 merge): 7B single stream with the decode-only accounting and per-trip split,
+    # run 27 (after the phase-2 merge; run 26 had the same steps after phase 1): 7B single stream with the decode-only accounting and per-trip split,
     # aggregate throughput at 4/8/16 streams, the network floor and the gateway CPU profile (all layers warm).
     # Checks: decode remote ms per trip x 112 + local + LM head within 10% of s/token; outputs bit-identical.
-    "pgw-run26-7b": {"steps": [
+    "pgw-run27-7b": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll"], "steps": [
         BUILD_NATIVE,
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; cat /sys/fs/cgroup/cpu.max || true", "timeout": 60},
         {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
@@ -68,7 +70,7 @@ JOBS: dict[str, dict] = {
     # at 4 streams ping-pong does not engage: a control). 32 tokens keep the store near run 26's size (two gateway
     # runs: about 4.3k slots, 24 GB at 7B). Checks: tokens_identical everywhere; engine_delta.pingpong_steps > 0
     # at 8 and 16 streams only.
-    "pgw-pingpong-7b": {"steps": [
+    "pgw-pingpong-7b": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll"], "steps": [
         BUILD_NATIVE,
         {"kind": "pytest", "name": "pytest_sched", "args": ["tests/engine/test_generate.py",
                                                             "tests/engine/test_scheduling_pingpong.py", "-q", "-rs",
@@ -85,7 +87,7 @@ JOBS: dict[str, dict] = {
     # Kaggle CPU: new paths (AVX-512 / register-blocked LM head, fast RoPE and sampler helpers) vs the
     # reference forms (PGW_LM_HEAD_ISA=avx + --reference-paths), at 1, 4 and 16 rows; plus spinning OpenMP
     # workers (OMP_WAIT_POLICY=ACTIVE) to size their effect. Outputs are bit-identical in every variant.
-    "pgw-token-profile-7b": {"exclude": ["deploy", "scripts", "tests"], "steps": [
+    "pgw-token-profile-7b": {"gpu": False, "exclude": ["deploy", "scripts", "tests"], "steps": [
         BUILD_NATIVE,
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; cat /sys/fs/cgroup/cpu.max || true", "timeout": 60},
         *[{"kind": "shell", "name": f"profile_token_{tag}_r{rows}",
@@ -252,9 +254,11 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
         (d / "run.py").write_text(template.replace("__JOB__", json.dumps(job)).replace("__PGW_TGZ_B64__", tgz))
         meta = {"id": f"{args.owner}/{slug}", "title": slug, "code_file": "run.py", "language": "python",
-                "kernel_type": "script", "is_private": True, "enable_gpu": True, "machine_shape": "NvidiaTeslaP100",
+                "kernel_type": "script", "is_private": True, "enable_gpu": job.get("gpu", True),
                 "enable_internet": True, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
                 "model_sources": []}
+        if meta["enable_gpu"]:
+            meta["machine_shape"] = "NvidiaTeslaP100"
         (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))
         print(d, f"{(d / 'run.py').stat().st_size / 1e6:.2f} MB")
 
