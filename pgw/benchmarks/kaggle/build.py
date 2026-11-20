@@ -31,30 +31,53 @@ QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
+#: Builds the Rust gateway kernels (pgw_fast) on the Kaggle VM.
+BUILD_NATIVE = {
+    "kind": "shell", "name": "build_native",
+    "cmd": "(command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) && "
+           ". $HOME/.cargo/env && python rust/tools/build_fast.py && "
+           "python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
+    "timeout": 1200,
+}
+
 JOBS: dict[str, dict] = {
-    # speculative decoding: 7B target (masked, service on the T4) with a 0.5B draft on the gateway CPU;
-    # the same requests with and without the draft, outputs compared with the plaintext reference
-    "pgw-spec-7b": {"steps": [
-        {"kind": "shell", "name": "build_native",
-         "cmd": "(command -v cargo || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal) && "
-                ". $HOME/.cargo/env && python rust/tools/build_fast.py && "
-                "python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
-         "timeout": 1200},
+    # run 26 (after the phase-1 merge): 7B single stream with the decode-only accounting and per-trip split,
+    # aggregate throughput at 4/8/16 streams, the network floor and the gateway CPU profile (all layers warm).
+    # Checks: decode remote ms per trip x 112 + local + LM head within 10% of s/token; outputs bit-identical.
+    "pgw-run26-7b": {"steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; cat /sys/fs/cgroup/cpu.max || true", "timeout": 60},
         {"kind": "pytest", "name": "pytest_gpu", "args": ["tests", "-m", "gpu", "-q", "-rs", "--timeout", "900"],
          "timeout": 1800},
+        {"kind": "shell", "name": "net_floor_bench",
+         "cmd": "python benchmarks/net_floor_bench.py --iters 5000 --json /kaggle/working/net_floor.json",
+         "timeout": 300},
         {"kind": "shell", "name": "gpu_kernel_bench",
          "cmd": "python benchmarks/gpu_kernel_bench.py --iters 300", "timeout": 1800},
         {"kind": "shell", "name": "profile_gateway_cpu",
-         "cmd": "python benchmarks/profile_gateway.py --preset 7b --layers 1 --steps 24 --ring K32A12C27 --profile "
+         "cmd": "python benchmarks/profile_gateway.py --preset 7b --layers 2 --steps 24 --ring K32A12C27 --profile "
                 "--workdir /tmp/pgw_prof", "timeout": 1800},
-        {"kind": "pytest", "name": "pytest_spec_ringmm", "args": ["tests/engine/test_speculative.py",
-                                                                  "tests/core/test_ringmm.py", "tests/wire/test_stream.py",
-                                                                  "-q", "-rs", "--timeout", "900"], "timeout": 1500},
         {"kind": "validate", "label": "qwen7b", "args": [
             "--model", QWEN7, "--label", "qwen7b", "--device", "cuda", "--ref-device", "cuda", "--ring", "K32A12C27",
-            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4",
-            "--draft-model", QWEN05, "--spec-tokens", "8", "--draft-device", "cpu", "cuda:1",
-            "--loadtest", "1x1", "1x5", "4x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
+            "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "64", "--concurrent", "4", "8", "16",
+            "--loadtest", "1x1", "1x5", "4x1", "8x1", "16x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
+         "timeout": 7800},
+    ]},
+    # speculation sweep: k = 1, 2, 3 with a 0.5B draft on the gateway CPU and on the second T4 (cuda:1), one
+    # fixed draft size per run (spec_min_tokens capped at k), spec_max_batch 1; single stream for every run and
+    # 4 streams for no-spec and k=2 on cuda:1 (spec at 4 streams should equal no-spec). 48 tokens keep the
+    # mask store near run 25's size (about 3.5k slots, 19 GB at 7B).
+    "pgw-spec-sweep-7b": {"steps": [
+        BUILD_NATIVE,
+        {"kind": "pytest", "name": "pytest_spec", "args": ["tests/engine/test_speculative.py", "-q", "-rs",
+                                                           "--timeout", "900"], "timeout": 1500},
+        {"kind": "validate", "label": "qwen7b_spec", "args": [
+            "--model", QWEN7, "--label", "qwen7b_spec", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "48",
+            "--concurrent", "4", "--draft-model", QWEN05, "--spec-tokens", "1", "2", "3", "--spec-min-tokens", "16",
+            "--spec-max-batch", "1", "--draft-device", "cpu", "cuda:1", "--spec-concurrent", "4",
+            "--spec-concurrent-variants", "2@cuda:1", "--loadtest", "1x1", "--loadtest-tokens", "2",
+            "--factory-bench-slots", "64"],
          "timeout": 7800},
     ]},
     # fused Triton ring GEMV (K <= 32, <= 16 rows): GPU exactness tests + timing vs the digit-GEMM path, 7B shapes

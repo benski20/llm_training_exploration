@@ -14,6 +14,14 @@ Everything goes through the real ``pgw`` CLI and real processes, as an operator 
 6. concurrent chat requests (gateway engine batching) for batched end-to-end throughput;
 7. ``pgw bench service`` against the running service: 1 session (decode, batch 1) and N sessions.
 
+Accounting (streaming request): ``decode_*`` fields cover only the decode steps. They come from the
+backend's decode counters (``decode_calls``/``decode_remote_seconds``/``decode_local_seconds``) when the
+gateway has them, else from the backend stats delta between the first streamed token and the end. The
+older whole-request averages (prefill included, divided by prompt + generated tokens) are kept as
+``*_incl_prefill``. ``trip_split`` breaks a round trip into the client RTT, the service-reported queue and
+compute time, and the rest (``wire_ms`` = RTT - queue - compute, clamped at 0: network, framing, Python),
+by rows per request; for multi-item requests the service reports compute as a sum and queue as a max.
+
 Writes ``<out>/<label>.json``. Usage::
 
     python benchmarks/gpu_validate.py --model Qwen/Qwen2.5-0.5B-Instruct --label qwen0.5b \
@@ -83,6 +91,103 @@ def gpu_mem_mb() -> list[int]:
         return [int(x) for x in out.split()]
     except Exception:
         return []
+
+
+def cpu_info() -> dict[str, Any]:
+    """CPU count, affinity, cgroup quota and ``lscpu`` (model, topology): needed to compare runs."""
+    out: dict[str, Any] = {"cpu_count": os.cpu_count()}
+    try:
+        out["affinity_cpus"] = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        pass
+    try:
+        out["cgroup_cpu_max"] = Path("/sys/fs/cgroup/cpu.max").read_text().strip()
+    except OSError:
+        pass
+    try:
+        js = json.loads(subprocess.run(["lscpu", "-J"], capture_output=True, text=True, timeout=30).stdout)  # noqa: S607
+        out["lscpu"] = {str(e.get("field", "")).rstrip(":"): e.get("data") for e in js.get("lscpu", [])}
+    except Exception as exc:
+        out["lscpu_error"] = type(exc).__name__
+    try:
+        rows = subprocess.run(["lscpu", "-p=CPU,CORE,SOCKET,NODE"], capture_output=True, text=True,  # noqa: S607
+                              timeout=30).stdout.splitlines()
+        cpus = [r.split(",") for r in rows if r and not r.startswith("#")]
+        out["topology"] = {"logical_cpus": len(cpus), "cores": len({(c[2], c[1]) for c in cpus}),
+                           "sockets": len({c[2] for c in cpus}), "numa_nodes": len({c[3] for c in cpus})}
+    except Exception as exc:
+        out["topology_error"] = type(exc).__name__
+    return out
+
+
+def num_delta(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, float]:
+    """``b - a`` for the numeric fields of ``b`` (missing in ``a``: 0)."""
+    a, b = a or {}, b or {}
+    return {k: v - (a.get(k) or 0) for k, v in b.items() if isinstance(v, int | float) and not isinstance(v, bool)}
+
+
+def trip_split(t0: dict[str, Any] | None, t1: dict[str, Any] | None) -> dict[str, Any]:
+    """Per-trip client RTT, service queue/compute and the rest, by rows per request (``/admin/status``
+    ``client_timing`` delta). Empty if the gateway does not report it."""
+    out: dict[str, Any] = {}
+    for cls, b in (t1 or {}).items():
+        d = num_delta((t0 or {}).get(cls), b)
+        n = d.get("trips", 0)
+        if n <= 0:
+            continue
+        row: dict[str, Any] = {"trips": int(n), "rows_per_trip": round(d["rows"] / n, 2),
+                               "multi_item_trips": int(d["multi_item"])}
+        for k in ("rtt", "queue", "compute", "wire"):
+            row[f"{k}_ms"] = round(d[f"{k}_s"] / n * 1e3, 4)
+        if d["multi_item"]:
+            row["note"] = "multi-item trips: compute_ms sums the items, queue_ms is their max"
+        out[f"rows_{cls}"] = row
+    return out
+
+
+def decode_accounting(b_first: dict[str, Any], b_end: dict[str, Any], db: dict[str, float], n_dec: int,
+                      dec_s: float | None) -> dict[str, Any]:
+    """Decode-only remote/local seconds per token and per trip (see the module docstring)."""
+    dd = num_delta(b_first, b_end)
+    trips = dd.get("round_trips", 0)
+    out: dict[str, Any] = {"decode_tokens": n_dec}
+    if n_dec <= 0 or trips <= 0:
+        return out
+    trips_per_token = trips / n_dec
+    out["decode_round_trips_per_token"] = round(trips_per_token, 2)
+    out["decode_rows_per_trip"] = round(dd.get("rows", 0) / trips, 3)
+    after_first: dict[str, Any] = {
+        "remote_s_per_token": round(dd.get("remote_seconds", 0) / n_dec, 4),
+        "local_s_per_token": round(dd.get("local_seconds", 0) / n_dec, 4),
+        "remote_ms_per_trip": round(dd.get("remote_seconds", 0) / trips * 1e3, 4),
+        "local_ms_per_trip": round(dd.get("local_seconds", 0) / trips * 1e3, 4),
+        "note": "backend stats delta from the first streamed token to the end; a step in flight at the "
+                "first-token snapshot is partly counted",
+    }
+    out["decode_after_first_token"] = after_first
+    src = after_first
+    calls = db.get("decode_calls", 0)
+    if "decode_calls" in b_end and calls > 0:
+        rem, loc = db.get("decode_remote_seconds", 0.0), db.get("decode_local_seconds", 0.0)
+        out["decode_counters"] = {
+            "calls": int(calls),
+            "remote_ms_per_trip": round(rem / calls * 1e3, 4),
+            "local_ms_per_trip": round(loc / calls * 1e3, 4),
+            "remote_s_per_token": round(rem / calls * trips_per_token, 4),
+            "local_s_per_token": round(loc / calls * trips_per_token, 4),
+        }
+        src = out["decode_counters"]
+        out["decode_source"] = "backend decode counters"
+    else:
+        out["decode_source"] = "stats delta after the first token"
+    for k in ("remote_s_per_token", "local_s_per_token", "remote_ms_per_trip", "local_ms_per_trip"):
+        out[f"decode_{k}"] = src[k]
+    if dec_s:
+        acc = src["remote_s_per_token"] + src["local_s_per_token"]
+        out["decode_accounted_s_per_token"] = round(acc, 4)
+        out["decode_unaccounted_s_per_token"] = round(dec_s - acc, 4)  # LM head, sampling, Python, streaming
+        out["decode_accounted_fraction"] = round(acc / dec_s, 3)
+    return out
 
 
 def dir_bytes(p: Path) -> int:
@@ -187,9 +292,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         R["torch"] = torch.__version__
         R["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
-        R["cpu_count"] = os.cpu_count()
-    except Exception:
-        pass
+    except Exception as exc:
+        R["torch_error"] = type(exc).__name__
+    R["cpu"] = cpu_info()
+    R["cpu_count"] = R["cpu"].get("cpu_count")
 
     # 1. download + pack
     src = args.model
@@ -224,7 +330,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cli("pack", str(dsrc), str(draft_pack), "--name", f"{args.label}-draft", "-q", env=env,
                 log_file=work / "logs" / "pack_draft.log")
         R["draft"] = {"model": args.draft_model, "spec_tokens": args.spec_tokens,
-                      "devices": args.draft_device or ["cpu"], "pack_bytes": dir_bytes(draft_pack)}
+                      "devices": args.draft_device or ["cpu"], "pack_bytes": dir_bytes(draft_pack),
+                      "spec_min_tokens": args.spec_min_tokens, "spec_max_batch": args.spec_max_batch}
     save()
 
     # 2. reference
@@ -242,10 +349,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # 3. mask store + factory
     n_prompt = len(ref["prompt_ids"])
     per_req = n_prompt + args.max_tokens
-    n_requests = 2 + args.concurrent  # non-streaming, streaming, concurrent batch
+    concurrent = [c for c in args.concurrent if c > 1]
+    n_requests = 2 + sum(concurrent)  # non-streaming, streaming, concurrent batches
     slots = per_req * n_requests + 16
-    if args.draft_model:  # the same requests again, with room for speculation rows
-        slots += (n_prompt + args.max_tokens * 3) * n_requests * len(args.draft_device or ["cpu"])  # spec_row_budget 3
+    spec_variants = _spec_variants(args, draft_pack)
+    for _, _, spec_conc in spec_variants:  # room for speculation rows (spec_row_budget <= 3 per token)
+        slots += (n_prompt + args.max_tokens * 3) * (2 + sum(spec_conc))
     store, kek = work / "masks", work / "secrets" / "kek"
     kek.parent.mkdir(mode=0o700, exist_ok=True)
     if not (store / "state.sqlite").exists():
@@ -253,7 +362,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     before = dir_bytes(store)
     t0 = time.monotonic()
     fac = cli("factory", "generate", "--pack", str(pack), "--store", str(store), "--key-file", str(kek), "--ring",
-              args.ring, "--slots", str(slots), "--device", args.device, env=env, log_file=work / "logs" / "factory.log")
+              args.ring, "--slots", str(slots), "--device", args.device, env=env,
+              log_file=work / "logs" / "factory.log")
     fac_s = time.monotonic() - t0
     store_bytes = dir_bytes(store) - before
     R["factory_generate"] = {"slots": slots, "wall_s": round(fac_s, 2), "tokens_per_hour_wall_incl_startup":
@@ -294,21 +404,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_service_loaded"] = gpu_mem_mb()
         svc_url = f"http://127.0.0.1:{svc_port}"
         models = sec / "models.json"
-        variants: list[tuple[str, dict[str, Any]]] = [("", {})]
-        if draft_pack is not None:
-            for dev in args.draft_device or ["cpu"]:
-                dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": args.spec_tokens,
-                                      "draft_device": dev}
-                variants.append(("spec_" if dev == "cpu" else f"spec_{dev.replace(':', '')}_", dk))
+        variants: list[tuple[str, dict[str, Any], list[int]]] = [("", {}, concurrent), *spec_variants]
         gw: subprocess.Popen[bytes] | None = None
-        for prefix, extra in variants:
+        for prefix, extra, conc_list in variants:
             if gw is not None:  # the next gateway reuses the store; stop the previous one first
                 gw.terminate()
                 gw.wait(timeout=120)
             models.write_text(json.dumps([{"name": args.label, "pack_path": str(pack), "fingerprint": fp,
                                            "ring": args.ring, "service_url": svc_url,
                                            "service_token_file": str(sec / "service_token"),
-                                           "max_concurrent_sessions": max(4, args.concurrent),
+                                           "max_concurrent_sessions":
+                                               max(4, *args.concurrent, args.spec_concurrent or 0),
                                            "service_timeout_s": 600, **extra}]))
             models.chmod(0o600)
             gw_port = free_port()
@@ -319,6 +425,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                       "PGW_GATEWAY_TOKENS_PER_MINUTE": "10000000", "PGW_GATEWAY_REQUESTS_PER_MINUTE": "10000",
                       "PGW_MASKSTORE_ROOT": str(store), "PGW_MASKSTORE_KEY_FILE": str(kek),
                       "PGW_MASKSTORE_LOW_WATER_SLOTS": "1"}
+            if extra and args.spec_max_batch is not None:  # gateway setting (plan interface C3), only when given
+                gw_env["PGW_GATEWAY_SPEC_MAX_BATCH"] = str(args.spec_max_batch)
             gw = stack.start(f"gateway{prefix}", ["gateway", "serve"], gw_env)
             ready_s = stack.wait_ready(f"http://127.0.0.1:{gw_port}/readyz", gw, f"gateway{prefix}")
             R[prefix + "gateway_startup_s"] = round(ready_s, 1)
@@ -355,7 +463,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "usage": js["usage"],
                 "tokens_identical": got_tokens == ref["tokens"],
                 "logprobs_identical": got_lps == ref["logprobs"],
-                "top2_identical": [[tuple(x) for x in t] for t in got_top] == [[tuple(x) for x in t] for t in ref["top"]],
+                "top2_identical": ([[tuple(x) for x in t] for t in got_top]
+                                   == [[tuple(x) for x in t] for t in ref["top"]]),
                 "text_identical": js["choices"][0]["message"]["content"] == ref["text"],
                 "max_abs_logprob_diff": max((abs(a - b) for a, b in zip(got_lps, ref["logprobs"], strict=False)),
                                             default=None),
@@ -367,18 +476,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "wire_bytes_per_token": round((d.get("bytes_up", 0) + d.get("bytes_down", 0)) / ntok),
                 "wire_up_bytes_per_token": round(d.get("bytes_up", 0) / ntok),
                 "wire_down_bytes_per_token": round(d.get("bytes_down", 0) / ntok),
-                "round_trips_per_token_decode": None,
-                "gateway_cpu_s_per_token": round((c1 - c0) / ntok, 4),
+                "gateway_cpu_s_per_token_incl_prefill": round((c1 - c0) / ntok, 4),
+                "trip_split_incl_prefill": trip_split(s0.get("client_timing"), s1.get("client_timing")),
                 "status_after": {k: v for k, v in s1.items() if k != "backend"},
             }
             if got_tokens != ref["tokens"]:
                 R[prefix + "chat"]["got_tokens"], R[prefix + "chat"]["ref_tokens"] = got_tokens, ref["tokens"]
-            log(prefix + "chat:", repr(R[prefix + "chat"]["text"]), "identical:", R[prefix + "chat"]["tokens_identical"],
-                R[prefix + "chat"]["logprobs_identical"])
+            log(prefix + "chat:", repr(R[prefix + "chat"]["text"]), "identical:",
+                R[prefix + "chat"]["tokens_identical"], R[prefix + "chat"]["logprobs_identical"])
             save()
 
             # 5b. streaming: TTFT (prefill) and decode s/token
             s0, c0 = status(), proc_cpu_seconds(gw.pid)
+            s_first: dict[str, Any] | None = None  # status right after the first token: decode-only deltas
             times: list[float] = []
             text: list[str] = []
             lps: list[float] = []
@@ -399,10 +509,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             for c in ch["logprobs"]["content"]:
                                 lps.append(c["logprob"])
                                 times.append(time.perf_counter() - t0)
+                            if s_first is None and times:
+                                s_first = status()
                         if piece:
                             text.append(piece)
             c1, s1 = proc_cpu_seconds(gw.pid), status()
-            db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"] if isinstance(s1["backend"][k], (int, float))}
+            db = num_delta(s0["backend"], s1["backend"])
             dec = (times[-1] - times[0]) / (len(times) - 1) if len(times) > 1 else None
             R[prefix + "stream"] = {
                 "text_identical": "".join(text) == ref["text"],
@@ -416,40 +528,55 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "backend_delta": db,
             }
             if dec:
-                # gateway CPU per decoded token: total CPU minus an estimate of the prefill share is not
-                # separable from /proc; report the request average and the local engine seconds instead.
-                R[prefix + "stream"]["gateway_local_engine_s_per_token"] = round(db.get("local_seconds", 0) / ntok, 4)
-                R[prefix + "stream"]["remote_s_per_token"] = round(db.get("remote_seconds", 0) / ntok, 4)
+                # whole-request averages (prefill included, divided by prompt + generated tokens): the old fields
+                R[prefix + "stream"]["gateway_local_engine_s_per_token_incl_prefill"] = round(
+                    db.get("local_seconds", 0) / ntok, 4)
+                R[prefix + "stream"]["remote_s_per_token_incl_prefill"] = round(db.get("remote_seconds", 0) / ntok, 4)
+            if s_first is not None:
+                R[prefix + "stream"].update(decode_accounting(s_first["backend"], s1["backend"], db,
+                                                              len(times) - 1, dec))
+                R[prefix + "stream"]["decode_trip_split"] = trip_split(s_first.get("client_timing"),
+                                                                       s1.get("client_timing"))
+            R[prefix + "stream"]["prefill_trip_split"] = trip_split(s0.get("client_timing"),
+                                                                    (s_first or s1).get("client_timing"))
             log(prefix + "stream:", R[prefix + "stream"])
             save()
 
             # 6. concurrent requests (gateway engine batches sessions; service batches rows)
-            if args.concurrent > 1:
+            for n_conc in conc_list:
                 s0, c0, t0 = status(), proc_cpu_seconds(gw.pid), time.perf_counter()
 
                 def one(_: int, gw_url: str = gw_url, body: dict[str, Any] = body,
                         H: dict[str, str] = H) -> dict[str, Any]:
-                    rr = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200, trust_env=False)
+                    rr = httpx.post(f"{gw_url}/v1/chat/completions", json=body, headers=H, timeout=7200,
+                                    trust_env=False)
                     return {"status": rr.status_code, "json": rr.json() if rr.status_code == 200 else rr.text[:500]}
 
-                with cf.ThreadPoolExecutor(args.concurrent) as ex:
-                    res = list(ex.map(one, range(args.concurrent)))
+                with cf.ThreadPoolExecutor(n_conc) as ex:
+                    res = list(ex.map(one, range(n_conc)))
                 wall = time.perf_counter() - t0
                 c1, s1 = proc_cpu_seconds(gw.pid), status()
-                db = {k: s1["backend"][k] - s0["backend"][k] for k in s1["backend"]
-                      if isinstance(s1["backend"][k], (int, float))}
+                db = num_delta(s0["backend"], s1["backend"])
                 ok = [x for x in res if x["status"] == 200]
-                same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"] for x in ok]
-                R[prefix + "concurrent"] = {
-                    "requests": args.concurrent, "ok": len(ok), "tokens_identical": same,
+                same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"]
+                        for x in ok]
+                rc = {
+                    "requests": n_conc, "ok": len(ok), "tokens_identical": same,
                     "errors": [x for x in res if x["status"] != 200][:3],
                     "wall_s": round(wall, 2),
                     "generated_tokens_per_s": round(len(ok) * args.max_tokens / wall, 3),
                     "all_tokens_per_s": round(len(ok) * ntok / wall, 3),
-                    "gateway_cpu_s_per_token": round((c1 - c0) / max(1, len(ok) * ntok), 4),
+                    "gateway_cpu_s_per_token_incl_prefill": round((c1 - c0) / max(1, len(ok) * ntok), 4),
                     "backend_delta": db,
+                    "trip_split_incl_prefill": trip_split(s0.get("client_timing"), s1.get("client_timing")),
                 }
-                log(prefix + "concurrent:", {k: v for k, v in R[prefix + "concurrent"].items() if k != "backend_delta"})
+                # "<prefix>concurrent" keeps the first level (the field older runs have); every level is
+                # also under "<prefix>concurrent_<n>"
+                if n_conc == conc_list[0]:
+                    R[prefix + "concurrent"] = rc
+                R[f"{prefix}concurrent_{n_conc}"] = rc
+                log(f"{prefix}concurrent {n_conc}:", {k: v for k, v in rc.items()
+                                                     if k not in ("backend_delta", "trip_split_incl_prefill")})
                 save()
 
         # 7. service load test (decode rows, all layers), batch 1 and batched
@@ -477,10 +604,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_end"] = gpu_mem_mb()
     finally:
         stack.stop()
-        for name in ("service", "gateway", "gatewayspec_", "gatewayspec_cuda_", "gatewayspec_cuda1_"):
-            lf = work / "logs" / f"{name}.log"
-            if lf.exists():
-                shutil.copy(lf, out_dir / f"{args.label}_{name}.log")
+        for lf in sorted((work / "logs").glob("*.log")):
+            if lf.stem == "service" or lf.stem.startswith("gateway"):
+                shutil.copy(lf, out_dir / f"{args.label}_{lf.name}")
         for name in ("factory.log", "bench_factory.log", "pack.log"):
             lf = work / "logs" / name
             if lf.exists():
@@ -488,6 +614,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     R["ok"] = True
     save()
     return R
+
+
+def _spec_variants(args: argparse.Namespace, draft_pack: Path | None) -> list[tuple[str, dict[str, Any], list[int]]]:
+    """Speculative gateway runs as ``(result prefix, model config extras, concurrency levels)``, one per
+    (draft device, k). With a single k the prefixes are the older ``spec_`` / ``spec_cuda1_``."""
+    if draft_pack is None:
+        return []
+    out: list[tuple[str, dict[str, Any], list[int]]] = []
+    ks = list(args.spec_tokens)
+    conc = [c for c in ([args.concurrent[0]] if args.spec_concurrent is None else [args.spec_concurrent]) if c > 1]
+    only = set(args.spec_concurrent_variants or [])
+    for dev in args.draft_device or ["cpu"]:
+        for k in ks:
+            dk: dict[str, Any] = {"draft_pack_path": str(draft_pack), "spec_tokens": k, "draft_device": dev}
+            if args.spec_min_tokens is not None:  # model config field, only when given
+                dk["spec_min_tokens"] = min(args.spec_min_tokens, k)
+            prefix = "spec_" if dev == "cpu" else f"spec_{dev.replace(':', '')}_"
+            if len(ks) > 1:
+                prefix += f"k{k}_"
+            out.append((prefix, dk, conc if not only or f"{k}@{dev}" in only else []))
+    return out
 
 
 def main() -> int:
@@ -501,7 +648,8 @@ def main() -> int:
     ap.add_argument("--plain-dtype", default="float32")
     ap.add_argument("--max-tokens", type=int, default=32)
     ap.add_argument("--prompt", default=PROMPT)
-    ap.add_argument("--concurrent", type=int, default=4)
+    ap.add_argument("--concurrent", type=int, nargs="+", default=[4],
+                    help="concurrent request counts (one batch each); the first is also reported as 'concurrent'")
     ap.add_argument("--loadtest", nargs="*", default=["1x1", "32x1", "1x32"],
                     help="service load tests as SESSIONSxROWS (rows per call: 1 = one decode row; a gateway "
                          "batching N sessions sends N rows per call)")
@@ -509,11 +657,22 @@ def main() -> int:
     ap.add_argument("--factory-bench-slots", type=int, default=256)
     ap.add_argument("--batch-window-ms", type=float, default=0.0)
     ap.add_argument("--draft-model", default=None, help="also run with speculative decoding (this draft model)")
-    ap.add_argument("--spec-tokens", type=int, default=4)
+    ap.add_argument("--spec-tokens", type=int, nargs="+", default=[4],
+                    help="draft lengths k; one speculative gateway run per (draft device, k)")
+    ap.add_argument("--spec-min-tokens", type=int, default=None,
+                    help="model config spec_min_tokens, capped at each run's k (forwarded only when given; "
+                         "a value >= k gives one fixed draft size)")
+    ap.add_argument("--spec-max-batch", type=int, default=None,
+                    help="gateway setting spec_max_batch: speculate only in steps with at most this many "
+                         "sequences (forwarded as PGW_GATEWAY_SPEC_MAX_BATCH only when given)")
+    ap.add_argument("--spec-concurrent", type=int, default=None,
+                    help="concurrent requests in speculative runs (default: the first --concurrent; 0 or 1 skips)")
+    ap.add_argument("--spec-concurrent-variants", nargs="*", default=None,
+                    help="only these speculative runs do the concurrent batch, as K@DEVICE (e.g. 2@cuda:1)")
     ap.add_argument("--draft-device", nargs="+", default=None,
                     help="draft model device(s) on the gateway; one speculative run each (default cpu)")
     ap.add_argument("--delete-hf", action="store_true", help="delete the HF download after packing")
-    ap.add_argument("--work", default="/tmp/pgw_bench")
+    ap.add_argument("--work", default="/tmp/pgw_bench")  # noqa: S108 - scratch space of a throwaway VM
     ap.add_argument("--out", default="results")
     # reference phase
     ap.add_argument("--pack")

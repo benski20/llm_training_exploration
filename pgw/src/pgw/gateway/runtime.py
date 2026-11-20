@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import math
 import random
@@ -89,43 +90,171 @@ def _kind_of(linear_key: str) -> str:
     return linear_key.split(".", 1)[1] if "." in linear_key else linear_key
 
 
+#: How often the client certificate file is re-read for the expiry gauge (seconds).
+_CERT_REREAD_S = 3600.0
+
+
+def _cert_not_after(path: Any) -> float:
+    """``notAfter`` of the first certificate in a PEM file, as Unix time."""
+    from pathlib import Path
+
+    from cryptography import x509
+
+    cert = x509.load_pem_x509_certificate(Path(path).read_bytes())
+    after = getattr(cert, "not_valid_after_utc", None)
+    if after is None:  # pragma: no cover - cryptography < 42
+        import datetime as _dt
+
+        after = cert.not_valid_after.replace(tzinfo=_dt.UTC)
+    return float(after.timestamp())
+
+
+def _row_class(rows: int) -> str:
+    """Bucket of a round trip by total rows (``1`` is a single-stream decode step)."""
+    if rows <= 1:
+        return "1"
+    return "2-8" if rows <= 8 else "9+"
+
+
+class TripTiming:
+    """Per-round-trip timing totals, split by rows per request (thread-safe, a few float adds per trip).
+
+    ``rtt`` is the client-side wall time of one compute request; ``queue``/``compute`` are what the
+    service reports in ``ServerTiming``; ``wire = rtt - queue - compute`` (clamped at 0) is network,
+    framing and the Python on both ends. For a request with several items the service reports the
+    **sum** of the items' compute times and the **max** of their queue times, so ``multi_item`` trips
+    are counted separately: their split is an approximation.
+    """
+
+    __slots__ = ("_lock", "_totals")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._totals: dict[str, list[float]] = {}
+
+    def add(self, rows: int, items: int, rtt_s: float, queue_s: float, compute_s: float, wire_s: float) -> None:
+        """Record one successful round trip."""
+        key = _row_class(rows)
+        with self._lock:
+            t = self._totals.get(key)
+            if t is None:
+                t = self._totals[key] = [0.0] * 7
+            t[0] += 1
+            t[1] += rows
+            t[2] += 1 if items > 1 else 0
+            t[3] += rtt_s
+            t[4] += queue_s
+            t[5] += compute_s
+            t[6] += wire_s
+
+    def snapshot(self) -> dict[str, dict[str, float]]:
+        """``{row_class: {trips, rows, multi_item, rtt_s, queue_s, compute_s, wire_s}}`` (cumulative)."""
+        with self._lock:
+            return {
+                k: {"trips": int(t[0]), "rows": int(t[1]), "multi_item": int(t[2]), "rtt_s": t[3],
+                    "queue_s": t[4], "compute_s": t[5], "wire_s": t[6]}
+                for k, t in self._totals.items()
+            }
+
+
 class _InstrumentedClient:
     """Wraps the compute client: fail-closed gate and round-trip timing per linear kind.
 
     Every round trip first checks the model's integrity circuit breaker, so once any response
     fails a check, sessions that are already generating stop sending to the service as well
-    (not only new requests). No payload inspection happens here.
+    (not only new requests). This holds for the async ``compute`` and for the blocking
+    ``compute_sync`` the engine uses for small decode calls. No payload inspection happens here.
+
+    Per trip it records the client round-trip time, and from the service-reported ``ServerTiming``
+    the service share (queue + compute) and the rest (network, framing, Python): Prometheus
+    histograms when the contract lists them, plus :attr:`timing` (``/admin/status``).
     """
+
+    #: Blocking round trip; set per instance only when the wrapped client has one (``hasattr`` checks).
+    compute_sync: Callable[[Any], Any]
 
     def __init__(self, inner: Any, metrics: GatewayMetrics, model: str, breaker: CircuitBreaker | None = None):
         self.inner = inner
         self._hist = metrics.get("pgw_gateway_round_trip_seconds")
+        self._net_hist = metrics.get("pgw_gateway_network_seconds")
+        self._svc_hist = metrics.get("pgw_gateway_service_seconds")
         self._failures = metrics.get("pgw_gateway_round_trip_failures_total")
+        self._children: dict[str, tuple[Any, Any, Any]] = {}
         self._model = model
         self._breaker = breaker
         self.round_trips = 0
         self.last_error: str | None = None
+        self.timing = TripTiming()
+        if callable(getattr(inner, "compute_sync", None)):
+            self.compute_sync = self._compute_sync
+
+    @staticmethod
+    def _kind(request: Any) -> str:
+        items = request.items
+        if len(items) == 1:
+            return _kind_of(items[0].linear)
+        kinds = {_kind_of(it.linear) for it in items}
+        return kinds.pop() if len(kinds) == 1 else "mixed"
+
+    def _failed(self, exc: BaseException) -> None:
+        if isinstance(exc, PGWError):
+            self.last_error = str(exc.code)
+            self._failures.labels(model=self._model, code=str(exc.code)).inc()
+        elif isinstance(exc, Exception):
+            self.last_error = type(exc).__name__
+            self._failures.labels(model=self._model, code="transport").inc()
+
+    def _record(self, request: Any, resp: Any, rtt: float) -> None:
+        self.round_trips += 1
+        kind = self._kind(request)
+        ch = self._children.get(kind)
+        if ch is None:
+            ch = self._children[kind] = (
+                self._hist.labels(model=self._model, linear_kind=kind),
+                self._net_hist.labels(model=self._model, linear_kind=kind),
+                self._svc_hist.labels(model=self._model, linear_kind=kind),
+            )
+        ch[0].observe(rtt)
+        st = getattr(resp, "timing", None)
+        queue_s = float(getattr(st, "queue_ms", 0.0) or 0.0) / 1e3
+        compute_s = float(getattr(st, "compute_ms", 0.0) or 0.0) / 1e3
+        service_s = queue_s + compute_s
+        wire_s = max(0.0, rtt - service_s)
+        ch[1].observe(wire_s)
+        ch[2].observe(service_s)
+        items = request.items
+        rows = int(items[0].rows) if len(items) == 1 else sum(int(it.rows) for it in items)
+        self.timing.add(rows, len(items), rtt, queue_s, compute_s, wire_s)
 
     async def compute(self, request: Any) -> Any:
         """Send one compute request (refused while the breaker is open)."""
         if self._breaker is not None:
             self._breaker.check()
-        kinds = {_kind_of(it.linear) for it in request.items}
-        kind = kinds.pop() if len(kinds) == 1 else "mixed"
         t0 = time.perf_counter()
         try:
             resp = await self.inner.compute(request)
-        except PGWError as exc:
-            self.last_error = str(exc.code)
-            self._failures.labels(model=self._model, code=str(exc.code)).inc()
+        except BaseException as exc:
+            self._failed(exc)
             raise
-        except Exception as exc:
-            self.last_error = type(exc).__name__
-            self._failures.labels(model=self._model, code="transport").inc()
-            raise
-        self.round_trips += 1
-        self._hist.labels(model=self._model, linear_kind=kind).observe(time.perf_counter() - t0)
+        self._record(request, resp, time.perf_counter() - t0)
         return resp
+
+    def _compute_sync(self, request: Any) -> Any:
+        """Blocking :meth:`compute` (refused while the breaker is open)."""
+        if self._breaker is not None:
+            self._breaker.check()
+        t0 = time.perf_counter()
+        try:
+            resp = self.inner.compute_sync(request)
+        except BaseException as exc:
+            self._failed(exc)
+            raise
+        self._record(request, resp, time.perf_counter() - t0)
+        return resp
+
+    def timing_snapshot(self) -> dict[str, dict[str, float]]:
+        """Cumulative per-row-class round-trip timing (see :class:`TripTiming`)."""
+        return self.timing.snapshot()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
@@ -341,6 +470,10 @@ class ModelRuntime:
         self._ready_gauge = self.metrics.get("pgw_gateway_model_ready")
         self._attempts = self.metrics.get("pgw_gateway_service_attempts_total")
         self._retries = self.metrics.get("pgw_gateway_service_retries_total")
+        self._cert_gauge = self.metrics.get("pgw_client_cert_expiry_seconds")
+        #: ``notAfter`` (Unix time) of the configured client certificate, re-read at most hourly.
+        self.client_cert_not_after: float | None = None
+        self._cert_read_at: float | None = None
         adm_active = self.metrics.get("pgw_gateway_admission_active")
         adm_waiting = self.metrics.get("pgw_gateway_admission_waiting")
         adm_rejected = self.metrics.get("pgw_gateway_admission_rejected_total")
@@ -451,8 +584,31 @@ class ModelRuntime:
         """``ComputeClient`` hook: every HTTP attempt (incl. retries) by outcome."""
         self._attempts.labels(model=self.name, code="ok" if code is None else code).inc()
 
+    def refresh_cert_expiry(self, *, force: bool = False) -> float | None:
+        """Seconds until the configured client certificate expires (``None`` without one).
+
+        Re-reads the certificate file at most once an hour (``force`` re-reads now), so a renewed
+        certificate shows up without a restart; the remaining time itself is recomputed on every call.
+        """
+        path = self.config.client_cert_file
+        if path is None:
+            return None
+        now = time.monotonic()
+        if force or self._cert_read_at is None or now - self._cert_read_at >= _CERT_REREAD_S:
+            self._cert_read_at = now
+            try:
+                self.client_cert_not_after = _cert_not_after(path)
+            except Exception as exc:  # telemetry only: never break start-up or a scrape
+                log.warning("model %s: cannot read the client certificate expiry (%s)", self.name, type(exc).__name__)
+        if self.client_cert_not_after is None:
+            return None
+        left = self.client_cert_not_after - time.time()
+        self._cert_gauge.labels(model=self.name).set(left)
+        return left
+
     def refresh_metrics(self) -> None:
-        """Scrape-time gauges: readiness and the client's retry counter."""
+        """Scrape-time gauges: readiness, the client's retry counter and the client-cert expiry."""
+        self.refresh_cert_expiry()
         ok, _ = self.ready()
         self._ready_gauge.labels(model=self.name).set(1.0 if ok else 0.0)
         st = getattr(self.client, "stats", None)
@@ -487,6 +643,7 @@ class ModelRuntime:
                 return
             t0 = time.perf_counter()
             self.state = "starting"
+            self.refresh_cert_expiry(force=True)
             try:
                 pack = await asyncio.to_thread(self._open_pack)
             except BaseException as exc:
@@ -627,6 +784,7 @@ class ModelRuntime:
                 on_integrity_failure=self._on_integrity_failure,
                 min_soundness_bits=self.settings.min_soundness_bits,
             )
+            await self._warm_weight_norms()
             avail = await asyncio.to_thread(self._available_slots)
             if avail == 0:
                 log.warning("no mask slots available for model %s (%s %s)",
@@ -640,6 +798,19 @@ class ModelRuntime:
             else:
                 await _aclose(client)
             raise
+
+    async def _warm_weight_norms(self) -> None:
+        """Compute every linear's weight norm before the model reports ready (plan interface C1).
+
+        Without this the first masked request reads all int8 weights (gigabytes at 7B) to find them.
+        Runs once, in a worker thread, only at start-up; a backend without the hook is left as is.
+        """
+        warm = getattr(self.backend, "warm_weight_norms", None)
+        if not callable(warm):
+            return
+        t0 = time.perf_counter()
+        await asyncio.to_thread(warm)
+        log.info("model %s: weight norms ready in %.1f s", self.name, time.perf_counter() - t0)
 
     def _finish_local(self, pack: Any, tokenizer: ChatTokenizer) -> None:
         if self.mode == "plain":
@@ -656,10 +827,14 @@ class ModelRuntime:
         if self.config.batch_lm_head is not None:
             self.model.batch_lm_head = self.config.batch_lm_head
         self.draft_model = self._load_draft()
+        gen_kw: dict[str, Any] = {}
+        spec_max_batch = getattr(self.settings, "spec_max_batch", None)  # plan interface C3
+        if spec_max_batch is not None and "spec_max_batch" in inspect.signature(Generator).parameters:
+            gen_kw["spec_max_batch"] = int(spec_max_batch)
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
-            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence,
+            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence, **gen_kw,
         )
         self.tokenizer = tokenizer
         self.pack = pack
@@ -1033,6 +1208,9 @@ class ModelRuntime:
         }
         if self.mode == "masked":
             out["service"] = dict(self.service_info)
+            if self.config.client_cert_file is not None:
+                left = self.refresh_cert_expiry()
+                out["client_cert_expires_in_s"] = round(left) if left is not None else None
             out["masks_available"] = self._available_slots() if self.started else None
             out["noise_monitor"] = {"state": self.noise_monitor_state}
             if self.noise_monitor is not None:
@@ -1048,6 +1226,9 @@ class ModelRuntime:
                 st = getattr(self.client, "stats", None)
                 if st is not None:
                     out["client"] = {k: v for k, v in vars(st).items() if isinstance(v, int | float)}
+                timing = getattr(self.client, "timing_snapshot", None)
+                if callable(timing):
+                    out["client_timing"] = timing()
         if self.backend is not None and hasattr(self.backend, "stats"):
             out["backend"] = self.backend.stats.snapshot()
         return out
