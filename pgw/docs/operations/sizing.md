@@ -88,6 +88,12 @@ each adds `rounds × RTT`; 112 round trips for Qwen2.5-7B, 128 for Llama-3-8B):
 | same region over PrivateLink / PSC | ~1 ms | about +0.11 s | estimate |
 | internet, same continent | 10-30 ms | +1.1 to +3.4 s | estimate |
 
+The two-party demo on Modal (`deploy/modal/README.md`) is a fifth tier: over Modal's public TCP tunnel a
+masked round trip of Qwen2.5-0.5B took 6.8 ms with the CPU provider (*measured*, 2026-11-20); on
+Modal's private network (i6pn) the RTT is unmeasured (0.1-1 ms, *estimate*). Its launcher reports the
+gateway's measured round-trip median on every end-to-end run and can relaunch a pair whose median
+exceeds a limit (`launch.py --e2e --max-trip-ms 1`).
+
 Keep the gateway in the zone of the service endpoint it calls (zonal endpoint DNS; see
 `deploy/marketplace/aws/README.md`). The service's own time per round trip comes on top; on a T4 the
 measured single-row call is about 1.4 ms (`STATUS.md`, run 25).
@@ -124,7 +130,8 @@ slots_on_hand ≥ tokens_per_day × buffer_days       (buffer ≥ refill outage 
   2-day buffer is about 14 TB of fast local disk.
 * 8B at K48A20: 121k slots per TB (*analytic*).
 * Read throughput: the gateway reads `masks_per_slot` per token (8.3 MB for 8B at K48A20). At 100
-  tokens/s that is 830 MB/s of sustained random-ish reads. Use NVMe.
+  tokens/s that is 830 MB/s of sustained random-ish reads. Use NVMe or RAM (see
+  [the read-rate rule](#mask-store-read-rate-nvme-or-ram) below).
 * Consumed segments are shredded (deleted, DEK destroyed), so capacity is recycled.
 * **Speculative decoding** (off by default; a draft model or prompt lookup on the gateway) reserves
   up to `spec_row_budget` mask slots per requested token (default 3) and burns the unused ones when the
@@ -144,6 +151,44 @@ A new or drained store is refilled with a ramp when `PGW_FACTORY_FIRST_SEGMENT_S
 setup wizard sets 256): while below low water, one segment of `min(segment_slots,
 max(first_segment_slots, next_pow2(2 × available)))` slots is made at a time (256, 512, 2048, 4096
 with the defaults), so the gateway can serve after the first small segment.
+
+### Mask-store read rate (NVMe or RAM)
+
+```
+read MB/s needed = tokens_per_second × masks_per_slot          (prompt and generated tokens alike)
+```
+
+Every token reads its whole slot (`W r` for every linear) from the store, in chunks of about a megabyte.
+For Qwen2.5-7B at the default ring (5.56 MB per slot, *analytic*):
+
+| load | read rate needed | basis |
+|---|---|---|
+| one decode stream at today's speed (about 2.9 tokens/s) | about 16 MB/s | derived |
+| one chat-speed stream (45 tokens/s) | about 250 MB/s | analytic |
+| a 500-token prompt admitted in 5 s next to one chat-speed stream | about 810 MB/s | analytic |
+| eight chat-speed streams | about 2 GB/s | analytic |
+
+| store volume | sustained read | chat-speed 7B streams it feeds | basis |
+|---|---|---|---|
+| network block volume at a baseline of 125 MB/s (e.g. AWS gp3 unprovisioned) | 125 MB/s | none | estimate (vendor specification) |
+| the same volume provisioned to 1000 MB/s | 1000 MB/s | about 4 | estimate (vendor specification) |
+| local NVMe (instance store) | 1.5-7 GB/s | 6-28 | estimate (vendor specification) |
+| RAM (`tmpfs`) | several GB/s | not the bound | estimate |
+
+**Rule:** for chat-speed decoding, keep the mask store on local NVMe or in RAM, never on a network
+block volume at its baseline rate. A RAM store is lost on a restart: its masks are burned (never
+reused), so the factory must refill it, and the low water mark above must cover that refill. Network
+filesystems are refused anyway (`allow_network_filesystem`).
+
+Measure the store's volume with the doctor:
+`pgw doctor --role gateway --maskstore /var/lib/pgw/masks --pack /var/lib/pgw/packs/qwen7b --expected-tps 45`.
+Its `maskstore.read_rate` check writes a 64 MiB probe file next to the store, drops it from the page
+cache, reads it back in 1 MiB blocks in shuffled order and reports MB/s and the tokens per second that
+rate feeds at the pack's mask bytes per slot. It fails below the expected load, warns within 20% of
+it, and without `--expected-tps` warns below 250 MB/s (one chat-speed 7B stream); it is skipped when the
+store root does not exist (the `maskstore` check reports that). On the 4-vCPU
+development container (virtual disk) it read 0.9-1.2 GB/s, about 160-210 tokens/s of 7B masks (*measured*,
+three runs).
 
 ## 5. Mask-factory throughput
 

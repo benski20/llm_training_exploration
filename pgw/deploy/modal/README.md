@@ -5,14 +5,14 @@ setup wizard in a browser. Model: `Qwen/Qwen2.5-0.5B-Instruct` (pinned revision)
 
 | party | app | hardware | what runs |
 |---|---|---|---|
-| provider | `pgw-provider` (`provider.py`) | 4 vCPU, 6 GiB (or 1 x T4 + 1 vCPU with `PGW_MODAL_GPU=T4` at deploy time) | `pgw service serve` (TLS, tenant tokens, enrollment, client-cert issuing CA); pack built into the image |
+| provider | `pgw-provider` (`provider.py`) | 4 cores, 6 GiB (or one GPU + 2 cores with `--gpu`, see [GPU provider](#gpu-provider)) | `pgw service serve` (TLS, tenant tokens, enrollment, client-cert issuing CA); pack built into the image |
 | customer | `pgw-customer` (`customer.py`) | 4 vCPU, 8 GiB, no GPU | `pgw gateway serve` in setup mode; downloads and packs the model itself during the wizard, encrypted mask factory |
 
 ```
  browser ──HTTPS (TLS ends at Modal's edge)──▶ customer container: pgw gateway + console + mask factory
                                                      │  TLS end to end (raw TCP tunnel, CA pinned by the
                                                      ▼  enrollment code, client cert issued at enrollment)
-                                               provider container: pgw compute service (CPU or T4)
+                                               provider container: pgw compute service (CPU or GPU)
 ```
 
 ## Use it
@@ -26,6 +26,9 @@ python pgw/deploy/modal/launch.py --stop     # stop both apps now and clear the 
 python pgw/deploy/modal/launch.py --e2e --ttl-min 40   # scripted test (below), then stop
 python pgw/deploy/modal/launch.py --deploy-only        # build images and deploy, start nothing
 python pgw/deploy/modal/launch.py --no-deploy          # start a pair on the already-deployed apps
+python pgw/deploy/modal/launch.py --gpu A10G           # provider on a GPU (fixed at deploy time)
+python pgw/deploy/modal/launch.py --i6pn               # private network instead of the tunnel (falls back)
+python pgw/deploy/modal/launch.py --e2e --gpu A10G --i6pn --max-trip-ms 1   # latency-gated test (below)
 ```
 
 `launch.py` prints the console URL, the one-time setup token and the enrollment code. The setup token
@@ -53,7 +56,8 @@ retries; the pair also stops itself after `--ttl-min` (default 80, max 85). Depl
 a running call cost nothing. At Modal list prices ($0.0473/core/h, $0.008/GiB/h, T4 $0.59/h) the
 CPU-only pair costs about $0.49/h, i.e. about $0.65 for the full 80 minutes, plus network egress
 ($0.04/GiB): the mask factory uploads about 1.2 MB of ciphertext per token of masks, about 5 GB to
-reach its 4000-token stock. With a T4 provider the pair costs about $0.85/h. The images (CUDA torch
+reach its 4000-token stock. With a GPU provider the pair costs about $0.99/h (T4), $1.50/h (A10G),
+$2.35/h (L40S) or $4.35/h (H100); see [GPU provider](#gpu-provider). The images (CUDA torch
 for the provider, CPU torch for the customer, pack built in) are built once and cached.
 
 GPU functions need a payment method on the Modal workspace; without one, deploy with the default
@@ -69,6 +73,97 @@ and both apps pinned to one region (`PGW_MODAL_REGION`, default `us-east`): setu
 masks 108 s, the same 41-token prompt + 32 generated tokens **26 s** (bit-identical logprobs), 6.8 ms
 per round trip. Without the region pin one run landed the parties about 85 ms apart and the same chat
 took 321 s: every token makes about 100 sequential round trips, so the two parties must be close.
+
+## GPU provider
+
+`--gpu T4|A10G|L40S|H100` deploys the provider with that GPU and 2 cores (one for the service's device
+worker, one for its network loop); without it the provider runs the exact CPU int8 backend on 4 cores.
+The GPU is fixed when the app is deployed (`launch.py` passes it to `modal deploy` as `PGW_MODAL_GPU`,
+which also sets the default of `--gpu`), so `--no-deploy` uses whatever was deployed last; the live
+details (`--show`) name the GPU and core count the provider actually got, and the printed cost estimate
+uses those. Results are bit-identical on every backend. `--gpu` and `PGW_MODAL_GPU` are
+case-insensitive and checked the same way before anything is deployed (one GPU only: no `T4:2`; never
+L4). `PGW_MODAL_PROVIDER_CPUS` at deploy time overrides the provider's core count.
+
+| GPU | list price (provider, with 2 cores) | when |
+|---|---|---|
+| none (CPU) | about $0.24/h | default; no payment method needed on the Modal workspace |
+| T4 | about $0.73/h | cheapest GPU; decode GEMV device time about 0.33 ms per trip at 7B |
+| A10G | about $1.24/h | default choice for speed (about 2x the T4's memory bandwidth) |
+| L40S | about $2.09/h | as A10G, more bandwidth |
+| H100 | about $4.09/h | latency tier |
+| L4 | refused | its 300 GB/s is no better than a T4's 320 GB/s for the bandwidth-bound single-row GEMV, at a higher price |
+
+Prices are Modal list prices as of 2026-11 (GPU plus $0.0473 per core-hour and $0.008 per GiB-hour);
+check them before quoting. The customer adds about $0.25/h. GPU functions need a payment method on the
+workspace. At 0.5B the provider's device time is a small part of a trip over the tunnel; a GPU pays off
+with i6pn.
+
+## Network: public tunnel or i6pn
+
+By default the gateway reaches the provider through the provider's public TCP tunnel
+(`modal.forward(..., unencrypted=True)`; TLS end to end). The tunnel adds about 5 ms to every round trip
+(6.8 ms per round trip measured on 2026-11-20, CPU provider), which bounds the demo at a few tokens per
+second whatever the provider runs.
+
+`--i6pn` (or `PGW_MODAL_I6PN=1`) uses the deployed `serve_i6pn` / `gateway_i6pn` functions instead: both
+containers join Modal's private IPv6 network and the enrollment code points the gateway at the
+provider's i6pn address (TLS still end to end; the provider's certificate names that address). It is
+**off by default**: on 2026-11-20 Modal did not schedule an i6pn CPU container in `us-east` for 25
+minutes. The launcher therefore waits at most `--i6pn-schedule-timeout-min` minutes for both functions
+to start (each writes a `*_boot` marker to the Dict as its first action); if one has not started, it
+cancels the pair and relaunches it on the tunnel, and says so. The window ends at that marker, so it
+also covers the image pull and container cold start, not only Modal's scheduling: the default is 6
+minutes without a GPU and 10 with one (larger CUDA image, scarcer machines); raise it if a GPU pair
+falls back although Modal did schedule it. Both networks carry the
+same masked bytes; the provider learns nothing new from either.
+
+The i6pn round-trip time has not been measured yet (*estimate*: 0.1-1 ms). Per the chat-speed plan's
+model, i6pn with a T4 provider and exact local linears (below) would give about 50 ms per token
+(*estimate*), against about 310 ms per token over the tunnel (*estimate*).
+
+## Trip latency and the `--max-trip-ms` gate
+
+`--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the
+result): the compute client's wall time per masked round trip, from the gateway's own
+`pgw_gateway_round_trip_seconds` histogram (`/metrics`) and `client_timing` (`/admin/status`), both read on
+loopback inside the customer container, as deltas over each chat:
+
+* `warm` (the second chat) and `both_chats`: `trips`, `p50_ms`, `p90_ms`, `mean_ms`, `p50_bucket_ms`
+  (the histogram bucket that holds the median), the bucket counts, and for single-row (decode) trips the
+  mean `rows_1_mean_ms` split into `rows_1_service_ms` (service queue + compute) and `rows_1_wire_ms`
+  (network, framing, Python on both ends).
+
+`--max-trip-ms X` (needs `--e2e`; off by default) gates the run on the warm chat's median: if it is above
+`X`, the launcher cancels the pair and starts a fresh one (a new placement), at most `--tries` pairs in all
+(default 3). The decision uses the bucket that holds the median, and the gateway's buckets include
+0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5 and 10 ms, so a limit on a bucket bound such as 1 ms is decided from the
+counts without interpolation. Exit codes: 0 = exact and within the limit; 1 = the masked answer was not
+bit-identical (never retried); 2 = still above the limit after the last try, or nothing measured. A
+1 ms limit can pass only on i6pn (the tunnel alone adds about 5 ms): for a limit below 3 ms the launcher
+does not relaunch a tunnel pair unless `--i6pn` was asked (each relaunch is a full paid run), and says
+why. The window counts every trip of the warm chat, all linear kinds and prefill trips included; the
+`rows_1_*` split covers single-row (decode) trips only.
+The measurement is local to the gateway: nothing new reaches the provider.
+
+## Exact local linears (E2): placeholder
+
+The chat-speed plan's exact local linears compute `qkv` and `o` on the gateway from the int8 pack (the
+same integers, so the same bits) and send only `gate_up`/`down`, halving the round trips of
+Qwen2.5-0.5B from 96 to 48 per token at a local read of about 1.8 MB per layer. That is the right
+setting for this demo on either network (it is off for co-located 7B deployments, where it is a net
+loss). It is **not in this build**: the per-model setting `local_linears` (`off` by default,
+`attention` or `auto`) is refused until WP-A4b/A5 land, and `launch.py --local-linears attention`
+stops with the same message. When they land:
+
+1. the setting leaves `PENDING_SPEED_SETTINGS` (`pgw/gateway/config.py`);
+2. the setup wizard writes `local_linears` into the model configuration it creates (it has no field for
+   it yet);
+3. `launch.py --local-linears attention` passes the value to the customer function, the `--e2e` check
+   stays the greedy bit-identity against the plaintext reference, and `trip_latency` should show
+   half the trips per token.
+
+The provider then sees only the `gate_up`/`down` items: strictly less than today.
 
 ## Configuration choices
 
@@ -108,8 +203,9 @@ took 321 s: every token makes about 100 sequential round trips, so the two parti
   far fewer masks per hour than a decoding gateway consumes: fine for a demo with a 256-slot first
   segment, not for sustained load. See
   [docs/operations/encrypted-masks.md](../../docs/operations/encrypted-masks.md).
-* There is no co-located latency benchmark yet: the two apps run wherever Modal places them, so
-  round-trip times here are not representative of a same-zone deployment.
+* The two apps run wherever Modal places them in the region, so round-trip times here are not
+  representative of a same-zone deployment. `--e2e` reports the measured trip latency of each run and
+  `--max-trip-ms` retries bad placements, but the private-network (i6pn) numbers are still unmeasured.
 * Both PKIs are generated in the containers for each run and live for two days at most.
 
 ## Files
@@ -118,8 +214,11 @@ took 321 s: every token makes about 100 sequential round trips, so the two parti
 * `pgw_modal_boot.py`: PKI, service and gateway start-up (no Modal imports; also used locally).
 * `wizard_client.py`: drives `/console/api/setup/*` like the browser and checks a masked chat against
   the plaintext reference.
+* `trip_gate.py`: the client-reported trip latency (from the gateway's `/metrics` and `/admin/status`)
+  and the `--max-trip-ms` decision; no Modal imports.
 * `local_rehearsal.py`: the same bootstrap with both parties on one machine (CPU service).
-* `launch.py`: deploy, start, show, stop, and the scripted end-to-end test.
+* `launch.py`: deploy, start, show, stop, the scripted end-to-end test, the GPU switch, the i6pn
+  scheduling fallback and the latency gate.
 
 ## Verified end to end (2026-11-20)
 
