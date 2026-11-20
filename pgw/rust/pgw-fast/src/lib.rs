@@ -16,6 +16,7 @@
 use pyo3::prelude::*;
 
 pub mod finish;
+pub mod hemask;
 pub mod lmhead;
 pub mod prepare;
 pub mod store;
@@ -31,6 +32,7 @@ fn version() -> &'static str {
 fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     finish::register(m)?;
+    hemask::register(m)?;
     lmhead::register(m)?;
     prepare::register(m)?;
     store::register(m)?;

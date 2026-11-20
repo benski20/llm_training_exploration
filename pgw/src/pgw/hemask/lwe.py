@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -41,10 +42,13 @@ __all__ = [
     "DEGREE",
     "HEParams",
     "MaskCiphertext",
+    "a_plane_count",
     "decrypt_wr",
     "encrypt_masks",
     "matmul_mod64",
     "public_matrix",
+    "sample_noise",
+    "sample_secret",
     "secret_matrix",
 ]
 
@@ -221,7 +225,9 @@ def secret_matrix(s: np.ndarray) -> np.ndarray:
 
 
 def _cbd(sx: SeedExpander, shape: tuple[int, ...], eta: int, label: str) -> np.ndarray:
-    """Centred binomial samples: popcount(eta random bits) - popcount(eta random bits)."""
+    """Centred binomial samples: popcount(eta random bits) - popcount(eta random bits).
+
+    Python reference of ``pgw_fast.he_cbd`` (same stream, same values)."""
     n = int(np.prod(shape))
     if eta > 32:
         raise ConfigError("eta must be <= 32")
@@ -233,7 +239,9 @@ def _cbd(sx: SeedExpander, shape: tuple[int, ...], eta: int, label: str) -> np.n
 
 
 def _ternary(sx: SeedExpander, shape: tuple[int, ...], label: str) -> np.ndarray:
-    """Uniform {-1, 0, 1} samples by rejection from random bytes (values 0..251 kept, mod 3)."""
+    """Uniform {-1, 0, 1} samples by rejection from random bytes (values 0..251 kept, mod 3).
+
+    Python reference of ``pgw_fast.he_ternary`` (same streams, same values)."""
     n = int(np.prod(shape))
     out = np.empty(0, dtype=np.int64)
     ctr = 0
@@ -243,6 +251,37 @@ def _ternary(sx: SeedExpander, shape: tuple[int, ...], label: str) -> np.ndarray
         keep = raw[raw < 252].astype(np.int64) % 3 - 1
         out = np.concatenate([out, keep])
     return out[:n].reshape(shape)
+
+
+def _native(*names: str) -> Any:
+    """The ``pgw_fast`` module when it provides ``names`` (bit-identical native kernels), else ``None``."""
+    from pgw.core.native import fast, native_available
+
+    return fast if native_available(*names) else None
+
+
+def sample_secret(seed: bytes, rank: int) -> np.ndarray:
+    """Secret block matrix ``S`` (``rank*256 x 256`` int8) of the ternary secret drawn from ``seed``.
+
+    Equal to ``secret_matrix(_ternary(SeedExpander(seed), (rank, 256), "s"))``; native when available.
+    """
+    nat = _native("he_secret_matrix")
+    if nat is not None:
+        out: np.ndarray = nat.he_secret_matrix(seed, rank)
+        return out
+    s = _ternary(SeedExpander(seed), (rank, DEGREE), "s")
+    smat = secret_matrix(s)
+    s.fill(0)
+    return smat
+
+
+def sample_noise(seed: bytes, rows: int, eta: int) -> np.ndarray:
+    """CBD(``eta``) noise ``(rows, 256)`` int64 drawn from ``seed`` (``_cbd(..., "e")``); native when available."""
+    nat = _native("he_cbd")
+    if nat is not None:
+        out: np.ndarray = nat.he_cbd(seed, rows, DEGREE, eta)
+        return out
+    return _cbd(SeedExpander(seed), (rows, DEGREE), eta, "e")
 
 
 @dataclass
@@ -257,35 +296,60 @@ class MaskCiphertext:
         self.secret.fill(0)
 
 
+def a_plane_count(params: HEParams) -> int:
+    """Byte planes of the public matrix that encryption needs: ``ceil(q / 8)``.
+
+    Plane ``d`` only contributes ``2^(8d)`` multiples to the pad, so for ``q = 2^56`` byte 7 vanishes
+    in the final ``mod 2^q`` and 7 planes give exactly the same ciphertexts as 8.
+    """
+    return -(-params.q // 8)
+
+
+#: int32 GEMM output kept per block of the fused native encryption (bounds temporary memory).
+_ENC_BLOCK_BYTES = 32 << 20
+
+
 def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
-                  a_planes: np.ndarray | None = None) -> MaskCiphertext:
+                  a_planes: np.ndarray | None = None, seed: bytes | None = None) -> MaskCiphertext:
     """Encrypt the masks of up to 256 slots of one linear.
 
     Args:
         r: ``(rows, n)`` masks in ``[0, 2^K)`` (int64/uint64), ``rows <= 256``.
         a: Public matrix rows for this linear (``n x dim`` uint64), e.g. ``public_matrix(...)[:n]``.
         params: Encryption parameters.
-        a_planes: The same rows as int8 byte planes (``n x 8 x dim``, :func:`pgw.hemask.fastmm.to_planes`);
-            used instead of ``a`` (faster: int8 GEMM, no per-call conversion).
+        a_planes: The same rows as int8 byte planes (``n x P x dim``, :func:`pgw.hemask.fastmm.to_planes`,
+            bytes ``0 .. P-1``); used instead of ``a`` (faster: int8 GEMM, no per-call conversion).
+            ``P = 8``, or ``P = a_plane_count(params)`` (7 at ``q = 2^56``: same ciphertexts).
+        seed: Randomness of the secret and the noise. Default (always in production): a fresh
+            ``os.urandom`` seed, never stored. Passing one is for reproducibility tests only.
     """
     rows, n = r.shape
     if rows > DEGREE:
         raise ConfigError(f"at most {DEGREE} slots per ciphertext group, got {rows}")
     shape = a_planes.shape if a_planes is not None else (a.shape if a is not None else None)
-    want = (n, 8, params.dim) if a_planes is not None else (n, params.dim)
+    want: tuple[int, ...] = (n, params.dim)
+    if a_planes is not None:
+        npl = a_planes.shape[1] if a_planes.ndim == 3 else 0
+        want = (n, npl if npl in (8, a_plane_count(params)) else 8, params.dim)
     if shape != want:
         raise ConfigError(f"public matrix shape {shape} != {want}")
-    sx = SeedExpander(new_seed())  # fresh secret and noise from the OS CSPRNG; never stored
-    s = _ternary(sx, (params.rank, DEGREE), "s")
-    smat = secret_matrix(s)
-    s.fill(0)
-    e = _cbd(sx, (n, DEGREE), params.eta, "e")
+    if seed is None:
+        seed = new_seed()  # fresh secret and noise from the OS CSPRNG; never stored
+    smat = sample_secret(seed, params.rank)
+    if a_planes is not None:
+        from pgw.hemask.fastmm import engine
+
+        nat = _native("he_encrypt_combine") if engine() == "cpu_int8" else None
+        if nat is not None:
+            b = _encrypt_native(nat, r, a_planes, smat, seed, params)
+            return MaskCiphertext(b=b, secret=smat, rows=rows)
+    e = sample_noise(seed, n, params.eta)
     msg = np.zeros((n, DEGREE), dtype=_U64)
     msg[:, :rows] = np.asarray(r, dtype=np.int64).astype(_U64).T
     if a_planes is not None:
         from pgw.hemask.fastmm import big_planes_mm_small
 
-        pad = big_planes_mm_small(a_planes, smat)
+        pad = big_planes_mm_small(a_planes, smat, first_byte=0)
     else:
         assert a is not None
         pad = matmul_mod64(smat, a, small_left=False)
@@ -293,6 +357,29 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
     e.fill(0)
     msg.fill(0)
     return MaskCiphertext(b=b, secret=smat, rows=rows)
+
+
+def _encrypt_native(nat: Any, r: np.ndarray, a_planes: np.ndarray, smat: np.ndarray, seed: bytes,
+                    params: HEParams) -> np.ndarray:
+    """``(pad + e + (msg << delta)) & q_mask`` with the pad GEMM in ``torch._int_mm`` (AMX/VNNI) and
+    the noise sampling, plane combine, mask transpose and reduction fused in ``pgw_fast``."""
+    import torch
+
+    n, npl, dim = a_planes.shape
+    r64 = np.ascontiguousarray(r, dtype=np.int64)
+    planes = np.ascontiguousarray(a_planes)
+    rhs = torch.from_numpy(smat)  # (dim, 256) row-major: no transposed copy of the secret
+    offset = (128 * smat.sum(0, dtype=np.int64)).astype(np.int32)
+    b = np.empty((n, DEGREE), dtype=_U64)
+    block = max(1, _ENC_BLOCK_BYTES // (npl * DEGREE * 4))
+    for r0 in range(0, n, block):
+        blk = planes[r0:r0 + block]
+        nb = blk.shape[0]
+        part = torch._int_mm(torch.from_numpy(blk.reshape(nb * npl, dim)), rhs).numpy()
+        nat.he_encrypt_combine(part.reshape(nb, npl, DEGREE), offset, 0, seed, params.eta, r64, r0,
+                               params.delta_bits, params.q, b)
+        part.fill(0)  # A s is as secret as the masks (b - A s = e + Delta r)
+    return b
 
 
 def decrypt_wr(y: np.ndarray, hint: np.ndarray, ct: MaskCiphertext, params: HEParams) -> np.ndarray:
