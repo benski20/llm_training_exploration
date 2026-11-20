@@ -19,6 +19,7 @@ twice), and this demo is single-use anyway. Use ``launch.py`` to start it.
 from __future__ import annotations
 
 import json
+import os
 import time
 import traceback
 from pathlib import Path
@@ -30,6 +31,9 @@ HERE = Path(__file__).resolve().parent
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
 DICT_NAME = "pgw-live"
+# Both parties in one region: every token makes ~100 sequential round trips between them, so a
+# cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -94,7 +98,8 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float) -
     }
 
 
-@app.function(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0)
+@app.function(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0,
+              region=REGION)
 def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False) -> dict:
     import sys
 

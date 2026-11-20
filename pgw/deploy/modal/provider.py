@@ -27,6 +27,9 @@ MODEL_NAME = "qwen2.5-0.5b-instruct"
 PACK = "/opt/packs/" + MODEL_NAME
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
 DICT_NAME = "pgw-live"
+# Both parties in one region: every token makes ~100 sequential round trips between them, so a
+# cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
+REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 # GPU type for the service, e.g. PGW_MODAL_GPU=T4 at deploy time. Default: none (CPU int8 backend), because
 # Modal only allows GPU functions on workspaces with a payment method. The image has CUDA torch either way.
 GPU = os.environ.get("PGW_MODAL_GPU") or None
@@ -59,7 +62,7 @@ app = modal.App("pgw-provider", image=image)
 
 
 @app.function(gpu=GPU, cpu=CPUS, memory=6144, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0,
-              retries=0)
+              retries=0, region=REGION)
 def serve(run_id: str, ttl_s: int = 80 * 60, tenant: str = "customer-demo", code_ttl: str = "90m") -> dict:
     import sys
 

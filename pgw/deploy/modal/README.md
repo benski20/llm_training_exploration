@@ -64,6 +64,12 @@ fingerprint check 12 s, encrypted-mask hint 95 s (7.5 GB), first 256-token mask 
 (2 tokens/s over the tunnel, which carries about 1.5 MB/s), a 41-token prompt + 32 generated tokens
 about 50-57 s.
 
+Measured again on 2026-11-20 after phase 2, with the native gateway kernels now built into both images
+and both apps pinned to one region (`PGW_MODAL_REGION`, default `us-east`): setup through the first
+masks 108 s, the same 41-token prompt + 32 generated tokens **26 s** (bit-identical logprobs), 6.8 ms
+per round trip. Without the region pin one run landed the parties about 85 ms apart and the same chat
+took 321 s: every token makes about 100 sequential round trips, so the two parties must be close.
+
 ## Configuration choices
 
 * **Service authentication.** The service listens with TLS (server certificate for the tunnel's host
