@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import logging
 import math
 import random
@@ -180,6 +179,8 @@ class _InstrumentedClient:
         self._svc_hist = metrics.get("pgw_gateway_service_seconds")
         self._failures = metrics.get("pgw_gateway_round_trip_failures_total")
         self._children: dict[str, tuple[Any, Any, Any]] = {}
+        #: Guards ``round_trips`` and the lazy ``_children`` fill: ``compute_sync`` runs on worker threads.
+        self._lock = threading.Lock()
         self._model = model
         self._breaker = breaker
         self.round_trips = 0
@@ -205,15 +206,16 @@ class _InstrumentedClient:
             self._failures.labels(model=self._model, code="transport").inc()
 
     def _record(self, request: Any, resp: Any, rtt: float) -> None:
-        self.round_trips += 1
         kind = self._kind(request)
-        ch = self._children.get(kind)
-        if ch is None:
-            ch = self._children[kind] = (
-                self._hist.labels(model=self._model, linear_kind=kind),
-                self._net_hist.labels(model=self._model, linear_kind=kind),
-                self._svc_hist.labels(model=self._model, linear_kind=kind),
-            )
+        with self._lock:
+            self.round_trips += 1
+            ch = self._children.get(kind)
+            if ch is None:
+                ch = self._children[kind] = (
+                    self._hist.labels(model=self._model, linear_kind=kind),
+                    self._net_hist.labels(model=self._model, linear_kind=kind),
+                    self._svc_hist.labels(model=self._model, linear_kind=kind),
+                )
         ch[0].observe(rtt)
         st = getattr(resp, "timing", None)
         queue_s = float(getattr(st, "queue_ms", 0.0) or 0.0) / 1e3
@@ -474,6 +476,8 @@ class ModelRuntime:
         #: ``notAfter`` (Unix time) of the configured client certificate, re-read at most hourly.
         self.client_cert_not_after: float | None = None
         self._cert_read_at: float | None = None
+        #: Scrape hooks, the watchdog and start-up may refresh concurrently.
+        self._cert_lock = threading.Lock()
         adm_active = self.metrics.get("pgw_gateway_admission_active")
         adm_waiting = self.metrics.get("pgw_gateway_admission_waiting")
         adm_rejected = self.metrics.get("pgw_gateway_admission_rejected_total")
@@ -593,18 +597,21 @@ class ModelRuntime:
         path = self.config.client_cert_file
         if path is None:
             return None
-        now = time.monotonic()
-        if force or self._cert_read_at is None or now - self._cert_read_at >= _CERT_REREAD_S:
-            self._cert_read_at = now
-            try:
-                self.client_cert_not_after = _cert_not_after(path)
-            except Exception as exc:  # telemetry only: never break start-up or a scrape
-                log.warning("model %s: cannot read the client certificate expiry (%s)", self.name, type(exc).__name__)
-        if self.client_cert_not_after is None:
-            return None
-        left = self.client_cert_not_after - time.time()
-        self._cert_gauge.labels(model=self.name).set(left)
-        return left
+        with self._cert_lock:
+            now = time.monotonic()
+            if force or self._cert_read_at is None or now - self._cert_read_at >= _CERT_REREAD_S:
+                self._cert_read_at = now
+                try:
+                    self.client_cert_not_after = _cert_not_after(path)
+                except Exception as exc:  # telemetry only: never break start-up or a scrape
+                    log.warning("model %s: cannot read the client certificate expiry (%s)", self.name,
+                                type(exc).__name__)
+            not_after = self.client_cert_not_after
+            if not_after is None:
+                return None
+            left = not_after - time.time()
+            self._cert_gauge.labels(model=self.name).set(left)
+            return left
 
     def refresh_metrics(self) -> None:
         """Scrape-time gauges: readiness, the client's retry counter and the client-cert expiry."""
@@ -827,14 +834,11 @@ class ModelRuntime:
         if self.config.batch_lm_head is not None:
             self.model.batch_lm_head = self.config.batch_lm_head
         self.draft_model = self._load_draft()
-        gen_kw: dict[str, Any] = {}
-        spec_max_batch = getattr(self.settings, "spec_max_batch", None)  # plan interface C3
-        if spec_max_batch is not None and "spec_max_batch" in inspect.signature(Generator).parameters:
-            gen_kw["spec_max_batch"] = int(spec_max_batch)
         self.generator = Generator(
             self.model, tokenizer, max_batch=self.config.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=self.config.spec_tokens, lookup=self.config.spec_lookup,
-            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence, **gen_kw,
+            spec_min_tokens=self.config.spec_min_tokens, draft_confidence=self.config.spec_confidence,
+            spec_max_batch=self.config.spec_max_batch,  # plan interface C3 (per-model GatewayModelConfig)
         )
         self.tokenizer = tokenizer
         self.pack = pack

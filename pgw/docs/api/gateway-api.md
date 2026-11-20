@@ -249,6 +249,8 @@ Labels never contain prompt data. Gateway series:
 | `pgw_gateway_ttft_seconds` | histogram | time to first token |
 | `pgw_gateway_tpot_seconds` | histogram | time per output token |
 | `pgw_gateway_round_trip_seconds` | histogram | compute round trips |
+| `pgw_gateway_network_seconds` | histogram | round trip minus the service-reported queue and compute time (network, framing, Python on both ends) |
+| `pgw_gateway_service_seconds` | histogram | service-reported queue plus compute time per round trip |
 | `pgw_gateway_active_sessions` | gauge | generating sequences |
 | `pgw_gateway_integrity_failures_total` | counter | Freivalds or range-check failures (**alert on any**) |
 | `pgw_gateway_noise_alarm` | gauge | 1 when the outbound-noise monitor alarms (**alert**) |
@@ -261,6 +263,7 @@ Labels never contain prompt data. Gateway series:
 | `pgw_gateway_admission_rejected_total` | counter | requests refused by admission (`queue_full`, `timeout`, `draining`, `too_large`) |
 | `pgw_gateway_queue_wait_seconds` | histogram | time spent in the admission queue |
 | `pgw_gateway_masks_burned_total` | counter | mask slots reserved by requests but never used |
+| `pgw_client_cert_expiry_seconds` | gauge | seconds until the configured compute-service client certificate expires (**alert** when low) |
 | `pgw_masks_open_reservations` | gauge | open mask reservations in the store |
 | `pgw_masks_unshredded_bytes` | gauge | bytes of fully consumed segment files awaiting shredding |
 | `pgw_masks_available_slots` | gauge | slots in the store per model and ring |
