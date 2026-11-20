@@ -33,12 +33,14 @@ QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
 
 #: Builds the Rust gateway kernels (pgw_fast) on the Kaggle VM.
 BUILD_NATIVE = {
-    "kind": "shell", "name": "build_native",
+    "kind": "shell", "name": "build_native", "required": True,
     # rust-version is 1.89 (stable AVX-512 intrinsics): install rustup when cargo is missing or older.
-    "cmd": "(cargo --version 2>/dev/null | awk '{split($2,v,\".\"); exit !(v[1]>1 || v[2]>=89)}' || "
+    "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && "
+           "(python rust/tools/cargo_ok.py 1.89 || "
            "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && "
            "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && "
-           "python -c 'from pgw.core import native; print(\"pgw_fast\", native.fast and native.fast.version())'",
+           "python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; "
+           "print(\"pgw_fast\", native.fast.version())'",
     "timeout": 1200,
 }
 

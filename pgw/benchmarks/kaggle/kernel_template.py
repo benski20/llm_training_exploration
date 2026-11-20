@@ -102,7 +102,13 @@ for step in JOB["steps"]:
                [sys.executable, f"{ROOT}/benchmarks/gpu_validate.py", "--out", f"{OUT}/validate", *step["args"]],
                timeout=step.get("timeout", 5400), cwd=ROOT)
         elif kind == "shell":
-            sh(step["name"], step["cmd"], timeout=step.get("timeout", 1800), cwd=ROOT)
+            rc, _ = sh(step["name"], step["cmd"], timeout=step.get("timeout", 1800), cwd=ROOT)
+            if rc != 0 and step.get("required"):
+                # e.g. the native build: every later number would measure the slow fallback, not the code
+                SUMMARY["aborted"] = f"required step {step['name']} failed (rc {rc}); later steps not run"
+                save()
+                log("ABORT", SUMMARY["aborted"])
+                break
     except Exception:  # noqa: BLE001
         SUMMARY["steps"][f"crash_{step.get('kind')}"] = traceback.format_exc()
         save()
