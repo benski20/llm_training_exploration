@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use zeroize::Zeroize;
 
 /// Relative slack on the float64 norm product (`pgw.core.ring._NORM_SLACK`).
-const NORM_SLACK: f64 = 1.0 + 1e-9;
+pub(crate) const NORM_SLACK: f64 = 1.0 + 1e-9;
 
 /// Kernel errors (mapped to Python `ValueError`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,7 +35,7 @@ pub enum PrepareError {
 }
 
 impl PrepareError {
-    fn into_py(self) -> PyErr {
+    pub(crate) fn into_py(self) -> PyErr {
         match self {
             PrepareError::Invalid(m) => PyValueError::new_err(m),
             PrepareError::Overflow(m) => PyValueError::new_err(format!("ring_overflow: {m}")),
@@ -57,7 +57,7 @@ pub struct PrepareParams {
 }
 
 impl PrepareParams {
-    fn validate(&self) -> Result<(), PrepareError> {
+    pub(crate) fn validate(&self) -> Result<(), PrepareError> {
         if self.k % 8 != 0 || !(8..=56).contains(&self.k) {
             return Err(PrepareError::Invalid(format!("ring K must be a multiple of 8 in [8, 56], got {}", self.k)));
         }
@@ -75,7 +75,7 @@ impl PrepareParams {
 }
 
 #[inline]
-fn qmax_of(bits: u32) -> f64 {
+pub(crate) fn qmax_of(bits: u32) -> f64 {
     ((1u64 << (bits - 1)) - 1) as f64
 }
 
@@ -93,7 +93,7 @@ const MAGIC_BITS: i64 = 0x4338_0000_0000_0000;
 /// [`biased_to_i64`]; the float is `b - ROUND_MAGIC` (possibly `-0.0` where numpy has `0.0`, which
 /// is the same integer and the same square).
 #[inline(always)]
-fn quant_biased(v: f32, s: f64, qmax: f64) -> f64 {
+pub(crate) fn quant_biased(v: f32, s: f64, qmax: f64) -> f64 {
     let c = f64::from(v) / s;
     let c = if c < -qmax {
         -qmax
@@ -107,7 +107,7 @@ fn quant_biased(v: f32, s: f64, qmax: f64) -> f64 {
 
 /// The integer held by a [`quant_biased`] value (pure integer op, vectorizes without AVX-512).
 #[inline(always)]
-fn biased_to_i64(b: f64) -> i64 {
+pub(crate) fn biased_to_i64(b: f64) -> i64 {
     (b.to_bits() as i64).wrapping_sub(MAGIC_BITS)
 }
 
@@ -117,7 +117,7 @@ const FAST_TOL: f64 = 1.0 / (1u64 << 40) as f64;
 
 /// Quantize one row into `q` with true division (numpy's exact operation sequence).
 #[inline(always)]
-fn quant_row_exact(xr: &[f32], s: f64, qmax: f64, q: &mut [i64]) {
+pub(crate) fn quant_row_exact(xr: &[f32], s: f64, qmax: f64, q: &mut [i64]) {
     for (qv, v) in q.iter_mut().zip(xr) {
         *qv = biased_to_i64(quant_biased(*v, s, qmax));
     }
@@ -157,7 +157,7 @@ fn quant_row(xr: &[f32], s: f64, qmax: f64, q: &mut [i64]) {
 /// `sum(q * q)` as float64; exact (so equal to numpy's float64 sum in any order) while the true
 /// sum is below `2^53`.
 #[inline(always)]
-fn sum_squares(q: &[i64], qmax: f64) -> f64 {
+pub(crate) fn sum_squares(q: &[i64], qmax: f64) -> f64 {
     // integer path: |q| < 2^31 and the total cannot overflow i64
     if qmax < 2_147_483_648.0 && (q.len() as f64) * qmax * qmax < 9.0e18 {
         let mut acc = 0i64;
@@ -174,7 +174,7 @@ fn sum_squares(q: &[i64], qmax: f64) -> f64 {
 /// Bit pattern of the largest `|x|` in a row. For non-negative floats the integer order of the
 /// bit patterns is the float order, and any NaN/inf gives a pattern `>= INF_BITS`.
 #[inline(always)]
-fn row_amax_bits(row: &[f32]) -> u32 {
+pub(crate) fn row_amax_bits(row: &[f32]) -> u32 {
     let mut acc = [0u32; 8];
     let mut c = row.chunks_exact(8);
     for xs in &mut c {
@@ -187,7 +187,7 @@ fn row_amax_bits(row: &[f32]) -> u32 {
 }
 
 /// `f32::INFINITY.to_bits()`.
-const INF_BITS: u32 = 0x7f80_0000;
+pub(crate) const INF_BITS: u32 = 0x7f80_0000;
 
 /// Per-row amax into `amax` (as f64); `false` if any value is NaN/inf.
 #[inline(always)]
@@ -219,7 +219,7 @@ fn amax_rows(x: &[f32], n: usize, amax: &mut [f64]) -> bool {
 
 /// Mask and pack one row: `x_hat = (xq + r) & mask`, `K/8` LE bytes each.
 #[inline(always)]
-fn mask_pack_row(xq: &[i64], r: &[i64], k: u32, xhat: &mut [i64], out: &mut [u8]) {
+pub(crate) fn mask_pack_row(xq: &[i64], r: &[i64], k: u32, xhat: &mut [i64], out: &mut [u8]) {
     let mask = ((1u64 << k) - 1) as i64;
     for ((q, rv), xh) in xq.iter().zip(r).zip(xhat.iter_mut()) {
         *xh = q.wrapping_add(*rv) & mask;
@@ -472,13 +472,14 @@ fn quantize_mask_pack<'py>(
     }
     let (rows, n) = (shape[0], shape[1]);
     let nb = (k / 8) as usize;
-    let xs = match xa.as_slice() {
-        Ok(s) => Data::Borrowed(s),
-        Err(_) => Data::Owned(xa.as_array().iter().copied().collect()),
+    // C order only: `as_slice` also accepts Fortran order, whose elements it would read transposed
+    let xs = match xa.as_slice().ok().filter(|_| xa.is_c_contiguous()) {
+        Some(s) => Data::Borrowed(s),
+        None => Data::Owned(xa.as_array().iter().copied().collect()),
     };
-    let mut rs = match ra.as_slice() {
-        Ok(s) => Data::Borrowed(s),
-        Err(_) => Data::Owned(ra.as_array().iter().copied().collect()),
+    let mut rs = match ra.as_slice().ok().filter(|_| ra.is_c_contiguous()) {
+        Some(s) => Data::Borrowed(s),
+        None => Data::Owned(ra.as_array().iter().copied().collect()),
     };
     let mut xhat = if want_xhat { vec![0i64; rows * n] } else { Vec::new() };
     let mut sx = vec![1.0f64; rows];
@@ -868,16 +869,16 @@ fn quantize_mask_pack_many<'py>(
     }
     let xd: Vec<Data<'_, f32>> = xro
         .iter()
-        .map(|a| match a.as_slice() {
-            Ok(s) => Data::Borrowed(s),
-            Err(_) => Data::Owned(a.as_array().iter().copied().collect()),
+        .map(|a| match a.as_slice().ok().filter(|_| a.is_c_contiguous()) {
+            Some(s) => Data::Borrowed(s), // C order only: `as_slice` also accepts Fortran order
+            None => Data::Owned(a.as_array().iter().copied().collect()),
         })
         .collect();
     let mut rd: Vec<Data<'_, i64>> = rro
         .iter()
-        .map(|a| match a.as_slice() {
-            Ok(s) => Data::Borrowed(s),
-            Err(_) => Data::Owned(a.as_array().iter().copied().collect()),
+        .map(|a| match a.as_slice().ok().filter(|_| a.is_c_contiguous()) {
+            Some(s) => Data::Borrowed(s), // C order only: `as_slice` also accepts Fortran order
+            None => Data::Owned(a.as_array().iter().copied().collect()),
         })
         .collect();
     // Outputs are allocated with the GIL held and filled without it.

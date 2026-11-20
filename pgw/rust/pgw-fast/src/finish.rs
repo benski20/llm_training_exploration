@@ -68,6 +68,8 @@ pub trait Word: Copy + Send + Sync + Default + Eq + 'static {
     fn sext(self, shift: u32) -> i64;
     /// All-ones mask of the low `k` bits.
     fn mask(k: u32) -> Self;
+    /// Zero-extend to u64.
+    fn widen(self) -> u64;
 }
 
 impl Word for u32 {
@@ -104,6 +106,10 @@ impl Word for u32 {
             (1u32 << k) - 1
         }
     }
+    #[inline(always)]
+    fn widen(self) -> u64 {
+        u64::from(self)
+    }
 }
 
 impl Word for u64 {
@@ -139,6 +145,10 @@ impl Word for u64 {
         } else {
             (1u64 << k) - 1
         }
+    }
+    #[inline(always)]
+    fn widen(self) -> u64 {
+        self
     }
 }
 
@@ -210,7 +220,7 @@ impl<'a> Src<'a> {
 
     /// Elements `[a, b)` as words into `dst` (`dst.len() == b - a`).
     #[inline(always)]
-    fn fill<W: Word, const NB: usize>(&self, a: usize, b: usize, dst: &mut [W]) {
+    pub(crate) fn fill<W: Word, const NB: usize>(&self, a: usize, b: usize, dst: &mut [W]) {
         match *self {
             Src::U64(s) => {
                 for (d, v) in dst.iter_mut().zip(&s[a..b]) {
@@ -228,7 +238,7 @@ impl<'a> Src<'a> {
 
     /// Elements `[a, b)` as words without a copy, when they are stored at the word width.
     #[inline(always)]
-    fn words<W: Word>(&self, a: usize, b: usize) -> Option<&'a [W]> {
+    pub(crate) fn words<W: Word>(&self, a: usize, b: usize) -> Option<&'a [W]> {
         let (ptr, ok) = match *self {
             Src::U32(s) if W::BITS == 32 => (s[a..b].as_ptr().cast::<W>(), true),
             Src::U64(s) if W::BITS == 64 => (s[a..b].as_ptr().cast::<W>(), true),
@@ -242,14 +252,16 @@ impl<'a> Src<'a> {
         Some(unsafe { std::slice::from_raw_parts(ptr, b - a) })
     }
 
-    /// True if every element is zero in its low `k` bits.
-    fn all_zero(&self, k: u32) -> bool {
+    /// True if every element is zero in its low `k` bits. Reads every element (no early exit, so the
+    /// time does not depend on where the first nonzero word of the secret vectors lies).
+    pub(crate) fn all_zero(&self, k: u32) -> bool {
         let mask = u64::mask(k);
-        match *self {
-            Src::U64(s) => s.iter().all(|&v| v & mask == 0),
-            Src::U32(s) => s.iter().all(|&v| u64::from(v) & mask == 0),
-            Src::Bytes(s) => s.iter().all(|&v| v == 0),
-        }
+        let acc = match *self {
+            Src::U64(s) => s.iter().fold(0u64, |a, &v| a | (v & mask)),
+            Src::U32(s) => s.iter().fold(0u64, |a, &v| a | (u64::from(v) & mask)),
+            Src::Bytes(s) => s.iter().fold(0u64, |a, &v| a | u64::from(v)),
+        };
+        acc == 0
     }
 }
 
@@ -315,7 +327,7 @@ impl WrBuf {
     }
 
     /// Zero the whole buffer (paths that return before the workers run).
-    fn wipe_all(&self) {
+    pub(crate) fn wipe_all(&self) {
         if !self.wipe {
             return;
         }
@@ -375,12 +387,12 @@ pub struct Group<'a> {
 }
 
 /// Column block size (elements) for the cache-blocked passes.
-const BLOCK: usize = 2048;
+pub(crate) const BLOCK: usize = 2048;
 /// Roughly this many element-operations per worker thread before going parallel.
 const WORK_PER_THREAD: usize = 1 << 19;
 
 /// Overwrite a buffer of secret-derived words with zeros (not elided by the optimiser).
-fn wipe<T: Copy + Default>(buf: &mut [T]) {
+pub(crate) fn wipe<T: Copy + Default>(buf: &mut [T]) {
     for v in buf.iter_mut() {
         // SAFETY: `v` is a valid, aligned, exclusive reference.
         unsafe { std::ptr::write_volatile(v, T::default()) };
@@ -390,13 +402,13 @@ fn wipe<T: Copy + Default>(buf: &mut [T]) {
 
 /// Raw output pointer shared by workers that write disjoint elements.
 #[derive(Clone, Copy)]
-struct OutPtr(*mut f32);
+pub(crate) struct OutPtr(pub(crate) *mut f32);
 // SAFETY: workers write pairwise disjoint index sets; the scope joins them before the Vec is read.
 unsafe impl Send for OutPtr {}
 unsafe impl Sync for OutPtr {}
 
 /// What one worker returns: partial Freivalds sums `(rows*c)` for both sides, and min/max of `yq`.
-struct Partial<W> {
+pub(crate) struct Partial<W> {
     lhs: Vec<W>,
     rhs: Vec<W>,
     ymin: i64,
@@ -404,7 +416,7 @@ struct Partial<W> {
 }
 
 #[inline(always)]
-fn dot<W: Word>(a: &[W], b: &[W]) -> W {
+pub(crate) fn dot<W: Word>(a: &[W], b: &[W]) -> W {
     let mut s = W::default();
     for (x, y) in a.iter().zip(b) {
         s = s.wadd(x.wmul(*y));
@@ -413,7 +425,7 @@ fn dot<W: Word>(a: &[W], b: &[W]) -> W {
 }
 
 #[inline(always)]
-fn decode<W: Word, const NB: usize>(src: &[u8], dst: &mut [W]) {
+pub(crate) fn decode<W: Word, const NB: usize>(src: &[u8], dst: &mut [W]) {
     for (d, ch) in dst.iter_mut().zip(src.chunks_exact(NB)) {
         let mut a = [0u8; 8];
         a[..NB].copy_from_slice(ch);
@@ -584,48 +596,114 @@ fn split(len: usize, parts: usize, i: usize) -> (usize, usize) {
     ((i * per).min(len), ((i + 1) * per).min(len))
 }
 
+/// How the column blocks of a finish are spread over threads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exec {
+    /// Scoped threads spawned for this call (`0`: automatic count): the [`finish_group`] behaviour.
+    Scoped(usize),
+    /// The persistent prepare pool ([`crate::prepare::pool::global`]): `1` keeps the call on the
+    /// calling thread, `0` uses as many pool workers as the work warrants.
+    Pool(usize),
+}
+
 fn run_group<W: Word, const NB: usize>(g: &Group<'_>, threads: usize) -> Finished {
+    let nrows: usize = g.parts.iter().map(|p| p.sx.len()).sum();
+    // Uninitialised: workers write every element (their column ranges partition `[0, m)`), and a
+    // plain malloc can reuse warm memory instead of faulting in fresh zeroed pages each call.
+    let mut out: Vec<f32> = Vec::with_capacity(nrows * g.m);
+    let (status, bad_rows) = run_group_core::<W, NB>(g, OutPtr(out.as_mut_ptr()), Exec::Scoped(threads), None);
+    if status == STATUS_U_ZERO {
+        return (None, status, bad_rows);
+    }
+    // SAFETY: every element of `out` was written by exactly one worker (joined in the core), and
+    // after a failed verdict the core zeroed all of them again.
+    unsafe { out.set_len(nrows * g.m) };
+    if status != STATUS_OK {
+        return (None, status, bad_rows);
+    }
+    (Some(out), STATUS_OK, 0)
+}
+
+/// The fused finish of a validated group into `out` (`sum rows x m` float32, valid for writes).
+///
+/// Returns `(status, bad_rows)`. Every output element is written unless the status is
+/// [`STATUS_U_ZERO`] (nothing is written then); after any other failed verdict the outputs are
+/// zeroed again before returning. With `rhs_pre` (`rows x c` words: the Freivalds input half
+/// `uw . x_hat`, computed at prepare time) the check compares `u . y_hat` against it and the parts
+/// need no `x_hat`.
+pub(crate) fn run_group_core<W: Word, const NB: usize>(
+    g: &Group<'_>,
+    out: OutPtr,
+    exec: Exec,
+    rhs_pre: Option<&[u64]>,
+) -> (u8, usize) {
     let m = g.m;
     let rows: Vec<(usize, usize)> =
         g.parts.iter().enumerate().flat_map(|(pi, p)| (0..p.sx.len()).map(move |t| (pi, t))).collect();
     let nrows = rows.len();
     let c = g.checks.map_or(0, |ck| ck.c);
-    let n = g.checks.map_or(0, |ck| ck.n);
+    // with a precomputed input half the workers skip the `uw . x_hat` pass
+    let n = if rhs_pre.is_some() { 0 } else { g.checks.map_or(0, |ck| ck.n) };
     if let Some(ck) = g.checks {
         if ck.u.all_zero(g.k) {
             for p in &g.parts {
                 p.wr.wipe_all();
             }
-            return (None, STATUS_U_ZERO, 0);
+            return (STATUS_U_ZERO, 0);
         }
     }
-    // Uninitialised: workers write every element (their column ranges partition `[0, m)`), and a
-    // plain malloc can reuse warm memory instead of faulting in fresh zeroed pages each call.
-    let mut out: Vec<f32> = Vec::with_capacity(nrows * m);
-    let ptr = OutPtr(out.as_mut_ptr());
+    let ptr = out;
     let work_units = nrows * (m * (c + 2) + n * c);
-    let max_t = if threads == 0 { default_threads() } else { threads };
-    let t = (work_units / WORK_PER_THREAD).clamp(1, max_t.max(1)).min(m.div_ceil(64).max(1));
+    let cap_cols = m.div_ceil(64).max(1);
 
-    let mut parts: Vec<Partial<W>> = if t == 1 {
-        vec![work_dispatch::<W, NB>(g, &rows, ptr, 0, m, 0, n)]
-    } else {
-        let rows = &rows;
-        std::thread::scope(|s| {
-            let hs: Vec<_> = (0..t)
-                .map(|i| {
+    let mut parts: Vec<Partial<W>> = match exec {
+        Exec::Scoped(threads) => {
+            let max_t = if threads == 0 { default_threads() } else { threads };
+            let t = (work_units / WORK_PER_THREAD).clamp(1, max_t.max(1)).min(cap_cols);
+            if t == 1 {
+                vec![work_dispatch::<W, NB>(g, &rows, ptr, 0, m, 0, n)]
+            } else {
+                let rows = &rows;
+                std::thread::scope(|s| {
+                    let hs: Vec<_> = (0..t)
+                        .map(|i| {
+                            let (ja, jb) = split(m, t, i);
+                            let (na, nb) = split(n, t, i);
+                            s.spawn(move || work_dispatch::<W, NB>(g, rows, ptr, ja, jb, na, nb))
+                        })
+                        .collect();
+                    hs.into_iter().map(|h| h.join().expect("finish worker panicked")).collect()
+                })
+            }
+        }
+        Exec::Pool(threads) => {
+            let pool = crate::prepare::pool::global();
+            let max_t = if threads == 0 { pool.workers() + 1 } else { threads };
+            let t = (work_units / WORK_PER_THREAD).clamp(1, max_t.max(1)).min(cap_cols);
+            if t == 1 {
+                vec![work_dispatch::<W, NB>(g, &rows, ptr, 0, m, 0, n)]
+            } else {
+                let slots: Vec<std::sync::Mutex<Option<Partial<W>>>> =
+                    (0..t).map(|_| std::sync::Mutex::new(None)).collect();
+                let rows = &rows;
+                let ok = pool.run(t, &|i| {
                     let (ja, jb) = split(m, t, i);
                     let (na, nb) = split(n, t, i);
-                    s.spawn(move || work_dispatch::<W, NB>(g, rows, ptr, ja, jb, na, nb))
-                })
-                .collect();
-            hs.into_iter().map(|h| h.join().expect("finish worker panicked")).collect()
-        })
+                    let pt = work_dispatch::<W, NB>(g, rows, ptr, ja, jb, na, nb);
+                    *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(pt);
+                });
+                let got: Vec<Partial<W>> =
+                    slots.into_iter().filter_map(|s| s.into_inner().unwrap_or_else(|e| e.into_inner())).collect();
+                if !ok || got.len() != t {
+                    // SAFETY: the pool returned after every task; `nrows * m` elements are valid.
+                    unsafe { zero_out(ptr, nrows * m) };
+                    panic!("finish worker panicked");
+                }
+                got
+            }
+        }
     };
     std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-
-    // SAFETY: every element of `out` was written by exactly one worker (joined above).
-    unsafe { out.set_len(nrows * m) };
 
     let (mut ymin, mut ymax) = (i64::MAX, i64::MIN);
     let mut status = STATUS_OK;
@@ -642,9 +720,15 @@ fn run_group<W: Word, const NB: usize>(g: &Group<'_>, threads: usize) -> Finishe
                 *a = a.wadd(*b);
             }
         }
+        if let Some(pre) = rhs_pre {
+            for (a, b) in rhs.iter_mut().zip(pre) {
+                *a = a.wadd(W::trunc(*b));
+            }
+        }
         for tr in 0..nrows {
-            let row_ok = (0..c).all(|i| lhs[tr * c + i].and(mask) == rhs[tr * c + i].and(mask));
-            bad_rows += usize::from(!row_ok);
+            // every check vector is compared (no early exit on the first mismatch)
+            let row_bad = (0..c).fold(false, |acc, i| acc | (lhs[tr * c + i].and(mask) != rhs[tr * c + i].and(mask)));
+            bad_rows += usize::from(row_bad);
         }
         wipe(&mut lhs);
         wipe(&mut rhs);
@@ -663,10 +747,45 @@ fn run_group<W: Word, const NB: usize>(g: &Group<'_>, threads: usize) -> Finishe
         status = STATUS_RANGE;
     }
     if status != STATUS_OK {
-        wipe(&mut out);
-        return (None, status, bad_rows);
+        // SAFETY: every element was written by a worker; zero them again (fail closed).
+        unsafe { zero_out(ptr, nrows * m) };
+        return (status, bad_rows);
     }
-    (Some(out), STATUS_OK, 0)
+    (STATUS_OK, 0)
+}
+
+/// Zero `len` floats at `p` (volatile: they are unmasked outputs of a rejected call).
+///
+/// # Safety
+/// `p` must be valid for `len` writes and not aliased by a live reference.
+unsafe fn zero_out(p: OutPtr, len: usize) {
+    for i in 0..len {
+        std::ptr::write_volatile(p.0.add(i), 0.0);
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// [`run_group_core`] for a validated group of any supported `k` (panics on another width).
+///
+/// # Safety
+/// `out` must be valid for `sum rows x m` float32 writes and not aliased until this returns.
+pub(crate) unsafe fn finish_group_into_raw(
+    g: &Group<'_>,
+    out: *mut f32,
+    exec: Exec,
+    rhs_pre: Option<&[u64]>,
+) -> (u8, usize) {
+    let o = OutPtr(out);
+    match g.k {
+        8 => run_group_core::<u32, 1>(g, o, exec, rhs_pre),
+        16 => run_group_core::<u32, 2>(g, o, exec, rhs_pre),
+        24 => run_group_core::<u32, 3>(g, o, exec, rhs_pre),
+        32 => run_group_core::<u32, 4>(g, o, exec, rhs_pre),
+        40 => run_group_core::<u64, 5>(g, o, exec, rhs_pre),
+        48 => run_group_core::<u64, 6>(g, o, exec, rhs_pre),
+        56 => run_group_core::<u64, 7>(g, o, exec, rhs_pre),
+        k => panic!("unsupported ring width {k}"),
+    }
 }
 
 /// Run the fused finish of a validated group (`threads = 0`: automatic). Output rows are the
@@ -702,12 +821,12 @@ pub fn finish(p: &Chunk<'_>, threads: usize) -> Finished {
 
 // ---- Python binding --------------------------------------------------------------------------
 
-fn verr(msg: impl Into<String>) -> PyErr {
+pub(crate) fn verr(msg: impl Into<String>) -> PyErr {
     PyValueError::new_err(msg.into())
 }
 
 /// Reinterpret an int64 slice as uint64 (same size and alignment).
-fn i64_as_u64(s: &[i64]) -> &[u64] {
+pub(crate) fn i64_as_u64(s: &[i64]) -> &[u64] {
     // SAFETY: i64 and u64 have identical size, alignment and no invalid bit patterns.
     unsafe { std::slice::from_raw_parts(s.as_ptr().cast::<u64>(), s.len()) }
 }
@@ -751,7 +870,7 @@ impl<'py> Ring2<'py> {
     }
 }
 
-fn arr1<'py, T: numpy::Element>(
+pub(crate) fn arr1<'py, T: numpy::Element>(
     obj: &Bound<'py, PyAny>,
     name: &str,
     ty: &str,
@@ -760,7 +879,7 @@ fn arr1<'py, T: numpy::Element>(
     a.try_readonly().map_err(|e| verr(format!("{name}: {e}")))
 }
 
-fn slice1<'a, T: numpy::Element>(a: &'a numpy::PyReadonlyArray1<'_, T>, name: &str) -> PyResult<&'a [T]> {
+pub(crate) fn slice1<'a, T: numpy::Element>(a: &'a numpy::PyReadonlyArray1<'_, T>, name: &str) -> PyResult<&'a [T]> {
     a.as_slice().map_err(|_| verr(format!("{name} must be C-contiguous")))
 }
 
@@ -867,7 +986,7 @@ fn finish_chunk<'py>(
 }
 
 /// A read-only ring matrix argument of [`finish_group`]: int64/uint64/uint32 array or wire bytes.
-enum RoRing<'py> {
+pub(crate) enum RoRing<'py> {
     I(numpy::PyReadonlyArray2<'py, i64>),
     U(numpy::PyReadonlyArray2<'py, u64>),
     U32(numpy::PyReadonlyArray2<'py, u32>),
@@ -875,7 +994,7 @@ enum RoRing<'py> {
 }
 
 impl<'py> RoRing<'py> {
-    fn extract(obj: &Bound<'py, PyAny>, name: &str, k: u32) -> PyResult<Self> {
+    pub(crate) fn extract(obj: &Bound<'py, PyAny>, name: &str, k: u32) -> PyResult<Self> {
         if let Ok(b) = obj.downcast::<PyBytes>() {
             return Ok(RoRing::B(b.clone()));
         }
@@ -895,8 +1014,18 @@ impl<'py> RoRing<'py> {
     }
 
     /// Elements and, for arrays, the 2-D shape.
-    fn src(&self, name: &str) -> PyResult<(Src<'_>, Option<(usize, usize)>)> {
+    pub(crate) fn src(&self, name: &str) -> PyResult<(Src<'_>, Option<(usize, usize)>)> {
         let cerr = || verr(format!("{name} must be C-contiguous"));
+        let c_order = match self {
+            RoRing::I(a) => a.is_c_contiguous(),
+            RoRing::U(a) => a.is_c_contiguous(),
+            RoRing::U32(a) => a.is_c_contiguous(),
+            RoRing::B(_) => true,
+        };
+        if !c_order {
+            // `as_slice` also accepts Fortran order, which would be read transposed
+            return Err(cerr());
+        }
         Ok(match self {
             RoRing::I(a) => {
                 (Src::U64(i64_as_u64(a.as_slice().map_err(|_| cerr())?)), Some((a.shape()[0], a.shape()[1])))
@@ -909,7 +1038,7 @@ impl<'py> RoRing<'py> {
 }
 
 /// The `W r` argument of [`finish_group`]: writable when the kernel wipes it.
-enum WrArg<'py> {
+pub(crate) enum WrArg<'py> {
     RwI(numpy::PyReadwriteArray2<'py, i64>),
     RwU(numpy::PyReadwriteArray2<'py, u64>),
     RwU32(numpy::PyReadwriteArray2<'py, u32>),
@@ -917,7 +1046,7 @@ enum WrArg<'py> {
 }
 
 impl<'py> WrArg<'py> {
-    fn extract(obj: &Bound<'py, PyAny>, k: u32, wipe: bool) -> PyResult<Self> {
+    pub(crate) fn extract(obj: &Bound<'py, PyAny>, k: u32, wipe: bool) -> PyResult<Self> {
         if !wipe {
             let r = RoRing::extract(obj, "wr", k)?;
             if matches!(r, RoRing::B(_)) {
@@ -942,8 +1071,17 @@ impl<'py> WrArg<'py> {
     }
 
     /// `(buffer, (rows, m))`.
-    fn buf(&mut self, wipe: bool) -> PyResult<(WrBuf, (usize, usize))> {
+    pub(crate) fn buf(&mut self, wipe: bool) -> PyResult<(WrBuf, (usize, usize))> {
         let cerr = || verr("wr must be C-contiguous");
+        let c_order = match self {
+            WrArg::RwI(a) => a.is_c_contiguous(),
+            WrArg::RwU(a) => a.is_c_contiguous(),
+            WrArg::RwU32(a) => a.is_c_contiguous(),
+            WrArg::Ro(_) => true, // checked in `RoRing::src`
+        };
+        if !c_order {
+            return Err(cerr());
+        }
         // SAFETY (all arms): the borrow guard held in `self` keeps the array alive and excludes other
         // numpy borrows until the kernel returns; the pointer covers exactly the slice's elements.
         Ok(match self {
