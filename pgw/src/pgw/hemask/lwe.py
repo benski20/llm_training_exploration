@@ -348,7 +348,7 @@ def encrypt_masks(r: np.ndarray, a: np.ndarray | None, params: HEParams, *,
     msg = np.zeros((n, DEGREE), dtype=_U64)
     msg[:, :rows] = np.asarray(r, dtype=np.int64).astype(_U64).T
     if a_planes is not None:
-        from pgw.hemask.fastmm import big_planes_mm_small
+        from pgw.hemask.ntt import big_planes_mm_small  # exact NTT/CRT product; falls back to fastmm
 
         pad = big_planes_mm_small(a_planes, smat, first_byte=0)
     else:
@@ -400,7 +400,7 @@ def decrypt_wr(y: np.ndarray, hint: np.ndarray, ct: MaskCiphertext, params: HEPa
         if hint.shape[-1] != params.dim or y.shape != (hint.shape[0], DEGREE):
             raise ConfigError(f"decrypt shapes do not match: y {y.shape}, hint {hint.shape}")
         if planes:
-            from pgw.hemask.fastmm import big_planes_mm_small
+            from pgw.hemask.ntt import big_planes_mm_small  # exact NTT/CRT product; falls back to fastmm
 
             corr = big_planes_mm_small(np.asarray(hint), ct.secret)
         else:

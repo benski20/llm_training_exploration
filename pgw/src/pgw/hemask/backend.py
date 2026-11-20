@@ -30,7 +30,7 @@ import torch
 from pgw.core.errors import ConfigError, IntegrityError
 from pgw.core.prng import new_seed
 from pgw.core.ring import RingParams
-from pgw.hemask.fastmm import big_planes_mm_small, engine, to_planes
+from pgw.hemask.fastmm import engine, to_planes
 from pgw.hemask.lwe import (
     DEGREE,
     HEParams,
@@ -40,6 +40,7 @@ from pgw.hemask.lwe import (
     matmul_mod64,
     public_matrix,
 )
+from pgw.hemask.ntt import big_planes_mm_small  # exact NTT/CRT product; falls back to fastmm
 
 __all__ = ["MAX_GROUPS_PER_PASS", "MAX_INFLIGHT", "HEMaskBackend", "HintStore", "verify_rows"]
 
@@ -274,6 +275,8 @@ class HEMaskBackend:
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
             nat = None
+            # Fused native path first: on an AMX host it measured faster than the NTT product (115 vs 153 ms for a
+            # 0.5B gate_up group of 1024 slots, bit-identical); the NTT product serves hosts without it.
             if hint.ndim == 3 and engine() == "cpu_int8":
                 from pgw.core.native import fast, native_available
 

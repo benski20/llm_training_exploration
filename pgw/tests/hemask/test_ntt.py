@@ -401,15 +401,24 @@ def test_mlwe_roundtrip_with_ntt_products(monkeypatch: pytest.MonkeyPatch, calls
     ap = fastmm.to_planes(a)
     hint = np.ascontiguousarray(fastmm.to_planes(lwe.matmul_mod64(w, a))[:, 1:7])  # HintStore v2 layout
     ring = RING_K32_A12_C27
-    fake = SimpleNamespace(params=params, ring=ring, hints=SimpleNamespace(hint=lambda _key: hint))
+    # A real backend object without __init__ (no hint store or provider client): only what _decrypt reads.
+    fake = object.__new__(backend_mod.HEMaskBackend)
+    fake.params, fake.ring = params, ring
+    fake.hints = SimpleNamespace(hint=lambda _key: hint)
+    import pgw.core.native as native_mod
 
+    monkeypatch.setattr(native_mod, "native_available", lambda _name: False)  # the path with the hooked product
+
+    # lwe.encrypt_masks imports pgw.hemask.ntt.big_planes_mm_small and the backend binds it at import (the NTT is
+    # the default with a dense fallback): pin each run explicitly to the dense or the NTT product.
+    dense, fast = fastmm.big_planes_mm_small, ntt.big_planes_mm_small
     results = []
     for use_ntt in (False, True):
         seeds = iter([bytes([i]) * 32 for i in range(4)])
         monkeypatch.setattr(lwe_mod, "new_seed", seeds.__next__)  # same secrets and noise in both runs
-        if use_ntt:
-            monkeypatch.setattr(fastmm, "big_planes_mm_small", ntt.big_planes_mm_small)
-            monkeypatch.setattr(backend_mod, "big_planes_mm_small", ntt.big_planes_mm_small)
+        impl = fast if use_ntt else dense
+        monkeypatch.setattr(ntt, "big_planes_mm_small", impl)
+        monkeypatch.setattr(backend_mod, "big_planes_mm_small", impl)
         cts = [encrypt_masks(r[g0 : g0 + DEGREE], None, params, a_planes=ap) for g0 in range(0, rows, DEGREE)]
         assert calls["mm_planes"] == (2 if use_ntt else 0)  # one encryption per 256-slot group
         b = np.concatenate([ct.b for ct in cts], axis=1)
