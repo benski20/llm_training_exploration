@@ -472,7 +472,7 @@ class ModelRuntime:
         self._ready_gauge = self.metrics.get("pgw_gateway_model_ready")
         self._attempts = self.metrics.get("pgw_gateway_service_attempts_total")
         self._retries = self.metrics.get("pgw_gateway_service_retries_total")
-        self._cert_gauge = self.metrics.get("pgw_client_cert_expiry_seconds")
+        self._cert_gauge = self.metrics.get("pgw_gateway_client_cert_expiry_seconds")
         #: ``notAfter`` (Unix time) of the configured client certificate, re-read at most hourly.
         self.client_cert_not_after: float | None = None
         self._cert_read_at: float | None = None

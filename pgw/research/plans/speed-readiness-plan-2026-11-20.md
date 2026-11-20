@@ -260,7 +260,7 @@ Exactness: verification is unchanged; a draft is accepted only when the target's
 2. **Telemetry.**
    - New per-hop buckets (0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5, 10, 25 ms) for `pgw_gateway_round_trip_seconds`, plus new `pgw_gateway_network_seconds` and `pgw_gateway_service_seconds`.
    - `_InstrumentedClient` (runtime.py:92) must also time `compute_sync`. Today `__getattr__` passes it through untimed, and decode uses it via backends.py:1238.
-   - Add the `pgw_client_cert_expiry_seconds` gauge, set at startup and hourly from the configured client cert.
+   - Add the `pgw_gateway_client_cert_expiry_seconds` gauge, set at startup and hourly from the configured client cert.
    - Call C1 `warm_weight_norms()` before model_ready.
 3. **Benches.**
    - `net_floor_bench.py`: TCP ping-pong for 64 B and 80 KB over loopback.

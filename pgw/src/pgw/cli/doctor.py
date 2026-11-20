@@ -119,6 +119,17 @@ class DoctorReport:
         }
 
 
+
+def _settings_without_env(cls: Any, values: dict[str, Any]) -> Any:
+    """``cls(**values)`` for a pydantic-settings class, ignoring environment variables and ``.env``."""
+
+    class _NoEnv(cls):  # type: ignore[misc]
+        @classmethod
+        def settings_customise_sources(cls, settings_cls: Any, init_settings: Any, *args: Any, **kwargs: Any) -> Any:
+            return (init_settings,)
+
+    return _NoEnv(**values)
+
 def _run(report: DoctorReport, name: str, fn: Callable[[], tuple[Status, str, dict[str, Any]]]) -> Check:
     """Run one check; unexpected exceptions become a ``fail`` with the error type and message."""
     from pgw.core.errors import PGWError
@@ -553,11 +564,12 @@ def _check_mask_supply(pack_path: Path, ring: str | None, maskstore_root: Path |
                             f"({need_tmp / 1e9:.2f} GB); set TMPDIR to a larger volume"), {"mode": mode}
         with tempfile.TemporaryDirectory(prefix="pgw-doctor-") as tmp:
             # Never the production counter or free-space floor: a throw-away store in a temporary directory.
-            # Explicit settings (model_validate skips the env sources), so no PGW_MASKSTORE_* override
+            # Explicit settings with the env and .env sources disabled, so no PGW_MASKSTORE_* override
             # (counter, KEK provider, network-filesystem policy, ...) reaches this store.
-            tmp_settings = MaskStoreSettings.model_validate(
+            tmp_settings = _settings_without_env(
+                MaskStoreSettings,
                 {"root": Path(tmp) / "store", "key_provider": "file", "key_file": Path(tmp) / "kek",
-                 "counter": "none", "min_free_bytes": 0}
+                 "counter": "none", "min_free_bytes": 0},
             )
             store = MaskStore(tmp_settings, FileKeyProvider(Path(tmp) / "kek", create=True))
             try:

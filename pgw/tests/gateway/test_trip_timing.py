@@ -146,8 +146,8 @@ def test_cert_expiry_gauge_is_registered() -> None:
     m = GatewayMetrics()
     if not m.enabled:
         pytest.skip("prometheus_client not installed")
-    m.get("pgw_client_cert_expiry_seconds").labels(model=MODEL).set(42.0)
-    assert m.registry.get_sample_value("pgw_client_cert_expiry_seconds", {"model": MODEL}) == 42.0
+    m.get("pgw_gateway_client_cert_expiry_seconds").labels(model=MODEL).set(42.0)
+    assert m.registry.get_sample_value("pgw_gateway_client_cert_expiry_seconds", {"model": MODEL}) == 42.0
 
 
 # ---- Generator wiring (plan interface C3) ---------------------------------------------------------------

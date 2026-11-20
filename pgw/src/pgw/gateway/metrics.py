@@ -40,7 +40,7 @@ EXTENSION_METRICS: dict[str, tuple[str, tuple[str, ...], str]] = {
     "pgw_gateway_service_seconds": (
         "histogram", ("model", "linear_kind"), "Service-reported queue plus compute time per round trip",
     ),
-    "pgw_client_cert_expiry_seconds": (
+    "pgw_gateway_client_cert_expiry_seconds": (
         "gauge", ("model",), "Seconds until the configured compute-service client certificate expires",
     ),
 }

@@ -263,7 +263,7 @@ Labels never contain prompt data. Gateway series:
 | `pgw_gateway_admission_rejected_total` | counter | requests refused by admission (`queue_full`, `timeout`, `draining`, `too_large`) |
 | `pgw_gateway_queue_wait_seconds` | histogram | time spent in the admission queue |
 | `pgw_gateway_masks_burned_total` | counter | mask slots reserved by requests but never used |
-| `pgw_client_cert_expiry_seconds` | gauge | seconds until the configured compute-service client certificate expires (**alert** when low) |
+| `pgw_gateway_client_cert_expiry_seconds` | gauge | seconds until the configured compute-service client certificate expires (**alert** when low) |
 | `pgw_masks_open_reservations` | gauge | open mask reservations in the store |
 | `pgw_masks_unshredded_bytes` | gauge | bytes of fully consumed segment files awaiting shredding |
 | `pgw_masks_available_slots` | gauge | slots in the store per model and ring |

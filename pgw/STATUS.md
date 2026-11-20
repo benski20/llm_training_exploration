@@ -30,7 +30,7 @@ Run 26 (after the phase-1 merge) will be measured with corrected accounting; no 
   The compute client wrapper now also times (and breaker-gates) the blocking `compute_sync` path that
   small decode calls use; before, those trips were untimed.
 - **Metrics**: `pgw_gateway_round_trip_seconds` uses sub-ms buckets (0.25-25 ms plus a tail).
-  `pgw_gateway_network_seconds`, `pgw_gateway_service_seconds` and `pgw_client_cert_expiry_seconds`
+  `pgw_gateway_network_seconds`, `pgw_gateway_service_seconds` and `pgw_gateway_client_cert_expiry_seconds`
   are implemented but emit only once they are added to the metric contract
   (`pgw.observability.metrics.METRIC_NAMES`) and the gateway API metrics table.
 - **Benches**: `benchmarks/net_floor_bench.py` (TCP ping-pong floor; loopback in this 4-vCPU container:

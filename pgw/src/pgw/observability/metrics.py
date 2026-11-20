@@ -75,7 +75,7 @@ METRIC_NAMES: dict[str, tuple[str, tuple[str, ...], str]] = {
     "pgw_gateway_admission_rejected_total": ("counter", ("model", "reason"), "Requests refused by admission"),
     "pgw_gateway_queue_wait_seconds": ("histogram", ("model",), "Time spent in the admission queue"),
     "pgw_gateway_masks_burned_total": ("counter", ("model",), "Mask slots reserved by requests but never used"),
-    "pgw_client_cert_expiry_seconds": (
+    "pgw_gateway_client_cert_expiry_seconds": (
         "gauge", ("model",), "Seconds until the configured compute-service client certificate expires",
     ),
     "pgw_masks_open_reservations": ("gauge", (), "Open mask reservations in the store"),
