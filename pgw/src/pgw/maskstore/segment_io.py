@@ -7,9 +7,12 @@ import logging
 import os
 import struct
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from pgw.core import native
 from pgw.core.errors import MaskStoreError
 from pgw.maskstore.counters import fsync_dir
 from pgw.maskstore.format import (
@@ -26,6 +29,18 @@ __all__ = ["RawSegmentWriter", "crypto_erase", "shred_file", "wipe_and_unlink"]
 
 log = logging.getLogger(__name__)
 
+#: Native segment writer (``pgw_fast.seal_chunks`` / ``seal_ring_chunks``, Rust ``writer.rs``):
+#: AES-256-GCM + ``pwrite`` with the GIL released, byte-identical to the Python path below
+#: (``tests/native/test_writer.py``). ``PGW_NATIVE=0`` (or a build without it) uses Python.
+NATIVE_WRITER = native.native_available("seal_chunks", "seal_ring_chunks")
+
+#: Threads of the native writer per call (0 = automatic: about one per MiB of plaintext, at most
+#: the CPU count and 8).
+try:
+    WRITER_THREADS = max(0, int(os.environ.get("PGW_WRITER_THREADS", "0") or 0))
+except ValueError:  # pragma: no cover - bad environment value: automatic
+    WRITER_THREADS = 0
+
 
 class RawSegmentWriter:
     """Writes encrypted chunks of one segment into a temp file, then publishes it atomically.
@@ -34,7 +49,9 @@ class RawSegmentWriter:
     exactly once before :meth:`publish`.
     """
 
-    def __init__(self, final_path: Path, header: SegmentHeader, dek: bytes, *, fsync: bool = True):
+    def __init__(
+        self, final_path: Path, header: SegmentHeader, dek: bytes, *, fsync: bool = True, use_native: bool | None = None
+    ):
         self.final_path = final_path
         self.tmp_path = final_path.with_name(f".{final_path.name}.part")
         self.header = header
@@ -44,6 +61,9 @@ class RawSegmentWriter:
         self._digest = hashlib.sha256(self.header_raw).digest()
         self._nonce_prefix = bytes.fromhex(header.nonce_prefix)
         self._aead: AESGCM | None = AESGCM(bytes(dek))
+        #: Native fast path in use (``use_native=None``: whenever the extension provides it).
+        self.native = NATIVE_WRITER if use_native is None else bool(use_native) and NATIVE_WRITER
+        self._key = bytearray(dek) if self.native else bytearray()  # wiped on publish/abort
         self._written: set[int] = set()
         self._expected = 1 + len(header.linears) * self.layout.chunks_per_linear
         final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +92,21 @@ class RawSegmentWriter:
             raise MaskStoreError(f"chunk {ref.index}: plaintext length {len(plaintext)} != {ref.plain_len}")
         if ref.index in self._written:
             raise MaskStoreError(f"chunk {ref.index} written twice")
+        if self.native:
+            mv = memoryview(plaintext)
+            if mv.format != "B" or mv.ndim != 1:
+                mv = mv.cast("B")
+            try:
+                native.fast.seal_chunks(
+                    self._fd, self._key, self._nonce_prefix, self._digest, mv,
+                    [(ref.index, ref.offset, 0, ref.plain_len)], WRITER_THREADS,
+                )
+            except OSError as exc:
+                raise MaskStoreError(f"segment write failed: {exc.strerror}") from exc
+            finally:
+                mv.release()
+            self._written.add(ref.index)
+            return
         ct = self._aead.encrypt(
             chunk_nonce(self._nonce_prefix, ref.index), bytes(plaintext), chunk_aad(self._digest, ref.index)
         )
@@ -82,6 +117,44 @@ class RawSegmentWriter:
         if n != len(ct):
             raise MaskStoreError("short write to segment file")
         self._written.add(ref.index)
+
+    def write_ring_chunks(self, values: np.ndarray, k: int, jobs: list[tuple[ChunkRef, int, int]]) -> bool:
+        """Range-check ``values``, then pack, encrypt and write row ranges of it (native path only).
+
+        ``values`` is a C-contiguous 2-D ring matrix (int64 / uint64, or int32 / uint32 holding the
+        low 32 bits for ``k <= 32``); each job ``(ref, row_start, rows)`` writes chunk ``ref`` with
+        plaintext ``pack_ring(values[row_start:row_start + rows], k)``, exactly as
+        :meth:`write_chunk` would. If any element of ``values`` (all rows, not only the jobs')
+        lies outside ``[0, 2^k)`` nothing is written and the result is False.
+        """
+        if self._fd is None or self._aead is None:
+            raise MaskStoreError("segment writer is closed")
+        if not self.native:
+            raise MaskStoreError("native segment writer not available")
+        cols = int(values.shape[1])
+        nb = k // 8
+        raw: list[tuple[int, int, int, int]] = []
+        for ref, row_start, rows in jobs:
+            if rows * cols * nb != ref.plain_len:
+                raise MaskStoreError(f"chunk {ref.index}: plaintext length {rows * cols * nb} != {ref.plain_len}")
+            if ref.index in self._written:
+                raise MaskStoreError(f"chunk {ref.index} written twice")
+            raw.append((ref.index, ref.offset, row_start, rows))
+        if len({j[0] for j in raw}) != len(raw):
+            raise MaskStoreError("chunk listed twice")
+        try:
+            ok = native.fast.seal_ring_chunks(
+                self._fd, self._key, self._nonce_prefix, self._digest, values, k, raw, WRITER_THREADS
+            )
+        except OSError as exc:
+            raise MaskStoreError(f"segment write failed: {exc.strerror}") from exc
+        if ok:
+            self._written.update(j[0] for j in raw)
+        return bool(ok)
+
+    def _wipe_key(self) -> None:
+        if self._key:
+            _zero_bytes(self._key)
 
     def publish(self, *, replace: bool = False) -> int:
         """fsync, rename into place, fsync the directory; return the file size.
@@ -114,11 +187,13 @@ class RawSegmentWriter:
             self.abort()
             raise
         self._aead = None
+        self._wipe_key()
         return self.layout.total_size
 
     def abort(self) -> None:
         """Delete the temp file (idempotent)."""
         self._aead = None
+        self._wipe_key()
         if self._fd is not None:
             try:
                 os.close(self._fd)
@@ -129,6 +204,12 @@ class RawSegmentWriter:
             self.tmp_path.unlink(missing_ok=True)
         except OSError as exc:  # pragma: no cover
             log.warning("could not remove partial segment %s: %s", self.tmp_path.name, exc.strerror)
+
+
+def _zero_bytes(buf: bytearray) -> None:
+    a: Any = np.frombuffer(buf, dtype=np.uint8)
+    a.fill(0)
+    del a
 
 
 def crypto_erase(path: Path, *, header_bytes: int = 64 << 10, fsync: bool = True) -> int:
