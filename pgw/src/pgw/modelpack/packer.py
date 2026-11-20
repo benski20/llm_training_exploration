@@ -32,6 +32,7 @@ from pgw.core.fingerprint import sha256_file
 from pgw.core.ring import quantize_weight_rows
 from pgw.core.types import LinearId, linear_ids
 from pgw.modelpack.arch import arch_config_from_hf, expected_linear_shape, hf_linear_parts, hf_plain_tensor_names
+from pgw.modelpack.loader import row_norm_sq_max
 from pgw.modelpack.manifest import (
     MANIFEST_FILE,
     PLAIN_FILE,
@@ -303,6 +304,7 @@ def _write_pack(
                 del ws
                 w8, sw = quantize_weight_rows(w_full)
                 del w_full
+                norm_sq = row_norm_sq_max(w8)  # exact; capped rings bound outputs with its square root
                 bias = (
                     torch.cat(
                         [_check_float(bn, src.get(bn)).to(torch.float32) for _, _, bn, _ in p.parts if bn is not None]
@@ -330,6 +332,7 @@ def _write_pack(
                         scale=f"{k}.scale",
                         bias=f"{k}.bias" if p.has_bias else None,
                         parts=tuple(lparts),
+                        row_norm_sq_max=norm_sq,
                     )
                 )
                 if progress:

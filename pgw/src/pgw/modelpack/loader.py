@@ -34,7 +34,7 @@ from pgw.core.types import LinearId, LinearKind, LinearSpec
 from pgw.modelpack.manifest import MANIFEST_FILE, TOKENIZER_DIR, ArchConfig, LinearEntry, Manifest, TensorEntry
 from pgw.modelpack.st_io import hash_tensor_ranges, read_safetensors_header, tensor_sha256, torch_dtype
 
-__all__ = ["COMPONENTS", "Component", "LinearMeta", "LinearWeights", "ModelPack", "VerifyMode"]
+__all__ = ["COMPONENTS", "Component", "LinearMeta", "LinearWeights", "ModelPack", "VerifyMode", "row_norm_sq_max"]
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +89,8 @@ class LinearMeta:
         bias: float32 ``(m,)`` or ``None``.
         out_features: ``m``.
         in_features: ``n``.
+        row_norm_sq_max: ``max_j ||W8_j||^2`` as an exact integer from the manifest, or ``None`` for
+            packs written before the field existed.
     """
 
     id: LinearId
@@ -96,6 +98,34 @@ class LinearMeta:
     bias: torch.Tensor | None
     out_features: int
     in_features: int
+    row_norm_sq_max: int | None = None
+
+
+#: Elements per block of :func:`row_norm_sq_max` (bounds the int32/int64 temporaries to ~64 MB).
+_NORM_BLOCK_ELEMS = 1 << 23
+
+
+def row_norm_sq_max(w8: torch.Tensor) -> int:
+    """``max_j sum_i W8[j, i]^2`` of an int8 ``(m, n)`` weight, exactly (int64 sums of int32 squares).
+
+    Rows are processed in blocks so a large linear (e.g. 7B ``down``) never needs an int64 copy of
+    the whole matrix. ``math.sqrt(float(result))`` equals the float64 ``max_j ||W8_j||_2`` the
+    engine computed before (each row's float64 sum of squares is exact below ``2^53`` and ``sqrt``
+    is correctly rounded and monotone).
+    """
+    if w8.dtype != torch.int8 or w8.ndim != 2:
+        raise ShapeError(f"row_norm_sq_max expects a 2-D int8 weight, got {w8.dtype}{list(w8.shape)}")
+    m, n = int(w8.shape[0]), int(w8.shape[1])
+    if m == 0 or n == 0:
+        return 0
+    step = max(1, _NORM_BLOCK_ELEMS // n)
+    best = 0
+    for r0 in range(0, m, step):
+        blk = w8[r0 : r0 + step].to(torch.int32)
+        blk.mul_(blk)  # |w| <= 128: squares fit int32
+        best = max(best, int(blk.sum(dim=1, dtype=torch.int64).max()))
+        del blk
+    return best
 
 
 def _check_scale_bias(lid: str, scale: torch.Tensor, bias: torch.Tensor | None) -> None:
@@ -387,7 +417,29 @@ class ModelPack:
         _check_scale_bias(e.id, sw, b)
         if tuple(sw.shape) != (e.out_features,):
             raise ShapeError(f"linear {e.id}: scale has shape {tuple(sw.shape)}, expected ({e.out_features},)")
-        return LinearMeta(e.linear_id, sw, b, int(e.out_features), int(e.in_features))
+        return LinearMeta(e.linear_id, sw, b, int(e.out_features), int(e.in_features), e.row_norm_sq_max)
+
+    def verify_row_norms(self) -> int:
+        """Recompute ``row_norm_sq_max`` from the int8 weights and compare with the manifest.
+
+        Reads every linear weight (seconds for a 7B pack); for install-time checks (``pgw doctor``),
+        not for startup. Packs without the field are skipped. Returns the number of linears checked.
+
+        Raises:
+            FingerprintMismatchError: a stored value differs from the weights.
+        """
+        checked = 0
+        for e in self.manifest.linears:
+            if e.row_norm_sq_max is None:
+                continue
+            got = row_norm_sq_max(self.load_tensor(e.weight))
+            if got != e.row_norm_sq_max:
+                raise FingerprintMismatchError(
+                    f"linear {e.id}: manifest row_norm_sq_max {e.row_norm_sq_max} != {got} computed from the weight",
+                    details={"linear": e.id},
+                )
+            checked += 1
+        return checked
 
     def iter_linears(
         self,

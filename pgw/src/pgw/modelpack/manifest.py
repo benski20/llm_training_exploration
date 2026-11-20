@@ -112,12 +112,27 @@ class LinearEntry(BaseModel):
     scale: str = Field(description="Tensor name of the float32 per-row scale")
     bias: str | None = None
     parts: tuple[LinearPart, ...]
+    row_norm_sq_max: int | None = Field(
+        default=None,
+        ge=0,
+        description="max_j sum_i W8[j, i]^2 (exact integer): the largest squared Euclidean norm of a weight "
+        "row. Capped rings bound each call's outputs with its square root, so the gateway never reads W8. "
+        "Absent in packs written before it existed (they keep their fingerprint).",
+    )
 
     @field_validator("id")
     @classmethod
     def _valid_id(cls, v: str) -> str:
         LinearId.parse(v)
         return v
+
+    @model_validator(mode="after")
+    def _norm_in_range(self) -> LinearEntry:
+        if self.row_norm_sq_max is not None and self.row_norm_sq_max > 127 * 127 * self.in_features:
+            raise ValueError(
+                f"linear {self.id}: row_norm_sq_max {self.row_norm_sq_max} exceeds 127^2 * in_features"
+            )
+        return self
 
     @property
     def linear_id(self) -> LinearId:
@@ -214,8 +229,12 @@ class Manifest(BaseModel):
 
     # ---- fingerprint ---------------------------------------------------------------------
     def semantic_dict(self) -> dict[str, Any]:
-        """JSON-mode dict used for fingerprinting (enums as values, tuples as lists)."""
-        return self.model_dump(mode="json")
+        """JSON-mode dict used for fingerprinting (enums as values, tuples as lists).
+
+        Optional linear fields that are unset (``row_norm_sq_max`` of older packs) are left out, so a
+        pack written before the field existed keeps its fingerprint; when set, the value is covered.
+        """
+        return _drop_unset_linear_fields(self.model_dump(mode="json"))
 
     def compute_fingerprint(self) -> str:
         """Fingerprint of this manifest's semantic content."""
@@ -342,7 +361,7 @@ class Manifest(BaseModel):
 
     def to_json(self) -> str:
         """Pretty JSON for writing ``manifest.json``."""
-        return json.dumps(self.model_dump(mode="json"), indent=1, sort_keys=True)
+        return json.dumps(_drop_unset_linear_fields(self.model_dump(mode="json")), indent=1, sort_keys=True)
 
     @classmethod
     def from_file(cls, path: str | Path) -> Manifest:
@@ -369,3 +388,16 @@ class Manifest(BaseModel):
                 f"invalid model pack manifest {p}: {exc.error_count()} error(s): {exc.errors()[0]['msg']}",
                 details={"path": str(p)},
             ) from exc
+
+
+#: Optional :class:`LinearEntry` fields added after format version 1 shipped. When unset they are not
+#: written and not fingerprinted, so older manifests read, round-trip and fingerprint as before.
+_OPTIONAL_LINEAR_FIELDS = ("row_norm_sq_max",)
+
+
+def _drop_unset_linear_fields(d: dict[str, Any]) -> dict[str, Any]:
+    for e in d.get("linears", ()):
+        for f in _OPTIONAL_LINEAR_FIELDS:
+            if f in e and e[f] is None:
+                del e[f]
+    return d

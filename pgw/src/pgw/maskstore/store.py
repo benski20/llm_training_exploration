@@ -480,29 +480,49 @@ class MaskReservation:
         cs = ex.seg.header.chunk_slots
         bpe = layout.bpe
         row_bytes = lin.out_features * bpe
-        out: bytearray | None = None  # only when the rows span chunks (or no native unpack)
+        out: bytearray | None = None  # rows span chunks without a native unpack: raw bytes, then one decode
+        dest: np.ndarray | None = None  # rows span chunks (native): one output, filled piece by piece
+        narrow = compact and _native_unpack32 and self.ring.k <= 32
         done = 0
-        while done < rows:
-            slot = slot0 + done
-            j = slot // cs
-            cached = self._chunk_cache.get((ei, lin.id))
-            if cached is None or cached[0] != j:
-                if cached is not None:
-                    _zero(cached[1])
-                cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j)))
-                self._chunk_cache[(ei, lin.id)] = cached
-            buf = cached[1]
-            in_chunk = slot - j * cs
-            n = min(rows - done, layout.chunk_rows(j) - in_chunk)
-            if done == 0 and n == rows and _native_unpack:  # all rows in one cached chunk: no copy
-                if compact and _native_unpack32 and self.ring.k <= 32:
-                    return torch.from_numpy(native.fast.unpack_rows_u32(buf, in_chunk, rows, lin.out_features,
-                                                                        self.ring.k))
-                return torch.from_numpy(native.fast.unpack_rows(buf, in_chunk, rows, lin.out_features, self.ring.k))
-            if out is None:
-                out = bytearray(rows * row_bytes)
-            out[done * row_bytes : (done + n) * row_bytes] = buf[in_chunk * row_bytes : (in_chunk + n) * row_bytes]
-            done += n
+        try:
+            while done < rows:
+                slot = slot0 + done
+                j = slot // cs
+                cached = self._chunk_cache.get((ei, lin.id))
+                if cached is None or cached[0] != j:
+                    if cached is not None:
+                        _zero(cached[1])
+                    cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j)))
+                    self._chunk_cache[(ei, lin.id)] = cached
+                buf = cached[1]
+                in_chunk = slot - j * cs
+                n = min(rows - done, layout.chunk_rows(j) - in_chunk)
+                if _native_unpack:
+                    if narrow:
+                        piece = native.fast.unpack_rows_u32(buf, in_chunk, n, lin.out_features, self.ring.k)
+                    else:
+                        piece = native.fast.unpack_rows(buf, in_chunk, n, lin.out_features, self.ring.k)
+                    if done == 0 and n == rows:  # all rows in one cached chunk: no copy
+                        return torch.from_numpy(piece)
+                    if dest is None:
+                        dest = np.empty((rows, lin.out_features), dtype=piece.dtype)
+                    dest[done : done + n] = piece
+                    piece.fill(0)  # decoded W r rows: secret-derived
+                    del piece
+                    done += n
+                    continue
+                if out is None:
+                    out = bytearray(rows * row_bytes)
+                out[done * row_bytes : (done + n) * row_bytes] = buf[in_chunk * row_bytes : (in_chunk + n) * row_bytes]
+                done += n
+        except BaseException:
+            if dest is not None:
+                dest.fill(0)
+            if out is not None:
+                _zero(out)
+            raise
+        if dest is not None:
+            return torch.from_numpy(dest)
         assert out is not None
         t = unpack_ring(out, (rows, lin.out_features), self.ring)
         _zero(out)

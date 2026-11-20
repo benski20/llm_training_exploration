@@ -16,7 +16,10 @@ import abc
 import asyncio
 import contextlib
 import inspect
+import json
 import logging
+import math
+import os
 import secrets
 import threading
 import time
@@ -24,6 +27,7 @@ import uuid
 import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -98,6 +102,10 @@ class BackendStats:
     integrity_failures: int = 0
     remote_seconds: float = 0.0
     local_seconds: float = 0.0
+    #: Round trips of decode-sized calls (at most ``decode_max_rows`` rows in total) and their time.
+    decode_calls: int = 0
+    decode_remote_seconds: float = 0.0
+    decode_local_seconds: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add(self, **kw: float) -> None:
@@ -107,9 +115,13 @@ class BackendStats:
                 setattr(self, k, getattr(self, k) + v)
 
     def add_many(self, calls: int, rows: int, round_trips: int, bytes_up: int, bytes_down: int,
-                 checked: int, skipped: int, remote_s: float, local_s: float) -> None:
+                 checked: int, skipped: int, remote_s: float, local_s: float, decode: bool = False) -> None:
         """Per-round-trip update of the masked backend (one lock, no keyword dispatch)."""
         with self._lock:
+            if decode:
+                self.decode_calls += round_trips
+                self.decode_remote_seconds += remote_s
+                self.decode_local_seconds += local_s
             self.calls += calls
             self.rows += rows
             self.round_trips += round_trips
@@ -268,7 +280,8 @@ class _IntWeight:
 
 
 def _row_norm_max(w8: torch.Tensor) -> float:
-    """``max_j ||W8_j||_2`` (exact enough in float64 for integer rows; used with a relative slack)."""
+    """``max_j ||W8_j||_2`` in float64. Each row's float64 sum of squares is exact (below ``2^53``),
+    so this equals ``math.sqrt(float(row_norm_sq_max(w8)))`` bit for bit (tested)."""
     return float(w8.to(torch.float64).pow(2).sum(dim=1).sqrt().max())
 
 
@@ -663,15 +676,21 @@ class MaskedBackend(LinearBackend):
         self._native_finish = native_available("finish_chunk")
         self._native_group = native_available("finish_group")
         self.stats = BackendStats()
+        #: Calls with at most this many rows in total count as decode in ``stats.decode_*`` (the
+        #: engine's ``inline_max_rows`` default; the runtime may set it to its configured value).
+        self.decode_max_rows = 8
+        #: ``row_norm_sq_max`` per linear key from :meth:`warm_weight_norms` (packs without the field).
+        self._norm_sq: dict[str, int] = {}
+        #: Full int8 weights read on a request path to learn a norm (0 with norms in the manifest or
+        #: after :meth:`warm_weight_norms`; anything else is a cold-start penalty worth alerting on).
+        self.hot_weight_loads = 0
 
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
             n, m = int(lw.in_features), int(lw.out_features)
             ring.check_in_features(n)
             wnorm = None
-            if ring.cap:  # one pass over this linear's int8 weights for the per-call output bound
-                full = pack.load_linear(lw.id, device="cpu")  # type: ignore[attr-defined]
-                wnorm = _row_norm_max(full.w8)
-                del full
+            if ring.cap:  # capped rings bound each call's outputs with the largest weight-row norm
+                wnorm = math.sqrt(float(self._norm_sq_of(lw)))
             return _MaskedMeta(
                 lw.scale.to(torch.float32).clone(),
                 None if lw.bias is None else lw.bias.to(torch.float32).clone(),
@@ -684,6 +703,70 @@ class MaskedBackend(LinearBackend):
         load_meta = getattr(pack, "load_linear_meta", None)
         loader = load_meta if callable(load_meta) else None
         self._meta = _WeightCache(pack, torch.device("cpu"), conv, loader=loader)
+
+    # ---- weight-row norms (capped rings) --------------------------------------------------------
+    def _norm_sq_of(self, lw: Any) -> int:
+        """``row_norm_sq_max`` of one linear: the manifest value, a warmed value, the weight the loader
+        already returned (in-memory packs), or, last resort, one read of the full int8 weight."""
+        from pgw.modelpack.loader import row_norm_sq_max
+
+        sq = getattr(lw, "row_norm_sq_max", None)
+        if sq is None:
+            sq = self._norm_sq.get(lw.id.key)
+        if sq is None:
+            w8 = getattr(lw, "w8", None)
+            if isinstance(w8, torch.Tensor):
+                sq = row_norm_sq_max(w8)
+            else:
+                self.hot_weight_loads += 1
+                if self.hot_weight_loads == 1:
+                    log.warning("capped ring: reading int8 weights on a request to learn row norms "
+                                "(pack without row_norm_sq_max and warm_weight_norms() not run)")
+                full = self.pack.load_linear(lw.id, device="cpu")  # type: ignore[attr-defined]
+                sq = row_norm_sq_max(full.w8)
+                del full
+        return int(sq)
+
+    def warm_weight_norms(self, *, cache_dir: str | Path | None = None) -> int:
+        """Make every linear's metadata (and, for capped rings, weight-row norm) known before serving.
+
+        Packs that carry ``row_norm_sq_max`` in the manifest need no weights at all. For older packs
+        the norms are read from a sidecar ``wnorm.<fingerprint>.json`` (next to the pack, or in
+        ``cache_dir`` / ``$PGW_WNORM_CACHE_DIR`` / ``~/.cache/pgw/wnorm`` when the pack directory
+        is read-only), else computed once from the int8 weights (chunked, exact int64) and written
+        to that sidecar, so the next start reads no weights. Call it at startup, in a worker thread,
+        before the model is marked ready; requests afterwards never read a weight.
+
+        Returns:
+            The number of linears whose norm was computed from the weights in this call.
+        """
+        from pgw.modelpack.loader import row_norm_sq_max
+
+        computed = 0
+        manifest = getattr(self.pack, "manifest", None)
+        has_meta = callable(getattr(self.pack, "load_linear_meta", None))
+        if self.ring.cap and manifest is not None and has_meta:
+            missing = [e for e in manifest.linears if e.row_norm_sq_max is None and e.id not in self._norm_sq]
+            if missing:
+                found = _read_norm_sidecar(self.pack, cache_dir)
+                if found is not None and all(e.id in found for e in missing):
+                    for e in missing:
+                        self._norm_sq[e.id] = found[e.id]
+                else:
+                    t0 = time.perf_counter()
+                    norms: dict[str, int] = {}
+                    for e in manifest.linears:
+                        lw = self.pack.load_linear(e.id, device="cpu")  # type: ignore[attr-defined]
+                        norms[e.id] = row_norm_sq_max(lw.w8)
+                        del lw
+                    computed = len(norms)
+                    for e in missing:
+                        self._norm_sq[e.id] = norms[e.id]
+                    where = _write_norm_sidecar(self.pack, norms, cache_dir)
+                    log.info("computed weight-row norms of %d linears in %.1f s (sidecar: %s)",
+                             computed, time.perf_counter() - t0, where or "not written")
+        self._meta.preload()
+        return computed
 
     # ---- helpers -------------------------------------------------------------------------------
     def _reservation(self, call: LinearCall) -> Any:
@@ -852,9 +935,18 @@ class MaskedBackend(LinearBackend):
         ring = self.ring
         kbits, abits, cap = ring.k, ring.a, int(ring.cap or 0)
         noise = self.noise_monitor
-        # x_hat is only materialized where something reads it (the noise monitor or an old kernel);
-        # the Freivalds check reads the request payload (the same values, packed).
-        lean = self._native_group and noise is None
+        # x_hat is only materialized where something reads it (an old finish kernel, or the noise
+        # monitor on the calls it samples); the Freivalds check reads the request payload (the same
+        # values, packed). Monitors with plan_call/guard_packed run their every-call checks (range,
+        # duplicate rows) on the packed payload of non-sampled calls.
+        group_finish = self._native_group
+        plan_call: Any = None
+        guard_packed: Any = None
+        if noise is not None and group_finish:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
         qmp = native.fast.quantize_mask_pack
         want_soundness = self.min_soundness_bits > 0
         max_item = self.max_rows_per_item
@@ -868,6 +960,9 @@ class MaskedBackend(LinearBackend):
                 row = 0
                 while row < t:
                     check = self._should_check()
+                    # The sampling draw comes before any row is taken (an alarmed monitor burns none).
+                    sampled = bool(plan_call()) if plan_call is not None else noise is not None
+                    want_xhat = not group_finish or sampled
                     rows, r, wr, chk = self._take(res, lid, min(t - row, max_item), check or want_soundness)
                     token = u = uw = None
                     try:
@@ -882,21 +977,29 @@ class MaskedBackend(LinearBackend):
                             )
                         r_np = r.numpy()
                         try:
-                            if lean:
-                                payload, xh, sx = qmp(xn[row : row + rows], r_np, kbits, abits, cap, wn, False)
-                            else:
+                            if want_xhat:
                                 payload, xh, sx = qmp(xn[row : row + rows], r_np, kbits, abits, cap, wn)
+                            else:
+                                payload, xh, sx = qmp(xn[row : row + rows], r_np, kbits, abits, cap, wn, False)
                         except ValueError as exc:
                             if str(exc).startswith("ring_overflow"):
                                 raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
                             raise ShapeError(str(exc)) from exc
                         x_hat = None if xh is None else torch.from_numpy(xh)
-                        if noise is not None and x_hat is not None:  # xq = centered(x_hat - r), for its checks
-                            xq = center(x_hat - r.to(torch.int64), ring)
-                            try:
-                                noise.guard(x_hat, xq)  # type: ignore[attr-defined]
-                            finally:
-                                _wipe(xq)
+                        if noise is not None:
+                            if guard_packed is not None and not sampled:
+                                guard_packed(payload, rows, meta.in_features)
+                            elif x_hat is not None:  # xq = centered(x_hat - r), for its checks
+                                xq = center(x_hat - r.to(torch.int64), ring)
+                                try:
+                                    if plan_call is not None:
+                                        noise.guard(x_hat, xq, planned=True)  # type: ignore[attr-defined]
+                                    else:
+                                        noise.guard(x_hat, xq)  # type: ignore[attr-defined]
+                                finally:
+                                    _wipe(xq)
+                            if group_finish:
+                                x_hat = None  # the group finish reads the payload: every chunk alike
                     except BaseException:
                         _wipe(wr)
                         raise
@@ -1055,9 +1158,10 @@ class MaskedBackend(LinearBackend):
             dev = call.x.device
             result.append(y if dev.type == "cpu" else y.to(dev))
         bytes_up = sum(len(it.x_hat) for it in req.items) if req is not None else 0
+        rows = sum(ch.rows for ch in prep.chunks)
         self.stats.add_many(
             len(prep.calls),
-            sum(ch.rows for ch in prep.chunks),
+            rows,
             1 if req is not None else 0,
             bytes_up,
             bytes_down,
@@ -1065,6 +1169,7 @@ class MaskedBackend(LinearBackend):
             skipped,
             remote_s,
             prep.t_prepare + time.perf_counter() - t0,
+            0 < rows <= self.decode_max_rows,
         )
         return result
 
@@ -1320,3 +1425,69 @@ def _run_coro_blocking(coro: Any) -> Any:
     except RuntimeError:
         return asyncio.run(coro)
     raise ConfigError("synchronous MaskedBackend.forward called inside an event loop; use aforward")
+
+
+# ---- weight-row norm sidecar (packs written before the manifest carried row_norm_sq_max) ----------
+_NORM_SIDECAR_FORMAT = "pgw-wnorm"
+
+
+def _norm_sidecar_dirs(pack: Any, cache_dir: str | Path | None) -> list[Path]:
+    dirs: list[Path] = []
+    root = getattr(pack, "root", None)
+    if isinstance(root, Path):
+        dirs.append(root)
+    if cache_dir is not None:
+        dirs.append(Path(cache_dir))
+    else:
+        env = os.environ.get("PGW_WNORM_CACHE_DIR")
+        if env:
+            dirs.append(Path(env))
+        else:
+            base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+            dirs.append(Path(base) / "pgw" / "wnorm")
+    return dirs
+
+
+def _read_norm_sidecar(pack: Any, cache_dir: str | Path | None) -> dict[str, int] | None:
+    """Validated norms from the first readable sidecar for this pack's fingerprint, else ``None``."""
+    fp = str(pack.fingerprint)
+    widths = {e.id: int(e.in_features) for e in pack.manifest.linears}
+    for d in _norm_sidecar_dirs(pack, cache_dir):
+        p = d / f"wnorm.{fp}.json"
+        try:
+            doc = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        try:
+            if doc.get("format") != _NORM_SIDECAR_FORMAT or doc.get("fingerprint") != fp:
+                raise ValueError("wrong format or fingerprint")
+            out: dict[str, int] = {}
+            for key, v in doc["row_norm_sq_max"].items():
+                n = widths.get(key)
+                if n is None or not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 128 * 128 * n:
+                    raise ValueError(f"bad entry {key!r}")
+                out[key] = v
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            log.warning("ignoring invalid weight-norm sidecar %s: %s", p, exc)
+            continue
+        return out
+    return None
+
+
+def _write_norm_sidecar(pack: Any, norms: dict[str, int], cache_dir: str | Path | None) -> Path | None:
+    """Write the sidecar atomically into the first writable directory; returns its path or ``None``."""
+    fp = str(pack.fingerprint)
+    body = json.dumps({"format": _NORM_SIDECAR_FORMAT, "version": 1, "fingerprint": fp,
+                       "row_norm_sq_max": norms}, sort_keys=True)
+    for d in _norm_sidecar_dirs(pack, cache_dir):
+        p = d / f"wnorm.{fp}.json"
+        tmp = d / f".wnorm.{fp}.{uuid.uuid4().hex}.tmp"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(body, encoding="utf-8")
+            os.replace(tmp, p)
+            return p
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+    return None

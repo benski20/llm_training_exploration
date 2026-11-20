@@ -21,6 +21,12 @@ that, on a random sample of outbound calls:
   bits agree even when ``xq`` differs (``|xq1 - xq2| << 2^K``), so mask reuse is caught on the first
   repeated slot.
 
+Lean path: a caller that has the payload only in its packed wire form calls :meth:`OutboundNoiseMonitor.plan_call`
+first (the sampling draw) and then either :meth:`~OutboundNoiseMonitor.guard` (``planned=True``, with the
+unpacked values, for the sampled ~5% of calls) or :meth:`~OutboundNoiseMonitor.guard_packed` (the every-call
+checks on the packed bytes, with identical duplicate-row fingerprints), so non-sampled calls never build the
+int64 ``x_hat`` or ``xq``.
+
 Every statistical test runs at ``alpha / (number of tests)`` so the false-alarm rate is below
 ``alpha`` (default 1e-9) per window (Bonferroni). The chi-square p-value is the asymptotic one; the
 other bounds are exact (non-asymptotic). Windows close after ``window_values`` inspected values.
@@ -314,13 +320,35 @@ class OutboundNoiseMonitor:
         """Whether the monitor currently alarms."""
         return self._alarm
 
-    def guard(self, x_hat: torch.Tensor, xq: torch.Tensor | None = None) -> None:
+    def plan_call(self) -> bool:
+        """Count one outbound call and decide whether it is inspected statistically.
+
+        The same random draw (and ``always_sample_first`` rule) :meth:`guard` makes for a call, in
+        the same order, so splitting a call into :meth:`plan_call` + :meth:`guard` (``planned``) or
+        :meth:`guard_packed` samples exactly as one :meth:`guard` would. The caller only needs the
+        unpacked ``x_hat`` and ``xq`` when this returns ``True``.
+
+        Raises:
+            IntegrityError: The monitor alarms and ``fail_closed`` is set.
+        """
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
+        with self._lock:
+            self._calls += 1
+            return self._draw_sample_locked()
+
+    def _draw_sample_locked(self) -> bool:
+        return self._calls <= self.config.always_sample_first or self._rng.random() < self.config.sample_rate
+
+    def guard(self, x_hat: torch.Tensor, xq: torch.Tensor | None = None, *, planned: bool | None = None) -> None:
         """Inspect (maybe) and raise if alarmed in fail-closed mode. Cheap on the fast path.
 
         Args:
             x_hat: Outbound masked values ``(T, n)`` (or ``(n,)``), integers in ``[0, 2^K)``.
             xq: The plaintext quantized activations the payload was built from (same shape), used
                 only for the correlation test and never retained.
+            planned: The result of :meth:`plan_call` for this call (the call was already counted and
+                its sampling decided); ``None`` (default) counts and decides here.
 
         Raises:
             IntegrityError: The monitor alarms (now or earlier) and ``fail_closed`` is set.
@@ -337,7 +365,8 @@ class OutboundNoiseMonitor:
                 raise ShapeError(f"xq shape {tuple(xq.shape)} != x_hat shape {tuple(x_hat.shape)}")
         new_reasons: list[str] = []
         with self._lock:
-            self._calls += 1
+            if planned is None:
+                self._calls += 1
             in_ring = True
             if x.numel():
                 # Every call: values outside Z_2^K (e.g. signed xq sent unmasked) are never valid.
@@ -347,7 +376,7 @@ class OutboundNoiseMonitor:
                     new_reasons.append(f"outbound values outside the ring Z_2^{self.ring.k}")
             if self.config.duplicate_check and x.numel():
                 self._check_duplicates(x, new_reasons)
-            sampled = self._calls <= self.config.always_sample_first or self._rng.random() < self.config.sample_rate
+            sampled = self._draw_sample_locked() if planned is None else bool(planned)
             if sampled and x.numel() and in_ring:
                 self._sampled_calls += 1
                 xq2 = self._as_2d(xq, "xq") if xq is not None else None
@@ -358,6 +387,50 @@ class OutboundNoiseMonitor:
             self._notify()
         if self.fail_closed and self._alarm:
             self._raise_blocked()
+
+    def guard_packed(self, payload: bytes | bytearray | memoryview, rows: int, n: int) -> None:
+        """The every-call checks of :meth:`guard` on a packed wire payload, for a call that
+        :meth:`plan_call` did not sample (no statistics, so no unpacked ``x_hat`` or ``xq`` needed).
+
+        ``payload`` holds ``rows * n`` little-endian ``ceil(K/8)``-byte ring elements (the
+        :func:`pgw.core.packing.pack_ring` layout the service receives). Runs the duplicate-row
+        (mask-reuse) fingerprint on the same columns, top bits and keyed multipliers as
+        :meth:`guard`, so both produce identical fingerprints for the same values. The ring range
+        check only applies when ``K`` is not a multiple of 8: a byte-aligned ``K``-bit encoding cannot
+        hold a value outside ``Z_2^K``.
+
+        Raises:
+            IntegrityError: The monitor alarms (now or earlier) and ``fail_closed`` is set.
+            ShapeError: the payload size does not match ``rows * n`` elements.
+        """
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
+        k = self.ring.k
+        nb = (k + 7) // 8
+        rows, n = int(rows), int(n)
+        if rows < 0 or n < 0 or len(payload) != rows * n * nb:
+            raise ShapeError(f"packed payload has {len(payload)} bytes, expected {rows}x{n}x{nb}")
+        new_reasons: list[str] = []
+        with self._lock:
+            if rows and n:
+                if k % 8 and self._packed_out_of_ring(payload, rows, n, nb):
+                    new_reasons.append(f"outbound values outside the ring Z_2^{k}")
+                if self.config.duplicate_check:
+                    cols = self._dup_columns(n)
+                    if cols.size * self._dup_bits >= 64:
+                        vals = _packed_columns(payload, rows, n, nb, cols)
+                        self._dup_fold(vals >> np.uint64(k - self._dup_bits), rows, n, new_reasons)
+            if new_reasons:
+                self._set_alarm(new_reasons)
+        if new_reasons:
+            self._notify()
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
+
+    def _packed_out_of_ring(self, payload: bytes | bytearray | memoryview, rows: int, n: int, nb: int) -> bool:
+        raw = np.frombuffer(payload, dtype=np.uint8).reshape(rows * n, nb)
+        top = raw[:, nb - 1] >> np.uint8(self.ring.k - 8 * (nb - 1))
+        return bool(top.any())
 
     def flush(self) -> None:
         """Evaluate the current partial window now (if it holds at least 4096 values)."""
@@ -489,6 +562,10 @@ class OutboundNoiseMonitor:
             return
         shift = np.uint64(self.ring.k - self._dup_bits)
         top = x[:, torch.from_numpy(cols)].numpy().astype(np.uint64) >> shift  # (T, c)
+        self._dup_fold(top, int(x.shape[0]), n, reasons)
+
+    def _dup_fold(self, top: np.ndarray, t: int, n: int, reasons: list[str]) -> None:
+        """Fingerprint rows from the top bits ``top`` (uint64 ``(t, c)``) of their sampled columns."""
         c = top.shape[1]
         groups = _DUP_GROUPS if c >= 2 * self._dup_cols_per_group else 1
         per = c // groups
@@ -513,11 +590,11 @@ class OutboundNoiseMonitor:
                 order.append(k)
         while len(order) > limit:
             seen.discard(order.popleft())
-        self._rows_checked += x.shape[0]
+        self._rows_checked += t
         if dups:
             self._duplicates += dups
             reasons.append(
-                f"duplicate outbound rows detected ({dups} in a call of {x.shape[0]} rows): possible mask reuse"
+                f"duplicate outbound rows detected ({dups} in a call of {t} rows): possible mask reuse"
             )
 
     # statistics --------------------------------------------------------------------------------
@@ -652,3 +729,17 @@ def _mix64(h: np.ndarray) -> np.ndarray:
     h = (h ^ (h >> _S27)) * _C2
     out: np.ndarray = h ^ (h >> _S31)
     return out
+
+
+def _packed_columns(
+    payload: bytes | bytearray | memoryview, rows: int, n: int, nb: int, cols: np.ndarray
+) -> np.ndarray:
+    """Columns ``cols`` of ``rows x n`` packed little-endian ``nb``-byte elements, as uint64 ``(rows, len(cols))``."""
+    raw = np.frombuffer(payload, dtype=np.uint8)
+    if nb in (1, 2, 4, 8):
+        words = raw.view({1: "<u1", 2: "<u2", 4: "<u4", 8: "<u8"}[nb]).reshape(rows, n)
+        return words[:, cols].astype(np.uint64)
+    picked = raw.reshape(rows, n, nb)[:, cols, :]
+    full = np.zeros((rows, cols.size, 8), dtype=np.uint8)
+    full[:, :, :nb] = picked
+    return full.view("<u8").reshape(rows, cols.size)
