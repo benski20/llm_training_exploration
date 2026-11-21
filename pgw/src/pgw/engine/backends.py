@@ -679,7 +679,14 @@ DUMMY = "dummy"
 
 #: Linear kinds of the ``attention`` local-linear policy (E2: qkv and o computed on the gateway).
 LOCAL_ATTENTION_KINDS: frozenset[str] = frozenset({"qkv", "o"})
-LOCAL_LINEAR_MODES = ("off", "attention", "auto")
+#: R1 (research/plans/fewer-round-trips.md), all default off: ``attention_down`` also computes down on
+#: the gateway (one round trip per layer: gate_up), ``all`` computes every linear there (no round trip),
+#: ``auto_kinds`` decides per linear kind from a start-up calibration (local iff cheaper than one trip).
+LOCAL_ATTENTION_DOWN_KINDS: frozenset[str] = frozenset({"qkv", "o", "down"})
+LOCAL_ALL_KINDS: frozenset[str] = frozenset({"qkv", "o", "gate_up", "down"})
+LOCAL_LINEAR_MODES = ("off", "attention", "auto", "attention_down", "all", "auto_kinds")
+_LOCAL_FIXED_KINDS: dict[str, frozenset[str]] = {
+    "attention": LOCAL_ATTENTION_KINDS, "attention_down": LOCAL_ATTENTION_DOWN_KINDS, "all": LOCAL_ALL_KINDS}
 
 
 def _is_lane_client(client: Any) -> bool:
@@ -782,8 +789,11 @@ class MaskedBackend(LinearBackend):
         sync_trips: :meth:`sync_trip_ok` says yes for decode passes of at most ``sync_trip_max_rows``
             rows (the engine's synchronous decode loop). ``None``: on with a trip-lane client and the
             TripEngine (``PGW_SYNC_TRIPS``).
-        local_linears: E2 policy, ``off`` (default), ``attention`` or ``auto``
-            (:meth:`configure_local_linears`); ``local_rtt_s`` is the round trip ``auto`` compares with.
+        local_linears: E2 policy, ``off`` (default), ``attention``, ``auto``, or (R1, default off)
+            ``attention_down``, ``all``, ``auto_kinds`` (:meth:`configure_local_linears`); ``local_rtt_s``
+            is the round trip ``auto`` / ``auto_kinds`` compare with. ``local_max_rows``: local linears
+            apply only to passes of at most this many rows in total (decode); larger passes (prefill)
+            send every linear. ``None``: every pass (today's behaviour).
 
     Speculation padding (fixed-R verify passes): ``LinearCall.meta[PAD_ROWS]`` / ``meta[DUMMY]``, see
     :data:`PAD_ROWS`. Padding rows are uniform random ring elements, take no mask row and are dropped
@@ -814,6 +824,7 @@ class MaskedBackend(LinearBackend):
         sync_trips: bool | None = None,
         local_linears: str = "off",
         local_rtt_s: float | None = None,
+        local_max_rows: int | None = None,
     ):
         if not 0.0 <= freivalds_rate <= 1.0:
             raise ConfigError("freivalds_rate must be in [0, 1]")
@@ -938,6 +949,10 @@ class MaskedBackend(LinearBackend):
         self._local_w: _WeightCache | None = None
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
         self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
+        if local_max_rows is not None and int(local_max_rows) < 1:
+            raise ConfigError("local_max_rows must be >= 1 or None")
+        #: Passes of more rows (in total) than this send every linear (R1; None: no cap).
+        self.local_max_rows: int | None = None if local_max_rows is None else int(local_max_rows)
 
         def conv(lw: Any, dev: torch.device) -> _MaskedMeta:
             n, m = int(lw.in_features), int(lw.out_features)
@@ -1909,8 +1924,10 @@ class MaskedBackend(LinearBackend):
         if mode != "off":
             if self._local_w is None:
                 self._local_w = _WeightCache(self.pack, torch.device("cpu"), _to_int_weight)
-            if mode == "attention":
-                kinds = LOCAL_ATTENTION_KINDS
+            if mode in _LOCAL_FIXED_KINDS:
+                kinds = _LOCAL_FIXED_KINDS[mode]
+            elif mode == "auto_kinds":
+                kinds = self._calibrate_kinds(rtt_s, max(1, int(reps)), policy)
             else:
                 kinds = self._calibrate_local(rtt_s, max(1, int(reps)), policy)
         if kinds:
@@ -1921,6 +1938,7 @@ class MaskedBackend(LinearBackend):
             self._local_w = None
         self._local_kinds = kinds
         policy["kinds"] = tuple(sorted(kinds))
+        policy["max_rows"] = self.local_max_rows
         self.local_policy = policy
         log.info("local linears: %s -> %s", mode, ", ".join(sorted(kinds)) or "none (every linear remote)")
         return kinds
@@ -1953,6 +1971,43 @@ class MaskedBackend(LinearBackend):
         policy["reason"] = "local qkv+o {:.3g} s {} 2 round trips {:.3g} s".format(
             total, "<" if on else ">=", 2.0 * float(rtt_s))
         return LOCAL_ATTENTION_KINDS if on else frozenset()
+
+    def _calibrate_kinds(self, rtt_s: float | None, reps: int, policy: dict[str, Any]) -> frozenset[str]:
+        """``auto_kinds`` (R1): each linear kind is local iff its calibrated local time (layer 0, one
+        row, median of ``reps``) is below one round trip of ``rtt_s`` seconds. Every remote linear is a
+        round trip of its own (a nonlinear step sits between any two consecutive linears), so the kinds
+        are independent. Decided once at start-up from public data (random inputs); never per token."""
+        if rtt_s is None:
+            st = self.stats.snapshot()
+            if st["decode_calls"] >= 16:
+                rtt_s = st["decode_remote_seconds"] / st["decode_calls"]
+        policy["rtt_s"] = rtt_s
+        if rtt_s is None:
+            policy["reason"] = "no round-trip measurement"
+            return frozenset()
+        gen = torch.Generator().manual_seed(0)
+        times: dict[str, float] = {}
+        for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
+            kind = spec.id.kind.value
+            if spec.id.layer != 0 or kind not in LOCAL_ALL_KINDS:
+                continue
+            call = LinearCall(spec.id, torch.randn(1, spec.in_features, generator=gen))
+            self._forward_local_one(call)  # warm-up (loads the weight)
+            ts = []
+            for _ in range(reps):
+                t0 = time.perf_counter()
+                self._forward_local_one(call)
+                ts.append(time.perf_counter() - t0)
+            times[kind] = sorted(ts)[len(ts) // 2]
+        policy["local_s_by_kind"] = dict(sorted(times.items()))
+        policy["reason"] = "per kind: local iff below one round trip of {:.3g} s".format(float(rtt_s))
+        return frozenset(k for k, t in times.items() if t < float(rtt_s))
+
+    def local_rows_ok(self, rows: int) -> bool:
+        """Engine hook (R1): local linears apply to a pass step of ``rows`` rows in total. Depends only
+        on the row count, which the provider sees for any remote pass anyway (SPEC 3.4)."""
+        cap = self.local_max_rows
+        return cap is None or int(rows) <= cap
 
     def local_linear(self, lid: Any) -> bool:
         """Engine hook: ``lid`` is computed exactly on the gateway (no mask, no round trip)."""
