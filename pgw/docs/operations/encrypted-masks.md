@@ -27,7 +27,18 @@ takes `--mask-source he`.
 about 10x faster on a CPU than the dense path on a T4, with bit-identical ciphertexts (needs the
 native `pgw_ntt` module). Ranks below 16 are refused; the unreviewed rank-12 profile needs
 `PGW_FACTORY_HE_PARAMS_ACK` set to its acknowledgement string. See
-`research/plans/he-structured-encryption.md`.
+`research/plans/he-structured-encryption.md`. With a gateway GPU, `ntt_pre` now decrypts as device passes
+on that GPU (self-tested at start; the CPU engines otherwise).
+
+`PGW_FACTORY_HE_WIRE_V2=true` (default off) lets the maskgen client use wire v2 (randomised modulus switch
+to `q - 3` upload bits, `K + 3` reply bits, noise budget planned per linear from the hint store's row
+norms, v1 fallback). Same decrypted masks; at 7B on a Kaggle T4x2 it cut the bytes by 11% and raised the
+whole factory from 5.5 to 6.4 slots/s (`benchmarks/he_e2e_bench.py`, `benchmarks/results/kaggle/x3_he_e2e_7b_r2`).
+
+Device hint cache (gateway GPU): hints used in the last `PGW_HEMASK_GPU_HINT_STALE_S` seconds (default 600)
+are not evicted; a hint that does not fit is streamed with the next block prefetched
+(`PGW_HEMASK_HINT_PREFETCH=0` turns that off). A decryption pass that runs out of device memory drops cached
+hints and reruns (same bits).
 
 ## The one-time hint
 

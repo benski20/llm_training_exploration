@@ -137,6 +137,13 @@ class FactorySettings(PGWSettings):
     )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")
+    he_wire_v2: bool = Field(
+        False, description="Offer maskgen wire v2 (q-3 bit uploads after a randomised modulus switch, K+3 bit "
+        "replies; per-linear noise budget planned at start-up from the hint store's row norms, v1 for any linear "
+        "that does not fit and whenever the service refuses v2; pgw.hemask.client). Decrypted masks are the same "
+        "bits. Measured at 7B on a T4x2: 11% fewer bytes, provider round trip 8.8 -> 10.8 slots/s, whole factory "
+        "5.5 -> 6.4 slots/s (benchmarks/results/kaggle/x3_he_e2e_7b_r2). Off by default",
+    )
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
     error_backoff_s: float = Field(10.0, gt=0, description="Initial back-off after a failed run (doubles to 600 s)")

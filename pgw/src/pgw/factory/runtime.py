@@ -116,7 +116,11 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     q_bits = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank).q
     hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank, q_bits)
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
-    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
+    v2: dict[str, Any] = {}
+    if settings.he_wire_v2:  # noise budget planned per linear from the customer's own hint store (row norms)
+        v2 = {"params": HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank),
+              "row_norms": hints.meta["row_norms"]}
+    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits, **v2)
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call,
