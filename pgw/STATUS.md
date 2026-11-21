@@ -15,6 +15,24 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-21: encrypted mask factory, gateway side (package M3)
+
+Design and numbers: [research/plans/he-gateway-decrypt.md](research/plans/he-gateway-decrypt.md).
+
+- **Fused NTT decryption** (`PGW_FACTORY_HE_DECRYPT`, default `auto`): the hint product `H S` runs as NTT
+  ring products (native `pgw_ntt`, exact by the CRT bound, checked per call) and decryption (subtract, round,
+  transpose into the output) is fused into the same native pass, so the correction never leaves native scratch
+  memory. `auto` uses it per pass size only when a start-up calibration on public random data found it
+  bit-identical to the dense path and faster; any native error falls back to dense. Optional hints in NTT form
+  (`PGW_FACTORY_HE_HINT_NTT_GB`, default 0; twice the hint's size in RAM). Measured locally (4 vCPUs with AMX,
+  0.5B shapes, decrypt only): 7.6 -> 1.9 ms/slot at 16 groups per pass, 6.1 -> 5.1 at 2 groups (1.5-2.0 with
+  hints in NTT form). Kaggle: pending.
+- **Masks of local linears** (`PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o`, opt-in): for gateways with
+  `local_linears = attention` (and no `local_max_rows`) the factory no longer makes qkv/o masks (16% of mask
+  bytes at 0.5B). The gateway declares at start-up which linears it sends (`MaskStore.require_linears`);
+  segments lacking one are retired (written off, never reserved), so a later configuration change cannot run
+  short or reuse a mask. Reservations may now span segments with different linear sets.
+
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 
 The phase-A packages now run on the gateway's production path (all per-model settings, off by default;

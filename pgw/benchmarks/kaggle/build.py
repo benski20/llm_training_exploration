@@ -226,6 +226,66 @@ JOBS: dict[str, dict] = {
          "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_encrypt_bench.py --preset qwen2.5-7b --rank 12 "
                 "--rows 2048 --dense-rows 256 --groups 4", "timeout": 1800},
     ]},
+    # package M3 (gateway side of the encrypted factory): CPU decryption paths (dense byte-plane GEMM vs the
+    # fused native NTT decryption, on the stored hint and on a hint held in NTT form) at 0.5B / 7B shapes, then
+    # the real factory loop (MaskGenerator + HEMaskBackend, encrypt=ntt_pre, CPU gateway, provider on the T4)
+    # at 512-slot (2 groups per pass, the Modal ramp) and 4096-slot chunks, per decrypt mode, and with the
+    # attention masks skipped (skip_kinds qkv,o). Exactness tests first.
+    "pgw-he-decrypt-m3": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/enroll", "tests/console",
+                                      "tests/engine", "tests/wire", "tests/native", "tests/core", "tests/cli",
+                                      "tests/docs", "tests/deploy", "tests/benchmarks", "docs", "research", "console",
+                                      "tests/vectors", "SPEC.md", "INTERFACE_NOTES.md", "tests/service",
+                                      "tests/modelpack", "tests/observability", "STATUS.md",
+                                      "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                      "benchmarks/results", "benchmarks/RESULTS.md", "ci", "deploy", "tests/factory",
+                                      "tests/moe", "tests/integration",
+                                      # bundle <= 1 MB: only the benches and tests this job runs
+                                      "benchmarks/kaggle", "rust/README.md", "rust/pgw-core-rs/tests",
+                                      *[f"benchmarks/{b}.py" for b in (
+                                          "chat_speed_model", "delay_proxy", "e2e_local", "gateway_probe",
+                                          "gpu_kernel_bench", "hemask_bench", "hemask_encrypt_bench",
+                                          "hemask_ntt_bench", "lane_bench", "lm_head_bench", "mask_pipeline_bench",
+                                          "maskgen_provider_bench", "native_finish_bench", "native_prepare_bench",
+                                          "native_store_bench", "net_floor_bench", "profile_gateway",
+                                          "profile_prefill", "provider_trip_bench", "quant_quality",
+                                          "quant_quality_gpu", "round_trip_model", "scale_provider_bench",
+                                          "scale_sizing", "spec_accept_bench", "spec_cost_bench", "stack_bench",
+                                          "trip_profile", "triton_gemv_bench", "wire_overhead_bench")],
+                                      *[f"tests/maskstore/{t}.py" for t in (
+                                          "test_concurrency_fuzz", "test_format", "test_hardening",
+                                          "test_integration", "test_keys", "test_pipeline_throughput",
+                                          "test_prefetch", "test_read_wr_span", "test_reliability", "test_ringbuf",
+                                          "test_ringshm", "test_rollback", "test_rotation_housekeeping",
+                                          "test_security_review", "test_store", "workers")],
+                                      *[f"tests/hemask/{t}.py" for t in (
+                                          "test_devmm", "test_gpu", "test_lwe", "test_mlwe_ring",
+                                          "test_native_sampling", "test_wire_v2")]],
+                          "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_decrypt_skip",
+         "args": ["tests/hemask/test_he_decrypt.py", "tests/hemask/test_ntt.py", "tests/hemask/test_factory_he.py",
+                  "tests/maskstore/test_skip_linears.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},
+        {"kind": "shell", "name": "cargo_test_ntt",
+         "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cd rust && "
+                "cargo test -p pgw-ntt --no-default-features --release 2>&1 | tail -5", "timeout": 1200},
+        *[{"kind": "shell", "name": f"decrypt_bench_{tag}",
+           "cmd": f"python benchmarks/hemask_decrypt_bench.py --preset {preset} --groups 2 16 --max-rows {rows} "
+                  f"--json /kaggle/working/decrypt_bench_{tag}.json", "timeout": 2400}
+          for tag, preset, rows in (("05b", "qwen2.5-0.5b", 4096), ("7b", "qwen2.5-7b", 2048))],
+        *[{"kind": "shell", "name": f"he_factory_05b_{tag}",
+           "cmd": "python benchmarks/gateway_gpu_bench.py --mode he --preset qwen2.5-0.5b --layers 4 "
+                  f"--device cpu --provider-device cuda --encrypt ntt_pre --he-device none {args} "
+                  f"--json /kaggle/working/he_factory_05b_{tag}.json", "timeout": 2400}
+          for tag, args in (
+              ("c512_dense", "--slots 512 --chunk-slots 512 --decrypt dense"),
+              ("c512_auto", "--slots 512 --chunk-slots 512 --decrypt auto"),
+              ("c512_pre", "--slots 512 --chunk-slots 512 --decrypt ntt_pre --hint-ntt-gb 4"),
+              ("c4096_dense", "--slots 4096 --decrypt dense"),
+              ("c4096_auto", "--slots 4096 --decrypt auto"),
+              ("c4096_pre", "--slots 4096 --decrypt ntt_pre --hint-ntt-gb 4"),
+              ("c4096_auto_skip", "--slots 4096 --decrypt auto --skip-kinds qkv o"))],
+    ]},
     # package M2: provider-side encrypted maskgen throughput (device-side v2 unpack/pack, ceil(bb/8) planes,
     # fused Triton combine, per-device slots). GPU exactness tests, then legacy vs fused slots/s and TOPS at
     # 0.5B / 7B / 70B layer shapes, layers sharded over both T4s, and decode-GEMM latency next to maskgen.

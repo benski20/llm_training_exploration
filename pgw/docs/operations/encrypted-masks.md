@@ -29,6 +29,21 @@ native `pgw_ntt` module). Ranks below 16 are refused; the unreviewed rank-12 pro
 `PGW_FACTORY_HE_PARAMS_ACK` set to its acknowledgement string. See
 `research/plans/he-structured-encryption.md`.
 
+Decryption on a CPU gateway: `PGW_FACTORY_HE_DECRYPT` (default `auto`) picks, per decryption-pass size,
+the faster of the byte-plane GEMM (`dense`) and the fused native NTT decryption (`ntt`), measured at
+start-up on public random data and used only when both give the same bits; a native error falls back to
+`dense`. `PGW_FACTORY_HE_HINT_NTT_GB` (default 0) keeps the hints of as many linears as fit in NTT form in
+RAM (`ntt_pre`: 12 bytes per coefficient, twice the stored hint, about 15 GB for all of Qwen2.5-0.5B),
+another 1.2-2.5x less decryption work. Every mode gives the same bits. Details and numbers:
+`research/plans/he-gateway-decrypt.md`.
+
+A gateway whose `local_linears` is fixed to `attention` (and `local_max_rows` unset) never sends qkv or o
+to the service, so their masks are never used. `PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o` (opt-in) makes the
+factory skip them (about 16% of the mask bytes and of the decryption at 0.5B). The gateway declares at
+start-up which linears it sends; segments lacking one of them are retired (written off, never reserved),
+so changing the gateway's setting later is safe: unset the factory setting and it refills with full
+segments.
+
 ## The one-time hint
 
 On first use, the factory builds `H = W8 A mod 2^64` for every linear from the pack and a fresh
