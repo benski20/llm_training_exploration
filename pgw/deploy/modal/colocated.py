@@ -64,6 +64,10 @@ GATEWAY_CPUS = 4.0
 MEMORY_MIB = 6144 + 8192
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
+#: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
+#: separate processes, directories, PKI and state; TLS end to end) if dropping to the party users fails in
+#: Modal's container runtime (e.g. GPU device permissions). Weaker isolation; reported in the result.
+SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: Both parties' logs, written by the (root) parent process: 0700 root, files 0600.
 LOGS = Path("/var/log/pgw")
@@ -91,7 +95,8 @@ image = (
     # one Unix user per party (own group, no login shell)
     .run_commands(f"useradd --system --user-group --shell /usr/sbin/nologin --no-create-home {PROVIDER_USER}",
                   f"useradd --system --user-group --shell /usr/sbin/nologin --no-create-home {CUSTOMER_USER}")
-    .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"})
+    .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+          "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
@@ -119,7 +124,10 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     deadline = t_boot + min(ttl_s, MAX_LIFETIME_S - 120)
     gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
     boot.log(f"co-located pair: torch {torch.__version__}, GPU {gpu}")
-    result: dict = {"run_id": run_id, "placement": "colocated"}
+    result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS}
+    puser, cuser = (PROVIDER_USER, CUSTOMER_USER) if SEPARATE_USERS else (None, None)
+    if not SEPARATE_USERS:
+        boot.log("PGW_MODAL_COLOCATED_USERS=0: both parties run as root (separate processes and directories)")
     procs: list = []
     reason = "ttl"
     info: dict = {}
@@ -129,7 +137,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     token = ""
     try:
         # ---- provider: own user, own directory, loopback listener only (pgw_modal_boot.start_provider_party)
-        prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=PROVIDER_USER,
+        prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
                                          log_dir=LOGS, note=f"modal co-located demo {run_id}")
         svc = prov["proc"]
         procs.append(svc)
@@ -143,7 +151,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         # ---- customer gateway: own user, own directory, no GPU (pgw_modal_boot.start_gateway_party)
         with modal.forward(GATEWAY_PORT) as tunnel:
             gurl = tunnel.url
-            gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=CUSTOMER_USER, log_dir=LOGS,
+            gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears})
             procs.append(gw)
@@ -151,7 +159,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,
                     "network": "colocated"}
             live["customer"] = info
-            boot.log(f"gateway in setup mode at {info['console_url']} (user {CUSTOMER_USER})")
+            boot.log(f"gateway in setup mode at {info['console_url']} (user {cuser or 'root'})")
             if e2e:
                 import e2e_driver
 

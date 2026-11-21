@@ -468,7 +468,7 @@ def test_colocated_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
     src = ast.get_source_segment(text, fn) or ""
     assert src.index("provider_boot") < src.index("import pgw_modal_boot")
     assert src.index("customer_boot") < src.index("import pgw_modal_boot")
-    assert "start_provider_party(" in src and "user=PROVIDER_USER" in src
-    assert "start_gateway_party(" in src and "user=CUSTOMER_USER" in src
+    assert "start_provider_party(" in src and "user=puser" in src and mod.SEPARATE_USERS
+    assert "start_gateway_party(" in src and "user=cuser" in src
     boot_text = (MODAL_DIR / "pgw_modal_boot.py").read_text()
     assert f'PROVIDER_USER, CUSTOMER_USER = "{mod.PROVIDER_USER}", "{mod.CUSTOMER_USER}"' in boot_text

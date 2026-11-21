@@ -143,7 +143,10 @@ third app, `pgw-colocated` (`colocated.py`), so every round trip crosses loopbac
   are written by the parent process to a root-only directory (0600 files); neither child inherits the
   Modal runtime's `MODAL_*` variables. The only data between the parties is what the protocol sends.
   The same code (`pgw_modal_boot.start_provider_party` / `start_gateway_party`) runs outside Modal with
-  `local_rehearsal.py --users` (see the Kaggle check below).
+  `local_rehearsal.py --users` (see the Kaggle check below). If dropping to the party users fails in
+  Modal's container runtime (for example GPU device permissions), deploy with
+  `PGW_MODAL_COLOCATED_USERS=0`: both parties then run as root (still separate processes, directories,
+  PKI and state; weaker isolation; the result says `separate_users: false`).
 
 ```bash
 python pgw/deploy/modal/launch.py --e2e --gpu T4 --placement colocated --max-trip-ms 2
