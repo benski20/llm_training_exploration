@@ -120,6 +120,9 @@ def format_stats(stats: GenerationStats) -> str:
     output self-check), ``write`` (encryption and I/O in the writer thread) and ``throttle`` (sleeps). The
     rng and write stages overlap the GEMMs when pipelined. Encrypted generation adds the
     :class:`pgw.hemask.HEMaskBackend` counters of this run (``he``: encrypt, provider, decrypt seconds).
+    With ``he_pipeline_depth`` the HE stages overlap: ``gemm`` is then the time the factory waited for
+    finished jobs, the stage seconds add up to more than ``wall`` (the time any job was outstanding) and
+    ``provider`` sums the request times of all request threads.
     """
     x = stats.extra
     rng_src = "gpu" if x.get("gpu_prng") else ("native" if x.get("native_rng") else "python")
@@ -132,6 +135,8 @@ def format_stats(stats: GenerationStats) -> str:
         s += (f"; he: {int(he.get('groups', 0))} groups, encrypt {he.get('encrypt_s', 0.0):.2f}s, "
               f"provider {he.get('remote_s', 0.0):.2f}s, decrypt {he.get('decrypt_s', 0.0):.2f}s, "
               f"wall {he.get('wall_s', 0.0):.2f}s")
+        if x.get("he_pipeline_depth"):
+            s += f", overlapped (depth {x['he_pipeline_depth']}, {int(he.get('jobs', 0))} jobs)"
     return s
 
 
@@ -227,10 +232,26 @@ class _Chunk:
     start: int
     rows: int
     r: torch.Tensor | None
-    wr: torch.Tensor
+    wr: torch.Tensor | None
     event: Any
     seconds: float
     stream: Any
+    #: The linear's ``(spec, uw, cu, cw)``: chunks of earlier linears can still be outstanding.
+    ctx: tuple[Any, ...] = ()
+    #: Encrypted generation with stage overlap: the :class:`pgw.hemask.backend.HEJob` computing ``wr``.
+    job: Any = None
+    nbytes: int = 0
+
+    def abandon(self) -> None:
+        """Drop a chunk that is never handed on: stop its job (it reads ``r``), then wipe ``r`` and ``wr``."""
+        if self.job is not None:
+            self.job.cancel()  # waits until no stage reads r any more; wipes the job's output
+            self.job = None
+        if self.r is not None:
+            self.r.zero_()
+            self.r = None
+        if self.wr is not None:
+            self.wr.zero_()
 
 
 class MaskGenerator:
@@ -453,6 +474,13 @@ class MaskGenerator:
             self._dev_prng_resolved = True
 
     # ---- generation --------------------------------------------------------------------------
+    def he_pipeline_depth(self) -> int:
+        """Outstanding encrypted-generation jobs (``HEMaskBackend.pipeline_depth``; ``0``: the backend's
+        stages run in series per chunk). Needs ``pipeline`` and a backend with ``submit``."""
+        if self.remote is None or not self.pipeline or not hasattr(self.remote, "submit"):
+            return 0
+        return max(0, int(getattr(self.remote, "pipeline_depth", 0) or 0))
+
     @staticmethod
     def _validate(seed: bytes, slots: int, checks: int, chunk_slots: int | None) -> None:
         if not isinstance(seed, bytes | bytearray) or len(seed) != SEED_BYTES:
@@ -533,6 +561,9 @@ class MaskGenerator:
         cpu_ring = _CpuRing(exp, self.native_rng)
         copier = _HostCopy(self.device) if cuda else None
         lag = max(0, int(self._output_lag))
+        he_depth = self.he_pipeline_depth()
+        he_budget = int(getattr(self.remote, "pipeline_bytes", 1 << 30))
+        stats.extra["he_pipeline_depth"] = he_depth
 
         def make_r(task: tuple[int, int, int]) -> torch.Tensor:
             i, start, rows = task
@@ -583,6 +614,14 @@ class MaskGenerator:
                 else:
                     r = make_r(task)
                 t0 = time.perf_counter()
+                if he_depth:  # the job runs in the backend's stage threads; finish() waits for it
+                    try:
+                        job = self.remote.submit(lid.key, r)
+                    except BaseException:
+                        r.zero_()
+                        raise
+                    return _Chunk(lid, start, rows, r, None, None, time.perf_counter() - t0, None, job=job,
+                                  nbytes=self.remote.job_bytes(lid.key, rows))
                 try:
                     wr = kern.matmul(r, self.ring)
                 except BaseException:
@@ -593,11 +632,15 @@ class MaskGenerator:
                 wr, ev = copier.start(wr)
             return _Chunk(lid, start, rows, r, wr, ev, time.perf_counter() - t0, stream)
 
-        def finish(c: _Chunk, spec: LinearSpec, uw: torch.Tensor, cu: np.ndarray | None,
-                   cw: np.ndarray | None) -> GeneratedLinear:
-            """Wait for the chunk's copy, self-check it and account it; returns the item to hand on."""
+        def finish(c: _Chunk) -> GeneratedLinear:
+            """Wait for the chunk's copy (or HE job), self-check it and account it; returns the item to hand on."""
+            spec, uw, cu, cw = c.ctx
             t0 = time.perf_counter()
             try:
+                if c.job is not None:
+                    job, c.job = c.job, None
+                    c.wr = job.result()  # on failure the job wiped its own output
+                assert c.wr is not None
                 if c.event is not None:  # pragma: no cover - GPU only
                     try:
                         c.event.synchronize()
@@ -628,7 +671,11 @@ class MaskGenerator:
                 before = thr.slept_s
                 thr.account(dt, c.rows * spec.out_features * spec.in_features / total_mn)
                 stats.throttle_seconds += thr.slept_s - before
-            return GeneratedLinear(c.lid, c.start, c.wr, uw if c.start == 0 else None)
+            wr, c.wr = c.wr, None
+            return GeneratedLinear(c.lid, c.start, wr, uw if c.start == 0 else None)
+
+        def outstanding_bytes() -> int:
+            return sum(c.nbytes for c in inflight)
 
         try:
             if pool is not None:
@@ -660,27 +707,37 @@ class MaskGenerator:
                     # stream key derived on the CPU (SPEC 7.3, unchanged); expansion on the device
                     stream = _gp.DeviceRingStream(exp.stream_key("r", lid.key), spec.in_features, k, w.device,
                                                   dev_prng)  # type: ignore[arg-type]
+                ctx = (spec, uw, cu, cw)
                 for _start in range(0, slots, chunk_slots):
                     task = tasks[ti]
                     ti += 1
-                    inflight.append(launch(kern, lid, w, task))
-                    if len(inflight) > lag:
-                        yield finish(inflight.pop(0), spec, uw, cu, cw)
-                while inflight:  # the stream key and the kernel are needed until the linear's last chunk
-                    yield finish(inflight.pop(0), spec, uw, cu, cw)
+                    if he_depth:  # make room first: at most he_depth jobs and he_budget bytes outstanding
+                        rows_next = task[2]
+                        while inflight and (len(inflight) >= he_depth or outstanding_bytes()
+                                            + self.remote.job_bytes(lid.key, rows_next) > he_budget):
+                            yield finish(inflight.pop(0))
+                    c = launch(kern, lid, w, task)
+                    c.ctx = ctx
+                    inflight.append(c)
+                    if not he_depth and len(inflight) > lag:
+                        yield finish(inflight.pop(0))
+                # The stream key and the kernel are needed until the linear's last chunk. HE jobs need
+                # neither (the backend holds what it needs), so they stay outstanding across linears.
+                while inflight and not he_depth:
+                    yield finish(inflight.pop(0))
                 if stream is not None:
                     stream.wipe()
                     stream = None
                 del kern, w
+            while inflight:  # HE jobs of the last linears
+                yield finish(inflight.pop(0))
         finally:
             if inflight:  # an error or an abandoned generator: drop chunks that were never handed on
                 if cuda:  # pragma: no cover - GPU only
                     with contextlib.suppress(Exception):
                         torch.cuda.synchronize(self.device)  # no copy may still read r or write wr
                 for c in inflight:
-                    if c.r is not None:
-                        c.r.zero_()
-                    c.wr.zero_()
+                    c.abandon()
                 inflight.clear()
             if stream is not None:
                 stream.wipe()

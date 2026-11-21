@@ -491,6 +491,35 @@ JOBS: dict[str, dict] = {
             # local_cuda_factory_24l (--mode local), linears_1row / linears_32rows (--mode linears)
         )],
     ]},
+    # M1: encrypted mask factory with overlapped stages (he_pipeline_depth). Real `pgw service serve` on the T4
+    # over loopback HTTP, the production HE backend (ntt_pre, 4 groups per call) on the VM's CPUs, synthetic
+    # Qwen2.5-0.5B shapes (24 layers): serial (depth 0) vs overlapped configs, 512-slot (the Modal demo's ramp
+    # segments) and 4096-slot segments; every config's masks hashed against the plaintext factory.
+    "pgw-he-overlap": {"exclude": [
+        "scripts", "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+        *[f"tests/{d}" for d in ("gateway", "e2e", "maskstore", "enroll", "console", "factory", "engine", "wire",
+                                 "native", "core", "cli", "docs", "deploy", "benchmarks", "vectors", "service",
+                                 "modelpack", "observability", "moe", "integration")],
+        *[f"tests/hemask/test_{t}.py" for t in ("gpu", "lwe", "mlwe_ring", "native_sampling", "ntt", "wire_v2")],
+        "benchmarks/RESULTS.md", "benchmarks/kaggle",
+        *[f"benchmarks/{p.name}" for p in sorted(HERE.parent.glob("*.py")) if p.name != "he_factory_overlap_bench.py"]],
+        "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info",
+         "cmd": "lscpu | head -20; nproc; free -g; df -h / /tmp; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_he_factory",
+         "args": ["tests/hemask/test_factory_he.py", "tests/hemask/test_devmm.py", "-q", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        *[{"kind": "shell", "name": name,
+           "cmd": "python benchmarks/he_factory_overlap_bench.py --provider service --service-device cuda "
+                  f"--layers 24 --workdir /tmp/heov --keep {args} --json /kaggle/working/{name}.json",
+           "timeout": 5400} for name, args in (
+            ("he_overlap_512", "--slots 512 --segments 3 --configs 0:2 2:2 4:2 4:4 8:4 --reference"),
+            ("he_overlap_4096", "--slots 4096 --segments 1 --configs 0:2 4:4"),
+            ("he_overlap_512_gpuw2", "--slots 512 --segments 3 --configs 0:2 4:4 "
+                                     "--service-env PGW_SERVICE_GPU_WORKERS_PER_DEVICE=2"),
+        )],
+    ]},
     # S1: draft acceptance of exact strict speculation on chat prompts (benchmarks/spec_accept_bench.py): tokens
     # per masked pass for each R (greedy, simulated over every R) and the real Generator in strict mode (greedy and
     # sampled; tokens must equal plain decoding). Targets 0.5B (prompt lookup only: the demo today), 1.5B and 3B
