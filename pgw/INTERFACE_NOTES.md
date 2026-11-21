@@ -520,3 +520,20 @@ Behaviour changes other components and operators must know about:
   - `GenerationStats.extra["gpu_prng"]`, `BenchmarkResult.gpu_prng`.
 - Status: [done] code + CPU tests (interpreter/emulation); CUDA tests and the T4 throughput numbers are in the
   Kaggle job `pgw-factory-gpu-prng` (not run yet).
+
+## 2026-11-21 factory (X1 scale-out) -> maskstore, gateway, deploy: factory fleet + partial-file liveness locks
+- What: `pgw.factory.fleet` (new): `FactoryFleet` (N spawned worker processes, `PGW_FACTORY_WORKERS` /
+  `pgw factory run --workers N`), `FleetScheduler` (one segment per claim, plans from inventory plus live peers'
+  in-flight segments via `ProductionLedger` under `<state or store root>/fleet`), `SegmentShardedRemote`
+  (`PGW_FACTORY_HE_SERVICE_URLS`: maskgen sharded by segment over several compute services). New settings
+  `workers`, `devices`, `he_service_urls` (property `he_urls`). `build_generators`/`build_he_backend` take
+  `worker_index`/`workers` keyword arguments (defaults unchanged).
+- maskstore: `RawSegmentWriter` holds an exclusive `flock` on its `.part` file from creation until after the
+  rename (the fd is now closed after `os.replace`); `MaskStore.cleanup_partials`, `gc` and orphan scans skip partial
+  files that are locked (`segment_io.partial_in_use`). Before, a factory restarting after a crash removed every
+  partial file, which would abort the segments of concurrent writers.
+- Helm (pgw-factory): `scaleOut.workers`, `scaleOut.devices`, `encrypted.*` (service URLs, token Secret, CA, hint
+  dir, rank, groups per call, encrypt mode).
+- Impact: backwards compatible; `workers` defaults to 1 (the classic single-process factory). The ring tier
+  (gateway child factory) is unchanged and single-writer.
+- Status: done

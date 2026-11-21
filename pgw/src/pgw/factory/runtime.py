@@ -68,13 +68,17 @@ def open_packs(settings: FactorySettings) -> list[Any]:
     return packs
 
 
-def build_generators(settings: FactorySettings, packs: list[Any], throttle: Throttle | None = None
-                     ) -> dict[tuple[str, str], MaskGenerator]:
-    """One :class:`MaskGenerator` per ``(pack, ring)``. Rings a pack cannot decode are rejected."""
+def build_generators(settings: FactorySettings, packs: list[Any], throttle: Throttle | None = None, *,
+                     worker_index: int = 0, workers: int = 1) -> dict[tuple[str, str], MaskGenerator]:
+    """One :class:`MaskGenerator` per ``(pack, ring)``. Rings a pack cannot decode are rejected.
+
+    ``worker_index``/``workers``: position in a :mod:`pgw.factory.fleet` (which compute service of
+    ``he_service_urls`` this worker starts on)."""
     gens: dict[tuple[str, str], MaskGenerator] = {}
     for pack in packs:
         for ring in settings.ring_names:
-            remote = build_he_backend(settings, pack, ring) if settings.he_service_url else None
+            remote = (build_he_backend(settings, pack, ring, worker_index=worker_index, workers=workers)
+                      if settings.he_urls else None)
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
                               self_check_rows=settings.self_check_rows, remote=remote,
@@ -85,10 +89,13 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
     return gens
 
 
-def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
+def build_he_backend(settings: FactorySettings, pack: Any, ring: str, *, worker_index: int = 0,
+                     workers: int = 1) -> Any:
     """Encrypted mask generation for ``pack``: W8.r from the provider on MLWE ciphertexts (pgw.hemask).
 
-    Builds the one-time hint W8.A locally on first use (minutes for 7B on CPU), then reuses it.
+    Builds the one-time hint W8.A locally on first use (minutes for 7B on CPU), then reuses it. With
+    several ``he_service_urls`` the provider calls are sharded by segment
+    (:class:`pgw.factory.fleet.SegmentShardedRemote`).
     """
     from pydantic import SecretStr
 
@@ -97,17 +104,18 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     from pgw.hemask.client import RemoteMulmod64
     from pgw.wire import ClientConfig, ComputeClient
 
-    assert settings.he_service_url is not None
+    urls = settings.he_urls
+    assert urls
     token = None
     if settings.he_token_file is not None:
         token = SecretStr(Path(settings.he_token_file).read_text().strip())
     # The gateway's enrolled client certificate, when configured: a service that requires mTLS for compute
     # refuses the token alone.
-    client = ComputeClient(ClientConfig(base_url=settings.he_service_url, token=token, ca_file=settings.he_ca_file,
-                                        client_cert_file=settings.he_client_cert_file,
-                                        client_key_file=settings.he_client_key_file,
-                                        request_timeout_s=settings.he_timeout_s,
-                                        max_request_bytes=1 << 30))
+    clients = [ComputeClient(ClientConfig(base_url=url, token=token, ca_file=settings.he_ca_file,
+                                          client_cert_file=settings.he_client_cert_file,
+                                          client_key_file=settings.he_client_key_file,
+                                          request_timeout_s=settings.he_timeout_s,
+                                          max_request_bytes=1 << 30)) for url in urls]
     if settings.he_client_cert_file is not None and settings.he_client_key_file is not None:
         watch_client_cert(settings.he_client_cert_file, settings.he_client_key_file)
     hint_root = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
@@ -116,9 +124,15 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     q_bits = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank).q
     hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank, q_bits)
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
-    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
+    remotes = [RemoteMulmod64(c, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
+               for c in clients]
+    remote: Any = remotes[0]
+    if len(remotes) > 1:
+        from pgw.factory.fleet import SegmentShardedRemote
+
+        remote = SegmentShardedRemote(remotes, start=worker_index, rotate=workers < len(remotes), names=urls)
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
-             pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
+             pack.short_fingerprint, ", ".join(urls), settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call,
                          encrypt=settings.he_encrypt)
 

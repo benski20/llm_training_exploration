@@ -294,6 +294,9 @@ FUNCS: dict[str, Callable[..., Any]] = {
     "int64": lambda v: int(v or 0),
     "add": lambda *a: sum(int(x) for x in a),
     "mul": lambda *a: __import__("math").prod(int(x) for x in a),
+    "div": lambda a, b: int(int(a) / int(b)),  # sprig: int64 division truncating toward zero
+    "max": lambda *a: max(int(x) for x in a),
+    "min": lambda *a: min(int(x) for x in a),
     "hasSuffix": lambda suf, s: str(s).endswith(suf),
     "len": lambda v: len(v),
     "eq": _cmp(lambda a, b: a == b),

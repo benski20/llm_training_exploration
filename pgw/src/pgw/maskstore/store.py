@@ -79,7 +79,7 @@ from pgw.maskstore.format import (
 )
 from pgw.maskstore.keys import KeyProvider, RecipientKeyPair, WrappedKey
 from pgw.maskstore.partner import TrustedPartners, read_signature
-from pgw.maskstore.segment_io import RawSegmentWriter, crypto_erase, wipe_and_unlink
+from pgw.maskstore.segment_io import RawSegmentWriter, crypto_erase, partial_in_use, wipe_and_unlink
 from pgw.maskstore.state import (
     ON_DISK,
     SCHEMA_VERSION,
@@ -1990,7 +1990,7 @@ class MaskStore:
             rel = str(p.relative_to(self.root))
             if p.name.endswith(".part"):
                 with contextlib.suppress(OSError):
-                    if now - p.stat().st_mtime > _PART_MAX_AGE_S:
+                    if now - p.stat().st_mtime > _PART_MAX_AGE_S and not partial_in_use(p):
                         p.unlink()
                         log.info("removed stale partial segment %s", p.name)
                 continue
@@ -2940,7 +2940,8 @@ class MaskStore:
         now = time.time()
         for p in self.root.glob(f"*/*/segments/.*{SEGMENT_SUFFIX}.part"):
             with contextlib.suppress(OSError):
-                if now - p.stat().st_mtime >= max_age_s:
+                # A locked partial file belongs to a live writer (another factory worker): never removed.
+                if now - p.stat().st_mtime >= max_age_s and not partial_in_use(p):
                     p.unlink()
                     removed.append(p.name)
                     log.info("removed partial segment file %s", p.name)
@@ -2951,7 +2952,9 @@ class MaskStore:
 
         Called by the factory scheduler at start-up. Partial files hold encrypted, never-registered
         masks, so deleting them cannot cause reuse. With the default ``max_age_s=0`` every partial
-        file is removed: only call it when no writer of this store is running (factory start-up).
+        file not held by a live writer is removed: each writer keeps an ``flock`` on its temp file until
+        the rename (:func:`pgw.maskstore.segment_io.partial_in_use`), so this is safe while other factory
+        workers of the store are writing.
         """
         with self._lock.hold():
             return self._remove_partials(max_age_s)

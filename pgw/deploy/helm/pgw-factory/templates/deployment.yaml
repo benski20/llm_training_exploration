@@ -8,6 +8,13 @@
 {{- if not (or (eq .Values.output "store") (eq .Values.output "export")) -}}
 {{- fail "output must be 'store' or 'export'" -}}
 {{- end -}}
+{{- $workers := int (default 1 .Values.scaleOut.workers) -}}
+{{- if lt $workers 1 -}}
+{{- fail "scaleOut.workers must be >= 1" -}}
+{{- end -}}
+{{- if and (gt $workers 1) (ne .Values.output "store") -}}
+{{- fail "scaleOut.workers > 1 needs output=store" -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -85,7 +92,32 @@ spec:
             - name: PGW_FACTORY_NICE
               value: {{ .Values.config.nice | quote }}
             - name: PGW_FACTORY_CPU_THREADS
-              value: {{ .Values.config.cpuThreads | quote }}
+              value: {{ max 1 (div (int .Values.config.cpuThreads) $workers) | quote }}
+            - name: PGW_FACTORY_WORKERS
+              value: {{ $workers | quote }}
+            {{- with .Values.scaleOut.devices }}
+            - name: PGW_FACTORY_DEVICES
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .Values.encrypted.enabled }}
+            {{- $urls := required "encrypted.serviceUrls needs at least one compute service URL" .Values.encrypted.serviceUrls }}
+            - name: PGW_FACTORY_HE_SERVICE_URLS
+              value: {{ toJson $urls | quote }}
+            - name: PGW_FACTORY_HE_TOKEN_FILE
+              value: /etc/pgw/he/token
+            {{- if .Values.encrypted.caConfigMap }}
+            - name: PGW_FACTORY_HE_CA_FILE
+              value: /etc/pgw/he-ca/ca.crt
+            {{- end }}
+            - name: PGW_FACTORY_HE_HINT_DIR
+              value: {{ default (printf "%s/hemask" .Values.store.mountPath) .Values.encrypted.hintDir | quote }}
+            - name: PGW_FACTORY_HE_RANK
+              value: {{ .Values.encrypted.rank | quote }}
+            - name: PGW_FACTORY_HE_GROUPS_PER_CALL
+              value: {{ .Values.encrypted.groupsPerCall | quote }}
+            - name: PGW_FACTORY_HE_ENCRYPT
+              value: {{ .Values.encrypted.encrypt | quote }}
+            {{- end }}
             - name: PGW_FACTORY_POLL_INTERVAL_S
               value: {{ .Values.config.pollIntervalSeconds | quote }}
             - name: PGW_FACTORY_FACTORY_ID
@@ -170,6 +202,16 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.encrypted.enabled }}
+            - name: he-token
+              mountPath: /etc/pgw/he
+              readOnly: true
+            {{- if .Values.encrypted.caConfigMap }}
+            - name: he-ca
+              mountPath: /etc/pgw/he-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
             {{- if eq .Values.output "store" }}
             - name: store
               mountPath: {{ .Values.store.mountPath }}
@@ -188,6 +230,20 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
+        {{- if .Values.encrypted.enabled }}
+        - name: he-token
+          secret:
+            secretName: {{ required "encrypted.tokenSecret.name is required when encrypted.enabled" .Values.encrypted.tokenSecret.name }}
+            defaultMode: 0400
+            items:
+              - key: {{ .Values.encrypted.tokenSecret.key }}
+                path: token
+        {{- if .Values.encrypted.caConfigMap }}
+        - name: he-ca
+          configMap:
+            name: {{ .Values.encrypted.caConfigMap }}
+        {{- end }}
+        {{- end }}
         {{- if eq .Values.output "store" }}
         - name: store
           persistentVolumeClaim:
