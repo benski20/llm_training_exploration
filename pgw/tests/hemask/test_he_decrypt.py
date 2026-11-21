@@ -132,6 +132,55 @@ def test_native_fault_falls_back_to_dense(tiny_pack: Any, tmp_path: Path, monkey
     assert remote._ntt_broken and set(remote.decrypt_paths) == {"dense"}
 
 
+def test_transform_fault_falls_back_to_dense(tiny_pack: Any, tmp_path: Path,
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    ring = RingParams.from_name("K32A12C27")
+    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)
+    local = {(g.id.key, g.slot_start): g.wr.clone()
+             for g in MaskGenerator(tiny_pack, ring, device="cpu").generate(SEED, 256, checks=2, chunk_slots=256)}
+
+    def boom(*a: Any, **k: Any) -> None:
+        raise ValueError("simulated native transform fault")
+
+    monkeypatch.setattr(ntt.TransformedOperand, "from_planes", boom)
+    remote = HEMaskBackend(tiny_pack, ring, hints, _Provider(tiny_pack), decrypt="ntt_pre", hint_ntt_bytes=1 << 30,
+                           device=None)
+    gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=remote)
+    he = {(g.id.key, g.slot_start): g.wr.clone() for g in gen.generate(SEED, 256, checks=2, chunk_slots=256)}
+    assert all(torch.equal(local[k], he[k]) for k in local)
+    assert remote._ntt_broken and set(remote.decrypt_paths) == {"dense"} and remote._pre_used == 0
+
+
+def test_concurrent_passes_transform_a_hint_once(tiny_pack: Any, tmp_path: Path,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    ring = RingParams.from_name("K32A12C27")
+    hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)
+    remote = HEMaskBackend(tiny_pack, ring, hints, _Provider(tiny_pack), decrypt="ntt_pre", hint_ntt_bytes=1 << 30,
+                           device=None)
+    real = ntt.TransformedOperand.from_planes
+    calls = []
+
+    def slow(*a: Any, **k: Any) -> Any:
+        calls.append(1)
+        time.sleep(0.2)
+        return real(*a, **k)
+
+    monkeypatch.setattr(ntt.TransformedOperand, "from_planes", slow)
+    key = next(iter(tiny_pack.linear_specs())).id.key
+    hint = hints.hint(key)
+    got: list[Any] = []
+    ts = [threading.Thread(target=lambda: got.append(remote._pretransformed(key, hint))) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    one = 12 * (-(-hint.shape[0] // 16) * 16) * hint.shape[2]
+    assert len(calls) == 1 and remote._pre_used == one and all(g is got[0] for g in got)
+
+
 def test_calibration_refuses_differing_bits(tiny_pack: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ring = RingParams.from_name("K32A12C27")
     hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)

@@ -258,6 +258,9 @@ class HEMaskBackend:
         self._pre_skip: set[str] = set()  # linears whose hint does not fit the budget
         self._pre_used = 0
         self._dec_lock = threading.Lock()
+        #: Serialises hint transforms: concurrent passes of one linear wait for one transform instead of each
+        #: reserving budget and transforming (double memory, budget over-counted).
+        self._pre_build = threading.Lock()
         self._dec_choice: dict[int, str] = {}  # auto: pass groups -> "dense" | "ntt"
         self._ntt_broken = False
         #: Decryption path per pass taken so far (``dense``, ``ntt``, ``ntt_pre``, ``device``) and the
@@ -374,7 +377,14 @@ class HEMaskBackend:
             self._count_path("device")
             return
         groups = sum(len(cts) for _, cts, _ in items)
-        path, big = self._decrypt_path(linear, hint, groups)
+        try:  # the hint transform (ntt_pre) is native too: its faults fall back like the decryption's
+            path, big = self._decrypt_path(linear, hint, groups)
+        except Exception as exc:
+            with self._dec_lock:
+                self._ntt_broken = True
+            log.error("encrypted mask factory: NTT hint transform failed (%s: %s); using the dense path",
+                      type(exc).__name__, str(exc)[:200])
+            path, big = "dense", None
         if path != "dense":
             try:
                 self._decrypt_ntt(big, items, out)
@@ -413,6 +423,14 @@ class HEMaskBackend:
 
     def _pretransformed(self, linear: str, hint: np.ndarray) -> Any:
         """The NTT form of ``linear``'s hint (made on first use when it fits ``hint_ntt_bytes``), or ``None``."""
+        with self._dec_lock:
+            pre = self._pre.get(linear)
+            if pre is not None or linear in self._pre_skip:
+                return pre
+        with self._pre_build:  # one transform at a time; a pass that waited finds the result below
+            return self._build_pretransformed(linear, hint)
+
+    def _build_pretransformed(self, linear: str, hint: np.ndarray) -> Any:
         from pgw.hemask import ntt
 
         with self._dec_lock:
