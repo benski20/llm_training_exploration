@@ -132,7 +132,7 @@ def _triton_ready(dev: torch.device) -> bool:
 def _combine_triton(part: torch.Tensor, m: int, cb: int, const: torch.Tensor) -> torch.Tensor:
     _, nb, cbp = part.shape
     out = torch.empty((m, cb), dtype=torch.int64, device=part.device)
-    block = 256 if cb >= 256 else 32
+    block = _block_of(cb)
     grid = (m, -(-cb // block))
     _combine_kernel()[grid](part, const.contiguous(), out, cb, nb * cbp, cbp, NB=nb, BLOCK=block)
     return out
@@ -172,33 +172,67 @@ def triton_combine_ok(dev: torch.device) -> bool:
         return ok
 
 
+def _check_case(dev: torch.device, nb: int, m: int, cb: int, g: torch.Generator) -> bool:
+    """One Triton-vs-torch combine comparison with extreme operands (int32 limits, int64 wrap)."""
+    cbp = -(-cb // 32) * 32 + 32
+    mp = m + 3
+    lim = 128 * 128 * 4096
+    part = torch.randint(-lim, lim, (mp, nb, cbp), generator=g, dtype=torch.int32)
+    part[0] = lim
+    part[1] = -lim
+    part[2, :, ::2] = 2**31 - 1
+    part[2, :, 1::2] = -(2**31)
+    const = torch.randint(-(2**62), 2**62, (m, 1), generator=g, dtype=torch.int64) * 2 - 1
+    const[0] = -(2**63)
+    part, const = part.to(dev), const.to(dev)
+    return torch.equal(_combine_triton(part, m, cb, const), _combine_torch(part, m, cb, const))
+
+
 def _self_check(dev: torch.device) -> bool:
     g = torch.Generator().manual_seed(1234)
-    for nb, m, cb in ((7, 37, 96), (8, 64, 288), (1, 5, 32), (6, 33, 64)):
-        cbp = -(-cb // 32) * 32 + 32
-        mp = m + 3
-        lim = 128 * 128 * 4096
-        part = torch.randint(-lim, lim, (mp, nb, cbp), generator=g, dtype=torch.int32)
-        part[0] = lim
-        part[1] = -lim
-        part[2, :, ::2] = 2**31 - 1
-        part[2, :, 1::2] = -(2**31)
-        const = torch.randint(-(2**62), 2**62, (m, 1), generator=g, dtype=torch.int64) * 2 - 1
-        const[0] = -(2**63)
-        part, const = part.to(dev), const.to(dev)
-        if not torch.equal(_combine_triton(part, m, cb, const), _combine_torch(part, m, cb, const)):
-            return False
-    return True
+    return all(_check_case(dev, nb, m, cb, g) for nb, m, cb in ((7, 37, 96), (8, 64, 288), (1, 5, 32), (6, 33, 64)))
+
+
+_SPEC_OK: dict[tuple[str, int, int], bool] = {}
+
+
+def _block_of(cb: int) -> int:
+    return 256 if cb >= 256 else 32
+
+
+def _spec_ok(dev: torch.device, nb: int, cb: int) -> bool:
+    """True once the kernel specialisation ``(NB, BLOCK)`` used for ``cb`` columns matched the torch
+    reference on ``dev`` (each compiled specialisation is checked before it serves)."""
+    block = _block_of(cb)
+    key = (str(dev), nb, block)
+    ok = _SPEC_OK.get(key)
+    if ok is not None:
+        return ok
+    with _TRITON_LOCK:
+        ok = _SPEC_OK.get(key)
+        if ok is not None:
+            return ok
+        try:
+            ok = _check_case(dev, nb, 37, 288 if block == 256 else 96, torch.Generator().manual_seed(4321 + nb))
+        except Exception as exc:  # compile or launch failure: use the torch reference
+            log.warning("maskgen fused combine NB=%d BLOCK=%d unavailable on %s (%s: %s); using torch ops",
+                        nb, block, dev, type(exc).__name__, str(exc)[:200])
+            ok = False
+        if not ok:
+            log.warning("maskgen fused combine NB=%d BLOCK=%d disabled on %s (self-check failed)", nb, block, dev)
+        _SPEC_OK[key] = ok
+        return ok
 
 
 def combine(part: torch.Tensor, m: int, cb: int, const: torch.Tensor, *, fused: bool | None = None) -> torch.Tensor:
     """``(m, cb)`` int64 bits of ``sum_d part[:m, d, :cb] << 8d + const mod 2^64``.
 
     ``part``: ``(mp, nb, cbp)`` int32 contiguous (the stacked-plane GEMM output), ``const``: ``(m, 1)``
-    int64. ``fused=None`` uses the Triton kernel when it passed its self-check on this device.
+    int64. ``fused=None`` uses the Triton kernel when it passed its self-check on this device, and the
+    kernel specialisation for this ``nb`` and block width passed its own check there.
     """
     if fused is None:
-        fused = triton_combine_ok(part.device)
+        fused = triton_combine_ok(part.device) and _spec_ok(part.device, part.shape[1], cb)
     if fused:
         return _combine_triton(part.contiguous(), m, cb, const)
     return _combine_torch(part, m, cb, const)

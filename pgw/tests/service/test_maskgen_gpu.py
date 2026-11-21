@@ -152,6 +152,32 @@ def test_triton_combine_falls_back_when_self_check_fails(monkeypatch: pytest.Mon
     assert torch.equal(mg.combine(part, 32, 40, const), _combine_planes([part[:32, d, :40] for d in range(7)], const))
 
 
+def test_combine_checks_each_kernel_specialisation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A (NB, BLOCK) specialisation that fails its own check falls back to torch; others stay fused."""
+    monkeypatch.setattr(mg, "_TRITON_OK", {"cpu": True})
+    monkeypatch.setattr(mg, "_SPEC_OK", {})
+    seen: list[tuple[int, int, int]] = []
+
+    def fake_case(dev: torch.device, nb: int, m: int, cb: int, g: torch.Generator) -> bool:
+        seen.append((nb, m, cb))
+        return nb != 7
+
+    monkeypatch.setattr(mg, "_check_case", fake_case)
+    fused_calls: list[int] = []
+    monkeypatch.setattr(mg, "_combine_triton", lambda part, m, cb, const: fused_calls.append(cb) or
+                        mg._combine_torch(part, m, cb, const))
+    const = torch.zeros((32, 1), dtype=torch.int64)
+    p7, p8 = _parts(34, 7, 288, 3), _parts(34, 8, 288, 3)
+    assert torch.equal(mg.combine(p7, 32, 256, const), _combine_planes([p7[:32, d, :256] for d in range(7)], const))
+    assert fused_calls == []  # NB=7 failed its check: torch reference
+    mg.combine(p8, 32, 256, const)
+    mg.combine(p8, 32, 64, const)
+    mg.combine(p8, 32, 256, const)  # cached
+    assert fused_calls == [256, 64, 256]
+    assert mg._SPEC_OK == {("cpu", 7, 256): False, ("cpu", 8, 256): True, ("cpu", 8, 32): True}
+    assert [s[0] for s in seen] == [7, 8, 8]
+
+
 # ---- one item on CPU tensors ---------------------------------------------------------------------
 def _const(w: np.ndarray, nb: int, rnd: int) -> torch.Tensor:
     kern = ComputeKernel(LinearSpec(LinearId(0, "qkv"), *w.shape), torch.from_numpy(w.copy()), device="cpu",
