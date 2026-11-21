@@ -176,7 +176,7 @@ plaintext quantized reference, none shows the provider anything new):
   dummy passes. `spec_rows` without `spec_strict_passes` is refused.
 * `"float_threads"`: torch threads of the gateway's decode float ops (`1` saved 2-5 ms per token on a
   4-vCPU host); enabled only if a start-up self-check gives the same bits (`PGW_FLOAT_THREADS` does
-  the same for every model).
+  the same for every model). Default `1` on CPU engines; `null` keeps the process thread count.
 
 `float_ops`, `head_mode`, `schedule` and `prefix_cache` are refused in this build (phase B).
 `PGW_GATEWAY_SETUP_MODEL_OPTIONS` (JSON) presets the speed settings above for the model entry the setup
