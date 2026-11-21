@@ -19,8 +19,9 @@ Prototype in this branch: `local_linears = attention_down | all | auto_kinds` pl
    nonlinear layer) or cost **10^3 to 10^5 times** the current per-token budget (GC, FHE). They also cannot be
    bit-exact to a float SiLU reference without full IEEE-754 circuits.
 2. **The exact lever that works is to move a linear to the gateway.** A local linear removes its round trip.
-   The provider then sees strictly less, the linear takes no masks, and the bits are the same (same
-   quantization, exact integer product). Today `auto` places only qkv and o. Extending placement to `down` (1
+   The provider then sees strictly less, the linear *takes* no mask rows, and the bits are the same (same
+   quantization, exact integer product). (Critique: mask *generation* is not reduced today. A slot holds
+   masks for every linear, so the local kinds' rows are generated, stored and burned; see section 7.) Today `auto` places only qkv and o. Extending placement to `down` (1
    trip per layer) or to everything in decode (0 trips) is a large win on slow links for small models:
    **0.5B at 17 ms goes from 0.90 to 0.12 s/token (7.6x, measured local costs)**. For 7B the win needs a real
    gateway: 1.22 to 0.85 s/token (1.4x) with `attention_down`, or to 0.67 s/token (1.8x) all-local, on a
@@ -41,8 +42,9 @@ speculation.
 | layers L | 24 | 28 | config |
 | local exact GEMV, 1 row, ms per layer: qkv / o / gate_up / down | 0.25 / 0.22 / 2.52 / 1.24 | 4.19 / 3.23 / 51.5 / 23.5 | **measured here**: `exact_int_matmul`, 1 torch thread, shared 4-vCPU box, about 3 GB/s of int8 weights (2 digit GEMMs at A=12) |
 | same, 4 rows | 0.30 / 0.25 / 2.64 / 1.53 | 4.55 / 3.64 / 58.5 / 24.0 | measured: memory-bound, so rows are nearly free |
+| same, after the critique's digit stacking (both digits as rows of one int8 GEMM, one weight pass) | 0.5B gate_up 1.27 / down 0.64; 7B-qkv shape 2.17 ms (1.87-1.97x faster) | | measured by the critique, 1 thread, load 11; bit-identical (tested) |
 | local exact GEMM, prefill | 64 G MAC/s per thread | same | measured (7B qkv shape, 64 to 256 rows) |
-| o = per-trip cost beyond RTT | 1.2 ms (est.) | 2.2 ms | Kaggle run 27: 1.47 ms remote at loopback + 0.71 ms gateway masking per trip |
+| o = per-trip cost beyond RTT | 1.2 ms (est.; **the Modal e2e implies ~9 ms**, see below) | 2.2 ms | Kaggle run 27: 1.47 ms remote at loopback + 0.71 ms gateway masking per trip |
 | F = gateway fixed per token | 17 ms (est.) | 94 ms | run 27 "other" (LM head, float ops) |
 
 "Dedicated" below means the local linear cost divided by 4. That is an **estimate** for a 4-8 core gateway
@@ -71,7 +73,11 @@ Reading: at RTT 1 ms the provider should do everything except, on a dedicated ga
 `attention_down` wins for both sizes. At 17 ms (Modal) 0.5B should decode entirely on the gateway. 7B gains
 1.4-1.8x only with a real gateway (and 6.5 GB of int8 weights in its RAM for `all`). The Modal measurement
 (26 ms median trip including the CPU provider, 49.5 trips per token, 47 s for 32 tokens) matches the model's
-0.5B "attention local" row once o is about 9 ms. `auto_kinds` picks this placement from a start-up
+0.5B "attention local" row once o is about 9 ms. **Critique:** the tables above use o = 1.2 ms, which is
+optimistic for Modal. With the Modal-calibrated o = 9 ms (`round_trip_model.py --modal-o`), 0.5B at 17 ms
+is 1.28 s/token today, 0.68 `attention_down`, 0.12 `all` (0.07 with digit stacking): **10.7x (18x)**, not
+7.6x. The 7B "dedicated" column remains an unmeasured estimate; with only the measured digit stacking
+(factor 0.53) 7B at 17 ms is 1.28 today, 1.09 `attention_down` (1.17x) and 1.32 `all` (slower). `auto_kinds` picks this placement from a start-up
 calibration (each kind local iff its local time is below one round trip). Every remote linear is its own
 trip, so the kinds are independent.
 
@@ -107,8 +113,10 @@ still about 10^3 x the budget.
 ## 3. Pipelining and overlap (a), and precompute-ahead (d)
 
 - **Multi-request batching** (implemented): S sessions share each trip, so aggregate throughput is about S x
-  single-stream until the gateway CPU saturates. Per-token latency is unchanged. At 17 ms the gateway is idle
-  about 90% of each pass (0.5B: 48 x 18 ms of link versus about 30 ms of compute), so a 0.5B Modal gateway
+  single-stream until the gateway CPU saturates. (Critique: local placement moves work onto that CPU. It
+  is cheap per row only when sessions run in lockstep in one step; unbatched sessions each pay the full
+  weight read, e.g. 7B `all` ~1.2 s of a core per token, so a busy gateway can lose aggregate throughput.) Per-token latency is unchanged. At 17 ms the gateway is idle
+  about 97% of each pass (0.5B: 48 x 18 ms of link versus about 30 ms of compute), so a 0.5B Modal gateway
   could carry about 8-16 batched streams at about 1 tok/s each with today's placement.
 - **Two-cohort ping-pong** (implemented, `engine_pingpong`): it overlaps cohort A's gateway compute with
   cohort B's trip. The gain is at most `compute / (compute + RTT + o)`: about 5% at 17 ms, about 30-40% at
@@ -134,14 +142,16 @@ L passes for L tokens, with the extra passes run as dummies after the answer str
 | draft model on gateway (strict, existing) | 2-3 (2.6x fewer trips measured on 7B with a 0.5B draft) | k+1 = 3-5 | in progress elsewhere |
 | Lookahead/Jacobi (Fu et al., ICML'24), no draft model | 1.5-2.3x reported (A100, 7B; W=15, N=5 needs ~100+ rows/pass) | W(N-1)+G(N-1): 20-130 | poor: each row costs masks and gateway mask/unmask; with remote MLP linears, 20+ rows/pass is 20x the masks for <2x |
 | Medusa heads on the gateway (Cai et al. '24) | 2.2-2.8x (Medusa-2) | tree of 16-64 nodes; fixed-size tree OK under fixed rows | heads are LM-head-sized per head (7B: 4 x 545M fp32) = heavy CPU; EAGLE-style 1-layer drafter is cheaper (EAGLE-3 reports ~3-6x; `eagle_capture_layers` exists) |
-| PEARL-style parallel draft/verify (draft the next block while this pass's trips are in flight) | hides draft time behind RTT | same | good fit for slow links: the gateway is idle ~90% of the pass at 17 ms |
+| PEARL-style parallel draft/verify (draft the next block while this pass's trips are in flight) | hides draft time behind RTT | same | good fit for slow links: the gateway is idle ~97% of the pass at 17 ms |
 
 Two findings:
 - **Strict dummies are expensive on slow links.** After an answer of L tokens, about `L (1 - 1/tau)` dummy
   passes run before a follow-up turn of the same conversation may start. For 0.5B, 17 ms, attention local
   (0.9 s/pass), L = 100 and tau = 2.5, that is **60 passes = about 54 s** of blocking. The fix is placement:
   with decode all-local the provider sees no decode pass, so dummies (local CPU only, 0.12 s each) cost about
-  7 s. A follow-up could also allow non-strict speculation when **no** decode step can go remote (cap never
+  7 s. (Critique: the provider still sees the gap between one turn's prefill trips and the next turn's,
+  which is at least the decode time, about L x 0.12 s. All-local decode removes the exact pass count, not
+  a timing bound on L; that bound is why the relaxation needs the review.) A follow-up could also allow non-strict speculation when **no** decode step can go remote (cap never
   exceeded). That needs a privacy sign-off and is not implemented.
 - Rows are almost free for local linears (GEMV is memory-bound: 4 rows cost 1.05-1.2x one row, measured), so
   speculation composes with local placement at about the full tau.
@@ -150,7 +160,7 @@ Two findings:
 
 | # | idea | speedup (single stream) | feasibility | status |
 |---|---|---|---|---|
-| 1 | **Generalized exact local placement** (`attention_down`, `all`, `auto_kinds`) + `local_max_rows` so prefill stays remote | 0.5B @17 ms: 0.90 -> 0.12 s/token (**7.6x**, measured local cost); @5 ms 0.33 -> 0.12 (2.7x). 7B @17 ms: 1.22 -> 0.85 (1.4x, `attention_down`) or 0.67 (1.8x, `all`) on a dedicated gateway (est.); 7B @1 ms: none (stay with today's) | high: small change, no protocol change, provider sees strictly less, fewer masks used (down is 64% of the 7B input-mask elements) | **prototyped** (default off), tests pass |
+| 1 | **Generalized exact local placement** (`attention_down`, `all`, `auto_kinds`) + `local_max_rows` so prefill stays remote, + digit stacking in `exact_int_matmul` (critique, 1.9x local cost) | 0.5B @17 ms: 0.90 -> 0.12 s/token (**7.6x** at o = 1.2 ms; 10.7x at the Modal o = 9 ms; 0.07 s with stacking); @5 ms 0.33 -> 0.12 (2.7x). 7B @17 ms: 1.22 -> 0.85 (1.4x, `attention_down`) or 0.67 (1.8x, `all`) on a dedicated gateway (est.); 7B @1 ms: none (stay with today's) | high: small change, no protocol change, provider sees strictly less; mask *takes* drop, but mask *generation* only drops after a factory change (section 7) | **prototyped** (default off), tests pass |
 | 2 | **Speculation on top of placement** (strict draft-verify elsewhere; PEARL-style drafting during trips; relax strict dummies only when decode is fully local) | x tau = 2-3 on any row above; e.g. 0.5B @17 ms all-local 0.12 -> ~0.05 s/token | medium: drafter exists elsewhere; the "no remote decode" relaxation needs a privacy review | memo only |
 | 3 | **Batching + ping-pong for throughput** (and `local_max_rows` to protect TTFT of today's `auto`) | aggregate about S x at 17 ms; per-token latency 1x; ping-pong <= 5% at 17 ms | high (exists) | recommend config only |
 | - | FSS / MPC / GC / FHE for a one-trip MLP | <= 1x (FSS/MPC) or 10^-3-10^-5 x (GC/FHE) | none | rejected (section 2) |
@@ -178,9 +188,62 @@ Two findings:
 
 Privacy argument: placement is fixed at start-up from public calibration. The row cap is a function of row
 counts the provider sees anyway. A local linear sends nothing and takes no mask. With `all` and a cap, the
-provider sees no decode passes at all, which hides the generation length (strictly less metadata than today).
+provider sees no decode passes at all, so it no longer sees the exact pass count; a timing bound on the
+generation length remains (section 4). Everything the provider sees is a deterministic function of what it
+sees today with the same placement off, so no new information leaks.
 Exactness: the local path is the same quantization plus the same exact integer product plus the same range
 check as the masked path (already proven for qkv/o; now tested for gate_up and down).
+
+## 7. Adversarial review (2026-11-21)
+
+Checked: every number in sections 1 and 5 (recomputed with `round_trip_model.py`), the code diff, the tests
+(10 + 6 new, plus `test_local_linears.py`, `test_backends.py` and `test_model_hooks.py`: 87 passed, 12 CUDA
+skips), SPEC 3.2/3.4/7/9.4a. Exactness holds: the local path is `quantize_activations` + exact int8-digit GEMM
+(int32 accumulation, max |partial| 128 x 128 x 18944 < 2^31) + the same range check. The privacy argument is
+correct: the cap is a function of the step's total rows, which a remote step reveals anyway, and placement is
+fixed at start-up. Corrections and additions:
+
+1. **Masks.** SPEC 7: a slot holds `r` and `W r` for every linear of the pack, and the gateway reserves
+   `prompt + max_tokens` slots. Rows of local kinds are reserved, never taken, and burned at the end. Today's
+   `attention` already does this. So "down is 64% of the input-mask elements, so local down saves masks"
+   holds only for takes, not for factory or encrypted-maskgen work, storage or download. **Follow-up (large,
+   cheap):** let the factory emit segments for a public subset of linears (the header already lists
+   `linears [{id, m, n}]`), chosen per deployment from the placement. With `attention_down`, 7B generation per
+   slot shrinks from Σn = 831,488 to 28 x 3584 = 100,352 (8.3x fewer `r` elements; `W r` from Σm 1,390,592
+   to 28 x 37,888 = 1,060,864). That also cuts the work of the encrypted (MLWE) mask path.
+2. **Per-trip overhead.** The model's o = 1.2 ms for 0.5B contradicts its own Modal calibration (o ~ 9 ms).
+   With 9 ms the 0.5B gain at 17 ms is 10.7x, not 7.6x (section 1).
+3. **Local kernel 2x now, not "not done".** `exact_int_matmul` ran one int8 GEMM per activation digit,
+   reading the weight twice. Stacking the digits as rows of one GEMM gives 1.87-1.97x at 1 row (measured,
+   1 thread), bit-identical. Implemented in this branch (CPU path only; CUDA unchanged), tested against a
+   float64 reference at A = 12 and 20 with extreme values. It also speeds up today's `attention` placement and
+   `PlainBackend`.
+4. **7B on a dedicated gateway is unmeasured.** The 4x factor was an estimate. Stacking supplies a measured
+   ~1.9x, so the column now assumes another ~2x from cores and bandwidth. A 7B `all` decode reads 6.5 GB of
+   int8 per token, so at a realistic 10-20 GB/s the floor is 0.33-0.65 s plus F. Do not promise 7B gains until
+   a dedicated box is measured.
+5. **"Hides the generation length" was overstated** (sections 4 and 6 corrected): turn-boundary timing still
+   bounds L. Short prompts of at most `local_max_rows` rows also become invisible. That is still a function of
+   today's view, so it is fine.
+6. **SPEC 9.4a contract.** Settings in `SETUP_MODEL_OPTION_KEYS` must be "tested gateway-level against the
+   plaintext reference". The branch adds `local_max_rows` and the new `local_linears` values without that
+   test or a SPEC 9.4a entry. Both are required before anyone presets them (still default off, so this does
+   not block the prototype).
+7. **`auto_kinds` calibration** runs on an idle CPU at start-up, so under load it underestimates local cost.
+   It also ignores gateway CPU contention between unbatched sessions. Prefer an explicit placement in
+   production; keep `auto_kinds` for demos.
+8. **Garbled circuits, an extra reason.** With arithmetic labels, multiplying by a public weight is free for
+   the evaluator only. The garbler must compute `W x A_0` on the zero labels (a lambda-bit GEMM on the
+   gateway, at least as expensive as the local exact GEMM). So GC does not offload the linears at all.
+9. SIGMA's 27 s for Llama2-7B is its next-token-generation figure (RWC 2024 slides; the paper abstract gives
+   44 s for 13B). OK as cited.
+
+Verdicts: (1) placement plus `local_max_rows` plus stacking: **pursue** (0.5B and Modal now; 7B only after a
+measured dedicated gateway), with the gateway-level test, the SPEC entry and the factory subset follow-up.
+(2) Speculation on placement: **pursue** the composition. **Park** the non-strict relaxation until a privacy
+review addresses the timing bound. (3) Batching and ping-pong: **park** (config only, no latency gain;
+`local_max_rows` should be the default companion of today's `auto` for long prompts, which is a separate
+small fix).
 
 ## Sources
 
@@ -192,4 +255,5 @@ check as the masked path (already proven for qkv/o; now tested for gate_up and d
 - Fu et al., Break the Sequential Dependency of LLM Inference Using Lookahead Decoding (ICML'24) — https://arxiv.org/abs/2402.02057
 - Cai et al., Medusa — https://arxiv.org/abs/2401.10774 ; Li et al., EAGLE-3 — https://arxiv.org/abs/2503.01840
 - PEARL: Parallel Speculative Decoding with Adaptive Draft Length — https://arxiv.org/abs/2408.11850
+- SIGMA RWC 2024 slides (next-token table) — https://iacr.org/submit/files/slides/2024/rwc/rwc2024/26/slides.pdf
 - Internal: STATUS.md (run 27, Modal e2e), research/plans/speed-readiness-plan-2026-11-20.md
