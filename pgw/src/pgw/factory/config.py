@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import SettingsConfigDict
 
+from pgw.core.errors import ConfigError
 from pgw.core.ring import RingParams
 from pgw.core.settings import PGWSettings
 from pgw.maskstore.format import DEFAULT_CHUNK_BYTES, MAX_CHUNK_BYTES
@@ -124,6 +125,16 @@ class FactorySettings(PGWSettings):
     he_client_key_file: Path | None = Field(None, description="Private key of he_client_cert_file (PEM, 0600)")
     he_hint_dir: Path | None = Field(None, description="Where the one-time hint W8.A is kept (default: <state>/hemask)")
     he_rank: int = Field(16, ge=8, le=32, description="MLWE module rank (LWE dimension = 256 x rank)")
+    he_params_ack: str = Field(
+        "", description="Opt in to an unreviewed HE parameter profile: ranks below 16 are refused unless this is the "
+        "profile's acknowledgement string (rank 12: pgw.hemask.mlwe_ring.R12_ACK). See "
+        "research/plans/he-structured-encryption.md",
+    )
+    he_encrypt: Literal["dense", "ntt_pre"] = Field(
+        "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine) or 'ntt_pre' "
+        "(public matrix kept in NTT form, pgw.hemask.mlwe_ring; same ciphertexts bit for bit, ~10x+ fewer CPU "
+        "operations; needs pgw_ntt)",
+    )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")
     # ---- crash safety -----------------------------------------------------------------------
@@ -166,6 +177,12 @@ class FactorySettings(PGWSettings):
             raise ValueError("target_slots must be >= low_water_slots")
         if (self.he_client_cert_file is None) != (self.he_client_key_file is None):
             raise ValueError("he_client_cert_file and he_client_key_file must be set together")
+        from pgw.hemask.mlwe_ring import check_rank
+
+        try:
+            check_rank(self.he_rank, self.he_params_ack)
+        except ConfigError as exc:
+            raise ValueError(str(exc)) from exc
         return self
 
     @property

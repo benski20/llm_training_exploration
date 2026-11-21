@@ -207,11 +207,17 @@ class HEMaskBackend:
             pass, so larger passes read it less often.
         pass_bytes: Memory budget of one decryption pass's replies (caps ``groups_per_pass`` for very
             wide linears; hard, except that a pass holds at least one group).
+        encrypt: ``"dense"`` (default: byte-plane product ``A[:n] @ S`` on the int8 engine) or
+            ``"ntt_pre"`` (:class:`pgw.hemask.mlwe_ring.PretransformedEncryptor`: ``A`` kept in NTT form,
+            bit-identical ciphertexts, far fewer operations on a CPU gateway; needs ``pgw_ntt``).
     """
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
-                 max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30):
+                 max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
+                 encrypt: str = "dense"):
+        if encrypt not in ("dense", "ntt_pre"):
+            raise ConfigError(f"encrypt must be 'dense' or 'ntt_pre', got {encrypt!r}")
         self.params = HEParams(k=ring.k, rank=hints.rank)
         if int(hints.meta.get("q_bits", 64)) != self.params.q:
             raise ConfigError(f"hint store is for q=2^{hints.meta.get('q_bits', 64)}, ring {ring.name} needs "
@@ -227,11 +233,21 @@ class HEMaskBackend:
         for key, norm in hints.meta["row_norms"].items():
             self.params.check_noise(norm, key)
         a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
-        # Public matrix as int8 byte planes for the int8 engines (gateway GPU, CPU AMX/VNNI); as uint64
-        # for the float64 engine, which would otherwise rebuild the words on every call. Only the
-        # ceil(q/8) low planes are kept (7 at q = 2^56): the top byte vanishes mod 2^q.
-        self._planes = engine() != "cpu_f64"
-        self._a: np.ndarray = self._a_planes(a) if self._planes else a
+        self._fast: Any = None
+        if encrypt == "ntt_pre":
+            from pgw.hemask.mlwe_ring import PretransformedEncryptor
+
+            # A in NTT form only (same ciphertexts as the dense path, bit for bit)
+            self._fast = PretransformedEncryptor(a, self.params)
+            self._planes = False
+            self._a: np.ndarray = np.empty((0, self.params.dim), dtype=np.uint64)
+        else:
+            # Public matrix as int8 byte planes for the int8 engines (gateway GPU, CPU AMX/VNNI); as
+            # uint64 for the float64 engine, which would otherwise rebuild the words on every call.
+            # Only the ceil(q/8) low planes are kept (7 at q = 2^56): the top byte vanishes mod 2^q.
+            self._planes = engine() != "cpu_f64"
+            self._a = self._a_planes(a) if self._planes else a
+        self.encrypt_mode = encrypt
         del a
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0,
                       "passes": 0, "max_inflight": 0}
@@ -245,6 +261,9 @@ class HEMaskBackend:
         return out
 
     def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
+        if self._fast is not None:
+            out: list[MaskCiphertext] = self._fast.encrypt(rn)
+            return out
         a = self._a[:n]
         if self._planes:
             return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)

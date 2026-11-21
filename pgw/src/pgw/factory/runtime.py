@@ -119,7 +119,8 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
-    return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call)
+    return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call,
+                         encrypt=settings.he_encrypt)
 
 
 _WATCHED: dict[tuple[str, str], threading.Thread] = {}

@@ -203,6 +203,28 @@ JOBS: dict[str, dict] = {
                   "--groups 4 --k 32", "timeout": 1800}
           for eng in ("cuda", "cpu_int8")],
     ]},
+    # Gateway encryption: dense (T4 GPU / CPU int8) vs public matrix in NTT form (mlwe_ring, CPU)
+    "pgw-he-encrypt-ntt": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                       "tests/console", "tests/factory", "tests/engine", "tests/wire", "tests/native",
+                                       "tests/core", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                       "docs", "research", "console", "tests/vectors", "SPEC.md",
+                                       "INTERFACE_NOTES.md", "tests/service", "tests/modelpack", "tests/observability",
+                                       "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                       "benchmarks/results", "benchmarks/RESULTS.md", "ci", "deploy"],
+                           "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_mlwe_ring",
+         "args": ["tests/hemask/test_mlwe_ring.py", "tests/hemask/test_ntt.py", "-q", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        *[{"kind": "shell", "name": f"encrypt_bench_{preset}_{eng}",
+           "cmd": f"PGW_HEMASK_ENGINE={eng} python benchmarks/hemask_encrypt_bench.py --preset {preset} "
+                  f"--rows 2048 --dense-rows {256 if eng == 'cuda' else 128} --groups 1,4,8", "timeout": 1800}
+          for preset in ("qwen2.5-0.5b", "qwen2.5-7b") for eng in ("cuda", "cpu_int8")],
+        {"kind": "shell", "name": "encrypt_bench_7b_rank12",
+         "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_encrypt_bench.py --preset qwen2.5-7b --rank 12 "
+                "--rows 2048 --dense-rows 256 --groups 4", "timeout": 1800},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
