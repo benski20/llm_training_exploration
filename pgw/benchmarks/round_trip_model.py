@@ -3,7 +3,10 @@
 s/token = remote_trips * (RTT + o) + layers * local_linear_ms(placement) + F, divided by tau (tokens
 per pass) for speculation. Inputs are measured values (see the memo for sources); `gw` scales local
 linear cost: 1.0 = measured here (1 thread, shared 4-vCPU box, exact 2-digit int8 GEMV, ~3 GB/s of
-weights), 0.25 = a dedicated 4-8 core gateway or a 1-pass int16xint8 kernel (estimate, not measured).
+weights), 0.53 = the same thread after the R1 critique's digit stacking in `exact_int_matmul` (both
+activation digits in one int8 GEMM, one pass over the weight; measured 1.87-1.90x on the 0.5B/7B
+shapes), 0.25 = a dedicated 4-8 core gateway on top of that (estimate, not measured). `--modal-o` uses
+the per-trip overhead the Modal e2e implies (26 ms median trip at 17 ms RTT, so o ~ 9 ms) for 0.5B.
 
     python benchmarks/round_trip_model.py
 """
@@ -40,9 +43,15 @@ def s_per_token(model: str, local: tuple[str, ...], rtt_ms: float, gw: float = 1
 
 
 def main() -> None:
+    import sys
+
+    if "--modal-o" in sys.argv:
+        TRIP_O_MS["0.5B"] = 9.0
+    labels = {1.0: "measured, 1 thread, 2 digit GEMMs", 0.53: "measured, 1 thread, stacked digits",
+              0.25: "dedicated gateway, est."}
     for model in ("0.5B", "7B"):
-        for gw in (1.0, 0.25):
-            print(f"\n{model}, local-cost factor {gw} ({'measured, 1 thread' if gw == 1 else 'dedicated gateway, est.'})")
+        for gw in (1.0, 0.53, 0.25):
+            print(f"\n{model}, local-cost factor {gw} ({labels[gw]})")
             print("| placement | RTT 1 ms | RTT 5 ms | RTT 17 ms |")
             print("|---|---|---|---|")
             for name, local in PLACEMENTS.items():

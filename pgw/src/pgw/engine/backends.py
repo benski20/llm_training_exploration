@@ -221,8 +221,16 @@ def exact_int_matmul(xq: torch.Tensor, w8t: torch.Tensor, value_bits: int) -> to
         return torch.round(xq.to(torch.float64) @ w8t.to(torch.float64)).to(torch.int64)
     ndig = _digits_needed(value_bits)
     digits = balanced_digits(xq, 8 * ndig, 8) if ndig > 1 else [xq]
-    acc = torch.zeros((t, m), dtype=torch.int64, device=dev)
     pad_rows = dev.type == "cuda"
+    if not pad_rows and ndig > 1:
+        # CPU: one GEMM over the digits stacked as rows. Decode GEMVs are memory-bound, so this reads
+        # the weight once instead of once per digit (~1.9x at 1 row; same integers, so the same bits).
+        y = int8_digit_gemm(torch.cat(digits, 0).to(torch.int8), w8t.t())
+        acc = y[:t].clone()
+        for i in range(1, ndig):
+            acc += y[i * t:(i + 1) * t] << (8 * i)
+        return acc
+    acc = torch.zeros((t, m), dtype=torch.int64, device=dev)
     for i, d in enumerate(digits):
         d8 = d.to(torch.int8)
         if pad_rows:  # pragma: no cover - GPU only

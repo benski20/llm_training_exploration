@@ -114,3 +114,21 @@ def test_r1_policy_and_auto_kinds(qwen_pack: InMemoryPack) -> None:
     # the default is unchanged: off, no cap
     d = make()
     assert d.local_policy["kinds"] == () and d.local_max_rows is None and d.local_rows_ok(10**6)
+
+
+@pytest.mark.parametrize("value_bits", [12, 20])
+@pytest.mark.parametrize("rows", [1, 3, 17])
+def test_exact_int_matmul_stacked_digits_matches_float64(value_bits: int, rows: int) -> None:
+    """R1 critique: the CPU path stacks the activation digits as rows of one int8 GEMM (one pass over
+    the weight). It must equal the float64 product exactly, extremes included."""
+    from pgw.engine.backends import exact_int_matmul
+
+    g = torch.Generator().manual_seed(rows * 100 + value_bits)
+    n, m = 1000, 37
+    hi = (1 << (value_bits - 1)) - 1
+    xq = torch.randint(-hi, hi + 1, (rows, n), generator=g, dtype=torch.int64)
+    xq[0, :5] = torch.tensor([hi, -hi, 0, hi, -hi])
+    w8t = torch.randint(-128, 128, (n, m), generator=g, dtype=torch.int8)
+    w8t[:5, 0] = torch.tensor([127, -128, 5, -128, 127], dtype=torch.int8)
+    ref = (xq.to(torch.float64) @ w8t.to(torch.float64)).round().to(torch.int64)
+    assert torch.equal(exact_int_matmul(xq, w8t, value_bits), ref)
