@@ -165,14 +165,31 @@ loopback | private <ip> | public <host>`. A tunnel run shows `public r500.modal.
 **Cost.** One container with the provider's GPU, 6 cores (2 + 4) and 14 GiB (6 + 8): at Modal list prices
 about **$0.99/h with a T4** ($0.59 GPU + 6 x $0.0473 + 14 x $0.008), the same as the two-container T4 pair
 ($0.73 + $0.25), and about $0.66 for the full 40-minute e2e window; A10G about $1.50/h. With
-`local_linears = "auto"` the gateway measures a sub-millisecond start-up round trip and keeps every
-linear on the provider (97 round trips per token for Qwen2.5-0.5B; below the 1.6 ms break-even, local qkv
-and o cost more than two round trips).
+`local_linears = "auto"` the start-up round-trip measurement decides as on the other placements (below
+the 1.6 ms break-even every linear stays on the provider, 97 round trips per token for Qwen2.5-0.5B;
+above it qkv and o run on the gateway, 49). On the Kaggle check below it measured 1.93 ms on a loaded
+4-vCPU box and chose qkv + o locally.
 
-**Expected speed** (*estimate*, to be confirmed by the lead's Modal run): about 0.5-1 ms per round trip
-on loopback with TLS and Python on both ends (measured below on CPU stub kernels), plus the T4's device
-time, so about 60-100 ms of round trips per token plus 15-30 ms of gateway float ops and LM head: roughly
-**8-15 tokens/s instead of about 1**.
+**Measured on a Kaggle T4 (2026-11-21, job `pgw-colocated-t4`, 4 vCPU shared by both parties).**
+`local_rehearsal.py --device auto --users` runs exactly the co-located code (`start_provider_party` /
+`start_gateway_party`, users `pgwprov` / `pgwcust`, loopback TLS), the full wizard and two greedy chats of
+Qwen2.5-0.5B (41-token prompt, 32 tokens). The second run adds 17 ms per round trip through the delay
+proxy (the Modal tunnel as measured). Both answers were bit-identical to the plaintext reference
+(32/32 tokens, max logprob difference 0.0).
+
+| warm chat (32 tokens) | co-located, loopback | same box, +17 ms per trip (tunnel) |
+|---|---|---|
+| round trip p50 / mean | 1.88 / 2.59 ms | 18.0 / 21.1 ms |
+| 1-row trip: service / rest | 0.55 / 1.62 ms | 0.76 / 19.9 ms |
+| round trips per token | 49.5 | 49.5 |
+| wall time | 13.0 s (**2.45 tokens/s**) | 44.3 s (0.72 tokens/s) |
+
+So the network wait per token drops from about 1.05 s to about 0.13 s (3.4x faster overall on that
+box). What is left, about 0.28 s per token, is gateway-side work that the 4 vCPUs share with the
+encrypted mask factory, which was still filling its stock during the chats (512- and 2048-slot segments,
+about 100 s of CPU GEMM each) and with the service. On Modal the co-located container has 6 cores; giving
+the gateway more cores, or letting the factory finish its first ramp before chatting, should help further
+(*estimate*; not measured). The lead's Modal run decides the real number.
 
 **Trust caveat (demo only).** The two parties share one container, one kernel and one host. Separate
 users, 0700 directories and no cross-uid ptrace keep the provider's *process* away from the gateway's
@@ -220,6 +237,9 @@ delay plus a constant, with no Nagle/delayed-ACK stall (that would show as about
 The 0.3-0.6 ms above the added delay is the proxy's own thread wake-ups (four threads per connection
 on a loaded box), not the client or the service. TLS adds about 0.3 ms per round trip at these
 shapes (Python's `ssl` record handling of the ~150 KB 7B `gate_up` reply; less at 0.5B, about 39 KB).
+On the Kaggle T4 box (job `pgw-colocated-t4`, same bench): TLS loopback p50 0.85 ms, through the proxy
+1.07 ms, +17 ms 18.44 ms (17.37 ms over the proxy hop); `TCP_NODELAY` set on the client socket and on
+all four accepted service sockets.
 
 ## Trip latency and the `--max-trip-ms` gate
 
