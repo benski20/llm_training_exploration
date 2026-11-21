@@ -38,3 +38,44 @@ def test_customer_gateway_env_presets_speed_settings(tmp_path: Path, monkeypatch
     assert gs.setup_model_options == opts
     GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
                        service_url="https://compute.example.net:8443", **gs.setup_model_options)
+
+
+def test_spec_options_are_valid_strict_presets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``launch.py --spec-rows`` presets: strict fixed rows (never the variable-row mode), prompt lookup, and the
+    draft pack only when the image has one; accepted by the wizard's preset check and by GatewayModelConfig."""
+    from pgw.gateway.config import GatewayModelConfig, GatewaySettings
+
+    boot = _boot()
+    assert boot.spec_options(0) == {}
+    with pytest.raises(ValueError):
+        boot.spec_options(1)
+    with pytest.raises(ValueError):
+        boot.spec_options(9)
+    for opts in (boot.spec_options(3), boot.spec_options(4, boot.DRAFT_PACK, "cuda")):
+        assert opts["spec_rows"] in (3, 4) and opts["spec_strict_passes"] is True and opts["spec_lookup"] > 0
+        merged = {**boot.GATEWAY_MODEL_OPTIONS, **opts}
+        env = boot.gateway_env(tmp_path / "config", tmp_path / "data", 8080, merged)
+        for k, v in env.items():
+            if k.startswith("PGW_GATEWAY_"):
+                monkeypatch.setenv(k, v)
+        gs = GatewaySettings()
+        assert gs.setup_model_options == json.loads(json.dumps(merged))
+        cfg = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
+                                 service_url="https://compute.example.net:8443", **gs.setup_model_options)
+        assert cfg.spec_rows == opts["spec_rows"] and cfg.spec_strict_passes
+    assert "draft_pack_path" not in boot.spec_options(3)
+    assert boot.spec_options(4, boot.DRAFT_PACK, "cuda")["draft_device"] == "cuda"
+
+
+def test_provider_model_table_matches_boot() -> None:
+    """provider.py keeps its own copy of the target table (no module-level import of this file in its
+    container); both parties must pack the same pinned revision."""
+    import ast
+
+    boot = _boot()
+    tree = ast.parse((MODAL_DIR / "provider.py").read_text())
+    table = next(ast.literal_eval(n.value) for n in tree.body
+                 if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "MODELS" for t in n.targets))
+    assert table == boot.MODELS
+    assert all(len(rev) == 40 for _, rev in boot.MODELS.values())
+    assert boot.MODELS[boot.MODEL_NAME][0] == boot.MODEL_REPO

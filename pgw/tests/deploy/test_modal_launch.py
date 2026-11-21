@@ -146,7 +146,7 @@ def test_spawn_pair_picks_functions_by_network() -> None:
     live = FakeDict(stop="x", provider={"run_id": "old"}, customer_boot={"run_id": "old"})
     p = launch.spawn_pair(live, False, 600, True, lookup=lambda app, name: FakeFunction(app, name, log))
     assert [(a, n) for a, n, _ in log] == [("pgw-provider", "serve"), ("pgw-customer", "gateway")]
-    assert log[1][2] == (p.run_id, 600, True, "auto") and p.network == "tunnel"
+    assert log[1][2] == (p.run_id, 600, True, "auto", 0) and p.network == "tunnel"
     assert not any(k in live for k in launch.RUN_KEYS)  # stale per-run keys cleared
     log.clear()
     p = launch.spawn_pair(live, True, 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
@@ -319,3 +319,55 @@ def test_modal_apps_import_and_refuse_l4(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("PGW_MODAL_GPU", "L4")
     with pytest.raises(ValueError, match="L4"):
         _load("provider")
+
+
+def test_spec_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--spec-rows (runtime, default off), --model and --spec-draft (deploy time) and their checks."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    a = launch.parse_args([])
+    assert a.spec_rows == 0 and a.model == launch.DEFAULT_MODEL and a.spec_draft is False
+    assert launch.parse_args(["--spec-rows", "3"]).spec_rows == 3
+    for bad in (["--spec-rows", "1"], ["--spec-rows", "9"], ["--spec-draft"],  # the draft needs spec rows
+                ["--spec-rows", "4", "--spec-draft"],  # the 0.5B drafting for itself
+                ["--model", "qwen2.5-7b-instruct"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args(bad)
+    a = launch.parse_args(["--model", "qwen2.5-1.5b-instruct", "--spec-rows", "4", "--spec-draft"])
+    assert a.model == "qwen2.5-1.5b-instruct" and a.spec_draft
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-3b-instruct")
+    assert launch.parse_args([]).model == "qwen2.5-3b-instruct"
+
+
+def test_deploy_passes_model_and_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, str]] = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda cmd, check, env: seen.append(env))
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    launch.deploy(None, None, launch.DEFAULT_MODEL, False)
+    assert all("PGW_MODAL_MODEL" not in e and "PGW_MODAL_DRAFT" not in e for e in seen)
+    seen.clear()
+    launch.deploy(None, None, "qwen2.5-1.5b-instruct", True)
+    assert [(e["PGW_MODAL_MODEL"], e["PGW_MODAL_DRAFT"]) for e in seen] == [("qwen2.5-1.5b-instruct", "1")] * 2
+
+
+def test_spawn_pair_passes_spec_rows_and_budget() -> None:
+    log: list[tuple[str, str, tuple[Any, ...]]] = []
+    p = launch.spawn_pair(FakeDict(), False, 600, True, lookup=lambda app, name: FakeFunction(app, name, log),
+                          spec_rows=4)
+    assert log[1][2] == (p.run_id, 600, True, "auto", 4)
+    assert launch.spec_budget(4, 41, 32) == {"plain": 73, "spec": 73 + 31 * 3}
+    assert launch.spec_budget(1, 41, 32)["spec"] == 73
+
+
+def test_provider_serves_the_chosen_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_GPU", raising=False)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    prov = _load("provider")
+    assert prov.MODEL_NAME == "qwen2.5-1.5b-instruct" and prov.MODEL_REPO == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert prov.PACK.endswith("qwen2.5-1.5b-instruct")
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-7b-instruct")
+    with pytest.raises(ValueError, match="PGW_MODAL_MODEL"):
+        _load("provider")
+    monkeypatch.delenv("PGW_MODAL_MODEL")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    assert _load("customer").DRAFT is True

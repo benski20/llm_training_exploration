@@ -33,6 +33,21 @@ from typing import IO, Any
 MODEL_REPO = "Qwen/Qwen2.5-0.5B-Instruct"
 MODEL_NAME = "qwen2.5-0.5b-instruct"
 RING = "K32A12C27"
+#: Targets the demo can serve (``launch.py --model``; ``PGW_MODAL_MODEL`` at deploy time): served name ->
+#: (Hugging Face repo, pinned revision). Both parties pack the same bytes: the provider at image build, the
+#: customer in the setup wizard from the repo and revision the enrollment lists. ``provider.py`` keeps a copy
+#: (it cannot import this file at module level inside its container); a test checks they agree.
+MODELS: dict[str, tuple[str, str]] = {
+    "qwen2.5-0.5b-instruct": ("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
+    "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
+    "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
+}
+#: The speculation draft baked into the customer image with ``PGW_MODAL_DRAFT=1`` (``launch.py --spec-draft``):
+#: Qwen2.5-0.5B-Instruct, the same tokenizer as every target above. It runs in plaintext on the gateway only.
+DRAFT_NAME = MODEL_NAME
+DRAFT_PACK = "/opt/packs/draft"
+#: Prompt lookup (longest n-gram) used next to the draft model, or alone without one.
+SPEC_LOOKUP = 4
 
 
 def log(msg: str) -> None:
@@ -259,6 +274,30 @@ _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 #: repeats the prompt, so prompt lookup accepts almost nothing: the provider sees as many passes either
 #: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
 GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1}
+
+
+def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None) -> dict[str, Any]:
+    """Strict-speculation presets for the wizard's ``models.json`` (``launch.py --spec-rows``; ``{}`` when off).
+
+    Every decode pass then carries exactly ``spec_rows`` masked rows per sequence (the pending token, the
+    drafts, masked random filler rows) and, after the answer, dummy passes run until the provider has seen as
+    many passes as tokens generated: it sees a fixed row count and the same pass schedule as without
+    speculation (SPEC 3.4). Drafts come from prompt lookup over the conversation and, with ``draft_pack``,
+    the draft model. Outputs are unchanged (the masked target decides every token). Mask budget: ``spec_rows``
+    mask slots per generated token; a request reserves ``prompt + max_tokens + (max_tokens - 1) *
+    (spec_rows - 1)`` slots up front.
+    """
+    r = int(spec_rows)
+    if r == 0:
+        return {}
+    if not 2 <= r <= 8:
+        raise ValueError("spec_rows must be 0 (off) or in [2, 8]")
+    out: dict[str, Any] = {"spec_rows": r, "spec_strict_passes": True, "spec_lookup": SPEC_LOOKUP}
+    if draft_pack:
+        out["draft_pack_path"] = str(draft_pack)
+        if draft_device:
+            out["draft_device"] = draft_device
+    return out
 
 
 def gateway_env(config_dir: Path, data_dir: Path, port: int,

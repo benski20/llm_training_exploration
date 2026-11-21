@@ -33,6 +33,13 @@ not relaunched for a limit below :data:`TUNNEL_FLOOR_MS` (the tunnel alone adds 
 Gateway speed settings: ``--local-linears`` (default ``auto``) is written into the customer's
 ``models.json`` by the setup wizard together with ``float_threads = 1`` (``pgw_modal_boot.GATEWAY_MODEL_OPTIONS``);
 ``--e2e`` prints the decision and the round trips per token of the warm chat.
+
+Strict speculation (off by default): ``--spec-rows R`` presets ``spec_rows = R`` with strict passes and prompt
+lookup for the wizard's ``models.json``: every decode pass carries exactly R masked rows (pending token, drafts,
+masked random fillers) and the provider sees as many passes as without speculation (SPEC 3.4), while the answer
+streams in fewer sequential passes. ``--model`` (deploy time) serves a larger Qwen2.5 target and ``--spec-draft``
+(deploy time) bakes the 0.5B draft model into the customer image. Mask budget: R slots per generated token (see
+:func:`spec_budget`). README section "Strict speculation" has the measurements and when it pays off.
 """
 
 from __future__ import annotations
@@ -71,6 +78,19 @@ CORE_H, GIB_H = 0.0473, 0.008
 TUNNEL_FLOOR_MS = 3.0
 #: Default ``--i6pn-schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
 I6PN_SCHEDULE_TIMEOUT_MIN = {False: 6.0, True: 10.0}
+#: Targets ``--model`` accepts (the same table as ``pgw_modal_boot.MODELS`` / ``provider.py``).
+MODELS = ("qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct")
+DEFAULT_MODEL = MODELS[0]
+
+
+def spec_budget(spec_rows: int, prompt_tokens: int, max_tokens: int) -> dict[str, int]:
+    """Mask slots of one request with strict speculation at ``spec_rows`` masked rows per pass (the gateway's
+    ``Generator.mask_rows_needed``): ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)`` reserved up
+    front, the same consumed whatever the text (dummy passes take ``spec_rows`` rows too), against
+    ``prompt + max_tokens`` without speculation."""
+    r = max(1, int(spec_rows))
+    base = int(prompt_tokens) + int(max_tokens)
+    return {"plain": base, "spec": base + max(0, int(max_tokens) - 1) * (r - 1)}
 
 
 def provider_cpus(gpu: str | None) -> float:
@@ -120,11 +140,14 @@ def _ts(t: float) -> str:
     return dt.datetime.fromtimestamp(t, dt.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def deploy(gpu: str | None, customer_gpu: str | None = None) -> None:
+def deploy(gpu: str | None, customer_gpu: str | None = None, model: str | None = None, draft: bool = False) -> None:
     """``modal deploy`` both apps; the GPUs are fixed at deploy time (``PGW_MODAL_GPU`` for the provider,
-    ``PGW_MODAL_CUSTOMER_GPU`` for the customer gateway's mask factory)."""
+    ``PGW_MODAL_CUSTOMER_GPU`` for the customer gateway's mask factory), as are the target the provider packs
+    (``PGW_MODAL_MODEL``) and the speculation draft in the customer image (``PGW_MODAL_DRAFT=1``)."""
     env = dict(os.environ)
-    for var, val in (("PGW_MODAL_GPU", gpu), ("PGW_MODAL_CUSTOMER_GPU", customer_gpu)):
+    for var, val in (("PGW_MODAL_GPU", gpu), ("PGW_MODAL_CUSTOMER_GPU", customer_gpu),
+                     ("PGW_MODAL_MODEL", model if model and model != DEFAULT_MODEL else None),
+                     ("PGW_MODAL_DRAFT", "1" if draft else None)):
         if val:
             env[var] = val
         else:
@@ -195,7 +218,8 @@ class Pair:
 
 
 def spawn_pair(live: Any, i6pn: bool, ttl_s: int, e2e: bool,
-               lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto") -> Pair:
+               lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto",
+               spec_rows: int = 0) -> Pair:
     """Clear the per-run Dict keys and spawn one call of each party on the chosen network."""
     lookup = lookup or modal.Function.from_name
     run_id = secrets.token_hex(4)
@@ -204,7 +228,7 @@ def spawn_pair(live: Any, i6pn: bool, ttl_s: int, e2e: bool,
     pfn, cfn = FUNCTIONS[i6pn]
     prov, cust = lookup("pgw-provider", pfn), lookup("pgw-customer", cfn)
     pcall = prov.spawn(run_id, ttl_s)
-    ccall = cust.spawn(run_id, ttl_s, e2e, local_linears)
+    ccall = cust.spawn(run_id, ttl_s, e2e, local_linears, spec_rows)
     print(f"run {run_id} ({'i6pn' if i6pn else 'tunnel'}): spawned provider ({pcall.object_id}) and "
           f"customer ({ccall.object_id})", flush=True)
     return Pair(run_id, i6pn, pcall, ccall, time.time())
@@ -315,6 +339,9 @@ def _print_speed(res: dict[str, Any]) -> None:
           f"{sp.get('float_threads')}, lane {sp.get('lane')} ({sp.get('lane_state')}), strict speculation "
           f"{sp.get('spec_rows') or 'off'}; {sp.get('warm_trips_per_token', '?')} round trips per token "
           "(warm chat)", flush=True)
+    if sp.get("spec_rows"):
+        print(f"strict speculation: warm answer {sp.get('warm_answer_tokens_per_s', '?')} tokens/s; dummy passes "
+              f"after the first chat took {sp.get('spec_drain_wait_s', '?')} s", flush=True)
 
 
 def _print_latency(res: dict[str, Any], pair: Pair) -> None:
@@ -330,11 +357,12 @@ def _print_latency(res: dict[str, Any], pair: Pair) -> None:
 
 
 def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
-    """:func:`spawn_pair` with the customer gateway's ``--local-linears`` choice."""
+    """:func:`spawn_pair` with the customer gateway's ``--local-linears`` and ``--spec-rows`` choices."""
     local = getattr(args, "local_linears", "auto")
+    spec_rows = int(getattr(args, "spec_rows", 0) or 0)
 
     def spawn(live: Any, i6pn: bool, ttl_s: int, e2e: bool) -> Pair:
-        return spawn_pair(live, i6pn, ttl_s, e2e, local_linears=local)
+        return spawn_pair(live, i6pn, ttl_s, e2e, local_linears=local, spec_rows=spec_rows)
 
     return spawn
 
@@ -414,6 +442,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="with --e2e: relaunch while the median client-reported round trip of the warm chat "
                          "is above this (off by default)")
     ap.add_argument("--tries", type=int, default=3, help="with --max-trip-ms: pairs to try in all (default 3)")
+    ap.add_argument("--model", default=os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL, choices=MODELS,
+                    help="target the provider packs and serves (fixed at deploy time; PGW_MODAL_MODEL sets the "
+                         f"default; default {DEFAULT_MODEL})")
+    ap.add_argument("--spec-rows", type=int, default=0,
+                    help="strict speculation with this many masked rows per decode pass (2-8; default 0 = off): "
+                         "prompt lookup, plus the draft model with --spec-draft. Exact; the provider sees fixed rows "
+                         "and the same pass count. Uses spec-rows mask slots per generated token")
+    ap.add_argument("--spec-draft", action="store_true", default=os.environ.get("PGW_MODAL_DRAFT", "0") == "1",
+                    help="bake the Qwen2.5-0.5B draft model into the customer image (deploy time; needs --spec-rows "
+                         "and a --model larger than the 0.5B; PGW_MODAL_DRAFT=1). On a CPU customer it runs on the "
+                         "gateway's CPU, with --customer-gpu on its GPU")
     ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="auto",
                     help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
@@ -439,13 +478,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
         ap.error("--max-trip-ms must be positive")
+    args.model = args.model.strip().lower()
+    if args.model not in MODELS:
+        ap.error(f"--model / PGW_MODAL_MODEL: use one of {', '.join(MODELS)}")
+    if args.spec_rows != 0 and not 2 <= args.spec_rows <= 8:
+        ap.error("--spec-rows must be 0 (off) or in [2, 8]")
+    if args.spec_draft and not args.spec_rows:
+        ap.error("--spec-draft needs --spec-rows (the draft is only used by strict speculation)")
+    if args.spec_draft and args.model == DEFAULT_MODEL:
+        # the target itself as its own draft: the gateway would compute the whole model in plaintext
+        ap.error("--spec-draft drafts with the 0.5B itself: use a larger --model (the draft must be much cheaper "
+                 "than the target, or the provider computes nothing the gateway does not)")
     return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.spec_rows:
+        b = spec_budget(args.spec_rows, 41, 32)
+        print(f"strict speculation: {args.spec_rows} masked rows per decode pass, i.e. {args.spec_rows} mask slots per "
+              f"generated token (the e2e chat reserves {b['spec']} slots instead of {b['plain']}); pass max_tokens "
+              "explicitly: a request reserves prompt + max_tokens + (max_tokens - 1) x (spec_rows - 1) slots",
+              flush=True)
     if args.deploy_only:
-        deploy(args.gpu, args.customer_gpu)
+        deploy(args.gpu, args.customer_gpu, args.model, args.spec_draft)
         print("deployed; start a pair later with --no-deploy")
         return
     if args.stop:
@@ -457,7 +513,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     ttl_s = int(min(args.ttl_min, 85.0) * 60)
     if not args.no_deploy:
-        deploy(args.gpu, args.customer_gpu)
+        deploy(args.gpu, args.customer_gpu, args.model, args.spec_draft)
     if args.e2e:
         sys.exit(run_e2e(live, args, ttl_s))
     pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=False,

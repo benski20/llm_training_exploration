@@ -47,6 +47,12 @@ REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 # factory's encrypt/decrypt GEMMs and random-number generation on the customer's own GPU (customer side: the
 # provider still sees only ciphertexts). Default none (CPU torch image, CPU products).
 CUSTOMER_GPU = os.environ.get("PGW_MODAL_CUSTOMER_GPU") or None
+# Strict speculation with a draft model (launch.py --spec-draft; PGW_MODAL_DRAFT=1 at deploy time): the image then
+# holds a pack of Qwen2.5-0.5B-Instruct (public weights, same tokenizer as the Qwen2.5 targets) that the gateway
+# runs in plaintext to propose tokens; it never leaves this container. Default: no draft (prompt lookup only).
+DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
+DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
+DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -69,6 +75,13 @@ image = (
         "cd / && python -c 'from pgw.hemask import ntt; assert ntt.available(); print(\"pgw_ntt\", ntt.info())'",
     )
     .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", "OMP_WAIT_POLICY": "PASSIVE"})
+)
+if DRAFT:
+    image = image.run_commands(
+        f"python -m pgw.cli pack {DRAFT_REPO} {DRAFT_PACK} --name draft --revision {DRAFT_REVISION} -q"
+        " && rm -rf /root/.cache/huggingface")
+image = (
+    image
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
@@ -79,7 +92,8 @@ app = modal.App("pgw-customer", image=image)
 PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pads are secure."}]
 
 
-def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, local_url: str) -> dict:
+def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, local_url: str,
+         spec_rows: int = 0) -> dict:
     import pgw_modal_boot as boot
     import trip_gate
     import wizard_client as wiz
@@ -91,7 +105,8 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
         if time.time() > deadline:
             raise RuntimeError("provider did not publish an enrollment code")
         time.sleep(5)
-    res = wiz.run_wizard(url, token, prov["code"], boot.MODEL_NAME, timeout_s=max(60, deadline - time.time()))
+    model_name = prov.get("model") or boot.MODEL_NAME  # the target the provider serves (launch.py --model)
+    res = wiz.run_wizard(url, token, prov["code"], model_name, timeout_s=max(60, deadline - time.time()))
     wiz.wait_gateway_ready(url)
     key = wiz.create_api_key(url, res["admin_token"])
     adm = res["admin_token"]
@@ -103,15 +118,18 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
         # the latency unmeasured (the gate then reports "no round trips measured"), never the exactness check.
         try:
             return (wiz.metrics_text(local_url, adm),
-                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), boot.MODEL_NAME))
+                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), model_name))
         except Exception as exc:
             snap_errors.append(f"{type(exc).__name__}: {str(exc)[:200]}")
             return "", {}
 
     s0 = snap()
-    out = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)
+    out = wiz.chat(url, key, model_name, PROMPT, 32)
+    # Strict speculation: the dummy passes of the first chat run after its answer, and the next request of the
+    # same conversation (this API key) waits for them; wait here so the warm window holds one chat's passes.
+    drain_s = wiz.wait_idle(local_url, adm, model_name) if spec_rows else 0.0
     s1 = snap()
-    out2 = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)  # second run: determinism + warm timing
+    out2 = wiz.chat(url, key, model_name, PROMPT, 32)  # second run: determinism + warm timing
     s2 = snap()
     # The warm chat (the second one) decides launch.py's --max-trip-ms gate; both chats are reported too.
     trips = {"warm": trip_gate.trip_latency(s1[0], s2[0], s1[1], s2[1]),
@@ -125,12 +143,17 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
     cmp = wiz.compare(out, ref)
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
-    model_status = next((m for m in status.get("models", []) if m.get("name") == boot.MODEL_NAME), {})
+    model_status = next((m for m in status.get("models", []) if m.get("name") == model_name), {})
     speed = dict(model_status.get("speed") or {})
     warm_tokens = int(((out2.get("usage") or {}).get("completion_tokens")) or 0)
     if warm_tokens and trips["warm"].get("trips"):
         speed["warm_trips_per_token"] = round(trips["warm"]["trips"] / warm_tokens, 2)
+    if spec_rows:
+        speed["spec_drain_wait_s"] = round(drain_s, 1)
+        if warm_tokens:
+            speed["warm_answer_tokens_per_s"] = round(warm_tokens / max(1e-9, out2["_wall_s"]), 2)
     return {
+        "model": model_name, "spec_rows": spec_rows,
         "timings": res["timings"], "verify": res["verify"], "enroll": {k: res["enroll"].get(k) for k in (
             "tenant", "service_url", "client_cert", "ca_fingerprint")},
         "chat_text": out["choices"][0]["message"]["content"], "usage": out.get("usage"),
@@ -148,18 +171,21 @@ _FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S,
 
 
 @app.function(**_FN, i6pn=False)
-def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
+def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
+            spec_rows: int = 0) -> dict:
     """The customer gateway; reaches the provider through its public TCP tunnel."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=False, local_linears=local_linears)
+    return _gateway(run_id, ttl_s, e2e, i6pn=False, local_linears=local_linears, spec_rows=spec_rows)
 
 
 @app.function(**_FN, i6pn=True)
-def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
+def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
+                 spec_rows: int = 0) -> dict:
     """The same gateway on Modal's private IPv6 network (pairs with the provider's ``serve_i6pn``)."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=True, local_linears=local_linears)
+    return _gateway(run_id, ttl_s, e2e, i6pn=True, local_linears=local_linears, spec_rows=spec_rows)
 
 
-def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: str = "auto") -> dict:
+def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: str = "auto",
+             spec_rows: int = 0) -> dict:
     import sys
 
     t_boot = time.time()
@@ -176,8 +202,10 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: s
     with modal.forward(port) as tunnel:
         url = tunnel.url
         # speed settings for the wizard's models.json (boot.GATEWAY_MODEL_OPTIONS; launch.py --local-linears)
+        # launch.py --spec-rows: strict speculation (prompt lookup; plus the image's draft with --spec-draft)
+        spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, "cuda" if CUSTOMER_GPU else None)
         env = boot.gateway_env(root / "config", root / "data", port,
-                               {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears})
+                               {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears, **spec})
         gw, token = boot.start_gateway(env, root / "gateway.log")
         boot.wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
         info = {"run_id": run_id, "console_url": url.rstrip("/") + "/console/", "base_url": url,
@@ -188,7 +216,7 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: s
         reason = "ttl"
         try:
             if e2e:
-                result["e2e"] = _e2e(live, run_id, url, token, deadline, f"http://127.0.0.1:{port}")
+                result["e2e"] = _e2e(live, run_id, url, token, deadline, f"http://127.0.0.1:{port}", spec_rows)
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"

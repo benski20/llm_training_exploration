@@ -41,8 +41,12 @@ log = logging.getLogger(__name__)
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_rtt_ms", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
-    "batch_lm_head", "engine_pingpong", "max_concurrent_sessions",
+    "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
 })
+#: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
+#: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,
+#: whose row and pass counts depend on how predictable the text is.
+_PRESET_DRAFT_SOURCES = ("spec_lookup", "draft_pack_path")
 
 #: Modes that run without the compute service (no privacy protocol involved). Development only.
 DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
@@ -578,6 +582,10 @@ class GatewaySettings(PGWSettings):
         if bad:
             raise ValueError(f"setup_model_options: {', '.join(bad)} cannot be preset (allowed: "
                              f"{', '.join(sorted(SETUP_MODEL_OPTION_KEYS))})")
+        drafts = [k for k in _PRESET_DRAFT_SOURCES if v.get(k) not in (None, 0, "", False)]
+        if drafts and (v.get("spec_rows") is None or v.get("spec_strict_passes") is not True):
+            raise ValueError(f"setup_model_options: {', '.join(drafts)} needs spec_rows and spec_strict_passes=true "
+                             "(presets enable strict fixed-row speculation only)")
         return v
 
     @field_validator("admin_token")

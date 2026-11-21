@@ -178,6 +178,35 @@ async def test_strict_speculation_bit_identical_and_pass_count(tiny_pack_dir: Pa
         assert rt.generator.spec_stats["dummy_passes"] > 0
 
 
+@pytest.mark.parametrize("draft", [False, True])
+async def test_strict_speculation_with_local_linears_is_exact(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                              make_store: Any, keys: ApiKeyStore, key: str,
+                                                              reference: dict[str, Any], draft: bool) -> None:
+    """The Modal demo's ``--spec-rows`` preset (``pgw_modal_boot.spec_options``) on top of its exact local
+    linears: same bits; the provider sees only gate_up/down items, every decode pass with spec_rows rows, and as
+    many passes as plain decoding (the local-linear run without speculation)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "deploy" / "modal"))
+    import pgw_modal_boot as boot
+
+    svc0 = InProcessService(gw_pack)
+    await _masked(tiny_pack_dir, tmp_path, make_store(400, name="plain"), svc0.transport, keys, key,
+                  {"local_linears": "attention"})
+    svc = InProcessService(gw_pack)
+    spec = boot.spec_options(4, str(tiny_pack_dir) if draft else None)
+    out, status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="spec"), svc.transport, keys, key,
+                                    {"local_linears": "attention", **spec})
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    assert status["speed"]["spec_rows"] == 4 and status["speed"]["local_linears"]["kinds"] == ["o", "qkv"]
+    assert {lid.split(".")[-1] for lid, _ in svc.received} == {"gate_up", "down"}
+    passes0 = [x.shape[0] for lid, x in svc0.received if lid == "0.gate_up"]
+    passes = [x.shape[0] for lid, x in svc.received if lid == "0.gate_up"]
+    assert passes == [4 if rows == 1 else rows for rows in passes0]
+    if draft:  # the tiny model drafts for itself: drafts are accepted, and dummy passes fill the schedule
+        assert rt.generator.spec_stats["spec_accepted"] > 0 and rt.generator.spec_stats["dummy_passes"] > 0
+
+
 async def test_strict_speculation_orders_a_conversation(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
                                                         make_store: Any, keys: ApiKeyStore, key: str) -> None:
     """Requests of one API key carry one conversation key; the engine gets it (dummy passes first)."""
