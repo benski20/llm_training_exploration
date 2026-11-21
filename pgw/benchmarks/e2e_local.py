@@ -145,6 +145,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         return time.perf_counter() - t, outs
 
     await once()  # warm-up (weight metadata, chunk caches, threads)
+    if args.start_at > 0:  # several processes (sharded gateways): time the same window in each
+        await asyncio.sleep(max(0.0, args.start_at - time.time()))
     best: dict[str, Any] | None = None
     outs: list[Any] = []
     for _ in range(args.repeat):
@@ -170,6 +172,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         decode_steps = args.tokens  # per stream
         row = {
             "wall_s": wall,
+            "t_end_unix": time.time(),
             "tokens": toks,
             "tokens_per_s": toks / wall,
             "gateway_local_s_per_token": (st1["local_seconds"] - st0["local_seconds"]) / toks,
@@ -216,6 +219,8 @@ def main() -> None:
                     help="with --null-service: latency added to every round trip (network + GPU stand-in)")
     ap.add_argument("--float-threads", type=int, default=0,
                     help="model float_threads (self-checked decode thread scope; 0: off, the default)")
+    ap.add_argument("--start-at", type=float, default=0.0,
+                    help="unix time to start the timed runs at (after the warm-up): aligns several processes")
     ap.add_argument("--profile", action="store_true", help="cProfile the timed runs (table on stderr)")
     ap.add_argument("--profile-sort", default="tottime")
     ap.add_argument("--profile-top", type=int, default=40)

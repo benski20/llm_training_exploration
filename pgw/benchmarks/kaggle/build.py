@@ -538,6 +538,18 @@ JOBS: dict[str, dict] = {
             "--loadtest", "1x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 3600},
     ]},
+    # X4 at 7B (after the float_threads default became 1): 1, 16 and 32 chats on one gateway, 32 chats over 2
+    # gateway processes, and the service alone at 1 and 32 sessions. About 22 GB of masks.
+    "pgw-x4-concurrency-7b": {"exclude": X4_EXCLUDE, "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true; df -h /tmp", "timeout": 60},
+        {"kind": "validate", "label": "qwen7b_conc", "args": [
+            "--model", QWEN7, "--label", "qwen7b_conc", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "16",
+            "--concurrent", "1", "16", "32", "--shard-gateways", "2", "--shard-concurrent", "32",
+            "--loadtest", "1x1", "32x1", "--loadtest-tokens", "2", "--factory-bench-slots", "64"],
+         "timeout": 5400},
+    ]},
     # fallback if 7B does not fit / is too slow
     "pgw-gpu-3b": {"steps": [
         {"kind": "validate", "label": "qwen3b", "args": [
