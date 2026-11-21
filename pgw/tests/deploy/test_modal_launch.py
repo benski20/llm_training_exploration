@@ -1,5 +1,5 @@
-"""Modal demo launcher (``deploy/modal/launch.py``): ``--max-trip-ms`` relaunch loop, i6pn scheduling
-fallback to the tunnel, GPU switch and the --local-linears setting.
+"""Modal demo launcher (``deploy/modal/launch.py``): ``--max-trip-ms`` relaunch loop, placements (tunnel,
+i6pn, co-located) and their scheduling fallback to the tunnel, GPU switch and the --local-linears setting.
 
 Nothing here talks to Modal: the launcher's Modal calls are replaced by fakes."""
 
@@ -207,23 +207,23 @@ def test_wait_scheduled_raises_when_a_call_dies_before_starting() -> None:
 
 
 def test_i6pn_falls_back_to_the_tunnel_when_not_scheduled() -> None:
-    spawned: list[bool] = []
+    spawned: list[str] = []
     cancelled: list[str] = []
 
-    def spawn(live: Any, i6pn: bool, ttl_s: int, e2e: bool) -> Any:
-        spawned.append(i6pn)
-        return _pair(i6pn, f"r{len(spawned)}")
+    def spawn(live: Any, placement: str, ttl_s: int, e2e: bool) -> Any:
+        spawned.append(placement)
+        return _pair(placement, f"r{len(spawned)}")
 
     live = FakeDict()
     p = launch.launch_pair(live, i6pn=True, ttl_s=60, e2e=True, schedule_timeout_s=300, spawn=spawn,
                            wait=lambda live, pair, t: ["provider"], cancel=lambda live, pair: cancelled.append(pair.run_id))
-    assert spawned == [True, False] and cancelled == ["r1"]
-    assert p.network == "tunnel" and "not scheduled within 5 min" in p.note
+    assert spawned == ["i6pn", "tunnel"] and cancelled == ["r1"]
+    assert p.network == "tunnel" and "i6pn: provider not scheduled within 5 min" in p.note
 
     spawned.clear()
-    p = launch.launch_pair(live, i6pn=True, ttl_s=60, e2e=True, schedule_timeout_s=300, spawn=spawn,
+    p = launch.launch_pair(live, placement="i6pn", ttl_s=60, e2e=True, schedule_timeout_s=300, spawn=spawn,
                            wait=lambda live, pair, t: [], cancel=lambda live, pair: cancelled.append("no"))
-    assert spawned == [True] and p.network == "i6pn" and p.note == ""
+    assert spawned == ["i6pn"] and p.network == "i6pn" and p.note == ""
 
     spawned.clear()
 
@@ -231,7 +231,7 @@ def test_i6pn_falls_back_to_the_tunnel_when_not_scheduled() -> None:
         raise AssertionError("the tunnel needs no scheduling wait")
 
     p = launch.launch_pair(live, i6pn=False, ttl_s=60, e2e=True, schedule_timeout_s=300, spawn=spawn, wait=never)
-    assert spawned == [False]
+    assert spawned == ["tunnel"]
 
 
 def test_cancel_pair_signals_and_cancels_without_undeploying() -> None:
@@ -257,7 +257,7 @@ def _run_e2e(monkeypatch: pytest.MonkeyPatch, results: list[dict], argv: list[st
     pairs: list[Any] = []
 
     def fake_launch(live: Any, **kw: Any) -> Any:
-        p = _pair(kw["i6pn"], f"r{len(pairs) + 1}")
+        p = _pair(kw["placement"], f"r{len(pairs) + 1}")
         p.pcall.done, p.pcall.result = True, {"log_tail": ""}
         pairs.append(p)
         return p
@@ -319,3 +319,156 @@ def test_modal_apps_import_and_refuse_l4(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("PGW_MODAL_GPU", "L4")
     with pytest.raises(ValueError, match="L4"):
         _load("provider")
+
+
+# ---------------------------------------------------------------------------------------- placements
+def test_placement_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_I6PN", raising=False)
+    monkeypatch.delenv("PGW_MODAL_PLACEMENT", raising=False)
+    monkeypatch.delenv("PGW_MODAL_CUSTOMER_GPU", raising=False)
+    assert launch.parse_args([]).placement == "tunnel"  # default unchanged
+    a = launch.parse_args(["--placement", "colocated"])
+    assert a.placement == "colocated" and a.i6pn is False
+    a = launch.parse_args(["--i6pn"])
+    assert a.placement == "i6pn" and a.i6pn is True
+    assert launch.parse_args(["--placement", "i6pn", "--i6pn"]).placement == "i6pn"
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--placement", "colocated", "--i6pn"])  # contradictory
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--placement", "cluster"])
+    with pytest.raises(SystemExit):  # the co-located gateway has no GPU of its own
+        launch.parse_args(["--placement", "colocated", "--customer-gpu", "T4"])
+    monkeypatch.setenv("PGW_MODAL_PLACEMENT", "colocated")
+    assert launch.parse_args([]).placement == "colocated"
+    assert launch.parse_args(["--placement", "tunnel"]).placement == "tunnel"
+    monkeypatch.setenv("PGW_MODAL_PLACEMENT", "nowhere")
+    with pytest.raises(SystemExit):
+        launch.parse_args([])
+    monkeypatch.delenv("PGW_MODAL_PLACEMENT")
+    # the scheduling timeout covers every placement; the old flag name still works
+    assert launch.parse_args(["--schedule-timeout-min", "4"]).i6pn_schedule_timeout_min == 4.0
+    assert launch.parse_args(["--i6pn-schedule-timeout-min", "4"]).i6pn_schedule_timeout_min == 4.0
+    assert launch.parse_args(["--placement", "colocated", "--gpu", "T4"]).i6pn_schedule_timeout_min == 10.0
+    assert launch.parse_args(["--region", "any"]).region == ""
+    assert launch.parse_args(["--region", "us-east"]).region == "us-east"
+    assert launch.parse_args([]).region is None
+
+
+def test_normalize_placement() -> None:
+    assert launch.normalize_placement(None) == "tunnel"
+    assert launch.normalize_placement(False) == "tunnel" and launch.normalize_placement(True) == "i6pn"
+    assert launch.normalize_placement(" Colocated ") == "colocated"
+    with pytest.raises(ValueError):
+        launch.normalize_placement("cluster")
+
+
+def test_spawn_colocated_is_one_call_for_both_parties() -> None:
+    log: list[tuple[str, str, tuple[Any, ...]]] = []
+    live = FakeDict(provider={"run_id": "old"})
+    p = launch.spawn_pair(live, "colocated", 600, True, lookup=lambda app, name: FakeFunction(app, name, log),
+                          local_linears="off")
+    assert [(a, n) for a, n, _ in log] == [launch.COLOCATED_FUNCTION]
+    assert log[0][2] == (p.run_id, 600, True, "off")
+    assert p.network == "colocated" and p.colocated and not p.i6pn and p.pcall is p.ccall
+    assert "provider" not in live
+    # cancelling the pair cancels the one call once
+    launch.cancel_pair(live, p)
+    assert p.pcall.cancelled and live["stop"] == p.run_id
+
+
+def test_colocated_falls_back_to_the_tunnel_when_not_started() -> None:
+    spawned: list[str] = []
+
+    def spawn(live: Any, placement: str, ttl_s: int, e2e: bool) -> Any:
+        spawned.append(placement)
+        return _pair(placement, f"r{len(spawned)}")
+
+    p = launch.launch_pair(FakeDict(), placement="colocated", ttl_s=60, e2e=True, schedule_timeout_s=600,
+                           spawn=spawn, wait=lambda live, pair, t: ["provider", "customer"],
+                           cancel=lambda live, pair: None)
+    assert spawned == ["colocated", "tunnel"] and p.network == "tunnel"
+    assert p.note.startswith("colocated: provider, customer not scheduled within 10 min")
+    spawned.clear()
+    p = launch.launch_pair(FakeDict(), placement="colocated", ttl_s=60, e2e=True, schedule_timeout_s=600,
+                           spawn=spawn, wait=lambda live, pair, t: [], cancel=lambda live, pair: None)
+    assert spawned == ["colocated"] and p.colocated
+
+
+def test_wait_scheduled_for_colocated_needs_both_markers_of_the_run() -> None:
+    clock = _Clock()
+    pair = launch.Pair("r1", "colocated", FakeCall("x"), None, 0.0)
+    pair.ccall = pair.pcall
+    live = FakeDict(provider_boot={"run_id": "r1"}, customer_boot={"run_id": "r1"})
+    assert launch.wait_scheduled(live, pair, 60, clock=clock, sleep=clock.sleep) == []
+
+
+def test_deploy_adds_the_colocated_app_and_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, dict[str, str]]] = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda cmd, check, env: seen.append((Path(cmd[-1]).name, env)))
+    monkeypatch.setenv("PGW_MODAL_REGION", "us-east")
+    launch.deploy("T4", None, "colocated", "")
+    assert [f for f, _ in seen] == ["provider.py", "customer.py", "colocated.py"]  # the tunnel stays deployed
+    assert all(e["PGW_MODAL_REGION"] == "" and e["PGW_MODAL_GPU"] == "T4" for _, e in seen)
+    seen.clear()
+    launch.deploy(None, None, "i6pn")
+    assert [f for f, _ in seen] == ["provider.py", "customer.py"]
+    assert all(e["PGW_MODAL_REGION"] == "us-east" for _, e in seen)
+
+
+def test_run_e2e_colocated_prints_the_service_log_from_the_one_result(monkeypatch: pytest.MonkeyPatch,
+                                                                     capsys: pytest.CaptureFixture[str]) -> None:
+    res = _res(True, [0.25, 0.5], 0.4)
+    res["service_log_tail"] = "SERVICE-LOG"
+    res["e2e"]["trip_latency"]["path"] = "loopback"
+    res["e2e"]["speed"] = {"measured_rtt_ms": 0.3, "rtt_path": "loopback", "local_linears": {"mode": "auto"},
+                           "warm_tokens_per_s": 9.5}
+
+    def fake_launch(live: Any, **kw: Any) -> Any:
+        assert kw["placement"] == "colocated"
+        c = FakeCall("one")
+        return launch.Pair("r1", "colocated", c, c, 0.0)
+
+    monkeypatch.setattr(launch, "launch_pair", fake_launch)
+    monkeypatch.setattr(launch, "wait_e2e", lambda live, pair, ttl: res)
+    monkeypatch.setattr(launch, "stop", lambda: None)
+    code = launch.run_e2e(FakeDict(), launch.parse_args(["--e2e", "--placement", "colocated", "--max-trip-ms", "1"]),
+                          600)
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "SERVICE-LOG" in out and "SERVICE-LOG" not in out.split("---- gateway log tail")[0]
+    assert "trip latency (colocated via loopback, warm chat)" in out
+    assert "start-up rtt 0.3 ms over loopback" in out and "9.5 tokens/s" in out
+
+
+def test_path_label() -> None:
+    pair = _pair("tunnel")
+    assert launch.path_label({}, pair) == "tunnel"
+    res = {"e2e": {"trip_latency": {"path": "public r500.modal.host"}}}
+    assert launch.path_label(res, pair) == "tunnel via public r500.modal.host"
+    assert launch.path_label({"e2e": {"network_path": "loopback"}}, _pair("colocated")) == "colocated via loopback"
+
+
+def test_colocated_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``colocated.py`` builds locally (no network), names the function the launcher spawns, writes both boot
+    markers before anything slow, binds the service to loopback only and runs each party as its own user."""
+    import ast
+
+    monkeypatch.delenv("PGW_MODAL_GPU", raising=False)
+    monkeypatch.delenv("PGW_MODAL_PROVIDER_CPUS", raising=False)
+    mod = _load("colocated")
+    assert hasattr(mod, launch.COLOCATED_FUNCTION[1]) and mod.app.name == launch.COLOCATED_FUNCTION[0]
+    assert mod.PROVIDER_CPUS + mod.GATEWAY_CPUS == 8.0 and mod.PROVIDER_USER != mod.CUSTOMER_USER
+    monkeypatch.setenv("PGW_MODAL_GPU", "T4")
+    assert _load("colocated").PROVIDER_CPUS == 2.0
+    monkeypatch.setenv("PGW_MODAL_GPU", "L4")
+    with pytest.raises(ValueError, match="L4"):
+        _load("colocated")
+    text = (MODAL_DIR / "colocated.py").read_text()
+    fn = next(n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == "pair")
+    src = ast.get_source_segment(text, fn) or ""
+    assert src.index("provider_boot") < src.index("import pgw_modal_boot")
+    assert src.index("customer_boot") < src.index("import pgw_modal_boot")
+    assert "start_provider_party(" in src and "user=PROVIDER_USER" in src
+    assert "start_gateway_party(" in src and "user=CUSTOMER_USER" in src
+    boot_text = (MODAL_DIR / "pgw_modal_boot.py").read_text()
+    assert f'PROVIDER_USER, CUSTOMER_USER = "{mod.PROVIDER_USER}", "{mod.CUSTOMER_USER}"' in boot_text

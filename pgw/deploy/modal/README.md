@@ -29,6 +29,7 @@ python pgw/deploy/modal/launch.py --no-deploy          # start a pair on the alr
 python pgw/deploy/modal/launch.py --gpu A10G           # provider on a GPU (fixed at deploy time)
 python pgw/deploy/modal/launch.py --i6pn               # private network instead of the tunnel (falls back)
 python pgw/deploy/modal/launch.py --e2e --gpu A10G --i6pn --max-trip-ms 1   # latency-gated test (below)
+python pgw/deploy/modal/launch.py --e2e --gpu T4 --placement colocated      # one container, loopback (below)
 ```
 
 `launch.py` prints the console URL, the one-time setup token and the enrollment code. The setup token
@@ -122,6 +123,101 @@ The i6pn round-trip time has not been measured yet (*estimate*: 0.1-1 ms). Per t
 model, i6pn with a T4 provider and exact local linears (below) would give about 50 ms per token
 (*estimate*), against about 310 ms per token over the tunnel (*estimate*).
 
+## Low-latency placement: both parties in one container (`--placement colocated`)
+
+Measured on 2026-11-21 over the public tunnel: **17 ms per round trip**, 49 sequential round trips per
+token (qkv and o computed on the gateway), so about 0.85 s per token of network wait alone: the demo ran
+at about 1 token/s while the T4 did almost nothing. Earlier tunnel placements measured 6.8, 8.1 and 26 ms.
+i6pn did not schedule within 10-25 minutes, twice.
+
+`--placement colocated` (or `PGW_MODAL_PLACEMENT=colocated`) runs both parties in **one** container of a
+third app, `pgw-colocated` (`colocated.py`), so every round trip crosses loopback TCP instead:
+
+* the provider's compute service runs as Unix user `pgwprov` in `/srv/pgw-provider` (0700), listens on
+  `127.0.0.1` only (nothing outside the container can reach it), with its own fresh PKI; the enrollment
+  code points the gateway at `https://127.0.0.1:8443` and pins that CA. It has the GPU (`--gpu`).
+* the customer's gateway runs as Unix user `pgwcust` in `/srv/pgw` (0700), without the GPU
+  (`CUDA_VISIBLE_DEVICES=""`), with its console on a public HTTPS URL as in `customer.py`.
+* **TLS end to end** as before (the gateway verifies the pinned CA and presents the client certificate
+  issued at enrollment); each party has its own working directory, PKI, state, `HOME` and caches; logs
+  are written by the parent process to a root-only directory (0600 files); neither child inherits the
+  Modal runtime's `MODAL_*` variables. The only data between the parties is what the protocol sends.
+  The same code (`pgw_modal_boot.start_provider_party` / `start_gateway_party`) runs outside Modal with
+  `local_rehearsal.py --users` (see the Kaggle check below).
+
+```bash
+python pgw/deploy/modal/launch.py --e2e --gpu T4 --placement colocated --max-trip-ms 2
+python pgw/deploy/modal/launch.py --gpu T4 --placement colocated     # leave it up for the browser wizard
+```
+
+The launcher deploys `colocated.py` next to the two usual apps and waits up to `--schedule-timeout-min`
+(10 min with a GPU) for the container to start; if Modal has not started it by then, it cancels it and
+relaunches the pair on the tunnel, as for i6pn, and says so. Everything else (the wizard, `--e2e`,
+`--max-trip-ms`, `--stop`) works as for the other placements. Every RTT figure now names the path it was
+measured on: `--e2e` prints `trip latency (colocated via loopback, ...)` and `start-up rtt ... ms over
+loopback`; the result has `trip_latency.path`, `speed.rtt_path` and `network_path`, the gateway's
+`/admin/status` has `speed.rtt_path`, and its start-up log line says `start-up round trip X ms over
+loopback | private <ip> | public <host>`. A tunnel run shows `public r500.modal.host` (or whichever relay).
+
+**Cost.** One container with the provider's GPU, 6 cores (2 + 4) and 14 GiB (6 + 8): at Modal list prices
+about **$0.99/h with a T4** ($0.59 GPU + 6 x $0.0473 + 14 x $0.008), the same as the two-container T4 pair
+($0.73 + $0.25), and about $0.66 for the full 40-minute e2e window; A10G about $1.50/h. With
+`local_linears = "auto"` the gateway measures a sub-millisecond start-up round trip and keeps every
+linear on the provider (97 round trips per token for Qwen2.5-0.5B; below the 1.6 ms break-even, local qkv
+and o cost more than two round trips).
+
+**Expected speed** (*estimate*, to be confirmed by the lead's Modal run): about 0.5-1 ms per round trip
+on loopback with TLS and Python on both ends (measured below on CPU stub kernels), plus the T4's device
+time, so about 60-100 ms of round trips per token plus 15-30 ms of gateway float ops and LM head: roughly
+**8-15 tokens/s instead of about 1**.
+
+**Trust caveat (demo only).** The two parties share one container, one kernel and one host. Separate
+users, 0700 directories and no cross-uid ptrace keep the provider's *process* away from the gateway's
+files and memory, but this is not the separation of two organisations' machines: a kernel or container
+escape on the provider side, or whoever controls the container (the Modal workspace owner, who controls
+both apps of the two-container demo too), reaches both parties, and a shared host offers cache and
+scheduling side channels. The provider's process can also reach the gateway's listeners on loopback,
+with the same credentials as from the internet, and like any process in a Modal container it can reach
+the workspace's `pgw-live` Dict (the container's identity authenticates it; the two-container provider
+can too). The masked bytes the provider receives are exactly those of the other placements, and nothing
+data-dependent is added. Use this placement to show what the protocol costs on a fast link, not as a
+deployment model: a real deployment keeps the gateway in the customer's network.
+
+**Other mechanisms considered** (Modal docs and the installed `modal` 1.6.4 source, 2026-11-21):
+
+* `@modal.clustered(size=2)` (formerly `modal.experimental.clustered`) gang-schedules physically
+  co-located containers on i6pn, rank 0 / rank 1 of one function (one image, one GPU spec). But Modal
+  requires each container to request **all GPUs of its host** (for example `H100:8`), CPU-only clusters
+  are not supported, and both ranks would pay for a GPU; for this demo that is at least two full GPU
+  hosts (two T4s at $0.59/h each at the very least, if Modal offers T4 cluster hosts at all) and the same
+  scheduling risk as i6pn. Not implemented.
+* i6pn with two separate functions (`--placement i6pn`): only containers in the same region **and cloud**
+  can talk over i6pn, and Modal restricts placement accordingly; cloud pinning is not available on this
+  plan, which is the likely cause of the 10-25 minute stalls. `--region` (deploy time; `any` lifts the
+  pin, a region group such as `us-east`, never a zone such as `us-east-1`) is available for experiments;
+  the scheduling fallback still applies.
+* Modal tunnels (`modal.forward`) always go through a relay host: 7-26 ms per round trip measured.
+* Sandboxes with i6pn are scheduled independently like functions: no co-location guarantee.
+
+**Per-trip overhead on the data path (checked 2026-11-21).** Every socket on the compute path has
+`TCP_NODELAY`: the gateway's WebSocket stream socket and the service's accepted sockets (asyncio sets it
+on every TCP transport; `benchmarks/wire_overhead_bench.py --check-nodelay` reads it back: client `[1]`,
+service `[1, 1, ...]`), and the native lane sets it explicitly. With a loopback delay proxy
+(`benchmarks/delay_proxy.py`, `--delay-ms`; tc netem is unavailable here) a round trip costs the added
+delay plus a constant, with no Nagle/delayed-ACK stall (that would show as about 40 ms):
+
+| path (shared 4-vCPU box, 1-row calls at 7B stub shapes, stream channel) | p50 per call |
+|---|---|
+| plain loopback, no TLS | 0.36 ms |
+| loopback, TLS (as on Modal) | 0.68 ms |
+| TLS through the proxy, no added delay | 0.83 ms |
+| TLS through the proxy, +2 ms | 3.12 ms (2.28 ms over the proxy hop) |
+| TLS through the proxy, +17 ms (the tunnel) | 18.43 ms (17.60 ms over the proxy hop) |
+
+The 0.3-0.6 ms above the added delay is the proxy's own thread wake-ups (four threads per connection
+on a loaded box), not the client or the service. TLS adds about 0.3 ms per round trip at these
+shapes (Python's `ssl` record handling of the ~150 KB 7B `gate_up` reply; less at 0.5B, about 39 KB).
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the
@@ -140,8 +236,8 @@ loopback inside the customer container, as deltas over each chat:
 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5 and 10 ms, so a limit on a bucket bound such as 1 ms is decided from the
 counts without interpolation. Exit codes: 0 = exact and within the limit; 1 = the masked answer was not
 bit-identical (never retried); 2 = still above the limit after the last try, or nothing measured. A
-1 ms limit can pass only on i6pn (the tunnel alone adds about 5 ms): for a limit below 3 ms the launcher
-does not relaunch a tunnel pair unless `--i6pn` was asked (each relaunch is a full paid run), and says
+1 ms limit can pass only on i6pn or co-located (the tunnel alone adds about 5 ms): for a limit below 3 ms the launcher
+does not relaunch a tunnel pair unless `--placement i6pn` or `colocated` was asked (each relaunch is a full paid run), and says
 why. The window counts every trip of the warm chat, all linear kinds and prefill trips included; the
 `rows_1_*` split covers single-row (decode) trips only.
 The measurement is local to the gateway: nothing new reaches the provider.
@@ -219,12 +315,17 @@ token, same per-trip latency).
 ## Files
 
 * `provider.py`, `customer.py`: the two Modal apps.
+* `colocated.py`: both parties in one container (`--placement colocated`), each as its own Unix user.
+* `e2e_driver.py`: the scripted wizard + chats + exactness check of `--e2e` (no Modal imports; used by
+  `customer.py`, `colocated.py` and `local_rehearsal.py`).
 * `pgw_modal_boot.py`: PKI, service and gateway start-up (no Modal imports; also used locally).
 * `wizard_client.py`: drives `/console/api/setup/*` like the browser and checks a masked chat against
   the plaintext reference.
 * `trip_gate.py`: the client-reported trip latency (from the gateway's `/metrics` and `/admin/status`)
   and the `--max-trip-ms` decision; no Modal imports.
-* `local_rehearsal.py`: the same bootstrap with both parties on one machine (CPU service).
+* `local_rehearsal.py`: the same bootstrap with both parties on one machine (`--device auto` for a GPU
+  service, `--users` for one Unix user per party as in `colocated.py`, `--delay-ms` to emulate a slower
+  link, `--json` for the end-to-end result).
 * `launch.py`: deploy, start, show, stop, the scripted end-to-end test, the GPU switch, the i6pn
   scheduling fallback and the latency gate.
 

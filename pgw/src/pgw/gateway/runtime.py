@@ -57,7 +57,7 @@ from pgw.engine import (
     TransformerModel,
 )
 from pgw.engine.backends import Int8DraftBackend, int8_lm_head
-from pgw.gateway.config import GatewayModelConfig, GatewaySettings, origin_of
+from pgw.gateway.config import GatewayModelConfig, GatewaySettings, network_path, origin_of
 from pgw.gateway.egress import EgressGuardTransport
 from pgw.gateway.masks import WindowedReservation
 from pgw.gateway.metrics import GatewayMetrics
@@ -874,8 +874,10 @@ class ModelRuntime:
             self.measured_rtt_s = rtt_s
         kinds = await asyncio.to_thread(configure, mode, rtt_s=rtt_s)
         policy = dict(getattr(self.backend, "local_policy", {}) or {})
-        log.info("model %s: local linears %s -> %s (%s)", self.name, mode, ", ".join(sorted(kinds)) or "none",
-                 policy.get("reason", "fixed"))
+        rtt = f"{rtt_s * 1e3:.3f} ms" if rtt_s is not None else "not measured"
+        log.info("model %s: local linears %s -> %s (%s; start-up round trip %s over %s)", self.name, mode,
+                 ", ".join(sorted(kinds)) or "none", policy.get("reason", "fixed"), rtt,
+                 network_path(self.config.service_url))
 
     def _measure_rtt(self, trips: int = 7) -> float | None:
         """Median round trip of ``trips`` mask-free 1-row dummy calls (after one warm-up); None on failure."""
@@ -1336,6 +1338,7 @@ class ModelRuntime:
             "lane": c.lane, "lane_state": self.lane_state,
             "local_linears": dict(getattr(be, "local_policy", {}) or {"mode": c.local_linears}),
             "measured_rtt_ms": round(self.measured_rtt_s * 1e3, 3) if self.measured_rtt_s is not None else None,
+            "rtt_path": network_path(c.service_url),
             "trip_engine": bool(getattr(be, "trip_engine", False)),
             "deferred_check": bool(getattr(be, "deferred_check", False)),
             "sync_decode": bool(getattr(self.model, "sync_decode", False)),

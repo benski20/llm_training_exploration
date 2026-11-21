@@ -113,6 +113,7 @@ async def test_local_linears_auto_measures_rtt_without_masks(tiny_pack_dir: Path
     async with gateway(app) as c:
         st = (await c.get("/admin/status", headers=ADMIN)).json()["models"][0]
     assert st["speed"]["measured_rtt_ms"] is not None and st["speed"]["measured_rtt_ms"] > 0
+    assert st["speed"]["rtt_path"].split(" ")[0] in ("loopback", "private", "public")  # which path was measured
     assert st["speed"]["local_linears"]["mode"] == "auto" and "rtt_s" in st["speed"]["local_linears"]
     assert sum(i.slots_available for i in store.inventory(gw_pack.fingerprint, DEFAULT_RING)) == before
     # what the provider saw at start-up: 1-row first-layer qkv calls of uniform random ring elements only
@@ -397,3 +398,15 @@ def test_phase_a_settings_are_no_longer_pending() -> None:
 def test_speed_setting_validation(kw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         _cfg(**kw)
+
+
+def test_network_path_labels() -> None:
+    from pgw.gateway.config import network_path
+
+    assert network_path("https://127.0.0.1:8443") == "loopback"
+    assert network_path("http://localhost:1") == "loopback"
+    assert network_path("https://[::1]:8443") == "loopback"
+    assert network_path("https://[fdaa:0:1::5]:8443") == "private fdaa:0:1::5"
+    assert network_path("https://10.1.2.3") == "private 10.1.2.3"
+    assert network_path("https://r500.modal.host:4000") == "public r500.modal.host"
+    assert network_path(None) == "unknown" and network_path("ftp://x") == "unknown"

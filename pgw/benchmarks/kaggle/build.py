@@ -203,6 +203,40 @@ JOBS: dict[str, dict] = {
                   "--groups 4 --k 32", "timeout": 1800}
           for eng in ("cuda", "cpu_int8")],
     ]},
+    # co-located placement of the Modal demo (deploy/modal/colocated.py) on a T4: the same pgw_modal_boot party
+    # starters (provider service on the GPU as user pgwprov, gateway as pgwcust without the GPU, loopback TLS),
+    # the setup wizard and two greedy chats of Qwen2.5-0.5B checked against the plaintext reference; then the
+    # same with 17 ms added per round trip (the Modal tunnel) through a loopback delay proxy. Reports trip
+    # latency, round trips per token and tokens/s. Plus the wire bench with TLS and the TCP_NODELAY check.
+    "pgw-colocated-t4": {"include_top": ["deploy"], "exclude": [
+        "scripts", "tests", "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+        "deploy/helm", "deploy/docker", "deploy/compose", "deploy/hf-space", "deploy/marketplace", "deploy/monitoring",
+        "deploy/systemd", "deploy/vmware",
+        # every benchmark but the wire bench and its delay proxy
+        "benchmarks/RESULTS.md", "benchmarks/chat_speed_model.py", "benchmarks/e2e_local.py",
+        "benchmarks/gateway_probe.py", "benchmarks/gpu_kernel_bench.py", "benchmarks/gpu_validate.py",
+        "benchmarks/hemask_bench.py", "benchmarks/hemask_ntt_bench.py", "benchmarks/kaggle",
+        "benchmarks/lane_bench.py", "benchmarks/lm_head_bench.py", "benchmarks/native_finish_bench.py",
+        "benchmarks/native_prepare_bench.py", "benchmarks/native_store_bench.py", "benchmarks/net_floor_bench.py",
+        "benchmarks/profile_gateway.py", "benchmarks/profile_prefill.py", "benchmarks/profile_token.py",
+        "benchmarks/quant_quality.py", "benchmarks/quant_quality_gpu.py", "benchmarks/spec_cost_bench.py",
+        "benchmarks/stack_bench.py", "benchmarks/triton_gemv_bench.py"],
+        "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true; df -h / /tmp", "timeout": 60},
+        {"kind": "shell", "name": "wire_tls_nodelay",
+         "cmd": "python benchmarks/wire_overhead_bench.py --calls 1000 --tls --check-nodelay && "
+                "python benchmarks/wire_overhead_bench.py --calls 1000 --tls --check-nodelay --delay-ms 0 && "
+                "python benchmarks/wire_overhead_bench.py --calls 300 --tls --check-nodelay --delay-ms 17",
+         "timeout": 900},
+        {"kind": "shell", "name": "colocated_users_t4",
+         "cmd": "python deploy/modal/local_rehearsal.py --work /tmp/reh --device auto --users "
+                "--json /kaggle/working/colocated_t4.json", "timeout": 3000},
+        {"kind": "shell", "name": "tunnel_emulated_17ms_t4",
+         "cmd": "rm -rf /tmp/reh/provider /tmp/reh/customer /tmp/reh/logs && "
+                "python deploy/modal/local_rehearsal.py --work /tmp/reh --device auto --users --delay-ms 17 "
+                "--json /kaggle/working/tunnel17_t4.json", "timeout": 3000},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
@@ -261,14 +295,16 @@ JOBS: dict[str, dict] = {
 }
 
 
-def source_tarball(exclude: tuple[str, ...] = ()) -> bytes:
-    """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/)."""
+def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:
+    """xz tarball of pgw/ without the excluded folders (plus ``exclude``: job-specific paths under pgw/;
+    ``include_top``: top-level folders of :data:`EXCLUDE_TOP` this job needs after all)."""
     buf = io.BytesIO()
     skip = EXCLUDE_PATHS + tuple(exclude)
+    top = EXCLUDE_TOP - set(include_top)
 
     def filt(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
         parts = Path(ti.name).parts
-        if len(parts) > 1 and parts[1] in EXCLUDE_TOP:
+        if len(parts) > 1 and parts[1] in top:
             return None
         rel = "/".join(parts[1:])
         if any(rel == p or rel.startswith(p + "/") for p in skip):
@@ -289,13 +325,13 @@ def main() -> None:
     ap.add_argument("--only", nargs="*")
     args = ap.parse_args()
     template = (HERE / "kernel_template.py").read_text()
-    tarballs: dict[tuple[str, ...], str] = {}
+    tarballs: dict[tuple[tuple[str, ...], tuple[str, ...]], str] = {}
     for slug, job in JOBS.items():
         if args.only and slug not in args.only:
             continue
-        excl = tuple(job.get("exclude", ()))
+        excl = (tuple(job.get("exclude", ())), tuple(job.get("include_top", ())))
         if excl not in tarballs:
-            raw = base64.b64encode(source_tarball(excl)).decode()
+            raw = base64.b64encode(source_tarball(*excl)).decode()
             tarballs[excl] = "\n".join(raw[i : i + 100] for i in range(0, len(raw), 100))  # short lines for Kaggle
         tgz = tarballs[excl]
         d = Path(args.out_root) / slug
