@@ -130,10 +130,11 @@ class FactorySettings(PGWSettings):
         "profile's acknowledgement string (rank 12: pgw.hemask.mlwe_ring.R12_ACK). See "
         "research/plans/he-structured-encryption.md",
     )
-    he_encrypt: Literal["dense", "ntt_pre"] = Field(
-        "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine) or 'ntt_pre' "
+    he_encrypt: Literal["dense", "ntt_pre", "ntt_dev"] = Field(
+        "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine), 'ntt_pre' "
         "(public matrix kept in NTT form, pgw.hemask.mlwe_ring; same ciphertexts bit for bit, ~10x+ fewer CPU "
-        "operations; needs pgw_ntt)",
+        "operations; needs pgw_ntt) or 'ntt_dev' (the same NTT product, and decryption's hint product, on the "
+        "gateway GPU, pgw.hemask.ntt_dev; self-tested at start-up, falls back to the CPU)",
     )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")

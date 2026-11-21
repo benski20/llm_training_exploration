@@ -218,13 +218,15 @@ class HEMaskBackend:
 
     #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
     _dev: Any = None
+    #: Self-tested device NTT (``encrypt="ntt_dev"``, :mod:`pgw.hemask.ntt_dev`), or ``None``.
+    _ntt_dev: Any = None
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
                  max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
                  encrypt: str = "dense", device: str | None = "auto"):
-        if encrypt not in ("dense", "ntt_pre"):
-            raise ConfigError(f"encrypt must be 'dense' or 'ntt_pre', got {encrypt!r}")
+        if encrypt not in ("dense", "ntt_pre", "ntt_dev"):
+            raise ConfigError(f"encrypt must be 'dense', 'ntt_pre' or 'ntt_dev', got {encrypt!r}")
         self.params = HEParams(k=ring.k, rank=hints.rank)
         if int(hints.meta.get("q_bits", 64)) != self.params.q:
             raise ConfigError(f"hint store is for q=2^{hints.meta.get('q_bits', 64)}, ring {ring.name} needs "
@@ -242,12 +244,16 @@ class HEMaskBackend:
         a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
         self._fast: Any = None
         dev: torch.device | None = None
-        if encrypt == "ntt_pre":
+        self._ntt_dev = None
+        if encrypt == "ntt_dev":
+            encrypt, self._ntt_dev = _device_ntt(self.params, device)
+        if encrypt in ("ntt_pre", "ntt_dev"):
             from pgw.hemask.mlwe_ring import PretransformedEncryptor
 
-            # A in NTT form only (same ciphertexts as the dense path, bit for bit). Encryption stays on the
-            # CPU NTT (faster than the fused device pass on a T4); decryption uses the CPU engines.
-            self._fast = PretransformedEncryptor(a, self.params)
+            # A in NTT form only (same ciphertexts as the dense path, bit for bit), on the CPU NTT or, for
+            # ntt_dev, on the device NTT (pgw.hemask.ntt_dev).
+            self._fast = (PretransformedEncryptor(a, self.params) if self._ntt_dev is None else
+                          PretransformedEncryptor(a, self.params, groups_per_pass=16, device_ntt=self._ntt_dev))
             self._planes = False
             self._a: np.ndarray = np.empty((0, self.params.dim), dtype=np.uint64)
         else:
@@ -271,7 +277,8 @@ class HEMaskBackend:
             self._dev = DeviceHE(self._a, self.params, dev)
             self._a = self._a[:0]  # the device holds A; the host copy is not needed
         #: Where the products run: ``device:<dev>`` (fused device passes) or the fastmm/NTT CPU engine name.
-        self.engine = f"device:{dev}" if dev is not None else engine()
+        self.engine = (f"device:{dev}" if dev is not None else
+                       f"ntt_dev:{self._ntt_dev.dev}" if self._ntt_dev is not None else engine())
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0,
                       "passes": 0, "max_inflight": 0}
         log.info("encrypted mask factory: encryption/decryption on %s%s", self.engine,
@@ -336,16 +343,19 @@ class HEMaskBackend:
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
             nat = None
+            if self._ntt_dev is not None and hint.ndim == 3 and _ntt_dev_decrypt():
+                corr = self._ntt_dev.hint_mm(hint, smat, first_byte=1)  # H S on the device NTT, same bits
             # Fused native path first: on an AMX host it measured faster than the NTT product (115 vs 153 ms for a
             # 0.5B gate_up group of 1024 slots, bit-identical); the NTT product serves hosts without it.
-            if hint.ndim == 3 and engine() == "cpu_int8":
+            elif hint.ndim == 3 and engine() == "cpu_int8":
                 from pgw.core.native import fast, native_available
 
                 nat = fast if native_available("he_decrypt_combine") else None
             if nat is not None:
                 self._decrypt_native(nat, hint, smat, items, out)
                 return
-            corr = big_planes_mm_small(hint, smat, first_byte=1)
+            if self._ntt_dev is None or hint.ndim != 3 or not _ntt_dev_decrypt():
+                corr = big_planes_mm_small(hint, smat, first_byte=1)
         finally:
             smat.fill(0)
         try:
@@ -498,3 +508,22 @@ class HEMaskBackend:
 
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
+
+
+def _ntt_dev_decrypt() -> bool:
+    """``PGW_NTT_DEV_DECRYPT=0`` keeps decryption on the CPU engines when ``encrypt="ntt_dev"``."""
+    return os.environ.get("PGW_NTT_DEV_DECRYPT", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _device_ntt(params: HEParams, device: str | None) -> tuple[str, Any]:
+    """``("ntt_dev", DeviceNTT)`` when a device NTT passes its self-test, else the CPU fallback
+    (``"ntt_pre"`` with the native NTT, otherwise ``"dense"``) and ``None``."""
+    from pgw.hemask import ntt
+    from pgw.hemask.ntt_dev import device_ntt_for
+
+    dn = device_ntt_for(params, device)
+    if dn is not None:
+        return "ntt_dev", dn
+    fallback = "ntt_pre" if ntt.available() else "dense"
+    log.warning("encrypt='ntt_dev': no self-tested device NTT (device %s); using %s on the CPU", device, fallback)
+    return fallback, None
