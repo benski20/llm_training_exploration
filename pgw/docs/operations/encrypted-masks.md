@@ -258,3 +258,30 @@ The wire then becomes the limit. At 70B a slot is 28 MB up and 29 MB down (v2 53
 (same region, multi-100G), or masks generated ahead of time in off-peak hours. Reducing the
 per-slot wire is a cryptographic change. Such a change needs its own reviewed scheme and stays
 off by default.
+
+## Bulk maskgen channel (transport, not crypto)
+
+Measured with `benchmarks/maskgen_wire_bench.py` (the real service app, TLS on loopback, a stub provider
+that answers at zero cost): the factory's per-pass "provider" time on the HTTP route is almost all
+transport and customer-side bit packing. For Qwen2.5-0.5B at 512 slots it was 9.8 s (v1) / 7.8 s (v2)
+with **no GPU work at all** (4 shared vCPUs), against 9.40 s measured on Modal with the T4. One slot moves
+about 2.5 MB (0.5B) or 11.6 MB (7B, v2), and one asyncio event loop per side (httpx/h11 and uvicorn,
+with TLS inside the loop) carries roughly 150-350 MB/s.
+
+The bulk channel carries the same request and reply bodies over blocking TLS sockets, one thread per
+connection, so OpenSSL runs with the GIL released and the reply is written straight from the pinned
+device-copy buffer:
+
+| Setting | Default | Effect |
+|---|---|---|
+| service `PGW_SERVICE_MASKGEN_BULK_PORT` | unset (off) | Listener of the bulk channel (TLS with the main listener's certificate and client-certificate policy; plain TCP only on a loopback host without TLS) |
+| service `PGW_SERVICE_MASKGEN_BULK_MAX_CONNS` | 16 | Open bulk connections at most (more get one `unavailable` reply) |
+| factory `PGW_FACTORY_HE_BULK_PORT` | unset (off) | Use the service's bulk port (host and TLS from `he_service_url`); a transport failure resends the request over HTTP |
+| factory `PGW_FACTORY_HE_BULK_SPLIT` | 1 | Send a multi-group request as up to N concurrent whole-group requests |
+| factory `PGW_FACTORY_HE_WIRE_V2` | on | Use wire v2 where the noise budget allows (the factory did not pass the parameters before, so it always used v1) |
+
+Nothing new reaches the provider: the bodies are the HTTP route's, and authentication (token, client
+certificate, `require_client_cert_for_compute`), admission, draining, tenant limits, wire versions,
+the GPU path and its decode yield are the handler's. With `pgw_fast`, the customer's v2 modulus switch
+and packing, and the reply unpacking, run natively (byte-identical to numpy for the same dither; the
+production dither is ChaCha20 from a fresh `os.urandom` seed, never stored).
