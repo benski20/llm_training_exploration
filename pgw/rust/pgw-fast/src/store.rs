@@ -382,8 +382,158 @@ fn unpack_rows_u32<'py>(
     Ok(arr)
 }
 
+/// One job of [`claim_rows_many`], validated, with raw pointers into Python-owned memory.
+struct ClaimJob {
+    key: Zeroizing<[u8; 32]>,
+    off: u64,
+    r: *mut i64,
+    r_len: usize,
+    src: *const u8,
+    src_len: usize,
+    wr: *mut u32,
+    wr_len: usize,
+}
+
+// SAFETY: the pointers refer to distinct freshly allocated output arrays (written by exactly one
+// job) and to read-only buffer exports held by the caller for the duration of the parallel section.
+unsafe impl Send for ClaimJob {}
+unsafe impl Sync for ClaimJob {}
+
+fn run_claim(job: &ClaimJob, k: u32, nb: usize) -> Result<(), String> {
+    // SAFETY: see `ClaimJob`; each job's outputs are only touched by the thread running it.
+    let r = unsafe { std::slice::from_raw_parts_mut(job.r, job.r_len) };
+    fill_ring(&job.key, job.off, r, k)?;
+    let src = unsafe { std::slice::from_raw_parts(job.src, job.src_len) };
+    let wr = unsafe { std::slice::from_raw_parts_mut(job.wr, job.wr_len) };
+    if nb == 4 {
+        for (o, c) in wr.iter_mut().zip(src.chunks_exact(4)) {
+            *o = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+        }
+    } else {
+        for (o, c) in wr.iter_mut().zip(src.chunks_exact(nb)) {
+            let mut w = [0u8; 4];
+            w[..nb].copy_from_slice(c);
+            *o = u32::from_le_bytes(w);
+        }
+    }
+    Ok(())
+}
+
+/// Batched mask fetch for many sessions/linears in one call (`pgw.maskstore.store.take_checked_many`).
+///
+/// `jobs`: `(key, cols, row_start, buf, row_offset, rows, out_cols)` tuples. Job `i` yields
+/// `(r, wr)`: `r = mask_rows_with_key(key, cols, k, row_start, rows)` (int64) and
+/// `wr = unpack_rows_u32(buf, row_offset, rows, out_cols, k)` (uint32, `k <= 32`), bit-identical to
+/// those functions. Jobs run on up to `threads` threads (0: automatic) with the GIL released; the
+/// caller must keep every `buf` unchanged until the call returns.
+#[pyfunction]
+#[pyo3(signature = (jobs, k, threads=0))]
+fn claim_rows_many<'py>(
+    py: Python<'py>,
+    jobs: &Bound<'py, PyAny>,
+    k: u32,
+    threads: usize,
+) -> PyResult<Vec<(Bound<'py, PyArray2<i64>>, Bound<'py, PyArray2<u32>>)>> {
+    if k % 8 != 0 || !(8..=32).contains(&k) {
+        return Err(value_err(format!("bad ring width {k} for uint32 rows")));
+    }
+    let nb = (k / 8) as usize;
+    let mut outs = Vec::new();
+    let mut work: Vec<ClaimJob> = Vec::new();
+    let mut exports: Vec<PyBuffer<u8>> = Vec::new();
+    let mut total = 0usize;
+    for item in jobs.try_iter()? {
+        let item = item?;
+        let (key_obj, cols, row_start, buf, row_offset, rows, out_cols): (
+            Bound<'py, PyAny>,
+            i64,
+            i64,
+            Bound<'py, PyAny>,
+            i64,
+            i64,
+            i64,
+        ) = item.extract()?;
+        let raw = secret_bytes(&key_obj)?;
+        let key: Zeroizing<[u8; 32]> =
+            Zeroizing::new(raw.as_slice().try_into().map_err(|_| value_err("key must be exactly 32 bytes"))?);
+        let (rows_u, cols_u, off) = row_range(cols, row_start, rows)?;
+        if row_offset < 0 || out_cols < 0 {
+            return Err(value_err("row_offset and out_cols must be >= 0"));
+        }
+        let out_cols_u = out_cols as usize;
+        let pb = PyBuffer::<u8>::get(&buf)?;
+        if !pb.is_c_contiguous() {
+            return Err(value_err("buffer must be C-contiguous"));
+        }
+        let len = pb.len_bytes();
+        let row_bytes = out_cols_u.checked_mul(nb).ok_or_else(|| value_err("row size overflows"))?;
+        let a = (row_offset as usize).checked_mul(row_bytes);
+        let b = rows_u.checked_mul(row_bytes).and_then(|n| a.and_then(|a| a.checked_add(n)));
+        let (a, b) = match (a, b) {
+            (Some(a), Some(b)) if b <= len => (a, b),
+            _ => return Err(value_err(format!("rows [{row_offset}, {row_offset}+{rows}) exceed the {len}-byte buffer"))),
+        };
+        let r_arr = PyArray2::<i64>::zeros(py, [rows_u, cols_u], false);
+        let wr_arr = PyArray2::<u32>::zeros(py, [rows_u, out_cols_u], false);
+        // SAFETY: freshly allocated, C-contiguous, not yet shared with Python code.
+        let r_sl = unsafe { r_arr.as_slice_mut() }.map_err(|e| value_err(e.to_string()))?;
+        let wr_sl = unsafe { wr_arr.as_slice_mut() }.map_err(|e| value_err(e.to_string()))?;
+        total += r_sl.len() * 8 + wr_sl.len() * 4;
+        work.push(ClaimJob {
+            key,
+            off,
+            r: r_sl.as_mut_ptr(),
+            r_len: r_sl.len(),
+            // SAFETY: `pb` (kept in `exports`) holds the buffer export; `a..b` is within it.
+            src: unsafe { pb.buf_ptr().cast::<u8>().add(a) },
+            src_len: b - a,
+            wr: wr_sl.as_mut_ptr(),
+            wr_len: wr_sl.len(),
+        });
+        exports.push(pb);
+        outs.push((r_arr, wr_arr));
+    }
+    let n = work.len();
+    let cpus = std::thread::available_parallelism().map_or(1, |c| c.get());
+    let want = if threads == 0 { cpus } else { threads };
+    let t = want.min(n).min(total / PAR_BYTES_PER_THREAD + 1).max(1);
+    let res: Result<(), String> = py.allow_threads(|| {
+        if t <= 1 {
+            for j in &work {
+                run_claim(j, k, nb)?;
+            }
+            return Ok(());
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let err: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+        let body = || loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if i >= n {
+                break;
+            }
+            if let Err(e) = run_claim(&work[i], k, nb) {
+                *err.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+            }
+        };
+        std::thread::scope(|s| {
+            for _ in 1..t {
+                s.spawn(body);
+            }
+            body();
+        });
+        match err.into_inner().unwrap_or_else(|p| p.into_inner()) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    });
+    drop(exports);
+    res.map_err(value_err)?;
+    Ok(outs)
+}
+
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(claim_rows_many, m)?)?;
     m.add_function(wrap_pyfunction!(mask_rows, m)?)?;
     m.add_function(wrap_pyfunction!(mask_key, m)?)?;
     m.add_function(wrap_pyfunction!(mask_rows_with_key, m)?)?;

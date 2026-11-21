@@ -203,6 +203,40 @@ JOBS: dict[str, dict] = {
                   "--groups 4 --k 32", "timeout": 1800}
           for eng in ("cuda", "cpu_int8")],
     ]},
+    # gateway mask pipeline (factory writer -> disk store -> batched decode claims -> wipe) on a quiet 4-vCPU
+    # box: A/B against the base commit (benchmarks/kaggle/_ab_base.patch, generated at build time: the reverse
+    # diff of the touched maskstore/prng files), plus the batched native claim. CPU only.
+    "pgw-mask-pipeline": {"gpu": False,
+                          "exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md",
+                                      "INTERFACE_NOTES.md", "STATUS.md", "src/pgw/hemask", "src/pgw/console",
+                                      "src/pgw/service",
+                                      "benchmarks/gpu_validate.py", "benchmarks/profile_token.py"],
+                          "steps": [
+        {"kind": "shell", "name": "build_fast", "required": True,
+         "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && "
+                "(python rust/tools/cargo_ok.py 1.89 || "
+                "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && "
+                "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && python rust/tools/build_fast.py && "
+                "python -c 'import pgw_fast; assert hasattr(pgw_fast, \"claim_rows_many\")'",
+         "timeout": 1500},
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; df -h /tmp /kaggle/working",
+         "timeout": 60},
+        {"kind": "shell", "name": "make_base", "required": True,
+         "cmd": "rm -rf /tmp/pgwbase && mkdir -p /tmp/pgwbase && cp -r src /tmp/pgwbase/ && "
+                "patch -d /tmp/pgwbase -p1 -R < benchmarks/kaggle/_ab_base.patch && "
+                "PYTHONPATH=/tmp/pgwbase/src python -c 'import pgw.maskstore.store as s; "
+                "assert not hasattr(s, \"take_checked_many\"); print(\"base ok\")'", "timeout": 120},
+        *[{"kind": "shell", "name": f"pipeline_{tag}_{side}_{rep}",
+           "cmd": f"PGW_OFFLINE=1 PYTHONPATH={pp} python benchmarks/mask_pipeline_bench.py {args} --root /tmp/mpb "
+                  f"--json /kaggle/working/pipeline_{tag}_{side}_{rep}.json{extra}",
+           "timeout": 1800}
+          for rep in (1, 2)
+          for tag, args in (("05b", "--model 0.5b --slots 512 --segments 1 --sessions 32 --tokens 16"),
+                            ("7b", "--model 7b --slots 256 --segments 1 --sessions 32 --tokens 8"),
+                            ("70b_l8", "--model 70b --layers 8 --slots 256 --segments 1 --sessions 32 --tokens 8"))
+          for side, pp, extra in (("base", "/tmp/pgwbase/src", ""), ("new", "src", ""),  # noqa: S108
+                                  ("new_claim", "src", " --claim-threads 0"))],
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},

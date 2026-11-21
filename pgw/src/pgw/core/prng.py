@@ -39,6 +39,40 @@ _DOMAIN = b"pgw/v1/prng"
 _ZERO_NONCE = bytes(16)
 #: Bytes addressable in one labelled stream (ChaCha20's 32-bit block counter x 64-byte blocks).
 MAX_STREAM_BYTES = (1 << 32) * 64
+#: Read-only all-zero input for keystream generation (ChaCha20 of zeros = keystream), in pieces.
+_ZERO_PIECE = memoryview(bytes(1 << 20))
+
+
+def _ring_stream_into(key: bytes | bytearray, byte_offset: int, out: np.ndarray, k: int) -> None:
+    """Fill ``out`` (C-contiguous int64) with ring elements of the stream keyed by ``key``.
+
+    Element ``i`` is ``u64_le(stream[byte_offset + 8 i : byte_offset + 8 i + 8]) mod 2^k``, exactly as
+    the normative construction. The keystream is written by OpenSSL straight into ``out`` (no
+    intermediate ``bytes``: nothing secret-derived is left behind in an immutable, unzeroable
+    object) and reduced in place; about 2x faster than the copy-based form.
+    """
+    block, skip = divmod(byte_offset, 64)
+    if block >= 1 << 32:
+        raise ConfigError("stream offset beyond the 2^32-block ChaCha20 counter range")
+    if not out.size:
+        return
+    enc = Cipher(algorithms.ChaCha20(key, block.to_bytes(4, "little") + bytes(12)), mode=None).encryptor()
+    if skip:  # discard the first ``skip`` keystream bytes of the block (into a scratch that is zeroed)
+        scratch = bytearray(skip)
+        enc.update_into(_ZERO_PIECE[:skip], scratch)
+        scratch[:] = bytes(skip)
+    buf = memoryview(out).cast("B")
+    n = len(buf)
+    piece = len(_ZERO_PIECE)
+    pos = 0
+    while pos < n:
+        m = min(piece, n - pos)
+        enc.update_into(_ZERO_PIECE[:m], buf[pos : pos + m])
+        pos += m
+    buf.release()
+    if k < 64:
+        u = out.view(np.uint64)
+        np.bitwise_and(u, np.uint64((1 << k) - 1), out=u)
 
 
 def max_stream_rows(cols: int) -> int:
@@ -119,9 +153,9 @@ class SeedExpander:
         """Uniform ring elements in ``[0, 2^k)`` as an int64 CPU tensor of ``shape``."""
         shp = (shape,) if isinstance(shape, int) else tuple(shape)
         count = int(np.prod(shp, dtype=np.int64)) if shp else 1
-        raw = np.frombuffer(self.random_bytes(8 * count, *labels), dtype="<u8")
-        vals = (raw & np.uint64((1 << k) - 1)).astype(np.int64)
-        return torch.from_numpy(vals.reshape(shp))
+        out = np.empty(count, dtype=np.int64)
+        _ring_stream_into(self._key(labels), 0, out, k)
+        return torch.from_numpy(out.reshape(shp))
 
     def ring_uniform_rows(self, cols: int, k: int, row_start: int, row_count: int, *labels: Label) -> torch.Tensor:
         """Rows ``[row_start, row_start + row_count)`` of the ``(rows, cols)`` matrix that
@@ -145,16 +179,9 @@ class SeedExpander:
         """:meth:`ring_uniform_rows` of the stream whose key is ``key`` (:meth:`stream_key`)."""
         if cols <= 0 or row_start < 0 or row_count < 0:
             raise ConfigError("cols must be > 0 and row_start/row_count >= 0")
-        offset = 8 * cols * row_start
-        length = 8 * cols * row_count
-        block, skip = divmod(offset, 64)
-        if block >= 1 << 32:
-            raise ConfigError("stream offset beyond the 2^32-block ChaCha20 counter range")
-        nonce = block.to_bytes(4, "little") + bytes(12)
-        enc = Cipher(algorithms.ChaCha20(key, nonce), mode=None).encryptor()
-        raw = np.frombuffer(enc.update(bytes(skip + length))[skip:], dtype="<u8")
-        vals = (raw & np.uint64((1 << k) - 1)).astype(np.int64)
-        return torch.from_numpy(vals.reshape(row_count, cols))
+        out = np.empty((row_count, cols), dtype=np.int64)
+        _ring_stream_into(key, 8 * cols * row_start, out, k)
+        return torch.from_numpy(out)
 
     def uniform_int(self, shape: tuple[int, ...] | int, low: int, high: int, *labels: Label) -> torch.Tensor:
         """Integers in ``[low, high)`` (rejection-free modulo; bias < 2^-32 for ranges < 2^32)."""
