@@ -203,6 +203,27 @@ JOBS: dict[str, dict] = {
                   "--groups 4 --k 32", "timeout": 1800}
           for eng in ("cuda", "cpu_int8")],
     ]},
+    # package M2: provider-side encrypted maskgen throughput (device-side v2 unpack/pack, ceil(bb/8) planes,
+    # fused Triton combine, per-device slots). GPU exactness tests, then legacy vs fused slots/s and TOPS at
+    # 0.5B / 7B / 70B layer shapes, layers sharded over both T4s, and decode-GEMM latency next to maskgen.
+    "pgw-maskgen-provider": {"machine_shape": "NvidiaTeslaT4x2",
+                             "exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                         "tests/console", "tests/factory", "tests/engine", "tests/wire",
+                                         "tests/native", "tests/core", "tests/cli", "tests/docs", "tests/deploy",
+                                         "tests/benchmarks", "docs", "research", "console", "tests/vectors",
+                                         "SPEC.md", "INTERFACE_NOTES.md", "tests/modelpack", "tests/observability",
+                                         "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                         "rust", "tests/hemask"],
+                             "steps": [
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi || true",
+         "timeout": 60},
+        {"kind": "pytest", "name": "pytest_maskgen_gpu",
+         "args": ["tests/service/test_maskgen_gpu.py", "tests/service/test_maskgen_fast.py",
+                  "tests/service/test_maskgen.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},
+        {"kind": "shell", "name": "maskgen_provider_bench",
+         "cmd": "python benchmarks/maskgen_provider_bench.py --presets qwen2.5-0.5b qwen2.5-7b llama3-70b "
+                "--decode --json /kaggle/working/maskgen_provider.json", "timeout": 5400},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
@@ -306,7 +327,7 @@ def main() -> None:
                 "enable_internet": True, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
                 "model_sources": []}
         if meta["enable_gpu"]:
-            meta["machine_shape"] = "NvidiaTeslaT4"
+            meta["machine_shape"] = job.get("machine_shape", "NvidiaTeslaT4")
         (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))
         print(d, f"{(d / 'run.py').stat().st_size / 1e6:.2f} MB")
 

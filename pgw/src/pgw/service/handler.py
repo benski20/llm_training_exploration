@@ -134,8 +134,27 @@ def _maskgen_item_v2(kern: Any, it: Any) -> bytes | bytearray:
     return pack_y_v2(y, it.b_bits, it.y_bits, inplace=True)
 
 
-def _maskgen_item(kern: Any, it: Any) -> bytes | bytearray:
-    """``y`` bytes of one maskgen item (runs in a worker thread)."""
+def _maskgen_fused(kern: Any) -> bool:
+    """True when ``kern`` takes the device-side CUDA maskgen path (:mod:`pgw.service.maskgen_gpu`)."""
+    dev = getattr(kern, "device", None)
+    if getattr(dev, "type", "cpu") != "cuda" or getattr(kern, "_pw", None) is None:
+        return False
+    from pgw.service.maskgen_gpu import fused_enabled
+
+    return fused_enabled()
+
+
+def _maskgen_item(kern: Any, it: Any, decode_busy: Any = None) -> bytes | bytearray:
+    """``y`` bytes of one maskgen item (runs in a worker thread).
+
+    CUDA kernels run the item end to end on the device (:func:`pgw.service.maskgen_gpu.run_item`:
+    device-side v2 unpack/pack, ``ceil(bb/8)`` planes, fused combine; byte-identical), unless
+    ``PGW_SERVICE_MASKGEN_FUSED=0``. ``decode_busy`` feeds the opt-in decode yield of that path.
+    """
+    if _maskgen_fused(kern):
+        from pgw.service.maskgen_gpu import run_item
+
+        return run_item(kern, it, decode_busy=decode_busy)
     if it.v2:
         return _maskgen_item_v2(kern, it)
     fast = getattr(kern, "mulmod64_wire", None)
@@ -255,6 +274,8 @@ class ServiceHandler:
         self.maskgen_concurrency = (max(1, int(maskgen_concurrency)) if maskgen_concurrency is not None
                                     else _maskgen_concurrency_default(settings))
         self._maskgen_slots = asyncio.Semaphore(self.maskgen_concurrency)  # bounded, not one global lock
+        #: per CUDA device: ``maskgen_concurrency`` slots each (multi-GPU services scale maskgen with devices)
+        self._maskgen_dev_slots: dict[str, asyncio.Semaphore] = {}
         if maskgen_versions is None:
             maskgen_versions = _maskgen_versions_default()
         if 1 not in maskgen_versions or not set(maskgen_versions) <= {1, 2}:
@@ -378,9 +399,11 @@ class ServiceHandler:
 
         The provider sees only pseudorandom ciphertexts. Admission and tenant limits count every
         256-column group as 256 rows, like the compute path. Each item goes from its raw ``b`` bytes
-        to its packed ``y`` bytes in one worker-thread call (:meth:`ComputeKernel.mulmod64_wire`;
-        wire v2 items also unpack and bit-pack on the CPU, :func:`_maskgen_item_v2`); at most
-        :attr:`maskgen_concurrency` items run at once, across all requests. The route stamps the
+        to its packed ``y`` bytes in one worker-thread call (on CUDA end to end on the device,
+        :mod:`pgw.service.maskgen_gpu`; on CPU :meth:`ComputeKernel.mulmod64_wire`, wire v2 items
+        also unpack and bit-pack on the CPU, :func:`_maskgen_item_v2`). The items of a request run
+        concurrently; at most :attr:`maskgen_concurrency` items run at once per CUDA device (and
+        in the shared CPU pool), across all requests. The route stamps the
         reply with the request's version and :attr:`maskgen_versions`.
         """
         from pgw.hemask.wire import MaskgenResponse, MaskgenResult
@@ -400,11 +423,9 @@ class ServiceHandler:
         self.inflight += 1
         self._idle.clear()
         try:
-            out = []
-            for it in request.items:
-                kern = model.kernel(it.linear)
-                y = await self._maskgen_in_slot(kern, it)
-                out.append(MaskgenResult(it.linear, it.cols, y))
+            # Items run concurrently (each under its device's slots), replies keep request order.
+            ys = await asyncio.gather(*(self._maskgen_in_slot(model.kernel(it.linear), it) for it in request.items))
+            out = [MaskgenResult(it.linear, it.cols, y) for it, y in zip(request.items, ys, strict=True)]
             return MaskgenResponse(request.request_id, tuple(out))
         finally:
             self.inflight -= 1
@@ -418,10 +439,10 @@ class ServiceHandler:
         a cancelled request (client disconnect) cannot stop ``to_thread`` work, so releasing on
         cancellation would let more than :attr:`maskgen_concurrency` items run at once.
         """
-        slots = self._maskgen_slots
+        slots = self._maskgen_slots_for(kern)
         await slots.acquire()
         try:
-            fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it))
+            fut = asyncio.ensure_future(asyncio.to_thread(_maskgen_item, kern, it, *self._maskgen_extra(kern)))
         except BaseException:
             slots.release()
             raise
@@ -433,6 +454,27 @@ class ServiceHandler:
 
         fut.add_done_callback(_done)
         return await asyncio.shield(fut)
+
+    def _maskgen_slots_for(self, kern: Any) -> asyncio.Semaphore:
+        """The slot pool of ``kern``'s device: one per CUDA device, the shared pool otherwise."""
+        dev = getattr(kern, "device", None)
+        per_dev = getattr(self, "_maskgen_dev_slots", None)
+        if per_dev is None or getattr(dev, "type", "cpu") != "cuda":
+            return self._maskgen_slots
+        key = str(dev)
+        sem = per_dev.get(key)
+        if sem is None:
+            sem = per_dev[key] = asyncio.Semaphore(self.maskgen_concurrency)
+        return sem
+
+    def _maskgen_extra(self, kern: Any) -> tuple[Any, ...]:
+        """Extra ``_maskgen_item`` arguments: the decode-busy probe for fused CUDA items."""
+        if not _maskgen_fused(kern):
+            return ()
+        batcher = getattr(self, "batcher", None)
+        if batcher is None:
+            return ()
+        return (lambda: batcher.queued_rows > 0,)
 
     def on_request_done(self, ctx: RequestContext, status: int, code: str | None) -> None:
         """Metrics hook called by the wire router after every compute reply."""
