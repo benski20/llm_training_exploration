@@ -345,6 +345,8 @@ class SyncStreamClient:
             self._release(ch)
             st.requests -= 1  # the fallback counts the call again
             return self._fallback(request, type(exc).__name__)
+        if isinstance(obj, ComputeResponse) and obj.request_id != request.request_id:
+            ch.close()  # a reply to another request: the channel is out of step, never reuse it
         self._release(ch)
         st.bytes_sent += len(body)
         st.last_rtt_s = time.monotonic() - t0

@@ -172,6 +172,26 @@ def test_broken_connection_falls_back_then_reconnects(serve: Any) -> None:
     client.close()
 
 
+def test_reply_to_another_request_falls_back_and_drops_the_channel(serve: Any) -> None:
+    srv = serve(FakeHandler())
+    client = SyncStreamClient(_client(srv.url))
+    req, xs = make_request(RING, [("0.qkv", 1)], rid="a")
+    first = client.compute_sync(req)
+    _check(first, req, xs, srv.handler)
+    ch = client._idle[0]
+    real = ch.call
+    ch.call = lambda body, t: (real(body, t), first)[1]  # type: ignore[method-assign]  # an out-of-step reply
+    req2, xs2 = make_request(RING, [("0.o", 1)], rid="b", seed=2)
+    _check(client.compute_sync(req2), req2, xs2, srv.handler)
+    st = client.sync_stream_stats
+    assert st.fallbacks == 1 and st.last_fallback == "ComputeResponse"
+    assert ch.closed and ch not in client._idle  # never reused
+    req3, xs3 = make_request(RING, [("0.down", 1)], rid="c", seed=3)
+    _check(client.compute_sync(req3), req3, xs3, srv.handler)
+    assert client.sync_stream_stats.opens == 2 and client.sync_stream_stats.calls == 2
+    client.close()
+
+
 def test_idle_connection_is_replaced(serve: Any) -> None:
     srv = serve(FakeHandler())
     client = SyncStreamClient(_client(srv.url), max_idle_s=0.0)

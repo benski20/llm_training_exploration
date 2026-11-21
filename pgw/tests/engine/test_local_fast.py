@@ -9,12 +9,20 @@ import torch
 from pgw.core import RING_K40_A12, IntegrityError
 from pgw.core.errors import RingOverflowError
 from pgw.core.ring import DEFAULT_RING
+from pgw.core.ringmm import cpu_int8_available
 from pgw.core.types import LinearId, LinearKind
 from pgw.engine import InMemoryPack, LinearCall, LocalComputeClient, MaskedBackend
 from pgw.engine import backends as B
 
-pytestmark = pytest.mark.skipif(not B.native_available("trip_prepare_into") or not B.cpu_int8_fast(),
-                                reason="needs pgw_fast and exact, fast CPU int8 GEMMs")
+pytestmark = pytest.mark.skipif(not B.native_available("trip_prepare_into") or not cpu_int8_available(),
+                                reason="needs pgw_fast and exact CPU int8 GEMMs")
+
+
+@pytest.fixture(autouse=True)
+def _int8_counts_as_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    # cpu_int8_fast() is a timing probe: on a loaded box (pytest -n 3) it can say "slow" and the fast path
+    # would silently not run. Exactness depends only on cpu_int8_available(); force the speed half on.
+    monkeypatch.setattr(B, "cpu_int8_fast", lambda: True)
 
 
 def _backend(pack: InMemoryPack, ring=DEFAULT_RING) -> MaskedBackend:  # type: ignore[no-untyped-def]
