@@ -449,7 +449,7 @@ JOBS: dict[str, dict] = {
     "pgw-spec-accept": {"exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md",
                                     "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
                                     "benchmarks/results"],
-                        "steps": [
+                               "steps": [
         BUILD_NATIVE,
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
         *[{"kind": "shell", "name": f"pack_{tag}", "required": True,
@@ -553,6 +553,25 @@ JOBS: dict[str, dict] = {
          "timeout": 6600},
     ]},
 }
+
+# X3 run 2 (run 1 = pgw-x3-he-e2e-7b: provider round trip 8.7 slots/s with GPU 0 at 2.5% busy; resident-hint
+# configs ran out of device memory): resident hints after the out-of-memory fallback, and the provider's maskgen
+# item function called in the gateway process on GPU 0 (inproc: the service's work minus HTTP) to split the
+# transport from the GPU work; wire v2; LRU vs keep-in-use. 1536 slots per config (one chunk per linear).
+JOBS["pgw-x3-he-e2e-7b-r2"] = {"machine_shape": "NvidiaTeslaT4x2",
+                               "exclude": JOBS["pgw-x3-he-e2e-7b"]["exclude"],
+                               "steps": [
+    BUILD_NATIVE,
+    {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; nvidia-smi", "timeout": 60},
+    {"kind": "pytest", "name": "pytest_hemask_cuda",
+     "args": ["tests/hemask/test_devmm.py", "tests/hemask/test_mlwe_ring.py", "tests/hemask/test_factory_he.py",
+              "-q", "-rs", "--timeout", "1200"], "timeout": 1800},
+    {"kind": "shell", "name": "he_e2e_7b",
+     "cmd": "python benchmarks/he_e2e_bench.py --preset qwen2.5-7b --layers 28 --slots 1536 --stage-rows 1024 "
+            "--configs ntt_dev ntt_dev_inproc dense_dev dense_dev_inproc ntt_dev_v2 ntt_dev_lru "
+            "--work /tmp/he_e2e --budget-s 4000 --config-timeout-s 1200 "
+            "--json /kaggle/working/he_e2e_7b.json", "timeout": 6000},
+]}
 
 
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:

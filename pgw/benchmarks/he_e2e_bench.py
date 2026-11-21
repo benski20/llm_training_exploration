@@ -64,6 +64,10 @@ CONFIGS: dict[str, dict[str, Any]] = {
     "ntt_dev": {"encrypt": "ntt_pre", "device": "auto"},
     "ntt_dev_lru": {"encrypt": "ntt_pre", "device": "auto", "env": {"PGW_HEMASK_GPU_HINT_STALE_S": "0"}},
     "ntt_dev_v2": {"encrypt": "ntt_pre", "device": "auto", "wire_v2": True},
+    # provider item function in the gateway process on the other GPU: the service's work without HTTP (needs
+    # CUDA_VISIBLE_DEVICES "<gateway>,<provider>", set by the driver)
+    "ntt_dev_inproc": {"encrypt": "ntt_pre", "device": "auto", "inproc": True},
+    "dense_dev_inproc": {"encrypt": "dense", "device": "auto", "inproc": True},
     "ntt_dev_stream": {"encrypt": "ntt_pre", "device": "auto", "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}},
     "ntt_dev_stream_noprefetch": {"encrypt": "ntt_pre", "device": "auto",
                                   "env": {"PGW_HEMASK_GPU_HINT_MB": "0", "PGW_HEMASK_HINT_PREFETCH": "0"}},
@@ -144,6 +148,36 @@ class _TimedRemote:
                     self.busy_s += t1 - self._t_busy0
 
 
+class _InProcProvider:
+    """The provider's maskgen item function (:func:`pgw.service.handler._maskgen_item`: the service's own GPU path,
+    wire v1 bytes in and out) called in this process on another GPU: everything the service does but HTTP."""
+
+    def __init__(self, pack: Any, q_bits: int, device: str):
+        from pgw.service.kernels import ComputeKernel
+
+        self.q = q_bits
+        self.kern: dict[str, Any] = {}
+        shared: dict[tuple[int, int], Any] = {}
+        for s in pack.specs:
+            key = (s.out_features, s.in_features)
+            if key not in shared:
+                shared[key] = ComputeKernel(s, pack.w[key], device=device)
+            self.kern[s.id.key] = shared[key]
+        self.bytes_up = self.bytes_down = self.calls_v2 = 0
+
+    def __call__(self, linear: str, b: Any) -> Any:
+        from pgw.hemask.wire import MaskgenItem, pack_b, unpack_y
+        from pgw.service.handler import _maskgen_item
+
+        kern = self.kern[linear]
+        cols = int(b.shape[1])
+        body = pack_b(b, self.q)
+        y = _maskgen_item(kern, MaskgenItem(linear, cols, body, 16, self.q))
+        self.bytes_up += len(body)
+        self.bytes_down += len(y)
+        return unpack_y(y, (kern.out_features, cols), 16, self.q)
+
+
 def _hint_store(root: Path, pack: Any, rank: int, q_bits: int) -> tuple[Any, float]:
     from gateway_gpu_bench import _hints
 
@@ -200,7 +234,10 @@ def gateway(args: argparse.Namespace) -> dict[str, Any]:
     kw: dict[str, Any] = {}
     if args.wire_v2 or cfg.get("wire_v2"):
         kw = {"params": p, "row_norms": hints.meta["row_norms"]}
-    remote = _TimedRemote(RemoteMulmod64(client, pack.fingerprint, out_f, timeout_s=900.0, q_bits=p.q, **kw))
+    if cfg.get("inproc"):
+        remote = _TimedRemote(_InProcProvider(pack, p.q, "cuda:1" if torch.cuda.device_count() > 1 else "cpu"))
+    else:
+        remote = _TimedRemote(RemoteMulmod64(client, pack.fingerprint, out_f, timeout_s=900.0, q_bits=p.q, **kw))
     t0 = time.perf_counter()
     be = HEMaskBackend(pack, ring, hints, remote, groups_per_call=args.groups_per_call, max_inflight=args.inflight,
                        encrypt=encrypt, device=device, pass_bytes=int(cfg.get("pass_mb", 1024)) << 20)
@@ -464,7 +501,8 @@ def main() -> None:
             name = cfg.partition(":")[0]
             if name not in CONFIGS:
                 raise SystemExit(f"unknown config {name}; choose from {sorted(CONFIGS)}")
-            genv = dict(base_env, CUDA_VISIBLE_DEVICES="" if args.cpu else args.gateway_gpu,
+            vis = args.gateway_gpu + ("," + args.provider_gpu if CONFIGS[name].get("inproc") else "")
+            genv = dict(base_env, CUDA_VISIBLE_DEVICES="" if args.cpu else vis,
                         **CONFIGS[name].get("env", {}))
             rfile = work / f"result-{name}.json"
             cmd = [sys.executable, __file__, *common, "--gateway", cfg, "--port", str(port), "--work", str(work),
