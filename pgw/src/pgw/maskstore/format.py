@@ -416,9 +416,14 @@ class SegmentFile:
                 details={"segment_id": self.header.segment_id, "chunk": ref.index},
             ) from exc
 
-    def decrypt_into(self, ref: ChunkRef) -> bytearray:
-        """Like :meth:`decrypt`, but into a fresh zeroable ``bytearray`` (no immutable plaintext copy,
-        and about 7x faster for mask chunks). Zeroed and discarded if authentication fails."""
+    def decrypt_into(self, ref: ChunkRef, out: bytearray | None = None) -> bytearray:
+        """Like :meth:`decrypt`, but into a zeroable ``bytearray`` (no immutable plaintext copy, and
+        about 7x faster for mask chunks). Zeroed and discarded if authentication fails.
+
+        ``out``: a bytearray of exactly ``ref.plain_len`` bytes to decrypt into (a chunk buffer the
+        caller is done with; it is overwritten). Reusing buffers saves the allocation and page
+        faults of a fresh 1 MiB buffer per chunk. On failure ``out`` is zeroed.
+        """
         if self._aead is None or self._dek is None:
             raise MaskStoreError("segment data key not available")
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -427,12 +432,23 @@ class SegmentFile:
         n = len(ct) - 16
         if n < 0:
             raise MaskStoreError(f"segment {self.header.segment_id} chunk {ref.index} is truncated")
-        out = bytearray(n + 15)  # update_into needs room for a partial block
+        reuse = out is not None and len(out) == n
+        if not reuse:
+            out = bytearray(n + 15)  # update_into needs room for a partial block
+        assert out is not None
+        tail = bytearray(31) if reuse else None  # last <= 16 bytes of a reused (exact-size) buffer
         try:
-            d = Cipher(algorithms.AES(bytes(self._dek)), modes.GCM(chunk_nonce(self._nonce_prefix, ref.index),
-                                                                    ct[n:])).decryptor()
+            d = Cipher(algorithms.AES(self._dek), modes.GCM(chunk_nonce(self._nonce_prefix, ref.index),
+                                                             ct[n:])).decryptor()
             d.authenticate_additional_data(chunk_aad(self.header_digest, ref.index))
-            got = d.update_into(memoryview(ct)[:n], out)
+            cv = memoryview(ct)
+            if tail is None:
+                got = d.update_into(cv[:n], out)
+            else:
+                head = max(0, n - 16)
+                got = d.update_into(cv[:head], out) if head else 0
+                got += d.update_into(cv[head:n], tail)
+                out[head:n] = memoryview(tail)[: n - head]
             d.finalize()
             if got != n:  # pragma: no cover - GCM is a stream mode
                 raise InvalidTag
@@ -442,7 +458,11 @@ class SegmentFile:
                 f"segment {self.header.segment_id}: chunk {ref.index} failed authentication (corrupt or tampered)",
                 details={"segment_id": self.header.segment_id, "chunk": ref.index},
             ) from exc
-        del out[n:]
+        finally:
+            if tail is not None:
+                tail[:] = bytes(31)
+        if not reuse:
+            del out[n:]
         return out
 
     def iter_chunks(self) -> list[ChunkRef]:

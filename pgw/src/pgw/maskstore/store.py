@@ -226,6 +226,109 @@ class IntegrityReport:
 LowWaterListener = Callable[[Inventory], None]
 
 
+def _zero_array(a: np.ndarray | torch.Tensor) -> None:
+    """Zero a secret-derived array in place with one single-threaded ``memset``-like fill.
+
+    ``torch.Tensor.zero_`` parallelises over OpenMP threads above ~32k elements; on a busy host the
+    thread hand-off costs milliseconds per call (a 7B reservation's ``close`` spent >100 ms there).
+    """
+    n = a.numpy() if isinstance(a, torch.Tensor) else a
+    if n.size:
+        if not n.flags.writeable:  # read-only views handed to callers; the owner may zero them
+            n.flags.writeable = True
+        n.fill(0)
+
+
+class _CheckEntry:
+    """Freivalds vectors of one (segment, linear): ``u``/``uW`` int64 tensors plus the compact form."""
+
+    __slots__ = ("compact", "refs", "token", "u", "uw")
+
+    def __init__(self, token: tuple[str, str], u: torch.Tensor, uw: torch.Tensor):
+        self.token = token
+        self.u = u
+        self.uw = uw
+        self.compact: tuple[tuple[str, str], np.ndarray, np.ndarray] | None = None
+        self.refs = 0
+
+    def wipe(self) -> None:
+        _zero_array(self.u)
+        _zero_array(self.uw)
+        if self.compact is not None:
+            _zero_array(self.compact[1])
+            _zero_array(self.compact[2])
+            self.compact = None
+
+
+class _SharedChecks:
+    """Freivalds vectors shared by every open reservation of one segment (in this process).
+
+    ``u`` and ``uW`` depend only on the segment (its seed and model) and the linear, never on the
+    slot, so N concurrent sessions reading one segment need one copy, not N: for a 7B model that is
+    ~50 MB and ~30 ms of derivation per session saved. Entries are keyed by the segment id *and* the
+    hash of its seed (plus fingerprint and ring), so two segments can never share vectors by
+    accident. An entry is reference-counted by the reservations that read it and zeroed when the
+    last of them closes (the same lifetime rule as before, per segment instead of per session).
+    """
+
+    def __init__(self) -> None:
+        # Re-entrant: ``MaskReservation.__del__`` -> ``close`` -> :meth:`release` can run from a gc pass
+        # triggered by an allocation inside one of this registry's critical sections (same thread);
+        # a plain Lock would deadlock there.
+        self._lock = threading.RLock()
+        self._d: dict[tuple[str, ...], _CheckEntry] = {}
+
+    def acquire(self, skey: tuple[str, ...], build: Callable[[], tuple[torch.Tensor, torch.Tensor]],
+                token: tuple[str, str]) -> _CheckEntry:
+        """The entry for ``skey`` with one more reference (``build`` runs outside the lock)."""
+        with self._lock:
+            hit = self._d.get(skey)
+            if hit is not None:
+                hit.refs += 1
+                return hit
+        u, uw = build()
+        with self._lock:
+            hit = self._d.get(skey)
+            if hit is None:
+                hit = self._d[skey] = _CheckEntry(token, u, uw)
+                u = uw = None  # type: ignore[assignment]
+            hit.refs += 1
+        if u is not None:  # another reservation built it first: drop our copy
+            _zero_array(u)
+            _zero_array(uw)
+        return hit
+
+    def compact(self, e: _CheckEntry, k: int) -> tuple[tuple[str, str], np.ndarray, np.ndarray]:
+        with self._lock:
+            if e.compact is None:
+                dt = np.uint32 if k <= 32 else np.uint64
+                un = e.u.numpy().astype(dt)
+                uwn = e.uw.numpy().astype(dt)
+                un.flags.writeable = False
+                uwn.flags.writeable = False
+                e.compact = (e.token, un, uwn)
+            return e.compact
+
+    def release(self, skey: tuple[str, ...]) -> None:
+        with self._lock:
+            e = self._d.get(skey)
+            if e is None:  # pragma: no cover - defensive
+                return
+            e.refs -= 1
+            if e.refs > 0:
+                return
+            del self._d[skey]
+        e.wipe()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._d)
+
+
+#: Process-wide registry (reservations of every store object and of the in-memory ring share it).
+_SHARED_CHECKS = _SharedChecks()
+
+
 # =================================================================================================
 # Reservation
 # =================================================================================================
@@ -240,6 +343,7 @@ class _Extent:
         self._secrets: bytearray | None = None
         self.seed: bytes | None = None
         self._uw_views: list[memoryview] = []
+        self._seed_id: str | None = None
 
     def secrets(self) -> tuple[bytes, list[memoryview]]:
         if self._secrets is None:
@@ -247,6 +351,13 @@ class _Extent:
             self.seed, self._uw_views = self.seg.layout.secrets_split(self._secrets)
         assert self.seed is not None
         return self.seed, self._uw_views
+
+    def seed_id(self) -> str:
+        """``seed_hash`` of the segment seed (keys the shared Freivalds vectors)."""
+        if self._seed_id is None:
+            seed, _ = self.secrets()
+            self._seed_id = seed_hash(bytes(seed))
+        return self._seed_id
 
     def wipe(self) -> None:
         self._uw_views = []
@@ -332,9 +443,9 @@ class MaskReservation:
         self._cursor: dict[str, int] = dict.fromkeys(self._linears, 0)
         # (extent index, linear key) -> (chunk index, packed plaintext)
         self._chunk_cache: dict[tuple[int, str], tuple[int, bytearray]] = {}
-        self._uw_cache: dict[tuple[int, str], tuple[torch.Tensor, torch.Tensor]] = {}
-        # (extent index, linear key) -> (token, u, uw) in the narrowest word width (see checks_compact)
-        self._compact_cache: dict[tuple[int, str], tuple[tuple[str, str], np.ndarray, np.ndarray]] = {}
+        # (extent index, linear key) -> shared Freivalds vectors (one copy per segment, see _SharedChecks)
+        self._uw_cache: dict[tuple[int, str], _CheckEntry] = {}
+        self._uw_keys: dict[tuple[int, str], tuple[str, ...]] = {}
         # (extent index, linear key) -> ChaCha20 key of that extent's "r" stream (HKDF once, not per take)
         self._rkey_cache: dict[tuple[int, str], bytearray] = {}
         # linear key -> index of the extent its cursor is in (cursors only move forward)
@@ -478,6 +589,83 @@ class MaskReservation:
             r, wr = self._take_locked(key, ei, ex, start, rows, compact=True)
         return rows, r, wr, chk
 
+    def _claim_plan_locked(
+        self, key: str, max_rows: int, checks: bool, pending: set[int], deferred: list[bytearray],
+        ends: list[tuple[int, str]],
+    ) -> tuple[Any, ...]:
+        """One request of :func:`take_checked_many` (lock held): advance the cursor and either take the
+        rows now (``("done", rows, r, wr, chk)``) or return a native job (``("job", rows, job, chk)``).
+
+        Never zeroes a buffer a pending job reads: replaced chunk buffers go to ``deferred`` and
+        extent-end cleanups to ``ends`` (both run after the native call)."""
+        self._alive()
+        start = self._cursor[key]
+        if start >= self._slots:
+            raise MaskExhaustedError(
+                "mask reservation exhausted", details={"linear": key, "needed": max_rows, "remaining": 0}
+            )
+        ei = self._cursor_extent(key, start)
+        ex = self._extents[ei]
+        rows = min(max_rows, ex.end_row - start)
+        chk = self._compact_locked(key, ei) if checks else None
+        li, lin = self._linears[key]
+        slot0 = ex.ext.start + (start - ex.first_row)
+        cs = ex.seg.header.chunk_slots
+        j = slot0 // cs
+        in_chunk = slot0 - j * cs
+        layout = ex.seg.layout
+        if key in self._stage or in_chunk + rows > layout.chunk_rows(j):
+            # staged rows, or rows spanning two chunks: the ordinary path (same rows, same order)
+            r, wr = self._take_locked(key, ei, ex, start, rows, compact=True)
+            return ("done", rows, r, wr, chk)
+        self._cursor[key] = start + rows  # advance first: these rows are never handed out again
+        cached = self._chunk_cache.get((ei, lin.id))
+        if cached is None or cached[0] != j:
+            reuse = None
+            if cached is not None:
+                del self._chunk_cache[(ei, lin.id)]
+                if id(cached[1]) in pending:
+                    deferred.append(cached[1])  # an earlier job of this batch still reads it
+                else:
+                    reuse = cached[1]
+                    _zero(reuse)
+            cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j), reuse))
+            self._chunk_cache[(ei, lin.id)] = cached
+        buf = cached[1]
+        pending.add(id(buf))
+        rkey = self._rkey_cache.get((ei, key))
+        if rkey is None:
+            seed, _ = ex.secrets()
+            rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
+        if slot0 + rows >= ex.ext.start + ex.ext.count:
+            ends.append((ei, key))
+        return ("job", rows, (rkey, lin.in_features, slot0, buf, in_chunk, rows, lin.out_features), chk)
+
+    def _claim_needs_slow_locked(self, key: str, max_rows: int) -> bool:
+        """Whether :meth:`_claim_plan_locked` would take ``key``'s next rows by the ordinary path."""
+        start = self._cursor[key]
+        if start >= self._slots:
+            return False
+        if key in self._stage:
+            return True
+        ei = self._cursor_extent(key, start)
+        ex = self._extents[ei]
+        rows = min(max_rows, ex.end_row - start)
+        slot0 = ex.ext.start + (start - ex.first_row)
+        cs = ex.seg.header.chunk_slots
+        j = slot0 // cs
+        return slot0 - j * cs + rows > ex.seg.layout.chunk_rows(j)
+
+    def _claim_finish_locked(self, ends: list[tuple[int, str]]) -> None:
+        """Extent-end cleanup of :meth:`_derive_locked` for the batch's jobs (after the native call)."""
+        for ei, key in ends:
+            done = self._chunk_cache.pop((ei, key), None)
+            if done is not None:
+                _zero(done[1])
+            rkey = self._rkey_cache.pop((ei, key), None)
+            if rkey is not None:
+                _zero(rkey)
+
     #: Most bytes of prefetched (staged) rows one reservation holds (``r`` and ``W r`` together).
     stage_max_bytes = 64 << 20
 
@@ -610,9 +798,15 @@ class MaskReservation:
                 j = slot // cs
                 cached = self._chunk_cache.get((ei, lin.id))
                 if cached is None or cached[0] != j:
+                    old_buf = None
                     if cached is not None:
-                        _zero(cached[1])
-                    cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j)))
+                        # Done with the previous chunk: drop it from the cache first (a failed
+                        # decrypt below must not leave a zeroed buffer cached), zero it, and let
+                        # the next chunk reuse its memory.
+                        del self._chunk_cache[(ei, lin.id)]
+                        old_buf = cached[1]
+                        _zero(old_buf)
+                    cached = (j, _decrypt_buf(ex.seg, layout.wr_chunk(li, j), old_buf))
                     self._chunk_cache[(ei, lin.id)] = cached
                 buf = cached[1]
                 in_chunk = slot - j * cs
@@ -662,8 +856,8 @@ class MaskReservation:
     def checks_u64(self, lid: LinearId | str) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`checks` as read-only uint64 numpy views of the cached vectors (no copy).
 
-        For the gateway's per-call hot path. The views are wiped (zeroed) when the reservation
-        closes; callers must not keep them beyond the call.
+        For the gateway's per-call hot path. The views are shared per segment and wiped (zeroed) when
+        the last open reservation of that segment closes; callers must not keep them beyond the call.
         """
         u, uw = self._checks_cached(lid)
         u64 = u.numpy().view(np.uint64)
@@ -678,7 +872,8 @@ class MaskReservation:
 
         The vectors depend only on the segment and the linear, so any two reservations (or extents)
         with equal tokens have identical vectors: the gateway checks rows of several sessions
-        against them in one pass. The arrays are wiped when the reservation closes.
+        against them in one pass. The arrays are shared per segment and wiped when the last open
+        reservation of that segment closes.
         """
         key = self._key(lid)
         with self._lock:
@@ -688,17 +883,12 @@ class MaskReservation:
             return self._compact_locked(key, ei)
 
     def _compact_locked(self, key: str, ei: int) -> tuple[tuple[str, str], np.ndarray, np.ndarray]:
-        hit = self._compact_cache.get((ei, key))
-        if hit is None:
-            u, uw = self._uw_locked(key, ei)
-            dt = np.uint32 if self.ring.k <= 32 else np.uint64
-            un = u.numpy().astype(dt)
-            uwn = uw.numpy().astype(dt)
-            un.flags.writeable = False
-            uwn.flags.writeable = False
-            hit = ((self._extents[ei].ext.segment_id, key), un, uwn)
-            self._compact_cache[(ei, key)] = hit
-        return hit
+        e = self._uw_cache.get((ei, key))
+        if e is None:
+            self._uw_locked(key, ei)
+            e = self._uw_cache[(ei, key)]
+        c = e.compact
+        return c if c is not None else _SHARED_CHECKS.compact(e, self.ring.k)
 
     def _checks_cached(self, lid: LinearId | str) -> tuple[torch.Tensor, torch.Tensor]:
         key = self._key(lid)
@@ -718,11 +908,18 @@ class MaskReservation:
             ex = self._extents[ei]
             li, lin = self._linears[key]
             seed, uw_views = ex.secrets()
-            u = SeedExpander(seed).ring_uniform((self._checks, lin.out_features), self.ring.k, "u", key)
-            uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
-            hit = (u, uw)
+            h = ex.seg.header
+
+            def build() -> tuple[torch.Tensor, torch.Tensor]:
+                u = SeedExpander(seed).ring_uniform((self._checks, lin.out_features), self.ring.k, "u", key)
+                uw = unpack_ring(uw_views[li], (self._checks, lin.in_features), self.ring)
+                return u, uw
+
+            skey = (h.fingerprint, h.ring, ex.ext.segment_id, ex.seed_id(), key, str(self._checks))
+            hit = _SHARED_CHECKS.acquire(skey, build, (ex.ext.segment_id, key))
             self._uw_cache[(ei, key)] = hit
-        return hit
+            self._uw_keys[(ei, key)] = skey
+        return hit.u, hit.uw
 
     # ---- lifecycle -------------------------------------------------------------------------------
     def close(self) -> None:
@@ -734,15 +931,11 @@ class MaskReservation:
             for _, buf in self._chunk_cache.values():
                 _zero(buf)
             self._chunk_cache.clear()
-            for u, uw in self._uw_cache.values():
-                u.zero_()
-                uw.zero_()
+            # Shared Freivalds vectors: zeroed when the last open reservation of the segment closes.
             self._uw_cache.clear()
-            for _, cu, cuw in self._compact_cache.values():
-                for a in (cu, cuw):  # read-only to callers; this owner may zero them
-                    a.flags.writeable = True
-                    a.fill(0)
-            self._compact_cache.clear()
+            for skey in self._uw_keys.values():
+                _SHARED_CHECKS.release(skey)
+            self._uw_keys.clear()
             for rk in self._rkey_cache.values():
                 _zero(rk)
             self._rkey_cache.clear()
@@ -781,25 +974,178 @@ _native_mask_rows_key = native.native_available("mask_rows_with_key")
 _native_unpack32 = native.native_available("unpack_rows_u32")
 
 
+#: ``r`` outputs of at most this many bytes use the native ChaCha20 (call overhead dominates) ...
+_NATIVE_PAD_SMALL = 8 << 10
+#: ... and of at least this many (the native side splits them over threads). In between, OpenSSL's
+#: AVX-512 ChaCha20 writing straight into the output (``pgw.core.prng._ring_stream_into``) measured
+#: 2-2.5x faster than the single-threaded native keystream (3.9 vs 1.4-1.8 GB/s per core).
+_NATIVE_PAD_LARGE = 8 << 20
+
+
+def _native_pad(nbytes: int) -> bool:
+    return nbytes <= _NATIVE_PAD_SMALL or nbytes >= _NATIVE_PAD_LARGE
+
+
 def _mask_rows(seed: bytes, cols: int, k: int, slot0: int, rows: int, key: str) -> torch.Tensor:
     """The one-time pad rows ``r`` (``SeedExpander(seed).ring_uniform_rows(..., "r", key)``).
 
-    The native ChaCha20 is bit-identical; it is used where it measured faster (OpenSSL's AVX-512
-    ChaCha wins for single wide rows)."""
-    if _native_mask_rows and (rows * cols * 8 >= 512 * 1024 or cols <= 4096):
+    Both implementations are bit-identical; each is used where it measured faster."""
+    if _native_mask_rows and _native_pad(rows * cols * 8):
         return torch.from_numpy(native.fast.mask_rows(seed, ["r", key], cols, k, slot0, rows))
     return SeedExpander(seed).ring_uniform_rows(cols, k, slot0, rows, "r", key)
 
 
 def _mask_rows_keyed(key: bytearray, cols: int, k: int, slot0: int, rows: int) -> torch.Tensor:
     """:func:`_mask_rows` from the stream key (``SeedExpander.stream_key(seed, "r", linear)``)."""
-    if _native_mask_rows_key and (rows * cols * 8 >= 512 * 1024 or cols <= 4096):
+    if _native_mask_rows_key and _native_pad(rows * cols * 8):
         return torch.from_numpy(native.fast.mask_rows_with_key(key, cols, k, slot0, rows))
     return SeedExpander.ring_uniform_rows_with_key(key, cols, k, slot0, rows)
 
 
-def _decrypt_buf(seg: Any, ref: Any) -> bytearray:
-    """Decrypt a chunk into a zeroable bytearray (segment readers without ``decrypt_into``: copy)."""
+_native_claim = native.native_available("claim_rows_many")
+
+#: Threads of the native batched claim (``PGW_MASK_CLAIM_THREADS``; 0 = automatic: the CPU count,
+#: bounded by the work: about one thread per 256 KiB of output).
+try:
+    CLAIM_THREADS = max(0, int(os.environ.get("PGW_MASK_CLAIM_THREADS", "0") or 0))
+except ValueError:  # pragma: no cover - bad environment value: automatic
+    CLAIM_THREADS = 0
+
+
+def take_checked_many(
+    requests: Sequence[tuple[Any, LinearId | str, int, bool]], *, threads: int | None = None
+) -> list[tuple[int, torch.Tensor, torch.Tensor, tuple[tuple[str, str], np.ndarray, np.ndarray] | None]]:
+    """``[res.take_checked(lid, max_rows, checks) for res, lid, max_rows, checks in requests]``, batched.
+
+    The batched-decode claim: one call takes the next rows of many ``(session, linear)`` pairs. Every
+    request gets exactly the rows the sequential loop would give it (same order per reservation and
+    linear, same values, bit for bit). With the native extension the pads ``r`` and the ``W r`` rows
+    of all requests are produced by one ``pgw_fast.claim_rows_many`` call on several threads with the
+    GIL released, instead of two native calls plus Python glue per request.
+
+    All reservation locks of the batch are held (in a fixed order) from the first cursor move until
+    the outputs exist, so a concurrent ``prefetch``/``take`` of the same reservation never sees a
+    half-done batch and no chunk buffer a job reads is replaced or zeroed underneath it. Single use is
+    unchanged: each cursor advances before anything is derived. On failure, the rows handed out so
+    far stay consumed (burned) and every output already produced is zeroed.
+
+    Requests on reservations that are not plain :class:`MaskReservation` objects (rings chained with
+    the store, test doubles), K > 32 rings, or builds without the native function fall back to the
+    sequential loop. ``threads``: native threads (``None``: ``PGW_MASK_CLAIM_THREADS``, 0 = auto).
+
+    Raises:
+        Whatever ``take_checked`` raises; nothing of a batch whose request is invalid (closed or
+        exhausted reservation, unknown linear, ``max_rows <= 0``) is consumed when it can be detected
+        before the first cursor moves.
+    """
+    reqs = list(requests)
+    fast = (
+        _native_claim
+        and all(type(r[0]) is MaskReservation and r[0].ring.k <= 32 for r in reqs)
+        and len({r[0].ring.k for r in reqs}) <= 1  # one native call unpacks/reduces with one ring width
+    )
+    if not fast or not reqs:
+        out: list[Any] = []
+        try:
+            for res, lid, rows, chk in reqs:
+                out.append(res.take_checked(lid, rows, chk))
+        except BaseException:
+            for o in out:
+                _wipe_claim(o)
+            raise
+        return out
+    keys: list[str] = []
+    for res, lid, rows, _ in reqs:
+        keys.append(res._key(lid))
+        if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
+            raise ConfigError(f"rows must be a positive int, got {rows!r}")
+    uniq: dict[int, MaskReservation] = {}
+    for r in reqs:
+        uniq.setdefault(id(r[0]), r[0])
+    locks = [uniq[i]._lock for i in sorted(uniq)]
+    nthreads = CLAIM_THREADS if threads is None else max(0, int(threads))
+    k = reqs[0][0].ring.k
+    results: list[Any] = [None] * len(reqs)
+    jobs: list[tuple[Any, ...]] = []
+    job_at: list[int] = []  # request index of each job
+    job_meta: list[tuple[int, Any]] = []  # (rows, checks) of each job
+    deferred: list[bytearray] = []
+    ends: dict[int, list[tuple[int, str]]] = {i: [] for i in uniq}
+    pending: set[int] = set()
+
+    def flush() -> None:
+        """Run the queued jobs; then zero replaced buffers and do extent-end cleanups."""
+        try:
+            if jobs:
+                outs = native.fast.claim_rows_many(jobs, k, nthreads)
+                for i, (rows, chk), (r_np, wr_np) in zip(job_at, job_meta, outs, strict=True):
+                    results[i] = (rows, torch.from_numpy(r_np), torch.from_numpy(wr_np), chk)
+        finally:
+            jobs.clear()
+            job_at.clear()
+            job_meta.clear()
+            pending.clear()
+            for buf in deferred:
+                _zero(buf)
+            deferred.clear()
+            for rid, e in ends.items():
+                uniq[rid]._claim_finish_locked(e)
+                e.clear()
+
+    for lk in locks:
+        lk.acquire()
+    try:
+        # pre-check what can be checked without moving a cursor (closed, exhausted)
+        need: dict[tuple[int, str], int] = {}
+        for (res, _, _, _), key in zip(reqs, keys, strict=True):
+            res._alive()
+            need[(id(res), key)] = need.get((id(res), key), 0) + 1
+        for (rid, key), n in need.items():
+            res = uniq[rid]
+            if res._slots - res._cursor[key] < n:  # each request takes at least one row
+                raise MaskExhaustedError(
+                    "mask reservation exhausted",
+                    details={"linear": key, "needed": n, "remaining": res._slots - res._cursor[key]},
+                )
+        try:
+            for i, ((res, _, rows, chk), key) in enumerate(zip(reqs, keys, strict=True)):
+                if jobs and res._claim_needs_slow_locked(key, rows):
+                    flush()  # the ordinary path may replace or zero a chunk buffer a queued job reads
+                p = res._claim_plan_locked(key, rows, chk, pending, deferred, ends[id(res)])
+                if p[0] == "done":
+                    results[i] = (p[1], p[2], p[3], p[4])
+                else:
+                    jobs.append(p[2])
+                    job_at.append(i)
+                    job_meta.append((p[1], p[3]))
+            flush()
+        except BaseException:
+            jobs.clear()
+            for o in results:
+                if o is not None:
+                    _wipe_claim(o)
+            with contextlib.suppress(Exception):
+                flush()  # zero replaced buffers, extent-end cleanups (no jobs left to run)
+            raise
+    finally:
+        for lk in reversed(locks):
+            lk.release()
+    return results
+
+
+def _wipe_claim(o: Any) -> None:
+    for t in (o[1], o[2]):
+        if isinstance(t, torch.Tensor) and t.numel():
+            t.numpy().fill(0)
+
+
+def _decrypt_buf(seg: Any, ref: Any, reuse: bytearray | None = None) -> bytearray:
+    """Decrypt a chunk into a zeroable bytearray (segment readers without ``decrypt_into``: copy).
+
+    ``reuse``: a zeroed chunk buffer the caller is done with; :class:`SegmentFile` decrypts into it
+    when its size matches (saves a fresh allocation and its page faults per chunk)."""
+    if reuse is not None and isinstance(seg, SegmentFile) and len(reuse) == ref.plain_len:
+        return seg.decrypt_into(ref, reuse)
     into = getattr(seg, "decrypt_into", None)
     if into is not None:
         return into(ref)  # type: ignore[no-any-return]

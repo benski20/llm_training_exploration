@@ -48,6 +48,7 @@ from pgw.maskstore.store import (
     MaskStore,
     SegmentWriter,
     SlotExtent,
+    take_checked_many,
 )
 
 __all__ = [
@@ -56,5 +57,6 @@ __all__ = [
     "KmsKeyProvider", "LowWaterListener", "MaskReservation", "MaskStore", "MaskStoreSettings", "MonotonicCounter",
     "PartnerSigningKey", "Pkcs11KeyProvider", "ProviderCounter", "RecipientKeyPair", "SegmentFile", "SegmentHeader",
     "SegmentLayout", "SegmentLinear", "SegmentWriter", "SlotExtent", "StaticKeyProvider", "TpmNvCounter",
-    "TrustedPartners", "WrappedKey", "hpke_wrap_for_recipient", "sign_segment", "write_key_file",
+    "TrustedPartners", "WrappedKey", "hpke_wrap_for_recipient", "sign_segment", "take_checked_many",
+    "write_key_file",
 ]
