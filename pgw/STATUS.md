@@ -26,7 +26,8 @@ Design and numbers: [research/plans/he-gateway-decrypt.md](research/plans/he-gat
   bit-identical to the dense path and faster; any native error falls back to dense. Optional hints in NTT form
   (`PGW_FACTORY_HE_HINT_NTT_GB`, default 0; twice the hint's size in RAM). Measured locally (4 vCPUs with AMX,
   0.5B shapes, decrypt only): 7.6 -> 1.9 ms/slot at 16 groups per pass, 6.1 -> 5.1 at 2 groups (1.5-2.0 with
-  hints in NTT form). GPU-side end-to-end numbers: not measured yet.
+  hints in NTT form). Kaggle 4-vCPU Xeon without fast int8 (measured): 16.5 -> 8.2 ms/slot at 0.5B and 75 -> 38 at
+  7B (16 groups), 5.9 and 27 with hints in NTT form; GPU-provider end-to-end numbers not measured (GPU session cap).
 - **Masks of local linears** (`PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o`, opt-in): for gateways with
   `local_linears = attention` (and no `local_max_rows`) the factory no longer makes qkv/o masks (16% of mask
   bytes at 0.5B). The gateway declares at start-up which linears it sends (`MaskStore.require_linears`);

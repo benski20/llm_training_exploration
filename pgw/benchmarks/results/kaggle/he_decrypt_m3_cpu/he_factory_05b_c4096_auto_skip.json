@@ -1,0 +1,58 @@
+{
+ "mode": "he",
+ "engine": "cpu_f64",
+ "fastmm_engine": "cpu_f64",
+ "layers": 4,
+ "slots": 4096,
+ "chunk_slots": 4096,
+ "init_s": 0.86,
+ "warmup_s": 5.12,
+ "wall_s": 32.857,
+ "provider_s": 25.164,
+ "slots_per_s_full_model": 20.78,
+ "slots_per_s_full_model_gateway_only": 88.74,
+ "stages": {
+  "rng": 1.92,
+  "gemm": 31.366,
+  "check": 1.382
+ },
+ "he": {
+  "groups": 128,
+  "encrypt_s": 7.246,
+  "remote_s": 42.738,
+  "decrypt_s": 4.873,
+  "wall_s": 31.365,
+  "passes": 8,
+  "max_inflight": 1
+ },
+ "device_stats": null,
+ "encrypt": "ntt_pre",
+ "decrypt": "auto",
+ "decrypt_paths": {
+  "ntt": 16
+ },
+ "decrypt_calibration": {
+  "1": {
+   "dense_s": 0.015735407999954987,
+   "ntt_s": 0.012392160999979751,
+   "rows": 256,
+   "identical": "True",
+   "choice": "ntt"
+  },
+  "16": {
+   "dense_s": 0.06920471099999759,
+   "ntt_s": 0.04042257100002189,
+   "rows": 256,
+   "identical": "True",
+   "choice": "ntt"
+  }
+ },
+ "skip_kinds": [
+  "o",
+  "qkv"
+ ],
+ "hint_ntt_gb": 0.0,
+ "env": {},
+ "gpu": null,
+ "cpus": 4
+}

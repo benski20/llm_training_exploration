@@ -1,0 +1,88 @@
+{
+ "preset": "qwen2.5-0.5b",
+ "rank": 16,
+ "k": 32,
+ "dense_engine": "cpu_f64",
+ "ntt": {
+  "primes": [
+   536870401,
+   536865281,
+   536856577
+  ],
+  "half": 77368301288923437828400128,
+  "isa": "avx2",
+  "lanes": 16,
+  "version": "0.1.0"
+ },
+ "torch_threads": 2,
+ "cpus": 4,
+ "hint_file": false,
+ "drop_cache": false,
+ "per_kind": {
+  "qkv": {
+   "m": 1152,
+   "rows_timed": 1152,
+   "g2_dense_us_per_row_group": 30.444,
+   "g2_ntt_us_per_row_group": 23.104,
+   "g2_ntt_pre_us_per_row_group": 7.428,
+   "g2_identical": true,
+   "g16_dense_us_per_row_group": 14.211,
+   "g16_ntt_us_per_row_group": 7.204,
+   "g16_ntt_pre_us_per_row_group": 5.369,
+   "g16_identical": true
+  },
+  "o": {
+   "m": 896,
+   "rows_timed": 896,
+   "g2_dense_us_per_row_group": 27.016,
+   "g2_ntt_us_per_row_group": 23.378,
+   "g2_ntt_pre_us_per_row_group": 7.708,
+   "g2_identical": true,
+   "g16_dense_us_per_row_group": 15.063,
+   "g16_ntt_us_per_row_group": 7.583,
+   "g16_ntt_pre_us_per_row_group": 5.507,
+   "g16_identical": true
+  },
+  "gate_up": {
+   "m": 9728,
+   "rows_timed": 4096,
+   "g2_dense_us_per_row_group": 28.058,
+   "g2_ntt_us_per_row_group": 22.263,
+   "g2_ntt_pre_us_per_row_group": 6.71,
+   "g2_identical": true,
+   "g16_dense_us_per_row_group": 13.597,
+   "g16_ntt_us_per_row_group": 6.768,
+   "g16_ntt_pre_us_per_row_group": 4.793,
+   "g16_identical": true
+  },
+  "down": {
+   "m": 896,
+   "rows_timed": 896,
+   "g2_dense_us_per_row_group": 26.986,
+   "g2_ntt_us_per_row_group": 23.445,
+   "g2_ntt_pre_us_per_row_group": 7.758,
+   "g2_identical": true,
+   "g16_dense_us_per_row_group": 15.182,
+   "g16_ntt_us_per_row_group": 7.773,
+   "g16_ntt_pre_us_per_row_group": 5.597,
+   "g16_identical": true
+  }
+ },
+ "page_cache_dropped": null,
+ "ms_per_slot": {
+  "g2_dense": 33.413,
+  "g2_ntt": 26.732,
+  "g2_ntt_pre": 8.221,
+  "g16_dense": 16.476,
+  "g16_ntt": 8.24,
+  "g16_ntt_pre": 5.883
+ },
+ "slots_per_s_decrypt_only": {
+  "g2_dense": 29.9,
+  "g2_ntt": 37.4,
+  "g2_ntt_pre": 121.6,
+  "g16_dense": 60.7,
+  "g16_ntt": 121.4,
+  "g16_ntt_pre": 170.0
+ }
+}

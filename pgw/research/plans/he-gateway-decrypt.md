@@ -98,7 +98,41 @@ Same box, real factory loop (`gateway_gpu_bench.py --mode he`, 1 layer of 0.5B, 
 gateway, provider in process **on the same CPU**), **measured**: 4096-slot chunk, decrypt 2.15 s -> 0.54 s and
 wall 6.6 s -> 3.2 s (`dense` -> `auto`); 512-slot chunk, decrypt 0.45 s -> 0.30 s.
 
-GPU (T4/H100) numbers: not measured yet. The Kaggle job `pgw-he-decrypt-m3` exists but was not run (GPU session cap); measure with `benchmarks/gateway_gpu_bench.py --mode he` as listed in that job.
+Kaggle, **measured**, CPU-only machine (4 vCPUs, Intel Xeon @ 2.20 GHz, no fast int8 engine, so `dense` is the
+`cpu_f64` engine's product): the `pgw-he-decrypt-m3` steps run as a CPU-only variant (`pgw-he-decrypt-m3-cpu`,
+provider in process on the same CPU) because the account's two GPU sessions were taken for over an hour.
+Raw output: `benchmarks/results/kaggle/he_decrypt_m3_cpu/`. Exactness tests there: 46 passed. All paths
+bit-identical in the bench.
+
+Decrypt only, ms per slot (all linears):
+
+| model, groups per pass | dense | ntt | ntt_pre |
+|---|---|---|---|
+| 0.5B, 2 | 33.4 | 26.7 | 8.2 |
+| 0.5B, 16 | 16.5 | 8.2 | 5.9 |
+| 7B, 2 | 161 | 123 | 37.7 |
+| 7B, 16 | 75.2 | 37.7 | 27.2 |
+
+Factory loop, 4 layers of 0.5B (scaled to 24), `encrypt = ntt_pre`, provider **on the same 4 CPUs** (so the
+wall time is dominated by the CPU provider and is not a deployment number; the decrypt seconds are the point):
+
+| chunk | decrypt mode | decrypt s | wall s | slots/s (full model, CPU provider) |
+|---|---|---|---|---|
+| 512 | dense (before) | 3.53 | 8.29 | 10.3 |
+| 512 | auto (-> ntt) | 2.93 | 7.77 | 11.0 |
+| 512 | ntt_pre (4 GB) | 0.93 | 6.05 | 14.1 |
+| 4096 | dense (before) | 11.7 | 44.8 | 15.2 |
+| 4096 | auto (-> ntt) | 6.26 | 39.5 | 17.3 |
+| 4096 | ntt_pre (4 GB) | 4.63 | 37.7 | 18.1 |
+| 4096 | auto + skip qkv,o | 4.87 | 32.9 | 20.8 |
+
+GPU (T4 provider) end-to-end numbers: not measured (GPU session cap); the GPU job is `pgw-he-decrypt-m3`.
+
+**Estimate for the Modal line** (512 slots: encrypt 1.61, provider 9.40, decrypt 4.12 s; serial): decrypt
+falls by 1.2x (`auto`) to about 3.4 s, or to about 1.2 s with hints in NTT form (needs about 15 GB of RAM at
+0.5B; the demo container has 8 GB), and with 4096-slot passes by 2-4x more per slot. Because the stages are
+serial, the slot rate gains at most decrypt's share (25%): about 1.05x (`auto`) to 1.25x (`ntt_pre`) at 512
+slots. The 5x target needs the provider round trip and the serial stage order fixed (other packages).
 
 ## 6. What is left
 
