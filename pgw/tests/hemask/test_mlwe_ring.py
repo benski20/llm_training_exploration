@@ -189,3 +189,33 @@ def test_backend_ntt_pre_exact_and_same_ciphertexts(q_bits: int, monkeypatch: py
         assert np.array_equal(x.b, y.b) and np.array_equal(x.secret, y.secret)
     with pytest.raises(ConfigError):
         HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider, encrypt="bogus")
+
+
+@needs_ntt
+@pytest.mark.parametrize("q_bits", [56, 64])
+def test_backend_ntt_pre_with_device_decryption_is_exact(q_bits: int) -> None:
+    """``encrypt='ntt_pre'`` with a device: CPU NTT encryption, decryption as fused device passes (here the
+    device code on CPU tensors). Exact ``W8 r``; the device holds no public matrix (ntt_pre keeps it)."""
+    import torch
+
+    from pgw.hemask.backend import HEMaskBackend
+
+    from .test_native_sampling import _Hints, _Pack, _Provider, _ref_wr, _ring_for
+
+    rng = np.random.default_rng(100 + q_bits)
+    weights = {"a": rng.integers(-127, 128, size=(40, 96)).astype(np.int8),
+               "b": np.where(rng.random((24, 160)) < 0.5, -127, 127).astype(np.int8)}
+    ring = _ring_for(q_bits)
+    be = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), _Provider(weights, q_bits), groups_per_call=2,
+                       max_inflight=2, groups_per_pass=3, encrypt="ntt_pre", device="cpu")
+    assert be._fast is not None and be._dev is not None and be.engine == "device:cpu"
+    assert be._dev.a.numel() == 0
+    for key, rows in (("a", 5 * DEGREE + 3), ("b", 77)):
+        w = weights[key]
+        r = rng.integers(0, 1 << ring.k, size=(rows, w.shape[1]), dtype=np.int64)
+        got = be.matmul(key, torch.from_numpy(r))
+        assert np.array_equal(got.numpy(), _ref_wr(w.astype(np.int64), r, ring.k))
+    # without a device the decryption stays on the CPU engines (the behaviour before this option)
+    cpu = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), _Provider(weights, q_bits), encrypt="ntt_pre",
+                        device=None)
+    assert cpu._dev is None

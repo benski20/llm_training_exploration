@@ -34,8 +34,10 @@ memory at start-up minus 1 GiB; ``0`` streams every pass).
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
+import time
 import warnings
 from collections import OrderedDict
 from typing import Any
@@ -130,33 +132,76 @@ def combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.
     return acc
 
 
-class _HintCache:
-    """Device copies of hints, least recently used first out, within ``budget`` bytes."""
+def _stale_s() -> float:
+    raw = os.environ.get("PGW_HEMASK_GPU_HINT_STALE_S", "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else 600.0
+    except ValueError:
+        return 600.0
 
-    def __init__(self, budget: int):
+
+class _HintCache:
+    """Device copies of hints within ``budget`` bytes.
+
+    The factory reads every linear's hint once per pass, in the same order, so the access pattern is a
+    cycle over all hints. When they do not all fit (7B: 34 GB of hints against a 16 GB GPU), least
+    recently used eviction evicts each hint just before it is needed again: every access misses and
+    re-uploads the whole hint. So entries used within the last ``stale_s`` seconds
+    (``PGW_HEMASK_GPU_HINT_STALE_S``, default 600) are never evicted: a hint that does not fit is
+    streamed instead, the resident ones keep hitting, and hints of a pack or ring that is no longer
+    generated make room once they go stale (least recently used first). ``stale_s = 0`` is plain LRU.
+    Which hints are resident never changes a result (cached and streamed passes compute the same bits).
+    """
+
+    def __init__(self, budget: int, stale_s: float | None = None):
         self.budget = max(0, int(budget))
         self.used = 0
+        self.stale_s = _stale_s() if stale_s is None else max(0.0, float(stale_s))
         self._d: OrderedDict[str, torch.Tensor] = OrderedDict()
+        self._last: dict[str, float] = {}
+
+    @staticmethod
+    def _size(t: torch.Tensor) -> int:
+        return t.numel() * t.element_size()
 
     def get(self, key: str) -> torch.Tensor | None:
         t = self._d.get(key)
         if t is not None:
             self._d.move_to_end(key)
+            self._last[key] = time.monotonic()
         return t
 
-    def put(self, key: str, t: torch.Tensor) -> bool:
-        size = t.numel() * t.element_size()
+    def _evictable(self, now: float) -> list[str]:
+        """Keys that may be evicted, least recently used first."""
+        return [k for k in self._d if now - self._last.get(k, -math.inf) >= self.stale_s]
+
+    def fits(self, size: int) -> bool:
+        """Whether ``put`` of ``size`` bytes would succeed (without evicting anything yet)."""
         if size > self.budget:
             return False
-        while self.used + size > self.budget and self._d:
-            _, old = self._d.popitem(last=False)
-            self.used -= old.numel() * old.element_size()
+        if self.used + size <= self.budget:
+            return True
+        free = self.budget - self.used + sum(self._size(self._d[k]) for k in self._evictable(time.monotonic()))
+        return size <= free
+
+    def put(self, key: str, t: torch.Tensor) -> bool:
+        size = self._size(t)
+        if not self.fits(size):
+            return False
+        now = time.monotonic()
+        for k in self._evictable(now):
+            if self.used + size <= self.budget:
+                break
+            self.used -= self._size(self._d.pop(k))
+            self._last.pop(k, None)
         self._d[key] = t
+        self._last[key] = now
         self.used += size
         return True
 
     def clear(self) -> None:
         self._d.clear()
+        self._last.clear()
         self.used = 0
 
 
@@ -229,7 +274,8 @@ class DeviceHE:
         t = self.cache.get(key)
         if t is not None:
             return t
-        if hint.nbytes > self.cache.budget:
+        if not self.cache.fits(hint.nbytes):  # streamed: uploading it would evict a hint still in use
+            self.stats["hint_misses_streamed"] = self.stats.get("hint_misses_streamed", 0) + 1
             return None
         try:
             t = torch.empty(hint.shape, dtype=torch.int8, device=self.dev)

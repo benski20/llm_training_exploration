@@ -171,3 +171,55 @@ def test_hint_cache_falls_back_to_streaming_when_the_device_is_full(monkeypatch:
     assert eng.cache.budget == eng.cache.used == hint.nbytes
     assert eng.hint_on_device("a", hint) is not None  # resident hints stay
     assert eng.stats["hint_oom"] == 1
+
+
+def test_hint_cache_keeps_hints_in_use_instead_of_thrashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cycle over more hints than fit: LRU evicted each hint right before its next use (no hits ever); the
+    cache now keeps the hints in use and streams the rest, and stale hints still make room."""
+    p = HEParams(k=32, rank=8)
+    a = public_matrix(bytes(32), 8, p)
+    hint = np.ones((16, 6, p.dim), dtype=np.int8)
+    clock = [1000.0]
+    monkeypatch.setattr(devmm.time, "monotonic", lambda: clock[0])
+
+    def cycle(eng: devmm.DeviceHE, passes: int) -> int:
+        hits = 0
+        for _ in range(passes):
+            for key in "abcd":
+                hits += eng.cache.get(key) is not None
+                eng.hint_on_device(key, hint)
+                clock[0] += 1.0
+        return hits
+
+    monkeypatch.setenv("PGW_HEMASK_GPU_HINT_STALE_S", "0")  # plain LRU: the old behaviour
+    lru = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=2 * hint.nbytes)
+    assert cycle(lru, 3) == 0 and lru.stats["hint_uploads"] == 12
+    monkeypatch.delenv("PGW_HEMASK_GPU_HINT_STALE_S")
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=2 * hint.nbytes)
+    assert cycle(eng, 3) == 4  # a and b resident from the second pass on; c and d streamed
+    assert eng.stats["hint_uploads"] == 2 and eng.stats["hint_misses_streamed"] == 6
+    assert eng.cache.used == eng.cache.budget
+    clock[0] += 601.0  # a and b went stale (another pack is being generated now): they make room
+    assert eng.hint_on_device("x", hint) is not None and eng.cache.get("a") is None
+    assert eng.cache.get("b") is not None and eng.cache.used == 2 * hint.nbytes
+
+
+def test_streamed_and_cached_hints_decrypt_the_same() -> None:
+    """Whatever the cache keeps, decryption gives the same bits (cached, streamed, after eviction)."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(11)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    planes = to_planes(a)[:, :a_plane_count(p)]
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    for budget in (0, hint.nbytes, 4 * hint.nbytes):
+        eng = devmm.DeviceHE(planes, p, "cpu", hint_budget=budget)
+        for key in ("x", "y", "x", "z", "x"):
+            cts, b = eng.encrypt(r, n)
+            y = matmul_mod64(w, b, fast=False) & p.q_mask
+            out = np.zeros((rows, m), dtype=np.int64)
+            eng.decrypt_into(key, hint, [(y, cts, 0)], out, p.delta_bits, 32)
+            assert np.array_equal(out, want), (budget, key)
