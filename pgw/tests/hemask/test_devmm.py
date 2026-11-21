@@ -150,3 +150,24 @@ def test_cuda_device_factory_matches_local_factory(tiny_pack: Any, tmp_path: Pat
     assert local.keys() == he.keys()
     for key in local:
         assert torch.equal(local[key], he[key].cpu()), key
+
+
+def test_hint_cache_falls_back_to_streaming_when_the_device_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Device memory taken by another backend or process: the hint is streamed (same bits), not an error."""
+    p = HEParams(k=32, rank=8)
+    a = public_matrix(bytes(32), 8, p)
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=1 << 30)
+    hint = np.ones((16, 6, p.dim), dtype=np.int8)
+    assert eng.hint_on_device("a", hint) is not None
+    real_empty = torch.empty
+
+    def full(*args: Any, **kwargs: Any) -> torch.Tensor:
+        if kwargs.get("device") is not None:
+            raise torch.cuda.OutOfMemoryError("full")
+        return real_empty(*args, **kwargs)
+
+    monkeypatch.setattr(devmm.torch, "empty", full)
+    assert eng.hint_on_device("b", hint) is None
+    assert eng.cache.budget == eng.cache.used == hint.nbytes
+    assert eng.hint_on_device("a", hint) is not None  # resident hints stay
+    assert eng.stats["hint_oom"] == 1

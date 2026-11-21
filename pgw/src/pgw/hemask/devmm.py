@@ -231,10 +231,22 @@ class DeviceHE:
             return t
         if hint.nbytes > self.cache.budget:
             return None
-        t = torch.empty(hint.shape, dtype=torch.int8, device=self.dev)
-        rows = max(1, (64 << 20) // max(1, hint.shape[1] * hint.shape[2]))
-        for r0 in range(0, hint.shape[0], rows):
-            t[r0:r0 + rows].copy_(self._upload_block(hint[r0:r0 + rows]))
+        try:
+            t = torch.empty(hint.shape, dtype=torch.int8, device=self.dev)
+            rows = max(1, (64 << 20) // max(1, hint.shape[1] * hint.shape[2]))
+            for r0 in range(0, hint.shape[0], rows):
+                t[r0:r0 + rows].copy_(self._upload_block(hint[r0:r0 + rows]))
+        except torch.cuda.OutOfMemoryError:
+            # the budget is estimated per backend at start-up; other backends of this process (several
+            # packs/rings) or another process on the same GPU may have taken the memory since: keep the
+            # hints already resident and stream the rest (same bits, slower)
+            self.cache.budget = self.cache.used
+            self.stats["hint_oom"] = self.stats.get("hint_oom", 0) + 1
+            log.warning("encrypted mask factory: device memory full while caching the hint of %s; hint cache "
+                        "capped at %.2f GiB, the other hints are streamed", key, self.cache.used / 2**30)
+            if self.dev.type == "cuda":  # pragma: no cover - GPU only
+                torch.cuda.empty_cache()
+            return None
         if not self.cache.put(key, t):  # pragma: no cover - checked above
             return None
         self.stats["hint_uploads"] += 1
@@ -259,6 +271,9 @@ class DeviceHE:
         cts: list[MaskCiphertext] = []
         host_e = np.empty((n, DEGREE * g), dtype=np.int8)
         host_st = np.empty((DEGREE * g, p.dim), dtype=np.int8)
+        st: torch.Tensor | None = None
+        ed: torch.Tensor | None = None
+        rd: torch.Tensor | None = None
         try:
             for gi, seed in enumerate(seeds):
                 smat = sample_secret(seed, p.rank)
@@ -270,9 +285,15 @@ class DeviceHE:
             st = self._to_dev(host_st)
             ed = self._to_dev(host_e)
             rd = self._to_dev(np.ascontiguousarray(r, dtype=np.int64))
+        except BaseException:
+            for t in (st, ed, rd):  # an upload failed part-way: wipe what reached the device
+                if t is not None:
+                    t.zero_()
+            raise
         finally:
             host_st.fill(0)
             host_e.fill(0)
+        assert st is not None and ed is not None and rd is not None
         npl = self.a.shape[1]
         part = pad = msg = None
         try:
@@ -320,12 +341,18 @@ class DeviceHE:
             c0 += y.shape[1]
         valid = np.flatnonzero(slot >= 0)
         dst = slot[valid]
+        st: torch.Tensor | None = None
         try:
             st = self._to_dev(smat_t)
             yd = self._to_dev(ys.view(np.int64))
+        except BaseException:
+            if st is not None:  # the secrets reached the device but the replies did not: wipe them
+                st.zero_()
+            raise
         finally:
             smat_t.fill(0)
             ys.fill(0)
+        assert st is not None
         vidx = torch.from_numpy(valid).to(self.dev)
         dev_hint = self.hint_on_device(key, hint)
         half = 1 << (delta_bits - 1)
