@@ -32,6 +32,9 @@ must review. Ranks below 12 are refused by :func:`check_rank`.
 from __future__ import annotations
 
 import math
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -52,6 +55,19 @@ __all__ = [
 ]
 
 _U64 = np.uint64
+#: Ciphertext rows combined per task (keeps one block of every group in L2).
+_COMBINE_ROWS = 256
+_POOL: ThreadPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> ThreadPoolExecutor:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=max(1, min(4, os.cpu_count() or 1)),
+                                       thread_name_prefix="pgw-hemask-combine")
+        return _POOL
 
 # ---------------------------------------------------------------------------------------------
 # Parameter profiles and the acknowledgement gate
@@ -242,23 +258,36 @@ class PretransformedEncryptor:
             finally:
                 secs.fill(0)
             try:
-                # The pad becomes the ciphertexts in place: b_g = pad[:, g] + e_g + (r_g^T << delta).
+                # The pad becomes the ciphertexts in place: b_g = pad[:, g] + e_g + (r_g^T << delta),
+                # combined in blocks of rows on a few threads (numpy releases the GIL).
                 pad3 = pad.reshape(n, len(seeds), DEGREE)
                 delta = _U64(p.delta_bits)
-                for gi, seed in enumerate(seeds):
-                    v = pad3[:, gi, :]
-                    e = sample_noise(seed, n, p.eta)
-                    np.add(v, e.view(_U64), out=v)  # int64 noise, two's complement: same as astype
-                    e.fill(0)
-                    rg = np.ascontiguousarray(r[gi * DEGREE:(gi + 1) * DEGREE], dtype=np.int64)
-                    msg = rg.view(_U64) << delta
-                    rows_g = rg.shape[0]
-                    vr = v[:, :rows_g]
-                    np.add(vr, msg.T, out=vr)
-                    msg.fill(0)
-                    if not np.may_share_memory(rg, r):  # only a converted copy, never the caller's masks
-                        rg.fill(0)
-                np.bitwise_and(pad, p.q_mask, out=pad)
+                noise = [sample_noise(seed, n, p.eta) for seed in seeds]  # native, multi-threaded
+                rgs = [np.ascontiguousarray(r[gi * DEGREE:(gi + 1) * DEGREE], dtype=np.int64)
+                       for gi in range(len(seeds))]
+                try:
+                    def combine(c0: int) -> None:
+                        c1 = min(n, c0 + _COMBINE_ROWS)
+                        for gi, (e, rg) in enumerate(zip(noise, rgs, strict=True)):
+                            v = pad3[c0:c1, gi, :]
+                            np.add(v, e[c0:c1].view(_U64), out=v)  # int64 noise, two's complement wrap
+                            msg = rg[:, c0:c1].view(_U64) << delta
+                            vr = v[:, :rg.shape[0]]
+                            np.add(vr, msg.T, out=vr)
+                            msg.fill(0)
+                        np.bitwise_and(pad[c0:c1], p.q_mask, out=pad[c0:c1])
+
+                    starts = range(0, n, _COMBINE_ROWS)
+                    if len(starts) > 1:
+                        list(_pool().map(combine, starts))
+                    else:
+                        combine(0)
+                finally:
+                    for e in noise:
+                        e.fill(0)
+                    for rg in rgs:
+                        if not np.may_share_memory(rg, r):  # only a converted copy, never the caller's masks
+                            rg.fill(0)
                 cts = [MaskCiphertext(b=pad3[:, gi, :], secret=smats[gi],
                                       rows=min(DEGREE, r.shape[0] - gi * DEGREE)) for gi in range(len(seeds))]
             except BaseException:
