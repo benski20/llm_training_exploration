@@ -122,6 +122,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         client = NullClient()
     backend = MaskedBackend(pack, None, client, ring, pack.fingerprint, min_soundness_bits=20)
     model = TransformerModel(pack, backend)
+    if args.float_threads:
+        print(f"float threads {args.float_threads}: {model.enable_float_threads(args.float_threads)} "
+              f"(rows {model.float_threads_rows})", file=sys.stderr)
     fp = pack.fingerprint
 
     def factory(n: int) -> Any:
@@ -131,7 +134,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             return res
         return WindowedReservation(res, lambda s: store.reserve(fp, ring, s), cap=n, window=args.window)
 
-    gen = Generator(model, None, max_batch=32, session_factory=factory, pingpong=args.pingpong)
+    gen = Generator(model, None, max_batch=max(32, args.streams), session_factory=factory, pingpong=args.pingpong)
     params = SamplingParams(max_tokens=args.tokens, temperature=0.0, ignore_eos=True, logprobs=0)
     prompts = [[(7 * s + 3 * i) % (pack.arch.vocab_size - 1) + 1 for i in range(prompt_len)]
                for s in range(args.streams)]
@@ -147,7 +150,21 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     for _ in range(args.repeat):
         st0 = backend.stats.snapshot()
         svc0 = TimedClient.service_s
+        prof = None
+        if args.profile:
+            import cProfile
+
+            prof = cProfile.Profile()
+            prof.enable()
         wall, outs = await once()
+        if prof is not None:
+            import io
+            import pstats
+
+            prof.disable()
+            buf = io.StringIO()
+            pstats.Stats(prof, stream=buf).sort_stats(args.profile_sort).print_stats(args.profile_top)
+            print(buf.getvalue(), file=sys.stderr)
         st1 = backend.stats.snapshot()
         toks = sum(len(o.token_ids) for o in outs)
         decode_steps = args.tokens  # per stream
@@ -197,6 +214,11 @@ def main() -> None:
     ap.add_argument("--pingpong", action="store_true", help="engine two-cohort ping-pong (steps of > 4 sequences)")
     ap.add_argument("--service-delay-ms", type=float, default=0.0,
                     help="with --null-service: latency added to every round trip (network + GPU stand-in)")
+    ap.add_argument("--float-threads", type=int, default=0,
+                    help="model float_threads (self-checked decode thread scope; 0: off, the default)")
+    ap.add_argument("--profile", action="store_true", help="cProfile the timed runs (table on stderr)")
+    ap.add_argument("--profile-sort", default="tottime")
+    ap.add_argument("--profile-top", type=int, default=40)
     args = ap.parse_args()
     print(json.dumps(asyncio.run(run(args)), indent=2))
 

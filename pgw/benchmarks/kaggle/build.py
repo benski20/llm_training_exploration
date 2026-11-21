@@ -47,6 +47,13 @@ BUILD_NATIVE = {
     "timeout": 1200,
 }
 
+#: X4 concurrency job: only gpu_validate.py (and its probe) of the benchmarks, no tests or top-level docs (keeps the
+#: bundle under Kaggle's size limit).
+X4_EXCLUDE = ["scripts", "tests", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md", "src/pgw/moe",
+              "benchmarks/kaggle/probe_int_mm.py",
+              *sorted(f"benchmarks/{p.name}" for p in HERE.parent.glob("*.py")
+                      if p.name not in ("gpu_validate.py", "gateway_probe.py"))]
+
 JOBS: dict[str, dict] = {
     # run 27 (after the phase-2 merge; run 26 had the same steps after phase 1): 7B single stream with the decode-only accounting and per-trip split,
     # aggregate throughput at 4/8/16 streams, the network floor and the gateway CPU profile (all layers warm).
@@ -504,6 +511,32 @@ JOBS: dict[str, dict] = {
             "--loadtest", "1x1", "8x1", "32x1", "1x8", "1x32", "4x32", "1x128", "--loadtest-tokens", "2",
             "--factory-bench-slots", "256"],
          "timeout": 6600},
+    ]},
+    # X4: aggregate online throughput vs concurrent chats on one T4 (gateway co-located over loopback, masks
+    # pre-filled by the factory before the gateway starts, so maskgen is not the limit). 0.5B then 1.5B: 1, 8, 32,
+    # 64 identical greedy requests at once on one gateway (every output compared with the plaintext reference),
+    # then 64 requests over 2 and 3 gateway processes on the same store and service (request i to gateway i mod N),
+    # then the service alone (pgw.service.loadtest, N sessions x 1 row: the provider's ceiling without a gateway).
+    # A/B: model config float_threads 1 (the self-checked decode thread scope) as variant "ft1"; the sharded
+    # gateways use it too. Reported per level: generated tokens/s, gateway and service CPU cores used, engine steps.
+    "pgw-x4-concurrency": {"exclude": X4_EXCLUDE, "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true; df -h /tmp", "timeout": 60},
+        {"kind": "validate", "label": "qwen05_conc", "args": [
+            "--model", QWEN05, "--label", "qwen05_conc", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "24",
+            "--concurrent", "1", "8", "32", "64", "--variant", 'ft1={"float_threads": 1}',
+            "--shard-gateways", "2", "3", "--shard-concurrent", "64", "--shard-config", '{"float_threads": 1}',
+            "--loadtest", "1x1", "8x1", "32x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
+         "timeout": 3600},
+        {"kind": "shell", "name": "free_disk", "cmd": "rm -rf /tmp/pgw_bench/qwen05_conc; df -h /tmp", "timeout": 300},
+        {"kind": "validate", "label": "qwen15_conc", "args": [
+            "--model", QWEN15, "--label", "qwen15_conc", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "16",
+            "--concurrent", "1", "64", "--variant", 'ft1={"float_threads": 1}',
+            "--shard-gateways", "2", "--shard-concurrent", "64", "--shard-config", '{"float_threads": 1}',
+            "--loadtest", "1x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
+         "timeout": 3600},
     ]},
     # fallback if 7B does not fit / is too slow
     "pgw-gpu-3b": {"steps": [
