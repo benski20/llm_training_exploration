@@ -543,7 +543,18 @@ sends the service anything it does not already see (`docs/operations/install-on-
   the same `x_hat` bytes and public header fields; any refusal resends the byte-identical request on
   the stream channel. Turns on the TripEngine (constant-time masking kernels, deferred Freivalds output
   half joined before the session's next payload; the model's last linear always checked synchronously)
-  and synchronous decode passes. No TCP lane.
+  and synchronous decode passes. `auto`/`required` take UDS tickets only.
+- `lane = "tls"`: decode calls over the service's TCP+TLS trip lane (`PGW_SERVICE_LANE=tcp`,
+  `PGW_SERVICE_LANE_PORT`): TLS 1.3 only (rustls on both ends; the service's own certificate; the gateway
+  verifies it against `service_ca_file` as the `service_url` host and connects only to that host, on the
+  ticket's port; ALPN `pgw-lane/1`). The ticket comes from `lane/open` on the regular channel (bearer token
+  and client certificate checked as for compute; revoking the token closes the lane connections). When the
+  gateway presented a client certificate on `lane/open`, the ticket is bound to that certificate's SHA-256
+  and only a TLS connection presenting the same certificate (verified against the service's client CA) can
+  spend it; `tls.require_client_cert` is enforced in the lane's handshake too. Frames, request ids, body
+  bytes and the call schedule are those of the UDS lane (the same public header fields as the stream
+  channel's msgpack request); any call it cannot take goes byte-identically to the blocking stream lane
+  (`stream`), then to the stream channel. TripEngine and synchronous decode as with `auto`.
 - `spec_rows` + `spec_strict_passes` (both required together): every decode pass carries exactly
   `spec_rows` rows per sequence (masked random filler rows), and after the answer dummy passes run until
   the pass count equals the generated length, so neither row counts nor pass counts depend on the text

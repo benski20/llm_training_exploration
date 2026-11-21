@@ -198,3 +198,18 @@ def test_customer_memory_matches_boot() -> None:
     assert m is not None
     assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
         boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])
+
+
+def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) -> None:
+    from pgw.gateway.config import GatewayModelConfig
+
+    boot = _boot()
+    assert boot.lane_options("stream") == {"lane": "stream"} and boot.lane_options("tls") == {"lane": "tls"}
+    with pytest.raises(ValueError):
+        boot.lane_options("uds")
+    c = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
+                           service_url="https://127.0.0.1:8443",
+                           **{**boot.GATEWAY_MODEL_OPTIONS, **boot.lane_options("tls")})
+    assert c.lane == "tls"
+    col = (MODAL_DIR / "colocated.py").read_text()
+    assert "lane_port=LANE_PORT if lane == \"tls\" else None" in col and "boot.lane_options(lane)" in col

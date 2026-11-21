@@ -15,6 +15,24 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-21: TCP+TLS trip lane (package L1, opt-in)
+
+The service's native trip lane now also listens on TCP with TLS 1.3 (`PGW_SERVICE_LANE=tcp`,
+`PGW_SERVICE_LANE_PORT`; rustls, the service's certificate, client certificates verified against its client
+CA), and the gateway has `lane = "tls"`: decode trips use the native `pgw_fast.TripChannel` (rustls, a
+48-byte binary header, one `writev`, the GIL released for the whole trip, spin-then-block wait) instead of
+the WebSocket stream lane. Encryption and authentication are unchanged or stricter: the gateway verifies
+the server against `service_ca_file` as the `service_url` host and connects only to that host; the
+single-use ticket comes from `lane/open` on the regular channel (bearer token, client certificate) and is
+bound to the client certificate that asked for it. Same masked bytes, request ids and call schedule; any
+call the lane cannot take goes byte-identically to the blocking stream lane. Gateway-level tests show
+greedy and seeded-sampled answers bit-identical (`tests/gateway/test_speed_wiring.py`); lane tests in
+`tests/service/test_lane_tls.py`. On the service, lane calls without a CUDA graph now run inline on the
+event loop when the device is idle (one thread hop instead of a task). Modal: `launch.py --placement
+colocated --lane tls` (default off). Measured here per 1-row loopback TLS call (0.5B shapes, stub kernels,
+load 30-40): stream lane p50/mean 346/795 us, TCP+TLS lane 219/395 us, transport alone 23/74 us; with two
+busy Python threads in the gateway 2157/3100 vs 280/975 us. Details: `deploy/modal/README.md`.
+
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 
 The phase-A packages now run on the gateway's production path (all per-model settings, off by default;

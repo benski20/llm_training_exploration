@@ -265,7 +265,7 @@ class Pair:
 
 def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
                lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto",
-               spec_rows: int = 0) -> Pair:
+               spec_rows: int = 0, lane: str = "stream") -> Pair:
     """Clear the per-run Dict keys and spawn the pair in the chosen placement (two calls, or one
     co-located call; ``placement`` may be the legacy ``i6pn`` bool)."""
     lookup = lookup or modal.Function.from_name
@@ -274,7 +274,8 @@ def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
     for k in RUN_KEYS:
         live.pop(k, None)
     if placement == "colocated":
-        call = lookup(*COLOCATED_FUNCTION).spawn(run_id, ttl_s, e2e, local_linears, spec_rows)
+        extra = (lane,) if lane != "stream" else ()  # --lane tls: the provider's TCP+TLS trip lane
+        call = lookup(*COLOCATED_FUNCTION).spawn(run_id, ttl_s, e2e, local_linears, spec_rows, *extra)
         print(f"run {run_id} (colocated): spawned both parties in one container ({call.object_id})", flush=True)
         return Pair(run_id, placement, call, call, time.time())
     pfn, cfn = FUNCTIONS[placement == "i6pn"]
@@ -424,9 +425,12 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     """:func:`spawn_pair` with the customer gateway's ``--local-linears`` and ``--spec-rows`` choices."""
     local = getattr(args, "local_linears", "auto")
     spec_rows = int(getattr(args, "spec_rows", 0) or 0)
+    lane = getattr(args, "lane", "stream") or "stream"
 
     def spawn(live: Any, placement: str | bool, ttl_s: int, e2e: bool) -> Pair:
-        return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows)
+        # a tunnel fallback of a co-located --lane tls run uses the stream lane (no provider lane port there)
+        return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows,
+                          lane=lane if normalize_placement(placement) == "colocated" else "stream")
 
     return spawn
 
@@ -535,6 +539,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
                          "(the tunnel: yes); 'attention' = always; 'off' = every linear on the provider")
+    ap.add_argument("--lane", choices=["stream", "tls"], default="stream",
+                    help="customer gateway's trip lane: 'stream' (default) = the blocking stream lane (WebSocket, "
+                         "msgpack, Python TLS); 'tls' (--placement colocated only) = the provider also serves its "
+                         "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
+                         "header, GIL released per trip; same masked bytes, request ids and schedule; misses fall "
+                         "back to the stream lane). Exact; the e2e comparison still applies")
     args = ap.parse_args(argv)
     try:
         env_placement = os.environ.get("PGW_MODAL_PLACEMENT") or None
@@ -568,6 +578,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--schedule-timeout-min must be positive")
     if args.max_trip_ms is not None and not args.e2e:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
+    if args.lane == "tls" and args.placement != "colocated":
+        ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
         ap.error("--max-trip-ms must be positive")
     args.model = args.model.strip().lower()

@@ -607,3 +607,23 @@ def test_container_reimport_keeps_deploy_choices(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setenv(var, val)
     prov2, cust2 = _load("provider"), _load("customer")
     assert prov2.MODEL_NAME == "qwen2.5-0.5b-instruct" and cust2.DRAFT is False and cust2.CUSTOMER_GPU is None
+
+
+def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_I6PN", raising=False)
+    monkeypatch.delenv("PGW_MODAL_PLACEMENT", raising=False)
+    monkeypatch.delenv("PGW_MODAL_CUSTOMER_GPU", raising=False)
+    assert launch.parse_args([]).lane == "stream"  # default unchanged
+    with pytest.raises(SystemExit):  # the provider's lane port is on its loopback only
+        launch.parse_args(["--lane", "tls"])
+    args = launch.parse_args(["--placement", "colocated", "--lane", "tls"])
+    assert args.lane == "tls"
+    log: list[tuple[str, str, tuple[Any, ...]]] = []
+    monkeypatch.setattr(launch.modal.Function, "from_name", lambda app, name: FakeFunction(app, name, log))
+    spawn = launch._spawner(args)
+    p = spawn(FakeDict(), "colocated", 600, True)
+    assert log[-1][:2] == launch.COLOCATED_FUNCTION and log[-1][2] == (p.run_id, 600, True, "auto", 0, "tls")
+    spawn(FakeDict(), "tunnel", 600, True)  # the tunnel fallback keeps the stream lane
+    assert log[-1][2][-2:] == ("auto", 0)
+    p = launch.spawn_pair(FakeDict(), "colocated", 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
+    assert log[-1][2] == (p.run_id, 600, False, "auto", 0)  # --lane stream: the call is unchanged
