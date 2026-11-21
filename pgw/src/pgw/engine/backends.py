@@ -1910,7 +1910,7 @@ class MaskedBackend(LinearBackend):
 
     # ---- E2: exact local linears ------------------------------------------------------------------
     def configure_local_linears(self, mode: str = "off", *, rtt_s: float | None = None,
-                                reps: int = 5) -> frozenset[str]:
+                                reps: int = 5, device: str = "cpu") -> frozenset[str]:
         """Decide once, at start-up, which linears the gateway computes itself (E2; public configuration).
 
         ``off``: none. ``attention``: qkv and o of every layer, computed exactly from the pack's int8
@@ -1921,6 +1921,11 @@ class MaskedBackend(LinearBackend):
         (at least 16 trips), else stays ``off``. The decision never changes per token. Call before
         serving (not concurrently with calls). The local int8 weights are loaded here (start-up), so
         a request never reads a weight.
+
+        ``device`` (``cpu``, ``cuda`` or ``auto``) is where the exact integer product of the local
+        linears runs; quantization, the range check and dequantization stay on the CPU. A gateway GPU
+        is used only after :meth:`_local_device_check` found its integer outputs identical to the CPU's
+        on layer 0 (and, for ``auto``, faster); otherwise the CPU is kept. Decided once, at start-up.
 
         Returns:
             The linear kinds computed locally.
@@ -1938,6 +1943,12 @@ class MaskedBackend(LinearBackend):
                 kinds = self._calibrate_kinds(rtt_s, max(1, int(reps)), policy)
             else:
                 kinds = self._calibrate_local(rtt_s, max(1, int(reps)), policy)
+        policy["device"] = "cpu"
+        if kinds and device != "cpu":
+            dev = self._local_device_choice(device, max(1, int(reps)), policy)
+            if dev is not None:
+                self._local_w = _WeightCache(self.pack, dev, _to_int_weight)
+                policy["device"] = str(dev)
         if kinds:
             for spec in self.pack.linear_specs():  # type: ignore[attr-defined]
                 if spec.id.kind.value in kinds:
@@ -1948,8 +1959,78 @@ class MaskedBackend(LinearBackend):
         policy["kinds"] = tuple(sorted(kinds))
         policy["max_rows"] = self.local_max_rows
         self.local_policy = policy
-        log.info("local linears: %s -> %s", mode, ", ".join(sorted(kinds)) or "none (every linear remote)")
+        log.info("local linears: %s -> %s%s", mode, ", ".join(sorted(kinds)) or "none (every linear remote)",
+                 f" on {policy['device']}" if kinds else "")
         return kinds
+
+    def _local_device_choice(self, want: str, reps: int, policy: dict[str, Any]) -> torch.device | None:
+        """The device of the local integer products (``None``: the CPU); see :meth:`configure_local_linears`."""
+        if want not in ("auto", "cuda") and not want.startswith("cuda:"):
+            raise ConfigError(f"local linear device must be cpu, cuda or auto, got {want!r}")
+        if not torch.cuda.is_available():
+            policy["device_reason"] = "no CUDA device"
+            if want != "auto":
+                log.warning("local linears: device %s requested but CUDA is not available; using the CPU", want)
+            return None
+        dev = torch.device("cuda" if want == "auto" else want)  # pragma: no cover - GPU only
+        return self._local_device_check(dev, reps, policy, need_faster=want == "auto")  # pragma: no cover
+
+    def _local_device_check(self, dev: torch.device, reps: int, policy: dict[str, Any], *,
+                            need_faster: bool) -> torch.device | None:
+        """``dev`` if its exact integer products equal the CPU's on layer 0's local linears (1 and 7 rows,
+        seeded inputs; with ``need_faster`` also a lower median one-row time), else ``None``."""
+        assert self._local_w is not None
+        dev_w = _WeightCache(self.pack, dev, _to_int_weight)
+        specs = [s for s in self.pack.linear_specs() if s.id.layer == 0  # type: ignore[attr-defined]
+                 and s.id.kind.value in LOCAL_ATTENTION_KINDS]
+        gen = torch.Generator().manual_seed(0)
+        t_cpu = t_dev = 0.0
+        try:
+            for spec in specs:
+                meta: _MaskedMeta = self._meta.get(spec.id)
+                for rows in (1, 7):
+                    x = torch.randn(rows, spec.in_features, generator=gen)
+                    xq, _ = quantize_activations(x, self.ring, meta.wnorm if self.ring.cap else None)
+                    ref = self._local_int_product(self._local_w.get(spec.id), xq)
+                    got = self._local_int_product(dev_w.get(spec.id), xq)
+                    if not torch.equal(ref, got):
+                        policy["device_reason"] = f"{dev} integer products differ from the CPU's ({spec.id})"
+                        log.error("local linears: %s; using the CPU", policy["device_reason"])
+                        return None
+                xq, _ = quantize_activations(torch.randn(1, spec.in_features, generator=gen), self.ring,
+                                             meta.wnorm if self.ring.cap else None)
+                for cache, slot in ((self._local_w, 0), (dev_w, 1)):
+                    times = []
+                    for _ in range(reps + 1):
+                        t0 = time.perf_counter()
+                        self._local_int_product(cache.get(spec.id), xq)
+                        times.append(time.perf_counter() - t0)
+                    med = sorted(times[1:])[len(times[1:]) // 2]
+                    if slot == 0:
+                        t_cpu += med
+                    else:
+                        t_dev += med
+        except Exception as exc:  # a missing kernel or a cuBLAS refusal: the CPU is kept
+            policy["device_reason"] = f"{dev} failed: {type(exc).__name__}: {str(exc)[:200]}"
+            log.error("local linears: %s; using the CPU", policy["device_reason"])
+            return None
+        policy["device_check"] = {"cpu_s": t_cpu, "device_s": t_dev, "identical": True}
+        if need_faster and not t_dev < t_cpu:
+            policy["device_reason"] = f"{dev} not faster ({t_dev:.3g} s vs {t_cpu:.3g} s per layer)"
+            return None
+        policy["device_reason"] = f"{dev} identical and {t_cpu / max(t_dev, 1e-12):.2f}x the CPU's speed"
+        return dev
+
+    def _local_int_product(self, w: _IntWeight, xq: torch.Tensor) -> torch.Tensor:
+        """Exact ``xq @ W8^T`` (int64, on the CPU) with the weight's device doing the integer GEMM."""
+        dev = w.w8t.device
+        if dev.type == "cpu":
+            return exact_int_matmul(xq, w.w8t, self.ring.a)
+        xd = xq.to(dev)  # pragma: no cover - GPU only
+        try:  # pragma: no cover - GPU only
+            return exact_int_matmul(xd, w.w8t, self.ring.a).cpu()
+        finally:  # pragma: no cover - GPU only
+            _wipe(xd)
 
     def _calibrate_local(self, rtt_s: float | None, reps: int, policy: dict[str, Any]) -> frozenset[str]:
         if rtt_s is None:
@@ -2038,7 +2119,7 @@ class MaskedBackend(LinearBackend):
         # the masked path's quantization (same weight-row norm) and the exact integer product
         xq, sx = quantize_activations(xf, self.ring, meta.wnorm if self.ring.cap else None)
         try:
-            yq = exact_int_matmul(xq, w.w8t, self.ring.a)
+            yq = self._local_int_product(w, xq)
         finally:
             _wipe(xq)
         # the masked path's range check (status 2 of its finish): same refusal on the same outputs

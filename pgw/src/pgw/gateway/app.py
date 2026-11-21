@@ -914,11 +914,18 @@ def create_app(
     async def admin_status(request: Request) -> Any:
         require_admin(request, "admin.status")
         statuses = await asyncio.to_thread(lambda: [rt.status() for rt in runtime.runtimes.values()])
+        from pgw.gateway.gpu_report import gpu_report
+
+        try:
+            gpu = await asyncio.to_thread(gpu_report, dict(runtime.runtimes))
+        except Exception as exc:  # a report must never break the status page
+            gpu = {"error": type(exc).__name__}
         return {
             "version": 1,
             "uptime_s": round(time.time() - state.started_at, 1),
             "production_policy": not settings.allow_dev_modes,
             "models": statuses,
+            "gpu": gpu,
             "api_keys": len(state.keys.list()),
             "egress_allowlist": sorted("{}://{}:{}".format(*o) for o in settings.egress_origins(
                 [rt.config for rt in runtime.runtimes.values()])),

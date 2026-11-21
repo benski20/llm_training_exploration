@@ -366,6 +366,41 @@ JOBS: dict[str, dict] = {
          "cmd": "python benchmarks/provider_trip_bench.py --no-kernel --service --tls --cores 0 0,1 all --tokens 20 "
                 "--json /kaggle/working/provider_trip_service.json", "timeout": 2400},
     ]},
+    # G2: gateway GPU wiring. Device passes of the encrypted factory (exactness + rate) vs the per-call CUDA
+    # products and the CPU int8 engine, the local GPU factory, and the local qkv/o linears per token.
+    "pgw-g2-gateway-gpu": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                       "tests/console", "tests/engine", "tests/wire", "tests/native",
+                                       "tests/core", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                       "docs", "research", "console", "tests/vectors", "SPEC.md",
+                                       "INTERFACE_NOTES.md", "tests/service", "tests/modelpack", "tests/observability",
+                                       "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                       "tests/factory/test_export_e2e.py", "tests/factory/test_reliability.py",
+                                       "tests/factory/test_scheduler.py", "tests/factory/test_sinks.py",
+                                       *[f"benchmarks/{b}.py" for b in (
+                                           "chat_speed_model", "e2e_local", "gateway_probe", "gpu_kernel_bench",
+                                           "hemask_ntt_bench", "lane_bench", "lm_head_bench", "native_finish_bench",
+                                           "native_prepare_bench", "native_store_bench", "net_floor_bench",
+                                           "profile_gateway", "profile_prefill", "quant_quality",
+                                           "quant_quality_gpu", "spec_cost_bench", "stack_bench",
+                                           "triton_gemv_bench", "wire_overhead_bench")]],
+                           "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_devmm_cuda",
+         "args": ["tests/hemask/test_devmm.py", "tests/hemask/test_gpu.py", "tests/hemask/test_factory_he.py",
+                  "-q", "-rs",
+                  "--timeout", "1800"],
+         "timeout": 2400},
+        *[{"kind": "shell", "name": name, "cmd": f"{env} python benchmarks/gateway_gpu_bench.py {args}",
+           "timeout": 2400} for name, env, args in (
+            ("he_device_24l", "", "--mode he --layers 24 --slots 4096"),
+            ("he_device_4l", "", "--mode he --layers 4 --slots 2048"),
+            ("he_device_stream_4l", "PGW_HEMASK_GPU_HINT_MB=0", "--mode he --layers 4 --slots 4096"),
+            ("he_cuda_percall_4l", "PGW_HEMASK_DEVICE_PASSES=0", "--mode he --layers 4 --slots 2048"),
+            # run 1 (kept for reference, slow on Kaggle's CPU): he_cpu_int8 (--device cpu, PGW_HEMASK_ENGINE=cpu_int8),
+            # local_cuda_factory_24l (--mode local), linears_1row / linears_32rows (--mode linears)
+        )],
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},

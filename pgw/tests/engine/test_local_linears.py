@@ -134,6 +134,32 @@ def test_auto_calibration(qwen_pack: InMemoryPack) -> None:
     assert be.configure_local_linears("off") == frozenset() and be._local_w is None
 
 
+def test_local_linear_device_choice(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The device check compares integer outputs with the CPU's; without CUDA the CPU is kept."""
+    be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert be.configure_local_linears("attention", device="auto") == B.LOCAL_ATTENTION_KINDS
+    assert be.local_policy["device"] == "cpu" and be.local_policy["device_reason"] == "no CUDA device"
+    with pytest.raises(ConfigError):
+        be.configure_local_linears("attention", device="tpu")
+    # the check itself (run on CPU tensors as the "device"): identical outputs pass, a wrong product fails
+    policy: dict[str, Any] = {}
+    assert be._local_device_check(torch.device("cpu"), 2, policy, need_faster=False) == torch.device("cpu")
+    assert policy["device_check"]["identical"]
+    real = be._local_int_product
+
+    def wrong(w: Any, xq: torch.Tensor) -> torch.Tensor:
+        y = real(w, xq)
+        return y + 1 if w.w8t.data_ptr() not in cpu_ptrs else y
+
+    cpu_ptrs = {be._local_w.get(s.id).w8t.data_ptr() for s in qwen_pack.linear_specs()  # type: ignore[union-attr]
+                if s.id.kind.value in B.LOCAL_ATTENTION_KINDS}
+    monkeypatch.setattr(be, "_local_int_product", wrong)
+    policy = {}
+    assert be._local_device_check(torch.device("cpu"), 2, policy, need_faster=False) is None
+    assert "differ" in policy["device_reason"]
+
+
 def test_local_linear_refuses_out_of_range_outputs_like_the_masked_path(qwen_pack: InMemoryPack,
                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,

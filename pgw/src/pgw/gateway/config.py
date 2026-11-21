@@ -39,7 +39,8 @@ log = logging.getLogger(__name__)
 #: :attr:`GatewaySettings.setup_model_options` keys: speed settings that never change outputs or weaken a
 #: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
-    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_rtt_ms", "local_max_rows", "float_threads",
+    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
+    "local_max_rows", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions",
 })
@@ -239,6 +240,12 @@ class GatewayModelConfig(BaseModel):
         None, ge=1, description="Local linears apply only to engine steps of at most this many rows in total "
         "(decode); larger steps (prefill) send every linear, so a long prompt never runs the big linears on the "
         "gateway CPU. None = every step (today's behaviour). Depends only on row counts, already public",
+    )
+    local_linears_device: Literal["cpu", "cuda", "auto"] = Field(
+        "cpu", description="Where the exact integer products of the local linears run: 'cpu' (default), 'cuda' (a "
+        "gateway GPU) or 'auto' (the GPU when it is faster). The GPU is used only after a start-up check found its "
+        "integer outputs identical to the CPU's; quantization, the range check and dequantization stay on the CPU, "
+        "so the outputs are the same bits either way",
     )
     local_rtt_ms: float | None = Field(
         None, gt=0, description="Round trip (ms) local_linears = 'auto' compares with. None = measured at start-up "

@@ -874,7 +874,7 @@ class ModelRuntime:
             else:
                 rtt_s = await asyncio.to_thread(self._measure_rtt)
             self.measured_rtt_s = rtt_s
-        kinds = await asyncio.to_thread(configure, mode, rtt_s=rtt_s)
+        kinds = await asyncio.to_thread(configure, mode, rtt_s=rtt_s, device=self.config.local_linears_device)
         policy = dict(getattr(self.backend, "local_policy", {}) or {})
         rtt = f"{rtt_s * 1e3:.3f} ms" if rtt_s is not None else "not measured"
         log.info("model %s: local linears %s -> %s (%s; start-up round trip %s over %s)", self.name, mode,

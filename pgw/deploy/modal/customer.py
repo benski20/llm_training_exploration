@@ -1,8 +1,8 @@
-"""Party 2 on Modal: the customer's gateway (``pgw-customer``, CPU only).
+"""Party 2 on Modal: the customer's gateway (``pgw-customer``; CPU only unless ``PGW_MODAL_CUSTOMER_GPU`` is set).
 
-The image installs pgw (CPU torch) from this repository; it contains no model. :func:`gateway` starts
-``pgw gateway serve`` with an empty configuration, so it opens the first-run setup wizard, exposes the
-console on a public HTTPS URL (``modal.forward``: TLS ends at Modal's edge) and publishes
+The image installs pgw (CPU torch; the CUDA build with a customer GPU) from this repository; it contains no
+model. :func:`gateway` starts ``pgw gateway serve`` with an empty configuration, so it opens the first-run
+setup wizard, exposes the console on a public HTTPS URL (``modal.forward``: TLS ends at Modal's edge) and publishes
 ``{console_url, setup_token}`` in the ``pgw-live`` Dict. During the wizard the gateway downloads the
 model from Hugging Face itself, packs it and checks the fingerprint against the provider's, builds the
 encrypted-mask hint and runs the encrypted mask factory, all inside this container.
@@ -67,6 +67,11 @@ image = (
         "python rust/tools/build_ntt.py --site && rm -rf rust/target $HOME/.cargo/registry",
         "cd / && python -c 'from pgw.core import native; assert native.fast is not None; print(native.fast.version())'",
         "cd / && python -c 'from pgw.hemask import ntt; assert ntt.available(); print(\"pgw_ntt\", ntt.info())'",
+        # with --customer-gpu the image must hold the CUDA build of torch (and Triton for the GPU mask PRNG);
+        # without it the gateway would silently stay on the CPU engines
+        *(["cd / && python -c 'import torch, triton; assert torch.version.cuda, \"CPU-only torch in a GPU image\"; "
+           "print(\"torch\", torch.__version__, \"cuda\", torch.version.cuda, \"triton\", triton.__version__)'"]
+          if CUSTOMER_GPU else []),
     )
     .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", "OMP_WAIT_POLICY": "PASSIVE"})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
@@ -110,8 +115,11 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: s
     with modal.forward(port) as tunnel:
         url = tunnel.url
         # speed settings for the wizard's models.json (boot.GATEWAY_MODEL_OPTIONS; launch.py --local-linears)
-        env = boot.gateway_env(root / "config", root / "data", port,
-                               {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears})
+        # with a customer GPU the local qkv/o integer products may run on it ('auto': only when a start-up
+        # check finds them identical to the CPU's and faster; the outputs are the same bits either way)
+        opts = {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears,
+                **({"local_linears_device": "auto"} if CUSTOMER_GPU else {})}
+        env = boot.gateway_env(root / "config", root / "data", port, opts)
         gw, token = boot.start_gateway(env, root / "gateway.log")
         boot.wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
         info = {"run_id": run_id, "console_url": url.rstrip("/") + "/console/", "base_url": url,

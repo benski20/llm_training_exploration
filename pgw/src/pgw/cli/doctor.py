@@ -279,6 +279,20 @@ def _check_cuda(role: str) -> tuple[Status, str, dict[str, Any]]:
     return "ok", f"{len(devices)} CUDA device(s): " + ", ".join(str(d["name"]) for d in devices), data
 
 
+def _check_gateway_gpu() -> tuple[Status, str, dict[str, Any]]:
+    """Which customer-side parts run on a gateway GPU (runs the encrypted factory's device self-test)."""
+    from pgw.gateway.gpu_report import gpu_report
+
+    data = gpu_report(run_self_test=True)
+    he = data["encrypted_mask_factory"]
+    if not data["cuda"]:
+        return "ok", "no gateway GPU: encrypted factory products on " + str(he["engine"]), data
+    if he.get("cuda_disabled"):
+        return "warn", f"gateway GPU present but its encrypted-factory self-test failed ({he['cuda_disabled']})", data
+    where = ", ".join(data["on_gpu"]) or "nothing"
+    return "ok", f"on the gateway GPU: {where}; decode float path on the CPU (reference bits)", data
+
+
 def _meminfo() -> dict[str, int]:
     out: dict[str, int] = {}
     try:
@@ -852,6 +866,8 @@ def run_doctor(
     if role in ("all", "service", "factory"):
         _run(report, "cpu_int8", _check_cpu_int8)
     _run(report, "cuda", lambda: _check_cuda(role))
+    if role in ("all", "gateway", "factory"):
+        _run(report, "gateway_gpu", _check_gateway_gpu)
     _run(report, "memory", _check_memory)
     if role != "all" and (check_settings or role in ("gateway", "service", "factory")):
         _run(report, f"settings.{role}", lambda: _check_role_settings(role))
