@@ -38,7 +38,14 @@ from urllib.parse import urlsplit
 
 from pgw.core.errors import PGWError
 from pgw.wire.codec import decode_any, encode_message
-from pgw.wire.messages import PROTOCOL_HEADER, PROTOCOL_VERSION, STREAM_PATH, ComputeRequest, ComputeResponse
+from pgw.wire.messages import (
+    COMPUTE_PATH,
+    PROTOCOL_HEADER,
+    PROTOCOL_VERSION,
+    STREAM_PATH,
+    ComputeRequest,
+    ComputeResponse,
+)
 
 __all__ = ["BlockingStreamChannel", "SyncStreamClient", "SyncStreamStats", "build_sync_stream_client"]
 
@@ -351,9 +358,12 @@ class SyncStreamClient:
 
         try:
             validate_compute_response(request, obj, client._out_features_for(request))
-        except PGWError:
+        except PGWError as exc:  # an invalid reply: not retryable (as on the regular path)
             st.failures += 1
+            client._hook(COMPUTE_PATH, None, t0, str(exc.code))
             raise
+        client._deposit_retry_token()  # like every regular request (shared retry budget)
+        client._hook(COMPUTE_PATH, 200, t0, None)
         self.sync_stream_stats.calls += 1
         return obj
 

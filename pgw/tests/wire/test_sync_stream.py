@@ -79,6 +79,20 @@ def test_sync_lane_matches_the_regular_path(serve: Any) -> None:
     assert seen[True] == seen[False] == [_wire(r) for r, _ in reqs]  # the service received the same requests
 
 
+def test_sync_lane_reports_attempts_like_the_regular_path(serve: Any) -> None:
+    srv = serve(FakeHandler())
+    seen: list[tuple[str, int | None, str | None]] = []
+    inner = ComputeClient(ClientConfig(base_url=srv.url, request_timeout_s=20),
+                          on_attempt=lambda path, status, s, code: seen.append((path, status, code)))
+    client = SyncStreamClient(inner)
+    for i in range(3):
+        req, xs = make_request(RING, [("0.down", 1)], rid=f"h{i}", seed=i)
+        _check(client.compute_sync(req), req, xs, srv.handler)
+    assert seen == [("/pgw/v1/compute", 200, None)] * 3
+    assert client.sync_stream_stats.calls == 3
+    client.close()
+
+
 def test_sync_lane_starts_no_event_loop(serve: Any) -> None:
     srv = serve(FakeHandler())
     inner = _client(srv.url)
