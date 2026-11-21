@@ -78,7 +78,8 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
             g = MaskGenerator(pack, ring, device=settings.device, backend=settings.backend, throttle=throttle,
                               pipeline=settings.pipeline, memory_fraction=settings.gpu_memory_fraction,
                               self_check_rows=settings.self_check_rows, remote=remote,
-                              gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng))
+                              gpu_prng=None if settings.gpu_prng == "auto" else bool(settings.gpu_prng),
+                              skip_kinds=settings.skip_kinds)
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g
@@ -120,7 +121,8 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call,
-                         encrypt=settings.he_encrypt)
+                         encrypt=settings.he_encrypt, decrypt=settings.he_decrypt,
+                         hint_ntt_bytes=int(settings.he_hint_ntt_gb * 1e9))
 
 
 _WATCHED: dict[tuple[str, str], threading.Thread] = {}

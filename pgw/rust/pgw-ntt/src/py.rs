@@ -3,9 +3,12 @@
 //! `pgw.hemask.fastmm` / `pgw.hemask.lwe.matmul_mod64`.
 
 use crate::arith::{bound_ok, params, N};
-use crate::kernel::{self, Big, Isa, Secrets, Wiping};
+use crate::kernel::{self, Big, DecOut, Isa, Secrets, Wiping};
 use numpy::ndarray::{Array2, Array3};
-use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
+use numpy::{
+    IntoPyArray, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadwriteArray2,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -130,6 +133,78 @@ fn mm_planes<'py>(
     to_out(py, out.map_err(kerr)?, rows, g * N)
 }
 
+/// Replies `(m, cols_i)` uint64, C-contiguous, as slices with their column counts.
+fn reply_slices<'a>(ys: &'a [PyReadonlyArray2<'_, u64>], m: usize) -> PyResult<Vec<(&'a [u64], usize)>> {
+    ys.iter()
+        .map(|y| {
+            if y.shape()[0] != m {
+                return Err(verr(format!("reply has {} rows, expected {m}", y.shape()[0])));
+            }
+            Ok((y.as_slice().map_err(|_| verr("replies must be C-contiguous"))?, y.shape()[1]))
+        })
+        .collect()
+}
+
+/// Shared body of the fused decryptions (validates, releases the GIL, runs [`kernel::decrypt`]).
+#[allow(clippy::too_many_arguments)]
+fn run_decrypt(
+    py: Python<'_>,
+    big: Big<'_>,
+    dim: usize,
+    secrets: &Bound<'_, PyAny>,
+    ys: Vec<PyReadonlyArray2<'_, u64>>,
+    slots: PyReadonlyArray1<'_, i64>,
+    row_base: usize,
+    delta_bits: u32,
+    k: u32,
+    mut out: PyReadwriteArray2<'_, i64>,
+    threads: usize,
+    isa: Isa,
+) -> PyResult<()> {
+    let (s, g, rank) = secrets_of(secrets)?;
+    let m = out.shape()[1];
+    let ys = reply_slices(&ys, m)?;
+    let slots = slots.as_slice().map_err(|_| verr("slots must be C-contiguous"))?;
+    let out = out.as_slice_mut().map_err(|_| verr("out must be C-contiguous"))?;
+    let dec = DecOut::new(ys, slots, row_base, m, delta_bits, k, out).map_err(kerr)?;
+    let r = py.allow_threads(|| {
+        let sec = Secrets::new(&s, g, rank);
+        kernel::decrypt(big, dim, &sec, &dec, threads, isa)
+    });
+    r.map_err(kerr)
+}
+
+/// Fused decryption with the hint as int8 byte planes ``(rows, P, rank*256)`` (bytes ``first_byte ..``,
+/// as :func:`mm_planes`), rows ``row_base .. row_base + rows`` of the linear: for every reply column
+/// ``c`` (``ys`` concatenated along columns, each ``(m, cols_i)`` uint64) with ``slots[c] >= 0``,
+/// ``out[slots[c], row_base + i] = ((y[row_base + i, c] - (planes @ S)[i, c] + 2^(delta-1)) >> delta) &
+/// (2^k - 1)``. ``out`` is ``(slots_total, m)`` int64. The correction never leaves native scratch memory
+/// (wiped).
+#[pyfunction]
+#[pyo3(signature = (planes, first_byte, secrets, ys, slots, row_base, delta_bits, k, out, threads = 0, isa = "auto"))]
+#[allow(clippy::too_many_arguments)]
+fn decrypt_planes<'py>(
+    py: Python<'py>,
+    planes: &Bound<'py, PyAny>,
+    first_byte: usize,
+    secrets: &Bound<'py, PyAny>,
+    ys: Vec<PyReadonlyArray2<'py, u64>>,
+    slots: PyReadonlyArray1<'py, i64>,
+    row_base: usize,
+    delta_bits: u32,
+    k: u32,
+    out: PyReadwriteArray2<'py, i64>,
+    threads: usize,
+    isa: &str,
+) -> PyResult<()> {
+    let isa = isa_of(isa)?;
+    let a: PyReadonlyArray3<'py, i8> = planes.extract().map_err(|_| verr("planes must be a 3-D int8 array"))?;
+    let (rows, npl, dim) = (a.shape()[0], a.shape()[1], a.shape()[2]);
+    let data = a.as_slice().map_err(|_| verr("planes must be C-contiguous"))?;
+    let big = Big::Planes { data, rows, npl, first: first_byte };
+    run_decrypt(py, big, dim, secrets, ys, slots, row_base, delta_bits, k, out, threads, isa)
+}
+
 /// A big operand transformed once (residues + forward NTTs, 12 bytes per coefficient), for operands
 /// reused across calls: the public matrix ``A`` (encryption) or a hint kept in NTT form.
 /// ``mm(secrets, rows)`` multiplies its first ``rows`` rows.
@@ -209,6 +284,32 @@ impl Transformed {
         to_out(py, out.map_err(kerr)?, rows, g * N)
     }
 
+    /// Fused decryption with this (transformed) hint, rows ``0 .. rows`` (default all); see
+    /// :func:`decrypt_planes` (``row_base`` is 0).
+    #[pyo3(signature = (secrets, ys, slots, delta_bits, k, out, rows = None, threads = 0, isa = "auto"))]
+    #[allow(clippy::too_many_arguments)]
+    fn decrypt<'py>(
+        &self,
+        py: Python<'py>,
+        secrets: &Bound<'py, PyAny>,
+        ys: Vec<PyReadonlyArray2<'py, u64>>,
+        slots: PyReadonlyArray1<'py, i64>,
+        delta_bits: u32,
+        k: u32,
+        out: PyReadwriteArray2<'py, i64>,
+        rows: Option<usize>,
+        threads: usize,
+        isa: &str,
+    ) -> PyResult<()> {
+        let isa = isa_of(isa)?;
+        let rows = rows.unwrap_or(self.rows);
+        if rows > self.rows {
+            return Err(verr(format!("asked for {rows} rows, the operand has {}", self.rows)));
+        }
+        let big = Big::Pre { data: &self.data, rows, bits: self.bits };
+        run_decrypt(py, big, self.rank * N, secrets, ys, slots, 0, delta_bits, k, out, threads, isa)
+    }
+
     #[getter]
     fn rows(&self) -> usize {
         self.rows
@@ -240,6 +341,7 @@ fn pgw_ntt(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_secrets, m)?)?;
     m.add_function(wrap_pyfunction!(mm_u64, m)?)?;
     m.add_function(wrap_pyfunction!(mm_planes, m)?)?;
+    m.add_function(wrap_pyfunction!(decrypt_planes, m)?)?;
     m.add_class::<Transformed>()?;
     Ok(())
 }

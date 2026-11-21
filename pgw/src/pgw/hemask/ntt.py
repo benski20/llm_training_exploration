@@ -59,6 +59,8 @@ __all__ = [
     "TransformedOperand",
     "available",
     "big_planes_mm_small",
+    "decrypt_available",
+    "decrypt_into",
     "exact",
     "info",
     "matmul_mod64",
@@ -220,6 +222,54 @@ def matmul_mod64(
                 finally:
                     sec.fill(0)
     return _dense_matmul_mod64(small, big, small_left=small_left, fast=fast)
+
+
+def decrypt_available() -> bool:
+    """True when the loaded native module has the fused decryption (:func:`decrypt_into`)."""
+    return native is not None and hasattr(native, "decrypt_planes")
+
+
+def decrypt_into(
+    big: np.ndarray | TransformedOperand,
+    secrets: np.ndarray,
+    ys: list[np.ndarray],
+    slots: np.ndarray,
+    delta_bits: int,
+    k: int,
+    out: np.ndarray,
+    *,
+    first_byte: int = 1,
+    row_base: int = 0,
+) -> None:
+    """Fused decryption ``out[slots[c], row_base + i] = ((y[row_base + i, c] - (H S)[i, c] + 2^(delta-1)) >> delta)
+    & (2^k - 1)`` for every hint row ``i`` of ``big`` and every reply column ``c`` with ``slots[c] >= 0``.
+
+    ``big`` is the hint as byte planes ``(rows, P, dim)`` (bytes ``first_byte ..``) or a
+    :class:`TransformedOperand` of it (then ``row_base`` must be 0); ``secrets`` ``(G, rank, 256)`` int8;
+    ``ys`` the provider replies ``(m, cols_i)`` uint64 whose columns concatenate to ``G * 256``;
+    ``out`` ``(slots_total, m)`` int64. The correction ``H S`` is exact (same CRT bound as
+    :func:`big_planes_mm_small`, checked natively) and never leaves native scratch memory, which is
+    wiped. Same bits as ``HEMaskBackend``'s dense decryption (``tests/hemask/test_he_decrypt.py``).
+    """
+    if not decrypt_available():
+        raise ConfigError("pgw_ntt with the fused decryption is not available (python rust/tools/build_ntt.py)")
+    sec = np.ascontiguousarray(secrets, dtype=np.int8)
+    ys = [np.ascontiguousarray(y, dtype=np.uint64) for y in ys]
+    sl = np.ascontiguousarray(slots, dtype=np.int64)
+    try:
+        with _threads() as nt:
+            if isinstance(big, TransformedOperand):
+                if row_base:
+                    raise ConfigError("a transformed hint covers its whole linear (row_base must be 0)")
+                big._h.decrypt(sec, ys, sl, int(delta_bits), int(k), out, None, nt, _isa())
+            else:
+                p = big if big.dtype == np.int8 else np.asarray(big).view(np.int8)
+                native.decrypt_planes(np.ascontiguousarray(p), int(first_byte), sec, ys, sl, int(row_base),
+                                      int(delta_bits), int(k), out,
+                                      nt, _isa())
+    finally:
+        if not np.may_share_memory(sec, secrets):
+            sec.fill(0)
 
 
 class TransformedOperand:

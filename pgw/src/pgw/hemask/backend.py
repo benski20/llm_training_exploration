@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 import warnings
 from collections import deque
@@ -42,7 +43,7 @@ from pgw.hemask.lwe import (
 )
 from pgw.hemask.ntt import big_planes_mm_small  # exact NTT/CRT product; falls back to fastmm
 
-__all__ = ["MAX_GROUPS_PER_PASS", "MAX_INFLIGHT", "HEMaskBackend", "HintStore", "verify_rows"]
+__all__ = ["DECRYPT_MODES", "MAX_GROUPS_PER_PASS", "MAX_INFLIGHT", "HEMaskBackend", "HintStore", "verify_rows"]
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +161,10 @@ class HintStore:
 
 #: Most 256-slot groups decrypted in one pass over a linear's hint (``E2``: fewer hint reads).
 MAX_GROUPS_PER_PASS = 16
+#: CPU decryption modes of :class:`HEMaskBackend` (``decrypt=``; ``PGW_FACTORY_HE_DECRYPT``).
+DECRYPT_MODES = ("auto", "dense", "ntt", "ntt_pre")
+#: Hint rows of the ``auto`` calibration (public random data; the cost per row does not depend on m).
+_CAL_ROWS = 256
 #: Most maskgen requests in flight per backend (``E6``: fills the link on high-latency paths).
 MAX_INFLIGHT = 4
 
@@ -214,17 +219,51 @@ class HEMaskBackend:
             ``"auto"`` = the gateway GPU when the CUDA engine is chosen and its self-test passed, else the
             CPU engines; ``None`` = the CPU engines; a device name (tests: ``"cpu"`` runs the device code
             on CPU tensors). Same ciphertext distribution and the same decrypted bits either way.
+        decrypt: CPU decryption when no device pass runs it (:data:`DECRYPT_MODES`). ``"dense"``: the
+            byte-plane GEMM ``H @ S`` (int8 engine plus the native combine). ``"ntt"``: the fused native
+            NTT decryption (:func:`pgw.hemask.ntt.decrypt_into`; the correction ``H S`` never leaves native
+            scratch memory) on the stored hint planes, no extra memory. ``"ntt_pre"``: as ``"ntt"``, with
+            the hints of as many linears as fit ``hint_ntt_bytes`` kept in NTT form in RAM (12 bytes per
+            coefficient, twice the stored planes; about 2-3x less work per row than ``"ntt"``), the others
+            as ``"ntt"``. ``"auto"`` (default): pre-transformed hints within ``hint_ntt_bytes`` (0: none),
+            else, per pass size, whichever of ``"dense"`` and ``"ntt"`` a start-up calibration on public
+            random data found faster **and bit-identical** (else ``"dense"``). All modes give the same bits
+            (exact products; every decrypted row is also checked by the factory's Freivalds self-check);
+            an error in a native NTT call falls back to ``"dense"`` for the rest of the backend's life.
+        hint_ntt_bytes: RAM budget for hints held in NTT form (``"ntt_pre"`` / ``"auto"``); 0 = none.
     """
 
     #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
     _dev: Any = None
+    #: Class defaults of the decryption state (instances set their own in ``__init__``; tests that build a
+    #: bare instance with ``object.__new__`` get the dense path).
+    decrypt_mode: str = "dense"
+    hint_ntt_bytes: int = 0
+    _ntt_broken: bool = False
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
                  max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
-                 encrypt: str = "dense", device: str | None = "auto"):
+                 encrypt: str = "dense", device: str | None = "auto", decrypt: str = "auto",
+                 hint_ntt_bytes: int = 0):
         if encrypt not in ("dense", "ntt_pre"):
             raise ConfigError(f"encrypt must be 'dense' or 'ntt_pre', got {encrypt!r}")
+        if decrypt not in DECRYPT_MODES:
+            raise ConfigError(f"decrypt must be one of {DECRYPT_MODES}, got {decrypt!r}")
+        if int(hint_ntt_bytes) < 0:
+            raise ConfigError("hint_ntt_bytes must be >= 0")
+        self.decrypt_mode = decrypt
+        self.hint_ntt_bytes = int(hint_ntt_bytes)
+        self._pre: dict[str, Any] = {}  # linear -> ntt.TransformedOperand of its hint
+        self._pre_skip: set[str] = set()  # linears whose hint does not fit the budget
+        self._pre_used = 0
+        self._dec_lock = threading.Lock()
+        self._dec_choice: dict[int, str] = {}  # auto: pass groups -> "dense" | "ntt"
+        self._ntt_broken = False
+        #: Decryption path per pass taken so far (``dense``, ``ntt``, ``ntt_pre``, ``device``) and the
+        #: calibration results of ``auto`` (diagnostics).
+        self.decrypt_paths: dict[str, int] = {}
+        self.decrypt_calibration: dict[int, dict[str, float | str]] = {}
         self.params = HEParams(k=ring.k, rank=hints.rank)
         if int(hints.meta.get("q_bits", 64)) != self.params.q:
             raise ConfigError(f"hint store is for q=2^{hints.meta.get('q_bits', 64)}, ring {ring.name} needs "
@@ -332,7 +371,151 @@ class HEMaskBackend:
         hint = self.hints.hint(linear)
         if self._dev is not None and hint.ndim == 3:
             self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+            self._count_path("device")
             return
+        groups = sum(len(cts) for _, cts, _ in items)
+        path, big = self._decrypt_path(linear, hint, groups)
+        if path != "dense":
+            try:
+                self._decrypt_ntt(big, items, out)
+                self._count_path(path)
+                return
+            except Exception as exc:  # a native fault: dense from now on (same bits, slower)
+                with self._dec_lock:
+                    self._ntt_broken = True
+                log.error("encrypted mask factory: NTT decryption failed (%s: %s); using the dense path",
+                          type(exc).__name__, str(exc)[:200])
+        self._decrypt_dense(hint, items, out)
+        self._count_path("dense")
+
+    def _count_path(self, path: str) -> None:
+        if "_dec_lock" not in self.__dict__:  # a bare test instance
+            return
+        with self._dec_lock:
+            self.decrypt_paths[path] = self.decrypt_paths.get(path, 0) + 1
+
+    # ---- NTT decryption -----------------------------------------------------------------------------
+    def _decrypt_path(self, linear: str, hint: np.ndarray, groups: int) -> tuple[str, Any]:
+        """``(path, operand)`` of one pass: ``("ntt_pre", TransformedOperand)``, ``("ntt", hint planes)`` or
+        ``("dense", None)`` (see the ``decrypt`` argument)."""
+        from pgw.hemask import ntt
+
+        mode = self.decrypt_mode
+        if mode == "dense" or hint.ndim != 3 or self._ntt_broken or not ntt.decrypt_available():
+            return "dense", None
+        if mode in ("ntt_pre", "auto") and self.hint_ntt_bytes > 0:
+            pre = self._pretransformed(linear, hint)
+            if pre is not None:
+                return "ntt_pre", pre
+        if mode in ("ntt", "ntt_pre"):
+            return "ntt", hint
+        return (("ntt", hint) if self._calibrated(hint.shape[1], groups) == "ntt" else ("dense", None))
+
+    def _pretransformed(self, linear: str, hint: np.ndarray) -> Any:
+        """The NTT form of ``linear``'s hint (made on first use when it fits ``hint_ntt_bytes``), or ``None``."""
+        from pgw.hemask import ntt
+
+        with self._dec_lock:
+            pre = self._pre.get(linear)
+            if pre is not None or linear in self._pre_skip:
+                return pre
+            m, _npl, dim = hint.shape
+            need = 12 * (-(-m // 16) * 16) * dim  # 3 primes x 4 bytes, rows padded to 16
+            if self._pre_used + need > self.hint_ntt_bytes:
+                self._pre_skip.add(linear)
+                return None
+            self._pre_used += need  # reserved before the (slow) transform, released if it fails
+        try:
+            t0 = time.perf_counter()
+            pre = ntt.TransformedOperand.from_planes(hint, first_byte=1)
+            log.info("HE hint of %s in NTT form: %.0f MB in %.1f s (%.1f of %.1f GB budget used)", linear,
+                     pre.nbytes / 1e6, time.perf_counter() - t0, self._pre_used / 1e9, self.hint_ntt_bytes / 1e9)
+        except Exception:
+            with self._dec_lock:
+                self._pre_used -= need
+                self._pre_skip.add(linear)
+            raise
+        with self._dec_lock:
+            self._pre[linear] = pre
+        return pre
+
+    def _decrypt_ntt(self, big: Any, items: list[tuple[np.ndarray, list[MaskCiphertext], int]],
+                     out: np.ndarray) -> None:
+        """Fused native decryption of one pass (:func:`pgw.hemask.ntt.decrypt_into`)."""
+        from pgw.hemask import ntt
+
+        secs = np.empty((sum(len(cts) for _, cts, _ in items), self.params.rank, DEGREE), dtype=np.int8)
+        try:
+            gi = 0
+            ys: list[np.ndarray] = []
+            slots: list[np.ndarray] = []
+            for y, cts, s0 in items:
+                for g, ct in enumerate(cts):
+                    sec = ntt.secrets_of(ct.secret)
+                    if sec is None:
+                        raise ConfigError("secret matrix is not block-negacyclic")
+                    secs[gi] = sec[0]
+                    sec.fill(0)
+                    gi += 1
+                    col = np.full(DEGREE, -1, dtype=np.int64)
+                    row = s0 + sum(c.rows for c in cts[:g])
+                    col[:ct.rows] = np.arange(row, row + ct.rows)
+                    slots.append(col)
+                ys.append(y)
+            ntt.decrypt_into(big, secs, ys, np.concatenate(slots), self.params.delta_bits, self.ring.k, out)
+        finally:
+            secs.fill(0)
+
+    def _calibrated(self, npl: int, groups: int) -> str:
+        """``auto``: ``"ntt"`` or ``"dense"`` for passes of ``groups`` groups, decided once per size on public
+        random data (:data:`_CAL_ROWS` hint rows, random secrets and replies): the faster of the two, and
+        ``"ntt"`` only when both gave the same bits."""
+        with self._dec_lock:
+            hit = self._dec_choice.get(groups)
+        if hit is not None:
+            return hit
+        from pgw.hemask.lwe import secret_matrix
+
+        rng = np.random.default_rng()  # public test data: nothing secret is involved
+        dim = self.params.dim
+        hint = rng.integers(-128, 128, size=(_CAL_ROWS, npl, dim), dtype=np.int8)
+        cts = [MaskCiphertext(b=_NO_B, secret=secret_matrix(rng.integers(-1, 2, size=(self.params.rank, DEGREE))),
+                              rows=DEGREE) for _ in range(groups)]
+        y = rng.integers(0, 1 << 63, size=(_CAL_ROWS, DEGREE * groups), dtype=np.uint64)
+        items = [(y, cts, 0)]
+        outs = {p: np.zeros((DEGREE * groups, _CAL_ROWS), dtype=np.int64) for p in ("dense", "ntt")}
+        times: dict[str, float] = {}
+        choice = "dense"
+        try:
+            for path in ("dense", "ntt", "dense", "ntt"):  # each twice (the first run warms up), best of the second
+                t0 = time.perf_counter()
+                if path == "dense":
+                    self._decrypt_dense(hint, items, outs[path])
+                else:
+                    self._decrypt_ntt(hint, items, outs[path])
+                times[path] = time.perf_counter() - t0
+            same = bool(np.array_equal(outs["dense"], outs["ntt"]))
+            if not same:
+                log.error("encrypted mask factory: NTT and dense decryption differ on the calibration data; "
+                          "using the dense path")
+            elif times["ntt"] < times["dense"]:
+                choice = "ntt"
+            cal: dict[str, float | str] = {"dense_s": times["dense"], "ntt_s": times["ntt"], "rows": _CAL_ROWS,
+                                           "identical": str(same), "choice": choice}
+        except Exception as exc:
+            log.error("encrypted mask factory: NTT decryption calibration failed (%s: %s); using the dense path",
+                      type(exc).__name__, str(exc)[:200])
+            cal = {"error": type(exc).__name__, "choice": choice}
+        log.info("encrypted mask factory: decryption of %d-group passes on the %s path (calibration %s)", groups,
+                 choice, cal)
+        with self._dec_lock:
+            self._dec_choice.setdefault(groups, choice)
+            self.decrypt_calibration[groups] = cal
+            return self._dec_choice[groups]
+
+    def _decrypt_dense(self, hint: np.ndarray, items: list[tuple[np.ndarray, list[MaskCiphertext], int]],
+                       out: np.ndarray) -> None:
+        """The byte-plane GEMM path: ``H @ [S_1 | ...]`` on the int8 engine (or the NTT product), then the combine."""
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
             nat = None
