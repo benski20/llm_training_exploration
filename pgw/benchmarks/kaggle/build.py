@@ -226,6 +226,40 @@ JOBS: dict[str, dict] = {
          "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_encrypt_bench.py --preset qwen2.5-7b --rank 12 "
                 "--rows 2048 --dense-rows 256 --groups 4", "timeout": 1800},
     ]},
+    # X5: gateway HE on the GPU with NTTs (pgw.hemask.gpuntt): bit-exactness on CUDA (Triton + eager kernels),
+    # then encryption/decryption rate per row and group vs the dense device pass (devmm) and the CPU NTT
+    # (ntt_pre), extrapolated to 0.5B / 7B / 70B (per-row cost is shape-independent).
+    "pgw-x5-gpuntt": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                  "tests/console", "tests/factory", "tests/engine", "tests/wire", "tests/native",
+                                  "tests/core", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                  "docs", "research", "console", "tests/vectors", "SPEC.md",
+                                  "INTERFACE_NOTES.md", "tests/service", "tests/modelpack", "tests/observability",
+                                  "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                  "benchmarks/results", "benchmarks/RESULTS.md", "ci", "deploy", "src/pgw/console",
+                                  "src/pgw/hemask/ntt_dev.py", "src/pgw/hemask/ntt_triton.py",
+                                  "tests/hemask/test_ntt_dev.py", "benchmarks/hemask_ntt_dev_bench.py", "tests/integration",
+                                  "tests/moe", *[f"tests/hemask/test_{t}.py" for t in (
+                                      "devmm", "factory_he", "gpu", "lwe", "native_sampling", "wire_v2")],
+                                  *[f"benchmarks/{b}.py" for b in (
+                                      "chat_speed_model", "e2e_local", "gateway_probe", "gpu_kernel_bench",
+                                      "hemask_ntt_bench", "lane_bench", "lm_head_bench", "native_finish_bench",
+                                      "native_prepare_bench", "native_store_bench", "net_floor_bench",
+                                      "profile_gateway", "profile_prefill", "quant_quality", "gateway_gpu_bench",
+                                      "quant_quality_gpu", "spec_cost_bench", "stack_bench", "spec_accept_bench",
+                                      "triton_gemv_bench", "wire_overhead_bench", "scale_provider_bench",
+                                      "maskgen_provider_bench", "mask_pipeline_bench", "trip_profile")]],
+                      "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; nvidia-smi || true; "
+                                                    "python -c 'import triton, torch; print(triton.__version__, "
+                                                    "torch.__version__)' || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_gpuntt",
+         "args": ["tests/hemask/test_gpuntt.py", "tests/hemask/test_mlwe_ring.py", "-q", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        {"kind": "shell", "name": "gpuntt_bench_g4_g16",
+         "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_gpuntt_bench.py --preset qwen2.5-0.5b --rows 4864 "
+                "--hint-rows 9728 --groups 4,16 --reps 3 --json /kaggle/working/gpuntt_bench.json", "timeout": 2400},
+    ]},
     # package M2: provider-side encrypted maskgen throughput (device-side v2 unpack/pack, ceil(bb/8) planes,
     # fused Triton combine, per-device slots). GPU exactness tests, then legacy vs fused slots/s and TOPS at
     # 0.5B / 7B / 70B layer shapes, layers sharded over both T4s, and decode-GEMM latency next to maskgen.
