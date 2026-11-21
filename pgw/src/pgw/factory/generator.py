@@ -66,6 +66,8 @@ DEFAULT_CHUNK_SLOTS = 256
 CUDA_CHUNK_SLOTS = 1024
 #: ``pgw_fast.mask_rows_with_key`` is importable (checked once; ``PGW_NATIVE=0`` disables it).
 _NATIVE_RNG = native.native_available("mask_rows_with_key")
+#: ``pgw_fast.he_check_rows`` (threaded row check) is importable: used by large output self-checks.
+_NATIVE_CHECK = native.native_available("he_check_rows")
 
 
 @dataclass
@@ -364,12 +366,16 @@ class MaskGenerator:
         On CUDA the per-chunk device working set of the widest linear (digit planes, int32 products,
         the int64 output and the next chunk's, plus ``r`` on the CPU-PRNG path) must fit half of the
         memory the weight budget leaves free (``(1 - memory_fraction)`` of the device plus the 1 GiB
-        reserve); the batch is halved down to 256 until it does. Encrypted generation keeps 256 (the
-        provider round trips are sized by ``he_groups_per_call``).
+        reserve); the batch is halved down to 256 until it does. Encrypted generation takes the backend's
+        ``preferred_chunk_slots()`` (one full decryption pass, so that provider requests pipeline and the
+        hint is read once per pass; 256 for backends without it).
         """
         if requested is not None:
             return int(requested)
-        if self.device.type != "cuda" or self.remote is not None:
+        if self.remote is not None:
+            pref = getattr(self.remote, "preferred_chunk_slots", None)
+            return int(pref()) if callable(pref) else DEFAULT_CHUNK_SLOTS
+        if self.device.type != "cuda":
             return DEFAULT_CHUNK_SLOTS
         try:  # pragma: no cover - GPU only
             total = int(torch.cuda.get_device_properties(self.device).total_memory)
@@ -718,13 +724,20 @@ class MaskGenerator:
         else:
             rs = r.index_select(0, idx) if n_check < rows else r
         try:
-            lhs = (_u64(ws) @ cu) & np.uint64(self.ring.mask)
-            rhs = (_u64(rs) @ cw) & np.uint64(self.ring.mask)
+            if _NATIVE_CHECK and ws.device.type == "cpu" and rs.device.type == "cpu" and n_check >= 64:
+                # native, threaded, GIL released (pgw.hemask.backend.verify_rows): the same flags as below
+                from pgw.hemask.backend import verify_rows
+
+                flags = verify_rows(rs.numpy(), ws.numpy(), cu, cw, self.ring.mask)
+                bad = int(flags.sum())
+            else:
+                lhs = (_u64(ws) @ cu) & np.uint64(self.ring.mask)
+                rhs = (_u64(rs) @ cw) & np.uint64(self.ring.mask)
+                bad = int((lhs != rhs).any(axis=1).sum())
         finally:
             if rs is not r:
                 rs.zero_()
-        if not np.array_equal(lhs, rhs):
-            bad = int((lhs != rhs).any(axis=1).sum())
+        if bad:
             log.error("factory self-check failed for %s on %s/%s: %d of %d sampled rows wrong",
                       lid, self.device, self.backend, bad, n_check)
             raise IntegrityError(

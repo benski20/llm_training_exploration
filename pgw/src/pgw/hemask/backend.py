@@ -207,11 +207,16 @@ class HEMaskBackend:
             pass, so larger passes read it less often.
         pass_bytes: Memory budget of one decryption pass's replies (caps ``groups_per_pass`` for very
             wide linears; hard, except that a pass holds at least one group).
+        device: Where encryption and decryption run as fused device passes (:mod:`pgw.hemask.devmm`):
+            ``"auto"`` = the gateway GPU when the CUDA engine is chosen and its self-test passed, else the
+            CPU engines; ``None`` = the CPU engines; a device name (tests: ``"cpu"`` runs the device code
+            on CPU tensors). Same ciphertext distribution and the same decrypted bits either way.
     """
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
-                 max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30):
+                 max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
+                 device: str | None = "auto"):
         self.params = HEParams(k=ring.k, rank=hints.rank)
         if int(hints.meta.get("q_bits", 64)) != self.params.q:
             raise ConfigError(f"hint store is for q=2^{hints.meta.get('q_bits', 64)}, ring {ring.name} needs "
@@ -230,11 +235,26 @@ class HEMaskBackend:
         # Public matrix as int8 byte planes for the int8 engines (gateway GPU, CPU AMX/VNNI); as uint64
         # for the float64 engine, which would otherwise rebuild the words on every call. Only the
         # ceil(q/8) low planes are kept (7 at q = 2^56): the top byte vanishes mod 2^q.
-        self._planes = engine() != "cpu_f64"
+        from pgw.hemask.devmm import DeviceHE, device_for
+
+        dev: torch.device | None
+        if device == "auto":
+            dev = device_for(self.params)
+        else:
+            dev = None if device is None else torch.device(device)
+        self._planes = dev is not None or engine() != "cpu_f64"
         self._a: np.ndarray = self._a_planes(a) if self._planes else a
         del a
+        self._dev: DeviceHE | None = None
+        if dev is not None:
+            self._dev = DeviceHE(self._a, self.params, dev)
+            self._a = self._a[:0]  # the device holds A; the host copy is not needed
+        #: Where the products run: ``device:<dev>`` (fused device passes) or the fastmm/NTT CPU engine name.
+        self.engine = f"device:{dev}" if dev is not None else engine()
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0,
                       "passes": 0, "max_inflight": 0}
+        log.info("encrypted mask factory: encryption/decryption on %s%s", self.engine,
+                 f" (hint cache {self._dev.cache.budget / 2**30:.1f} GiB)" if self._dev is not None else "")
         self._pool = ThreadPoolExecutor(max_workers=self.max_inflight, thread_name_prefix="pgw-hemask-remote")
 
     def _a_planes(self, a: np.ndarray, block: int = 1024) -> np.ndarray:
@@ -244,12 +264,28 @@ class HEMaskBackend:
             out[r0:r0 + block] = to_planes(a[r0:r0 + block])[:, :npl]
         return out
 
-    def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
+    def preferred_chunk_slots(self, max_bytes: int = 512 << 20) -> int:
+        """Factory GEMM batch for encrypted generation: one full decryption pass (``groups_per_pass``
+        groups), so that requests pipeline (``max_inflight``, ``groups_per_call``) and the hint is read
+        once per pass; capped so that one chunk of the widest linear's output stays within ``max_bytes``."""
+        m_max = max(s.out_features for s in self.specs.values())
+        groups = max(1, min(self.groups_per_pass, max_bytes // (8 * DEGREE * m_max)))
+        return DEGREE * groups
+
+    def _encrypt(self, rn: np.ndarray, n: int) -> tuple[list[MaskCiphertext], np.ndarray]:
+        """The groups of ``rn`` and their ciphertexts side by side (``n x 256 g``); ``ct.b`` is left empty."""
+        if self._dev is not None:
+            return self._dev.encrypt(rn, n)
         a = self._a[:n]
         if self._planes:
-            return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
-                    for g0 in range(0, len(rn), DEGREE)]
-        return [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
+            cts = [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
+                   for g0 in range(0, len(rn), DEGREE)]
+        else:
+            cts = [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
+        b = np.concatenate([ct.b for ct in cts], axis=1)
+        for ct in cts:
+            ct.b = _NO_B  # the request owns the ciphertext now
+        return cts, b
 
     def _decrypt(self, linear: str, y: np.ndarray, cts: list[MaskCiphertext], m: int) -> np.ndarray:
         """``W8 r`` (``(sum rows, m)`` int64) of the groups of one provider reply."""
@@ -272,6 +308,9 @@ class HEMaskBackend:
         at output row ``s0``. Wipes nothing but its own copies (the caller wipes the ciphertexts).
         """
         hint = self.hints.hint(linear)
+        if self._dev is not None and hint.ndim == 3:
+            self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+            return
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
             nat = None
@@ -401,10 +440,7 @@ class HEMaskBackend:
         try:
             for s0, s1 in batches:
                 t0 = time.perf_counter()
-                cts = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
-                b = np.concatenate([ct.b for ct in cts], axis=1)
-                for ct in cts:
-                    ct.b = _NO_B  # the request owns the ciphertext now
+                cts, b = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
                 self.stats["encrypt_s"] += time.perf_counter() - t0
                 if len(inflight) >= self.max_inflight:  # wait for the oldest before sending more
                     try:

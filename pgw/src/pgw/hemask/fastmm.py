@@ -25,8 +25,11 @@ import warnings
 import numpy as np
 import torch
 
-__all__ = ["big_planes_mm_small", "engine", "int8_gemm_available", "planes_to_u64", "small_mm_big", "to_planes"]
+__all__ = ["big_planes_mm_small", "disable_cuda", "engine", "int8_gemm_available", "planes_to_u64", "small_mm_big",
+           "to_planes"]
 
+#: Why the CUDA engine was turned off in this process (``None``: not turned off).
+_CUDA_DISABLED: str | None = None
 
 
 def int8_gemm_available() -> bool:
@@ -36,32 +39,41 @@ def int8_gemm_available() -> bool:
     return cpu_int8_fast()
 
 
+def disable_cuda(reason: str) -> None:
+    """Stop choosing the CUDA engine in this process (its device self-test failed)."""
+    global _CUDA_DISABLED
+    _CUDA_DISABLED = reason
+
+
+def cuda_disabled() -> str | None:
+    """Why the CUDA engine is off in this process, or ``None``."""
+    return _CUDA_DISABLED
+
+
 def engine() -> str:
     """Where the byte-plane GEMMs run: ``cuda`` (a GPU on the gateway), ``cpu_int8`` (AMX/VNNI) or
     ``cpu_f64`` (exact float64 bit slices, for CPUs without fast int8 GEMMs).
 
     ``PGW_HEMASK_ENGINE`` overrides the automatic choice (``auto``, ``cuda``, ``cpu_int8``, ``cpu_f64``).
+    After a failed device self-test (:func:`disable_cuda`) ``cuda`` is never chosen, not even when forced.
     """
     want = os.environ.get("PGW_HEMASK_ENGINE", "auto").strip().lower()
+    if want == "cuda" and _CUDA_DISABLED is not None:
+        want = "auto"
     if want in ("cuda", "cpu_int8", "cpu_f64"):
         return want
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and _CUDA_DISABLED is None:
         return "cuda"
     return "cpu_int8" if int8_gemm_available() else "cpu_f64"
 
 
 def _int_mm(lhs: torch.Tensor, rhs_t: torch.Tensor, dev: str) -> torch.Tensor:
-    """``lhs (M, K) @ rhs_t (N, K)^T`` in int32 on ``dev`` (CUDA operands are zero-padded to multiples of 32)."""
+    """``lhs (M, K) @ rhs_t (N, K)^T`` in int32 on ``dev`` (CUDA operands are zero-padded only when needed)."""
     if dev != "cuda":
         return torch._int_mm(lhs, rhs_t.t())
-    m, k = lhs.shape  # pragma: no cover - GPU only
-    n = rhs_t.shape[0]
-    mp, kp, np_ = (-(-m // 32) * 32), (-(-k // 32) * 32), (-(-n // 32) * 32)
-    a = torch.zeros((mp, kp), dtype=torch.int8, device="cuda")
-    a[:m, :k] = lhs.to("cuda", non_blocking=True)
-    b = torch.zeros((np_, kp), dtype=torch.int8, device="cuda")
-    b[:n, :k] = rhs_t.to("cuda", non_blocking=True)
-    return torch._int_mm(a, b.t())[:m, :n]
+    from pgw.hemask.devmm import int_mm  # pragma: no cover - GPU only
+
+    return int_mm(lhs.to("cuda"), rhs_t.to("cuda"))  # pragma: no cover - GPU only
 
 
 def to_planes(x: np.ndarray) -> np.ndarray:
