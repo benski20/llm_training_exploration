@@ -204,6 +204,18 @@ class _HintCache:
         self.used += size
         return True
 
+    def shrink(self, nbytes: int) -> int:
+        """Lower the budget by ``nbytes`` (at least to what is resident minus ``nbytes``) and drop the most
+        recently cached hints until the rest fits, stale or not. Returns the bytes released."""
+        self.budget = max(0, min(self.budget, self.used) - max(0, int(nbytes)))
+        freed = 0
+        while self._d and self.used > self.budget:
+            k, t = self._d.popitem(last=True)
+            self._last.pop(k, None)
+            self.used -= self._size(t)
+            freed += self._size(t)
+        return freed
+
     def clear(self) -> None:
         self._d.clear()
         self._last.clear()
@@ -213,6 +225,10 @@ class _HintCache:
 def _prefetch_enabled() -> bool:
     """``PGW_HEMASK_HINT_PREFETCH`` (default on): streamed hint blocks are copied ahead on a helper thread."""
     return os.environ.get("PGW_HEMASK_HINT_PREFETCH", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+#: Bytes of cached hints dropped per out-of-memory retry of a decryption pass.
+_OOM_SHRINK = 2 << 30
 
 
 def _auto_budget(dev: torch.device) -> int:
@@ -437,7 +453,31 @@ class DeviceHE:
 
         ``items`` are ``(y, cts, s0)`` as in :meth:`pgw.hemask.backend.HEMaskBackend._decrypt_into`;
         ``hint`` holds byte planes ``1 .. P`` of ``H mod 2^q`` (byte 0 is not needed).
+
+        When the device runs out of memory for the pass itself (the hint cache took the memory the pass
+        workspace needs: 7B hints on a 16 GB T4), cached hints are dropped (``_OOM_SHRINK`` bytes at a time,
+        the budget lowered with them) and the pass runs again from the start; it rewrites every output row,
+        so the result is the same bits. With no cached hint left the error is raised.
         """
+        while True:
+            oom = False
+            try:
+                self._decrypt_pass(key, hint, items, out, delta_bits, k)
+                return
+            except torch.cuda.OutOfMemoryError:
+                if not self.cache.used:
+                    raise
+                oom = True
+            if oom:  # outside the handler: the failed pass's frames (and device tensors) are released
+                freed = self.cache.shrink(_OOM_SHRINK)
+                self.stats["pass_oom_shrinks"] = self.stats.get("pass_oom_shrinks", 0) + 1
+                log.warning("encrypted mask factory: device memory full during a decryption pass; dropped %.2f GiB "
+                            "of cached hints (cache now %.2f GiB) and retried", freed / 2**30, self.cache.used / 2**30)
+                if self.dev.type == "cuda":  # pragma: no cover - GPU only
+                    torch.cuda.empty_cache()
+
+    def _decrypt_pass(self, key: str, hint: np.ndarray, items: list[tuple[np.ndarray, list[MaskCiphertext], int]],
+                      out: np.ndarray, delta_bits: int, k: int) -> None:
         m, npl, dim = hint.shape
         smat_t = np.concatenate([ct.secret.T for it in items for ct in it[1]], axis=0)  # (cols, dim)
         ys = np.concatenate([np.ascontiguousarray(y, dtype=np.uint64) for y, _, _ in items], axis=1)

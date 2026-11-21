@@ -234,3 +234,48 @@ def test_streamed_and_cached_hints_decrypt_the_same(block_rows: int, prefetch: s
             assert np.array_equal(out, want), (budget, key)
         if budget == 0 and prefetch == "1":  # the one-buffer path counts CUDA uploads only
             assert eng.stats["hint_streamed_blocks"] == 5 * -(-m // min(m, max(8, block_rows)))
+
+
+def test_pass_out_of_memory_drops_cached_hints_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A decryption pass that runs out of device memory (7B: the hint cache took the pass workspace) drops cached
+    hints, lowers the budget and reruns: same bits. With nothing cached the error goes up."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(12)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=4 * hint.nbytes)
+    monkeypatch.setattr(devmm, "_OOM_SHRINK", 1)
+    real = devmm.DeviceHE._decrypt_pass
+    fails = {"left": 0}
+
+    def flaky(self: Any, key: str, *args: Any) -> None:
+        if fails["left"]:
+            fails["left"] -= 1
+            self.hint_on_device(key, hint)  # the cache fills, then the workspace allocation fails
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        real(self, key, *args)
+
+    monkeypatch.setattr(devmm.DeviceHE, "_decrypt_pass", flaky)
+
+    def run(key: str) -> np.ndarray:
+        cts, b = eng.encrypt(r, n)
+        y = matmul_mod64(w, b, fast=False) & p.q_mask
+        out = np.zeros((rows, m), dtype=np.int64)
+        eng.decrypt_into(key, hint, [(y, cts, 0)], out, p.delta_bits, 32)
+        return out
+
+    assert np.array_equal(run("x"), want) and eng.cache.used == hint.nbytes
+    fails["left"] = 1
+    assert np.array_equal(run("y"), want)
+    # the hint cached by the failed pass went first; the budget now fits only what is left
+    assert eng.stats["pass_oom_shrinks"] == 1 and eng.cache.used == hint.nbytes < eng.cache.budget < 2 * hint.nbytes
+    assert np.array_equal(run("y"), want)  # streamed from now on: same bits
+    eng.cache.shrink(1 << 40)
+    assert eng.cache.used == eng.cache.budget == 0
+    fails["left"] = 1
+    with pytest.raises(torch.cuda.OutOfMemoryError):  # nothing cached left to drop
+        run("x")

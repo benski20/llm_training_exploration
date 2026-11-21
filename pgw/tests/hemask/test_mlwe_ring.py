@@ -174,8 +174,9 @@ def test_backend_ntt_pre_exact_and_same_ciphertexts(q_bits: int, monkeypatch: py
         r = rng.integers(0, 1 << ring.k, size=(rows, w.shape[1]), dtype=np.int64)
         got = be.matmul(key, torch.from_numpy(r))
         assert np.array_equal(got.numpy(), _ref_wr(w.astype(np.int64), r, ring.k))
-    # same seeds -> same ciphertexts as the dense backend
-    dense = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider)
+    # same seeds -> same ciphertexts as the dense backend (host path: the device encryptor draws its seeds through
+    # its own import of new_seed, which the patch below would not reach on a CUDA host)
+    dense = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider, device=None)
     r = rng.integers(0, 1 << ring.k, size=(300, 96), dtype=np.int64)
     seeds = _seeds(2, 40)
     it = iter(seeds)
