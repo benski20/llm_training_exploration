@@ -203,6 +203,22 @@ JOBS: dict[str, dict] = {
                   "--groups 4 --k 32", "timeout": 1800}
           for eng in ("cuda", "cpu_int8")],
     ]},
+    # scale plan (research/plans/scale-north-star.md): provider ring-GEMM throughput at decode batches 1..1024 for
+    # Llama-3-70B and Mixtral-8x22B shapes (K32, exact spot check), oblivious-MoE overhead, plain factory rate.
+    "pgw-scale-provider": {"exclude": ["rust", "scripts", "tests/gateway", "tests/e2e", "tests/maskstore",
+                                       "tests/enroll", "tests/console", "tests/factory", "tests/engine", "tests/wire",
+                                       "tests/native", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                       "tests/hemask", "tests/service", "tests/modelpack", "tests/observability",
+                                       "tests/vectors", "tests/integration", "SPEC.md", "INTERFACE_NOTES.md",
+                                       "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py"],
+                           "steps": [
+        {"kind": "shell", "name": "gpu_info", "cmd": "nvidia-smi || true; nproc", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_moe", "args": ["tests/moe", "-q", "-rs", "--timeout", "600"],
+         "timeout": 900},
+        {"kind": "shell", "name": "scale_provider_bench",
+         "cmd": "python benchmarks/scale_provider_bench.py --iters 5 --json /kaggle/working/scale_provider_bench.json",
+         "timeout": 3600},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
