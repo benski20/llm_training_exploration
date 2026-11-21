@@ -866,7 +866,9 @@ class ModelRuntime:
         if mode == "off" or not callable(configure):
             return
         rtt_s: float | None = None
-        if mode == "auto":
+        if self.config.local_max_rows is not None and hasattr(self.backend, "local_max_rows"):
+            self.backend.local_max_rows = int(self.config.local_max_rows)
+        if mode in ("auto", "auto_kinds"):
             if self.config.local_rtt_ms is not None:
                 rtt_s = self.config.local_rtt_ms / 1e3
             else:

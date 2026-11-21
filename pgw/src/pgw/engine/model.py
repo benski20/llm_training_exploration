@@ -895,6 +895,9 @@ class TransformerModel:
             return None
         if any(c.id != calls[0].id for c in calls):  # pragma: no cover - schedules yield one linear per step
             raise ShapeError("a step mixes linears; local linears need one linear per step")
+        rows_ok = getattr(self.backend, "local_rows_ok", None)
+        if rows_ok is not None and not rows_ok(sum(int(c.x.shape[0]) for c in calls)):
+            return None  # a large (prefill) pass sends every linear (R1: local_max_rows)
         return self._check_results(calls, self.backend.forward_local(calls))  # type: ignore[attr-defined]
 
     def _advance_local(self, gen: _Steps, value: list[torch.Tensor] | None, rows: int) -> tuple[bool, Any]:

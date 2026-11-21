@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 #: :attr:`GatewaySettings.setup_model_options` keys: speed settings that never change outputs or weaken a
 #: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
-    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_rtt_ms", "float_threads",
+    "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_rtt_ms", "local_max_rows", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions",
 })
@@ -207,13 +207,20 @@ class GatewayModelConfig(BaseModel):
         0.01, ge=0, le=1.0, description="When every lane connection is busy, wait this long for one before sending "
         "the call on the stream channel",
     )
-    local_linears: Literal["off", "attention", "auto"] = Field(
+    local_linears: Literal["off", "attention", "auto", "attention_down", "all", "auto_kinds"] = Field(
         "off", description="Exact local linears: 'off' (default) = every linear goes to the service; 'attention' = "
         "qkv and o are computed exactly on the gateway from the int8 pack (same integers, so the same bits) and only "
         "gate_up/down are sent (half the round trips per token; the gateway then holds the attention int8 weights "
         "in memory); 'auto' = 'attention' when one layer's local qkv + o costs less than two round trips, decided "
         "once at start-up (local_rtt_ms, else a start-up measurement of a few content-free round trips; public "
-        "configuration, never per token). Pays off on links slower than about 2 ms",
+        "configuration, never per token). Pays off on links slower than about 2 ms. R1 (research/plans/"
+        "fewer-round-trips.md): 'attention_down' = also down (one round trip per layer), 'all' = every linear "
+        "(no round trip), 'auto_kinds' = each kind local iff its calibrated local time is below one round trip",
+    )
+    local_max_rows: int | None = Field(
+        None, ge=1, description="Local linears apply only to engine steps of at most this many rows in total "
+        "(decode); larger steps (prefill) send every linear, so a long prompt never runs the big linears on the "
+        "gateway CPU. None = every step (today's behaviour). Depends only on row counts, already public",
     )
     local_rtt_ms: float | None = Field(
         None, gt=0, description="Round trip (ms) local_linears = 'auto' compares with. None = measured at start-up "
