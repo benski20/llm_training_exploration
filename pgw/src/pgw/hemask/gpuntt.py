@@ -525,50 +525,54 @@ class GpuNTTHE(DeviceHE):
         return out
 
     def _encrypt_pass(self, r: np.ndarray, n: int, seeds: list[bytes]) -> list[MaskCiphertext]:
+        """One pass: the pads ``A s`` of all groups are launched on the device first (asynchronous on CUDA),
+        then the noise is sampled on the CPU while the device works, then the epilogue runs per block."""
         p = self.params
         g = len(seeds)
         rows = int(r.shape[0])
         smats = [sample_secret(s, p.rank) for s in seeds]
         sh = ed = rd = None
+        pads: list[torch.Tensor] = []
         try:
+            sh = self._secrets_on_device(smats, self._a_bits)
+            block = self._block_rows(g * DEGREE)
+            starts = list(range(0, n, block))
+            for c0 in starts:
+                pads.append(self._mac(self.t_a, c0, min(block, n - c0), sh))  # (nb, g*256) = A s mod 2^64
+            sh.zero_()
             host_e = np.empty((n, DEGREE * g), dtype=np.int8)
             try:
-                for gi, seed in enumerate(seeds):
+                for gi, seed in enumerate(seeds):  # overlaps the device work launched above
                     e = sample_noise(seed, n, p.eta)
                     host_e[:, gi * DEGREE:(gi + 1) * DEGREE] = e  # |e| <= eta: exact in int8
                     e.fill(0)
-                sh = self._secrets_on_device(smats, self._a_bits)
                 ed = self._to_dev(host_e)
                 rd = self._to_dev(np.ascontiguousarray(r, dtype=np.int64))
             finally:
                 host_e.fill(0)
             b = np.empty((n, DEGREE * g), dtype=np.uint64)
-            block = self._block_rows(g * DEGREE)
             qmask = (1 << p.q) - 1 if p.q < 64 else None
-            for c0 in range(0, n, block):
-                nb = min(block, n - c0)
-                pad = self._mac(self.t_a, c0, nb, sh)  # (nb, g*256) = A s mod 2^64
-                try:
-                    pad += ed[c0:c0 + nb]
-                    msg = torch.zeros((nb, DEGREE * g), dtype=torch.int64, device=self.dev)
-                    msg[:, :rows] = rd[:, c0:c0 + nb].t()
-                    msg <<= p.delta_bits
-                    pad += msg
-                    msg.zero_()
-                    if qmask is not None:
-                        pad &= qmask
-                    host = pad.to("cpu", copy=True)
-                    b[c0:c0 + nb] = host.numpy().view(np.uint64)
-                    host.zero_()
-                finally:
-                    pad.zero_()
+            for c0, pad in zip(starts, pads, strict=True):
+                nb = pad.shape[0]
+                pad += ed[c0:c0 + nb]
+                msg = torch.zeros((nb, DEGREE * g), dtype=torch.int64, device=self.dev)
+                msg[:, :rows] = rd[:, c0:c0 + nb].t()
+                msg <<= p.delta_bits
+                pad += msg
+                msg.zero_()
+                if qmask is not None:
+                    pad &= qmask
+                host = pad.to("cpu", copy=True)
+                pad.zero_()
+                b[c0:c0 + nb] = host.numpy().view(np.uint64)
+                host.zero_()
             self.stats["encrypt_groups"] += g
         except BaseException:
             for sm in smats:
                 sm.fill(0)
             raise
         finally:
-            for t in (sh, ed, rd):
+            for t in (sh, ed, rd, *pads):
                 if t is not None:
                     t.zero_()
         b3 = b.reshape(n, g, DEGREE)
@@ -584,8 +588,7 @@ class GpuNTTHE(DeviceHE):
         if dim != self.params.dim:
             raise ConfigError(f"hint dimension {dim} != {self.params.dim}")
         cts_all = [ct for it in items for ct in it[1]]
-        ys = np.concatenate([np.ascontiguousarray(y, dtype=np.uint64) for y, _, _ in items], axis=1)
-        cols = ys.shape[1]
+        cols = sum(int(y.shape[1]) for y, _, _ in items)
         slot = np.full(cols, -1, dtype=np.int64)
         c0 = 0
         for y, cts, s0 in items:
@@ -597,17 +600,18 @@ class GpuNTTHE(DeviceHE):
         valid = np.flatnonzero(slot >= 0)
         dst = slot[valid]
         big_bits = min(63, 8 * (1 + npl))
-        sh = yd = None
+        sh = self._secrets_on_device([ct.secret for ct in cts_all], big_bits)
         try:
-            sh = self._secrets_on_device([ct.secret for ct in cts_all], big_bits)
-            yd = self._to_dev(ys.view(np.int64))
+            # the replies W8 b are what the provider sent (not secret): uploaded straight into one device array
+            yd = torch.empty((m, cols), dtype=torch.int64, device=self.dev)
+            c0 = 0
+            for y, _, _ in items:
+                yh = torch.from_numpy(np.ascontiguousarray(y, dtype=np.uint64).view(np.int64))
+                yd[:, c0:c0 + yh.shape[1]].copy_(yh)
+                c0 += yh.shape[1]
         except BaseException:
-            if sh is not None:
-                sh.zero_()
+            sh.zero_()
             raise
-        finally:
-            ys.fill(0)
-        assert sh is not None and yd is not None
         vidx = torch.from_numpy(valid).to(self.dev)
         dev_hint = self.hint_on_device(key, hint)
         half = 1 << (delta_bits - 1)
@@ -627,9 +631,17 @@ class GpuNTTHE(DeviceHE):
                 v &= kmask
                 sel = v.t().index_select(0, vidx)
                 v.zero_()
-                host = sel.to("cpu", copy=True).numpy()
-                sel.zero_()
-                out[dst, r0:r0 + nb] = host
+                if k <= 32:  # download 4 bytes per value: [0, 2^K) as the int32 with the same low 32 bits
+                    sel -= (sel >= 1 << 31).to(torch.int64) << 32
+                    sel32 = sel.to(torch.int32)
+                    sel.zero_()
+                    host = sel32.to("cpu", copy=True).numpy()
+                    sel32.zero_()
+                    out[dst, r0:r0 + nb] = host.view(np.uint32)
+                else:
+                    host = sel.to("cpu", copy=True).numpy()
+                    sel.zero_()
+                    out[dst, r0:r0 + nb] = host
                 host.fill(0)
             self.stats["decrypt_groups"] += len(cts_all)
         finally:

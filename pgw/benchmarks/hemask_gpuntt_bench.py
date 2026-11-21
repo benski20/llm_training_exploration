@@ -122,9 +122,31 @@ def main() -> None:
                 eng.cache.budget = budget
                 f = (lambda y=y, cts=cts, out=out: eng.decrypt_into("h", hint, [(y, cts, 0)], out, p.delta_bits, p.k))
                 dec[f"{kern}_{mode}_g{g}"] = timed(f, args.reps, sync) / (m * g)
+        # breakdown (device-only times; the CPU noise sampler every engine shares)
+        g = max(gs)
+        smats = [sample_secret(bytes([40 + i]) * 32, p.rank) for i in range(g)]
+        sh = eng._secrets_on_device(smats, 56)
+        hd = torch.from_numpy(hint).to(dev)
+        mb = min(m, 4096)
+        th = eng._fwd_planes(hd[:mb], 1)
+        brk = {
+            "mac_inv_crt_encrypt": timed(lambda: eng._mac(eng.t_a, 0, n, sh), args.reps, sync) / (n * g),
+            "fwd_hint_planes": timed(lambda: eng._fwd_planes(hd[:mb], 1), args.reps, sync) / (mb * g),
+            "mac_inv_crt_decrypt": timed(lambda: eng._mac(th, 0, mb, sh), args.reps, sync) / (mb * g),
+            "secrets_transform": timed(lambda: eng._secrets_on_device(smats, 56), args.reps, sync) / (n * g),
+        }
+        res[f"breakdown_{kern}_g{g}_us_per_row_group"] = {k: round(v * 1e6, 3) for k, v in brk.items()}
+        del hd, th, sh
         del eng
         if sync:
             torch.cuda.empty_cache()
+
+    # CPU noise sampling (CBD, native when built), shared by every engine's encryption
+    from pgw.hemask.lwe import sample_noise
+
+    g = max(gs)
+    res["sample_noise_us_per_row_group"] = round(1e6 * timed(
+        lambda: [sample_noise(bytes([60 + i]) * 32, n, p.eta) for i in range(g)], args.reps, False) / (n * g), 3)
 
     # ---- dense device pass ----
     if "devmm" in engines:

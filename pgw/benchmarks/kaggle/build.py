@@ -239,7 +239,7 @@ JOBS: dict[str, dict] = {
                                   "src/pgw/hemask/ntt_dev.py", "src/pgw/hemask/ntt_triton.py",
                                   "tests/hemask/test_ntt_dev.py", "benchmarks/hemask_ntt_dev_bench.py", "tests/integration",
                                   "tests/moe", *[f"tests/hemask/test_{t}.py" for t in (
-                                      "devmm", "factory_he", "gpu", "lwe", "native_sampling", "wire_v2")],
+                                      "devmm", "factory_he", "gpu", "lwe", "wire_v2")],
                                   *[f"benchmarks/{b}.py" for b in (
                                       "chat_speed_model", "e2e_local", "gateway_probe", "gpu_kernel_bench",
                                       "hemask_ntt_bench", "lane_bench", "lm_head_bench", "native_finish_bench",
