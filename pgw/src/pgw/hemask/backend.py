@@ -213,6 +213,9 @@ class HEMaskBackend:
             on CPU tensors). Same ciphertext distribution and the same decrypted bits either way.
     """
 
+    #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
+    _dev: Any = None
+
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
                  max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
@@ -245,7 +248,7 @@ class HEMaskBackend:
         self._planes = dev is not None or engine() != "cpu_f64"
         self._a: np.ndarray = self._a_planes(a) if self._planes else a
         del a
-        self._dev: DeviceHE | None = None
+        self._dev = None
         if dev is not None:
             self._dev = DeviceHE(self._a, self.params, dev)
             self._a = self._a[:0]  # the device holds A; the host copy is not needed
@@ -272,20 +275,18 @@ class HEMaskBackend:
         groups = max(1, min(self.groups_per_pass, max_bytes // (8 * DEGREE * m_max)))
         return DEGREE * groups
 
-    def _encrypt(self, rn: np.ndarray, n: int) -> tuple[list[MaskCiphertext], np.ndarray]:
-        """The groups of ``rn`` and their ciphertexts side by side (``n x 256 g``); ``ct.b`` is left empty."""
+    def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
+        """The 256-slot groups of ``rn``, encrypted (on the device: one GEMM for all of them)."""
         if self._dev is not None:
-            return self._dev.encrypt(rn, n)
+            cts, b = self._dev.encrypt(rn, n)
+            for gi, ct in enumerate(cts):
+                ct.b = np.ascontiguousarray(b[:, gi * DEGREE:(gi + 1) * DEGREE])
+            return cts
         a = self._a[:n]
         if self._planes:
-            cts = [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
-                   for g0 in range(0, len(rn), DEGREE)]
-        else:
-            cts = [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
-        b = np.concatenate([ct.b for ct in cts], axis=1)
-        for ct in cts:
-            ct.b = _NO_B  # the request owns the ciphertext now
-        return cts, b
+            return [encrypt_masks(rn[g0:g0 + DEGREE], None, self.params, a_planes=a)
+                    for g0 in range(0, len(rn), DEGREE)]
+        return [encrypt_masks(rn[g0:g0 + DEGREE], a, self.params) for g0 in range(0, len(rn), DEGREE)]
 
     def _decrypt(self, linear: str, y: np.ndarray, cts: list[MaskCiphertext], m: int) -> np.ndarray:
         """``W8 r`` (``(sum rows, m)`` int64) of the groups of one provider reply."""
@@ -440,7 +441,10 @@ class HEMaskBackend:
         try:
             for s0, s1 in batches:
                 t0 = time.perf_counter()
-                cts, b = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
+                cts = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
+                b = np.concatenate([ct.b for ct in cts], axis=1)
+                for ct in cts:
+                    ct.b = _NO_B  # the request owns the ciphertext now
                 self.stats["encrypt_s"] += time.perf_counter() - t0
                 if len(inflight) >= self.max_inflight:  # wait for the oldest before sending more
                     try:

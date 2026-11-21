@@ -225,7 +225,8 @@ JOBS: dict[str, dict] = {
         {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; free -g; nvidia-smi || true", "timeout": 60},
         {"kind": "pytest", "name": "pytest_devmm_cuda",
          "args": ["tests/hemask/test_devmm.py", "tests/hemask/test_gpu.py", "tests/hemask/test_factory_he.py",
-                  "tests/factory/test_gpu_prng.py", "tests/factory/test_generator.py", "-q", "-rs", "--timeout", "1800"],
+                  "tests/factory/test_gpu_prng.py", "tests/factory/test_generator.py", "-q", "-rs",
+                  "--timeout", "1800"],
          "timeout": 2400},
         *[{"kind": "shell", "name": name, "cmd": f"{env} python benchmarks/gateway_gpu_bench.py {args}",
            "timeout": 2400} for name, env, args in (

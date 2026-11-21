@@ -14,8 +14,7 @@ import torch
 
 from pgw.core.ring import RingParams
 from pgw.factory import MaskGenerator
-from pgw.hemask import DEGREE, HEParams, encrypt_masks, matmul_mod64, public_matrix
-from pgw.hemask import devmm, fastmm
+from pgw.hemask import DEGREE, HEParams, devmm, encrypt_masks, fastmm, matmul_mod64, public_matrix
 from pgw.hemask.backend import HEMaskBackend, HintStore
 from pgw.hemask.fastmm import to_planes
 from pgw.hemask.lwe import a_plane_count
