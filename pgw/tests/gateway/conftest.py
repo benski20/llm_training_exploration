@@ -132,8 +132,8 @@ def masked_settings(tiny_pack_dir: Path, tmp_path: Path, **kw: Any) -> Any:
         from pgw.modelpack import ModelPack
 
         model_kw["fingerprint"] = ModelPack.open(tiny_pack_dir).fingerprint  # production policy: pinned
-    model = GatewayModelConfig(name=MODEL, pack_path=tiny_pack_dir, mode="masked", service_url=SERVICE_URL,
-                               **model_kw)
+    model_kw.setdefault("service_url", SERVICE_URL)
+    model = GatewayModelConfig(name=MODEL, pack_path=tiny_pack_dir, mode="masked", **model_kw)
     base: dict[str, Any] = {
         "models": [model], "admin_token": ADMIN_TOKEN, "maskstore_root": tmp_path / "unused-store",
         "audit_log_file": tmp_path / "audit.jsonl", "default_max_tokens": 8,

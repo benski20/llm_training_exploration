@@ -33,9 +33,9 @@ def test_customer_gateway_env_presets_speed_settings(tmp_path: Path, monkeypatch
     boot = _boot()
     env = boot.gateway_env(tmp_path / "config", tmp_path / "data", 8080)
     opts = json.loads(env["PGW_GATEWAY_SETUP_MODEL_OPTIONS"])
-    assert opts == {"local_linears": "auto", "float_threads": 1}
+    assert opts == {"local_linears": "auto", "float_threads": 1, "lane": "stream"}
     assert env["PGW_FLOAT_THREADS"] == "1"
-    assert "lane" not in opts and "spec_rows" not in opts  # remote provider; no draft model in the demo
+    assert "spec_rows" not in opts  # no draft model in the demo; lane = stream works with a remote provider
     for k, v in env.items():
         if k.startswith("PGW_GATEWAY_"):
             monkeypatch.setenv(k, v)

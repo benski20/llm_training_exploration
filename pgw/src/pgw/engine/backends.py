@@ -902,7 +902,8 @@ class MaskedBackend(LinearBackend):
         self.hot_weight_loads = 0
 
         # ---- chat-speed WP-A4b: TripEngine, deferred checks, synchronous trips, local linears ----
-        lane_client = _is_lane_client(client)
+        # a trip-lane client, or the blocking stream lane (``lane = "stream"``): synchronous trips are fast
+        lane_client = _is_lane_client(client) or getattr(client, "sync_stream", False) is True
         self._trip_native = all(native_available(f) for f in _TRIP_FUNCS)
         #: TripEngine: prepare and finish with the native trip kernels (``pgw_fast.trip_*``, WP-A4a):
         #: the activation bit width is selected in constant time (every row evaluates the same public
@@ -955,6 +956,12 @@ class MaskedBackend(LinearBackend):
         #: Linear kinds computed exactly on the gateway (E2): empty = every linear is remote.
         self._local_kinds: frozenset[str] = frozenset()
         self._local_w: _WeightCache | None = None
+        #: :meth:`_local_fast` usable at all (native trip prepare kernel, a 32-bit ring, at most 15
+        #: activation bits for two int8 digits, exact CPU int8 GEMMs); per shape it is self-checked.
+        #: Decided on first use (the CPU int8 probe times a GEMM once per process).
+        self._local_fast_on: bool | None = None
+        self._local_fast_checked: dict[tuple[int, int, float, int], bool] = {}
+        self._local_zero_r: dict[int, np.ndarray] = {}
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
         self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
         if local_max_rows is not None and int(local_max_rows) < 1:
@@ -2089,7 +2096,7 @@ class MaskedBackend(LinearBackend):
                 ts.append(time.perf_counter() - t0)
             times[kind] = sorted(ts)[len(ts) // 2]
         policy["local_s_by_kind"] = dict(sorted(times.items()))
-        policy["reason"] = "per kind: local iff below one round trip of {:.3g} s".format(float(rtt_s))
+        policy["reason"] = f"per kind: local iff below one round trip of {float(rtt_s):.3g} s"
         return frozenset(k for k, t in times.items() if t < float(rtt_s))
 
     def local_rows_ok(self, rows: int) -> bool:
@@ -2106,6 +2113,85 @@ class MaskedBackend(LinearBackend):
         kind = getattr(lid, "kind", None)
         return kind is not None and getattr(kind, "value", kind) in kinds
 
+    #: Decode-sized local calls (at most this many rows) take :meth:`_local_fast` when its one-time
+    #: self-check per linear shape passed (0 disables; ``PGW_LOCAL_FAST=0`` too).
+    local_fast_max_rows = 8
+
+    def _local_fast_ok(self, meta: _MaskedMeta, w: _IntWeight, rows: int, lid: LinearId) -> bool:
+        if not 0 < rows <= self.local_fast_max_rows:
+            return False
+        on = self._local_fast_on
+        if on is None:
+            ring = self.ring
+            on = self._local_fast_on = (_env_flag("PGW_LOCAL_FAST", True) and native_available("trip_prepare_into")
+                                        and ring.k == 32 and ring.a <= 15 and cpu_int8_fast())
+        if not on:
+            return False
+        key = (meta.in_features, meta.out_features, float(meta.wnorm or 0.0), id(w))
+        hit = self._local_fast_checked.get(key)
+        if hit is None:
+            hit = self._local_fast_checked[key] = self._local_fast_agrees(meta, w, lid)
+        return hit
+
+    def _local_fast_agrees(self, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> bool:
+        """Self-check: :meth:`_local_fast` gives the reference outputs bit for bit on public test rows
+        (Gaussian, spike, zero, tiny; 1 and 3 rows), and refuses the same rows."""
+        rng = np.random.default_rng(0x5EED ^ meta.in_features * 7919 + meta.out_features)
+        x = (rng.standard_normal((3, meta.in_features)) * 3).astype(np.float32)
+        x[1] *= np.float32(1e-3)
+        x[1, int(rng.integers(0, meta.in_features))] = 50.0
+        x[2] = 0.0
+        tiny = (rng.standard_normal((1, meta.in_features)) * 1e-30).astype(np.float32)
+        try:
+            for xs in (x[:1], x, tiny):
+                ref = self._local_reference(torch.from_numpy(xs.copy()), meta, w, lid)
+                got = self._local_fast(np.ascontiguousarray(xs), meta, w, lid)
+                if ref.dtype != got.dtype or ref.shape != got.shape or not torch.equal(ref, got):
+                    raise ValueError("outputs differ")
+        except Exception as exc:
+            log.error("local fast path self-check failed for n=%d m=%d (%s): reference path kept",
+                      meta.in_features, meta.out_features, exc)
+            return False
+        return True
+
+    def _local_fast(self, xf: np.ndarray, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> torch.Tensor:
+        """The exact local product for a few rows: the TripEngine's prepare kernel quantizes (with a zero
+        mask its payload is the quantized ring element; checked against the reference by
+        ``_trip_kernels_agree`` like every TripEngine use), two balanced base-256 digits go through one
+        int8 GEMM, and the numpy rescale is :func:`dequantize_outputs`' small-input path. Same integers,
+        so the same bits as :meth:`_local_reference` (self-checked per shape)."""
+        ring = self.ring
+        rows, n = xf.shape
+        zeros = self._local_zero_r.get(n)
+        if zeros is None or zeros.shape[0] < rows:
+            zeros = self._local_zero_r[n] = np.zeros((self.local_fast_max_rows, n), dtype=np.int64)
+        payload = np.empty(rows * n * 4, dtype=np.uint8)
+        sx = np.empty(rows, dtype=np.float64)
+        try:
+            native.fast.trip_prepare_into(xf, zeros[:rows], ring.k, ring.a, int(ring.cap or 0),
+                                          float(meta.wnorm or 0.0) if ring.cap else 0.0, payload, sx)
+        except ValueError as exc:
+            if str(exc).startswith("ring_overflow"):
+                raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+            raise ShapeError(str(exc)) from exc
+        xq = payload.view("<u4").astype(np.int64).reshape(rows, n)
+        xq -= (xq >> 31) << 32  # centered: |xq| < 2^(A-1)
+        lo = ((xq + 128) & 255) - 128
+        hi = (xq - lo) >> 8
+        payload.fill(0)
+        d8 = torch.from_numpy(np.concatenate([lo, hi]).astype(np.int8))
+        xq.fill(0)
+        lo.fill(0)
+        hi.fill(0)
+        y = int8_digit_gemm(d8, w.w8t.t()).numpy()
+        d8.numpy().fill(0)
+        yq = y[:rows] + (y[rows:] << 8)
+        bound = int(ring.output_bound(meta.in_features))
+        if int(np.abs(yq).max()) > bound:
+            self._raise_status(2, 0, lid, rows, bound)
+        out = dequantize_outputs(torch.from_numpy(yq), torch.from_numpy(sx), meta.scale, meta.bias, torch.float32)
+        return out
+
     def _forward_local_one(self, call: LinearCall) -> torch.Tensor:
         assert self._local_w is not None
         w: _IntWeight = self._local_w.get(call.id)
@@ -2113,6 +2199,14 @@ class MaskedBackend(LinearBackend):
         x = call.x
         if x.ndim != 2 or x.shape[1] != meta.in_features:
             raise ShapeError(f"{call.id}: x must be (T, {meta.in_features}), got {tuple(x.shape)}")
+        if x.device.type == "cpu" and self._local_fast_ok(meta, w, int(x.shape[0]), call.id):
+            xn = np.ascontiguousarray(x.detach().to(torch.float32).numpy())
+            if not np.isfinite(xn).all():
+                raise RingOverflowError("non-finite activation values cannot be quantized")
+            return self._local_fast(xn, meta, w, call.id)
+        return self._local_reference(x, meta, w, call.id)
+
+    def _local_reference(self, x: torch.Tensor, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> torch.Tensor:
         xf = x.detach().to("cpu", torch.float32)
         if xf.numel() and not bool(torch.isfinite(xf).all()):
             raise RingOverflowError("non-finite activation values cannot be quantized")
@@ -2125,7 +2219,7 @@ class MaskedBackend(LinearBackend):
         # the masked path's range check (status 2 of its finish): same refusal on the same outputs
         bound = int(self.ring.output_bound(meta.in_features))
         if yq.numel() and int(yq.abs().max()) > bound:
-            self._raise_status(2, 0, call.id, int(yq.shape[0]), bound)
+            self._raise_status(2, 0, lid, int(yq.shape[0]), bound)
         y = dequantize_outputs(yq, sx, meta.scale, meta.bias, torch.float32)
         return y if x.device.type == "cpu" else y.to(x.device)
 
