@@ -1,0 +1,43 @@
+{
+ "preset": "qwen2.5-7b",
+ "rank": 16,
+ "k": 32,
+ "sum_n": 831488,
+ "dense_engine": "cpu_int8",
+ "threads": 2,
+ "cpu": 4,
+ "transform_s": 0.178,
+ "transform_bytes_per_row": 49152.0,
+ "us_per_row_group": {
+  "dense": 4603.697,
+  "ntt_pre_g1": 11.753,
+  "ntt_pre_g4": 7.607,
+  "ntt_pre_g8": 7.327
+ },
+ "encrypt_ms_per_slot": {
+  "dense": 14952.809,
+  "ntt_pre_g1": 38.175,
+  "ntt_pre_g4": 24.706,
+  "ntt_pre_g8": 23.798
+ },
+ "encrypt_slots_per_s": {
+  "dense": 0.1,
+  "ntt_pre_g1": 26.2,
+  "ntt_pre_g4": 40.5,
+  "ntt_pre_g8": 42.0
+ },
+ "speedup_vs_dense": {
+  "dense": 1.0,
+  "ntt_pre_g1": 391.7,
+  "ntt_pre_g4": 605.2,
+  "ntt_pre_g8": 628.3
+ },
+ "ops_model_one_row_group": {
+  "dense": 7340032.0,
+  "ntt_pre": 15360.0,
+  "ratio": 477.8666666666667
+ },
+ "transformed_A_bytes_model": 931135488
+}
+
+---stderr---

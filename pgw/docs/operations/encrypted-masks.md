@@ -23,6 +23,12 @@ The same settings are available as `PGW_FACTORY_HE_SERVICE_URL`, `PGW_FACTORY_HE
 `PGW_FACTORY_HE_GROUPS_PER_CALL` (default 4) and `PGW_FACTORY_HE_TIMEOUT_S`. The client demo
 takes `--mask-source he`.
 
+`PGW_FACTORY_HE_ENCRYPT=ntt_pre` (default `dense`) keeps the public matrix in NTT form and encrypts
+about 10x faster on a CPU than the dense path on a T4, with bit-identical ciphertexts (needs the
+native `pgw_ntt` module). Ranks below 16 are refused; the unreviewed rank-12 profile needs
+`PGW_FACTORY_HE_PARAMS_ACK` set to its acknowledgement string. See
+`research/plans/he-structured-encryption.md`.
+
 ## The one-time hint
 
 On first use, the factory builds `H = W8 A mod 2^64` for every linear from the pack and a fresh

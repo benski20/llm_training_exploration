@@ -57,12 +57,8 @@ inverse NTT per row and group. That is what `PretransformedEncryptor` does.
 
 ### Measurements
 
-Local box (shared 4-vCPU Xeon @ 2.1 GHz with AVX-512/AMX flags, `fastmm.engine() == cpu_f64` because
-the int8 timing probe fails here, so *today's* encryption takes the NTT path that transforms `A` on
-every call). Numbers are full encryptions (sampling + pad + combine), extrapolated per slot from
-2048 rows; the box was shared with other agents' test runs, so expect +-30 %:
-
-(see section 6, filled in from `benchmarks/hemask_encrypt_bench.py`)
+Measured on Kaggle (job `pgw-he-encrypt-ntt`, T4 + 4-vCPU Xeon @ 2.0 GHz, raw output in `benchmarks/results/kaggle/he_encrypt_ntt/`); see section 6. No local
+numbers are reported (the shared box is too noisy to quote).
 
 ## 3. Security of the current parameters (and why nothing below rank 12 is offered)
 
@@ -84,6 +80,7 @@ n=4096/109: 95.5), i.e. that standard's cost model adds ~30 bits of overhead on 
 | rank 14   | 3584           | 56     | same  | ternary  | 687  | 200.6              | 182.1   | (~95)                     |
 | **rank 16** (default) | 4096 | 56 | same  | ternary  | 818  | **238.9**          | 216.8   | 109                       |
 | rank 16, q=2^64 (K40) | 4096 | 64 | same | ternary | 687 | 200.6             | 182.1   | 109                       |
+| rank 12, q=2^64 (K40, opt-in) | 3072 | 64 | same | ternary | 467 | **136.4** | 123.8 | (~81)                 |
 
 Consequences:
 
@@ -102,8 +99,12 @@ Consequences:
   (sigma = 3.24), public matrix uniform from a gateway-chosen 32-byte seed, scaling 2^(q-K).
 * Same assumption family (decision MLWE with ternary secret, power-of-two cyclotomic, many samples
   per secret); only the dimension shrinks. Estimated core-SVP 163.5 bits classical / 148.4 quantum
-  (Kyber-768 is quoted at core-SVP ~182, Kyber-512 at ~118); comfortably above 128 even without the
-  HE-standard overheads.
+  at q = 2^56 (Kyber-768 is quoted at core-SVP ~182, Kyber-512 at ~118; `core_svp_beta` reproduces
+  Kyber-512 beta = 406 and Kyber-768 beta = 624 with their noise widths); comfortably above 128 even
+  without the HE-standard overheads. **At q = 2^64 (K40 rings) the margin is much smaller:** beta = 467,
+  core-SVP 136.4 classical / 123.8 quantum (below 128 quantum), still inside the HE-standard 128-bit
+  envelope by interpolation (log q 64 < ~81). The gate does not distinguish K32 from K40; a reviewer
+  may want to restrict `mlwe-r12` to q = 2^56.
 * Correctness is unchanged: the decryption noise does not depend on the rank except the hint-drop
   term `255 x dim`, which shrinks (`HEParams.noise_bound`); at K32 the worst 7B row (n = 18944,
   ||w|| <= 127 sqrt(n)) gives a bound of 2^21.05 (rank 16: 2^21.22) vs the 2^23 budget; a 70B-class row (n = 28672) 2^21.25 (rank 16: 2^21.39).
@@ -139,7 +140,31 @@ Consequences:
 
 ## 6. Numbers
 
-Filled in below from the local and Kaggle runs.
+Kaggle job `pgw-he-encrypt-ntt` (T4, 4-vCPU Xeon @ 2.0 GHz, benchmark pinned to 2 threads),
+`benchmarks/hemask_encrypt_bench.py --rows 2048`, K32. Full encryption (sampling + pad + combine) of
+one token slot across all linears; `dense` is today's byte-plane path on the given engine
+(extrapolated from 256 rows on CUDA, 128 rows on cpu_int8). On-device pytest of
+`test_mlwe_ring.py` + `test_ntt.py`: 44 passed.
+
+| model | rank | dense engine | dense slots/s | ntt_pre G=1 | G=4 | G=8 | ntt_pre / dense (best) |
+|-------|------|--------------|---------------|-------------|-----|-----|------------------------|
+| 0.5B  | 16   | T4 (cuda)    | 22.4          | 133.6       | **225.8** | 192.8 | 10.1x |
+| 0.5B  | 16   | cpu_int8     | 0.2           | 129.7       | 185.6 | **192.0** | (927x, see note) |
+| 7B    | 16   | T4 (cuda)    | 4.4           | 29.1        | **47.0** | 40.7 | 10.7x |
+| 7B    | 16   | cpu_int8     | 0.1           | 26.2        | 40.5 | **42.0** | (628x, see note) |
+| 7B    | 12 (opt-in) | T4 (cuda) | 5.4       | -           | **53.6** | -   | 10.0x |
+
+Notes:
+
+* `ntt_pre` runs on the CPU only (2 threads); it beats the T4 dense GEMM by ~10x at both sizes.
+* The cpu_int8 dense numbers are from a Kaggle CPU without AMX and are not representative of a
+  gateway with AMX/VNNI: the Modal 0.5B CPU run encrypted ~17 slots/s (512 slots in 30 s), so the
+  realistic CPU gain at 0.5B is ~11-13x, not ~900x.
+* Transform of `A` once: 0.13-0.18 s per 2048 rows; transformed `A` 0.24 GB (0.5B), 0.93 GB (7B).
+* Rank 12 buys only +14 % encryption throughput at 7B (53.6 vs 47.0 slots/s) once `ntt_pre` is used;
+  its main benefit would be the 25 % smaller hint and decryption, which were not measured here.
+* After `ntt_pre`, encryption (~21 ms/slot at 7B on 2 cores) is no longer the dominant gateway cost;
+  the provider product and decryption are.
 
 ## 7. What a human cryptographer must check
 

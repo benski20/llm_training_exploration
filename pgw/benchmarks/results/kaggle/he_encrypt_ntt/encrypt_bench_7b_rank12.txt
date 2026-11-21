@@ -1,0 +1,35 @@
+{
+ "preset": "qwen2.5-7b",
+ "rank": 12,
+ "k": 32,
+ "sum_n": 831488,
+ "dense_engine": "cuda",
+ "threads": 2,
+ "cpu": 4,
+ "transform_s": 0.13,
+ "transform_bytes_per_row": 36864.0,
+ "us_per_row_group": {
+  "dense": 57.38,
+  "ntt_pre_g4": 5.742
+ },
+ "encrypt_ms_per_slot": {
+  "dense": 186.37,
+  "ntt_pre_g4": 18.65
+ },
+ "encrypt_slots_per_s": {
+  "dense": 5.4,
+  "ntt_pre_g4": 53.6
+ },
+ "speedup_vs_dense": {
+  "dense": 1.0,
+  "ntt_pre_g4": 10.0
+ },
+ "ops_model_one_row_group": {
+  "dense": 5505024.0,
+  "ntt_pre": 12288.0,
+  "ratio": 448.0
+ },
+ "transformed_A_bytes_model": 698351616
+}
+
+---stderr---
