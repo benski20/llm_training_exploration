@@ -340,3 +340,28 @@ def test_self_check_falls_back_to_one_row_cuda_core(monkeypatch: pytest.MonkeyPa
         finally:
             tg._SELF_CHECK.pop(dev, None)
             tg._NO_DOT.discard(dev)
+
+
+@pytest.mark.parametrize(("cc", "dot"), [((7, 5), False), ((7, 0), False), ((8, 0), True), ((9, 0), True)])
+def test_self_check_skips_tensor_core_variant_before_sm80(monkeypatch: pytest.MonkeyPatch, cc: tuple[int, int],
+                                                           dot: bool) -> None:
+    """Before sm_80 (T4 = sm_75) Triton has no int8 tensor-core dot: the variant is never compiled there (the
+    choice is made from the capability, deterministically), and the CUDA-core kernels are checked once."""
+    import pgw.core.triton_gemv as tg
+
+    dev = "cuda:7"  # a key no real call uses on this host
+    calls: list[str] = []
+    monkeypatch.setattr(tg, "triton_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda index=None: cc)
+    monkeypatch.setattr(tg, "_run_check", lambda key, device: (calls.append(key), (True, ""))[1])
+    monkeypatch.setattr(tg, "_checked_rules", lambda key, device: ())
+    monkeypatch.setattr(tg, "_enable_multirow", lambda key, device: 0)
+    tg._reset(dev)
+    try:
+        assert tg.self_check(dev)
+        assert calls == [dev]  # one check, no failing tensor-core attempt first
+        assert (dev not in tg._NO_DOT) is dot
+        assert tg.max_rows(dev) == (TRITON_GEMV_MAX_ROWS if dot else 1)
+    finally:
+        tg._reset(dev)
+    assert tg._dot_unsupported("cpu") is None

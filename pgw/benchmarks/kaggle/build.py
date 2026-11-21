@@ -335,6 +335,37 @@ JOBS: dict[str, dict] = {
                 "python deploy/modal/local_rehearsal.py --work /tmp/reh --device auto --users --delay-ms 17 "
                 "--json /kaggle/working/tunnel17_t4.json", "timeout": 3000},
     ]},
+    # provider GPU wiring on a T4 with Modal's torch (2.15.0): which fused ring GEMV variant compiles and passes
+    # its self-check, GPU exactness tests, the service time per call at the Modal demo's 0.5B shapes (Triton vs
+    # digit GEMM vs CUDA graphs, 1-16 rows), and the real service per round trip over TLS at 1 / 2 / all cores.
+    "pgw-g1-provider-t4": {"exclude": ["rust", "scripts", "tests/gateway", "tests/e2e", "tests/maskstore",
+                                       "tests/enroll", "tests/console", "tests/factory", "tests/engine", "tests/wire",
+                                       "tests/native", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                       "tests/hemask", "tests/vectors", "tests/modelpack", "tests/observability",
+                                       "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+                                       "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                       "benchmarks/chat_speed_model.py", "benchmarks/RESULTS.md"],
+                           "steps": [
+        {"kind": "shell", "name": "torch_modal_version",
+         "cmd": "python -m pip install -q torch==2.15.0 && python -c 'import torch, triton; "
+                "assert torch.cuda.is_available(); print(torch.__version__, torch.version.cuda, triton.__version__, "
+                "torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))' || "
+                "(python -m pip install -q torch==2.15.0 --index-url https://download.pytorch.org/whl/cu126 && "
+                "python -c 'import torch, triton; print(torch.__version__, torch.version.cuda, triton.__version__, "
+                "torch.cuda.is_available())')", "timeout": 1500},
+        {"kind": "shell", "name": "cpu_info", "cmd": "nproc; lscpu | head -20; nvidia-smi", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_gpu_kernels",
+         "args": ["tests/core/test_triton_gemv.py", "tests/core/test_triton_gemv_multirow.py",
+                  "tests/service/test_gpu_exec.py", "tests/service/test_kernels.py", "tests/service/test_gpu_graphs.py",
+                  "-q", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        {"kind": "shell", "name": "provider_trip_kernel",
+         "cmd": "python benchmarks/provider_trip_bench.py --iters 300 --json /kaggle/working/provider_trip_kernel.json",
+         "timeout": 1800},
+        {"kind": "shell", "name": "provider_trip_service",
+         "cmd": "python benchmarks/provider_trip_bench.py --no-kernel --service --tls --cores 0 0,1 all --tokens 20 "
+                "--json /kaggle/working/provider_trip_service.json", "timeout": 2400},
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},

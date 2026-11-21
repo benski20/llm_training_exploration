@@ -1,0 +1,5 @@
+2.15.0+cu132 13.2 3.9.0 Tesla T4 (7, 5)
+
+---stderr---
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+torchvision 0.26.0+cu130 requires torch==2.11.0, but you have torch 2.15.0 which is incompatible.

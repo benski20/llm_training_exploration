@@ -1,0 +1,165 @@
+{"gpu": "Tesla T4", "capability": [7, 5], "sms": 40, "torch": "2.15.0+cu132", "triton": "3.9.0", "self_check": true, "self_check_s": 4.55, "tensor_core_variant": false, "dot_unsupported": "compute capability 7.5 < 8.0: Triton has no int8 tensor-core dot there", "max_rows": 1, "stream_rows": 0, "table_rules": ["GemvConfig(block_r=1, block_m=16, block_n=512, split_k=8, num_warps=4, dot=False, stream=False) 7B qkv", "GemvConfig(block_r=1, block_m=8, block_n=1024, split_k=1, num_warps=4, dot=False, stream=False) 7B o", "GemvConfig(block_r=1, block_m=32, block_n=1024, split_k=8, num_warps=4, dot=False, stream=False) wide (7B gate_up)", "GemvConfig(block_r=1, block_m=32, block_n=1024, split_k=8, num_warps=4, dot=False, stream=False) deep (7B down)"], "dot_probe": "RuntimeError: PassManager::run failed"}
+{"linear": "qkv", "m": 1152, "n": 896, "rows": 1, "triton_ms": 0.2678, "triton_p90_ms": 0.2942, "eager_ms": 0.5294, "eager_p90_ms": 0.5674, "graphs_ms": 0.1604, "graphs_p90_ms": 0.1746, "graphs_captured": 1, "triton_dev_ms": 0.0609, "config": "GemvConfig(block_r=1, block_m=16, block_n=1024, split_k=1, num_warps=4, dot=False, stream=False)", "weight_gbs": 16.9, "served_by": "triton"}
+{"linear": "qkv", "m": 1152, "n": 896, "rows": 2, "triton_ms": 0.5394, "triton_p90_ms": 0.5736, "eager_ms": 0.556, "eager_p90_ms": 1.047, "graphs_ms": 0.1658, "graphs_p90_ms": 0.1874, "graphs_captured": 1, "served_by": "digit"}
+{"linear": "qkv", "m": 1152, "n": 896, "rows": 4, "triton_ms": 0.6103, "triton_p90_ms": 1.0028, "eager_ms": 0.533, "eager_p90_ms": 0.6186, "graphs_ms": 0.1652, "graphs_p90_ms": 0.1766, "graphs_captured": 1, "served_by": "digit"}
+{"linear": "qkv", "m": 1152, "n": 896, "rows": 8, "triton_ms": 0.544, "triton_p90_ms": 0.5778, "eager_ms": 0.5398, "eager_p90_ms": 0.5669, "graphs_ms": 0.1798, "graphs_p90_ms": 0.1955, "graphs_captured": 1, "served_by": "digit"}
+{"linear": "qkv", "m": 1152, "n": 896, "rows": 16, "triton_ms": 0.5514, "triton_p90_ms": 0.6068, "eager_ms": 0.5613, "eager_p90_ms": 0.5871, "graphs_ms": 0.2029, "graphs_p90_ms": 0.2159, "graphs_captured": 2, "served_by": "digit"}
+{"linear": "o", "m": 896, "n": 896, "rows": 1, "triton_ms": 0.2489, "triton_p90_ms": 0.2762, "eager_ms": 0.5189, "eager_p90_ms": 0.5617, "graphs_ms": 0.5186, "graphs_p90_ms": 0.548, "graphs_captured": 0, "triton_dev_ms": 0.0606, "config": "GemvConfig(block_r=1, block_m=16, block_n=1024, split_k=1, num_warps=4, dot=False, stream=False)", "weight_gbs": 13.2, "served_by": "triton"}
+{"linear": "o", "m": 896, "n": 896, "rows": 2, "triton_ms": 0.5252, "triton_p90_ms": 0.5626, "eager_ms": 0.5135, "eager_p90_ms": 0.5544, "graphs_ms": 0.5221, "graphs_p90_ms": 0.5546, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "o", "m": 896, "n": 896, "rows": 4, "triton_ms": 0.5313, "triton_p90_ms": 0.5652, "eager_ms": 0.5209, "eager_p90_ms": 0.556, "graphs_ms": 0.5295, "graphs_p90_ms": 0.5667, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "o", "m": 896, "n": 896, "rows": 8, "triton_ms": 0.5405, "triton_p90_ms": 0.585, "eager_ms": 0.5109, "eager_p90_ms": 0.5596, "graphs_ms": 0.5268, "graphs_p90_ms": 0.5605, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "o", "m": 896, "n": 896, "rows": 16, "triton_ms": 0.5399, "triton_p90_ms": 0.5648, "eager_ms": 0.5297, "eager_p90_ms": 0.5597, "graphs_ms": 0.5455, "graphs_p90_ms": 0.5734, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "gate_up", "m": 9728, "n": 896, "rows": 1, "triton_ms": 0.2855, "triton_p90_ms": 0.3169, "eager_ms": 0.5296, "eager_p90_ms": 0.5663, "graphs_ms": 0.5483, "graphs_p90_ms": 0.5796, "graphs_captured": 0, "triton_dev_ms": 0.0734, "config": "GemvConfig(block_r=1, block_m=16, block_n=1024, split_k=1, num_warps=4, dot=False, stream=False)", "weight_gbs": 118.8, "served_by": "triton"}
+{"linear": "gate_up", "m": 9728, "n": 896, "rows": 2, "triton_ms": 0.562, "triton_p90_ms": 0.5949, "eager_ms": 0.5571, "eager_p90_ms": 0.5955, "graphs_ms": 0.5624, "graphs_p90_ms": 0.6121, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "gate_up", "m": 9728, "n": 896, "rows": 4, "triton_ms": 0.5665, "triton_p90_ms": 0.6139, "eager_ms": 0.5591, "eager_p90_ms": 0.5869, "graphs_ms": 0.5793, "graphs_p90_ms": 0.5982, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "gate_up", "m": 9728, "n": 896, "rows": 8, "triton_ms": 0.5839, "triton_p90_ms": 0.6102, "eager_ms": 0.5802, "eager_p90_ms": 0.6153, "graphs_ms": 0.5878, "graphs_p90_ms": 0.6211, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "gate_up", "m": 9728, "n": 896, "rows": 16, "triton_ms": 0.6675, "triton_p90_ms": 0.6956, "eager_ms": 0.6558, "eager_p90_ms": 0.6848, "graphs_ms": 0.6321, "graphs_p90_ms": 0.6629, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "down", "m": 896, "n": 4864, "rows": 1, "triton_ms": 0.2721, "triton_p90_ms": 0.3028, "eager_ms": 0.5325, "eager_p90_ms": 0.5644, "graphs_ms": 0.5353, "graphs_p90_ms": 0.5657, "graphs_captured": 0, "triton_dev_ms": 0.071, "config": "GemvConfig(block_r=1, block_m=16, block_n=1024, split_k=8, num_warps=4, dot=False, stream=False)", "weight_gbs": 61.4, "served_by": "triton"}
+{"linear": "down", "m": 896, "n": 4864, "rows": 2, "triton_ms": 0.5498, "triton_p90_ms": 0.5857, "eager_ms": 0.5584, "eager_p90_ms": 0.5926, "graphs_ms": 0.5409, "graphs_p90_ms": 0.569, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "down", "m": 896, "n": 4864, "rows": 4, "triton_ms": 0.5628, "triton_p90_ms": 0.5947, "eager_ms": 0.554, "eager_p90_ms": 0.5862, "graphs_ms": 0.5539, "graphs_p90_ms": 0.5982, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "down", "m": 896, "n": 4864, "rows": 8, "triton_ms": 0.584, "triton_p90_ms": 0.6187, "eager_ms": 0.5698, "eager_p90_ms": 0.6072, "graphs_ms": 0.5671, "graphs_p90_ms": 0.6001, "graphs_captured": 0, "served_by": "digit"}
+{"linear": "down", "m": 896, "n": 4864, "rows": 16, "triton_ms": 0.5956, "triton_p90_ms": 0.6259, "eager_ms": 0.607, "eager_p90_ms": 0.6761, "graphs_ms": 0.5906, "graphs_p90_ms": 0.6285, "graphs_captured": 0, "served_by": "digit"}
+{"service_call_ms_per_layer_trips": {"1": 0.5576, "2": 1.098, "4": 1.113, "8": 1.1473, "16": 1.2227}, "service_call_ms_per_token_1row": 13.382, "executor_stats": "ExecutorStats(replays=1535, eager=15741, captures=2, capture_failures=6, pinned_copies=18510, gemv=1228)"}
+
+---stderr---
+/usr/local/lib/python3.13/dist-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.
+  warn_once(FP_FUSION_DEFAULT_WARNING)
+/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:90:16: error: 'arith.extf' op operand #0 must be floating-point-like, but got 'tensor<16x32xi8, #ttg.dot_op<{opIdx = 0, parent = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>}>>'
+        acc0 = tl.dot(d.to(tl.int8), wt, acc0, out_dtype=tl.int32)
+               ^
+module {
+  tt.func public @ring_gemv_dot_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32, %arg9: i32 {tt.divisibility = 16 : i32}, %arg10: i32 {tt.divisibility = 16 : i32}, %arg11: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0> : tensor<16x16xi32>
+    %cst_0 = arith.constant dense<0> : tensor<16x32xi8>
+    %c32_i32 = arith.constant 32 : i32
+    %cst_1 = arith.constant dense<24> : tensor<16x16xi32>
+    %cst_2 = arith.constant dense<16> : tensor<16x16xi32>
+    %cst_3 = arith.constant dense<8> : tensor<16x16xi32>
+    %cst_4 = arith.constant dense<8> : tensor<16x32xi32>
+    %cst_5 = arith.constant dense<128> : tensor<16x32xi32>
+    %cst_6 = arith.constant dense<255> : tensor<16x32xi32>
+    %cst_7 = arith.constant dense<0> : tensor<16x32xi32>
+    %c16_i32 = arith.constant 16 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %3 = arith.muli %0, %c16_i32 : i32
+    %4 = tt.splat %3 : i32 -> tensor<16xi32>
+    %5 = arith.addi %4, %2 : tensor<16xi32>
+    %6 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %7 = tt.splat %arg3 : i32 -> tensor<16xi32>
+    %8 = arith.cmpi slt, %2, %7 : tensor<16xi32>
+    %9 = tt.splat %arg5 : i32 -> tensor<16xi32>
+    %10 = arith.cmpi slt, %5, %9 : tensor<16xi32>
+    %11 = arith.muli %1, %arg7 : i32
+    %12 = arith.addi %11, %arg7 : i32
+    %13 = arith.minsi %12, %arg6 : i32
+    %14 = arith.extsi %5 : tensor<16xi32> to tensor<16xi64>
+    %15 = tt.expand_dims %14 {axis = 1 : i32} : tensor<16xi64> -> tensor<16x1xi64>
+    %16 = arith.extsi %arg10 : i32 to i64
+    %17 = tt.splat %16 : i64 -> tensor<16x1xi64>
+    %18 = arith.muli %15, %17 : tensor<16x1xi64>
+    %19 = tt.splat %arg1 : !tt.ptr<i8> -> tensor<16x1x!tt.ptr<i8>>
+    %20 = tt.addptr %19, %18 : tensor<16x1x!tt.ptr<i8>>, tensor<16x1xi64>
+    %21 = arith.extsi %2 : tensor<16xi32> to tensor<16xi64>
+    %22 = tt.expand_dims %21 {axis = 1 : i32} : tensor<16xi64> -> tensor<16x1xi64>
+    %23 = arith.extsi %arg9 : i32 to i64
+    %24 = tt.splat %23 : i64 -> tensor<16x1xi64>
+    %25 = arith.muli %22, %24 : tensor<16x1xi64>
+    %26 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<16x1x!tt.ptr<i32>>
+    %27 = tt.addptr %26, %25 : tensor<16x1x!tt.ptr<i32>>, tensor<16x1xi64>
+    %28:4 = scf.for %arg12 = %11 to %13 step %c32_i32 iter_args(%arg13 = %cst, %arg14 = %cst, %arg15 = %cst, %arg16 = %cst) -> (tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>)  : i32 {
+      %51 = tt.splat %arg12 : i32 -> tensor<32xi32>
+      %52 = arith.addi %51, %6 : tensor<32xi32>
+      %53 = tt.expand_dims %10 {axis = 1 : i32} : tensor<16xi1> -> tensor<16x1xi1>
+      %54 = tt.splat %13 : i32 -> tensor<32xi32>
+      %55 = arith.cmpi slt, %52, %54 : tensor<32xi32>
+      %56 = tt.expand_dims %55 {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+      %57 = tt.broadcast %53 : tensor<16x1xi1> -> tensor<16x32xi1>
+      %58 = tt.broadcast %56 : tensor<1x32xi1> -> tensor<16x32xi1>
+      %59 = arith.andi %57, %58 : tensor<16x32xi1>
+      %60 = tt.expand_dims %52 {axis = 0 : i32} : tensor<32xi32> -> tensor<1x32xi32>
+      %61 = tt.broadcast %20 : tensor<16x1x!tt.ptr<i8>> -> tensor<16x32x!tt.ptr<i8>>
+      %62 = tt.broadcast %60 : tensor<1x32xi32> -> tensor<16x32xi32>
+      %63 = tt.addptr %61, %62 : tensor<16x32x!tt.ptr<i8>>, tensor<16x32xi32>
+      %64 = tt.load %63, %59, %cst_0 : tensor<16x32x!tt.ptr<i8>>
+      %65 = tt.trans %64 {order = array<i32: 1, 0>} : tensor<16x32xi8> -> tensor<32x16xi8>
+      %66 = tt.expand_dims %8 {axis = 1 : i32} : tensor<16xi1> -> tensor<16x1xi1>
+      %67 = tt.splat %arg4 : i32 -> tensor<32xi32>
+      %68 = arith.cmpi slt, %52, %67 : tensor<32xi32>
+      %69 = tt.expand_dims %68 {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+      %70 = tt.broadcast %66 : tensor<16x1xi1> -> tensor<16x32xi1>
+      %71 = tt.broadcast %69 : tensor<1x32xi1> -> tensor<16x32xi1>
+      %72 = arith.andi %70, %71 : tensor<16x32xi1>
+      %73 = tt.broadcast %27 : tensor<16x1x!tt.ptr<i32>> -> tensor<16x32x!tt.ptr<i32>>
+      %74 = tt.addptr %73, %62 : tensor<16x32x!tt.ptr<i32>>, tensor<16x32xi32>
+      %75 = tt.load %74, %72, %cst_7 : tensor<16x32x!tt.ptr<i32>>
+      %76 = arith.andi %75, %cst_6 : tensor<16x32xi32>
+      %77 = arith.xori %76, %cst_5 : tensor<16x32xi32>
+      %78 = arith.subi %77, %cst_5 : tensor<16x32xi32>
+      %79 = arith.trunci %78 : tensor<16x32xi32> to tensor<16x32xi8>
+      %80 = tt.dot %79, %65, %arg13, inputPrecision = tf32 : tensor<16x32xi8> * tensor<32x16xi8> -> tensor<16x16xi32>
+      %81 = arith.subi %75, %78 : tensor<16x32xi32>
+      %82 = arith.shrui %81, %cst_4 : tensor<16x32xi32>
+      %83 = arith.andi %82, %cst_6 : tensor<16x32xi32>
+      %84 = arith.xori %83, %cst_5 : tensor<16x32xi32>
+      %85 = arith.subi %84, %cst_5 : tensor<16x32xi32>
+      %86 = arith.trunci %85 : tensor<16x32xi32> to tensor<16x32xi8>
+      %87 = tt.dot %86, %65, %arg14, inputPrecision = tf32 : tensor<16x32xi8> * tensor<32x16xi8> -> tensor<16x16xi32>
+      %88 = arith.subi %82, %85 : tensor<16x32xi32>
+      %89 = arith.shrui %88, %cst_4 : tensor<16x32xi32>
+      %90 = arith.andi %89, %cst_6 : tensor<16x32xi32>
+      %91 = arith.xori %90, %cst_5 : tensor<16x32xi32>
+      %92 = arith.subi %91, %cst_5 : tensor<16x32xi32>
+      %93 = arith.trunci %92 : tensor<16x32xi32> to tensor<16x32xi8>
+      %94 = tt.dot %93, %65, %arg15, inputPrecision = tf32 : tensor<16x32xi8> * tensor<32x16xi8> -> tensor<16x16xi32>
+      %95 = arith.subi %89, %92 : tensor<16x32xi32>
+      %96 = arith.shrui %95, %cst_4 : tensor<16x32xi32>
+      %97 = arith.andi %96, %cst_6 : tensor<16x32xi32>
+      %98 = arith.xori %97, %cst_5 : tensor<16x32xi32>
+      %99 = arith.subi %98, %cst_5 : tensor<16x32xi32>
+      %100 = arith.trunci %99 : tensor<16x32xi32> to tensor<16x32xi8>
+      %101 = tt.dot %100, %65, %arg16, inputPrecision = tf32 : tensor<16x32xi8> * tensor<32x16xi8> -> tensor<16x16xi32>
+      scf.yield %80, %87, %94, %101 : tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>, tensor<16x16xi32>
+    }
+    %29 = arith.shli %28#1, %cst_3 : tensor<16x16xi32>
+    %30 = arith.addi %28#0, %29 : tensor<16x16xi32>
+    %31 = arith.shli %28#2, %cst_2 : tensor<16x16xi32>
+    %32 = arith.addi %30, %31 : tensor<16x16xi32>
+    %33 = arith.shli %28#3, %cst_1 : tensor<16x16xi32>
+    %34 = arith.addi %32, %33 : tensor<16x16xi32>
+    %35 = tt.splat %arg8 : i32 -> tensor<16x16xi32>
+    %36 = arith.andi %34, %35 : tensor<16x16xi32>
+    %37 = arith.extsi %arg11 : i32 to i64
+    %38 = tt.splat %37 : i64 -> tensor<16x1xi64>
+    %39 = arith.muli %22, %38 : tensor<16x1xi64>
+    %40 = tt.splat %arg2 : !tt.ptr<i32> -> tensor<16x1x!tt.ptr<i32>>
+    %41 = tt.addptr %40, %39 : tensor<16x1x!tt.ptr<i32>>, tensor<16x1xi64>
+    %42 = tt.expand_dims %5 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+    %43 = tt.broadcast %41 : tensor<16x1x!tt.ptr<i32>> -> tensor<16x16x!tt.ptr<i32>>
+    %44 = tt.broadcast %42 : tensor<1x16xi32> -> tensor<16x16xi32>
+    %45 = tt.addptr %43, %44 : tensor<16x16x!tt.ptr<i32>>, tensor<16x16xi32>
+    %46 = tt.expand_dims %8 {axis = 1 : i32} : tensor<16xi1> -> tensor<16x1xi1>
+    %47 = tt.expand_dims %10 {axis = 0 : i32} : tensor<16xi1> -> tensor<1x16xi1>
+    %48 = tt.broadcast %46 : tensor<16x1xi1> -> tensor<16x16xi1>
+    %49 = tt.broadcast %47 : tensor<1x16xi1> -> tensor<16x16xi1>
+    %50 = arith.andi %48, %49 : tensor<16x16xi1>
+    tt.store %45, %36, %50 : tensor<16x16x!tt.ptr<i32>>
+    tt.return
+  }
+}
+
+{-#
+  external_resources: {
+    mlir_reproducer: {
+      pipeline: "builtin.module(convert-triton-to-tritongpu{enable-source-remat=false num-ctas=1 num-warps=4 target=cuda:75 threads-per-warp=32}, tritongpu-coalesce, tritongpu-F32DotTC{emu-tf32=false}, triton-nvidia-gpu-assign-cga-layouts, tritongpu-remove-layout-conversions{disable-remat-splitting=false}, triton-nvidia-gpu-optimize-cta-locality, tritongpu-remove-layout-conversions{disable-remat-splitting=false}, tritongpu-optimize-thread-locality, tritongpu-accelerate-matmul, triton-nvidia-check-matmul-two-cta, tritongpu-remove-layout-conversions{disable-remat-splitting=false}, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, triton-nvidia-optimize-descriptor-encoding, triton-loop-aware-cse, triton-licm, canonicalize{cse-between-iterations=false    max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}, triton-loop-aware-cse, tritongpu-optimize-dot-operands{hoist-layout-conversion=false}, tritongpu-coalesce-async-copy, triton-nvidia-optimize-tmem-layouts, triton-nvidia-tmem-load-reduce, tritongpu-remove-layout-conversions{disable-remat-splitting=false}, triton-nvidia-interleave-tmem, tritongpu-reduce-data-duplication, tritongpu-reorder-instructions, triton-loop-aware-cse, symbol-dce, triton-nvidia-gpu-fence-insertion{compute-capability=75}, triton-nvidia-mma-lowering, triton-nvidia-gpu-hoist-mbarrier-lifecycle{compute-capability=75}, sccp, cse, canonicalize{cse-between-iterations=false    max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true})",
+      disable_threading: true,
+      verify_each: true
+    }
+  }
+#-}
+/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:53:1: error: Failures have been detected while processing an MLIR pass pipeline
+def ring_gemv_dot_kernel(
+^
+/tmp/pgwsrc/pgw/src/pgw/core/_triton_gemv_kernel.py:53:1: note: Pipeline failed while executing [`TritonGPUAccelerateMatmul` on 'builtin.module' operation]: reproducer generated at `std::errs, please share the reproducer above with Triton project.`
+CUDA graph capture failed on cuda:0 (K=32, rows<=8, n=896, m=896): RuntimeError: it->second->use_count > 0 INTERNAL ASSERT FAILED at "/__w/pytorch/pytorch/c10/cuda/CUDACachingAllocator.cpp":3473, please report a bug to PyTorch. ; running eagerly
