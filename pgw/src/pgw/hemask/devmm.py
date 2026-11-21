@@ -198,7 +198,10 @@ class DeviceHE:
         t = torch.from_numpy(np.ascontiguousarray(arr))
         if self.dev.type != "cuda":
             return t.clone()
-        pinned = t.pin_memory()  # pragma: no cover - GPU only
+        # always a private pinned copy: t.pin_memory() returns t itself when the caller's buffer is already
+        # pinned (the factory pins r), and wiping that would destroy the caller's data
+        pinned = torch.empty(t.shape, dtype=t.dtype, pin_memory=True)  # pragma: no cover - GPU only
+        pinned.copy_(t)  # pragma: no cover - GPU only
         try:  # pragma: no cover - GPU only
             return pinned.to(self.dev)  # synchronous: the pinned copy can be wiped right after
         finally:  # pragma: no cover - GPU only
@@ -389,10 +392,14 @@ def self_test(device: torch.device | str, k: int = 32, rank: int = 16) -> bool:
             eng = DeviceHE(a_pl, p, dev, hint_budget=0)
             r = rng.integers(0, 1 << k, size=(rows, n), dtype=np.int64)
             seeds = [bytes([7 + i]) * 32 for i in range(2)]
-            cts, b = eng.encrypt(r, n, seeds=seeds)
+            # the factory hands over pinned host buffers on CUDA: they must come back untouched
+            r_in = torch.from_numpy(r.copy()).pin_memory().numpy() if dev.type == "cuda" else r.copy()
+            cts, b = eng.encrypt(r_in, n, seeds=seeds)
             ref = np.concatenate([_reference_encrypt(r[i * DEGREE:(i + 1) * DEGREE], a, p, s)
                                   for i, s in enumerate(seeds)], axis=1)
-            if not np.array_equal(b, ref):
+            if not np.array_equal(r_in, r):
+                why = "encryption modified its input masks"
+            elif not np.array_equal(b, ref):
                 why = "encryption differs from the reference"
             else:
                 w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)

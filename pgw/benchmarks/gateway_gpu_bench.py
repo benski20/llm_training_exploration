@@ -243,6 +243,9 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=9)
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
+    import logging
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     fn = {"he": bench_he, "local": bench_local, "linears": bench_linears}[args.mode]
     res = fn(args)
     res["env"] = {k: v for k, v in os.environ.items() if k.startswith("PGW_HEMASK")}
