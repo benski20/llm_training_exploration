@@ -272,7 +272,10 @@ class _SharedChecks:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # Re-entrant: ``MaskReservation.__del__`` -> ``close`` -> :meth:`release` can run from a gc pass
+        # triggered by an allocation inside one of this registry's critical sections (same thread);
+        # a plain Lock would deadlock there.
+        self._lock = threading.RLock()
         self._d: dict[tuple[str, ...], _CheckEntry] = {}
 
     def acquire(self, skey: tuple[str, ...], build: Callable[[], tuple[torch.Tensor, torch.Tensor]],
@@ -853,8 +856,8 @@ class MaskReservation:
     def checks_u64(self, lid: LinearId | str) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`checks` as read-only uint64 numpy views of the cached vectors (no copy).
 
-        For the gateway's per-call hot path. The views are wiped (zeroed) when the reservation
-        closes; callers must not keep them beyond the call.
+        For the gateway's per-call hot path. The views are shared per segment and wiped (zeroed) when
+        the last open reservation of that segment closes; callers must not keep them beyond the call.
         """
         u, uw = self._checks_cached(lid)
         u64 = u.numpy().view(np.uint64)
@@ -869,7 +872,8 @@ class MaskReservation:
 
         The vectors depend only on the segment and the linear, so any two reservations (or extents)
         with equal tokens have identical vectors: the gateway checks rows of several sessions
-        against them in one pass. The arrays are wiped when the reservation closes.
+        against them in one pass. The arrays are shared per segment and wiped when the last open
+        reservation of that segment closes.
         """
         key = self._key(lid)
         with self._lock:
@@ -1035,7 +1039,11 @@ def take_checked_many(
         before the first cursor moves.
     """
     reqs = list(requests)
-    fast = _native_claim and all(type(r[0]) is MaskReservation and r[0].ring.k <= 32 for r in reqs)
+    fast = (
+        _native_claim
+        and all(type(r[0]) is MaskReservation and r[0].ring.k <= 32 for r in reqs)
+        and len({r[0].ring.k for r in reqs}) <= 1  # one native call unpacks/reduces with one ring width
+    )
     if not fast or not reqs:
         out: list[Any] = []
         try:

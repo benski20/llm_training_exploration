@@ -95,6 +95,18 @@ def test_checks_shared_per_segment_and_wiped_by_last_close(store: MaskStore, mod
     assert not uc.any() and len(store_mod._SHARED_CHECKS) == base
 
 
+def test_shared_checks_release_is_reentrant(store: MaskStore, model: ToyModel) -> None:
+    """``__del__`` -> ``close`` -> ``release`` may run from a gc pass inside the registry's own critical
+    section (same thread): the registry lock must be re-entrant, or that close deadlocks."""
+    write_segment(store, model, 4, ring=K32)
+    q = lid("1.down")
+    a = store.reserve(FP, K32, 2)
+    _, ua, _ = a.checks_compact(q)
+    with store_mod._SHARED_CHECKS._lock:  # stands in for an allocation-triggered gc in acquire()
+        a.close()
+    assert not ua.any()
+
+
 # ---- chunk buffer reuse ------------------------------------------------------------------------------
 @pytest.mark.parametrize("out_features", [1, 3, 16, 40])  # chunks shorter than one AES block too
 def test_decrypt_into_reuse_matches_and_zeroes_on_tamper(tmp_path: Path, kp: StaticKeyProvider,
