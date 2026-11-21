@@ -170,7 +170,6 @@ def _exact_rows(w: Any, r: Any, k: int) -> Any:
 def gateway(args: argparse.Namespace) -> dict[str, Any]:
     import logging
 
-    import numpy as np
     import torch
     from gateway_gpu_bench import _Pack
 
@@ -178,7 +177,7 @@ def gateway(args: argparse.Namespace) -> dict[str, Any]:
     from pgw.core.ring import RingParams
     from pgw.factory import MaskGenerator
     from pgw.factory.bench import MODEL_PRESETS
-    from pgw.hemask import DEGREE, fastmm
+    from pgw.hemask import fastmm
     from pgw.hemask.backend import HEMaskBackend
     from pgw.hemask.client import RemoteMulmod64
     from pgw.hemask.lwe import HEParams
@@ -212,7 +211,8 @@ def gateway(args: argparse.Namespace) -> dict[str, Any]:
     scale = MODEL_PRESETS[args.preset].layers / layers
     res: dict[str, Any] = {"config": args.gateway, "encrypt": encrypt, "device_arg": device, "engine": be.engine,
                            "fastmm_engine": fastmm.engine(), "layers": layers, "scale_to_full_model": scale,
-                           "chunk_slots": chunk, "pass_groups_widest": be._pass_groups(max(s.out_features for s in pack.specs)),
+                           "chunk_slots": chunk,
+                           "pass_groups_widest": be._pass_groups(max(s.out_features for s in pack.specs)),
                            "hint_build_s": round(t_hint, 1), "init_s": round(t_init, 2),
                            "hint_gb_per_layer": round(sum(hints.hint(s.id.key).nbytes for s in pack.specs)
                                                       / layers / 1e9, 3),
@@ -287,7 +287,7 @@ def _stages(args: argparse.Namespace, be: Any, remote: Any, pack: Any, ring: Any
             bs = [np.concatenate([ct.b for ct in bt], axis=1) for bt in batches]
             t0 = time.perf_counter()
             with ThreadPoolExecutor(max(1, args.inflight)) as ex:
-                ys = list(ex.map(lambda b: remote(key, b), bs))
+                ys = list(ex.map(lambda b, k=key: remote(k, b), bs))
             tp = time.perf_counter() - t0
             out = np.empty((rows, m), dtype=np.int64)
             t0 = time.perf_counter()
@@ -336,8 +336,9 @@ class _Sampler:
         if gpus:
             try:
                 self._smi = subprocess.Popen(  # noqa: S603
-                    ["nvidia-smi", "--query-gpu=timestamp,index,utilization.gpu,memory.used", "--format=csv,noheader,nounits",
-                     f"-lms={int(period_s * 1000)}"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                    ["nvidia-smi", "--query-gpu=timestamp,index,utilization.gpu,memory.used",  # noqa: S607
+                     "--format=csv,noheader,nounits", f"-lms={int(period_s * 1000)}"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
                 threading.Thread(target=self._read_smi, daemon=True).start()
             except OSError:
                 self._smi = None
@@ -435,7 +436,8 @@ def main() -> None:
     ready = work / f"ready-{port}"
     base_env = dict(os.environ)
     env = dict(base_env, CUDA_VISIBLE_DEVICES="" if args.cpu else args.provider_gpu)
-    common = ["--preset", args.preset, "--ring", args.ring, "--layers", str(args.layers)] + (["--cpu"] if args.cpu else [])
+    common = ["--preset", args.preset, "--ring", args.ring, "--layers", str(args.layers)]
+    common += ["--cpu"] if args.cpu else []
     log_path = work / "provider.log"
     with open(log_path, "w") as log:
         prov = subprocess.Popen([sys.executable, __file__, *common, "--serve", str(port), "--ready-file", str(ready)],  # noqa: S603
