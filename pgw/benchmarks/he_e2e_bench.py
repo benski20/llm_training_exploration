@@ -65,6 +65,8 @@ CONFIGS: dict[str, dict[str, Any]] = {
     "ntt_dev_lru": {"encrypt": "ntt_pre", "device": "auto", "env": {"PGW_HEMASK_GPU_HINT_STALE_S": "0"}},
     "ntt_dev_v2": {"encrypt": "ntt_pre", "device": "auto", "wire_v2": True},
     "ntt_dev_stream": {"encrypt": "ntt_pre", "device": "auto", "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}},
+    "ntt_dev_stream_noprefetch": {"encrypt": "ntt_pre", "device": "auto",
+                                  "env": {"PGW_HEMASK_GPU_HINT_MB": "0", "PGW_HEMASK_HINT_PREFETCH": "0"}},
     "ntt_dev_c4096": {"encrypt": "ntt_pre", "device": "auto", "chunk": 4096, "pass_mb": 2048, "slots": 4096},
     "ntt_dev_c4096_stream": {"encrypt": "ntt_pre", "device": "auto", "chunk": 4096, "pass_mb": 2048, "slots": 4096,
                              "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}},

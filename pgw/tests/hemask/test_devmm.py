@@ -204,8 +204,13 @@ def test_hint_cache_keeps_hints_in_use_instead_of_thrashing(monkeypatch: pytest.
     assert eng.cache.get("b") is not None and eng.cache.used == 2 * hint.nbytes
 
 
-def test_streamed_and_cached_hints_decrypt_the_same() -> None:
-    """Whatever the cache keeps, decryption gives the same bits (cached, streamed, after eviction)."""
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("prefetch", ["1", "0"])
+@pytest.mark.parametrize("block_rows", [3, 1 << 20])
+def test_streamed_and_cached_hints_decrypt_the_same(block_rows: int, prefetch: str, device: str,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever the cache keeps, decryption gives the same bits (cached, streamed with the next block's host
+    copy prefetched, after eviction), with one block per pass or many (block_rows=3: 7 blocks of 20 rows)."""
     p = HEParams(k=32, rank=8)
     rng = np.random.default_rng(11)
     n, m, rows = 48, 20, DEGREE
@@ -215,11 +220,17 @@ def test_streamed_and_cached_hints_decrypt_the_same() -> None:
     hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
     r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
     want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    monkeypatch.setattr(devmm, "_BLOCK_BYTES", hint.shape[1] * DEGREE * 4 * block_rows)
+    monkeypatch.setenv("PGW_HEMASK_HINT_PREFETCH", prefetch)
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
     for budget in (0, hint.nbytes, 4 * hint.nbytes):
-        eng = devmm.DeviceHE(planes, p, "cpu", hint_budget=budget)
+        eng = devmm.DeviceHE(planes, p, device, hint_budget=budget)
         for key in ("x", "y", "x", "z", "x"):
             cts, b = eng.encrypt(r, n)
             y = matmul_mod64(w, b, fast=False) & p.q_mask
             out = np.zeros((rows, m), dtype=np.int64)
             eng.decrypt_into(key, hint, [(y, cts, 0)], out, p.delta_bits, 32)
             assert np.array_equal(out, want), (budget, key)
+        if budget == 0 and prefetch == "1":  # the one-buffer path counts CUDA uploads only
+            assert eng.stats["hint_streamed_blocks"] == 5 * -(-m // min(m, max(8, block_rows)))

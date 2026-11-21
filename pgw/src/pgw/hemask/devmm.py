@@ -28,11 +28,14 @@ Privacy: this is customer-side work only. The provider still receives exactly th
 (``A s``, ``H S``, masks, noise) are zeroed after use like their CPU counterparts.
 
 Environment: ``PGW_HEMASK_GPU_HINT_MB`` caps the hint cache (MiB; ``auto`` = 70% of the free device
-memory at start-up minus 1 GiB; ``0`` streams every pass).
+memory at start-up minus 1 GiB; ``0`` streams every pass). ``PGW_HEMASK_GPU_HINT_STALE_S`` (default 600)
+protects hints used that recently from eviction (``0``: plain LRU). ``PGW_HEMASK_HINT_PREFETCH=0`` turns
+off the double-buffered hint stream (next block copied on a helper thread while the device works).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -40,6 +43,8 @@ import threading
 import time
 import warnings
 from collections import OrderedDict
+from collections.abc import Generator, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -205,6 +210,11 @@ class _HintCache:
         self.used = 0
 
 
+def _prefetch_enabled() -> bool:
+    """``PGW_HEMASK_HINT_PREFETCH`` (default on): streamed hint blocks are copied ahead on a helper thread."""
+    return os.environ.get("PGW_HEMASK_HINT_PREFETCH", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _auto_budget(dev: torch.device) -> int:
     raw = os.environ.get("PGW_HEMASK_GPU_HINT_MB", "auto").strip().lower()
     if raw not in ("", "auto"):
@@ -236,6 +246,9 @@ class DeviceHE:
         self.cache = _HintCache(_auto_budget(self.dev) if hint_budget is None else hint_budget)
         self._stage: torch.Tensor | None = None  # pinned staging buffer for streamed hint blocks
         self._stage_ev: Any = None
+        self._stage2: list[torch.Tensor] | None = None  # two staging buffers of the prefetching hint stream
+        self._stage2_ev: list[Any] = [None, None]
+        self._prefetch: ThreadPoolExecutor | None = None
         self.stats = {"hint_uploads": 0, "hint_streamed_blocks": 0}
 
     # ---- helpers ---------------------------------------------------------------------------------
@@ -268,6 +281,58 @@ class DeviceHE:
         self._stage_ev.record()  # pragma: no cover - GPU only
         self.stats["hint_streamed_blocks"] += 1  # pragma: no cover - GPU only
         return out  # pragma: no cover - GPU only
+
+    def _streamed_blocks(self, hint: np.ndarray, block: int) -> Generator[tuple[int, int, torch.Tensor], None, None]:
+        """``(r0, rows, device copy of hint[r0:r0 + rows])`` for the hint's row blocks, in order.
+
+        Two (pinned) staging buffers: while the device multiplies block ``i``, a helper thread copies block
+        ``i + 1`` out of the hint (a memory map, so this is where the disk reads of a hint larger than RAM
+        happen). The one-buffer path did the host copy, the upload and the product one after another. A
+        buffer is refilled only after its previous upload has completed (CUDA event). Same bytes reach the
+        device either way, so decryption gives the same bits.
+        """
+        m, npl, dim = hint.shape
+        cuda = self.dev.type == "cuda"
+        size = min(block, m) * npl * dim
+        if self._stage2 is None or self._stage2[0].numel() < size:
+            self._stage2 = [torch.empty(size, dtype=torch.int8, pin_memory=cuda) for _ in range(2)]
+            self._stage2_ev = [None, None]
+        bufs, evs = self._stage2, self._stage2_ev
+        if self._prefetch is None:
+            self._prefetch = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-hint")
+        starts = list(range(0, m, block))
+
+        def fill(i: int) -> torch.Tensor:
+            r0 = starts[i]
+            nb = min(block, m - r0)
+            ev = evs[i % 2]
+            if ev is not None:  # pragma: no cover - GPU only
+                ev.synchronize()  # the upload that last read this buffer has finished
+            dst = bufs[i % 2][:nb * npl * dim].view(nb, npl, dim)
+            np.copyto(dst.numpy(), hint[r0:r0 + nb])
+            return dst
+
+        fut: Future[torch.Tensor] | None = self._prefetch.submit(fill, 0)
+        try:
+            for i, r0 in enumerate(starts):
+                assert fut is not None
+                host = fut.result()
+                fut = None
+                if cuda:  # pragma: no cover - GPU only
+                    dev_blk = host.to(self.dev, non_blocking=True)
+                    ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
+                    ev.record()
+                    evs[i % 2] = ev
+                else:
+                    dev_blk = host  # CPU tensors (tests): the caller is done with it before the next fill
+                if i + 1 < len(starts):
+                    fut = self._prefetch.submit(fill, i + 1)
+                self.stats["hint_streamed_blocks"] += 1
+                yield r0, int(host.shape[0]), dev_blk
+        finally:
+            if fut is not None:
+                with contextlib.suppress(Exception):
+                    fut.result()  # never leave a copy into the staging buffer running past this pass
 
     def hint_on_device(self, key: str, hint: np.ndarray) -> torch.Tensor | None:
         """The device copy of ``hint`` (uploaded on first use), or ``None`` when it does not fit the budget."""
@@ -405,10 +470,15 @@ class DeviceHE:
         kmask = (1 << k) - 1
         block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
         offset = st.sum(1, dtype=torch.int64) * 128
+        blocks: Iterator[tuple[int, int, torch.Tensor]]
+        if dev_hint is not None:
+            blocks = ((r0, min(block, m - r0), dev_hint[r0:r0 + block]) for r0 in range(0, m, block))
+        elif _prefetch_enabled():
+            blocks = self._streamed_blocks(hint, block)
+        else:  # PGW_HEMASK_HINT_PREFETCH=0: one staging buffer, host copy / upload / product in turn
+            blocks = ((r0, min(block, m - r0), self._upload_block(hint[r0:r0 + block])) for r0 in range(0, m, block))
         try:
-            for r0 in range(0, m, block):
-                nb = min(block, m - r0)
-                h = dev_hint[r0:r0 + nb] if dev_hint is not None else self._upload_block(hint[r0:r0 + nb])
+            for r0, nb, h in blocks:
                 part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
                 corr = combine(part, offset, 1)
                 part.zero_()
@@ -424,6 +494,8 @@ class DeviceHE:
                 out[dst, r0:r0 + nb] = host
                 host.fill(0)
         finally:
+            if isinstance(blocks, Generator):
+                blocks.close()  # an error part-way: the next block's host copy is waited for, not left running
             offset.zero_()
             st.zero_()
             yd.zero_()

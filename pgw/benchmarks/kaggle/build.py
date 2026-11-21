@@ -436,7 +436,8 @@ JOBS: dict[str, dict] = {
                   "-q", "-rs", "--timeout", "1200"], "timeout": 1800},
         {"kind": "shell", "name": "he_e2e_7b",
          "cmd": "python benchmarks/he_e2e_bench.py --preset qwen2.5-7b --layers 28 --slots 3072 --stage-rows 1024 "
-                "--configs ntt_dev dense_dev ntt_dev_c4096 ntt_dev_stream ntt_dev_c4096_stream ntt_dev_lru ntt_dev_v2 "
+                "--configs ntt_dev dense_dev ntt_dev_c4096 ntt_dev_stream ntt_dev_stream_noprefetch ntt_dev_c4096_stream "
+                "ntt_dev_lru ntt_dev_v2 "
                 "dense_dev_c4096 ntt_cpu:2 --work /tmp/he_e2e --disk-read --budget-s 4200 --config-timeout-s 1500 "
                 "--json /kaggle/working/he_e2e_7b.json", "timeout": 6600},
     ]},
