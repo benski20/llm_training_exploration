@@ -276,6 +276,30 @@ _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1}
 
 
+#: Customer container memory (MiB): the 0.5B demo fits 8 GiB; a larger target (its float32 embedding and head, the
+#: local attention weights, packing it in the wizard) plus the 0.5B draft gets 16 GiB (about $0.064/h more).
+CUSTOMER_MEMORY_MIB = {"default": 8192, "large": 16384}
+
+
+def customer_memory_mib(model: str | None, draft: bool = False) -> int:
+    """Memory of the customer container for the deployed target (``PGW_MODAL_MODEL``) and draft."""
+    big = bool(draft) or (model or MODEL_NAME).strip().lower() != MODEL_NAME
+    return CUSTOMER_MEMORY_MIB["large" if big else "default"]
+
+
+def e2e_min_masks(spec_rows: int, prompt_tokens: int = 64, max_tokens: int = 32, chats: int = 2) -> int:
+    """Mask slots the scripted ``--e2e`` waits for before its chats (``wizard_client.run_wizard(min_masks=)``).
+
+    Without speculation the wizard's default (64) stands: the factory keeps adding slots while the chats run.
+    With strict speculation each chat reserves ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)`` slots
+    up front and fails fast when the store holds fewer, so the e2e waits for both chats' slots.
+    """
+    if not spec_rows:
+        return 64
+    per_chat = int(prompt_tokens) + int(max_tokens) + max(0, int(max_tokens) - 1) * (int(spec_rows) - 1)
+    return per_chat * int(chats)
+
+
 def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None) -> dict[str, Any]:
     """Strict-speculation presets for the wizard's ``models.json`` (``launch.py --spec-rows``; ``{}`` when off).
 

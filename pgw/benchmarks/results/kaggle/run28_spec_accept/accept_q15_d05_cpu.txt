@@ -1,0 +1,87 @@
+[spec_accept] greedy answers: 350 tokens in 93.62 s
+{
+ "lookup": {
+  "4": 1.052,
+  "p_first_draft_ok": 0.061
+ },
+ "lookup2": {
+  "4": 1.081,
+  "p_first_draft_ok": 0.087
+ },
+ "model": {
+  "4": 2.908,
+  "p_first_draft_ok": 0.821
+ },
+ "lookup+model": {
+  "4": 2.932,
+  "p_first_draft_ok": 0.827
+ }
+}
+[spec_accept] check {"R": 4, "temperature": 0.0, "drafter": "lookup+model", "identical_to_plain": false, "tokens_per_pass": 2.797, "draft_ms_per_pass": 348.05, "tokens": 222, "passes": 79.0, "accepted": 142.0, "draft_ms": 76919.12, "draft_calls": 221.0, "dummy_passes": 142.0, "spec_wall_s": 54.4, "plain_wall_s": 53.22}
+{
+ "label": "q15_d05_cpu",
+ "target": "q15",
+ "draft": "/tmp/packs/q05",
+ "draft_kind": "float32",
+ "device": "cuda",
+ "draft_device": "cpu",
+ "max_tokens": 128,
+ "prompts": 4,
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "greedy_s": 93.62,
+ "answer_tokens": [
+  31,
+  63,
+  128,
+  128
+ ],
+ "sim_s": 7.05,
+ "tokens_per_pass_sim": {
+  "lookup": {
+   "4": 1.052,
+   "p_first_draft_ok": 0.061
+  },
+  "lookup2": {
+   "4": 1.081,
+   "p_first_draft_ok": 0.087
+  },
+  "model": {
+   "4": 2.908,
+   "p_first_draft_ok": 0.821
+  },
+  "lookup+model": {
+   "4": 2.932,
+   "p_first_draft_ok": 0.827
+  }
+ },
+ "per_prompt_r4": {
+  "lookup+model": [
+   2.73,
+   1.94,
+   3.74,
+   3.1
+  ]
+ },
+ "generator_checks": [
+  {
+   "R": 4,
+   "temperature": 0.0,
+   "drafter": "lookup+model",
+   "identical_to_plain": false,
+   "tokens_per_pass": 2.797,
+   "draft_ms_per_pass": 348.05,
+   "tokens": 222,
+   "passes": 79.0,
+   "accepted": 142.0,
+   "draft_ms": 76919.12,
+   "draft_calls": 221.0,
+   "dummy_passes": 142.0,
+   "spec_wall_s": 54.4,
+   "plain_wall_s": 53.22
+  }
+ ]
+}
+
+---stderr---
+model on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)

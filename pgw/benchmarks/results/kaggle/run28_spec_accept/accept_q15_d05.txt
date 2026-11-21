@@ -1,0 +1,219 @@
+[spec_accept] greedy answers: 2213 tokens in 550.26 s
+{
+ "lookup": {
+  "2": 1.061,
+  "3": 1.077,
+  "4": 1.091,
+  "5": 1.094,
+  "6": 1.096,
+  "8": 1.101,
+  "p_first_draft_ok": 0.094
+ },
+ "lookup2": {
+  "2": 1.091,
+  "3": 1.124,
+  "4": 1.135,
+  "5": 1.147,
+  "6": 1.15,
+  "8": 1.154,
+  "p_first_draft_ok": 0.139
+ },
+ "model": {
+  "2": 1.793,
+  "3": 2.427,
+  "4": 2.88,
+  "5": 3.277,
+  "6": 3.654,
+  "8": 4.031,
+  "p_first_draft_ok": 0.81
+ },
+ "lookup+model": {
+  "2": 1.797,
+  "3": 2.435,
+  "4": 2.899,
+  "5": 3.292,
+  "6": 3.667,
+  "8": 4.061,
+  "p_first_draft_ok": 0.814
+ }
+}
+[spec_accept] check {"R": 4, "temperature": 0.0, "drafter": "lookup+model", "identical_to_plain": false, "tokens_per_pass": 2.97, "draft_ms_per_pass": 108.87, "tokens": 689, "passes": 231.0, "accepted": 455.0, "draft_ms": 74686.6, "draft_calls": 686.0, "dummy_passes": 455.0, "spec_wall_s": 97.27, "plain_wall_s": 166.39}
+[spec_accept] check {"R": 4, "temperature": 0.7, "drafter": "lookup+model", "identical_to_plain": false, "tokens_per_pass": 2.972, "draft_ms_per_pass": 166.15, "tokens": 633, "passes": 212.0, "accepted": 418.0, "draft_ms": 104675.1, "draft_calls": 630.0, "dummy_passes": 418.0, "spec_wall_s": 120.06, "plain_wall_s": 167.49}
+[spec_accept] check {"R": 5, "temperature": 0.0, "drafter": "lookup+model", "identical_to_plain": false, "tokens_per_pass": 3.314, "draft_ms_per_pass": 142.38, "tokens": 689, "passes": 207.0, "accepted": 479.0, "draft_ms": 97671.21, "draft_calls": 686.0, "dummy_passes": 479.0, "spec_wall_s": 99.08, "plain_wall_s": 166.01}
+[spec_accept] check {"R": 5, "temperature": 0.7, "drafter": "lookup+model", "identical_to_plain": false, "tokens_per_pass": 3.481, "draft_ms_per_pass": 219.58, "tokens": 633, "passes": 181.0, "accepted": 449.0, "draft_ms": 138333.78, "draft_calls": 630.0, "dummy_passes": 449.0, "spec_wall_s": 120.32, "plain_wall_s": 167.08}
+{
+ "label": "q15_d05",
+ "target": "q15",
+ "draft": "/tmp/packs/q05",
+ "draft_kind": "float16",
+ "device": "cuda",
+ "draft_device": "cuda",
+ "max_tokens": 128,
+ "prompts": 24,
+ "torch": "2.11.0+cu130",
+ "gpu": "Tesla T4",
+ "greedy_s": 550.26,
+ "answer_tokens": [
+  31,
+  63,
+  128,
+  128,
+  23,
+  60,
+  128,
+  122,
+  14,
+  17,
+  48,
+  128,
+  128,
+  128,
+  79,
+  128,
+  128,
+  120,
+  128,
+  128,
+  128,
+  30,
+  128,
+  70
+ ],
+ "sim_s": 3.27,
+ "tokens_per_pass_sim": {
+  "lookup": {
+   "2": 1.061,
+   "3": 1.077,
+   "4": 1.091,
+   "5": 1.094,
+   "6": 1.096,
+   "8": 1.101,
+   "p_first_draft_ok": 0.094
+  },
+  "lookup2": {
+   "2": 1.091,
+   "3": 1.124,
+   "4": 1.135,
+   "5": 1.147,
+   "6": 1.15,
+   "8": 1.154,
+   "p_first_draft_ok": 0.139
+  },
+  "model": {
+   "2": 1.793,
+   "3": 2.427,
+   "4": 2.88,
+   "5": 3.277,
+   "6": 3.654,
+   "8": 4.031,
+   "p_first_draft_ok": 0.81
+  },
+  "lookup+model": {
+   "2": 1.797,
+   "3": 2.435,
+   "4": 2.899,
+   "5": 3.292,
+   "6": 3.667,
+   "8": 4.061,
+   "p_first_draft_ok": 0.814
+  }
+ },
+ "per_prompt_r4": {
+  "lookup+model": [
+   2.73,
+   1.94,
+   3.74,
+   3.1,
+   2.2,
+   2.95,
+   3.34,
+   3.46,
+   3.25,
+   2.0,
+   3.36,
+   2.54,
+   2.49,
+   3.53,
+   3.9,
+   2.89,
+   3.34,
+   2.38,
+   2.54,
+   3.17,
+   2.89,
+   3.22,
+   2.65,
+   2.46
+  ]
+ },
+ "generator_checks": [
+  {
+   "R": 4,
+   "temperature": 0.0,
+   "drafter": "lookup+model",
+   "identical_to_plain": false,
+   "tokens_per_pass": 2.97,
+   "draft_ms_per_pass": 108.87,
+   "tokens": 689,
+   "passes": 231.0,
+   "accepted": 455.0,
+   "draft_ms": 74686.6,
+   "draft_calls": 686.0,
+   "dummy_passes": 455.0,
+   "spec_wall_s": 97.27,
+   "plain_wall_s": 166.39
+  },
+  {
+   "R": 4,
+   "temperature": 0.7,
+   "drafter": "lookup+model",
+   "identical_to_plain": false,
+   "tokens_per_pass": 2.972,
+   "draft_ms_per_pass": 166.15,
+   "tokens": 633,
+   "passes": 212.0,
+   "accepted": 418.0,
+   "draft_ms": 104675.1,
+   "draft_calls": 630.0,
+   "dummy_passes": 418.0,
+   "spec_wall_s": 120.06,
+   "plain_wall_s": 167.49
+  },
+  {
+   "R": 5,
+   "temperature": 0.0,
+   "drafter": "lookup+model",
+   "identical_to_plain": false,
+   "tokens_per_pass": 3.314,
+   "draft_ms_per_pass": 142.38,
+   "tokens": 689,
+   "passes": 207.0,
+   "accepted": 479.0,
+   "draft_ms": 97671.21,
+   "draft_calls": 686.0,
+   "dummy_passes": 479.0,
+   "spec_wall_s": 99.08,
+   "plain_wall_s": 166.01
+  },
+  {
+   "R": 5,
+   "temperature": 0.7,
+   "drafter": "lookup+model",
+   "identical_to_plain": false,
+   "tokens_per_pass": 3.481,
+   "draft_ms_per_pass": 219.58,
+   "tokens": 633,
+   "passes": 181.0,
+   "accepted": 449.0,
+   "draft_ms": 138333.78,
+   "draft_calls": 630.0,
+   "dummy_passes": 449.0,
+   "spec_wall_s": 120.32,
+   "plain_wall_s": 167.08
+  }
+ ]
+}
+
+---stderr---
+model on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)
+model on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)

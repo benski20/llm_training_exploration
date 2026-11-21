@@ -371,3 +371,17 @@ def test_provider_serves_the_chosen_model(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("PGW_MODAL_MODEL")
     monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
     assert _load("customer").DRAFT is True
+
+
+def test_customer_cost_follows_the_target_and_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A larger target or the draft gives the customer 16 GiB (customer.py MEMORY_MIB): the estimate follows."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    base = launch.cost_per_h(None)["pgw-customer"]
+    assert base == pytest.approx(4 * 0.0473 + 8 * 0.008)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    assert launch.customer_gib() == 16
+    assert launch.cost_per_h(None)["pgw-customer"] == pytest.approx(base + 8 * 0.008)
+    monkeypatch.delenv("PGW_MODAL_MODEL")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    assert launch.customer_gib() == 16

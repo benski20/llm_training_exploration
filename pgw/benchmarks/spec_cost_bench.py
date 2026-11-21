@@ -195,7 +195,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--preset", default="7b", choices=["7b", "0.5b", "8b"])
+    ap.add_argument("--preset", default="7b", choices=["7b", "0.5b", "1.5b", "8b"])
     ap.add_argument("--layers", type=int, default=4, help="layers measured (scaled to the preset's; 0 = all)")
     ap.add_argument("--vocab", type=int, default=0, help="override the vocabulary (0 = the preset's; smoke tests)")
     ap.add_argument("--rows", default="1,2,4,8", help="verify rows R per pass, comma list (1 is always added)")

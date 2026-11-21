@@ -79,3 +79,26 @@ def test_provider_model_table_matches_boot() -> None:
     assert table == boot.MODELS
     assert all(len(rev) == 40 for _, rev in boot.MODELS.values())
     assert boot.MODELS[boot.MODEL_NAME][0] == boot.MODEL_REPO
+
+
+def test_e2e_waits_for_both_strict_chats_slots() -> None:
+    """The scripted e2e chats (32 tokens, prompt under 64 tokens) fail fast without their whole strict
+    reservation: the wizard step waits for both chats' slots (and keeps its old 64 without speculation)."""
+    boot = _boot()
+    assert boot.e2e_min_masks(0) == 64
+    assert boot.e2e_min_masks(4) == 2 * (64 + 32 + 31 * 3)
+    assert boot.e2e_min_masks(4, prompt_tokens=41, chats=1) == 41 + 32 + 31 * 3
+
+
+def test_customer_memory_matches_boot() -> None:
+    """customer.py computes its memory without importing this file at module level: same rule."""
+    import re
+
+    boot = _boot()
+    src = (MODAL_DIR / "customer.py").read_text()
+    m = re.search(r"MEMORY_MIB = (\d+) if DRAFT or MODEL != \"([^\"]+)\" else (\d+)", src)
+    assert m is not None
+    assert int(m.group(1)) == boot.CUSTOMER_MEMORY_MIB["large"] == boot.customer_memory_mib(None, draft=True)
+    assert int(m.group(3)) == boot.CUSTOMER_MEMORY_MIB["default"] == boot.customer_memory_mib(None)
+    assert m.group(2) == boot.MODEL_NAME
+    assert boot.customer_memory_mib("qwen2.5-1.5b-instruct") == boot.CUSTOMER_MEMORY_MIB["large"]

@@ -38,6 +38,8 @@ PRESETS: dict[str, dict[str, int]] = {
     # hidden, intermediate, heads, kv heads, full layer count
     "0.5b": {"hidden_size": 896, "intermediate_size": 4864, "num_attention_heads": 14,
              "num_key_value_heads": 2, "full_layers": 24},
+    "1.5b": {"hidden_size": 1536, "intermediate_size": 8960, "num_attention_heads": 12,
+             "num_key_value_heads": 2, "full_layers": 28},
     "7b": {"hidden_size": 3584, "intermediate_size": 18944, "num_attention_heads": 28,
            "num_key_value_heads": 4, "full_layers": 28},
     "8b": {"hidden_size": 4096, "intermediate_size": 14336, "num_attention_heads": 32,

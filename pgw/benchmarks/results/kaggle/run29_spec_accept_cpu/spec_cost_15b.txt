@@ -1,0 +1,21 @@
+{"rows": 1, "layers_ms": 34.056, "head_ms": 45.427, "sample_ms": 0.655}
+{"rows": 4, "layers_ms": 92.218, "head_ms": 58.665, "sample_ms": 2.77}
+{"rows": 5, "layers_ms": 153.978, "head_ms": 70.066, "sample_ms": 4.935}
+
+---stderr---
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py", line 227, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py", line 219, in main
+    res = run(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py", line 176, in run
+    comp[rows]["masking_ms"] = round(masking(args, rows), 3)
+                                     ~~~~~~~^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py", line 137, in masking
+    subprocess.run(cmd, check=True, capture_output=True, timeout=7200)  # noqa: S603
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.13/subprocess.py", line 578, in run
+    raise CalledProcessError(retcode, process.args,
+                             output=stdout, stderr=stderr)
+subprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/profile_gateway.py', '--preset', '1.5b', '--layers', '1', '--steps', '5', '--rows', '1', '--sessions', '1', '--null-service', '--ring', 'K32A12C27', '--workdir', '/tmp/sc15/pg', '--json', '/tmp/sc15/mask_r1.json']' returned non-zero exit status 1.

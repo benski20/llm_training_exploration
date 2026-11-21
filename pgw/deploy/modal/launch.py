@@ -98,12 +98,19 @@ def provider_cpus(gpu: str | None) -> float:
     return float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if gpu else 4.0))
 
 
+def customer_gib() -> int:
+    """Customer memory as ``customer.py`` sets it: 16 GiB with a target larger than the 0.5B or the draft
+    (``PGW_MODAL_MODEL`` / ``PGW_MODAL_DRAFT``), else 8."""
+    model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
+    return 16 if os.environ.get("PGW_MODAL_DRAFT", "0") == "1" or model != DEFAULT_MODEL else 8
+
+
 def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
     """Hourly list price of each party (provider cores: ``cpus``, else :func:`provider_cpus`)."""
     cores = provider_cpus(gpu) if cpus is None else float(cpus)
     prov = (GPU_PRICE_H[gpu] if gpu else 0.0) + cores * CORE_H
     cgpu = normalize_gpu(os.environ.get("PGW_MODAL_CUSTOMER_GPU"))
-    cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + 8 * GIB_H
+    cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + customer_gib() * GIB_H
     return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": cust}
 
 
@@ -494,6 +501,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    # the deploy-time choices also drive the cost estimate (customer memory) in this process
+    for var, val in (("PGW_MODAL_MODEL", args.model if args.model != DEFAULT_MODEL else None),
+                     ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None)):
+        if val:
+            os.environ[var] = val
+        else:
+            os.environ.pop(var, None)
     if args.spec_rows:
         b = spec_budget(args.spec_rows, 41, 32)
         print(f"strict speculation: {args.spec_rows} masked rows per decode pass, i.e. {args.spec_rows} mask slots per "

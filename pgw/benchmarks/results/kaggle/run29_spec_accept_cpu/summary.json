@@ -1,0 +1,124 @@
+{
+ "job": {
+  "exclude": [
+   "scripts",
+   "tests",
+   "docs",
+   "research",
+   "console",
+   "SPEC.md",
+   "INTERFACE_NOTES.md",
+   "STATUS.md",
+   "benchmarks/gpu_validate.py",
+   "benchmarks/results"
+  ],
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "build_native",
+    "required": true,
+    "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && { [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())' && python rust/tools/build_ntt.py && python -c 'from pgw.hemask import ntt; assert ntt.available(), \"pgw_ntt not loaded\"; print(\"pgw_ntt\", ntt.info())'",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "cpu_info",
+    "cmd": "lscpu; nproc; nvidia-smi || true",
+    "timeout": 60
+   },
+   {
+    "kind": "shell",
+    "name": "pack_q05",
+    "required": true,
+    "cmd": "python -m pgw.cli pack Qwen/Qwen2.5-0.5B-Instruct /tmp/packs/q05 --name q05 -q && rm -rf $HOME/.cache/huggingface",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "pack_q15",
+    "required": true,
+    "cmd": "python -m pgw.cli pack Qwen/Qwen2.5-1.5B-Instruct /tmp/packs/q15 --name q15 -q && rm -rf $HOME/.cache/huggingface",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "accept_q15_cpu_d05_gpu",
+    "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 --device cpu --draft-device cuda --label q15_cpu_d05_gpu --prompts 4 --check-prompts 4 --max-tokens 96 --rs 2,3,4,5,6,8 --check 4,5 --json /kaggle/working/accept_q15_cpu.json",
+    "timeout": 9000
+   },
+   {
+    "kind": "shell",
+    "name": "spec_cost_15b",
+    "cmd": "python benchmarks/spec_cost_bench.py --preset 1.5b --layers 4 --rows 4,5 --masking --workdir /tmp/sc15 --json /kaggle/working/spec_cost_15b.json",
+    "timeout": 3600
+   },
+   {
+    "kind": "shell",
+    "name": "spec_cost_05b",
+    "cmd": "python benchmarks/spec_cost_bench.py --preset 0.5b --layers 4 --rows 4,5 --masking --workdir /tmp/sc05 --json /kaggle/working/spec_cost_05b.json",
+    "timeout": 3600
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 14.6,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "build_native": {
+   "rc": 0,
+   "seconds": 70.8,
+   "tail": "utils v0.4.8\n   Compiling digest v0.10.7\n   Compiling block-buffer v0.12.1\n   Compiling memoffset v0.9.1\n   Compiling matrixmultiply v0.3.11\n   Compiling cpufeatures v0.3.1\n   Compiling heck v0.5.0\n   Compiling ring v0.17.14\n   Compiling cpubits v0.1.1\n   Compiling cipher v0.5.2\n   Compiling universal-hash v0.6.1\n   Compiling pyo3 v0.23.5\n   Compiling inout v0.1.4\n   Compiling getrandom v0.2.17\n   Compiling untrusted v0.9.0\n   Compiling rawpointer v0.2.1\n   Compiling cpufeatures v0.2.17\n   Compiling cipher v0.4.4\n   Compiling polyval v0.7.3\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling hmac v0.12.1\n   Compiling rustls-pki-types v1.16.0\n   Compiling rustls v0.23.46\n   Compiling indoc v2.0.8\n   Compiling unindent v0.2.4\n   Compiling hkdf v0.12.4\n   Compiling ndarray v0.16.1\n   Compiling ghash v0.6.0\n   Compiling chacha20 v0.9.1\n   Compiling sha2 v0.10.9\n   Compiling pyo3-macros v0.23.5\n   Compiling aes v0.9.4\n   Compiling ctr v0.10.1\n   Compiling aead v0.6.1\n   Compiling rustc-hash v2.1.3\n   Compiling aes-gcm v0.11.1\n   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n   Compiling pgw-lane v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-lane)\n   Compiling numpy v0.23.0\n   Compiling rustls-webpki v0.103.17\n   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n    Finished `release` profile [optimized] target(s) in 47.26s\n   Compiling pgw-ntt v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-ntt)\n    Finished `release` profile [optimized] target(s) in 3.39s\n"
+  },
+  "cpu_info": {
+   "rc": 0,
+   "seconds": 0.4,
+   "tail": "    MIG M. |\n|=========================================+========================+======================|\n|   0  Tesla T4                       Off |   00000000:00:04.0 Off |                    0 |\n| N/A   46C    P8              9W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n|   1  Tesla T4                       Off |   00000000:00:05.0 Off |                    0 |\n| N/A   44C    P8              9W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n\n---stderr---\n"
+  },
+  "pack_q05": {
+   "rc": 0,
+   "seconds": 27.9,
+   "tail": "packed q05 fingerprint 9d3bc3567550655b3214862df1017beeb9cf6af357d97ad43fe5d3850ce08f50\n\n---stderr---\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n2026-11-21 04:39:30,837 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 7 files:  29%|\u2588\u2588\u258a       | 2/7 [00:00<00:00,  9.81it/s]\nFetching 7 files:  86%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258c | 6/7 [00:00<00:00, 19.67it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:06<00:00,  1.04it/s]\n2026-11-21 04:39:37,521 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-0.5B-Instruct (qwen2, 24 layers) -> q05\n2026-11-21 04:39:49,568 INFO pgw.modelpack.packer: wrote linears-00000-of-00001.safetensors (96 linear groups)\n2026-11-21 04:39:55,071 INFO pgw.modelpack.packer: packed q05: 24 layers, 1 linear shards, fingerprint 9d3bc3567550 (17.5s)\n"
+  },
+  "pack_q15": {
+   "rc": 0,
+   "seconds": 77.5,
+   "tail": "packed q15 fingerprint 903498acbd9b176eefbb937e2ed6c06a9acf8dafc942f29083559632e11fbb6d\n\n---stderr---\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n2026-11-21 04:39:58,051 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 7 files:  29%|\u2588\u2588\u258a       | 2/7 [00:00<00:00, 13.49it/s]\nFetching 7 files:  86%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258c | 6/7 [00:00<00:00, 24.65it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:19<00:00,  2.81s/it]\n2026-11-21 04:40:17,646 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-1.5B-Instruct (qwen2, 28 layers) -> q15\n2026-11-21 04:41:03,367 INFO pgw.modelpack.packer: wrote linears-00000-of-00001.safetensors (112 linear groups)\n2026-11-21 04:41:12,498 INFO pgw.modelpack.packer: packed q15: 28 layers, 1 linear shards, fingerprint 903498acbd9b (54.8s)\n"
+  },
+  "accept_q15_cpu_d05_gpu": {
+   "rc": -999,
+   "seconds": 9000.1,
+   "tail": "TIMEOUT after 9000s\nb'[spec_accept] greedy answers: 286 tokens in 1337.6 s\\n{\\n \"lookup\": {\\n  \"2\": 1.037,\\n  \"3\": 1.048,\\n  \"4\": 1.052,\\n  \"5\": 1.056,\\n  \"6\": 1.056,\\n  \"8\": 1.06,\\n  \"p_first_draft_ok\": 0.06\\n },\\n \"lookup2\": {\\n  \"2\": 1.044,\\n  \"3\": 1.064,\\n  \"4\": 1.072,\\n  \"5\": 1.076,\\n  \"6\": 1.076,\\n  \"8\": 1.08,\\n  \"p_first_draft_ok\": 0.078\\n },\\n \"model\": {\\n  \"2\": 1.785,\\n  \"3\": 2.41,\\n  \"4\": 2.82,\\n  \"5\": 3.099,\\n  \"6\": 3.57,\\n  \"8\": 3.972,\\n  \"p_first_draft_ok\": 0.812\\n },\\n \"lookup+model\": {\\n  \"2\": 1.785,\\n  \"3\": 2.41,\\n  \"4\": 2.848,\\n  \"5\": 3.133,\\n  \"6\": 3.57,\\n  \"8\": 4.029,\\n  \"p_first_draft_ok\": 0.819\\n }\\n}\\n[spec_accept] check {\"R\": 4, \"temperature\": 0.0, \"drafter\": \"lookup+model\", \"identical_to_plain\": true, \"tokens_per_pass\": 2.84, \"draft_ms_per_pass\": 111.48, \"tokens\": 286, \"passes\": 100.0, \"accepted\": 184.0, \"draft_ms\": 31660.44, \"draft_calls\": 284.0, \"dummy_passes\": 184.0, \"spec_wall_s\": 565.22, \"plain_wall_s\": 1328.25}\\n[spec_accept] check {\"R\": 4, \"temperature\": 0.7, \"drafter\": \"lookup+model\", \"identical_to_plain\": true, \"tokens_per_pass\": 2.78, \"draft_ms_per_pass\": 169.19, \"tokens\": 280, \"passes\": 100.0, \"accepted\": 178.0, \"draft_ms\": 47036.2, \"draft_calls\": 278.0, \"dummy_passes\": 178.0, \"spec_wall_s\": 586.33, \"plain_wall_s\": 1290.96}\\n'\nb'model on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\\n'"
+  },
+  "spec_cost_15b": {
+   "rc": 1,
+   "seconds": 21.0,
+   "tail": "{\"rows\": 1, \"layers_ms\": 34.056, \"head_ms\": 45.427, \"sample_ms\": 0.655}\n{\"rows\": 4, \"layers_ms\": 92.218, \"head_ms\": 58.665, \"sample_ms\": 2.77}\n{\"rows\": 5, \"layers_ms\": 153.978, \"head_ms\": 70.066, \"sample_ms\": 4.935}\n\n---stderr---\nTraceback (most recent call last):\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 227, in <module>\n    main()\n    ~~~~^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 219, in main\n    res = run(args)\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 176, in run\n    comp[rows][\"masking_ms\"] = round(masking(args, rows), 3)\n                                     ~~~~~~~^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 137, in masking\n    subprocess.run(cmd, check=True, capture_output=True, timeout=7200)  # noqa: S603\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/subprocess.py\", line 578, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/profile_gateway.py', '--preset', '1.5b', '--layers', '1', '--steps', '5', '--rows', '1', '--sessions', '1', '--null-service', '--ring', 'K32A12C27', '--workdir', '/tmp/sc15/pg', '--json', '/tmp/sc15/mask_r1.json']' returned non-zero exit status 1.\n"
+  },
+  "spec_cost_05b": {
+   "rc": 1,
+   "seconds": 17.0,
+   "tail": "{\"rows\": 1, \"layers_ms\": 27.813, \"head_ms\": 21.549, \"sample_ms\": 0.668}\n{\"rows\": 4, \"layers_ms\": 73.573, \"head_ms\": 38.188, \"sample_ms\": 2.559}\n{\"rows\": 5, \"layers_ms\": 107.249, \"head_ms\": 48.006, \"sample_ms\": 4.299}\n\n---stderr---\nTraceback (most recent call last):\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 227, in <module>\n    main()\n    ~~~~^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 219, in main\n    res = run(args)\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 176, in run\n    comp[rows][\"masking_ms\"] = round(masking(args, rows), 3)\n                                     ~~~~~~~^^^^^^^^^^^^\n  File \"/tmp/pgwsrc/pgw/benchmarks/spec_cost_bench.py\", line 137, in masking\n    subprocess.run(cmd, check=True, capture_output=True, timeout=7200)  # noqa: S603\n    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/subprocess.py\", line 578, in run\n    raise CalledProcessError(retcode, process.args,\n                             output=stdout, stderr=stderr)\nsubprocess.CalledProcessError: Command '['/usr/bin/python3', '/tmp/pgwsrc/pgw/benchmarks/profile_gateway.py', '--preset', '0.5b', '--layers', '1', '--steps', '5', '--rows', '1', '--sessions', '1', '--null-service', '--ring', 'K32A12C27', '--workdir', '/tmp/sc05/pg', '--json', '/tmp/sc05/mask_r1.json']' returned non-zero exit status 1.\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869292 kB",
+   "MemFree:        26207576 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 154.0
+}

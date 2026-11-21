@@ -1,0 +1,13 @@
+packed q05 fingerprint 9d3bc3567550655b3214862df1017beeb9cf6af357d97ad43fe5d3850ce08f50
+
+---stderr---
+
+Fetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-11-21 02:26:50,535 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 7 files:  57%|█████▋    | 4/7 [00:00<00:00, 23.20it/s]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.18s/it]
+Fetching 7 files: 100%|██████████| 7/7 [00:06<00:00,  1.01it/s]
+2026-11-21 02:26:57,423 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-0.5B-Instruct (qwen2, 24 layers) -> q05
+2026-11-21 02:27:09,478 INFO pgw.modelpack.packer: wrote linears-00000-of-00001.safetensors (96 linear groups)
+2026-11-21 02:27:14,804 INFO pgw.modelpack.packer: packed q05: 24 layers, 1 linear shards, fingerprint 9d3bc3567550 (17.4s)

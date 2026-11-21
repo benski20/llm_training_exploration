@@ -67,6 +67,8 @@ PRESETS: dict[str, dict[str, Any]] = {
            "vocab_size": 152064, "rope_theta": 1000000.0, "rms_norm_eps": 1e-6},
     "0.5b": {"hidden_size": 896, "intermediate_size": 4864, "num_heads": 14, "num_kv_heads": 2, "num_layers": 24,
              "vocab_size": 151936, "rope_theta": 1000000.0, "rms_norm_eps": 1e-6},
+    "1.5b": {"hidden_size": 1536, "intermediate_size": 8960, "num_heads": 12, "num_kv_heads": 2, "num_layers": 28,
+             "vocab_size": 151936, "rope_theta": 1000000.0, "rms_norm_eps": 1e-6},
     "8b": {"hidden_size": 4096, "intermediate_size": 14336, "num_heads": 32, "num_kv_heads": 8, "num_layers": 32,
            "vocab_size": 128256, "rope_theta": 500000.0, "rms_norm_eps": 1e-5},
 }

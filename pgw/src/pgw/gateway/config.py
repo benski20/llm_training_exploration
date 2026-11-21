@@ -312,9 +312,22 @@ class GatewayModelConfig(BaseModel):
                                  "(spec_lookup or draft_pack_path)")
             if self.spec_tokens == 0:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
+        if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":
+            # Verify passes are bit-identical to plain decoding only with the CPU float path: on a GPU the
+            # float kernels' results depend on how many rows a pass carries (Kaggle T4, 2026-11-21: greedy
+            # answers of a CUDA target diverged once drafts were accepted). The draft may use a GPU
+            # (draft_device): it only proposes, the target decides every token.
+            raise ValueError(f"model {self.name!r}: speculation (spec_lookup / draft_pack_path) needs device='cpu' "
+                             "for the target (verify passes are not bit-identical on a GPU); put the draft on the "
+                             "GPU with draft_device instead")
         if self.lane != "off" and self.mode != "masked":
             raise ValueError(f"model {self.name!r}: lane needs masked mode")
         return self
+
+    @property
+    def speculates(self) -> bool:
+        """Speculative decoding is on (a draft source and spec_tokens > 0)."""
+        return (self.spec_lookup > 0 or self.draft_pack_path is not None) and self.spec_tokens > 0
 
     def resolved_service_token(self) -> SecretStr | None:
         """The service bearer token: ``service_token`` or the stripped contents of ``service_token_file``.

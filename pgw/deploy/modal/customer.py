@@ -53,6 +53,10 @@ CUSTOMER_GPU = os.environ.get("PGW_MODAL_CUSTOMER_GPU") or None
 DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
 DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
 DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
+# A target larger than the 0.5B (launch.py --model, PGW_MODAL_MODEL at deploy time) or the draft needs more memory:
+# 16 GiB instead of 8 (= pgw_modal_boot.customer_memory_mib; a test checks they agree).
+MODEL = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
+MEMORY_MIB = 16384 if DRAFT or MODEL != "qwen2.5-0.5b-instruct" else 8192
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -106,7 +110,9 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
             raise RuntimeError("provider did not publish an enrollment code")
         time.sleep(5)
     model_name = prov.get("model") or boot.MODEL_NAME  # the target the provider serves (launch.py --model)
-    res = wiz.run_wizard(url, token, prov["code"], model_name, timeout_s=max(60, deadline - time.time()))
+    # strict speculation reserves spec_rows slots per generated token up front: wait for both chats' slots
+    res = wiz.run_wizard(url, token, prov["code"], model_name, timeout_s=max(60, deadline - time.time()),
+                         min_masks=boot.e2e_min_masks(spec_rows))
     wiz.wait_gateway_ready(url)
     key = wiz.create_api_key(url, res["admin_token"])
     adm = res["admin_token"]
@@ -166,7 +172,7 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
     }
 
 
-_FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1,
+_FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S, max_containers=1,
                  min_containers=0, retries=0, region=REGION)
 
 

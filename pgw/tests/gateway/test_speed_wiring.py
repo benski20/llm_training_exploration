@@ -422,7 +422,18 @@ def test_phase_a_settings_are_no_longer_pending() -> None:
     ({"local_rtt_ms": 0}, "greater than 0"),
     ({"lane_pool_wait_s": 2.0}, "less than or equal to 1"),
     ({"float_threads": 0}, "greater than or equal to 1"),
+    # speculation verifies on the CPU float path only (a GPU target's verify passes are not bit-identical)
+    ({"spec_rows": 4, "spec_strict_passes": True, "spec_lookup": 3, "device": "cuda"}, "needs device='cpu'"),
+    ({"spec_lookup": 3, "device": "cuda:0"}, "needs device='cpu'"),
 ])
 def test_speed_setting_validation(kw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         _cfg(**kw)
+
+
+def test_speculation_target_on_cpu_draft_anywhere() -> None:
+    """The draft may sit on a GPU (it only proposes); without speculation a GPU target stays allowed."""
+    c = _cfg(spec_rows=4, spec_strict_passes=True, spec_lookup=3, draft_device="cuda")
+    assert c.speculates and c.device == "cpu"
+    assert not _cfg(device="cuda").speculates
+    assert not _cfg(device="cuda", spec_lookup=3, spec_tokens=0).speculates

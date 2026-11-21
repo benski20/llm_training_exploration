@@ -22,6 +22,11 @@ Two measurements:
   tokens must equal the plain generation (exactness), and its own counters give the measured tokens per
   pass, the draft time per pass and the dummy passes.
 
+Run the Generator check with the target on the CPU (``--device cpu``, the gateway's only speculation device,
+see ``GatewayModelConfig``): with a CUDA target the float kernels' results depend on the rows of a pass, so verify
+passes are not bit-identical to plain decoding (Kaggle T4, run28: greedy answers diverged once drafts were
+accepted). The acceptance simulation is fine on either device. The draft may run anywhere (``--draft-device``).
+
 Drafters: ``lookup`` (prompt lookup over the conversation, ``n`` = 4..3, the gateway's
 :func:`pgw.engine.generate._lookup_drafts_fixed`), ``lookup2`` (n down to 2), ``model`` (the draft pack,
 ``--draft-pack``), ``lookup+model`` (lookup first, the model completes the proposal; the gateway's
@@ -326,13 +331,14 @@ def main(argv: list[str] | None = None) -> int:
             print("[spec_accept] check", json.dumps(row), flush=True)
             checks.append(row)
     report["generator_checks"] = checks
+    report["check_device_exact"] = args.device == "cpu"  # CUDA targets are not expected to match (see above)
     if args.dump_tokens:
         Path(args.dump_tokens).write_text(json.dumps({"prompts": ids_all, "answers": gens}))
     txt = json.dumps(report, indent=1)
     if args.json:
         Path(args.json).write_text(txt)
     print(txt)
-    return 0 if all(c["identical_to_plain"] for c in checks) else 1
+    return 0 if args.device != "cpu" or all(c["identical_to_plain"] for c in checks) else 1
 
 
 if __name__ == "__main__":
