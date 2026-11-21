@@ -520,3 +520,17 @@ Behaviour changes other components and operators must know about:
   - `GenerationStats.extra["gpu_prng"]`, `BenchmarkResult.gpu_prng`.
 - Status: [done] code + CPU tests (interpreter/emulation); CUDA tests and the T4 throughput numbers are in the
   Kaggle job `pgw-factory-gpu-prng` (not run yet).
+
+## 2026-11-21 gateway speed (L2) -> engine, observability: native local linear, native noise keys, decode prefetch
+- What (all additive, outputs and wire bytes unchanged):
+  - `pgw_fast.local_linear_into(x, w8t, scale, bias, k, a, cap, wnorm, bound, sx, out, threads=1) -> status`
+    (0 ok, 2 out of range); `MaskedBackend._local_fast` uses it (`PGW_LOCAL_NATIVE=0`: numpy + `torch._int_mm`).
+    The decode fast path now also covers K != 32 rings with A <= 15 (e.g. K40A12), still self-checked per shape.
+  - `pgw_fast.noise_dup_keys(payload, rows, n, nb, cols, shift, mult, groups, per)`;
+    `OutboundNoiseMonitor.guard_packed` uses it (`PGW_NOISE_NATIVE=0`: numpy); new helper `_dup_record`.
+  - `MaskedBackend.prefetch_decode` (default: with synchronous trips; `PGW_PREFETCH_DECODE`) and
+    `decode_prefetch_rows` (8): single-session 1-row decode stages its next rows on the prefetch thread.
+- Why: gateway CPU per decode token (chat speed).
+- Impact: none on the wire, mask consumption or outputs. Benches: `benchmarks/decode_cpu_bench.py`,
+  `trip_cpu_bench.py`, `local_linear_bench.py`.
+- Status: done
