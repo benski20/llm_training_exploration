@@ -1,0 +1,1113 @@
+{"gpus": ["Tesla T4", "Tesla T4"], "torch": "2.11.0+cu130", "triton_combine": true, "cpus": 4}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.01666, "slots_per_s": 640.31, "planes": 7, "gemm_tops": 3.21, "tops_7plane": 3.21}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.01778, "slots_per_s": 600.07, "planes": 7, "gemm_tops": 3.01, "tops_7plane": 3.01}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.01406, "slots_per_s": 758.92, "planes": 7, "gemm_tops": 3.8, "tops_7plane": 3.8}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.01888, "slots_per_s": 564.87, "planes": 7, "gemm_tops": 2.83, "tops_7plane": 2.83}
+qwen2.5-0.5b v2:53:35 1 CPU reference: True
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.05092, "slots_per_s": 837.99, "planes": 7, "gemm_tops": 4.2, "tops_7plane": 4.2}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.03531, "slots_per_s": 1208.39, "planes": 7, "gemm_tops": 6.05, "tops_7plane": 6.05}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.02233, "slots_per_s": 1910.62, "planes": 7, "gemm_tops": 9.57, "tops_7plane": 9.57}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.02245, "slots_per_s": 1900.2, "planes": 7, "gemm_tops": 9.52, "tops_7plane": 9.52}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.16316, "slots_per_s": 1045.98, "planes": 7, "gemm_tops": 5.24, "tops_7plane": 5.24}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.12046, "slots_per_s": 1416.79, "planes": 7, "gemm_tops": 7.1, "tops_7plane": 7.1}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.07926, "slots_per_s": 2153.21, "planes": 7, "gemm_tops": 10.79, "tops_7plane": 10.79}
+qwen2.5-0.5b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.04444, "slots_per_s": 3840.64, "planes": 7, "gemm_tops": 19.24, "tops_7plane": 19.24}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.00734, "slots_per_s": 1453.12, "planes": 7, "gemm_tops": 7.28, "tops_7plane": 7.28}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.00773, "slots_per_s": 1380.15, "planes": 7, "gemm_tops": 6.91, "tops_7plane": 6.91}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.00805, "slots_per_s": 1325.02, "planes": 7, "gemm_tops": 6.64, "tops_7plane": 6.64}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.01015, "slots_per_s": 1051.09, "planes": 7, "gemm_tops": 5.27, "tops_7plane": 5.27}
+qwen2.5-0.5b v1:56:16 1 CPU reference: True
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.02173, "slots_per_s": 1963.78, "planes": 7, "gemm_tops": 9.84, "tops_7plane": 9.84}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.02228, "slots_per_s": 1915.23, "planes": 7, "gemm_tops": 9.59, "tops_7plane": 9.59}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.01522, "slots_per_s": 2804.06, "planes": 7, "gemm_tops": 14.05, "tops_7plane": 14.05}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.01412, "slots_per_s": 3021.05, "planes": 7, "gemm_tops": 15.13, "tops_7plane": 15.13}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.06357, "slots_per_s": 2684.85, "planes": 7, "gemm_tops": 13.45, "tops_7plane": 13.45}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.07868, "slots_per_s": 2169.1, "planes": 7, "gemm_tops": 10.87, "tops_7plane": 10.87}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.06224, "slots_per_s": 2742.11, "planes": 7, "gemm_tops": 13.74, "tops_7plane": 13.74}
+qwen2.5-0.5b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.05356, "slots_per_s": 3186.16, "planes": 7, "gemm_tops": 15.96, "tops_7plane": 15.96}
+qwen2.5-0.5b profile gate_up {"m": 9728, "n": 896, "cols": 1024, "host_copy_ms": 0.356, "h2d_ms": 0.505, "unpack_planes_ms": 0.634, "gemm_ms": 2.683, "gemm_tops_block": 46.57, "combine_fused_ms": 1.465, "combine_torch_ms": 7.492, "pack_ms": 4.183, "d2h_ms": 3.331, "total_item_ms": 13.258, "gemm_tops_8k_ceiling": 36.93}
+qwen2.5-0.5b profile down {"m": 896, "n": 4864, "cols": 1024, "host_copy_ms": 3.019, "h2d_ms": 2.681, "unpack_planes_ms": 6.208, "gemm_ms": 1.205, "gemm_tops_block": 51.86, "combine_fused_ms": 0.154, "combine_torch_ms": 0.75, "pack_ms": 0.433, "d2h_ms": 0.324, "total_item_ms": 11.521, "gemm_tops_8k_ceiling": 30.13}
+decode alone {"n": 2194, "p50_ms": 0.631, "p90_ms": 0.704, "p99_ms": 0.871}
+decode maskgen {"n": 786, "p50_ms": 3.261, "p90_ms": 12.026, "p99_ms": 15.246}
+decode maskgen_yield {"n": 1221, "p50_ms": 2.408, "p90_ms": 4.138, "p99_ms": 5.572}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.03643, "slots_per_s": 250.99, "planes": 7, "gemm_tops": 22.93, "tops_7plane": 22.93}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.02032, "slots_per_s": 450.01, "planes": 7, "gemm_tops": 41.11, "tops_7plane": 41.11}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.03586, "slots_per_s": 254.93, "planes": 7, "gemm_tops": 23.29, "tops_7plane": 23.29}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.02285, "slots_per_s": 400.05, "planes": 7, "gemm_tops": 36.55, "tops_7plane": 36.55}
+qwen2.5-7b v2:53:35 1 CPU reference: True
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.15783, "slots_per_s": 231.71, "planes": 7, "gemm_tops": 21.17, "tops_7plane": 21.17}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.0813, "slots_per_s": 449.86, "planes": 7, "gemm_tops": 41.1, "tops_7plane": 41.1}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.158, "slots_per_s": 231.47, "planes": 7, "gemm_tops": 21.15, "tops_7plane": 21.15}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.08079, "slots_per_s": 452.65, "planes": 7, "gemm_tops": 41.35, "tops_7plane": 41.35}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.81518, "slots_per_s": 179.45, "planes": 7, "gemm_tops": 16.39, "tops_7plane": 16.39}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.54284, "slots_per_s": 269.48, "planes": 7, "gemm_tops": 24.62, "tops_7plane": 24.62}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.76986, "slots_per_s": 190.02, "planes": 7, "gemm_tops": 17.36, "tops_7plane": 17.36}
+qwen2.5-7b {"fmt": "v2:53:35", "groups": 16, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.35705, "slots_per_s": 409.71, "planes": 7, "gemm_tops": 37.43, "tops_7plane": 37.43}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.03335, "slots_per_s": 274.11, "planes": 7, "gemm_tops": 25.04, "tops_7plane": 25.04}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.02771, "slots_per_s": 329.91, "planes": 7, "gemm_tops": 30.14, "tops_7plane": 30.14}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.03104, "slots_per_s": 294.51, "planes": 7, "gemm_tops": 26.9, "tops_7plane": 26.9}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.01831, "slots_per_s": 499.42, "planes": 7, "gemm_tops": 45.62, "tops_7plane": 45.62}
+qwen2.5-7b v1:56:16 1 CPU reference: True
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.15508, "slots_per_s": 235.82, "planes": 7, "gemm_tops": 21.54, "tops_7plane": 21.54}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.07784, "slots_per_s": 469.85, "planes": 7, "gemm_tops": 42.92, "tops_7plane": 42.92}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.15619, "slots_per_s": 234.15, "planes": 7, "gemm_tops": 21.39, "tops_7plane": 21.39}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.0764, "slots_per_s": 478.67, "planes": 7, "gemm_tops": 43.73, "tops_7plane": 43.73}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.6551, "slots_per_s": 223.3, "planes": 7, "gemm_tops": 20.4, "tops_7plane": 20.4}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.43457, "slots_per_s": 336.62, "planes": 7, "gemm_tops": 30.75, "tops_7plane": 30.75}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.70361, "slots_per_s": 207.91, "planes": 7, "gemm_tops": 18.99, "tops_7plane": 18.99}
+qwen2.5-7b {"fmt": "v1:56:16", "groups": 16, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.37577, "slots_per_s": 389.29, "planes": 7, "gemm_tops": 35.56, "tops_7plane": 35.56}
+qwen2.5-7b profile gate_up {"m": 37888, "n": 3584, "cols": 1024, "host_copy_ms": 2.149, "h2d_ms": 1.979, "unpack_planes_ms": 5.081, "gemm_ms": 47.812, "gemm_tops_block": 41.99, "combine_fused_ms": 5.89, "combine_torch_ms": 30.31, "pack_ms": 20.788, "d2h_ms": 12.931, "total_item_ms": 97.55, "gemm_tops_8k_ceiling": 28.62}
+qwen2.5-7b profile down {"m": 3584, "n": 18944, "cols": 1024, "host_copy_ms": 11.645, "h2d_ms": 10.408, "unpack_planes_ms": 14.143, "gemm_ms": 33.052, "gemm_tops_block": 29.45, "combine_fused_ms": 0.57, "combine_torch_ms": 2.794, "pack_ms": 1.895, "d2h_ms": 1.244, "total_item_ms": 59.271, "gemm_tops_8k_ceiling": 28.12}
+decode alone {"n": 2143, "p50_ms": 0.712, "p90_ms": 0.755, "p99_ms": 1.054}
+decode maskgen {"n": 230, "p50_ms": 11.997, "p90_ms": 80.699, "p99_ms": 84.215}
+decode maskgen_yield {"n": 1025, "p50_ms": 2.025, "p90_ms": 11.439, "p99_ms": 19.722}
+llama3-70b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.13952, "slots_per_s": 22.94, "planes": 7, "gemm_tops": 21.98, "tops_7plane": 21.98}
+llama3-70b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.06975, "slots_per_s": 45.88, "planes": 7, "gemm_tops": 43.97, "tops_7plane": 43.97}
+llama3-70b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.14559, "slots_per_s": 21.98, "planes": 7, "gemm_tops": 21.06, "tops_7plane": 21.06}
+llama3-70b {"fmt": "v2:53:35", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.07242, "slots_per_s": 44.19, "planes": 7, "gemm_tops": 42.35, "tops_7plane": 42.35}
+llama3-70b v2:53:35 1 CPU reference: True
+llama3-70b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.61078, "slots_per_s": 20.96, "planes": 7, "gemm_tops": 20.08, "tops_7plane": 20.08}
+llama3-70b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.29498, "slots_per_s": 43.39, "planes": 7, "gemm_tops": 41.58, "tops_7plane": 41.58}
+llama3-70b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.55859, "slots_per_s": 22.91, "planes": 7, "gemm_tops": 21.96, "tops_7plane": 21.96}
+llama3-70b {"fmt": "v2:53:35", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.28308, "slots_per_s": 45.22, "planes": 7, "gemm_tops": 43.33, "tops_7plane": 43.33}
+llama3-70b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.12712, "slots_per_s": 25.17, "planes": 7, "gemm_tops": 24.12, "tops_7plane": 24.12}
+llama3-70b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.06505, "slots_per_s": 49.19, "planes": 7, "gemm_tops": 47.14, "tops_7plane": 47.14}
+llama3-70b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.1325, "slots_per_s": 24.15, "planes": 7, "gemm_tops": 23.14, "tops_7plane": 23.14}
+llama3-70b {"fmt": "v1:56:16", "groups": 1, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.06383, "slots_per_s": 50.13, "planes": 7, "gemm_tops": 48.04, "tops_7plane": 48.04}
+llama3-70b v1:56:16 1 CPU reference: True
+llama3-70b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 1, "s_per_layer_round": 0.64271, "slots_per_s": 19.92, "planes": 7, "gemm_tops": 19.09, "tops_7plane": 19.09}
+llama3-70b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 2, "devices": 2, "s_per_layer_round": 0.331, "slots_per_s": 38.67, "planes": 7, "gemm_tops": 37.06, "tops_7plane": 37.06}
+llama3-70b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 1, "s_per_layer_round": 0.58067, "slots_per_s": 22.04, "planes": 7, "gemm_tops": 21.12, "tops_7plane": 21.12}
+llama3-70b {"fmt": "v1:56:16", "groups": 4, "mode": "fused", "conc": 4, "devices": 2, "s_per_layer_round": 0.30849, "slots_per_s": 41.49, "planes": 7, "gemm_tops": 39.76, "tops_7plane": 39.76}
+llama3-70b profile gate_up {"m": 57344, "n": 8192, "cols": 1024, "host_copy_ms": 5.517, "h2d_ms": 4.506, "unpack_planes_ms": 14.503, "gemm_ms": 328.022, "gemm_tops_block": 20.53, "combine_fused_ms": 8.244, "combine_torch_ms": 43.827, "pack_ms": 28.39, "d2h_ms": 19.564, "total_item_ms": 269.384, "gemm_tops_8k_ceiling": 31.35}
+llama3-70b profile down {"m": 8192, "n": 28672, "cols": 1024, "host_copy_ms": 17.268, "h2d_ms": 15.754, "unpack_planes_ms": 23.264, "gemm_ms": 127.572, "gemm_tops_block": 26.4, "combine_fused_ms": 1.245, "combine_torch_ms": 6.418, "pack_ms": 4.344, "d2h_ms": 2.82, "total_item_ms": 238.301, "gemm_tops_8k_ceiling": 30.89}
+decode alone {"n": 1910, "p50_ms": 1.038, "p90_ms": 1.122, "p99_ms": 1.189}
+decode maskgen {"n": 116, "p50_ms": 32.742, "p90_ms": 84.446, "p99_ms": 202.394}
+decode maskgen_yield {"n": 416, "p50_ms": 9.041, "p90_ms": 29.838, "p99_ms": 44.962}
+{
+ "gpus": [
+  "Tesla T4",
+  "Tesla T4"
+ ],
+ "torch": "2.11.0+cu130",
+ "triton_combine": true,
+ "cpus": 4,
+ "presets": {
+  "qwen2.5-0.5b": {
+   "layers": 24,
+   "shapes": {
+    "qkv": [
+     1152,
+     896
+    ],
+    "o": [
+     896,
+     896
+    ],
+    "gate_up": [
+     9728,
+     896
+    ],
+    "down": [
+     896,
+     4864
+    ]
+   },
+   "macs_per_slot_per_plane": 357826560,
+   "runs": [
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.01666,
+     "slots_per_s": 640.31,
+     "planes": 7,
+     "gemm_tops": 3.21,
+     "tops_7plane": 3.21
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.01778,
+     "slots_per_s": 600.07,
+     "planes": 7,
+     "gemm_tops": 3.01,
+     "tops_7plane": 3.01
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.01406,
+     "slots_per_s": 758.92,
+     "planes": 7,
+     "gemm_tops": 3.8,
+     "tops_7plane": 3.8
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.01888,
+     "slots_per_s": 564.87,
+     "planes": 7,
+     "gemm_tops": 2.83,
+     "tops_7plane": 2.83
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.05092,
+     "slots_per_s": 837.99,
+     "planes": 7,
+     "gemm_tops": 4.2,
+     "tops_7plane": 4.2
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.03531,
+     "slots_per_s": 1208.39,
+     "planes": 7,
+     "gemm_tops": 6.05,
+     "tops_7plane": 6.05
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.02233,
+     "slots_per_s": 1910.62,
+     "planes": 7,
+     "gemm_tops": 9.57,
+     "tops_7plane": 9.57
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.02245,
+     "slots_per_s": 1900.2,
+     "planes": 7,
+     "gemm_tops": 9.52,
+     "tops_7plane": 9.52
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.16316,
+     "slots_per_s": 1045.98,
+     "planes": 7,
+     "gemm_tops": 5.24,
+     "tops_7plane": 5.24
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.12046,
+     "slots_per_s": 1416.79,
+     "planes": 7,
+     "gemm_tops": 7.1,
+     "tops_7plane": 7.1
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.07926,
+     "slots_per_s": 2153.21,
+     "planes": 7,
+     "gemm_tops": 10.79,
+     "tops_7plane": 10.79
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.04444,
+     "slots_per_s": 3840.64,
+     "planes": 7,
+     "gemm_tops": 19.24,
+     "tops_7plane": 19.24
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.00734,
+     "slots_per_s": 1453.12,
+     "planes": 7,
+     "gemm_tops": 7.28,
+     "tops_7plane": 7.28
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.00773,
+     "slots_per_s": 1380.15,
+     "planes": 7,
+     "gemm_tops": 6.91,
+     "tops_7plane": 6.91
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.00805,
+     "slots_per_s": 1325.02,
+     "planes": 7,
+     "gemm_tops": 6.64,
+     "tops_7plane": 6.64
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.01015,
+     "slots_per_s": 1051.09,
+     "planes": 7,
+     "gemm_tops": 5.27,
+     "tops_7plane": 5.27
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.02173,
+     "slots_per_s": 1963.78,
+     "planes": 7,
+     "gemm_tops": 9.84,
+     "tops_7plane": 9.84
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.02228,
+     "slots_per_s": 1915.23,
+     "planes": 7,
+     "gemm_tops": 9.59,
+     "tops_7plane": 9.59
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.01522,
+     "slots_per_s": 2804.06,
+     "planes": 7,
+     "gemm_tops": 14.05,
+     "tops_7plane": 14.05
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.01412,
+     "slots_per_s": 3021.05,
+     "planes": 7,
+     "gemm_tops": 15.13,
+     "tops_7plane": 15.13
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.06357,
+     "slots_per_s": 2684.85,
+     "planes": 7,
+     "gemm_tops": 13.45,
+     "tops_7plane": 13.45
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.07868,
+     "slots_per_s": 2169.1,
+     "planes": 7,
+     "gemm_tops": 10.87,
+     "tops_7plane": 10.87
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.06224,
+     "slots_per_s": 2742.11,
+     "planes": 7,
+     "gemm_tops": 13.74,
+     "tops_7plane": 13.74
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.05356,
+     "slots_per_s": 3186.16,
+     "planes": 7,
+     "gemm_tops": 15.96,
+     "tops_7plane": 15.96
+    }
+   ],
+   "cpu_reference_ok": {
+    "v2:53:35/g1": true,
+    "v1:56:16/g1": true
+   },
+   "profile": {
+    "gate_up": {
+     "m": 9728,
+     "n": 896,
+     "cols": 1024,
+     "host_copy_ms": 0.356,
+     "h2d_ms": 0.505,
+     "unpack_planes_ms": 0.634,
+     "gemm_ms": 2.683,
+     "gemm_tops_block": 46.57,
+     "combine_fused_ms": 1.465,
+     "combine_torch_ms": 7.492,
+     "pack_ms": 4.183,
+     "d2h_ms": 3.331,
+     "total_item_ms": 13.258,
+     "gemm_tops_8k_ceiling": 36.93
+    },
+    "down": {
+     "m": 896,
+     "n": 4864,
+     "cols": 1024,
+     "host_copy_ms": 3.019,
+     "h2d_ms": 2.681,
+     "unpack_planes_ms": 6.208,
+     "gemm_ms": 1.205,
+     "gemm_tops_block": 51.86,
+     "combine_fused_ms": 0.154,
+     "combine_torch_ms": 0.75,
+     "pack_ms": 0.433,
+     "d2h_ms": 0.324,
+     "total_item_ms": 11.521,
+     "gemm_tops_8k_ceiling": 30.13
+    }
+   },
+   "decode": {
+    "alone": {
+     "n": 2194,
+     "p50_ms": 0.631,
+     "p90_ms": 0.704,
+     "p99_ms": 0.871
+    },
+    "maskgen": {
+     "n": 786,
+     "p50_ms": 3.261,
+     "p90_ms": 12.026,
+     "p99_ms": 15.246
+    },
+    "maskgen_yield": {
+     "n": 1221,
+     "p50_ms": 2.408,
+     "p90_ms": 4.138,
+     "p99_ms": 5.572
+    }
+   }
+  },
+  "qwen2.5-7b": {
+   "layers": 28,
+   "shapes": {
+    "qkv": [
+     4608,
+     3584
+    ],
+    "o": [
+     3584,
+     3584
+    ],
+    "gate_up": [
+     37888,
+     3584
+    ],
+    "down": [
+     3584,
+     18944
+    ]
+   },
+   "macs_per_slot_per_plane": 6525288448,
+   "runs": [
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.03643,
+     "slots_per_s": 250.99,
+     "planes": 7,
+     "gemm_tops": 22.93,
+     "tops_7plane": 22.93
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.02032,
+     "slots_per_s": 450.01,
+     "planes": 7,
+     "gemm_tops": 41.11,
+     "tops_7plane": 41.11
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.03586,
+     "slots_per_s": 254.93,
+     "planes": 7,
+     "gemm_tops": 23.29,
+     "tops_7plane": 23.29
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.02285,
+     "slots_per_s": 400.05,
+     "planes": 7,
+     "gemm_tops": 36.55,
+     "tops_7plane": 36.55
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.15783,
+     "slots_per_s": 231.71,
+     "planes": 7,
+     "gemm_tops": 21.17,
+     "tops_7plane": 21.17
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.0813,
+     "slots_per_s": 449.86,
+     "planes": 7,
+     "gemm_tops": 41.1,
+     "tops_7plane": 41.1
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.158,
+     "slots_per_s": 231.47,
+     "planes": 7,
+     "gemm_tops": 21.15,
+     "tops_7plane": 21.15
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.08079,
+     "slots_per_s": 452.65,
+     "planes": 7,
+     "gemm_tops": 41.35,
+     "tops_7plane": 41.35
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.81518,
+     "slots_per_s": 179.45,
+     "planes": 7,
+     "gemm_tops": 16.39,
+     "tops_7plane": 16.39
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.54284,
+     "slots_per_s": 269.48,
+     "planes": 7,
+     "gemm_tops": 24.62,
+     "tops_7plane": 24.62
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.76986,
+     "slots_per_s": 190.02,
+     "planes": 7,
+     "gemm_tops": 17.36,
+     "tops_7plane": 17.36
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.35705,
+     "slots_per_s": 409.71,
+     "planes": 7,
+     "gemm_tops": 37.43,
+     "tops_7plane": 37.43
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.03335,
+     "slots_per_s": 274.11,
+     "planes": 7,
+     "gemm_tops": 25.04,
+     "tops_7plane": 25.04
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.02771,
+     "slots_per_s": 329.91,
+     "planes": 7,
+     "gemm_tops": 30.14,
+     "tops_7plane": 30.14
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.03104,
+     "slots_per_s": 294.51,
+     "planes": 7,
+     "gemm_tops": 26.9,
+     "tops_7plane": 26.9
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.01831,
+     "slots_per_s": 499.42,
+     "planes": 7,
+     "gemm_tops": 45.62,
+     "tops_7plane": 45.62
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.15508,
+     "slots_per_s": 235.82,
+     "planes": 7,
+     "gemm_tops": 21.54,
+     "tops_7plane": 21.54
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.07784,
+     "slots_per_s": 469.85,
+     "planes": 7,
+     "gemm_tops": 42.92,
+     "tops_7plane": 42.92
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.15619,
+     "slots_per_s": 234.15,
+     "planes": 7,
+     "gemm_tops": 21.39,
+     "tops_7plane": 21.39
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.0764,
+     "slots_per_s": 478.67,
+     "planes": 7,
+     "gemm_tops": 43.73,
+     "tops_7plane": 43.73
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.6551,
+     "slots_per_s": 223.3,
+     "planes": 7,
+     "gemm_tops": 20.4,
+     "tops_7plane": 20.4
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.43457,
+     "slots_per_s": 336.62,
+     "planes": 7,
+     "gemm_tops": 30.75,
+     "tops_7plane": 30.75
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.70361,
+     "slots_per_s": 207.91,
+     "planes": 7,
+     "gemm_tops": 18.99,
+     "tops_7plane": 18.99
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 16,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.37577,
+     "slots_per_s": 389.29,
+     "planes": 7,
+     "gemm_tops": 35.56,
+     "tops_7plane": 35.56
+    }
+   ],
+   "cpu_reference_ok": {
+    "v2:53:35/g1": true,
+    "v1:56:16/g1": true
+   },
+   "profile": {
+    "gate_up": {
+     "m": 37888,
+     "n": 3584,
+     "cols": 1024,
+     "host_copy_ms": 2.149,
+     "h2d_ms": 1.979,
+     "unpack_planes_ms": 5.081,
+     "gemm_ms": 47.812,
+     "gemm_tops_block": 41.99,
+     "combine_fused_ms": 5.89,
+     "combine_torch_ms": 30.31,
+     "pack_ms": 20.788,
+     "d2h_ms": 12.931,
+     "total_item_ms": 97.55,
+     "gemm_tops_8k_ceiling": 28.62
+    },
+    "down": {
+     "m": 3584,
+     "n": 18944,
+     "cols": 1024,
+     "host_copy_ms": 11.645,
+     "h2d_ms": 10.408,
+     "unpack_planes_ms": 14.143,
+     "gemm_ms": 33.052,
+     "gemm_tops_block": 29.45,
+     "combine_fused_ms": 0.57,
+     "combine_torch_ms": 2.794,
+     "pack_ms": 1.895,
+     "d2h_ms": 1.244,
+     "total_item_ms": 59.271,
+     "gemm_tops_8k_ceiling": 28.12
+    }
+   },
+   "decode": {
+    "alone": {
+     "n": 2143,
+     "p50_ms": 0.712,
+     "p90_ms": 0.755,
+     "p99_ms": 1.054
+    },
+    "maskgen": {
+     "n": 230,
+     "p50_ms": 11.997,
+     "p90_ms": 80.699,
+     "p99_ms": 84.215
+    },
+    "maskgen_yield": {
+     "n": 1025,
+     "p50_ms": 2.025,
+     "p90_ms": 11.439,
+     "p99_ms": 19.722
+    }
+   }
+  },
+  "llama3-70b": {
+   "layers": 80,
+   "shapes": {
+    "qkv": [
+     10240,
+     8192
+    ],
+    "o": [
+     8192,
+     8192
+    ],
+    "gate_up": [
+     57344,
+     8192
+    ],
+    "down": [
+     8192,
+     28672
+    ]
+   },
+   "macs_per_slot_per_plane": 68451041280,
+   "runs": [
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.13952,
+     "slots_per_s": 22.94,
+     "planes": 7,
+     "gemm_tops": 21.98,
+     "tops_7plane": 21.98
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.06975,
+     "slots_per_s": 45.88,
+     "planes": 7,
+     "gemm_tops": 43.97,
+     "tops_7plane": 43.97
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.14559,
+     "slots_per_s": 21.98,
+     "planes": 7,
+     "gemm_tops": 21.06,
+     "tops_7plane": 21.06
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.07242,
+     "slots_per_s": 44.19,
+     "planes": 7,
+     "gemm_tops": 42.35,
+     "tops_7plane": 42.35
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.61078,
+     "slots_per_s": 20.96,
+     "planes": 7,
+     "gemm_tops": 20.08,
+     "tops_7plane": 20.08
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.29498,
+     "slots_per_s": 43.39,
+     "planes": 7,
+     "gemm_tops": 41.58,
+     "tops_7plane": 41.58
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.55859,
+     "slots_per_s": 22.91,
+     "planes": 7,
+     "gemm_tops": 21.96,
+     "tops_7plane": 21.96
+    },
+    {
+     "fmt": "v2:53:35",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.28308,
+     "slots_per_s": 45.22,
+     "planes": 7,
+     "gemm_tops": 43.33,
+     "tops_7plane": 43.33
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.12712,
+     "slots_per_s": 25.17,
+     "planes": 7,
+     "gemm_tops": 24.12,
+     "tops_7plane": 24.12
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.06505,
+     "slots_per_s": 49.19,
+     "planes": 7,
+     "gemm_tops": 47.14,
+     "tops_7plane": 47.14
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.1325,
+     "slots_per_s": 24.15,
+     "planes": 7,
+     "gemm_tops": 23.14,
+     "tops_7plane": 23.14
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 1,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.06383,
+     "slots_per_s": 50.13,
+     "planes": 7,
+     "gemm_tops": 48.04,
+     "tops_7plane": 48.04
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 1,
+     "s_per_layer_round": 0.64271,
+     "slots_per_s": 19.92,
+     "planes": 7,
+     "gemm_tops": 19.09,
+     "tops_7plane": 19.09
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 2,
+     "devices": 2,
+     "s_per_layer_round": 0.331,
+     "slots_per_s": 38.67,
+     "planes": 7,
+     "gemm_tops": 37.06,
+     "tops_7plane": 37.06
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 1,
+     "s_per_layer_round": 0.58067,
+     "slots_per_s": 22.04,
+     "planes": 7,
+     "gemm_tops": 21.12,
+     "tops_7plane": 21.12
+    },
+    {
+     "fmt": "v1:56:16",
+     "groups": 4,
+     "mode": "fused",
+     "conc": 4,
+     "devices": 2,
+     "s_per_layer_round": 0.30849,
+     "slots_per_s": 41.49,
+     "planes": 7,
+     "gemm_tops": 39.76,
+     "tops_7plane": 39.76
+    }
+   ],
+   "cpu_reference_ok": {
+    "v2:53:35/g1": true,
+    "v1:56:16/g1": true
+   },
+   "profile": {
+    "gate_up": {
+     "m": 57344,
+     "n": 8192,
+     "cols": 1024,
+     "host_copy_ms": 5.517,
+     "h2d_ms": 4.506,
+     "unpack_planes_ms": 14.503,
+     "gemm_ms": 328.022,
+     "gemm_tops_block": 20.53,
+     "combine_fused_ms": 8.244,
+     "combine_torch_ms": 43.827,
+     "pack_ms": 28.39,
+     "d2h_ms": 19.564,
+     "total_item_ms": 269.384,
+     "gemm_tops_8k_ceiling": 31.35
+    },
+    "down": {
+     "m": 8192,
+     "n": 28672,
+     "cols": 1024,
+     "host_copy_ms": 17.268,
+     "h2d_ms": 15.754,
+     "unpack_planes_ms": 23.264,
+     "gemm_ms": 127.572,
+     "gemm_tops_block": 26.4,
+     "combine_fused_ms": 1.245,
+     "combine_torch_ms": 6.418,
+     "pack_ms": 4.344,
+     "d2h_ms": 2.82,
+     "total_item_ms": 238.301,
+     "gemm_tops_8k_ceiling": 30.89
+    }
+   },
+   "decode": {
+    "alone": {
+     "n": 1910,
+     "p50_ms": 1.038,
+     "p90_ms": 1.122,
+     "p99_ms": 1.189
+    },
+    "maskgen": {
+     "n": 116,
+     "p50_ms": 32.742,
+     "p90_ms": 84.446,
+     "p99_ms": 202.394
+    },
+    "maskgen_yield": {
+     "n": 416,
+     "p50_ms": 9.041,
+     "p90_ms": 29.838,
+     "p99_ms": 44.962
+    }
+   }
+  }
+ }
+}
+
+---stderr---
