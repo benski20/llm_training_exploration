@@ -848,6 +848,7 @@ class ModelRuntime:
             )
             await self._warm_weight_norms()
             await self._configure_local_linears()
+            await asyncio.to_thread(self._require_mask_linears)
             avail = await asyncio.to_thread(self._available_slots)
             if avail == 0:
                 log.warning("no mask slots available for model %s (%s %s)",
@@ -861,6 +862,32 @@ class ModelRuntime:
             else:
                 await _aclose(client)
             raise
+
+    def mask_linears_needed(self) -> list[str]:
+        """Linears this model's reservations must cover: every linear it may send to the service. A kind
+        is left out only when the backend computes it locally on every step (a local kind with
+        ``local_max_rows`` set still goes to the service for large steps). Public configuration only."""
+        be = self.backend
+        specs = list(be.pack.linear_specs())
+        is_local = getattr(be, "local_linear", None)
+        if not callable(is_local) or getattr(be, "local_max_rows", None) is not None:
+            return [s.id.key for s in specs]
+        return [s.id.key for s in specs if not is_local(s.id)]
+
+    def _require_mask_linears(self) -> None:
+        """Declare :meth:`mask_linears_needed` to the disk mask store (``MaskStore.require_linears``): segments
+        lacking one of them (from a factory with ``skip_linear_kinds``) are retired, never reserved."""
+        store = self.mask_store
+        if store is not None and not callable(getattr(store, "require_linears", None)):
+            store = getattr(store, "store", None)  # TieredMaskSource: the disk store behind the rings
+        fn = getattr(store, "require_linears", None)
+        if not callable(fn):
+            return
+        needed = self.mask_linears_needed()
+        retired = fn(self.fingerprint, self.ring, needed)
+        total = len(list(self.backend.pack.linear_specs()))
+        log.info("model %s: reservations need masks for %d of %d linears%s", self.name, len(needed), total,
+                 f"; retired {retired} segment(s) lacking some of them" if retired else "")
 
     async def _configure_local_linears(self) -> None:
         """``local_linears``: decide once, at start-up, which linears the gateway computes itself.

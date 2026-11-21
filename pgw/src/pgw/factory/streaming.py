@@ -54,12 +54,16 @@ class WeightStreamer:
         device: Target device.
         resident_bytes: Device bytes available for permanently resident weights. ``-1`` keeps
             everything resident (small models / tests).
+        specs: Subset of the pack's linears to stream (canonical order); default all.
     """
 
-    def __init__(self, pack: Any, device: str | torch.device, resident_bytes: int):
+    def __init__(self, pack: Any, device: str | torch.device, resident_bytes: int, *,
+                 specs: list[LinearSpec] | None = None):
         self.pack = pack
         self.device = torch.device(device)
-        self.specs: list[LinearSpec] = list(pack.linear_specs())
+        #: Linears streamed, in canonical order (default: all of the pack's; a generator with
+        #: skip_kinds passes its subset).
+        self.specs: list[LinearSpec] = list(pack.linear_specs()) if specs is None else list(specs)
         if not self.specs:
             raise ConfigError("model pack has no linear groups")
         total = sum(s.out_features * s.in_features for s in self.specs)

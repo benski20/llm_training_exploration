@@ -108,6 +108,11 @@ class EmbeddedFactory:
     def start(self) -> bool:
         """Build and start; returns False (gateway keeps serving from the store) if another factory runs."""
         settings = self._build_settings()
+        if settings.skip_kinds:
+            self.error = ("skip_linear_kinds is not supported by the embedded factory (in-memory rings hold every "
+                          "linear)")
+            log.error("embedded mask factory not started: %s; serving from the mask store only", self.error)
+            return False
         try:
             lock = acquire_device_lock(str(settings.device), self.lock_dir)
         except ConfigError as exc:

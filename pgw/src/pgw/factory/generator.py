@@ -311,6 +311,7 @@ class MaskGenerator:
         gpu_prng: bool | str | None = None,
         gpu_prng_impl: str = "auto",
         native_rng: bool | None = None,
+        skip_kinds: frozenset[str] | set[str] | tuple[str, ...] = (),
     ):
         self.pack = pack
         # Encrypted mask generation (pgw.hemask.HEMaskBackend): W8 r comes from the provider on
@@ -322,10 +323,19 @@ class MaskGenerator:
         self.ring = ring_from_setting(ring)
         if hasattr(pack, "check_ring"):
             pack.check_ring(self.ring)
-        self.specs: list[LinearSpec] = list(pack.linear_specs())
+        all_specs: list[LinearSpec] = list(pack.linear_specs())
+        if not all_specs:
+            raise ConfigError("model pack has no linear groups")
+        #: Linear kinds whose masks this generator does not produce (opt-in; public configuration only).
+        self.skip_kinds = frozenset(str(k) for k in skip_kinds)
+        known = {s.id.kind.value for s in all_specs}
+        if self.skip_kinds - known:
+            raise ConfigError(f"skip_kinds {sorted(self.skip_kinds - known)} are not linear kinds of this pack")
+        # The masks of every other linear are unchanged: r and u derive from (seed, linear id) alone.
+        self.specs: list[LinearSpec] = [s for s in all_specs if s.id.kind.value not in self.skip_kinds]
         self._weak_warned: set[int] = set()
         if not self.specs:
-            raise ConfigError("model pack has no linear groups")
+            raise ConfigError("skip_kinds leaves no linear to generate masks for")
         for s in self.specs:
             self.ring.check_in_features(s.in_features)
         self.fingerprint: str = pack.fingerprint
@@ -335,9 +345,11 @@ class MaskGenerator:
             max_lin = max(s.out_features * s.in_features for s in self.specs)
             reserve = 2 * max_lin + (1 << 30)
             budget = auto_resident_bytes(self.device, memory_fraction, reserve)
-            streamer = WeightStreamer(pack, self.device, budget)
+            streamer = WeightStreamer(pack, self.device, budget, specs=self.specs)
         elif torch.device(streamer.device) != self.device:
             raise ConfigError(f"streamer device {streamer.device} != generator device {self.device}")
+        elif [s.id for s in streamer.specs] != [s.id for s in self.specs]:
+            raise ConfigError("streamer linears do not match the generator's (skip_kinds)")
         self.streamer = streamer
         self.memory_fraction = float(memory_fraction)
         if native_rng and not _NATIVE_RNG:
@@ -361,9 +373,11 @@ class MaskGenerator:
         self.last_stats = GenerationStats(backend=self.backend, device=str(self.device))
         self._lock = threading.Lock()  # one segment at a time per generator
         log.info(
-            "mask generator for %s (%s) ring %s on %s/%s, %d linears, %.2f MB/slot",
+            "mask generator for %s (%s) ring %s on %s/%s, %d linears%s, %.2f MB/slot",
             getattr(pack, "name", "?"), short_fingerprint(self.fingerprint), self.ring.name, self.device,
-            self.backend, len(self.specs), slot_bytes(self.specs, self.ring) / 1e6,
+            self.backend, len(self.specs),
+            f" (skipping {', '.join(sorted(self.skip_kinds))})" if self.skip_kinds else "",
+            slot_bytes(self.specs, self.ring) / 1e6,
         )
 
     # ---- properties --------------------------------------------------------------------------

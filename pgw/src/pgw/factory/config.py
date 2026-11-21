@@ -110,6 +110,14 @@ class FactorySettings(PGWSettings):
         "true = on (still self-tested; never used when the test fails). Needs self_check_rows != 0 (the output "
         "self-check re-derives sampled r rows on the CPU). Same derivation and output",
     )
+    skip_linear_kinds: str = Field(
+        "", description="Comma-separated linear kinds (qkv, o, gate_up, down) whose masks are NOT generated: "
+        "opt-in, for gateways whose local_linears is fixed in configuration (e.g. 'attention' with local_max_rows "
+        "unset: set 'qkv,o') and that therefore never send those linears to the service. Segments then list only "
+        "the generated linears in their header. A gateway that needs a skipped linear never uses such a segment: "
+        "it retires it (burned, never reused) and the factory must produce full segments again (unset this). "
+        "Not supported with in-memory mask rings (their layout is fixed). Default: every linear",
+    )
     # ---- encrypted mask generation (pgw.hemask) -----------------------------------------------
     he_service_url: str | None = Field(
         None, description="Compute service URL: get W8.r from the provider on MLWE-encrypted masks instead of "
@@ -134,6 +142,18 @@ class FactorySettings(PGWSettings):
         "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine) or 'ntt_pre' "
         "(public matrix kept in NTT form, pgw.hemask.mlwe_ring; same ciphertexts bit for bit, ~10x+ fewer CPU "
         "operations; needs pgw_ntt)",
+    )
+    he_decrypt: Literal["auto", "dense", "ntt", "ntt_pre"] = Field(
+        "auto", description="Gateway decryption product on the CPU (pgw.hemask.backend.HEMaskBackend): 'dense' "
+        "(byte-plane GEMM on the int8 engine plus the native combine), 'ntt' (fused native NTT decryption on the "
+        "stored hint, no extra memory), 'ntt_pre' ('ntt' with the hints of the linears that fit he_hint_ntt_gb "
+        "kept in NTT form in RAM), 'auto' (default: hints in NTT form within he_hint_ntt_gb, else per pass size "
+        "the faster of 'dense' and 'ntt' as measured at start-up on public random data, 'ntt' only if both gave "
+        "the same bits). Same bits in every mode; a native NTT error falls back to 'dense'",
+    )
+    he_hint_ntt_gb: float = Field(
+        0.0, ge=0, description="RAM (GB) for hints kept in NTT form ('ntt_pre' / 'auto'): 12 bytes per coefficient, "
+        "twice the stored hint (Qwen2.5-0.5B: about 15 GB for all linears). 0 = none (default)",
     )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_max_inflight: int = Field(2, ge=1, le=4, description="Provider requests in flight at once (encrypted mode)")
@@ -187,6 +207,23 @@ class FactorySettings(PGWSettings):
             if name not in out:
                 out.append(name)
         return tuple(out)
+
+    @field_validator("skip_linear_kinds")
+    @classmethod
+    def _valid_skip(cls, v: str) -> str:
+        kinds = [k.strip() for k in str(v or "").split(",") if k.strip()]
+        allowed = ("qkv", "o", "gate_up", "down")
+        bad = [k for k in kinds if k not in allowed]
+        if bad:
+            raise ValueError(f"skip_linear_kinds: unknown kinds {bad} (allowed: {', '.join(allowed)})")
+        if set(kinds) >= set(allowed):
+            raise ValueError("skip_linear_kinds cannot skip every linear kind")
+        return ",".join(k for k in allowed if k in kinds)  # canonical order, de-duplicated
+
+    @property
+    def skip_kinds(self) -> frozenset[str]:
+        """Linear kinds whose masks are not generated (``skip_linear_kinds``)."""
+        return frozenset(k for k in self.skip_linear_kinds.split(",") if k)
 
     @model_validator(mode="after")
     def _check(self) -> FactorySettings:

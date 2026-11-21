@@ -396,17 +396,21 @@ fn mac_part(a: &[Lanes], sh: &[u32], rank: usize, gp: usize, g0: usize, jb: usiz
 struct OutPtr(*mut u64);
 #[derive(Clone, Copy)]
 struct OutPtr32(*mut u32);
+#[derive(Clone, Copy)]
+struct OutPtrI64(*mut i64);
+// SAFETY: fused decryption writes disjoint elements (distinct rows per block, distinct slots).
+unsafe impl Send for OutPtrI64 {}
+unsafe impl Sync for OutPtrI64 {}
 // SAFETY: workers write disjoint rows / blocks.
 unsafe impl Send for OutPtr {}
 unsafe impl Sync for OutPtr {}
 unsafe impl Send for OutPtr32 {}
 unsafe impl Sync for OutPtr32 {}
 
-/// CRT of three residue polynomials (each `[0, 2p_i)`) -> exact integer mod 2^64, written to rows
-/// `row0 .. row0 + nrows` at columns `col0 .. col0 + 256` (row stride `stride`).
+/// CRT of three residue polynomials (each `[0, 2p_i)`) of secret `g` -> exact integers mod 2^64:
+/// `buf[j][i]` is coefficient `j` of row `i` of the block.
 #[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: usize, stride: usize, col0: usize) {
+fn crt_block(r: &[Lanes], g: usize, gp: usize, buf: &mut [[u64; L]; N]) {
     let prm = params();
     let [q0, q1, q2] = &prm.primes;
     let c = &prm.crt;
@@ -415,9 +419,6 @@ fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: 
     let o0 = g * N;
     let o1 = (gp + g) * N;
     let o2 = (2 * gp + g) * N;
-    // results of all 16 rows first, then each row's 256 words written contiguously (a lane-major
-    // scatter would touch 16 output pages per coefficient)
-    let mut buf = [[0u64; L]; N];
     for (j, x) in buf.iter_mut().enumerate() {
         let (v0, v1, v2) = (r[o0 + j], r[o1 + j], r[o2 + j]);
         for i in 0..L {
@@ -433,11 +434,105 @@ fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: 
             x[i] = (a0 as u64).wrapping_add((p0 as u64).wrapping_mul(t1 as u64)).wrapping_add(c.p01.wrapping_mul(t2s));
         }
     }
+}
+
+/// CRT of three residue polynomials (each `[0, 2p_i)`) -> exact integer mod 2^64, written to rows
+/// `row0 .. row0 + nrows` at columns `col0 .. col0 + 256` (row stride `stride`).
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn crt_write(r: &[Lanes], g: usize, gp: usize, out: OutPtr, row0: usize, nrows: usize, stride: usize, col0: usize) {
+    // results of all 16 rows first, then each row's 256 words written contiguously (a lane-major
+    // scatter would touch 16 output pages per coefficient)
+    let mut buf = [[0u64; L]; N];
+    crt_block(r, g, gp, &mut buf);
     for i in 0..nrows {
         // SAFETY: row row0 + i, columns col0 .. col0 + 256 are inside the output and owned by this block.
         let row = unsafe { std::slice::from_raw_parts_mut(out.0.add((row0 + i) * stride + col0), N) };
         for (o, x) in row.iter_mut().zip(buf.iter()) {
             *o = x[i];
+        }
+    }
+}
+
+/// Where a fused decryption ([`decrypt`]) reads the provider replies and writes the plaintexts.
+///
+/// Column `c` of the secrets (secret `c / 256`, coefficient `c % 256`) is column `c` of the replies
+/// concatenated in order; its plaintext goes to output row `slots[c]` (skipped when negative). Row `i`
+/// of the big operand is row `row_base + i` of the replies and column `row_base + i` of the output.
+pub struct DecOut<'a> {
+    ys: Vec<(&'a [u64], usize)>,
+    cols: Vec<(u32, u32)>,
+    slots: &'a [i64],
+    row_base: usize,
+    m: usize,
+    delta: u32,
+    kmask: u64,
+    out: OutPtrI64,
+}
+
+impl<'a> DecOut<'a> {
+    /// `ys`: replies `(data, columns)`, each `(m, columns)` row-major uint64; `slots`: output row of
+    /// every reply column (distinct, `< out.len() / m`, or negative); `out`: `(rows, m)` row-major.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        ys: Vec<(&'a [u64], usize)>,
+        slots: &'a [i64],
+        row_base: usize,
+        m: usize,
+        delta: u32,
+        k: u32,
+        out: &'a mut [i64],
+    ) -> Result<DecOut<'a>, Error> {
+        if m == 0 || !out.len().is_multiple_of(m) {
+            return Err(Error::Shape(format!("output length {} is not a multiple of m = {m}", out.len())));
+        }
+        if delta == 0 || delta >= 64 || !(1..=63).contains(&k) {
+            return Err(Error::Shape("bad delta_bits / k".into()));
+        }
+        let mut cols = Vec::with_capacity(slots.len());
+        for (yi, &(y, yc)) in ys.iter().enumerate() {
+            if y.len() != m * yc {
+                return Err(Error::Shape(format!("reply {yi} has {} words, expected {m} x {yc}", y.len())));
+            }
+            cols.extend((0..yc).map(|c| (yi as u32, c as u32)));
+        }
+        if cols.len() != slots.len() {
+            return Err(Error::Shape(format!("{} slots for {} reply columns", slots.len(), cols.len())));
+        }
+        let out_rows = out.len() / m;
+        let mut seen = vec![false; out_rows];
+        for &s in slots {
+            if s >= 0 {
+                let s = s as usize;
+                if s >= out_rows || std::mem::replace(&mut seen[s], true) {
+                    return Err(Error::Shape(format!("slot {s} out of range or repeated")));
+                }
+            }
+        }
+        Ok(DecOut { ys, cols, slots, row_base, m, delta, kmask: (1u64 << k) - 1, out: OutPtrI64(out.as_mut_ptr()) })
+    }
+}
+
+/// Fused decryption of one secret's block: `out[slot, row] = ((y[row, c] - corr + half) >> delta) & kmask`.
+#[inline(always)]
+fn dec_write(buf: &[[u64; L]; N], dec: &DecOut, row0: usize, nrows: usize, col0: usize) {
+    let half = 1u64 << (dec.delta - 1);
+    let rb = dec.row_base + row0;
+    for (j, x) in buf.iter().enumerate() {
+        let c = col0 + j;
+        let s = dec.slots[c];
+        if s < 0 {
+            continue;
+        }
+        let (yi, yc) = dec.cols[c];
+        let (y, ycols) = dec.ys[yi as usize];
+        let ob = s as usize * dec.m + rb;
+        for (i, &corr) in x.iter().enumerate().take(nrows) {
+            let v = y[(rb + i) * ycols + yc as usize];
+            let w = (v.wrapping_sub(corr).wrapping_add(half) >> dec.delta) & dec.kmask;
+            // SAFETY: slot s < out rows and rb + i < m (checked in `DecOut::new` / `decrypt`): inside the
+            // output; blocks own distinct rows and slots are distinct, so writes never alias.
+            unsafe { *dec.out.0.add(ob + i) = w as i64 };
         }
     }
 }
@@ -449,6 +544,13 @@ struct Scratch {
     res: Vec<Lanes>,
 }
 
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // `res` holds products with the secrets (A s or H s in NTT form)
+        wipe(self.res.as_flattened_mut());
+    }
+}
+
 impl Scratch {
     fn new(rank: usize) -> Scratch {
         Scratch { ahat: vec![[0; L]; NP * rank * N], tmp: vec![0; NP * L * TILE], res: vec![] }
@@ -457,7 +559,7 @@ impl Scratch {
 
 /// One block of rows: products with every secret, written to `out`.
 #[inline(always)]
-fn product_block<K: Kern>(big: &Big, sec: &Secrets, blk: usize, sc: &mut Scratch, out: OutPtr) {
+fn product_block<K: Kern>(big: &Big, sec: &Secrets, blk: usize, sc: &mut Scratch, out: Sink) {
     let rank = sec.rank;
     let ps = &params().primes;
     let row0 = blk * L;
@@ -489,8 +591,20 @@ fn product_block<K: Kern>(big: &Big, sec: &Secrets, blk: usize, sc: &mut Scratch
             K::ntt_inv(&mut res[g * N..(g + 1) * N], pr);
         }
     }
-    for g in 0..sec.g {
-        crt_write(&sc.res, g, gp, out, row0, nrows, stride, g * N);
+    match out {
+        Sink::Plain(o) => {
+            for g in 0..sec.g {
+                crt_write(&sc.res, g, gp, o, row0, nrows, stride, g * N);
+            }
+        }
+        Sink::Dec(dec) => {
+            let mut buf = [[0u64; L]; N];
+            for g in 0..sec.g {
+                crt_block(&sc.res, g, gp, &mut buf);
+                dec_write(&buf, dec, row0, nrows, g * N);
+            }
+            wipe(buf.as_flattened_mut()); // H s: as secret as the masks it removes
+        }
     }
 }
 
@@ -548,8 +662,15 @@ impl Isa {
     }
 }
 
+/// Destination of a product block: the plain product, or a fused decryption.
+#[derive(Clone, Copy)]
+enum Sink<'a> {
+    Plain(OutPtr),
+    Dec(&'a DecOut<'a>),
+}
+
 enum Job<'a> {
-    Product { big: Big<'a>, sec: &'a Secrets, out: OutPtr },
+    Product { big: Big<'a>, sec: &'a Secrets, out: Sink<'a> },
     Transform { big: Big<'a>, rank: usize, out: OutPtr32 },
 }
 
@@ -671,11 +792,39 @@ pub fn product(big: Big, dim: usize, sec: &Secrets, threads: usize, isa: Isa) ->
     if total == 0 {
         return Ok(out);
     }
-    let job = Job::Product { big, sec, out: OutPtr(out.as_mut_ptr()) };
+    let job = Job::Product { big, sec, out: Sink::Plain(OutPtr(out.as_mut_ptr())) };
     run_blocks(&job, rows.div_ceil(L), sec.rank, threads, isa);
     // SAFETY: the blocks cover every row and every block writes all g*256 columns of its rows.
     unsafe { out.set_len(total) };
     Ok(out)
+}
+
+/// Fused decryption: for every row `i` of `big` (the hint, or a block of its rows) and every column
+/// `c` of the secrets, `out[slots[c], row_base + i] = ((y[row_base + i, c] - (big @ S)[i, c] +
+/// 2^(delta-1)) >> delta) & (2^k - 1)` (mod 2^64 arithmetic; `y` the replies concatenated along
+/// columns). The correction `big @ S` is exact (same bound as [`product`]) and never leaves the
+/// worker's scratch, which is wiped.
+pub fn decrypt(big: Big, dim: usize, sec: &Secrets, dec: &DecOut, threads: usize, isa: Isa) -> Result<(), Error> {
+    if dim != sec.rank * N {
+        return Err(Error::Shape(format!("big operand has {dim} columns, secrets need {}", sec.rank * N)));
+    }
+    check_shape(&big, sec.rank)?;
+    if dec.slots.len() != sec.g * N {
+        return Err(Error::Shape(format!("{} reply columns for {} secrets", dec.slots.len(), sec.g)));
+    }
+    if dec.row_base + big.rows() > dec.m {
+        return Err(Error::Shape(format!("rows {}..{} exceed m = {}", dec.row_base, dec.row_base + big.rows(), dec.m)));
+    }
+    if !crate::arith::bound_ok(big.bits(), sec.l1) {
+        return Err(Error::Bound { big_bits: big.bits() });
+    }
+    let rows = big.rows();
+    if rows == 0 {
+        return Ok(());
+    }
+    let job = Job::Product { big, sec, out: Sink::Dec(dec) };
+    run_blocks(&job, rows.div_ceil(L), sec.rank, threads, isa);
+    Ok(())
 }
 
 /// Residues + forward NTTs of every row (layout of [`Big::Pre`]); `rows` padded to a multiple of 16.
@@ -864,6 +1013,70 @@ mod tests {
             check(17, 2, 5, false, isa);
             check(3, 1, 1, true, isa);
         }
+    }
+
+    /// Fused decryption equals `((y - product) + half) >> delta & kmask` written transposed, for
+    /// planes (with a row offset), u64 and pre-transformed operands, two replies, and skipped columns.
+    #[test]
+    fn decrypt_matches_product() {
+        let (rank, g, m, delta, k) = (2usize, 3usize, 37usize, 24u32, 32u32);
+        let dim = rank * N;
+        let mut seed = 0xdec0_0001u64;
+        let planes: Vec<i8> = (0..m * 6 * dim).map(|_| rng(&mut seed) as i8).collect();
+        let s: Vec<i8> = (0..g * rank * N).map(|_| (rng(&mut seed) % 3) as i8 - 1).collect();
+        let sec = Secrets::new(&s, g, rank);
+        let cols = g * N;
+        let y: Vec<u64> = (0..m * cols).map(|_| rng(&mut seed)).collect();
+        // replies of 1 and 2 groups (columns split 256 / 512)
+        let y1: Vec<u64> = (0..m).flat_map(|r| y[r * cols..r * cols + N].to_vec()).collect();
+        let y2: Vec<u64> = (0..m).flat_map(|r| y[r * cols + N..(r + 1) * cols].to_vec()).collect();
+        let out_rows = cols + 5;
+        let slots: Vec<i64> = (0..cols).map(|c| if c % 7 == 3 { -1 } else { (cols - 1 - c) as i64 }).collect();
+        let half = 1u64 << (delta - 1);
+        let kmask = (1u64 << k) - 1;
+        for isa in [Isa::Scalar, Isa::Avx2, Isa::Avx512] {
+            let full = Big::Planes { data: &planes, rows: m, npl: 6, first: 1 };
+            let prod = product(full, dim, &sec, 2, isa).unwrap();
+            let mut want = vec![-7i64; out_rows * m];
+            for r in 0..m {
+                for c in 0..cols {
+                    if slots[c] >= 0 {
+                        let v = y[r * cols + c].wrapping_sub(prod[r * cols + c]).wrapping_add(half) >> delta;
+                        want[slots[c] as usize * m + r] = (v & kmask) as i64;
+                    }
+                }
+            }
+            // whole operand, in two row blocks (row_base), pre-transformed
+            let mut got = vec![-7i64; out_rows * m];
+            {
+                let dec = DecOut::new(vec![(&y1, N), (&y2, 2 * N)], &slots, 0, m, delta, k, &mut got).unwrap();
+                decrypt(full, dim, &sec, &dec, 3, isa).unwrap();
+            }
+            assert_eq!(got, want, "planes, isa {isa:?}");
+            let mut got = vec![-7i64; out_rows * m];
+            for (r0, r1) in [(0usize, 21usize), (21, m)] {
+                let blk = Big::Planes { data: &planes[r0 * 6 * dim..r1 * 6 * dim], rows: r1 - r0, npl: 6, first: 1 };
+                let dec = DecOut::new(vec![(&y1, N), (&y2, 2 * N)], &slots, r0, m, delta, k, &mut got).unwrap();
+                decrypt(blk, dim, &sec, &dec, 2, isa).unwrap();
+            }
+            assert_eq!(got, want, "row blocks, isa {isa:?}");
+            let pre = transform(full, rank, 2, isa).unwrap();
+            let mut got = vec![-7i64; out_rows * m];
+            {
+                let dec = DecOut::new(vec![(&y1, N), (&y2, 2 * N)], &slots, 0, m, delta, k, &mut got).unwrap();
+                decrypt(Big::Pre { data: &pre, rows: m, bits: 56 }, dim, &sec, &dec, 3, isa).unwrap();
+            }
+            assert_eq!(got, want, "pre-transformed, isa {isa:?}");
+        }
+        // shape errors: repeated slot, rows past m, wrong column count
+        let mut out = vec![0i64; out_rows * m];
+        let mut bad = slots.clone();
+        bad[1] = bad[0];
+        assert!(DecOut::new(vec![(&y, cols)], &bad, 0, m, delta, k, &mut out).is_err());
+        let dec = DecOut::new(vec![(&y, cols)], &slots, 1, m, delta, k, &mut out).unwrap();
+        let full = Big::Planes { data: &planes, rows: m, npl: 6, first: 1 };
+        assert!(decrypt(full, dim, &sec, &dec, 1, Isa::Auto).is_err());
+        assert!(DecOut::new(vec![(&y1, N)], &slots, 0, m, delta, k, &mut out).is_err());
     }
 
     #[test]

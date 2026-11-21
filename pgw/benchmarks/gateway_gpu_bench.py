@@ -134,13 +134,17 @@ def bench_he(args: argparse.Namespace) -> dict[str, Any]:
         prov = _Provider(pack, args.provider_device, p.b_bytes)
         t0 = time.perf_counter()
         be = HEMaskBackend(pack, ring, hints, prov, groups_per_call=args.groups_per_call,
-                           max_inflight=args.inflight)
+                           max_inflight=args.inflight, encrypt=args.encrypt, decrypt=args.decrypt,
+                           hint_ntt_bytes=int(args.hint_ntt_gb * 1e9),
+                           device=None if args.he_device == "none" else "auto")
         t_init = time.perf_counter() - t0
-        gen = MaskGenerator(pack, ring, device=args.device, remote=be)
+        gen = MaskGenerator(pack, ring, device=args.device, remote=be, skip_kinds=set(args.skip_kinds))
         chunk = gen.chunk_slots_for(args.chunk_slots)
         t0 = time.perf_counter()
         for _ in gen.generate(new_seed(), args.warmup_slots, checks=2):  # uploads hints, compiles
             pass
+        if args.decrypt == "auto":  # the timed pass size's one-time calibration stays out of the timing
+            be._calibrated(p.q // 8 - 1, max(1, min(chunk, args.slots) // 256))
         t_warm = time.perf_counter() - t0
         prov.seconds = 0.0
         he0 = dict(be.stats)
@@ -161,7 +165,9 @@ def bench_he(args: argparse.Namespace) -> dict[str, Any]:
             "slots_per_s_full_model_gateway_only": round(args.slots / max(gateway_s, 1e-9) / scale, 2),
             "stages": {"rng": round(st.rng_seconds, 3), "gemm": round(st.gemm_seconds, 3),
                        "check": round(st.check_seconds, 3)},
-            "he": he, "device_stats": dev_stats,
+            "he": he, "device_stats": dev_stats, "encrypt": args.encrypt, "decrypt": args.decrypt,
+            "decrypt_paths": dict(be.decrypt_paths), "decrypt_calibration": be.decrypt_calibration,
+            "skip_kinds": sorted(args.skip_kinds), "hint_ntt_gb": args.hint_ntt_gb,
         }
 
 
@@ -237,6 +243,11 @@ def main() -> None:
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--groups-per-call", type=int, default=4)
     ap.add_argument("--inflight", type=int, default=2)
+    ap.add_argument("--encrypt", default="dense", choices=("dense", "ntt_pre"))
+    ap.add_argument("--decrypt", default="auto", choices=("auto", "dense", "ntt", "ntt_pre"))
+    ap.add_argument("--hint-ntt-gb", type=float, default=0.0, help="RAM for hints in NTT form")
+    ap.add_argument("--he-device", default="auto", choices=("auto", "none"), help="none: CPU engines only")
+    ap.add_argument("--skip-kinds", nargs="*", default=[], help="linear kinds whose masks are not made")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--provider-device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--rows", type=int, default=1)
