@@ -101,6 +101,9 @@ _NON_FIELD_ENV = {
     "PGW_MASKSTORE_KEK",  # default value of MaskStoreSettings.key_env_var
     "PGW_DOCTOR_EXPECTED_TOKENS_PER_S",  # input of `pgw doctor`'s mask-supply check (pgw.cli.doctor), not a setting
     "PGW_FLOAT_THREADS",  # engine switch read by pgw.engine.model (per model: GatewayModelConfig.float_threads)
+    "PGW_SERVICE_MASKGEN_CONCURRENCY",  # env override read by pgw.service.handler (maskgen slots per device)
+    "PGW_SERVICE_MASKGEN_FUSED",  # env switch read by pgw.service.maskgen_gpu (fused CUDA maskgen path)
+    "PGW_SERVICE_MASKGEN_YIELD_MS",  # env knob read by pgw.service.maskgen_gpu (decode yield between blocks)
 }
 
 

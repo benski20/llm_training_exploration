@@ -274,6 +274,9 @@ def gateway_env(config_dir: Path, data_dir: Path, port: int,
                                                       else model_options),
         # also for models the gateway process builds outside models.json (the setup wizard's checks)
         "PGW_FLOAT_THREADS": "1",
+        # encrypted mask factory: public matrix in NTT form (same ciphertexts bit for bit as "dense", ~10x
+        # cheaper on the gateway CPU; see research/plans/he-structured-encryption.md)
+        "PGW_FACTORY_HE_ENCRYPT": "ntt_pre",
     })
     return env
 
