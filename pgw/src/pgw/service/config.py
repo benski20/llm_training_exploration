@@ -206,10 +206,14 @@ class ServiceSettings(PGWSettings):
     lane: Literal["off", "uds", "tcp"] = Field(
         "off", description="Native trip lane next to the stream channel (binary header, same masked bytes, CUDA-graph "
         "replay for rows 1..lane_max_rows). 'off' (default) = no lane; 'uds' = a Unix domain socket at lane_socket "
-        "(peer credentials checked); 'tcp' = lane_port, TLS required (not built yet: the service refuses to start)",
+        "(peer credentials checked); 'tcp' = lane_port on the service's host address, TLS 1.3 only with the service's "
+        "own certificate (tls.cert_file / tls.key_file, unencrypted key); client certificates are verified against "
+        "tls.ca_file (required with tls.require_client_cert) and a ticket asked for with a client certificate opens "
+        "only a connection presenting that certificate",
     )
     lane_socket: Path | None = Field(None, description="Unix domain socket path of the lane (lane = 'uds')")
-    lane_port: int | None = Field(None, ge=0, le=65535, description="TCP port of the lane (lane = 'tcp')")
+    lane_port: int | None = Field(None, ge=0, le=65535, description="TCP port of the lane (lane = 'tcp'; 0 = any "
+                                  "free port, announced in each ticket)")
     lane_max_rows: int = Field(
         8, ge=1, le=8, description="Largest rows per item the lane serves; bigger calls use the stream channel",
     )

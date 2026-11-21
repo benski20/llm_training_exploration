@@ -5,14 +5,24 @@ The two work packages were built against different framings of the same idea:
 
 * the client package speaks lane format "A3" (``POST /pgw/v1/lane_open`` in msgpack, a ``PGWH`` hello
   and ``PGWT`` / ``PGWR`` 36-byte headers; its native channel is ``pgw_fast.TripChannel``);
-* the service that ships (``pgw service serve`` with ``lane = "uds"``) speaks lane format "A1":
+* the service that ships (``pgw service serve`` with ``lane = "uds"`` or ``"tcp"``) speaks lane format "A1":
   ``POST /pgw/v1/lane/open`` in JSON, then ``PGWL`` 48-byte request headers and 40-byte ``PGWR`` reply
-  headers over a Unix domain socket (``rust/pgw-lane/src/proto.rs``).
+  headers over a Unix domain socket or over TCP with TLS 1.3 (``rust/pgw-lane/src/proto.rs``).
 
 This module lets :class:`~pgw.wire.lane.LaneComputeClient` (pool, cool-down, byte-identical fallback,
 statistics) drive the A1 service lane: :class:`ServiceLaneOpener` wraps a
-:class:`~pgw.wire.client.ComputeClient` and answers ``lane_open`` from the A1 JSON route, and
-:class:`ServiceLaneChannel` is a ``TripChannelLike`` speaking A1 frames. Privacy is unchanged: an A1
+:class:`~pgw.wire.client.ComputeClient` and answers ``lane_open`` from the A1 JSON route, and the channels
+speak A1 frames: the native ``pgw_fast.TripChannel`` (``connect_service_uds`` / ``connect_service_tls``: GIL
+released for the whole trip, one ``writev`` per request, spin-then-block wait for the reply) when the
+extension has it, else :class:`ServiceLaneChannel` (UDS only, plain blocking socket).
+
+TCP lane (gateway ``lane = "tls"``): TLS 1.3 only, to the **host of the client's service URL** (never a host
+from the service) on the port the ticket names, the server verified against the client's pinned ``ca_file``
+under that host name, ALPN ``pgw-lane/1``, and the client's mTLS certificate presented when it has one (the
+service binds the ticket to the certificate that asked for it). The ticket itself comes from ``lane/open`` on
+the regular channel (bearer token and client certificate checked as for compute); revoking the token closes
+the lane connections. Without the native extension, a ``ca_file`` or with a password-protected client key,
+the TCP lane is not used (the calls take the wrapped client's path). Privacy is unchanged: an A1
 request header carries the same public fields as the stream channel's request (request id, linear, ring,
 rows, deadline, body length) and the body is the same packed ``x_hat``; nothing else is sent.
 
@@ -23,8 +33,8 @@ of the pool asks for a fresh ticket. A1 statuses are mapped onto the client's
 becomes ``DEADLINE``, and every status after which the A1 service closes the connection (16 and above,
 ``busy`` = 23 included) becomes a closing status, so the client drops the lane and cools down.
 
-``build_lane_client`` is what the gateway uses (``GatewayModelConfig.lane``). Only the UDS transport is
-built on the service side; the gateway's lane client accepts nothing else.
+``build_lane_client`` is what the gateway uses (``GatewayModelConfig.lane``: ``auto`` / ``required`` accept
+UDS tickets only, ``tls`` TCP tickets only).
 """
 
 from __future__ import annotations
@@ -38,8 +48,11 @@ import time
 import uuid
 from typing import Any
 
+from pathlib import Path
+from urllib.parse import urlsplit
+
 from pgw.core.errors import ProtocolError
-from pgw.wire.lane import LaneComputeClient, LaneConfig, LaneRefusedError, Status
+from pgw.wire.lane import LaneComputeClient, LaneConfig, LaneRefusedError, Status, native_channel_class
 from pgw.wire.messages import LaneTicket, LinearInfo
 
 __all__ = [
@@ -220,7 +233,8 @@ class ServiceLaneOpener:
     def _ticket(self, raw: bytes, rid: str, fingerprint: str, ring: str) -> LaneTicket:
         try:
             d = json.loads(raw)
-            if not isinstance(d, dict) or int(d.get("version", 0)) != _VERSION or d.get("transport") != "uds":
+            if (not isinstance(d, dict) or int(d.get("version", 0)) != _VERSION
+                    or d.get("transport") not in self._lane_config.transports):
                 raise ProtocolError("unsupported lane ticket")
             secret = bytes.fromhex(str(d["ticket"]))
             if len(secret) != _TICKET_LEN or d.get("fingerprint") != fingerprint:
@@ -229,8 +243,14 @@ class ServiceLaneOpener:
             linears = tuple(LinearInfo(str(i), *dims[str(i)]) for i in d["linears"])
             rings = tuple(str(r) for r in d["rings"])
             ttl_ms = max(1, int(float(d.get("ttl_s", 30.0)) * 1000))
-            return LaneTicket(rid, _VERSION, "uds", secret, ttl_ms, int(self._lane_config.max_channels),
-                              int(d["max_rows"]), fingerprint, rings, linears, path=str(d["socket"]))
+            common = (rid, _VERSION, str(d["transport"]), secret, ttl_ms, int(self._lane_config.max_channels),
+                      int(d["max_rows"]), fingerprint, rings, linears)
+            if d["transport"] == "tcp":
+                port = int(d["port"])
+                if not 0 < port < 65536 or d.get("alpn", "pgw-lane/1") != "pgw-lane/1":
+                    raise ProtocolError("lane ticket names a bad port or protocol")
+                return LaneTicket(*common, port=port)
+            return LaneTicket(*common, path=str(d["socket"]))
         except ProtocolError:
             raise
         except (ValueError, KeyError, TypeError) as exc:
@@ -239,8 +259,8 @@ class ServiceLaneOpener:
     async def lane_open(self, fingerprint: str, ring: str, *, transports: tuple[str, ...] = ("uds",),
                         lane_versions: tuple[int, ...] = (1,)) -> LaneTicket:
         """A ticket from ``POST /pgw/v1/lane/open`` (one attempt; authenticated like a compute call)."""
-        if "uds" not in transports or _VERSION not in lane_versions:
-            raise ProtocolError("the service lane is UDS lane version 1 only")
+        if not set(transports) & set(self._lane_config.transports) or _VERSION not in lane_versions:
+            raise ProtocolError("the service lane is lane version 1 over the configured transports only")
         rid = uuid.uuid4().hex
         body = json.dumps({"fingerprint": fingerprint}).encode()
         deadline = time.monotonic() + float(getattr(self._client.config, "request_timeout_s", 60.0))
@@ -256,9 +276,10 @@ class ServiceLaneOpener:
         return self._client._run_sync(  # type: ignore[no-any-return]
             self.lane_open(fingerprint, ring, transports=transports, lane_versions=lane_versions))
 
-    def channel(self, ticket: LaneTicket, secret: bytearray) -> ServiceLaneChannel:
+    def channel(self, ticket: LaneTicket, secret: bytearray) -> Any:
         """``LaneComputeClient`` channel factory: the accepted ticket for its first connection, a fresh
-        ticket (same socket path, which the client already checked) for every further one."""
+        ticket (same transport and socket path or port, which the client already checked) for every further
+        one."""
         key = hashlib.sha256(bytes(secret)).digest()
         with self._used_lock:
             fresh = key not in self._used
@@ -269,14 +290,28 @@ class ServiceLaneOpener:
             use: bytes | bytearray = secret
         else:
             ring = ticket.rings[0] if ticket.rings else ""
-            t = self.lane_open_sync(ticket.fingerprint, ring)
-            if t.path != ticket.path:
+            t = self.lane_open_sync(ticket.fingerprint, ring, transports=(ticket.transport,))
+            if (t.transport, t.path, t.port) != (ticket.transport, ticket.path, ticket.port):
                 raise ProtocolError("a fresh lane ticket names another socket")
             use = t.ticket
             with self._used_lock:
                 self._used.add(hashlib.sha256(bytes(use)).digest())
+        cfg = self._lane_config
+        timeout = float(cfg.connect_timeout_s)
+        native = native_channel_class()
+        if native is not None and not hasattr(native, "connect_service_uds"):
+            native = None  # an older extension: A3 frames only
+        if ticket.transport == "tcp":
+            if native is None:
+                raise ProtocolError("the TCP service lane needs the native pgw_fast.TripChannel")
+            assert ticket.port is not None
+            return _connect_tls(native, self._client.config, ticket, use, timeout, int(cfg.spin_us))
         assert ticket.path is not None
-        return ServiceLaneChannel(ticket.path, use, float(self._lane_config.connect_timeout_s), ticket.max_rows)
+        if native is not None and cfg.native is not False:
+            return native.connect_service_uds(ticket.path, use, timeout, int(ticket.max_rows), int(cfg.spin_us))
+        if cfg.native is True:
+            raise ProtocolError("lane native channel required but pgw_fast has no service-lane TripChannel")
+        return ServiceLaneChannel(ticket.path, use, timeout, ticket.max_rows)
 
     def close(self) -> None:
         self._client.close()
@@ -285,12 +320,53 @@ class ServiceLaneOpener:
         await self._client.aclose()
 
 
+def _connect_tls(native: Any, config: Any, ticket: LaneTicket, secret: bytes | bytearray, timeout: float,
+                 spin_us: int) -> Any:
+    """The native TLS channel to the service host of ``config.base_url`` (never a host from the service),
+    verified against ``config.ca_file`` as that host, presenting the client certificate when configured.
+
+    Raises:
+        ProtocolError: TLS off or unverified, no ``ca_file``, or a password-protected client key (the lane is
+            then not used; the wrapped client serves every call).
+    """
+    base = str(getattr(config, "base_url", ""))
+    parts = urlsplit(base)
+    if parts.scheme != "https" or not getattr(config, "verify_tls", False):
+        raise ProtocolError("the TCP lane is TLS only: needs an https:// service URL with TLS verification on")
+    host = parts.hostname
+    ca_file = getattr(config, "ca_file", None)
+    if not host or ca_file is None:
+        raise ProtocolError("the TCP lane needs the service's CA pinned in ca_file")
+    cert_file = getattr(config, "client_cert_file", None)
+    key_file = getattr(config, "client_key_file", None)
+    cert_pem = key_pem = None
+    if cert_file is not None and key_file is not None:
+        if getattr(config, "client_key_password", None) is not None:
+            raise ProtocolError("the TCP lane cannot use a password-protected client key")
+        # read per connection: a renewed certificate is presented from the next connection on
+        cert_pem, key_pem = Path(cert_file).read_bytes(), bytearray(Path(key_file).read_bytes())
+    try:
+        return native.connect_service_tls(host, int(ticket.port or 0), host, Path(ca_file).read_bytes(), secret,
+                                          timeout, int(ticket.max_rows), spin_us, cert_pem,
+                                          bytes(key_pem) if key_pem is not None else None)
+    finally:
+        if key_pem is not None:
+            key_pem[:] = bytes(len(key_pem))
+
+
 def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: float = 0.01,
-                      max_channels: int = 4) -> LaneComputeClient:
-    """Wrap ``client`` (a connected-or-connecting :class:`~pgw.wire.client.ComputeClient`) so eligible calls
-    use the service's UDS trip lane, everything else (and every lane failure) the stream channel with the
-    byte-identical request. Only the ``uds`` transport is accepted (the TCP+TLS lane is not built)."""
-    cfg = LaneConfig(native=False, uds_dir=uds_dir, pool_wait_s=pool_wait_s, max_channels=max_channels,
-                     transports=("uds",))
+                      max_channels: int = 4, transports: tuple[str, ...] = ("uds",), spin_us: int = 50,
+                      native: bool | None = False) -> LaneComputeClient:
+    """Wrap ``client`` (a connected-or-connecting :class:`~pgw.wire.client.ComputeClient`, or a wrapper of one
+    such as :class:`~pgw.wire.sync_stream.SyncStreamClient`) so eligible calls use the service's trip lane,
+    everything else (and every lane failure) the wrapped client with the byte-identical request.
+    ``transports``: ``("uds",)`` (a service on this host) or ``("tcp",)`` (TLS to the service URL's host).
+    ``native``: None = the native channel when the extension has it, False (default, as before) = the Python
+    channel on UDS. The TCP lane always uses the native channel (there is no Python TLS channel for A1 frames)."""
+    bad = set(transports) - {"uds", "tcp"}
+    if bad or not transports:
+        raise ValueError(f"unknown lane transports {sorted(bad)}")
+    cfg = LaneConfig(native=native, uds_dir=uds_dir, pool_wait_s=pool_wait_s, max_channels=max_channels,
+                     transports=tuple(transports), spin_us=spin_us)
     opener = ServiceLaneOpener(client, cfg)
     return LaneComputeClient(opener, cfg, channel_factory=opener.channel)

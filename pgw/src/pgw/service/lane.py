@@ -11,7 +11,12 @@ Flow:
    fingerprint and receives a single-use 32-byte ticket (valid :data:`TICKET_TTL_S`), the socket
    path, and the model's linear and ring tables (the header's indices point into them).
 2. It connects to the Unix domain socket (only processes of the allowed uids are accepted,
-   SO_PEERCRED), sends an ``open`` frame with the ticket, then ``call`` frames.
+   SO_PEERCRED), sends an ``open`` frame with the ticket, then ``call`` frames. With ``lane = "tcp"``
+   the ticket names a TCP port instead (on the service's host address): every connection completes a
+   TLS 1.3 handshake first (the service's certificate and key; client certificates verified against
+   ``tls.ca_file``, required with ``tls.require_client_cert``), and a ticket issued to a ``lane/open``
+   request that presented a client certificate is bound to that certificate's SHA-256, so only a
+   connection presenting the same certificate can spend it. Same frames, same checks.
 3. Each call is checked (header, table indices, exact body length, deadline cap) before its body
    is read, then admitted against the **shared** admission state (draining, global and per-tenant
    in-flight caps, per-tenant row bucket: one budget with the stream channel) and executed by
@@ -36,6 +41,7 @@ for tests and as the reference for the client package (WP-A3).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import enum
 import logging
 import os
@@ -260,13 +266,20 @@ class LaneManager:
         """A manager when ``settings.lane`` asks for one, else ``None``.
 
         Raises:
-            ConfigError: ``lane = "tcp"`` (TCP+TLS is not built yet).
+            ConfigError: ``lane = "tcp"`` with a password-protected TLS key (the native listener reads only
+                unencrypted PEM keys).
         """
         if settings.lane == "off":
             return None
-        if settings.lane == "tcp":
-            raise ConfigError("lane = 'tcp' (TCP+TLS lane) is not built yet; use lane = 'uds' or 'off'")
+        if settings.lane == "tcp" and settings.tls.key_password is not None:
+            raise ConfigError("lane = 'tcp' needs an unencrypted tls.key_file (the native TLS listener cannot "
+                              "use tls.key_password); use lane = 'off' or an unencrypted key")
         return cls(settings, state)
+
+    @property
+    def transport(self) -> str:
+        """``uds`` or ``tcp`` (TLS)."""
+        return "tcp" if self.settings.lane == "tcp" else "uds"
 
     @property
     def running(self) -> bool:
@@ -292,14 +305,29 @@ class LaneManager:
         self.loop = loop
         cap_ms = int(min(s.max_deadline_s or 120.0, 3600.0) * 1000)
         use_graphs = _graphs_wanted() and self._any_cuda()
-        s.lane_socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        listen: dict[str, Any] = {}
+        if self.transport == "tcp":
+            if not hasattr(fast.LaneService, "port"):
+                self.unavailable_reason = "the pgw_fast extension has no TCP+TLS lane (rebuild it)"
+                log.warning("lane = 'tcp' requested but %s; serving the stream channel only", self.unavailable_reason)
+                return False
+            tls = s.tls
+            assert tls.cert_file is not None and tls.key_file is not None  # ServiceSettings checks lane = 'tcp'
+            listen = {"tls_addr": _socket_addr(s.host, int(s.lane_port or 0)),
+                      "tls_cert_pem": tls.cert_file.read_bytes(), "tls_key_pem": tls.key_file.read_bytes(),
+                      "tls_client_ca_pem": tls.ca_file.read_bytes() if tls.ca_file is not None else None,
+                      "require_client_cert": bool(tls.require_client_cert)}
+            path = ""
+        else:
+            s.lane_socket.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = str(s.lane_socket)
         self.svc = fast.LaneService(
-            str(s.lane_socket), peer_uids=_peer_uids(), max_rows=int(s.lane_max_rows), deadline_cap_ms=cap_ms,
+            path, peer_uids=_peer_uids(), max_rows=int(s.lane_max_rows), deadline_cap_ms=cap_ms,
             max_connections=int(s.max_inflight_requests), max_inflight=int(s.max_inflight_requests),
             tenant_max_inflight=s.tenant_max_inflight, tenant_rows_per_s=s.tenant_rows_per_s,
             tenant_burst_rows=float(s.tenant_burst_rows) if s.tenant_burst_rows else None,
             retry_after_ms=round(s.retry_after_s * 1000), executor=self._py_execute, use_graphs=use_graphs,
-            spin_us=_spin_us(),
+            spin_us=_spin_us(), **listen,
         )
         for m in self.state.registry.models():
             self._slot_for(m.fingerprint)
@@ -308,7 +336,8 @@ class LaneManager:
             self._install_device_locks()
             self.graph_report = capture_lane_graphs(self)
         off = self.graph_report.disabled
-        log.info("trip lane listening on %s (max rows %d, graphs %d%s)", s.lane_socket, s.lane_max_rows,
+        where = f"TLS port {self.svc.port}" if self.transport == "tcp" else str(s.lane_socket)
+        log.info("trip lane listening on %s (max rows %d, graphs %d%s)", where, s.lane_max_rows,
                  self.svc.graph_count, f", graphs off: {off}" if off else "")
         return True
 
@@ -353,12 +382,16 @@ class LaneManager:
         self._tables[slot] = _Slot(fingerprint, linears, rings)
         return slot
 
-    def open_ticket(self, identity: Any, fingerprint: str) -> dict[str, Any]:
+    def open_ticket(self, identity: Any, fingerprint: str, *, client_cert_der: bytes | None = None,
+                    client_cert_seen: bool = False) -> dict[str, Any]:
         """Issue a ticket for ``identity`` (a :class:`pgw.service.TenantIdentity` or ``None``) and model
-        ``fingerprint``: the ``lane/open`` reply.
+        ``fingerprint``: the ``lane/open`` reply. On the TCP lane a ticket asked for with a client certificate
+        (``client_cert_der``, the verified certificate of the ``lane/open`` request) is bound to it: only a TLS
+        connection presenting the same certificate can spend it.
 
         Raises:
-            ServiceUnavailableError: no lane, or draining.
+            ServiceUnavailableError: no lane, draining, or (TCP) a request authenticated with a client certificate
+                the service cannot bind the ticket to (``client_cert_seen`` without ``client_cert_der``).
             PGWError: unknown model (``model_not_found``).
         """
         if self.svc is None:
@@ -370,14 +403,23 @@ class LaneManager:
         slot = self._slot_for(fingerprint)
         t = self._tables[slot]
         ticket = secrets.token_bytes(TICKET_LEN)
-        self.svc.add_ticket(ticket, tenant, slot, TICKET_TTL_S)
+        bind: bytes | None = None
+        if self.transport == "tcp":
+            if client_cert_seen and client_cert_der is None:
+                raise ServiceUnavailableError("the TCP trip lane cannot bind this client certificate (the "
+                                              "certificate itself is not available to the service)",
+                                              details={"reason": "client certificate not bindable"})
+            bind = client_cert_der
+        self.svc.add_ticket(ticket, tenant, slot, TICKET_TTL_S, bind)
         token_id = getattr(identity, "token_id", None)
         if token_id is not None and callable(getattr(identity, "still_valid", None)):
             self._identities.setdefault(tenant, {})[str(token_id)] = identity
+        where: dict[str, Any] = ({"port": int(self.svc.port), "alpn": "pgw-lane/1"} if self.transport == "tcp"
+                                 else {"socket": str(self.settings.lane_socket)})
         return {
             "version": LANE_VERSION,
-            "transport": "uds",
-            "socket": str(self.settings.lane_socket),
+            "transport": self.transport,
+            **where,
             "ticket": ticket.hex(),
             "ttl_s": TICKET_TTL_S,
             "fingerprint": t.fingerprint,
@@ -395,12 +437,41 @@ class LaneManager:
         t = self._tables.get(slot)
         if loop is None or t is None or loop.is_closed():
             return int(LaneStatus.FALLBACK)
-        fut = asyncio.run_coroutine_threadsafe(
-            self.state.handler.lane_compute(t.fingerprint, t.linears[linear], t.rings[ring], rows, body, tenant), loop)
+        handler = self.state.handler
+        fp, lin, rp = t.fingerprint, t.linears[linear], t.rings[ring]
+        fut: concurrent.futures.Future[bytes] = concurrent.futures.Future()
+        task: list[asyncio.Future[bytes]] = []
+
+        def run() -> None:  # on the event loop: inline on an idle device (one hop), else the batcher's queue
+            if not fut.set_running_or_notify_cancel():
+                return
+            try:
+                y = handler.lane_compute_inline(fp, lin, rp, rows, body)
+            except BaseException as exc:  # noqa: BLE001 - handed to the lane thread as is
+                fut.set_exception(exc)
+                return
+            if y is not None:
+                fut.set_result(y)
+                return
+            tk = asyncio.ensure_future(handler.lane_compute(fp, lin, rp, rows, body, tenant))
+            task.append(tk)
+
+            def done(f: asyncio.Future[bytes]) -> None:
+                if f.cancelled():
+                    fut.set_exception(TimeoutError())
+                elif f.exception() is not None:
+                    fut.set_exception(f.exception())  # type: ignore[arg-type]
+                else:
+                    fut.set_result(f.result())
+
+            tk.add_done_callback(done)
+
+        loop.call_soon_threadsafe(run)
         try:
             return bytes(fut.result(timeout=remaining_s))
         except TimeoutError:
-            fut.cancel()
+            if not fut.cancel():  # running: cancel the queued kernel call, if any, on the loop
+                loop.call_soon_threadsafe(lambda: [tk.cancel() for tk in task])
             return int(LaneStatus.DEADLINE_EXCEEDED)
         except RateLimitedError:
             return int(LaneStatus.RATE_LIMITED)
@@ -463,7 +534,8 @@ class LaneManager:
         """Readiness details."""
         if self.svc is None:
             return {"running": False, "reason": self.unavailable_reason}
-        return {"running": True, "socket": self.svc.path, "connections": self.svc.connections(),
+        where = {"port": self.svc.port} if self.transport == "tcp" else {"socket": self.svc.path}
+        return {"running": True, "transport": self.transport, **where, "connections": self.svc.connections(),
                 "graphs": self.svc.graph_count, "graphs_disabled": self.svc.graphs_disabled_reason}
 
     # ---- CUDA --------------------------------------------------------------------------------
@@ -479,6 +551,18 @@ class LaneManager:
             if d.type == "cuda":
                 ex = device_executor(d)
                 ex.share_lock(self.svc.device_lock(int(d.index or 0)))
+
+
+def _socket_addr(host: str, port: int) -> str:
+    """``ip:port`` for the native TCP listener (a host name is resolved once; IPv6 in brackets)."""
+    import ipaddress
+    import socket as _socket
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = ipaddress.ip_address(_socket.getaddrinfo(host, port, type=_socket.SOCK_STREAM)[0][4][0])
+    return f"[{ip}]:{port}" if ip.version == 6 else f"{ip}:{port}"
 
 
 def _bulk_observe(hist: Any, buckets: Sequence[int], total: float, count: int) -> None:
@@ -678,7 +762,11 @@ def add_lane_routes(app: Any, state: Any) -> None:
             if mgr is None:
                 raise ServiceUnavailableError("the trip lane is not enabled on this service",
                                               details={"reason": "lane = off"})
-            out = mgr.open_ticket(identity, fp)
+            from pgw.service.tls_peer import peer_cert_der
+
+            subject = _client_cert_subject(request.scope)
+            out = mgr.open_ticket(identity, fp, client_cert_der=peer_cert_der(request.scope),
+                                  client_cert_seen=subject is not None)
             return Response(content=json.dumps(out), media_type="application/json",
                             headers={"Cache-Control": "no-store"})
         except Exception as exc:

@@ -604,6 +604,15 @@ class ModelRuntime:
             return build_sync_stream_client(client)
         from pgw.wire.service_lane import build_lane_client
 
+        if c.lane == "tls":
+            from pgw.wire.sync_stream import build_sync_stream_client
+
+            # TCP+TLS lane: TLS 1.3 to the service_url host only (pgw.wire.service_lane._connect_tls), on the port
+            # of a ticket issued over the authenticated regular channel, server verified against the pinned CA.
+            # Misses and failures go to the blocking stream lane (same endpoint as above), then the stream channel.
+            return build_lane_client(build_sync_stream_client(client), transports=("tcp",), native=None,
+                                     pool_wait_s=c.lane_pool_wait_s)
+
         # The lane socket is local (UDS only; a TCP ticket is refused): the egress allowlist is unaffected.
         return build_lane_client(client, uds_dir=str(c.lane_uds_dir) if c.lane_uds_dir is not None else None,
                                  pool_wait_s=c.lane_pool_wait_s)
@@ -766,7 +775,7 @@ class ModelRuntime:
             return
         ok = bool(await opener(self.fingerprint, self.ring.name))
         ticket = getattr(client, "lane_ticket", None)
-        self.lane_state = "open" if ok else "unavailable"
+        self.lane_state = "open" if ok else ("stream" if lane == "tls" else "unavailable")
         if ok:
             log.info("model %s: trip lane open (%s, up to %s rows per trip)", self.name,
                      getattr(ticket, "transport", "?"), getattr(ticket, "max_rows", "?"))

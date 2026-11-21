@@ -212,19 +212,25 @@ class GatewayModelConfig(BaseModel):
 
     # ---- chat-speed plan (WP-A0 scaffold). Every default is today's behaviour; a value other than the
     # default is refused while its package is listed in PENDING_SPEED_SETTINGS (not built yet).
-    lane: Literal["off", "auto", "required", "stream"] = Field(
+    lane: Literal["off", "auto", "required", "stream", "tls"] = Field(
         "off", description="Native trip lane to the service (a binary header over a Unix domain socket; the provider "
         "sees the same masked bytes as on the stream channel). 'off' (default) = the WebSocket stream channel only; "
         "'auto' = the lane when the service offers one (lane = 'uds' on a service on this host, or a socket inside "
         "lane_uds_dir), else the stream channel; any call the lane cannot take is resent byte-identically on the "
         "stream channel. 'required' = as 'auto', but the model does not start (stays 'connecting') until the "
-        "service grants a lane ticket. Only the UDS lane exists: a TCP lane ticket is refused. With the lane the "
+        "service grants a lane ticket. 'auto' and 'required' take UDS tickets only. With the lane the "
         "gateway also uses the native trip engine (constant-time masking kernels, deferred Freivalds output half) "
         "and runs decode passes synchronously on its plaintext thread. 'stream' = the blocking stream lane for a "
         "remote service (any network, TLS as configured): decode trips go over the same WebSocket stream endpoint "
         "with the same msgpack bytes, but are written and read with blocking socket calls on the plaintext thread "
         "(no event-loop hand-off per trip); TripEngine and synchronous decode as with the UDS lane; any call it "
-        "cannot complete is resent byte-identically on the stream channel",
+        "cannot complete is resent byte-identically on the stream channel. 'tls' = the native TCP+TLS trip lane of a "
+        "service with lane = 'tcp' (needs an https service_url with service_ca_file; TLS 1.3 to the service_url host on the "
+        "port the ticket names, the server verified against service_ca_file, the client certificate presented when "
+        "configured and bound to the ticket by the service): binary header instead of msgpack, rustls instead of "
+        "Python ssl, the GIL released for the whole trip; the same masked bytes, request ids and call schedule. A "
+        "call the lane cannot take, and every lane failure, goes to the blocking stream lane ('stream') with the "
+        "byte-identical request, and from there to the stream channel",
     )
     lane_uds_dir: Path | None = Field(
         None, description="Directory the service's lane socket must be in (for a service on this host that is not "
