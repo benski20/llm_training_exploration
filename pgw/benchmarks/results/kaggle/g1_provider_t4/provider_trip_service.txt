@@ -1,0 +1,68 @@
+{"trips": 960, "p50_ms": 1.2078, "p90_ms": 1.2924, "p99_ms": 1.5104, "mean_ms": 1.222, "ms_per_token": 59.58, "service_cpu_ms_per_trip": 0.8542, "service_peak_rss_mib": 1347.7, "cores": "0", "tls": true, "service": {"pid": 276, "affinity": [0], "torch_threads": 1}, "host_cpus": 4}
+service log tail: INFO:pgw.core.triton_gemv:fused ring GEMV on cuda:0: tensor-core variant skipped (compute capability 7.5 < 8.0: Triton has no int8 tensor-core dot there); CUDA-core kernels
+/usr/local/lib/python3.13/dist-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.
+  warn_once(FP_FUSION_DEFAULT_WARNING)
+INFO:pgw.core.triton_gemv:fused ring GEMV timing gate on cuda:0 (rows: stream/digit ms) 2:1.075/1.061 -> stream variant up to 0 rows
+INFO:pgw.core.triton_gemv:fused ring GEMV self-check passed on cuda:0 (up to 1 rows; 4 table rules; stream variant up to 0 rows)
+INFO:uvicorn.error:Started server process [276]
+INFO:uvicorn.error:Waiting for application startup.
+INFO:pgw.service.app:compute service ready: 1 model(s), devices=['cuda:0'], startup 0.01s
+INFO:uvicorn.error:Application startup complete.
+INFO:uvicorn.error:Uvicorn running on https://127.0.0.1:36845 (Press CTRL+C to quit)
+INFO:uvicorn.error:127.0.0.1:50712 - "WebSocket /pgw/v1/stream" [accepted]
+INFO:uvicorn.error:connection open
+INFO:pgw.service.app:compute service draining: no new requests admitted
+INFO:pgw.service.server:shutdown requested; draining
+INFO:uvicorn.error:Shutting down
+INFO:uvicorn.error:Waiting for application shutdown.
+INFO:pgw.service.batcher:batch scheduler stopped (drain=True, batches=1104, mean_rows=1.0)
+INFO:pgw.service.app:compute service stopped
+INFO:uvicorn.error:Application shutdown complete.
+INFO:uvicorn.error:Finished server process [276]
+
+{"trips": 960, "p50_ms": 1.2712, "p90_ms": 1.3344, "p99_ms": 1.6316, "mean_ms": 1.2701, "ms_per_token": 61.9, "service_cpu_ms_per_trip": 0.9062, "service_peak_rss_mib": 1347.5, "cores": "0,1", "tls": true, "service": {"pid": 290, "affinity": [0, 1], "torch_threads": 2}, "host_cpus": 4}
+service log tail: INFO:pgw.core.triton_gemv:fused ring GEMV on cuda:0: tensor-core variant skipped (compute capability 7.5 < 8.0: Triton has no int8 tensor-core dot there); CUDA-core kernels
+/usr/local/lib/python3.13/dist-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.
+  warn_once(FP_FUSION_DEFAULT_WARNING)
+INFO:pgw.core.triton_gemv:fused ring GEMV timing gate on cuda:0 (rows: stream/digit ms) 2:1.077/1.060 -> stream variant up to 0 rows
+INFO:pgw.core.triton_gemv:fused ring GEMV self-check passed on cuda:0 (up to 1 rows; 4 table rules; stream variant up to 0 rows)
+INFO:uvicorn.error:Started server process [290]
+INFO:uvicorn.error:Waiting for application startup.
+INFO:pgw.service.app:compute service ready: 1 model(s), devices=['cuda:0'], startup 0.01s
+INFO:uvicorn.error:Application startup complete.
+INFO:uvicorn.error:Uvicorn running on https://127.0.0.1:57457 (Press CTRL+C to quit)
+INFO:uvicorn.error:127.0.0.1:52390 - "WebSocket /pgw/v1/stream" [accepted]
+INFO:uvicorn.error:connection open
+INFO:pgw.service.app:compute service draining: no new requests admitted
+INFO:pgw.service.server:shutdown requested; draining
+INFO:uvicorn.error:Shutting down
+INFO:uvicorn.error:Waiting for application shutdown.
+INFO:pgw.service.batcher:batch scheduler stopped (drain=True, batches=1104, mean_rows=1.0)
+INFO:pgw.service.app:compute service stopped
+INFO:uvicorn.error:Application shutdown complete.
+INFO:uvicorn.error:Finished server process [290]
+
+{"trips": 960, "p50_ms": 1.2898, "p90_ms": 1.346, "p99_ms": 1.4518, "mean_ms": 1.2779, "ms_per_token": 62.24, "service_cpu_ms_per_trip": 0.9167, "service_peak_rss_mib": 1347.5, "cores": "all", "tls": true, "service": {"pid": 302, "affinity": [0, 1, 2, 3], "torch_threads": 2}, "host_cpus": 4}
+service log tail: INFO:pgw.core.triton_gemv:fused ring GEMV on cuda:0: tensor-core variant skipped (compute capability 7.5 < 8.0: Triton has no int8 tensor-core dot there); CUDA-core kernels
+/usr/local/lib/python3.13/dist-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.
+  warn_once(FP_FUSION_DEFAULT_WARNING)
+INFO:pgw.core.triton_gemv:fused ring GEMV timing gate on cuda:0 (rows: stream/digit ms) 2:1.037/1.066 -> stream variant up to 0 rows
+INFO:pgw.core.triton_gemv:fused ring GEMV self-check passed on cuda:0 (up to 1 rows; 4 table rules; stream variant up to 0 rows)
+INFO:uvicorn.error:Started server process [302]
+INFO:uvicorn.error:Waiting for application startup.
+INFO:pgw.service.app:compute service ready: 1 model(s), devices=['cuda:0'], startup 0.01s
+INFO:uvicorn.error:Application startup complete.
+INFO:uvicorn.error:Uvicorn running on https://127.0.0.1:43509 (Press CTRL+C to quit)
+INFO:uvicorn.error:127.0.0.1:56828 - "WebSocket /pgw/v1/stream" [accepted]
+INFO:uvicorn.error:connection open
+INFO:pgw.service.app:compute service draining: no new requests admitted
+INFO:pgw.service.server:shutdown requested; draining
+INFO:uvicorn.error:Shutting down
+INFO:uvicorn.error:Waiting for application shutdown.
+INFO:pgw.service.batcher:batch scheduler stopped (drain=True, batches=1104, mean_rows=1.0)
+INFO:pgw.service.app:compute service stopped
+INFO:uvicorn.error:Application shutdown complete.
+INFO:uvicorn.error:Finished server process [302]
+
+
+---stderr---

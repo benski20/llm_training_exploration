@@ -547,7 +547,7 @@ def _cuda_ref(x: torch.Tensor, w8: torch.Tensor, k: int) -> np.ndarray:
 def test_gpu_stream_all_shapes_rows_1_to_8(name: str) -> None:  # pragma: no cover - GPU only
     """Stream variant (heuristic, split and tile variants) vs the cuda_int8 digit GEMM for rows 1..8, every
     K, every 7B and 0.5B shape, random and adversarial x_hat (0, 2^K - 1, 2^(K-1))."""
-    set_name, lin = name.split(".")
+    set_name, lin = name.rsplit(".", 1)
     m, n = (SHAPES_7B if set_name == "7b" else SHAPES_05B)[lin]
     g = torch.Generator().manual_seed(len(name))
     w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=g)
@@ -595,7 +595,7 @@ def test_gpu_self_check_table_and_multirow(fresh: None) -> None:  # pragma: no c
             x, _ = _rand(b, 1, n, k, seed=b + k)
             gemv0 = ex.stats.gemv
             np.testing.assert_array_equal(kern.run(x, ring).numpy(), ringmm_reference(x, w8, k))
-            assert ex.stats.gemv - gemv0 == (2 if b <= tg.max_rows("cuda:0") else 0)  # first call cross-checked
+            assert ex.stats.gemv - gemv0 == (1 if b <= tg.max_rows("cuda:0") else 0)  # one fused launch per call
 
 
 @pytest.mark.gpu

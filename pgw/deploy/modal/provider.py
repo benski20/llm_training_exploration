@@ -47,7 +47,12 @@ if GPU is not None and GPU.split(":")[0].upper() == "L4":
     raise ValueError("PGW_MODAL_GPU=L4 is not supported for the provider (no faster than a T4 for the "
                      f"bandwidth-bound decode GEMV, and dearer); use one of {GPU_TIERS}")
 # With a GPU, 2 cores: one for the service's device worker and one for the network/event loop, so the
-# trip path never waits for a core (Modal bills about $0.05/h per core).
+# trip path never waits for a core (Modal bills about $0.05/h per core). Measured on a Kaggle T4 with
+# torch 2.15.0 (benchmarks/provider_trip_bench.py, real service over TLS, 0.5B demo trips, 1 row): p50
+# 1.21 / 1.27 / 1.29 ms per round trip with the service pinned to 1 / 2 / 4 cores and 0.85-0.92 ms of
+# service CPU per trip, so the core count is not a bottleneck (one session is one event loop; the
+# decode kernel runs inline on it). Modal's ``cpu=`` is a request, not a cap, so bursts are allowed.
+# 2 keeps headroom for TLS, logging and GC; more buys nothing for one chat.
 CPUS = float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if GPU else 4.0))
 
 image = (

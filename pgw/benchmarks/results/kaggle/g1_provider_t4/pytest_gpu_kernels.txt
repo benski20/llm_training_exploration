@@ -1,0 +1,133 @@
+..................................................................ssssss [ 19%]
+sssssssssssssssssssssssssssssssssssssssss............................... [ 38%]
+......................................................................ss [ 57%]
+sssssssssssssssssssssssssss.sssss....FFFFF.............................. [ 77%]
+...........................................................sssssssssssss [ 96%]
+sssss....ss..                                                            [100%]
+=================================== FAILURES ===================================
+_______________ test_gpu_stream_all_shapes_rows_1_to_8[0.5b.qkv] _______________
+
+name = '0.5b.qkv'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", [f"7b.{k}" for k in SHAPES_7B] + [f"0.5b.{k}" for k in SHAPES_05B])
+    def test_gpu_stream_all_shapes_rows_1_to_8(name: str) -> None:  # pragma: no cover - GPU only
+        """Stream variant (heuristic, split and tile variants) vs the cuda_int8 digit GEMM for rows 1..8, every
+        K, every 7B and 0.5B shape, random and adversarial x_hat (0, 2^K - 1, 2^(K-1))."""
+>       set_name, lin = name.split(".")
+        ^^^^^^^^^^^^^
+E       ValueError: too many values to unpack (expected 2)
+
+tests/core/test_triton_gemv_multirow.py:550: ValueError
+________________ test_gpu_stream_all_shapes_rows_1_to_8[0.5b.o] ________________
+
+name = '0.5b.o'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", [f"7b.{k}" for k in SHAPES_7B] + [f"0.5b.{k}" for k in SHAPES_05B])
+    def test_gpu_stream_all_shapes_rows_1_to_8(name: str) -> None:  # pragma: no cover - GPU only
+        """Stream variant (heuristic, split and tile variants) vs the cuda_int8 digit GEMM for rows 1..8, every
+        K, every 7B and 0.5B shape, random and adversarial x_hat (0, 2^K - 1, 2^(K-1))."""
+>       set_name, lin = name.split(".")
+        ^^^^^^^^^^^^^
+E       ValueError: too many values to unpack (expected 2)
+
+tests/core/test_triton_gemv_multirow.py:550: ValueError
+_____________ test_gpu_stream_all_shapes_rows_1_to_8[0.5b.gate_up] _____________
+
+name = '0.5b.gate_up'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", [f"7b.{k}" for k in SHAPES_7B] + [f"0.5b.{k}" for k in SHAPES_05B])
+    def test_gpu_stream_all_shapes_rows_1_to_8(name: str) -> None:  # pragma: no cover - GPU only
+        """Stream variant (heuristic, split and tile variants) vs the cuda_int8 digit GEMM for rows 1..8, every
+        K, every 7B and 0.5B shape, random and adversarial x_hat (0, 2^K - 1, 2^(K-1))."""
+>       set_name, lin = name.split(".")
+        ^^^^^^^^^^^^^
+E       ValueError: too many values to unpack (expected 2)
+
+tests/core/test_triton_gemv_multirow.py:550: ValueError
+______________ test_gpu_stream_all_shapes_rows_1_to_8[0.5b.down] _______________
+
+name = '0.5b.down'
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    @pytest.mark.parametrize("name", [f"7b.{k}" for k in SHAPES_7B] + [f"0.5b.{k}" for k in SHAPES_05B])
+    def test_gpu_stream_all_shapes_rows_1_to_8(name: str) -> None:  # pragma: no cover - GPU only
+        """Stream variant (heuristic, split and tile variants) vs the cuda_int8 digit GEMM for rows 1..8, every
+        K, every 7B and 0.5B shape, random and adversarial x_hat (0, 2^K - 1, 2^(K-1))."""
+>       set_name, lin = name.split(".")
+        ^^^^^^^^^^^^^
+E       ValueError: too many values to unpack (expected 2)
+
+tests/core/test_triton_gemv_multirow.py:550: ValueError
+____________________ test_gpu_self_check_table_and_multirow ____________________
+
+fresh = None
+
+    @pytest.mark.gpu
+    @pytest.mark.usefixtures("compiled")
+    def test_gpu_self_check_table_and_multirow(fresh: None) -> None:  # pragma: no cover - GPU only
+        """self_check checks every table rule and stream variant; served row counts are exact end to end."""
+        from pgw.service.gpu_exec import device_executor
+        from pgw.service.kernels import ComputeKernel
+    
+        tg._reset("cuda:0")
+        assert tg.self_check("cuda:0")
+        name = tg.device_name("cuda:0")
+        if name == "Tesla T4":
+            assert len(tg._RULES["cuda:0"]) == len(tg.DEVICE_TABLES["Tesla T4"])  # every measured rule passed
+        print(f"{name}: max_rows={tg.max_rows('cuda:0')} stream rows={tg.multirow_rows('cuda:0')} "
+              f"rules={len(tg._RULES['cuda:0'])}")
+        m, n = 300, 1000
+        w8 = torch.randint(-128, 128, (m, n), dtype=torch.int8, generator=torch.Generator().manual_seed(9))
+        spec = LinearSpec(LinearId(0, LinearKind.O), m, n)
+        kern = ComputeKernel(spec, w8, device="cuda", cuda_graphs=False)
+        ex = device_executor("cuda:0")
+        for k in TRITON_GEMV_KS:
+            ring = RingParams(k, 12 if k > 16 else 4)
+            for b in range(1, MULTIROW_MAX_ROWS + 2):
+                x, _ = _rand(b, 1, n, k, seed=b + k)
+                gemv0 = ex.stats.gemv
+                np.testing.assert_array_equal(kern.run(x, ring).numpy(), ringmm_reference(x, w8, k))
+>               assert ex.stats.gemv - gemv0 == (2 if b <= tg.max_rows("cuda:0") else 0)  # first call cross-checked
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               assert (8 - 7) == 2
+E                +  where 8 = ExecutorStats(replays=0, eager=54, captures=0, capture_failures=0, pinned_copies=62, gemv=8).gemv
+E                +    where ExecutorStats(replays=0, eager=54, captures=0, capture_failures=0, pinned_copies=62, gemv=8) = <pgw.service.gpu_exec.DeviceExecutor object at 0x7feb3cac8590>.stats
+
+tests/core/test_triton_gemv_multirow.py:598: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Tesla T4: max_rows=1 stream rows=0 rules=4
+=============================== warnings summary ===============================
+tests/core/test_triton_gemv.py::test_gpu_self_check
+  /usr/local/lib/python3.13/dist-packages/triton/knobs.py:504: UserWarning: TRITON_DEFAULT_FP_FUSION is unset: defaulting to FP fusion ENABLED for backward compatibility in Triton 3.9. The default will change to DISABLED in Triton 3.10; set TRITON_DEFAULT_FP_FUSION=1 to keep fusion enabled or =0 to adopt the new default early and silence this warning.
+    warn_once(FP_FUSION_DEFAULT_WARNING)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [12] tests/core/test_triton_gemv.py:109: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [6] tests/core/test_triton_gemv.py:122: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [24] tests/core/test_triton_gemv.py:146: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv.py:164: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv.py:183: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [3] tests/core/test_triton_gemv.py:189: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [12] tests/core/test_triton_gemv_multirow.py:271: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [3] tests/core/test_triton_gemv_multirow.py:286: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv_multirow.py:307: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [7] tests/core/test_triton_gemv_multirow.py:324: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv_multirow.py:343: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [4] tests/core/test_triton_gemv_multirow.py:362: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv_multirow.py:384: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv_multirow.py:416: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [1] tests/core/test_triton_gemv_multirow.py:424: Triton interpreter not enabled (CUDA host: see the gpu tests)
+SKIPPED [3] tests/core/test_triton_gemv_multirow.py:520: no offline CUDA toolchain in triton (or a CUDA host)
+SKIPPED [19] tests/service/test_gpu_graphs.py:113: CUDA graph capture unsupported in this torch build; eager results verified exact
+SKIPPED [1] tests/service/test_gpu_graphs.py:141: CUDA graph capture unsupported in this torch build; eager results verified exact
+5 failed, 267 passed, 101 skipped, 1 warning in 856.76s (0:14:16)
+
+---stderr---
