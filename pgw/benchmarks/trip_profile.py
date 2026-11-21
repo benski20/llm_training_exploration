@@ -296,6 +296,9 @@ def main() -> None:
                     "per decode pass)")
     ap.add_argument("--lane", default="off", choices=("off", "stream"), help="'stream': the blocking stream lane "
                     "(gateway lane = 'stream')")
+    ap.add_argument("--gateway-cpus", default=None, help="CPU list for the gateway (this process), e.g. 0,1: "
+                    "with --service-cpus, the CPU service does not compete with the gateway (as on a remote GPU)")
+    ap.add_argument("--service-cpus", default=None, help="CPU list for the service and delay proxy, e.g. 2,3")
     ap.add_argument("--env", nargs="*", default=[], help="KEY=VALUE set in this process before the run")
     args = ap.parse_args()
     if args.proxy:
@@ -304,6 +307,17 @@ def main() -> None:
     for kv in args.env:
         k, v = kv.split("=", 1)
         os.environ[k] = v
+    svc_cpus = {int(c) for c in args.service_cpus.split(",")} if args.service_cpus else None
+    if args.gateway_cpus:
+        gw_cpus = {int(c) for c in args.gateway_cpus.split(",")}
+        os.sched_setaffinity(0, gw_cpus)
+        import torch
+
+        torch.set_num_threads(len(gw_cpus))
+
+    def _pin() -> None:  # child processes: the service CPUs (else inherit the gateway's)
+        if svc_cpus:
+            os.sched_setaffinity(0, svc_cpus)
     work = Path(args.workdir)
     work.mkdir(parents=True, exist_ok=True)
     from pgw.modelpack import ModelPack
@@ -325,11 +339,13 @@ def main() -> None:
                "PGW_SERVICE_TOKENS_FILE": str(secrets / "tokens"), "PGW_SERVICE_DEVICE": "cpu",
                "PGW_SERVICE_VERIFY_PACKS": "fingerprint", "PGW_SERVICE_METRICS_ON_MAIN_PORT": "true",
                "PGW_LOG_LEVEL": "WARNING"}
+    if svc_cpus:
+        svc_env["OMP_NUM_THREADS"] = str(len(svc_cpus))
     procs: list[subprocess.Popen[bytes]] = []
     log = open(work / "service.log", "ab")
     try:
         procs.append(subprocess.Popen([sys.executable, "-m", "pgw.cli", "service", "serve"], env=svc_env,
-                                      stdout=log, stderr=subprocess.STDOUT))
+                                      stdout=log, stderr=subprocess.STDOUT, preexec_fn=_pin))
         _wait_http(f"http://127.0.0.1:{svc_port}/readyz", procs[0])
         reps = len(args.delay_ms) * (args.repeat + 1)
         store = _make_store(args, pack, work, reps * (16 + args.tokens + 8) + 16)
@@ -337,7 +353,7 @@ def main() -> None:
         for d in args.delay_ms:
             pport = _free_port()
             p = subprocess.Popen([sys.executable, __file__, "--proxy", str(pport), str(svc_port), str(d / 2e3)],  # noqa: S603
-                                 env=env)
+                                 env=env, preexec_fn=_pin)
             procs.append(p)
             time.sleep(1.0)
             res = asyncio.run(_gateway(args, f"http://127.0.0.1:{pport}", token, svc_port, d / 1e3, store, pack))
