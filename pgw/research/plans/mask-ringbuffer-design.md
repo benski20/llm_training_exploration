@@ -728,7 +728,9 @@ Changes against the text above:
   embedded factory; `WindowedReservation.ensure` counts in-flight background slots against the cap;
   `pgw_masks_ring_fallback_reservations_total` is per model; the v2 child gets only
   `PGW_FACTORY_*` and runtime environment variables (`ringshm.child_env`).
-* Not done: the `view_rows` fast path in `_read_wr` (needs `store.py`, owned by another package),
+* Done 2026-11-21 (package X2, `mask-ram-path-x2.md`): the direct-read fast path in `_read_wr`
+  (`RamSegment.read_wr_rows`, no per-reservation chunk copy; 7B take 172 -> 276 slots/s per core).
+* Not done:
   Helm values and `docs/operations/sizing.md` (owned by WP9).
 
 Local measurements (4 vCPU, one Qwen2.5-7B-shaped layer at K32, 64 slots; a 7B slot is 28 layers)

@@ -53,6 +53,7 @@ import mmap
 import os
 import queue
 import resource
+import sys
 import threading
 import time
 import uuid
@@ -443,6 +444,12 @@ class FdMapping:
             del dst
         return out
 
+    def address(self, off: int, n: int) -> int:
+        """Absolute address of ``[off, off + n)`` (bounds-checked; valid until :meth:`close`)."""
+        if self._closed or off < 0 or n < 0 or off + n > self.size:
+            raise MaskStoreError("mask ring slab read out of range")
+        return self.addr + off
+
     def zero(self) -> None:
         if not self._closed and self.writable:
             _bzero(self.addr, self.size)
@@ -510,6 +517,9 @@ class MemfdSlab:
 
     def copy_out(self, off: int, n: int) -> bytearray:
         return self._map.copy_out(off, n)
+
+    def address(self, off: int, n: int) -> int:
+        return self._map.address(off, n)
 
     def close(self) -> None:
         """Unmap and close. An unsealed slab is overwritten with zeros first (``pwrite`` on the memfd
@@ -819,6 +829,43 @@ class RamSegment:
                 )
         return out
 
+    def read_wr_rows(self, li: int, slot0: int, rows: int, *, compact: bool) -> np.ndarray:
+        """``W r`` rows ``[slot0, slot0 + rows)`` of linear ``li`` decoded straight out of the slab.
+
+        The zero-copy read path of :meth:`pgw.maskstore.MaskReservation._read_wr` for RAM segments:
+        no chunk is copied into a per-reservation cache; the rows are decoded from the slab into a
+        fresh, writable numpy array (``uint32`` when ``compact`` and K <= 32, else ``int64``) under
+        the slab lock, with the same R4 checks as :meth:`decrypt_into` (ring open, generation, state).
+        The caller owns (and zeroes) the result; no other copy of the rows is made.
+        """
+        if self.closed:
+            raise MaskStoreError(f"ring segment {self.header.segment_id} handle is closed")
+        ring, slab = self._ring, self._slab
+        with slab.lock:
+            if ring.closed or slab.gen != self.gen or slab.state not in _READABLE:
+                raise MaskStoreError(
+                    f"ring segment {self.header.segment_id} is no longer readable (ring closed or slab recycled)",
+                    details={"segment_id": self.header.segment_id},
+                )
+            return ring._read_wr_rows(slab, li, slot0, rows, compact)
+
+    @property
+    def slab_lock(self) -> threading.Lock:
+        """The slab's R4 lock (``take_checked_many`` holds it around a native read of the slab)."""
+        return self._slab.lock
+
+    def wr_view_locked(self, li: int) -> memoryview:
+        """Read-only view of linear ``li``'s ``W r`` rows (all slots) in the slab. The caller holds
+        :attr:`slab_lock` from before this call until the view is released; same checks as
+        :meth:`decrypt_into` (handle open, ring open, generation, readable state)."""
+        ring, slab = self._ring, self._slab
+        if self.closed or ring.closed or slab.gen != self.gen or slab.state not in _READABLE:
+            raise MaskStoreError(
+                f"ring segment {self.header.segment_id} is no longer readable (ring closed or slab recycled)",
+                details={"segment_id": self.header.segment_id},
+            )
+        return ring._wr_view(slab, li)
+
     def close(self) -> None:
         """Release the slab reference. Lock-free (safe from finalizers): the ring reconciles later."""
         if self.closed:
@@ -843,6 +890,12 @@ class _RingOwner:
 
 class RingReservation(MaskReservation):
     """A :class:`MaskReservation` whose finalizer marks its handles so the ring counts them as leaked."""
+
+    #: Whether :func:`pgw.maskstore.take_checked_many` batches ring reservations into one native call
+    #: (rows read from the slabs under their locks, pads from ``pgw_fast``'s ChaCha20, GIL released).
+    #: Off by default: on the 4-vCPU dev box it measured slower than the sequential take (whose pads use
+    #: OpenSSL's AVX-512 ChaCha20); ``PGW_MASK_RING_BATCHED_CLAIM=1`` turns it on. Same rows either way.
+    batched_claim = os.environ.get("PGW_MASK_RING_BATCHED_CLAIM", "0").strip().lower() in ("1", "true", "yes", "on")
 
     def __del__(self) -> None:  # pragma: no cover - exercised through gc in tests
         if not getattr(self, "_closed", True):
@@ -979,6 +1032,55 @@ class MaskRing:
         if self._arena is None:
             raise MaskStoreError("ring slab has no memory")
         return self._arena.copy_out(slab.off + off, n)
+
+    def _slab_addr(self, slab: _Slab, off: int, n: int) -> int:
+        """Absolute address of slab bytes ``[off, off + n)`` (bounds-checked; slab lock held)."""
+        if slab.mem is not None:
+            return int(slab.mem.address(off, n))
+        arena = self._arena
+        if arena is None or arena.closed or off < 0 or off + n > self.geometry.slab_bytes:
+            raise MaskStoreError("mask ring read out of range")
+        return int(arena.addr) + slab.off + off
+
+    def _wr_view(self, slab: _Slab, li: int) -> memoryview:
+        """Read-only byte view of linear ``li``'s ``W r`` rows in the slab (slab lock held)."""
+        if slab.layout is None or not 0 <= li < len(slab.wr_offsets):
+            raise MaskStoreError(f"ring linear index {li} out of range")
+        n = slab.slots * int(self.linears[li].out_features) * self.geometry.bpe
+        addr = self._slab_addr(slab, self.geometry.wr_base + slab.wr_offsets[li], n)
+        return memoryview((ctypes.c_char * n).from_address(addr)).cast("B").toreadonly()
+
+    def _read_wr_rows(self, slab: _Slab, li: int, slot0: int, rows: int, compact: bool) -> np.ndarray:
+        """Decode ``W r`` rows of linear ``li`` from the slab (slab lock held by the caller)."""
+        layout = slab.layout
+        if layout is None or not 0 <= li < len(slab.wr_offsets):
+            raise MaskStoreError(f"ring linear index {li} out of range")
+        if rows <= 0 or slot0 < 0 or slot0 + rows > slab.slots:
+            raise MaskStoreError("ring rows out of range", details={"slot0": slot0, "rows": rows, "slots": slab.slots})
+        m = int(self.linears[li].out_features)
+        bpe = self.geometry.bpe
+        n = rows * m * bpe
+        # Rows of one linear are contiguous in the slab (chunks of a linear follow each other).
+        addr = self._slab_addr(slab, self.geometry.wr_base + slab.wr_offsets[li] + slot0 * m * bpe, n)
+        src = np.ctypeslib.as_array((ctypes.c_uint8 * n).from_address(addr))
+        k = self.ring.k
+        if bpe == 4:
+            out = np.empty((rows, m), dtype=np.uint32 if compact and k <= 32 else np.int64)
+            np.copyto(out.reshape(-1), src.view("<u4"), casting="unsafe")
+            return out
+        if bpe == 8:
+            out = np.empty((rows, m), dtype=np.int64)
+            out.reshape(-1).view(np.uint64)[:] = src.view("<u8")
+            return out
+        # K = 16/24/40/48/56: little-endian bpe-byte words, widened in place (no immutable copy)
+        out = np.zeros((rows, m), dtype=np.uint32 if compact and k <= 32 else np.int64)
+        if sys.byteorder != "little":  # pragma: no cover - every supported host is little-endian
+            for b in range(bpe):
+                out |= src.reshape(rows * m, bpe)[:, b].reshape(rows, m).astype(out.dtype) << (8 * b)
+            return out
+        wide = out.reshape(-1).view(np.uint8).reshape(rows * m, out.itemsize)
+        wide[:, :bpe] = src.reshape(rows * m, bpe)
+        return out
 
     def _release_slab_memory(self, slab: _Slab) -> None:
         """Wipe (arena) or drop (memfd: unmap and close; sealed pages cannot be written) a slab's bytes."""
