@@ -34,6 +34,10 @@ if MODEL_NAME not in MODELS:
     raise ValueError(f"PGW_MODAL_MODEL={MODEL_NAME!r}: use one of {', '.join(MODELS)}")
 MODEL_REPO, MODEL_REVISION = MODELS[MODEL_NAME]
 PACK = "/opt/packs/" + MODEL_NAME
+#: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
+#: the deploy shell's environment, so MODEL_NAME (hence PACK and the "model" published to the customer) would fall
+#: back to the 0.5B there; the image's environment carries them instead.
+RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME}
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
@@ -78,7 +82,7 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
-    .env({"PYTHONUNBUFFERED": "1"})
+    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
 )
 

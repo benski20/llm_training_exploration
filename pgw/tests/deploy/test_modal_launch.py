@@ -385,3 +385,31 @@ def test_customer_cost_follows_the_target_and_draft(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("PGW_MODAL_MODEL")
     monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
     assert launch.customer_gib() == 16
+
+
+def test_container_reimport_keeps_deploy_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Modal re-imports provider.py / customer.py inside the container without the deploy shell's environment:
+    the image's environment (RUNTIME_ENV) must make them evaluate the same there (target pack, published model
+    name, draft on/off, draft device)."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU", "PGW_MODAL_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    monkeypatch.setenv("PGW_MODAL_CUSTOMER_GPU", "T4")
+    prov, cust = _load("provider"), _load("customer")
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var)
+    for var, val in {**prov.RUNTIME_ENV, **cust.RUNTIME_ENV}.items():  # the container sees only the image env
+        monkeypatch.setenv(var, val)
+    prov2, cust2 = _load("provider"), _load("customer")
+    assert (prov2.MODEL_NAME, prov2.PACK) == (prov.MODEL_NAME, prov.PACK) == (
+        "qwen2.5-1.5b-instruct", "/opt/packs/qwen2.5-1.5b-instruct")
+    assert (cust2.DRAFT, cust2.CUSTOMER_GPU, cust2.MEMORY_MIB) == (True, "T4", cust.MEMORY_MIB)
+    # the default deploy keeps the defaults in the container too
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var)
+    prov, cust = _load("provider"), _load("customer")
+    for var, val in {**prov.RUNTIME_ENV, **cust.RUNTIME_ENV}.items():
+        monkeypatch.setenv(var, val)
+    prov2, cust2 = _load("provider"), _load("customer")
+    assert prov2.MODEL_NAME == "qwen2.5-0.5b-instruct" and cust2.DRAFT is False and cust2.CUSTOMER_GPU is None

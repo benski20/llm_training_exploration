@@ -57,6 +57,11 @@ DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 # 16 GiB instead of 8 (= pgw_modal_boot.customer_memory_mib; a test checks they agree).
 MODEL = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
 MEMORY_MIB = 16384 if DRAFT or MODEL != "qwen2.5-0.5b-instruct" else 8192
+#: Deploy-time choices the gateway reads at run time (DRAFT: use the baked draft; CUSTOMER_GPU: run it on the GPU).
+#: Modal re-imports this file inside the container without the deploy shell's environment, so without these in
+#: the image's environment DRAFT would read False there and the draft would never be used.
+RUNTIME_ENV = {"PGW_MODAL_DRAFT": "1" if DRAFT else "0", "PGW_MODAL_CUSTOMER_GPU": CUSTOMER_GPU or "",
+               "PGW_MODAL_MODEL": MODEL}
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -86,6 +91,7 @@ if DRAFT:
         " && rm -rf /root/.cache/huggingface")
 image = (
     image
+    .env(RUNTIME_ENV)
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
