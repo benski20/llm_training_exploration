@@ -13,10 +13,20 @@ public information and reveals nothing about routing.
 
 The price is waste and possible stalls: popular experts drain faster than ``k / E`` of the rows, cold ones
 accumulate unused masks. ``overprovision`` (rho) buys slack; :func:`simulate_refill` measures stalls and
-waste for a routing trace. While a routed expert's pool is empty the gateway must not pause visibly
-(a pause would correlate with routing). It sends a constant-shape trip whose rows are all uniform dummies
-(``plan_dispatch(np.empty((0, k), int), E, rows=B)`` is such an all-dummy plan) and retries the real rows later.
-The plain (trusted, local) factory has no such constraint: the provider never sees its refills.
+waste for a routing trace. While a routed expert's pool is empty the gateway sends a constant-shape trip
+whose rows are all uniform dummies (``plan_dispatch(np.empty((0, k), int), E, rows=B)`` is such an all-dummy
+plan) and retries the real rows later.
+
+**Stalls are not hidden.** The all-dummy trip hides the row values, but the stall itself is observable:
+the provider knows which weights each trip uses, so a repeated expert-layer trip (and the longer time per
+generated token) shows that a stall happened, and whether a pool runs dry depends on the routing. Each stall
+therefore leaks routing information. ``overprovision`` and ``reserve_slots`` must be sized so that stalls do
+not occur in practice for the measured routing distribution (``simulate_refill`` reports the stall share), and
+a deployment should treat a stall as a reportable leak, not as a hidden slow path. The configurations with
+non-zero stall share in the scale plan's table are leaky, not merely slow.
+
+The plain (trusted, local) factory's refills are invisible to the provider, but a pool that runs dry before
+a local refill lands causes the same observable stall, so its refills must also stay ahead of consumption.
 """
 
 from __future__ import annotations

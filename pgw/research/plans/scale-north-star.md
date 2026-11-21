@@ -172,7 +172,11 @@ Per-expert consumption follows the routing. With the **encrypted** factory the p
 refill and sees which expert it is for, so "top up the low pool" would leak the routing histogram over
 time. `LockstepRefill` refills **all** experts by the same amount, as a function only of the public
 row counter. While a routed pool is empty, the gateway sends a constant-shape all-dummy trip
-(`plan_dispatch(np.empty((0, k)), E, rows=B)`) instead of pausing visibly. Steady state: with per-expert
+(`plan_dispatch(np.empty((0, k), int), E, rows=B)`). This hides the row values but **not the stall**:
+the provider knows which weights each trip uses, so a repeated expert-layer trip and the slower token are
+visible, and whether a pool runs dry depends on the routing. Every stall leaks routing information, so rho
+and the reserve must be sized for a stall share of zero on the measured routing; the non-zero cells in the
+table below are leaky configurations, not just slow ones. Steady state: with per-expert
 routing probabilities `p_e` (summing to k), the overprovision must satisfy `rho >= E max_e p_e / k`, and
 the waste is `1 - 1/rho` of the expert masks (analytic). Simulated with `simulate_refill` (64 rows per
 trip, 300 trips, lag 4 trips; Zipf-skewed routing with exponent s):
@@ -184,8 +188,8 @@ trip, 300 trips, lag 4 trips; Zipf-skewed routing with exponent s):
 
 Trained MoEs carry a load-balancing loss, so real routing is closer to s = 0 than s = 1, but this needs a
 measured trace. Fine-grained MoE with an encrypted factory needs rho of 2-4, which multiplies maskgen and
-HE work for the expert linears. The plain factory has no such constraint, because the provider never sees
-its refills.
+HE work for the expert linears. The plain factory's refills are invisible, but a pool that runs dry before a
+local refill lands stalls just as visibly, so it must also stay ahead of consumption.
 
 ### 7.3 Router
 
@@ -253,6 +257,8 @@ refills keyed on pool levels with the encrypted factory. Each leaks routing.
 - The oblivious dispatch's security argument (7.1) and the refill argument (7.2) are information-theoretic
   and rest on the one-time pad. No lattice parameter changes. They still need a human review before any
   deployment turns them on.
+- A mask-pool stall (7.2) is visible to the provider and routing-dependent: size rho and the reserve so
+  that it does not happen, and report any stall as a leak.
 - Freivalds must run on dummy rows too. Any engine integration that skips dummy rows reopens the
   selective-failure channel.
 - Dummy rows must come from a CSPRNG under a key the provider never sees, never from a seed it derives.
