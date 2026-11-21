@@ -170,11 +170,81 @@ def bench_preset(name: str, args: argparse.Namespace, ndev: int) -> dict[str, An
                     ok = bytes(handler_mod._maskgen_item(sk, it)) == _reference_rows(sub, it, n, rows)
                 res.setdefault("cpu_reference_ok", {})[f"{fmt}/g{g}"] = bool(ok)
                 print(name, fmt, g, "CPU reference:", ok, flush=True)
+    if args.profile:
+        _set_mode("fused")
+        res["profile"] = {}
+        for kind in ("gate_up", "down"):
+            n = shapes[kind][1]
+            try:
+                res["profile"][kind] = profile_item(kerns[0][kind], _item(f"0.{kind}", n, DEGREE * args.profile_groups,
+                                                                          "v2:53:35", rng))
+            except Exception as exc:  # pragma: no cover - diagnostics only
+                res["profile"][kind] = {"error": f"{type(exc).__name__}: {exc}"}
+            print(name, "profile", kind, json.dumps(res["profile"][kind]), flush=True)
     if args.decode:
         res["decode"] = bench_decode(kerns[0], shapes, args, rng)
     del kerns
     torch.cuda.empty_cache()
     return res
+
+
+def _sync_time(fn: Any, reps: int = 3) -> float:
+    fn()
+    torch.cuda.synchronize()
+    t = time.perf_counter()
+    for _ in range(reps):
+        fn()
+    torch.cuda.synchronize()
+    return (time.perf_counter() - t) / reps
+
+
+def profile_item(kern: ComputeKernel, it: MaskgenItem) -> dict[str, Any]:
+    """Stage times (ms, synchronised) of one fused v2 item, and the bare int8 GEMM ceiling for its shape."""
+    dev = kern.device
+    wpad = kern._pw._w_dev
+    m, n, cols = kern.out_features, kern.in_features, it.cols
+    mp, np_ = wpad.shape
+    nb = -(-it.b_bits // 8)
+    const = kern._maskgen_const(nb, 0)
+    out: dict[str, Any] = {"m": m, "n": n, "cols": cols}
+    with torch.cuda.device(dev):
+        host = torch.empty(len(it.b), dtype=torch.uint8, pin_memory=True)
+        src = torch.frombuffer(it.b, dtype=torch.uint8)
+        out["host_copy_ms"] = 1e3 * _sync_time(lambda: host.copy_(src))
+        dd = host.to(dev)
+        out["h2d_ms"] = 1e3 * _sync_time(lambda: host.to(dev, non_blocking=True))
+        step = mg._block_cols(mp, nb, cols, mg.PART_BYTES)
+        cb = min(step, cols)
+        cbp = -(-cb // 32) * 32
+        srcs = mg.v2_planes_source(dd, n, cols, it.b_bits)
+        planes = torch.empty((nb, cbp, np_), dtype=torch.uint8, device=dev)
+
+        def mk() -> None:
+            for d, (sv, j) in enumerate(mg.v2_planes_source(dd, n, cols, it.b_bits)):
+                torch.bitwise_xor(sv[:, :cb, j].t(), 0x80, out=planes[d, :cb, :n])
+
+        nblk = -(-cols // step)
+        out["unpack_planes_ms"] = 1e3 * nblk * _sync_time(mk)
+        del srcs
+        rhs = planes.view(torch.int8).view(nb * cbp, np_).t()
+        t_gemm = _sync_time(lambda: torch._int_mm(wpad, rhs))
+        out["gemm_ms"] = 1e3 * nblk * t_gemm
+        out["gemm_tops_block"] = round(2 * mp * np_ * nb * cbp / t_gemm / 1e12, 2)
+        part = torch._int_mm(wpad, rhs).view(mp, nb, cbp)
+        out["combine_fused_ms"] = 1e3 * nblk * _sync_time(lambda: mg.combine(part, m, cb, const, fused=True))
+        out["combine_torch_ms"] = 1e3 * nblk * _sync_time(lambda: mg.combine(part, m, cb, const, fused=False))
+        y = mg.combine(part, m, cb, const)
+        pk = torch.empty(m * cols * it.y_bits // 8, dtype=torch.uint8, device=dev)
+        out["pack_ms"] = 1e3 * nblk * _sync_time(lambda: mg.pack_v2_block(y, it.b_bits, it.y_bits, pk, cols, 0))
+        res = torch.empty(pk.numel(), dtype=torch.uint8, pin_memory=True)
+        out["d2h_ms"] = 1e3 * _sync_time(lambda: res.copy_(pk))
+        out["total_item_ms"] = 1e3 * _sync_time(lambda: handler_mod._maskgen_item(kern, it))
+        # the ceiling: one large square-ish int8 GEMM on this device
+        a = torch.randint(-128, 127, (8192, 8192), dtype=torch.int8, device=dev)
+        bt = torch.randint(-128, 127, (8192, 8192), dtype=torch.int8, device=dev).t()
+        tc = _sync_time(lambda: torch._int_mm(a, bt))
+        out["gemm_tops_8k_ceiling"] = round(2 * 8192**3 / tc / 1e12, 2)
+    return {k: (round(v, 3) if isinstance(v, float) else v) for k, v in out.items()}
 
 
 def bench_decode(ks: dict[str, ComputeKernel], shapes: dict[str, tuple[int, int]], args: argparse.Namespace,
@@ -236,6 +306,8 @@ def main() -> None:
     ap.add_argument("--multi-gpu", action="store_true", default=True)
     ap.add_argument("--no-multi-gpu", dest="multi_gpu", action="store_false")
     ap.add_argument("--decode", action="store_true")
+    ap.add_argument("--profile", action="store_true", help="stage breakdown of one gate_up / down item")
+    ap.add_argument("--profile-groups", type=int, default=4)
     ap.add_argument("--decode-groups", type=int, default=4)
     ap.add_argument("--decode-seconds", type=float, default=6.0)
     ap.add_argument("--yield-ms", type=float, default=5.0)

@@ -48,10 +48,10 @@ import os
 import sys
 import threading
 import time
+import warnings
 from collections.abc import Callable
 from typing import Any
 
-import numpy as np
 import torch
 
 from pgw.hemask.wire import bit_fields, y_round_offset, y_wire_bytes
@@ -75,6 +75,8 @@ ENV_FUSED = "PGW_SERVICE_MASKGEN_FUSED"
 ENV_YIELD_MS = "PGW_SERVICE_MASKGEN_YIELD_MS"
 #: Byte budget of one block's int32 partial sums on CUDA (as :data:`pgw.service.kernels.MASKGEN_PART_BYTES_CUDA`).
 PART_BYTES = 512 << 20
+#: Smaller blocks while the decode yield is on (each block is one wait point; ~10 ms of T4 GEMM at 7B).
+PART_BYTES_YIELD = 64 << 20
 _ALIGN = 32
 
 
@@ -309,23 +311,29 @@ def maskgen_device(wpad: torch.Tensor, m: int, n: int, dev_data: torch.Tensor, c
     return out.view(-1)
 
 
-_STAGING_LOCK = threading.Lock()
+#: torch warns on every view of read-only ``bytes``; the views here are only read (thread-safe, narrow filter)
+warnings.filterwarnings("ignore", message=r"The given buffer is not writable", category=UserWarning)
 
 
 def _upload(data: bytes | bytearray | memoryview, dev: torch.device) -> torch.Tensor:
-    src = np.frombuffer(data, dtype=np.uint8)
+    """The request bytes on ``dev``: one parallel host copy into pinned memory, then an async H2D copy."""
+    # read-only request bytes are never written through this view (see the warning filter above)
+    src = torch.frombuffer(memoryview(data).cast("B"), dtype=torch.uint8) if len(data) else \
+        torch.empty(0, dtype=torch.uint8)
     if dev.type != "cuda":
-        return torch.from_numpy(src.copy())
-    host = torch.empty(src.size, dtype=torch.uint8, pin_memory=True)  # torch's caching host allocator
-    np.copyto(host.numpy(), src)
+        return src.clone()
+    host = torch.empty(src.numel(), dtype=torch.uint8, pin_memory=True)  # torch's caching host allocator
+    host.copy_(src)  # multi-threaded, releases the GIL
     return host.to(dev, non_blocking=True)
 
 
-def run_item(kern: Any, it: Any, *, decode_busy: Callable[[], bool] | None = None) -> bytes:
+def run_item(kern: Any, it: Any, *, decode_busy: Callable[[], bool] | None = None) -> memoryview:
     """One maskgen item (v1 or v2) on a CUDA :class:`~pgw.service.kernels.ComputeKernel`: wire bytes in, out.
 
     Byte-identical to the previous path (``mulmod64_wire`` for v1, the CPU unpack/pack around it for
     v2). Runs on a pooled stream of the kernel's device; any number of threads may call it.
+    Returns a read-only byte view of the pinned reply buffer (no host copy; msgpack sends it as
+    ``bin``; the buffer stays alive while the view does).
     """
     from pgw.service.kernels import _borrow_stream, _return_stream
 
@@ -360,10 +368,11 @@ def run_item(kern: Any, it: Any, *, decode_busy: Callable[[], bool] | None = Non
                     while decode_busy() and time.monotonic() < t_end:
                         time.sleep(2e-4)
             dev_data = _upload(it.b, dev)
-            out = maskgen_device(wpad, m, n, dev_data, cols, const, fused=None, after_block=after, **kw)
+            out = maskgen_device(wpad, m, n, dev_data, cols, const, fused=None, after_block=after,
+                                 part_bytes=PART_BYTES_YIELD if after is not None else PART_BYTES, **kw)
             res = torch.empty(out.numel(), dtype=torch.uint8, pin_memory=True)
             res.copy_(out, non_blocking=True)
             stream.synchronize()
-        return res.numpy().tobytes()
+        return memoryview(res.numpy()).toreadonly()
     finally:
         _return_stream(dev, stream)

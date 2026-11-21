@@ -1,0 +1,10 @@
+........................s.........ssssssss....ssss...................... [ 49%]
+........................................................................ [ 98%]
+..                                                                       [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/service/test_maskgen_gpu.py:139: needs the Triton interpreter
+SKIPPED [8] tests/service/test_maskgen_gpu.py:168: needs the Triton interpreter
+SKIPPED [4] tests/service/test_maskgen_gpu.py:184: needs the Triton interpreter
+133 passed, 13 skipped in 77.57s (0:01:17)
+
+---stderr---

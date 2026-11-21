@@ -221,8 +221,11 @@ JOBS: dict[str, dict] = {
          "args": ["tests/service/test_maskgen_gpu.py", "tests/service/test_maskgen_fast.py",
                   "tests/service/test_maskgen.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},
         {"kind": "shell", "name": "maskgen_provider_bench",
+         # run 1 (v1 of this kernel) measured legacy vs fused; run 2 measures the fused path after the
+         # host-copy cuts (parallel pinned upload, zero-copy reply), smaller yield blocks, and the stage profile
          "cmd": "python benchmarks/maskgen_provider_bench.py --presets qwen2.5-0.5b qwen2.5-7b llama3-70b "
-                "--decode --json /kaggle/working/maskgen_provider.json", "timeout": 5400},
+                "--modes fused --conc 2 4 --rounds 4 --decode --profile "
+                "--json /kaggle/working/maskgen_provider.json", "timeout": 5400},
     ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
