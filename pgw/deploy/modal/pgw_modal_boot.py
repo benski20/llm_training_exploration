@@ -253,12 +253,17 @@ _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 #:   sequential round trips per token. On i6pn the measurement decides.
 #: * ``float_threads = 1``: the gateway's decode float ops on one torch thread (self-checked bit-identical;
 #:   2-5 ms per token less on 4 vCPUs). Same effect as ``PGW_FLOAT_THREADS=1``.
+#: * ``lane = "stream"``: the blocking stream lane. Decode trips go over the same WebSocket stream endpoint
+#:   (same TLS, same msgpack bytes) but are written and read on the gateway's plaintext thread, with the
+#:   TripEngine and synchronous decode: no event-loop hand-off per trip (W1: about 20-35 ms per token less
+#:   with 48 trips per token, measured with benchmarks/trip_profile.py). Any call it cannot complete is
+#:   resent byte-identically on the stream channel. (The native UDS lane needs a provider on this host.)
 #:
-#: Not set: ``lane`` (the provider is remote: the service lane is a local Unix socket only) and strict
+#: Not set: strict
 #: speculation (``spec_rows`` / ``spec_strict_passes``). The demo has no draft model and its chat barely
 #: repeats the prompt, so prompt lookup accepts almost nothing: the provider sees as many passes either
 #: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
-GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1}
+GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1, "lane": "stream"}
 
 
 def gateway_env(config_dir: Path, data_dir: Path, port: int,

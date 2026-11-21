@@ -163,8 +163,14 @@ logprobs) and shows the provider nothing new:
 * `float_threads = 1` (and `PGW_FLOAT_THREADS=1`): the gateway's decode float ops on one torch thread,
   self-checked bit-identical at start-up.
 
-Not used here: the trip lane (`lane`; it is a Unix socket for a service on the gateway's host, and the
-provider is remote) and strict speculation (`spec_rows` + `spec_strict_passes`). The demo has no draft
+* `lane = "stream"`: the blocking stream lane. Decode trips use the same WebSocket stream endpoint
+  through the tunnel (same TLS, same msgpack request bytes) but are written and read on the gateway's
+  plaintext thread with the TripEngine and synchronous decode, so no event-loop hand-off per trip. Any
+  call it cannot complete is resent byte-identically on the regular stream channel. `/admin/status`
+  shows `lane_state = "stream"` and `stream_lane_stats` (calls, fallbacks, opens).
+
+Not used here: the native trip lane (`lane = "auto"`; a Unix socket for a service on the gateway's host,
+and the provider is remote) and strict speculation (`spec_rows` + `spec_strict_passes`). The demo has no draft
 model and its chat barely repeats the prompt, so prompt lookup would accept almost nothing; strict mode
 shows the provider as many passes either way, while each pass would carry `spec_rows` masked rows
 (that many times the mask supply of the encrypted factory).

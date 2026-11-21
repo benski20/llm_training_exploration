@@ -237,6 +237,7 @@ class SyncStreamClient:
         self._idle: list[BlockingStreamChannel] = []
         self._open = 0
         self._off_until = 0.0
+        self._fails = 0
         self._closed = False
         # Like the asyncio stream channel: a custom transport (tests, in-process services) carries no
         # WebSocket unless the client opted in (the gateway's egress guard over the real network does).
@@ -287,11 +288,14 @@ class SyncStreamClient:
         except Exception as exc:
             with self._lock:
                 self._open -= 1
-                self._off_until = time.monotonic() + self._cool_down_s
+                self._fails += 1
+                cool = min(600.0, self._cool_down_s * 2.0 ** (self._fails - 1))  # repeated failures back off
+                self._off_until = time.monotonic() + cool
             self.sync_stream_stats.open_failures += 1
-            log.info("blocking stream lane unavailable (%s); stream channel for %.0fs", type(exc).__name__,
-                     self._cool_down_s)
+            log.info("blocking stream lane unavailable (%s); stream channel for %.0fs", type(exc).__name__, cool)
             return None
+        with self._lock:
+            self._fails = 0
         self.sync_stream_stats.opens += 1
         return ch
 
