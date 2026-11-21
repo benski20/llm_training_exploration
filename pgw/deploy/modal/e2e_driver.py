@@ -24,8 +24,12 @@ PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pad
 
 
 def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url: str,
-        config_dir: Path = Path("/srv/pgw/config")) -> dict[str, Any]:
-    """Wizard + two chats + exactness check; see the module docstring."""
+        config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0) -> dict[str, Any]:
+    """Wizard + two chats + exactness check; see the module docstring.
+
+    ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
+    the wizard waits for enough mask slots for both chats and the warm window starts after the first chat's
+    dummy passes have drained."""
     while True:
         prov = live.get("provider") or {}
         if prov.get("run_id") == run_id and prov.get("code", "").startswith("PGW1-"):
@@ -33,7 +37,10 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         if time.time() > deadline:
             raise RuntimeError("provider did not publish an enrollment code")
         time.sleep(5)
-    res = wiz.run_wizard(url, token, prov["code"], boot.MODEL_NAME, timeout_s=max(60, deadline - time.time()))
+    model_name = prov.get("model") or boot.MODEL_NAME  # the target the provider serves (launch.py --model)
+    # strict speculation reserves spec_rows slots per generated token up front: wait for both chats' slots
+    res = wiz.run_wizard(url, token, prov["code"], model_name, timeout_s=max(60, deadline - time.time()),
+                         min_masks=boot.e2e_min_masks(spec_rows))
     wiz.wait_gateway_ready(url)
     key = wiz.create_api_key(url, res["admin_token"])
     adm = res["admin_token"]
@@ -46,15 +53,18 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         # the latency unmeasured (the gate then reports "no round trips measured"), never the exactness check.
         try:
             return (wiz.metrics_text(local_url, adm),
-                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), boot.MODEL_NAME))
+                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), model_name))
         except Exception as exc:
             snap_errors.append(f"{type(exc).__name__}: {str(exc)[:200]}")
             return "", {}
 
     s0 = snap()
-    out = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)
+    out = wiz.chat(url, key, model_name, PROMPT, 32)
+    # Strict speculation: the dummy passes of the first chat run after its answer, and the next request of the
+    # same conversation (this API key) waits for them; wait here so the warm window holds one chat's passes.
+    drain_s = wiz.wait_idle(local_url, adm, model_name) if spec_rows else 0.0
     s1 = snap()
-    out2 = wiz.chat(url, key, boot.MODEL_NAME, PROMPT, 32)  # second run: determinism + warm timing
+    out2 = wiz.chat(url, key, model_name, PROMPT, 32)  # second run: determinism + warm timing
     s2 = snap()
     # The warm chat (the second one) decides launch.py's --max-trip-ms gate; both chats are reported too.
     trips: dict[str, Any] = {"warm": trip_gate.trip_latency(s1[0], s2[0], s1[1], s2[1]),
@@ -69,7 +79,7 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     cmp = wiz.compare(out, ref)
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
-    model_status = next((m for m in status.get("models", []) if m.get("name") == boot.MODEL_NAME), {})
+    model_status = next((m for m in status.get("models", []) if m.get("name") == model_name), {})
     speed = dict(model_status.get("speed") or {})
     speed.setdefault("rtt_path", path)
     warm_tokens = int(((out2.get("usage") or {}).get("completion_tokens")) or 0)
@@ -77,7 +87,12 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         speed["warm_trips_per_token"] = round(trips["warm"]["trips"] / warm_tokens, 2)
     if warm_tokens and out2.get("_wall_s"):
         speed["warm_tokens_per_s"] = round(warm_tokens / float(out2["_wall_s"]), 2)
+    if spec_rows:
+        speed["spec_drain_wait_s"] = round(drain_s, 1)
+        if warm_tokens:
+            speed["warm_answer_tokens_per_s"] = round(warm_tokens / max(1e-9, out2["_wall_s"]), 2)
     return {
+        "model": model_name, "spec_rows": spec_rows,
         "timings": res["timings"], "verify": res["verify"], "enroll": {k: res["enroll"].get(k) for k in (
             "tenant", "service_url", "client_cert", "ca_fingerprint")},
         "chat_text": out["choices"][0]["message"]["content"], "usage": out.get("usage"),

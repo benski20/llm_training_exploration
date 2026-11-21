@@ -146,7 +146,7 @@ def test_spawn_pair_picks_functions_by_network() -> None:
     live = FakeDict(stop="x", provider={"run_id": "old"}, customer_boot={"run_id": "old"})
     p = launch.spawn_pair(live, False, 600, True, lookup=lambda app, name: FakeFunction(app, name, log))
     assert [(a, n) for a, n, _ in log] == [("pgw-provider", "serve"), ("pgw-customer", "gateway")]
-    assert log[1][2] == (p.run_id, 600, True, "auto") and p.network == "tunnel"
+    assert log[1][2] == (p.run_id, 600, True, "auto", 0) and p.network == "tunnel"
     assert not any(k in live for k in launch.RUN_KEYS)  # stale per-run keys cleared
     log.clear()
     p = launch.spawn_pair(live, True, 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
@@ -368,7 +368,7 @@ def test_spawn_colocated_is_one_call_for_both_parties() -> None:
     p = launch.spawn_pair(live, "colocated", 600, True, lookup=lambda app, name: FakeFunction(app, name, log),
                           local_linears="off")
     assert [(a, n) for a, n, _ in log] == [launch.COLOCATED_FUNCTION]
-    assert log[0][2] == (p.run_id, 600, True, "off")
+    assert log[0][2] == (p.run_id, 600, True, "off", 0)
     assert p.network == "colocated" and p.colocated and not p.i6pn and p.pcall is p.ccall
     assert "provider" not in live
     # cancelling the pair cancels the one call once
@@ -472,3 +472,138 @@ def test_colocated_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "start_gateway_party(" in src and "user=cuser" in src
     boot_text = (MODAL_DIR / "pgw_modal_boot.py").read_text()
     assert f'PROVIDER_USER, CUSTOMER_USER = "{mod.PROVIDER_USER}", "{mod.CUSTOMER_USER}"' in boot_text
+
+
+def test_spec_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--spec-rows (runtime, default off), --model and --spec-draft (deploy time) and their checks."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    a = launch.parse_args([])
+    assert a.spec_rows == 0 and a.model == launch.DEFAULT_MODEL and a.spec_draft is False
+    assert launch.parse_args(["--spec-rows", "3"]).spec_rows == 3
+    for bad in (["--spec-rows", "1"], ["--spec-rows", "9"], ["--spec-draft"],  # the draft needs spec rows
+                ["--spec-rows", "4", "--spec-draft"],  # the 0.5B drafting for itself
+                ["--model", "qwen2.5-7b-instruct"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args(bad)
+    a = launch.parse_args(["--model", "qwen2.5-1.5b-instruct", "--spec-rows", "4", "--spec-draft"])
+    assert a.model == "qwen2.5-1.5b-instruct" and a.spec_draft
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-3b-instruct")
+    assert launch.parse_args([]).model == "qwen2.5-3b-instruct"
+
+
+def test_deploy_passes_model_and_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict[str, str]] = []
+    monkeypatch.setattr(launch.subprocess, "run", lambda cmd, check, env: seen.append(env))
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    launch.deploy(None, None, model=launch.DEFAULT_MODEL, draft=False)
+    assert all("PGW_MODAL_MODEL" not in e and "PGW_MODAL_DRAFT" not in e for e in seen)
+    seen.clear()
+    launch.deploy(None, None, model="qwen2.5-1.5b-instruct", draft=True)
+    assert [(e["PGW_MODAL_MODEL"], e["PGW_MODAL_DRAFT"]) for e in seen] == [("qwen2.5-1.5b-instruct", "1")] * 2
+    seen.clear()  # the co-located app gets the same deploy-time choices
+    launch.deploy(None, None, "colocated", None, "qwen2.5-3b-instruct", True)
+    assert [(e["PGW_MODAL_MODEL"], e["PGW_MODAL_DRAFT"]) for e in seen] == [("qwen2.5-3b-instruct", "1")] * 3
+
+
+def test_spawn_pair_passes_spec_rows_and_budget() -> None:
+    log: list[tuple[str, str, tuple[Any, ...]]] = []
+    p = launch.spawn_pair(FakeDict(), False, 600, True, lookup=lambda app, name: FakeFunction(app, name, log),
+                          spec_rows=4)
+    assert log[1][2] == (p.run_id, 600, True, "auto", 4)
+    assert launch.spec_budget(4, 41, 32) == {"plain": 73, "spec": 73 + 31 * 3}
+    assert launch.spec_budget(1, 41, 32)["spec"] == 73
+    log.clear()
+    p = launch.spawn_pair(FakeDict(), "colocated", 600, True, lookup=lambda app, name: FakeFunction(app, name, log),
+                          spec_rows=3)
+    assert [(a, n) for a, n, _ in log] == [launch.COLOCATED_FUNCTION]
+    assert log[0][2] == (p.run_id, 600, True, "auto", 3)
+
+
+def test_colocated_serves_the_chosen_model_and_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """colocated.py packs the --model target and bakes the --spec-draft draft like provider.py / customer.py,
+    passes --spec-rows to its gateway (the draft on the gateway's CPU: its process sees no GPU), and keeps the
+    deploy-time choices in the image's environment for Modal's re-import inside the container."""
+    import ast
+
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_GPU", "PGW_MODAL_PROVIDER_CPUS"):
+        monkeypatch.delenv(var, raising=False)
+    col = _load("colocated")
+    assert (col.MODEL_NAME, col.DRAFT, col.MEMORY_MIB) == ("qwen2.5-0.5b-instruct", False, 6144 + 8192)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    col = _load("colocated")
+    assert col.MODEL_NAME == "qwen2.5-1.5b-instruct" and col.PACK.endswith("qwen2.5-1.5b-instruct")
+    assert col.DRAFT and col.MEMORY_MIB == 6144 + 16384
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT"):
+        monkeypatch.delenv(var)
+    for var, val in col.RUNTIME_ENV.items():
+        monkeypatch.setenv(var, val)
+    col2 = _load("colocated")
+    assert (col2.MODEL_NAME, col2.PACK, col2.DRAFT, col2.MEMORY_MIB) == (col.MODEL_NAME, col.PACK, True,
+                                                                         col.MEMORY_MIB)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-7b-instruct")
+    with pytest.raises(ValueError, match="PGW_MODAL_MODEL"):
+        _load("colocated")
+    text = (MODAL_DIR / "colocated.py").read_text()
+    fn = next(n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == "pair")
+    src = ast.get_source_segment(text, fn) or ""
+    assert "spec_rows: int = 0" in src
+    assert "boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)" in src and "**spec" in src
+    assert "spec_rows=spec_rows" in src
+
+
+def test_provider_serves_the_chosen_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_GPU", raising=False)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    prov = _load("provider")
+    assert prov.MODEL_NAME == "qwen2.5-1.5b-instruct" and prov.MODEL_REPO == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert prov.PACK.endswith("qwen2.5-1.5b-instruct")
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-7b-instruct")
+    with pytest.raises(ValueError, match="PGW_MODAL_MODEL"):
+        _load("provider")
+    monkeypatch.delenv("PGW_MODAL_MODEL")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    assert _load("customer").DRAFT is True
+
+
+def test_customer_cost_follows_the_target_and_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A larger target or the draft gives the customer 16 GiB (customer.py MEMORY_MIB): the estimate follows."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    base = launch.cost_per_h(None)["pgw-customer"]
+    assert base == pytest.approx(4 * 0.0473 + 8 * 0.008)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    assert launch.customer_gib() == 16
+    assert launch.cost_per_h(None)["pgw-customer"] == pytest.approx(base + 8 * 0.008)
+    monkeypatch.delenv("PGW_MODAL_MODEL")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    assert launch.customer_gib() == 16
+
+
+def test_container_reimport_keeps_deploy_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Modal re-imports provider.py / customer.py inside the container without the deploy shell's environment:
+    the image's environment (RUNTIME_ENV) must make them evaluate the same there (target pack, published model
+    name, draft on/off, draft device)."""
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU", "PGW_MODAL_GPU"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-1.5b-instruct")
+    monkeypatch.setenv("PGW_MODAL_DRAFT", "1")
+    monkeypatch.setenv("PGW_MODAL_CUSTOMER_GPU", "T4")
+    prov, cust = _load("provider"), _load("customer")
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var)
+    for var, val in {**prov.RUNTIME_ENV, **cust.RUNTIME_ENV}.items():  # the container sees only the image env
+        monkeypatch.setenv(var, val)
+    prov2, cust2 = _load("provider"), _load("customer")
+    assert (prov2.MODEL_NAME, prov2.PACK) == (prov.MODEL_NAME, prov.PACK) == (
+        "qwen2.5-1.5b-instruct", "/opt/packs/qwen2.5-1.5b-instruct")
+    assert (cust2.DRAFT, cust2.CUSTOMER_GPU, cust2.MEMORY_MIB) == (True, "T4", cust.MEMORY_MIB)
+    # the default deploy keeps the defaults in the container too
+    for var in ("PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_CUSTOMER_GPU"):
+        monkeypatch.delenv(var)
+    prov, cust = _load("provider"), _load("customer")
+    for var, val in {**prov.RUNTIME_ENV, **cust.RUNTIME_ENV}.items():
+        monkeypatch.setenv(var, val)
+    prov2, cust2 = _load("provider"), _load("customer")
+    assert prov2.MODEL_NAME == "qwen2.5-0.5b-instruct" and cust2.DRAFT is False and cust2.CUSTOMER_GPU is None

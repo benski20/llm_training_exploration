@@ -127,3 +127,74 @@ def test_colocated_party_starters_isolate_the_parties() -> None:
     assert prov.index("service_env") < prov.index("party_dir(work, user)")
     assert "user_kw=kw" in prov and "as_user(env, user" in prov
     assert 'env["CUDA_VISIBLE_DEVICES"] = ""' in gw and "user_kw=kw" in gw and "as_user(env, user" in gw
+
+
+def test_spec_options_are_valid_strict_presets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``launch.py --spec-rows`` presets: strict fixed rows (never the variable-row mode), prompt lookup, and the
+    draft pack only when the image has one; accepted by the wizard's preset check and by GatewayModelConfig."""
+    from pgw.gateway.config import GatewayModelConfig, GatewaySettings
+
+    boot = _boot()
+    assert boot.spec_options(0) == {}
+    with pytest.raises(ValueError):
+        boot.spec_options(1)
+    with pytest.raises(ValueError):
+        boot.spec_options(9)
+    for opts in (boot.spec_options(3), boot.spec_options(4, boot.DRAFT_PACK, "cuda")):
+        assert opts["spec_rows"] in (3, 4) and opts["spec_strict_passes"] is True and opts["spec_lookup"] > 0
+        merged = {**boot.GATEWAY_MODEL_OPTIONS, **opts}
+        env = boot.gateway_env(tmp_path / "config", tmp_path / "data", 8080, merged)
+        for k, v in env.items():
+            if k.startswith("PGW_GATEWAY_"):
+                monkeypatch.setenv(k, v)
+        gs = GatewaySettings()
+        assert gs.setup_model_options == json.loads(json.dumps(merged))
+        cfg = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
+                                 service_url="https://compute.example.net:8443", **gs.setup_model_options)
+        assert cfg.spec_rows == opts["spec_rows"] and cfg.spec_strict_passes
+    assert "draft_pack_path" not in boot.spec_options(3)
+    assert boot.spec_options(4, boot.DRAFT_PACK, "cuda")["draft_device"] == "cuda"
+
+
+def test_provider_model_table_matches_boot() -> None:
+    """provider.py keeps its own copy of the target table (no module-level import of this file in its
+    container); both parties must pack the same pinned revision."""
+    import ast
+
+    boot = _boot()
+    for name in ("provider.py", "colocated.py"):  # the co-located container packs the same target
+        tree = ast.parse((MODAL_DIR / name).read_text())
+        table = next(ast.literal_eval(n.value) for n in tree.body
+                     if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "MODELS" for t in n.targets))
+        assert table == boot.MODELS, name
+    assert all(len(rev) == 40 for _, rev in boot.MODELS.values())
+    assert boot.MODELS[boot.MODEL_NAME][0] == boot.MODEL_REPO
+
+
+def test_e2e_waits_for_both_strict_chats_slots() -> None:
+    """The scripted e2e chats (32 tokens, prompt under 64 tokens) fail fast without their whole strict
+    reservation: the wizard step waits for both chats' slots (and keeps its old 64 without speculation)."""
+    boot = _boot()
+    assert boot.e2e_min_masks(0) == 64
+    assert boot.e2e_min_masks(4) == 2 * (64 + 32 + 31 * 3)
+    assert boot.e2e_min_masks(4, prompt_tokens=41, chats=1) == 41 + 32 + 31 * 3
+
+
+def test_customer_memory_matches_boot() -> None:
+    """customer.py computes its memory without importing this file at module level: same rule."""
+    import re
+
+    boot = _boot()
+    src = (MODAL_DIR / "customer.py").read_text()
+    m = re.search(r"MEMORY_MIB = (\d+) if DRAFT or MODEL != \"([^\"]+)\" else (\d+)", src)
+    assert m is not None
+    assert int(m.group(1)) == boot.CUSTOMER_MEMORY_MIB["large"] == boot.customer_memory_mib(None, draft=True)
+    assert int(m.group(3)) == boot.CUSTOMER_MEMORY_MIB["default"] == boot.customer_memory_mib(None)
+    assert m.group(2) == boot.MODEL_NAME
+    assert boot.customer_memory_mib("qwen2.5-1.5b-instruct") == boot.CUSTOMER_MEMORY_MIB["large"]
+    # the co-located container: the provider's 6 GiB plus the same gateway rule
+    col = (MODAL_DIR / "colocated.py").read_text()
+    m = re.search(r"MEMORY_MIB = 6144 \+ \((\d+) if DRAFT or MODEL_NAME != \"([^\"]+)\" else (\d+)\)", col)
+    assert m is not None
+    assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
+        boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])

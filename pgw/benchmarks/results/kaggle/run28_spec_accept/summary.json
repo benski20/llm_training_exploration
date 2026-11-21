@@ -1,0 +1,148 @@
+{
+ "job": {
+  "exclude": [
+   "scripts",
+   "tests",
+   "docs",
+   "research",
+   "console",
+   "SPEC.md",
+   "INTERFACE_NOTES.md",
+   "STATUS.md",
+   "benchmarks/gpu_validate.py",
+   "benchmarks/profile_token.py",
+   "benchmarks/results"
+  ],
+  "steps": [
+   {
+    "kind": "shell",
+    "name": "build_native",
+    "required": true,
+    "cmd": "{ [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && (python rust/tools/cargo_ok.py 1.89 || curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable) && { [ -f $HOME/.cargo/env ] && . $HOME/.cargo/env; true; } && cargo --version && python rust/tools/build_fast.py && python -c 'from pgw.core import native; assert native.fast is not None, \"pgw_fast not loaded\"; print(\"pgw_fast\", native.fast.version())' && python rust/tools/build_ntt.py && python -c 'from pgw.hemask import ntt; assert ntt.available(), \"pgw_ntt not loaded\"; print(\"pgw_ntt\", ntt.info())'",
+    "timeout": 1200
+   },
+   {
+    "kind": "shell",
+    "name": "cpu_info",
+    "cmd": "lscpu; nproc; nvidia-smi || true",
+    "timeout": 60
+   },
+   {
+    "kind": "shell",
+    "name": "pack_q05",
+    "required": true,
+    "cmd": "python -m pgw.cli pack Qwen/Qwen2.5-0.5B-Instruct /tmp/packs/q05 --name q05 -q && rm -rf $HOME/.cache/huggingface",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "pack_q15",
+    "required": true,
+    "cmd": "python -m pgw.cli pack Qwen/Qwen2.5-1.5B-Instruct /tmp/packs/q15 --name q15 -q && rm -rf $HOME/.cache/huggingface",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "pack_q3",
+    "required": true,
+    "cmd": "python -m pgw.cli pack Qwen/Qwen2.5-3B-Instruct /tmp/packs/q3 --name q3 -q && rm -rf $HOME/.cache/huggingface",
+    "timeout": 1800
+   },
+   {
+    "kind": "shell",
+    "name": "accept_q05_lookup",
+    "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q05 --device cuda --label q05 --check 3,4 --json /kaggle/working/accept_q05.json --dump-tokens /kaggle/working/tokens_q05.json",
+    "timeout": 3600
+   },
+   {
+    "kind": "shell",
+    "name": "accept_q15_d05",
+    "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 --device cuda --label q15_d05 --check 4,5 --json /kaggle/working/accept_q15_d05.json --dump-tokens /kaggle/working/tokens_q15.json",
+    "timeout": 5400
+   },
+   {
+    "kind": "shell",
+    "name": "accept_q3_d05",
+    "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q3 --draft-pack /tmp/packs/q05 --device cuda --label q3_d05 --check 4 --json /kaggle/working/accept_q3_d05.json --dump-tokens /kaggle/working/tokens_q3.json",
+    "timeout": 5400
+   },
+   {
+    "kind": "shell",
+    "name": "accept_q15_d05_cpu",
+    "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 --device cuda --draft-device cpu --label q15_d05_cpu --prompts 4 --rs 4 --check 4 --check-prompts 3 --temperature 0 --json /kaggle/working/accept_q15_d05_cpu.json",
+    "timeout": 3600
+   }
+  ]
+ },
+ "steps": {
+  "pip_install": {
+   "rc": 0,
+   "seconds": 13.0,
+   "tail": "\n---stderr---\n"
+  },
+  "pip_freeze": {
+   "rc": 0,
+   "seconds": 1.0,
+   "tail": "=0.11.0+cu130\ntorchdata==0.11.0\ntorchinfo==1.8.0\ntorchmetrics==1.9.0\ntorchsummary==1.5.1\ntorchtune==0.6.1\ntorchvision==0.26.0+cu130\ntornado==6.5.7\nTPOT==1.1.0\ntqdm==4.67.3\ntraitlets==5.16.1\ntraittypes==0.2.3\ntransformers==5.20.2\ntreelite==4.8.0\ntreescope==0.1.10\ntriton==3.6.0\ntruststore==0.10.5\ntrx-python==0.6\ntsfresh==0.21.2\ntuf==7.0.1\ntweepy==4.17.0\ntypeguard==4.6.0\ntyper==0.27.3\ntypes-pytz==2026.5.0.20261006\ntypes-PyYAML==6.0.12.20261113\ntypes-setuptools==84.0.0.20261006\ntyping-inspect==0.9.0\ntyping-inspection==0.4.4\ntyping_extensions==4.16.0\ntzdata==2026.5\ntzlocal==5.4.5\nucxx-cu13==0.50.0\nujson==6.1.0\numap-learn==0.5.12\numf==1.0.3\nuniversal_pathlib==0.3.10\nupdate_checker==1.0.1\nuri-template==1.3.0\nuritemplate==4.2.0\nurllib3==2.8.0\nurwid==5.1.3\nurwid_readline==0.15.1\nuuid_utils==0.18.0\nuvicorn==0.54.0\nuvloop==0.23.0\nvega-datasets==0.9.0\nvisions==0.8.1\nvtk==9.7.2\nwadllib==1.3.6\nWand==0.7.2\nwandb==0.28.1\nwasabi==1.1.3\nwatchdog==6.0.0\nwatchfiles==1.3.0\nwavio==0.0.9\nwcwidth==0.9.3\nweasel==1.0.0\nwebcolors==25.10.0\nwebencodings==0.6.1\nwebsocket-client==1.9.2\nwebsockets==15.0.1\nWerkzeug==3.1.9\nwheel==0.48.0\nwidgetsnbextension==4.0.16\nwoodwork==0.31.0\nwordcloud==1.9.6\nwrapt==2.5.1\nwsproto==1.3.2\nxarray==2025.12.0\nxarray-einstats==0.11.0\nxee==0.1.2\nxgboost==3.4.1\nxlrd==2.0.2\nxvfbwrapper==0.2.38\nxxhash==4.0.2\nxyzservices==2026.9.1\nyarl==1.25.1\nydata-profiling==4.18.4\nydf==0.15.0\nydf_tf==2.21.0\nyellowbrick==1.5\nyfinance==0.2.66\nzict==3.0.0\nzipp==4.1.2\nzstandard==0.25.0\n\n---stderr---\n"
+  },
+  "build_native": {
+   "rc": 0,
+   "seconds": 69.9,
+   "tail": "ctutils v0.4.8\n   Compiling syn v2.0.119\n   Compiling block-buffer v0.12.1\n   Compiling matrixmultiply v0.3.11\n   Compiling memoffset v0.9.1\n   Compiling heck v0.5.0\n   Compiling cpubits v0.1.1\n   Compiling cpufeatures v0.3.1\n   Compiling ring v0.17.14\n   Compiling cipher v0.5.2\n   Compiling universal-hash v0.6.1\n   Compiling pyo3 v0.23.5\n   Compiling getrandom v0.2.17\n   Compiling inout v0.1.4\n   Compiling cpufeatures v0.2.17\n   Compiling untrusted v0.9.0\n   Compiling rawpointer v0.2.1\n   Compiling cipher v0.4.4\n   Compiling polyval v0.7.3\n   Compiling num-integer v0.1.47\n   Compiling num-complex v0.4.6\n   Compiling hmac v0.12.1\n   Compiling rustls-pki-types v1.16.0\n   Compiling indoc v2.0.8\n   Compiling unindent v0.2.4\n   Compiling rustls v0.23.46\n   Compiling hkdf v0.12.4\n   Compiling ndarray v0.16.1\n   Compiling ghash v0.6.0\n   Compiling chacha20 v0.9.1\n   Compiling sha2 v0.10.9\n   Compiling pyo3-macros v0.23.5\n   Compiling ctr v0.10.1\n   Compiling aes v0.9.4\n   Compiling aead v0.6.1\n   Compiling rustc-hash v2.1.3\n   Compiling aes-gcm v0.11.1\n   Compiling pgw-core-rs v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-core-rs)\n   Compiling pgw-lane v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-lane)\n   Compiling numpy v0.23.0\n   Compiling rustls-webpki v0.103.17\n   Compiling pgw-fast v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-fast)\n    Finished `release` profile [optimized] target(s) in 47.36s\n   Compiling pgw-ntt v0.1.0 (/tmp/pgwsrc/pgw/rust/pgw-ntt)\n    Finished `release` profile [optimized] target(s) in 3.33s\n"
+  },
+  "cpu_info": {
+   "rc": 0,
+   "seconds": 0.4,
+   "tail": "    MIG M. |\n|=========================================+========================+======================|\n|   0  Tesla T4                       Off |   00000000:00:04.0 Off |                    0 |\n| N/A   48C    P8              9W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n|   1  Tesla T4                       Off |   00000000:00:05.0 Off |                    0 |\n| N/A   45C    P8              9W /   70W |       3MiB /  15360MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n\n---stderr---\n"
+  },
+  "pack_q05": {
+   "rc": 0,
+   "seconds": 27.7,
+   "tail": "packed q05 fingerprint 9d3bc3567550655b3214862df1017beeb9cf6af357d97ad43fe5d3850ce08f50\n\n---stderr---\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n2026-11-21 02:26:50,535 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 7 files:  57%|\u2588\u2588\u2588\u2588\u2588\u258b    | 4/7 [00:00<00:00, 23.20it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:06<00:00,  1.18s/it]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:06<00:00,  1.01it/s]\n2026-11-21 02:26:57,423 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-0.5B-Instruct (qwen2, 24 layers) -> q05\n2026-11-21 02:27:09,478 INFO pgw.modelpack.packer: wrote linears-00000-of-00001.safetensors (96 linear groups)\n2026-11-21 02:27:14,804 INFO pgw.modelpack.packer: packed q05: 24 layers, 1 linear shards, fingerprint 9d3bc3567550 (17.4s)\n"
+  },
+  "pack_q15": {
+   "rc": 0,
+   "seconds": 76.1,
+   "tail": "packed q15 fingerprint 903498acbd9b176eefbb937e2ed6c06a9acf8dafc942f29083559632e11fbb6d\n\n---stderr---\n\nFetching 7 files:   0%|          | 0/7 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n2026-11-21 02:27:17,543 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 7 files:  57%|\u2588\u2588\u2588\u2588\u2588\u258b    | 4/7 [00:00<00:00, 34.56it/s]\nFetching 7 files:  86%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258c | 6/7 [00:20<00:00, 34.56it/s]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:21<00:00,  3.77s/it]\nFetching 7 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 7/7 [00:21<00:00,  3.13s/it]\n2026-11-21 02:27:39,365 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-1.5B-Instruct (qwen2, 28 layers) -> q15\n2026-11-21 02:28:21,651 INFO pgw.modelpack.packer: wrote linears-00000-of-00001.safetensors (112 linear groups)\n2026-11-21 02:28:30,762 INFO pgw.modelpack.packer: packed q15: 28 layers, 1 linear shards, fingerprint 903498acbd9b (51.4s)\n"
+  },
+  "pack_q3": {
+   "rc": 0,
+   "seconds": 146.9,
+   "tail": "packed q3 fingerprint f899b488fa92e89a989c1e7ba5e6542bfaf8fa62d982c8ab5c18e20b4efc5a41\n\n---stderr---\n\nFetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n2026-11-21 02:28:33,525 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.\n\nFetching 9 files:  44%|\u2588\u2588\u2588\u2588\u258d     | 4/9 [00:00<00:00, 34.63it/s]\nFetching 9 files:  78%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u258a  | 7/9 [00:20<00:00, 34.63it/s]\nFetching 9 files:  89%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2589 | 8/9 [00:31<00:04,  4.58s/it]\nFetching 9 files: 100%|\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588| 9/9 [00:31<00:00,  3.47s/it]\n2026-11-21 02:29:04,711 INFO pgw.modelpack.packer: packing Qwen/Qwen2.5-3B-Instruct (qwen2, 36 layers) -> q3\n2026-11-21 02:30:22,001 INFO pgw.modelpack.packer: wrote linears-00000-of-00002.safetensors (111 linear groups)\n2026-11-21 02:30:45,283 INFO pgw.modelpack.packer: wrote linears-00001-of-00002.safetensors (33 linear groups)\n2026-11-21 02:30:57,487 INFO pgw.modelpack.packer: packed q3: 36 layers, 2 linear shards, fingerprint f899b488fa92 (112.8s)\n"
+  },
+  "accept_q05_lookup": {
+   "rc": 0,
+   "seconds": 1813.7,
+   "tail": "nerator_checks\": [\n  {\n   \"R\": 3,\n   \"temperature\": 0.0,\n   \"drafter\": \"lookup\",\n   \"identical_to_plain\": true,\n   \"tokens_per_pass\": 1.083,\n   \"draft_ms_per_pass\": 0.25,\n   \"tokens\": 679,\n   \"passes\": 623.0,\n   \"accepted\": 52.0,\n   \"draft_ms\": 167.47,\n   \"draft_calls\": 675.0,\n   \"dummy_passes\": 52.0,\n   \"spec_wall_s\": 148.11,\n   \"plain_wall_s\": 137.29\n  },\n  {\n   \"R\": 3,\n   \"temperature\": 0.7,\n   \"drafter\": \"lookup\",\n   \"identical_to_plain\": true,\n   \"tokens_per_pass\": 1.109,\n   \"draft_ms_per_pass\": 0.25,\n   \"tokens\": 663,\n   \"passes\": 595.0,\n   \"accepted\": 65.0,\n   \"draft_ms\": 167.71,\n   \"draft_calls\": 660.0,\n   \"dummy_passes\": 65.0,\n   \"spec_wall_s\": 178.16,\n   \"plain_wall_s\": 148.9\n  },\n  {\n   \"R\": 4,\n   \"temperature\": 0.0,\n   \"drafter\": \"lookup\",\n   \"identical_to_plain\": true,\n   \"tokens_per_pass\": 1.094,\n   \"draft_ms_per_pass\": 0.25,\n   \"tokens\": 679,\n   \"passes\": 617.0,\n   \"accepted\": 58.0,\n   \"draft_ms\": 166.67,\n   \"draft_calls\": 675.0,\n   \"dummy_passes\": 58.0,\n   \"spec_wall_s\": 148.78,\n   \"plain_wall_s\": 138.57\n  },\n  {\n   \"R\": 4,\n   \"temperature\": 0.7,\n   \"drafter\": \"lookup\",\n   \"identical_to_plain\": true,\n   \"tokens_per_pass\": 1.122,\n   \"draft_ms_per_pass\": 0.26,\n   \"tokens\": 663,\n   \"passes\": 588.0,\n   \"accepted\": 72.0,\n   \"draft_ms\": 170.63,\n   \"draft_calls\": 660.0,\n   \"dummy_passes\": 72.0,\n   \"spec_wall_s\": 190.29,\n   \"plain_wall_s\": 150.65\n  }\n ]\n}\n\n---stderr---\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\n"
+  },
+  "accept_q15_d05": {
+   "rc": 1,
+   "seconds": 2585.8,
+   "tail": "\"draft_ms_per_pass\": 108.87,\n   \"tokens\": 689,\n   \"passes\": 231.0,\n   \"accepted\": 455.0,\n   \"draft_ms\": 74686.6,\n   \"draft_calls\": 686.0,\n   \"dummy_passes\": 455.0,\n   \"spec_wall_s\": 97.27,\n   \"plain_wall_s\": 166.39\n  },\n  {\n   \"R\": 4,\n   \"temperature\": 0.7,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 2.972,\n   \"draft_ms_per_pass\": 166.15,\n   \"tokens\": 633,\n   \"passes\": 212.0,\n   \"accepted\": 418.0,\n   \"draft_ms\": 104675.1,\n   \"draft_calls\": 630.0,\n   \"dummy_passes\": 418.0,\n   \"spec_wall_s\": 120.06,\n   \"plain_wall_s\": 167.49\n  },\n  {\n   \"R\": 5,\n   \"temperature\": 0.0,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 3.314,\n   \"draft_ms_per_pass\": 142.38,\n   \"tokens\": 689,\n   \"passes\": 207.0,\n   \"accepted\": 479.0,\n   \"draft_ms\": 97671.21,\n   \"draft_calls\": 686.0,\n   \"dummy_passes\": 479.0,\n   \"spec_wall_s\": 99.08,\n   \"plain_wall_s\": 166.01\n  },\n  {\n   \"R\": 5,\n   \"temperature\": 0.7,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 3.481,\n   \"draft_ms_per_pass\": 219.58,\n   \"tokens\": 633,\n   \"passes\": 181.0,\n   \"accepted\": 449.0,\n   \"draft_ms\": 138333.78,\n   \"draft_calls\": 630.0,\n   \"dummy_passes\": 449.0,\n   \"spec_wall_s\": 120.32,\n   \"plain_wall_s\": 167.08\n  }\n ]\n}\n\n---stderr---\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\n"
+  },
+  "accept_q3_d05": {
+   "rc": 1,
+   "seconds": 2093.8,
+   "tail": ": 0.096\n  },\n  \"model\": {\n   \"2\": 1.758,\n   \"3\": 2.323,\n   \"4\": 2.769,\n   \"5\": 3.1,\n   \"6\": 3.308,\n   \"8\": 3.661,\n   \"p_first_draft_ok\": 0.776\n  },\n  \"lookup+model\": {\n   \"2\": 1.76,\n   \"3\": 2.323,\n   \"4\": 2.773,\n   \"5\": 3.1,\n   \"6\": 3.312,\n   \"8\": 3.667,\n   \"p_first_draft_ok\": 0.777\n  }\n },\n \"per_prompt_r4\": {\n  \"lookup+model\": [\n   2.0,\n   2.29,\n   3.53,\n   3.43,\n   2.33,\n   2.91,\n   2.7,\n   3.63,\n   3.25,\n   2.12,\n   3.36,\n   2.4,\n   2.49,\n   3.17,\n   2.89,\n   2.82,\n   3.34,\n   2.44,\n   2.7,\n   2.49,\n   2.59,\n   3.02,\n   2.49,\n   2.57\n  ]\n },\n \"generator_checks\": [\n  {\n   \"R\": 4,\n   \"temperature\": 0.0,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 2.727,\n   \"draft_ms_per_pass\": 108.25,\n   \"tokens\": 754,\n   \"passes\": 275.0,\n   \"accepted\": 475.0,\n   \"draft_ms\": 81186.97,\n   \"draft_calls\": 750.0,\n   \"dummy_passes\": 475.0,\n   \"spec_wall_s\": 139.45,\n   \"plain_wall_s\": 228.15\n  },\n  {\n   \"R\": 4,\n   \"temperature\": 0.7,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 2.834,\n   \"draft_ms_per_pass\": 165.41,\n   \"tokens\": 738,\n   \"passes\": 259.0,\n   \"accepted\": 475.0,\n   \"draft_ms\": 121410.2,\n   \"draft_calls\": 734.0,\n   \"dummy_passes\": 475.0,\n   \"spec_wall_s\": 168.65,\n   \"plain_wall_s\": 244.61\n  }\n ]\n}\n\n---stderr---\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\n"
+  },
+  "accept_q15_d05_cpu": {
+   "rc": 1,
+   "seconds": 308.6,
+   "tail": "0.827\n }\n}\n[spec_accept] check {\"R\": 4, \"temperature\": 0.0, \"drafter\": \"lookup+model\", \"identical_to_plain\": false, \"tokens_per_pass\": 2.797, \"draft_ms_per_pass\": 348.05, \"tokens\": 222, \"passes\": 79.0, \"accepted\": 142.0, \"draft_ms\": 76919.12, \"draft_calls\": 221.0, \"dummy_passes\": 142.0, \"spec_wall_s\": 54.4, \"plain_wall_s\": 53.22}\n{\n \"label\": \"q15_d05_cpu\",\n \"target\": \"q15\",\n \"draft\": \"/tmp/packs/q05\",\n \"draft_kind\": \"float32\",\n \"device\": \"cuda\",\n \"draft_device\": \"cpu\",\n \"max_tokens\": 128,\n \"prompts\": 4,\n \"torch\": \"2.11.0+cu130\",\n \"gpu\": \"Tesla T4\",\n \"greedy_s\": 93.62,\n \"answer_tokens\": [\n  31,\n  63,\n  128,\n  128\n ],\n \"sim_s\": 7.05,\n \"tokens_per_pass_sim\": {\n  \"lookup\": {\n   \"4\": 1.052,\n   \"p_first_draft_ok\": 0.061\n  },\n  \"lookup2\": {\n   \"4\": 1.081,\n   \"p_first_draft_ok\": 0.087\n  },\n  \"model\": {\n   \"4\": 2.908,\n   \"p_first_draft_ok\": 0.821\n  },\n  \"lookup+model\": {\n   \"4\": 2.932,\n   \"p_first_draft_ok\": 0.827\n  }\n },\n \"per_prompt_r4\": {\n  \"lookup+model\": [\n   2.73,\n   1.94,\n   3.74,\n   3.1\n  ]\n },\n \"generator_checks\": [\n  {\n   \"R\": 4,\n   \"temperature\": 0.0,\n   \"drafter\": \"lookup+model\",\n   \"identical_to_plain\": false,\n   \"tokens_per_pass\": 2.797,\n   \"draft_ms_per_pass\": 348.05,\n   \"tokens\": 222,\n   \"passes\": 79.0,\n   \"accepted\": 142.0,\n   \"draft_ms\": 76919.12,\n   \"draft_calls\": 221.0,\n   \"dummy_passes\": 142.0,\n   \"spec_wall_s\": 54.4,\n   \"plain_wall_s\": 53.22\n  }\n ]\n}\n\n---stderr---\nmodel on cuda: the LM head stays on the CPU (deterministic native kernel; same logits, bit for bit)\n"
+  }
+ },
+ "env": {
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "torch": "2.11.0+cu130",
+  "cuda": "13.0",
+  "gpu": "Tesla T4",
+  "gpu_count": 2,
+  "cpu_count": 4,
+  "mem": [
+   "MemTotal:       32869296 kB",
+   "MemFree:        26289348 kB"
+  ],
+  "disk": "Filesystem      Size  Used Avail Use% Mounted on\noverlay         8.0T  5.6T  2.5T  70% /\noverlay         8.0T  5.6T  2.5T  70% /\n/dev/loop2       20G  2.0M   20G   1% /kaggle/working\n"
+ },
+ "total_minutes": 119.1
+}

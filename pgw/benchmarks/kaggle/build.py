@@ -30,6 +30,7 @@ EXCLUDE_TOP = {"docs", "requirements", ".github", "ci", "research", "console", "
 QWEN05 = "Qwen/Qwen2.5-0.5B-Instruct"
 QWEN7 = "Qwen/Qwen2.5-7B-Instruct"
 QWEN3 = "Qwen/Qwen2.5-3B-Instruct"
+QWEN15 = "Qwen/Qwen2.5-1.5B-Instruct"
 
 #: Builds the Rust gateway kernels (pgw_fast) and the HE customer's NTT products (pgw_ntt) on the Kaggle VM.
 BUILD_NATIVE = {
@@ -400,6 +401,62 @@ JOBS: dict[str, dict] = {
             # run 1 (kept for reference, slow on Kaggle's CPU): he_cpu_int8 (--device cpu, PGW_HEMASK_ENGINE=cpu_int8),
             # local_cuda_factory_24l (--mode local), linears_1row / linears_32rows (--mode linears)
         )],
+    ]},
+    # S1: draft acceptance of exact strict speculation on chat prompts (benchmarks/spec_accept_bench.py): tokens
+    # per masked pass for each R (greedy, simulated over every R) and the real Generator in strict mode (greedy and
+    # sampled; tokens must equal plain decoding). Targets 0.5B (prompt lookup only: the demo today), 1.5B and 3B
+    # with the 0.5B draft on the GPU, and the 1.5B with the 0.5B draft on the CPU (draft time per pass on a
+    # CPU-only gateway). All on the exact PlainBackend (CUDA), which is bit-identical to the masked path.
+    "pgw-spec-accept": {"exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md",
+                                    "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                    "benchmarks/results"],
+                        "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
+        *[{"kind": "shell", "name": f"pack_{tag}", "required": True,
+           "cmd": f"python -m pgw.cli pack {repo} /tmp/packs/{tag} --name {tag} -q && rm -rf $HOME/.cache/huggingface",
+           "timeout": 1800} for tag, repo in (("q05", QWEN05), ("q15", QWEN15), ("q3", QWEN3))],
+        {"kind": "shell", "name": "accept_q05_lookup",
+         "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q05 --device cuda --label q05 "
+                "--check 3,4 --json /kaggle/working/accept_q05.json --dump-tokens /kaggle/working/tokens_q05.json",
+         "timeout": 3600},
+        {"kind": "shell", "name": "accept_q15_d05",
+         "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 "
+                "--device cuda --label q15_d05 --check 4,5 --json /kaggle/working/accept_q15_d05.json "
+                "--dump-tokens /kaggle/working/tokens_q15.json", "timeout": 5400},
+        {"kind": "shell", "name": "accept_q3_d05",
+         "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q3 --draft-pack /tmp/packs/q05 "
+                "--device cuda --label q3_d05 --check 4 --json /kaggle/working/accept_q3_d05.json "
+                "--dump-tokens /kaggle/working/tokens_q3.json", "timeout": 5400},
+        {"kind": "shell", "name": "accept_q15_d05_cpu",
+         "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 "
+                "--device cuda --draft-device cpu --label q15_d05_cpu --prompts 4 --rs 4 --check 4 --check-prompts 3 "
+                "--temperature 0 --json /kaggle/working/accept_q15_d05_cpu.json", "timeout": 3600},
+    ]},
+    # S1 follow-up: the gateway's real configuration (target float ops on the CPU, the only device that keeps verify
+    # passes bit-identical; the 0.5B draft on the T4): Generator exactness (greedy and sampled) and tokens per pass of
+    # the 1.5B target at R = 4 and 5, draft time per pass on the GPU next to a CPU target, and the gateway-side
+    # verify cost per row (spec_cost_bench, 1.5B shapes, masking included) on the Kaggle CPU.
+    "pgw-spec-accept-cpu": {"exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md",
+                                        "INTERFACE_NOTES.md", "STATUS.md", "benchmarks/gpu_validate.py",
+                                        "benchmarks/results"],
+                            "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
+        *[{"kind": "shell", "name": f"pack_{tag}", "required": True,
+           "cmd": f"python -m pgw.cli pack {repo} /tmp/packs/{tag} --name {tag} -q && rm -rf $HOME/.cache/huggingface",
+           "timeout": 1800} for tag, repo in (("q05", QWEN05), ("q15", QWEN15))],
+        {"kind": "shell", "name": "accept_q15_cpu_d05_gpu",
+         "cmd": "python benchmarks/spec_accept_bench.py --target-pack /tmp/packs/q15 --draft-pack /tmp/packs/q05 "
+                "--device cpu --draft-device cuda --label q15_cpu_d05_gpu --prompts 4 --check-prompts 4 "
+                "--max-tokens 96 --rs 2,3,4,5,6,8 --check 4,5 --json /kaggle/working/accept_q15_cpu.json",
+         "timeout": 9000},
+        {"kind": "shell", "name": "spec_cost_15b",
+         "cmd": "python benchmarks/spec_cost_bench.py --preset 1.5b --layers 4 --rows 4,5 --masking "
+                "--workdir /tmp/sc15 --json /kaggle/working/spec_cost_15b.json", "timeout": 3600},
+        {"kind": "shell", "name": "spec_cost_05b",
+         "cmd": "python benchmarks/spec_cost_bench.py --preset 0.5b --layers 4 --rows 4,5 --masking "
+                "--workdir /tmp/sc05 --json /kaggle/working/spec_cost_05b.json", "timeout": 3600},
     ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [

@@ -179,6 +179,35 @@ async def test_strict_speculation_bit_identical_and_pass_count(tiny_pack_dir: Pa
         assert rt.generator.spec_stats["dummy_passes"] > 0
 
 
+@pytest.mark.parametrize("draft", [False, True])
+async def test_strict_speculation_with_local_linears_is_exact(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                              make_store: Any, keys: ApiKeyStore, key: str,
+                                                              reference: dict[str, Any], draft: bool) -> None:
+    """The Modal demo's ``--spec-rows`` preset (``pgw_modal_boot.spec_options``) on top of its exact local
+    linears: same bits; the provider sees only gate_up/down items, every decode pass with spec_rows rows, and as
+    many passes as plain decoding (the local-linear run without speculation)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "deploy" / "modal"))
+    import pgw_modal_boot as boot
+
+    svc0 = InProcessService(gw_pack)
+    await _masked(tiny_pack_dir, tmp_path, make_store(400, name="plain"), svc0.transport, keys, key,
+                  {"local_linears": "attention"})
+    svc = InProcessService(gw_pack)
+    spec = boot.spec_options(4, str(tiny_pack_dir) if draft else None)
+    out, status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="spec"), svc.transport, keys, key,
+                                    {"local_linears": "attention", **spec})
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    assert status["speed"]["spec_rows"] == 4 and status["speed"]["local_linears"]["kinds"] == ["o", "qkv"]
+    assert {lid.split(".")[-1] for lid, _ in svc.received} == {"gate_up", "down"}
+    passes0 = [x.shape[0] for lid, x in svc0.received if lid == "0.gate_up"]
+    passes = [x.shape[0] for lid, x in svc.received if lid == "0.gate_up"]
+    assert passes == [4 if rows == 1 else rows for rows in passes0]
+    if draft:  # the tiny model drafts for itself: drafts are accepted, and dummy passes fill the schedule
+        assert rt.generator.spec_stats["spec_accepted"] > 0 and rt.generator.spec_stats["dummy_passes"] > 0
+
+
 async def test_strict_speculation_orders_a_conversation(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
                                                         make_store: Any, keys: ApiKeyStore, key: str) -> None:
     """Requests of one API key carry one conversation key; the engine gets it (dummy passes first)."""
@@ -394,6 +423,9 @@ def test_phase_a_settings_are_no_longer_pending() -> None:
     ({"local_rtt_ms": 0}, "greater than 0"),
     ({"lane_pool_wait_s": 2.0}, "less than or equal to 1"),
     ({"float_threads": 0}, "greater than or equal to 1"),
+    # speculation verifies on the CPU float path only (a GPU target's verify passes are not bit-identical)
+    ({"spec_rows": 4, "spec_strict_passes": True, "spec_lookup": 3, "device": "cuda"}, "needs device='cpu'"),
+    ({"spec_lookup": 3, "device": "cuda:0"}, "needs device='cpu'"),
 ])
 def test_speed_setting_validation(kw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -410,3 +442,11 @@ def test_network_path_labels() -> None:
     assert network_path("https://10.1.2.3") == "private 10.1.2.3"
     assert network_path("https://r500.modal.host:4000") == "public r500.modal.host"
     assert network_path(None) == "unknown" and network_path("ftp://x") == "unknown"
+
+
+def test_speculation_target_on_cpu_draft_anywhere() -> None:
+    """The draft may sit on a GPU (it only proposes); without speculation a GPU target stays allowed."""
+    c = _cfg(spec_rows=4, spec_strict_passes=True, spec_lookup=3, draft_device="cuda")
+    assert c.speculates and c.device == "cpu"
+    assert not _cfg(device="cuda").speculates
+    assert not _cfg(device="cuda", spec_lookup=3, spec_tokens=0).speculates

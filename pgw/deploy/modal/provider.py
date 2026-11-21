@@ -1,6 +1,7 @@
 """Party 1 on Modal: the compute provider (``pgw-provider``; CPU by default, a GPU with ``launch.py --gpu``).
 
-The image installs pgw from this repository and packs Qwen2.5-0.5B-Instruct once at build time.
+The image installs pgw from this repository and packs the target once at build time (Qwen2.5-0.5B-Instruct by
+default; ``launch.py --model`` / ``PGW_MODAL_MODEL`` picks a larger Qwen2.5 target for strict speculation).
 :func:`serve` opens a raw TCP tunnel (``modal.forward(..., unencrypted=True)``: Modal forwards bytes and
 does not terminate TLS, so TLS runs end to end between the customer's gateway and this service),
 creates a fresh PKI for the tunnel's host name, starts ``pgw service serve`` with production settings,
@@ -21,10 +22,22 @@ import modal
 HERE = Path(__file__).resolve().parent
 # Inside the container this file is /root/<name>.py and the source tree is not there (nor needed).
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
-MODEL_REPO = "Qwen/Qwen2.5-0.5B-Instruct"
-MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"  # pinned: both parties must pack the same bytes
-MODEL_NAME = "qwen2.5-0.5b-instruct"
+# The served target, fixed at deploy time (launch.py --model, or PGW_MODAL_MODEL); default the 0.5B. Same table as
+# pgw_modal_boot.MODELS (a test checks it): revisions are pinned because both parties must pack the same bytes.
+MODELS = {
+    "qwen2.5-0.5b-instruct": ("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
+    "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
+    "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
+}
+MODEL_NAME = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
+if MODEL_NAME not in MODELS:
+    raise ValueError(f"PGW_MODAL_MODEL={MODEL_NAME!r}: use one of {', '.join(MODELS)}")
+MODEL_REPO, MODEL_REVISION = MODELS[MODEL_NAME]
 PACK = "/opt/packs/" + MODEL_NAME
+#: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
+#: the deploy shell's environment, so MODEL_NAME (hence PACK and the "model" published to the customer) would fall
+#: back to the 0.5B there; the image's environment carries them instead.
+RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME}
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
 DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
@@ -74,7 +87,7 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
-    .env({"PYTHONUNBUFFERED": "1"})
+    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
 )
 

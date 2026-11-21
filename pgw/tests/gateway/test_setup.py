@@ -342,3 +342,17 @@ def test_setup_model_options_accept_only_speed_settings(tmp_path: Path) -> None:
     for bad in ({"freivalds_rate": 0.5}, {"mode": "plain"}, {"service_url": "https://evil.example"}):
         with pytest.raises(ValidationError, match="cannot be preset"):
             _settings(tmp_path, setup_model_options=bad)
+
+
+def test_setup_model_options_enable_strict_speculation_only(tmp_path: Path) -> None:
+    """A preset draft source (prompt lookup or a draft pack) must come with strict fixed rows: presets never
+    enable the variable-row mode, whose row and pass counts depend on the text."""
+    from pydantic import ValidationError
+
+    for bad in ({"spec_lookup": 4}, {"draft_pack_path": "/opt/packs/draft"}, {"spec_lookup": 4, "spec_rows": 3},
+                {"draft_pack_path": "/d", "spec_rows": 3, "spec_strict_passes": False}):
+        with pytest.raises(ValidationError, match="strict"):
+            _settings(tmp_path, setup_model_options=bad)
+    ok = {"spec_lookup": 4, "draft_pack_path": "/opt/packs/draft", "draft_device": "cuda", "spec_rows": 4,
+          "spec_strict_passes": True}
+    assert _settings(tmp_path, setup_model_options=ok).setup_model_options == ok

@@ -166,6 +166,24 @@ def client_timing(status: dict[str, Any], model: str | None = None) -> dict[str,
     return {}
 
 
+def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3.0, timeout_s: float = 600.0,
+              poll_s: float = 1.0) -> float:
+    """Wait until the model's round-trip counters (``client_timing``) have not moved for ``quiet_s``: with
+    strict speculation, the dummy passes after an answer are done. Returns the seconds waited (the
+    timeout is not an error: the next chat of the conversation then waits for them inside the gateway)."""
+    t0 = time.time()
+    last = client_timing(admin_get(base_url, admin_token, "/admin/status"), model)
+    still = time.time()
+    while time.time() - t0 < timeout_s:
+        time.sleep(poll_s)
+        cur = client_timing(admin_get(base_url, admin_token, "/admin/status"), model)
+        if cur != last:
+            last, still = cur, time.time()
+        elif time.time() - still >= quiet_s:
+            break
+    return time.time() - t0
+
+
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process)."""
     import asyncio

@@ -284,14 +284,111 @@ logprobs) and shows the provider nothing new:
   self-checked bit-identical at start-up.
 
 Not used here: the trip lane (`lane`; it is a Unix socket for a service on the gateway's host, and the
-provider is remote) and strict speculation (`spec_rows` + `spec_strict_passes`). The demo has no draft
-model and its chat barely repeats the prompt, so prompt lookup would accept almost nothing; strict mode
-shows the provider as many passes either way, while each pass would carry `spec_rows` masked rows
-(that many times the mask supply of the encrypted factory).
+provider is remote). Strict speculation is available but off by default; see the next section.
 
 `launch.py --e2e` prints the settings in effect (`local_linears` decision, start-up RTT, round trips
 per token of the warm chat) next to `trip_latency`; the per-trip gate is unchanged (fewer trips per
 token, same per-trip latency).
+
+## Strict speculation (`--spec-rows`, `--model`, `--spec-draft`; off by default)
+
+Every token costs one pass of sequential round trips (49 for the 0.5B with local attention linears), so over
+the tunnel the trip time sets the chat speed (about 1 token/s at 17 ms per trip). Strict speculation
+(`spec_rows` + `spec_strict_passes`) verifies R - 1 draft tokens in the same pass, so a pass yields
+`accepted + 1` tokens at the same number of trips. The masked target decides every token: answers stay
+bit-identical (the `--e2e` comparison still applies). The provider sees exactly R rows in every decode pass,
+and after the answer the gateway runs mask-carrying dummy passes on random data until it has seen as many
+passes as tokens generated, at the same per-pass cost. So the provider sees fixed rows and the same pass
+schedule as without speculation. Masks are taken the same way whatever the text (R slots per generated
+token), so the factory's requests reveal nothing either.
+
+```bash
+# 1.5B target on the provider's T4, 0.5B draft on the customer's CPU (about $1.05/h for the pair)
+python launch.py --gpu T4 --model qwen2.5-1.5b-instruct --spec-draft --spec-rows 4 --e2e
+# the same with the draft (and the mask factory) on a customer T4: faster, about $1.64/h
+python launch.py --gpu T4 --customer-gpu T4 --model qwen2.5-1.5b-instruct --spec-draft --spec-rows 4 --e2e
+```
+
+* `--spec-rows R` (runtime, 2-8): presets strict speculation with prompt lookup (and the draft with
+  `--spec-draft`) in the wizard's `models.json`.
+* `--model` (deploy time, `PGW_MODAL_MODEL`): the target the provider packs at image build and the customer
+  packs in the wizard (pinned revisions: `qwen2.5-0.5b-instruct` (default), `qwen2.5-1.5b-instruct`,
+  `qwen2.5-3b-instruct`). A larger target or the draft gives the customer 16 GiB instead of 8.
+* `--spec-draft` (deploy time, `PGW_MODAL_DRAFT=1`): packs Qwen2.5-0.5B-Instruct (public weights, same
+  tokenizer) into the customer image as the draft. It runs in plaintext on the gateway only: on its CPU, or on
+  its GPU with `--customer-gpu T4`. It is refused with the 0.5B target: a draft as large as the target would
+  mean the gateway computes the whole model itself.
+* All three apply to `--placement colocated` too: `colocated.py` packs the same target, bakes the draft into
+  its image and passes `--spec-rows` to its gateway; the draft runs on the gateway's CPU there (the gateway's
+  process sees no GPU). The container gets the provider's 6 GiB plus the gateway's 8 or 16 GiB.
+
+The gateway's target float ops stay on its CPU: speculation is refused for a GPU target device, because a
+GPU's float kernels give results that depend on the rows of a pass (Kaggle T4: a CUDA target's greedy answers
+changed once drafts were accepted). Only the draft may use a GPU.
+
+**Measured acceptance** (Kaggle T4, `benchmarks/spec_accept_bench.py`, 24 chat prompts, 128 tokens, greedy;
+tokens per pass simulated over the target's exact answers; the real `Generator` in strict mode agrees within
+a few percent, greedy and sampled at T = 0.7). Raw results are in `benchmarks/results/kaggle/run28_spec_accept`
+and `run29_spec_accept_cpu`.
+
+| target, drafter | R = 2 | R = 3 | R = 4 | R = 5 | R = 6 | R = 8 |
+|---|---|---|---|---|---|---|
+| 0.5B, prompt lookup (today's demo) | 1.06 | 1.08 | 1.09 | 1.09 | 1.09 | 1.10 |
+| 1.5B, 0.5B draft (+ lookup) | 1.80 | 2.44 | 2.90 | 3.29 | 3.67 | 4.06 |
+| 3B, 0.5B draft (+ lookup) | 1.76 | 2.32 | 2.77 | 3.10 | 3.31 | 3.67 |
+
+Prompt lookup alone barely helps the 0.5B demo (chat answers rarely copy the prompt): about 9% fewer passes
+for R times the masks. It is not worth it there. The 0.5B draft agrees with the 1.5B on about 81% of tokens.
+The draft costs about 110 ms per pass at R = 4 on a T4 (float16; three draft steps plus catch-up; 142 ms at
+R = 5) and about 350 ms on a 4-vCPU CPU (float32).
+
+In the gateway's real configuration (target float ops on the CPU, draft on a T4; Kaggle run29, 4 prompts, 96
+tokens) the strict `Generator` at R = 4 gave answers identical to plain decoding, greedy and sampled, at 2.84
+and 2.78 tokens per pass, with 111 ms (greedy) and 169 ms (sampled) of draft time per pass.
+
+**Estimated answer speed** (tokens per second while the answer streams). These are estimates, not Modal
+measurements. A pass costs `trips x RTT + gateway work + draft`. The trips are 49 for the 0.5B and 57 for the
+1.5B (two per layer plus the head). The gateway work is the 170 ms per token the live 0.5B demo spends beyond
+its trips, plus the measured extra float work of the 1.5B and of R rows (Kaggle CPU, `spec_cost_bench.py`):
+about 200 ms at R = 1 and 290 ms at R = 4.
+
+| configuration | trips at 17 ms (tunnel today) | trips at 2 ms |
+|---|---|---|
+| 0.5B, no speculation (today) | 1.0 (measured) | 3.7 |
+| 1.5B, no speculation | 0.86 | 3.2 |
+| 1.5B, R = 4, 0.5B draft on a customer T4 | **2.1** | **5.5** |
+| 1.5B, R = 4, 0.5B draft on the customer CPU | 1.7 | 3.7 |
+| 1.5B, R = 5, draft on a T4 | 2.2 | 5.3 |
+
+R = 4 is the default choice: R = 5 gains about 5% at 17 ms, loses at 2 ms and takes 25% more masks. The 3B
+(73 trips, 2.77 tokens per pass) comes out at about 1.6 tokens/s at 17 ms.
+
+**Costs and limits.**
+
+* Price: provider T4 (2 cores) about $0.73/h; customer 4 vCPU and 16 GiB about $0.32/h (CPU draft) or
+  $0.91/h with a T4 for the draft. The pair costs about $1.05/h (CPU draft) or $1.64/h (GPU draft).
+* Masks: every decode pass, dummy passes included, takes R slots, so a request reserves
+  `prompt + max_tokens + (max_tokens - 1) x (R - 1)` slots up front (`launch.spec_budget`). A slot of the
+  1.5B is about 2.1 times the 0.5B's bytes (5.9 MB of encrypted supply against 2.8 MB). Over the tunnel the
+  encrypted factory supplied about 2 slots/s for the 0.5B, which suggests about 1 slot/s for the 1.5B. At R = 4
+  that is about 0.25 generated tokens per second of supply. So **the mask supply, not the round trips, limits a
+  sustained chat**: one 128-token answer with a 50-token prompt reserves 559 slots, about 10 minutes of supply.
+  The scripted `--e2e` waits for both chats' slots before chatting (`pgw_modal_boot.e2e_min_masks`). Filler rows
+  without masks (padding) would cut this to about R / (tokens per pass) slots per token. They are not used:
+  with the encrypted factory on the provider, the slots taken would then reveal how many passes the answer
+  took.
+* The dummy passes run after the answer has streamed: one full pass (drafter included) for every token the
+  drafts saved, i.e. about two thirds of the answer's tokens at R = 4. The next request of the same
+  conversation (API key) waits for them: about 110 s after a 128-token answer of the 1.5B at 17 ms per trip
+  (85 passes of about 1.3 s), about 40 s at 2 ms. Users spend part of that time reading; the total provider
+  time per conversation is that of plain decoding at R rows.
+* One-time setup grows with the target: the provider packs it in its image; the customer downloads and packs
+  it in the wizard (about 1 minute on Kaggle for the 1.5B, 2 for the 3B). The encrypted-mask hint is about
+  16 GB for the 1.5B (7.5 GB for the 0.5B).
+
+So, with the trips at 17 ms, the 1.5B and its draft answer about twice as fast as the 0.5B demo does today,
+with a larger model. Mask supply over the tunnel limits it to a few chats per session, so it stays opt-in.
+On i6pn or a faster link, both the speed-up and the mask supply improve.
 
 ## Configuration choices
 

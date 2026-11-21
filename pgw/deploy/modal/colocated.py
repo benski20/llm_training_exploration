@@ -46,10 +46,24 @@ import modal
 HERE = Path(__file__).resolve().parent
 # Inside the container this file is /root/<name>.py and the source tree is not there (nor needed).
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
-MODEL_REPO = "Qwen/Qwen2.5-0.5B-Instruct"
-MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"  # pinned: the same bytes as provider.py
-MODEL_NAME = "qwen2.5-0.5b-instruct"
+# The served target, fixed at deploy time (launch.py --model, or PGW_MODAL_MODEL); default the 0.5B. Same table as
+# provider.py / pgw_modal_boot.MODELS (a test checks it): revisions are pinned (the same bytes as provider.py).
+MODELS = {
+    "qwen2.5-0.5b-instruct": ("Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"),
+    "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
+    "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
+}
+MODEL_NAME = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
+if MODEL_NAME not in MODELS:
+    raise ValueError(f"PGW_MODAL_MODEL={MODEL_NAME!r}: use one of {', '.join(MODELS)}")
+MODEL_REPO, MODEL_REVISION = MODELS[MODEL_NAME]
 PACK = "/opt/packs/" + MODEL_NAME
+# Strict speculation with a draft model (launch.py --spec-draft; PGW_MODAL_DRAFT=1 at deploy time), as in
+# customer.py: a pack of Qwen2.5-0.5B-Instruct the gateway runs in plaintext (here on the CPU: the gateway's
+# process sees no GPU) to propose tokens. Default: no draft (prompt lookup only).
+DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
+DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
+DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
 DICT_NAME = "pgw-live"
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
@@ -61,8 +75,9 @@ if GPU is not None and GPU.split(":")[0].upper() == "L4":
 #: Cores per party, as in the two-container apps: the provider 2 with a GPU (4 without), the gateway 4.
 PROVIDER_CPUS = float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if GPU else 4.0))
 GATEWAY_CPUS = 4.0
-#: Memory: the provider's 6 GiB plus the gateway's 8 GiB.
-MEMORY_MIB = 6144 + 8192
+#: Memory: the provider's 6 GiB plus the gateway's (8 GiB; 16 GiB with a target larger than the 0.5B or the draft,
+#: = customer.py's MEMORY_MIB / pgw_modal_boot.customer_memory_mib).
+MEMORY_MIB = 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192)
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
@@ -70,6 +85,11 @@ PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: TLS end to end) if dropping to the party users fails in
 #: Modal's container runtime (e.g. GPU device permissions). Weaker isolation; reported in the result.
 SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
+#: Deploy-time choices the container needs at run time. Modal re-imports this file inside the container without
+#: the deploy shell's environment, so MODEL_NAME / PACK would fall back to the 0.5B there and DRAFT to False (the
+#: baked draft never used); the image's environment carries them instead (as RUNTIME_ENV in customer.py).
+RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT else "0",
+               "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: Both parties' logs, written by the (root) parent process: 0700 root, files 0600.
 LOGS = Path("/var/log/pgw")
@@ -94,11 +114,17 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface && chmod -R a+rX /opt/packs")
+)
+if DRAFT:
+    image = image.run_commands(
+        f"python -m pgw.cli pack {DRAFT_REPO} {DRAFT_PACK} --name draft --revision {DRAFT_REVISION} -q"
+        " && rm -rf /root/.cache/huggingface && chmod -R a+rX /opt/packs")
+image = (
+    image
     # one Unix user per party (own group, no login shell)
     .run_commands(f"useradd --system --user-group --shell /usr/sbin/nologin --no-create-home {PROVIDER_USER}",
                   f"useradd --system --user-group --shell /usr/sbin/nologin --no-create-home {CUSTOMER_USER}")
-    .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1",
-          "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"})
+    .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", **RUNTIME_ENV})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
@@ -110,7 +136,8 @@ app = modal.App("pgw-colocated", image=image)
 
 @app.function(gpu=GPU, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
               max_containers=1, min_containers=0, retries=0, region=REGION)
-def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
+def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
+         spec_rows: int = 0) -> dict:
     """Provider service and customer gateway in this container, over loopback TLS (module docstring)."""
     import sys
 
@@ -153,9 +180,12 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         # ---- customer gateway: own user, own directory, no GPU (pgw_modal_boot.start_gateway_party)
         with modal.forward(GATEWAY_PORT) as tunnel:
             gurl = tunnel.url
+            # launch.py --spec-rows: strict speculation (prompt lookup; plus the image's draft with --spec-draft,
+            # on the CPU: the gateway's process sees no GPU)
+            spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
-                                                                "local_linears": local_linears})
+                                                                "local_linears": local_linears, **spec})
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,
@@ -166,7 +196,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 import e2e_driver
 
                 result["e2e"] = e2e_driver.run(live, run_id, gurl, token, deadline,
-                                               f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config")
+                                               f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
+                                               spec_rows=spec_rows)
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"

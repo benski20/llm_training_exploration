@@ -47,6 +47,21 @@ REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 # factory's encrypt/decrypt GEMMs and random-number generation on the customer's own GPU (customer side: the
 # provider still sees only ciphertexts). Default none (CPU torch image, CPU products).
 CUSTOMER_GPU = os.environ.get("PGW_MODAL_CUSTOMER_GPU") or None
+# Strict speculation with a draft model (launch.py --spec-draft; PGW_MODAL_DRAFT=1 at deploy time): the image then
+# holds a pack of Qwen2.5-0.5B-Instruct (public weights, same tokenizer as the Qwen2.5 targets) that the gateway
+# runs in plaintext to propose tokens; it never leaves this container. Default: no draft (prompt lookup only).
+DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
+DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
+DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
+# A target larger than the 0.5B (launch.py --model, PGW_MODAL_MODEL at deploy time) or the draft needs more memory:
+# 16 GiB instead of 8 (= pgw_modal_boot.customer_memory_mib; a test checks they agree).
+MODEL = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
+MEMORY_MIB = 16384 if DRAFT or MODEL != "qwen2.5-0.5b-instruct" else 8192
+#: Deploy-time choices the gateway reads at run time (DRAFT: use the baked draft; CUSTOMER_GPU: run it on the GPU).
+#: Modal re-imports this file inside the container without the deploy shell's environment, so without these in
+#: the image's environment DRAFT would read False there and the draft would never be used.
+RUNTIME_ENV = {"PGW_MODAL_DRAFT": "1" if DRAFT else "0", "PGW_MODAL_CUSTOMER_GPU": CUSTOMER_GPU or "",
+               "PGW_MODAL_MODEL": MODEL}
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -74,6 +89,14 @@ image = (
           if CUSTOMER_GPU else []),
     )
     .env({"PYTHONUNBUFFERED": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1", "OMP_WAIT_POLICY": "PASSIVE"})
+)
+if DRAFT:
+    image = image.run_commands(
+        f"python -m pgw.cli pack {DRAFT_REPO} {DRAFT_PACK} --name draft --revision {DRAFT_REVISION} -q"
+        " && rm -rf /root/.cache/huggingface")
+image = (
+    image
+    .env(RUNTIME_ENV)
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")
@@ -82,23 +105,26 @@ image = (
 
 app = modal.App("pgw-customer", image=image)
 
-_FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1,
+_FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S, max_containers=1,
                  min_containers=0, retries=0, region=REGION)
 
 
 @app.function(**_FN, i6pn=False)
-def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
+def gateway(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
+            spec_rows: int = 0) -> dict:
     """The customer gateway; reaches the provider through its public TCP tunnel."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=False, local_linears=local_linears)
+    return _gateway(run_id, ttl_s, e2e, i6pn=False, local_linears=local_linears, spec_rows=spec_rows)
 
 
 @app.function(**_FN, i6pn=True)
-def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto") -> dict:
+def gateway_i6pn(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
+                 spec_rows: int = 0) -> dict:
     """The same gateway on Modal's private IPv6 network (pairs with the provider's ``serve_i6pn``)."""
-    return _gateway(run_id, ttl_s, e2e, i6pn=True, local_linears=local_linears)
+    return _gateway(run_id, ttl_s, e2e, i6pn=True, local_linears=local_linears, spec_rows=spec_rows)
 
 
-def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: str = "auto") -> dict:
+def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: str = "auto",
+             spec_rows: int = 0) -> dict:
     import sys
 
     t_boot = time.time()
@@ -117,8 +143,10 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: s
         # speed settings for the wizard's models.json (boot.GATEWAY_MODEL_OPTIONS; launch.py --local-linears)
         # with a customer GPU the local qkv/o integer products may run on it ('auto': only when a start-up
         # check finds them identical to the CPU's and faster; the outputs are the same bits either way)
+        # launch.py --spec-rows: strict speculation (prompt lookup; plus the image's draft with --spec-draft)
+        spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, "cuda" if CUSTOMER_GPU else None)
         opts = {**boot.GATEWAY_MODEL_OPTIONS, "local_linears": local_linears,
-                **({"local_linears_device": "auto"} if CUSTOMER_GPU else {})}
+                **({"local_linears_device": "auto"} if CUSTOMER_GPU else {}), **spec}
         env = boot.gateway_env(root / "config", root / "data", port, opts)
         gw, token = boot.start_gateway(env, root / "gateway.log")
         boot.wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
@@ -133,7 +161,7 @@ def _gateway(run_id: str, ttl_s: int, e2e: bool, *, i6pn: bool, local_linears: s
                 import e2e_driver
 
                 result["e2e"] = e2e_driver.run(live, run_id, url, token, deadline, f"http://127.0.0.1:{port}",
-                                               root / "config")
+                                               root / "config", spec_rows=spec_rows)
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"

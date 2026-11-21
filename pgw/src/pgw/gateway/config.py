@@ -42,8 +42,12 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
     "local_max_rows", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
-    "batch_lm_head", "engine_pingpong", "max_concurrent_sessions",
+    "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
 })
+#: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
+#: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,
+#: whose row and pass counts depend on how predictable the text is.
+_PRESET_DRAFT_SOURCES = ("spec_lookup", "draft_pack_path")
 
 #: Modes that run without the compute service (no privacy protocol involved). Development only.
 DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
@@ -340,9 +344,22 @@ class GatewayModelConfig(BaseModel):
                                  "(spec_lookup or draft_pack_path)")
             if self.spec_tokens == 0:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
+        if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":
+            # Verify passes are bit-identical to plain decoding only with the CPU float path: on a GPU the
+            # float kernels' results depend on how many rows a pass carries (Kaggle T4, 2026-11-21: greedy
+            # answers of a CUDA target diverged once drafts were accepted). The draft may use a GPU
+            # (draft_device): it only proposes, the target decides every token.
+            raise ValueError(f"model {self.name!r}: speculation (spec_lookup / draft_pack_path) needs device='cpu' "
+                             "for the target (verify passes are not bit-identical on a GPU); put the draft on the "
+                             "GPU with draft_device instead")
         if self.lane != "off" and self.mode != "masked":
             raise ValueError(f"model {self.name!r}: lane needs masked mode")
         return self
+
+    @property
+    def speculates(self) -> bool:
+        """Speculative decoding is on (a draft source and spec_tokens > 0)."""
+        return (self.spec_lookup > 0 or self.draft_pack_path is not None) and self.spec_tokens > 0
 
     def resolved_service_token(self) -> SecretStr | None:
         """The service bearer token: ``service_token`` or the stripped contents of ``service_token_file``.
@@ -610,6 +627,10 @@ class GatewaySettings(PGWSettings):
         if bad:
             raise ValueError(f"setup_model_options: {', '.join(bad)} cannot be preset (allowed: "
                              f"{', '.join(sorted(SETUP_MODEL_OPTION_KEYS))})")
+        drafts = [k for k in _PRESET_DRAFT_SOURCES if v.get(k) not in (None, 0, "", False)]
+        if drafts and (v.get("spec_rows") is None or v.get("spec_strict_passes") is not True):
+            raise ValueError(f"setup_model_options: {', '.join(drafts)} needs spec_rows and spec_strict_passes=true "
+                             "(presets enable strict fixed-row speculation only)")
         return v
 
     @field_validator("admin_token")
