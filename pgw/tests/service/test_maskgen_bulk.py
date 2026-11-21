@@ -212,6 +212,27 @@ def test_bulk_connection_cap(stub_server: Any) -> None:
             s.close()
 
 
+def test_bulk_waiter_gets_a_slot_freed_by_an_error(stub_server: Any) -> None:
+    """A caller waiting for a connection proceeds when another call drops its connection after an error."""
+    srv, _h, _ = stub_server
+    body, req = _req_body()
+    cli = BulkMaskgenClient("127.0.0.1", srv.port, ssl_context=None, server_hostname=None,
+                            authorization=f"Bearer {TOKEN_A}", max_conns=1, timeout_s=30.0)
+    try:
+        sock = cli._take()  # the only slot
+        out: list[Any] = []
+        t = threading.Thread(target=lambda: out.append(cli.call(body, req.request_id, bytes)))
+        t.start()
+        import time
+
+        time.sleep(0.2)
+        cli._drop(sock)  # what call() does after an error reply: the slot is free, the idle queue stays empty
+        t.join(10)
+        assert not t.is_alive() and out and out[0]
+    finally:
+        cli.close()
+
+
 def test_remote_falls_back_to_http_when_bulk_is_down() -> None:
     class _Http:
         def __init__(self) -> None:

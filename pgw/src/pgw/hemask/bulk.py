@@ -175,7 +175,20 @@ class BulkMaskgenClient:
                 self._open += 1
                 wait = False
         if wait:
-            return self._idle.get(timeout=self.timeout_s)
+            # poll: a connection dropped by another thread frees a slot without reaching the idle queue
+            deadline = time.monotonic() + self.timeout_s
+            while True:
+                try:
+                    return self._idle.get(timeout=0.05)
+                except queue.Empty:
+                    pass
+                with self._lock:
+                    if self._open < self.max_conns:
+                        self._open += 1
+                        break
+                if self._closed or time.monotonic() >= deadline:
+                    raise ServiceUnavailableError("no maskgen bulk connection became free",
+                                                  details={"bulk_transport": True})
         try:
             return self._connect()
         except BaseException:

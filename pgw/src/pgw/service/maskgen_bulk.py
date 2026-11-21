@@ -84,6 +84,7 @@ class MaskgenBulkServer:
         self._stop = threading.Event()
         self._conns: set[Any] = set()
         self._lock = threading.Lock()
+        self._refusers = threading.BoundedSemaphore(4)  # threads answering over-cap connections at most
         self._thread: threading.Thread | None = None
         self.requests = 0
         self.refused = 0
@@ -122,7 +123,11 @@ class MaskgenBulkServer:
                     self._conns.add(raw)
             if busy:
                 self.refused += 1
-                threading.Thread(target=self._refuse, args=(raw,), daemon=True).start()
+                if self._refusers.acquire(blocking=False):  # bounded: excess connections are just closed
+                    threading.Thread(target=self._refuse, args=(raw,), daemon=True).start()
+                else:
+                    with contextlib.suppress(OSError):
+                        raw.close()
                 continue
             threading.Thread(target=self._serve_conn, args=(raw,), name="pgw-maskgen-bulk", daemon=True).start()
 
@@ -144,6 +149,7 @@ class MaskgenBulkServer:
         finally:
             with contextlib.suppress(OSError):
                 raw.close()
+            self._refusers.release()
 
     def _subject(self, sock: Any) -> str | None:
         if not self.verify_peer or not isinstance(sock, ssl.SSLSocket):
