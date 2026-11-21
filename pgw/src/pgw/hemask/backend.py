@@ -295,6 +295,7 @@ class HEMaskBackend:
         self._dev_lock = threading.Lock()  # the device passes are not used from two threads at once
         self._busy = 0  # submitted jobs not finished yet (wall_s counts the time with at least one)
         self._busy_t0 = 0.0
+        self._remote_now = 0  # provider requests running now (submit path)
         self._stage_pools: tuple[ThreadPoolExecutor, ThreadPoolExecutor] | None = None
         self._stage_pools_lock = threading.Lock()
         log.info("encrypted mask factory: encryption/decryption on %s%s", self.engine,
@@ -480,10 +481,15 @@ class HEMaskBackend:
                 self.stats["wall_s"] += time.perf_counter() - self._busy_t0
 
     def _timed_remote(self, linear: str, b: np.ndarray) -> np.ndarray:
+        with self._stats_lock:  # requests with the provider at once (the serial path counts submitted ones)
+            self._remote_now += 1
+            self.stats["max_inflight"] = max(self.stats["max_inflight"], self._remote_now)
         t0 = time.perf_counter()
         try:
             return self.remote(linear, b)
         finally:
+            with self._stats_lock:
+                self._remote_now -= 1
             self._add_stats(remote_s=time.perf_counter() - t0)
 
     def submit(self, linear: str, r: torch.Tensor) -> HEJob:

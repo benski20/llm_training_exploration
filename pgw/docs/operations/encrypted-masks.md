@@ -30,7 +30,12 @@ chunk run in series, and a small segment (two 256-slot groups per linear, one re
 them. The provider receives the same requests (same ciphertexts, sizes and counts); only their start
 times move, and those follow from shape-dependent stage times. The decrypted masks are bit-identical and
 every row is still self-checked. `benchmarks/he_factory_overlap_bench.py` measures serial against
-overlapped configurations against a real service.
+overlapped configurations against a real service. Measured on a Kaggle T4 VM (4 vCPUs shared by
+gateway and service, 24 layers of Qwen2.5-0.5B shapes, `ntt_pre`): 512-slot segments 21.1 slots/s serial,
+26.4 at depth 4 with `PGW_FACTORY_HE_MAX_INFLIGHT=4`, 28.6 at depth 8 / inflight 4 (1.36x); depth 2 or 4
+with inflight 2 was *slower* (17.4 slots/s). 4096-slot segments: 20.0 -> 25.4 slots/s (depth 4 /
+inflight 4). All configurations were bit-identical to the plaintext factory. Keep depth 0 unless the
+gateway has spare cores, and pair a non-zero depth with inflight 4.
 
 `PGW_FACTORY_HE_ENCRYPT=ntt_pre` (default `dense`) keeps the public matrix in NTT form and encrypts
 about 10x faster on a CPU than the dense path on a T4, with bit-identical ciphertexts (needs the

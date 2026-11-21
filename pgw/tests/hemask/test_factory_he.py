@@ -158,8 +158,10 @@ def test_he_pipeline_overlaps_stages(tiny_pack: Any, tmp_path: Path) -> None:
     gen = MaskGenerator(tiny_pack, ring, device="cpu", remote=be)
     _collect(gen, 256, 256)
     assert prov.max_active >= 2
+    assert 2 <= be.stats["max_inflight"] <= 4  # concurrent requests, capped by max_inflight
     st = gen.last_stats.extra["he"]
-    assert st["remote_s"] > st["wall_s"]  # request time summed over threads exceeds the busy wall time
+    # (remote_s vs wall_s is not compared: under CPU load encryption/decryption can dominate the wall time)
+    assert st["jobs"] > 0 and st["remote_s"] > 0 and st["wall_s"] > 0
 
 
 @pytest.mark.parametrize("fail_at", [1, 3, 7])
