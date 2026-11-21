@@ -98,7 +98,7 @@ Same box, real factory loop (`gateway_gpu_bench.py --mode he`, 1 layer of 0.5B, 
 gateway, provider in process **on the same CPU**), **measured**: 4096-slot chunk, decrypt 2.15 s -> 0.54 s and
 wall 6.6 s -> 3.2 s (`dense` -> `auto`); 512-slot chunk, decrypt 0.45 s -> 0.30 s.
 
-Kaggle (`pgw-he-decrypt-m3`): KAGGLE_RESULTS_PENDING.
+GPU (T4/H100) numbers: not measured yet. The Kaggle job `pgw-he-decrypt-m3` exists but was not run (GPU session cap); measure with `benchmarks/gateway_gpu_bench.py --mode he` as listed in that job.
 
 ## 6. What is left
 
