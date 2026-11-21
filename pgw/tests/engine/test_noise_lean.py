@@ -71,6 +71,25 @@ def test_plan_call_draws_like_guard() -> None:
     assert ra.calls == 60 and not ra.alarm and not rb.alarm
 
 
+@pytest.mark.skipif(not core_native.native_available("noise_dup_keys"), reason="pgw_fast without noise_dup_keys")
+@pytest.mark.parametrize("ring", RINGS, ids=lambda r: r.name)
+@pytest.mark.parametrize("n", [64, 896, 18944])
+def test_native_fingerprints_equal_numpy(ring: RingParams, n: int) -> None:
+    """L2: guard_packed's native fingerprints (pgw_fast.noise_dup_keys) equal the numpy ones bit for bit."""
+    a = OutboundNoiseMonitor(ring, seed=3, always_sample_first=0, sample_rate=1e-9)
+    b = OutboundNoiseMonitor(ring, seed=3, always_sample_first=0, sample_rate=1e-9)
+    assert b._native_keys is not None
+    a._native_keys = None  # the numpy form
+    for i, rows in enumerate((1, 2, 9)):
+        payload = pack_ring(_uniform(rows, n, ring, 200 + i), ring)
+        a.guard_packed(payload, rows, n)
+        b.guard_packed(bytearray(payload) if i == 1 else payload, rows, n)
+    assert a._dup_seen == b._dup_seen and list(a._dup_order) == list(b._dup_order)
+    assert a.report().rows_checked == b.report().rows_checked == 12
+    with pytest.raises(IntegrityError):
+        b.guard_packed(pack_ring(_uniform(1, n, ring, 200), ring), 1, n)
+
+
 def test_guard_packed_rejects_bad_size() -> None:
     from pgw.core import ShapeError
 

@@ -49,8 +49,9 @@ def test_local_fast_equals_reference(qwen_pack: InMemoryPack, rows: int, lid: st
     be.close()
 
 
-def test_local_fast_only_for_decode_rows_and_k32(qwen_pack: InMemoryPack) -> None:
+def test_local_fast_only_for_decode_rows_and_k32(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
     lin = LinearId(0, LinearKind.QKV)
+    monkeypatch.setenv("PGW_LOCAL_NATIVE", "0")  # the numpy + torch form needs K = 32 (the native one does not)
     be = _backend(qwen_pack, RING_K40_A12)
     be.forward_local([LinearCall(lin, torch.randn(1, qwen_pack.arch.hidden_size))])
     assert be._local_fast_on is False and not be._local_fast_checked  # K40: reference path
@@ -89,6 +90,7 @@ def test_local_fast_self_check_failure_keeps_reference(qwen_pack: InMemoryPack,
 
 
 def test_local_fast_refuses_like_the_reference(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PGW_LOCAL_NATIVE", "0")  # patches the torch digit GEMM (tests/engine/test_local_native.py)
     be = _backend(qwen_pack)
     lid = LinearId(0, LinearKind.QKV)
     x = torch.randn(2, qwen_pack.arch.hidden_size)

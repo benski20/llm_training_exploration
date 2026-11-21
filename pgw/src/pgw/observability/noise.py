@@ -279,6 +279,8 @@ class OutboundNoiseMonitor:
         self._dup_seen: set[int] = set()
         self._dup_order: deque[int] = deque()
         self._dup_cols_cache: dict[int, np.ndarray] = {}
+        #: :meth:`guard_packed`'s fingerprints in one native call (``PGW_NOISE_NATIVE=0``: numpy).
+        self._native_keys = _native_dup_keys()
         self._clear_state()
         self._calls = 0
         self._sampled_calls = 0
@@ -418,8 +420,16 @@ class OutboundNoiseMonitor:
                 if self.config.duplicate_check:
                     cols = self._dup_columns(n)
                     if cols.size * self._dup_bits >= 64:
-                        vals = _packed_columns(payload, rows, n, nb, cols)
-                        self._dup_fold(vals >> np.uint64(k - self._dup_bits), rows, n, new_reasons)
+                        fast = self._native_keys
+                        if fast is not None:  # same keys as _dup_fold's, in one native call
+                            c = int(cols.size)
+                            groups = _DUP_GROUPS if c >= 2 * self._dup_cols_per_group else 1
+                            per = c // groups
+                            keys = fast(payload, rows, n, nb, cols, k - self._dup_bits, self._dup_mult, groups, per)
+                            self._dup_record(keys, rows, groups, new_reasons)
+                        else:
+                            vals = _packed_columns(payload, rows, n, nb, cols)
+                            self._dup_fold(vals >> np.uint64(k - self._dup_bits), rows, n, new_reasons)
             if new_reasons:
                 self._set_alarm(new_reasons)
         if new_reasons:
@@ -577,6 +587,10 @@ class OutboundNoiseMonitor:
             folded = np.bitwise_xor.reduce(v.reshape(top.shape[0], groups, per), axis=2)
             salts = np.array([(n * 0x9E3779B1 + (gi + 1) * 0x85EBCA77) & _M64 for gi in range(groups)], dtype=np.uint64)
             keys = _mix64(folded ^ salts)
+        self._dup_record(keys, t, groups, reasons)
+
+    def _dup_record(self, keys: np.ndarray, t: int, groups: int, reasons: list[str]) -> None:
+        """Count rows whose fingerprint (any group's key, uint64 ``(t, groups)``) was seen before."""
         keys_per_group = keys.T.tolist()
         seen, order = self._dup_seen, self._dup_order
         limit = self.config.duplicate_history_rows * groups
@@ -729,6 +743,15 @@ def _mix64(h: np.ndarray) -> np.ndarray:
     h = (h ^ (h >> _S27)) * _C2
     out: np.ndarray = h ^ (h >> _S31)
     return out
+
+
+def _native_dup_keys() -> Any:
+    """``pgw_fast.noise_dup_keys`` (bit-identical to ``_packed_columns`` + ``_dup_fold``'s keys), or None."""
+    if os.environ.get("PGW_NOISE_NATIVE", "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    from pgw.core import native
+
+    return getattr(native.fast, "noise_dup_keys", None) if native.fast is not None else None
 
 
 def _packed_columns(

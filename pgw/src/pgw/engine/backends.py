@@ -962,6 +962,12 @@ class MaskedBackend(LinearBackend):
         self._local_fast_on: bool | None = None
         self._local_fast_checked: dict[tuple[int, int, float, int], bool] = {}
         self._local_zero_r: dict[int, np.ndarray] = {}
+        #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
+        #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
+        self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
+        self._local_w8n: dict[str, np.ndarray] = {}
+        #: ``n * m`` from which a native local linear spreads its columns over the native pool.
+        self.local_pool_min_macs = 4 << 20
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
         self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
         if local_max_rows is not None and int(local_max_rows) < 1:
@@ -2123,8 +2129,12 @@ class MaskedBackend(LinearBackend):
         on = self._local_fast_on
         if on is None:
             ring = self.ring
+            native_ok = self._local_native and ring.k % 8 == 0 and 8 <= ring.k <= 56
+            if not native_ok:
+                self._local_native = False
             on = self._local_fast_on = (_env_flag("PGW_LOCAL_FAST", True) and native_available("trip_prepare_into")
-                                        and ring.k == 32 and ring.a <= 15 and cpu_int8_fast())
+                                        and ring.a <= 15
+                                        and (native_ok or (ring.k == 32 and cpu_int8_fast())))
         if not on:
             return False
         key = (meta.in_features, meta.out_features, float(meta.wnorm or 0.0), id(w))
@@ -2162,6 +2172,27 @@ class MaskedBackend(LinearBackend):
         so the same bits as :meth:`_local_reference` (self-checked per shape)."""
         ring = self.ring
         rows, n = xf.shape
+        if self._local_native and w.w8t.device.type == "cpu" and w.w8t.is_contiguous():
+            # pgw_fast.local_linear_into: the same quantizer (zero mask), the exact int8 product as one
+            # int16 x int8 GEMV with int64 flushes, the same range check and rescale; no temporaries
+            scale, bias, bound = self._consts(lid, meta)
+            w8n = self._local_w8n.get(lid.key)
+            if w8n is None:
+                w8n = self._local_w8n[lid.key] = w.w8t.numpy()
+            out = np.empty((rows, meta.out_features), dtype=np.float32)
+            sx = np.empty(rows, dtype=np.float64)
+            try:
+                status = native.fast.local_linear_into(
+                    xf, w8n, scale, bias, ring.k, ring.a, int(ring.cap or 0),
+                    float(meta.wnorm or 0.0) if ring.cap else 0.0, bound, sx, out,
+                    0 if n * meta.out_features >= self.local_pool_min_macs else 1)
+            except ValueError as exc:
+                if str(exc).startswith("ring_overflow"):
+                    raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                raise ShapeError(str(exc)) from exc
+            if status:
+                self._raise_status(int(status), 0, lid, rows, bound)
+            return torch.from_numpy(out)
         zeros = self._local_zero_r.get(n)
         if zeros is None or zeros.shape[0] < rows:
             zeros = self._local_zero_r[n] = np.zeros((self.local_fast_max_rows, n), dtype=np.int64)
