@@ -97,6 +97,35 @@ fewer sequential round trips per token (speculative decoding), not faster calls.
 
 Peak 1.24 T ring-MAC/s (K32A8, 256 rows). CPU int8 on the Kaggle host is about 0.6 G ring-MAC/s.
 
+## Gateway mask pipeline (store -> claims), CPU
+
+`benchmarks/mask_pipeline_bench.py`, K32A12C27, 32 concurrent sessions in batched decode (one row of every
+linear per session per step, `take_checked(lid, 1, checks=True)`), fsync on. Slots are full-model slots
+(7B: 5.56 MB of `W r` + 6.65 MB of `r` keystream per slot; 70B: 26.9 MB + 34.1 MB; the 70B rows ran 8 of 80
+layers and scale). Kaggle job `pgw-mask-pipeline` (CPU kernel, 4 vCPU Xeon 2.2 GHz = 2 cores x 2 HT), A/B
+against the base commit 2078450 on the same box, two runs each (both shown):
+
+| model | decode slots/s base | after (sequential `take_checked`) | after (`take_checked_many`, native batch) | `W r` GB/s base -> batch | close ms/session base -> after |
+|---|---|---|---|---|---|
+| Qwen2.5-0.5B | 106.8 / 104.0 | 130.1 / 136.8 (+27%) | 132.2 / 136.0 | 0.13 -> 0.17 | 11.7 -> 8.2 |
+| Qwen2.5-7B | 31.5 / 31.4 | 45.1 / 46.1 (+45%) | 51.8 / 54.0 (+68%) | 0.18 -> 0.30 | 17.5 -> 10.1 |
+| Llama-3-70B | 7.9 / 7.9 | 13.2 / 13.4 (+68%) | 15.1 / 14.8 (+89%) | 0.21 -> 0.40 | 12.2 -> 8.9 |
+
+Writer (factory side, native AES-GCM + `pwrite`, fsync): 0.15-0.19 GB/s on the Kaggle disk, 0.5-0.7 GB/s on
+the dev box (1.1-1.6 GB/s without fsync), unchanged (disk bound). Reserve: 16-18 ms per session on the Kaggle
+disk (one fsync'd SQLite transaction each). Wipe of consumed segments with `shred_zero_fill`: 0.22 GB/s on
+the Kaggle disk (7B: 1.4 GB in 6.4 s), a second full write of every consumed byte. In-memory ring
+(`--tier ring`, dev box, 7B 4 layers): writes 6.2-6.8 GB/s vs 1.1-1.6 GB/s into the store; decode +12%
+(AES and file reads go away; pad regeneration and per-row work stay).
+
+What changed: OpenSSL ChaCha20 writing the pad straight into the output (2-2.5x per core over the native
+single-thread keystream for decode-sized rows), next `W r` chunk decrypted into the zeroed previous buffer
+(no 1 MiB allocation + page faults per chunk), one copy of the Freivalds vectors per segment instead of per
+session (7B: 53 MB, 70B: 263 MB per session saved), numpy zeroization on close (torch `zero_` hands off to
+OpenMP: up to 130 ms per 7B close on a busy host), and the opt-in batched claim
+`pgw.maskstore.take_checked_many` (one `pgw_fast.claim_rows_many` call per step and linear, threads, GIL
+released). Every path is bit-identical to the reference derivation (`tests/maskstore/test_pipeline_throughput.py`).
+
 ## Tests on GPU
 
 | run | result |

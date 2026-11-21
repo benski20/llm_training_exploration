@@ -204,8 +204,10 @@ JOBS: dict[str, dict] = {
           for eng in ("cuda", "cpu_int8")],
     ]},
     # gateway mask pipeline (factory writer -> disk store -> batched decode claims -> wipe) on a quiet 4-vCPU
-    # box: A/B against the base commit (benchmarks/kaggle/_ab_base.patch, generated at build time: the reverse
-    # diff of the touched maskstore/prng files), plus the batched native claim. CPU only.
+    # box: A/B against a base commit, plus the batched native claim. CPU only. Before building, write the diff
+    # from the base to this tree of the files that differ (not committed):
+    #   git diff 2078450 --relative -- src/pgw/core/prng.py src/pgw/maskstore > benchmarks/kaggle/_ab_base.patch
+    # Results: benchmarks/RESULTS.md, "Gateway mask pipeline".
     "pgw-mask-pipeline": {"gpu": False,
                           "exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md",
                                       "INTERFACE_NOTES.md", "STATUS.md", "src/pgw/hemask", "src/pgw/console",

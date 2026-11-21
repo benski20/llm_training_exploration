@@ -15,6 +15,9 @@ Phases (all on the real :class:`pgw.maskstore.MaskStore`, ring K32A12C27):
   :func:`pgw.maskstore.take_checked_many` (all sessions of a linear per call, N native threads).
 * **close/gc**: closing reservations (zeroization) and the secure wipe of consumed segments.
 
+``--tier ring`` writes into and consumes from the in-memory :class:`pgw.maskstore.ringbuf.MaskRing`
+instead (plaintext slabs in RAM: no AES-GCM, no file I/O; run unlocked here, a gateway mlocks).
+
 Slot numbers are per *full model* slot: with ``--layers`` below the model's layer count the measured
 work is scaled by ``layers_total / layers`` (per-layer work is identical).
 """
@@ -35,6 +38,7 @@ import torch
 from pgw.core.ring import RingParams
 from pgw.factory.bench import MODEL_PRESETS
 from pgw.maskstore import MaskStore, StaticKeyProvider
+from pgw.maskstore.format import auto_chunk_slots
 
 FP = "ab" * 32
 ALIASES = {"0.5b": "qwen2.5-0.5b", "7b": "qwen2.5-7b", "70b": "llama3-70b", "8b": "llama3-8b"}
@@ -61,8 +65,15 @@ def run(args: argparse.Namespace) -> dict:
         "model": shape.name, "layers": args.layers, "layers_total": shape.layers, "ring": ring.name,
         "slots": args.slots, "segments": args.segments, "sessions": args.sessions, "tokens": args.tokens,
         "wr_mb_per_full_slot": wr_bytes_slot * scale / 1e6, "fsync": not args.no_fsync,
-        "claim_threads": args.claim_threads,
+        "claim_threads": args.claim_threads, "tier": args.tier,
     }
+    mring = None
+    if args.tier == "ring":  # in-memory ring (unlocked here: a benchmark, not a gateway)
+        from pgw.maskstore.ringbuf import MaskRing, SeedRegistry, ring_geometry
+
+        geo = ring_geometry(specs, ring, 1 << 40, segment_slots=args.slots)
+        mring = MaskRing(FP, ring, specs, capacity_bytes=max(4, args.segments + 1) * geo.slab_bytes,
+                         segment_slots=args.slots, allow_unlocked=True, min_soundness_bits=0.0, seeds=SeedRegistry())
     store = MaskStore.open(root / "store", StaticKeyProvider(os.urandom(32)), low_water_slots=0,
                            allow_no_external_counter=True, fsync=not args.no_fsync)
     try:
@@ -74,7 +85,11 @@ def run(args: argparse.Namespace) -> dict:
                for s in specs}
         t0 = time.perf_counter()
         for _ in range(args.segments):
-            w = store.writer(FP, ring, specs, slots=args.slots, checks=2, chunk_slots=args.chunk_slots)
+            if mring is not None:
+                cs = args.chunk_slots or auto_chunk_slots([x.out_features for x in specs], ring)  # as the factory
+                w = mring.writer(FP, ring, specs, slots=args.slots, seed=os.urandom(32), checks=2, chunk_slots=cs)
+            else:
+                w = store.writer(FP, ring, specs, slots=args.slots, checks=2, chunk_slots=args.chunk_slots)
             for s in specs:
                 done = 0
                 while done < args.slots:
@@ -89,7 +104,10 @@ def run(args: argparse.Namespace) -> dict:
         res["write_full_slots_per_s"] = total_slots / tw / scale
 
         t0 = time.perf_counter()
-        resv = [store.reserve(FP, ring, args.tokens, session_id=f"s{i}") for i in range(args.sessions)]
+        if mring is not None:
+            resv = [mring.reserve(args.tokens, session_id=f"s{i}") for i in range(args.sessions)]
+        else:
+            resv = [store.reserve(FP, ring, args.tokens, session_id=f"s{i}") for i in range(args.sessions)]
         res["reserve_ms_each"] = (time.perf_counter() - t0) / args.sessions * 1e3
 
         lids = [s.id for s in specs]
@@ -120,7 +138,7 @@ def run(args: argparse.Namespace) -> dict:
         for rv in resv:
             rv.close()
         res["close_ms_each"] = (time.perf_counter() - t0) / args.sessions * 1e3
-        # Consume the rest and wipe consumed segments.
+        # Consume the rest and wipe consumed segments (the ring wipes slabs as they drain).
         left = store.available_slots(FP, ring)
         if left:
             store.reserve(FP, ring, left).close()
@@ -132,6 +150,8 @@ def run(args: argparse.Namespace) -> dict:
         res["gc_s"] = tg
         res["gc_gbps"] = total_slots * wr_bytes_slot / tg / 1e9 if tg > 0 else None
     finally:
+        if mring is not None:
+            mring.close()
         store.close()
         shutil.rmtree(root, ignore_errors=True)
     return res
@@ -152,6 +172,8 @@ def main() -> int:
     ap.add_argument("--claim-threads", type=int, default=None,
                     help="claim through pgw.maskstore.take_checked_many (native threads; 0 = auto)")
     ap.add_argument("--no-fsync", action="store_true")
+    ap.add_argument("--tier", choices=("store", "ring"), default="store",
+                    help="consume from the encrypted disk store or the in-memory ring (MaskRing)")
     ap.add_argument("--root", default=None, help="parent directory of the (temporary) store")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
