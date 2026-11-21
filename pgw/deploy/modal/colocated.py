@@ -21,7 +21,8 @@ Process isolation (separate uids, no ptrace across uids, 0700 directories) keeps
 process away from the gateway's files and memory, but it is not the separation of two organisations'
 machines: a kernel or container escape on the provider side, or whoever controls the container (the
 workspace owner, as for both apps of the two-container demo anyway), reaches both parties, and a
-shared host offers cache and scheduling side channels. The provider's process can also reach the
+shared host offers cache and scheduling side channels (and, without ``hidepid``, each other's
+``/proc/<pid>/stat`` CPU times). The provider's process can also reach the
 gateway's listeners on loopback, with the same credentials as from the internet. The demo's ``pgw-live``
 Dict is reachable from any process in a Modal container (the container's identity authenticates it),
 exactly as from the two-container provider. Use this placement to measure what the protocol costs on
@@ -65,7 +66,8 @@ MEMORY_MIB = 6144 + 8192
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
-#: separate processes, directories, PKI and state; TLS end to end) if dropping to the party users fails in
+#: separate processes, working directories, PKI and state, but root's HOME and caches;
+#: TLS end to end) if dropping to the party users fails in
 #: Modal's container runtime (e.g. GPU device permissions). Weaker isolation; reported in the result.
 SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080

@@ -145,8 +145,8 @@ third app, `pgw-colocated` (`colocated.py`), so every round trip crosses loopbac
   The same code (`pgw_modal_boot.start_provider_party` / `start_gateway_party`) runs outside Modal with
   `local_rehearsal.py --users` (see the Kaggle check below). If dropping to the party users fails in
   Modal's container runtime (for example GPU device permissions), deploy with
-  `PGW_MODAL_COLOCATED_USERS=0`: both parties then run as root (still separate processes, directories,
-  PKI and state; weaker isolation; the result says `separate_users: false`).
+  `PGW_MODAL_COLOCATED_USERS=0`: both parties then run as root (still separate processes, working
+  directories, PKI and state, but one `HOME` and its caches; weaker isolation; the result says `separate_users: false`).
 
 ```bash
 python pgw/deploy/modal/launch.py --e2e --gpu T4 --placement colocated --max-trip-ms 2
@@ -196,11 +196,12 @@ users, 0700 directories and no cross-uid ptrace keep the provider's *process* aw
 files and memory, but this is not the separation of two organisations' machines: a kernel or container
 escape on the provider side, or whoever controls the container (the Modal workspace owner, who controls
 both apps of the two-container demo too), reaches both parties, and a shared host offers cache and
-scheduling side channels. The provider's process can also reach the gateway's listeners on loopback,
+scheduling side channels (without a `hidepid` mount the provider's user can also read the gateway's
+world-readable `/proc/<pid>/stat`, i.e. its CPU time over time). The provider's process can also reach the gateway's listeners on loopback,
 with the same credentials as from the internet, and like any process in a Modal container it can reach
 the workspace's `pgw-live` Dict (the container's identity authenticates it; the two-container provider
 can too). The masked bytes the provider receives are exactly those of the other placements, and nothing
-data-dependent is added. Use this placement to show what the protocol costs on a fast link, not as a
+data-dependent is added to the protocol. Use this placement to show what the protocol costs on a fast link, not as a
 deployment model: a real deployment keeps the gateway in the customer's network.
 
 **Other mechanisms considered** (Modal docs and the installed `modal` 1.6.4 source, 2026-11-21):
