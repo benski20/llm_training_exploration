@@ -34,7 +34,7 @@ import torch
 
 from pgw.core.ring import RingParams
 from pgw.factory.bench import MODEL_PRESETS
-from pgw.maskstore import MaskStore, StaticKeyProvider, take_checked_many
+from pgw.maskstore import MaskStore, StaticKeyProvider
 
 FP = "ab" * 32
 ALIASES = {"0.5b": "qwen2.5-0.5b", "7b": "qwen2.5-7b", "70b": "llama3-70b", "8b": "llama3-8b"}
@@ -54,7 +54,9 @@ def run(args: argparse.Namespace) -> dict:
     scale = shape.layers / args.layers
     wr_bytes_slot = sum(s.out_features for s in specs) * ring.bytes_per_element
     r_bytes_slot = sum(s.in_features for s in specs) * 8  # int64 ring tensors handed out
-    root = Path(args.root) if args.root else Path(tempfile.mkdtemp(prefix="pgw-maskbench-"))
+    if args.root:
+        Path(args.root).mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="pgw-maskbench-", dir=args.root))  # fresh store every run
     res: dict = {
         "model": shape.name, "layers": args.layers, "layers_total": shape.layers, "ring": ring.name,
         "slots": args.slots, "segments": args.segments, "sessions": args.sessions, "tokens": args.tokens,
@@ -98,6 +100,8 @@ def run(args: argparse.Namespace) -> dict:
         t0 = time.perf_counter()
         for _ in range(args.tokens):
             if args.claim_threads is not None:
+                from pgw.maskstore import take_checked_many  # not in older trees (A/B runs)
+
                 for lid in lids:  # one engine step per linear: every session's row of it
                     take_checked_many([(rv, lid, 1, True) for rv in resv], threads=args.claim_threads)
             else:
@@ -129,8 +133,7 @@ def run(args: argparse.Namespace) -> dict:
         res["gc_gbps"] = total_slots * wr_bytes_slot / tg / 1e9 if tg > 0 else None
     finally:
         store.close()
-        if not args.root:
-            shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
     return res
 
 
@@ -149,7 +152,7 @@ def main() -> int:
     ap.add_argument("--claim-threads", type=int, default=None,
                     help="claim through pgw.maskstore.take_checked_many (native threads; 0 = auto)")
     ap.add_argument("--no-fsync", action="store_true")
-    ap.add_argument("--root", default=None)
+    ap.add_argument("--root", default=None, help="parent directory of the (temporary) store")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
     if not args.layers:
