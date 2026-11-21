@@ -947,6 +947,7 @@ class MaskedBackend(LinearBackend):
         #: within the same layer (down's prepare joins it), so no cache entry depends on it.
         self.defer_min_out = 16384
         self._trip_checked: dict[tuple[int, int, float], bool] = {}
+        self._defer_memo: dict[tuple[Any, int], bool] = {}
         self._final_ordinal: int | None = None
         self._pending: list[_PendingCheck] = []
         #: Failed deferred checks harvested outside their own session's path: raised in that
@@ -1281,9 +1282,15 @@ class MaskedBackend(LinearBackend):
         linears with at least :attr:`defer_min_out` outputs (a public per-linear choice)."""
         if not self.deferred_check or not isinstance(lid, LinearId):
             return False
-        if lid.ordinal >= self._final_linear_ordinal():
-            return False
-        return int(self._meta.get(lid).out_features) >= int(self.defer_min_out)
+        ck = (lid, int(self.defer_min_out))
+        hit = self._defer_memo.get(ck)
+        if hit is None:  # a public per-linear decision: computed once per (linear, threshold)
+            hit = (lid.ordinal < self._final_linear_ordinal()
+                   and int(self._meta.get(lid).out_features) >= int(self.defer_min_out))
+            if len(self._defer_memo) > 65536:
+                self._defer_memo.clear()
+            self._defer_memo[ck] = hit
+        return hit
 
     def _prepare_trip(self, calls: Sequence[LinearCall]) -> _Prepared:
         """:meth:`_prepare_native` on ``pgw_fast.trip_prepare_into`` (constant-time width selection).

@@ -15,6 +15,37 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-21: gateway CPU per decode token (package L2)
+
+Single chat, decode, 1 row, on the gateway's production decode path (TripEngine, synchronous trips, noise
+monitor, `local_linears` qkv + o). All changes are bit-identical (self-checked or tested against the
+reference) and nothing sent to the provider changes (bytes, sizes, counts, schedule).
+
+- **Native exact local linear** (`pgw_fast.local_linear_into`, `rust/pgw-fast/src/local.rs`): quantize with
+  the TripEngine's constant-time quantizer (zero mask), int16 x int8 GEMV (AVX2 `vpmaddwd`, int32 partial
+  sums flushed to int64 every `2^(24-A)` features), range check over every output, the finish kernel's
+  rescale. Replaces numpy temporaries + a two-digit `torch._int_mm` (whose OpenMP threads also spun against
+  the co-located provider). Works for any K multiple of 8 with A <= 15 (K40A12 now takes the fast path too).
+  `PGW_LOCAL_NATIVE=0` restores the old form; the per-shape self-check is unchanged.
+- **Native noise fingerprints** (`pgw_fast.noise_dup_keys`): `guard_packed`'s duplicate-row keys in one
+  call (`PGW_NOISE_NATIVE=0`: numpy). Same keys bit for bit, same history and alarms.
+- **Decode mask prefetch overlap**: with synchronous trips (lane `stream`/`uds`) a single session's 1-row
+  decode stages its next 8 rows per (reservation, linear) on the prefetch thread, i.e. while the gateway
+  thread waits in `recv`. Same rows, same order, same consumption (`PGW_PREFETCH_DECODE` overrides).
+- Small: no logits copy in the sampler without penalties; request ids from `os.urandom(16).hex()` (same
+  format); the deferred-check decision memoized per linear.
+
+Measured here (4 shared vCPUs at load 20-40 from other jobs, so medians of calling-thread CPU; GPU box
+numbers pending, see the L2 report):
+
+| item (1 row) | before | after |
+|---|---|---|
+| local linear 0.5B qkv 896x1152 / o 896x896 (`local_linear_bench.py`, 1 thread) | 137-175 / 114-255 us | 35 / 29 us |
+| local linear 7B qkv 3584x4608 / down 18944x3584 (1 thread) | 2.6-4.6 / 25 ms CPU (5.4-8.2 / 45 ms wall) | 1.2 / 10.9 ms |
+| noise `guard_packed` per trip, n = 896 ... 18944 | 17-21 us | 2.6-4.2 us |
+| one 0.5B decode trip, gate_up / down (`trip_cpu_bench.py`, gateway thread CPU) | 175-231 / 281-350 us | 137-168 / 205-244 us |
+| local linears in the decode loop (`decode_cpu_bench.py`, 0.5B, 4 layers, wall per token) | 12.0 ms | 2.6 ms |
+
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 
 The phase-A packages now run on the gateway's production path (all per-model settings, off by default;
