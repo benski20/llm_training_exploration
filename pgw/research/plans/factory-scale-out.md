@@ -106,6 +106,11 @@ spends about 0.5 s with the provider, 0.3 s decrypting and 0.1 s encrypting, one
 M1's target). Two workers overlap these stages almost perfectly. At four workers the box runs out of cores,
 because the CPU provider competes with the workers.
 
+The same run with **two** CPU provider services and 40 ms of added round-trip time per service (loopback delay
+proxy, `--provider-devices cpu cpu --delay-ms 40`), measured: 578, 977 and 1,398 slots/s at 1, 2 and 4
+workers (1.69x and 2.42x; whole model about 24, 41 and 58 slots/s, estimate). Every run committed exactly
+`workers x 3` segments (overshoot 0).
+
 ### 4.2 Kaggle T4x2 (two provider GPUs) - KAGGLE_RESULTS_PENDING
 
 ## 5. What is left
