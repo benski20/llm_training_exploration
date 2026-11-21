@@ -25,6 +25,18 @@ Usage::
         [--variants base,tuned] [--repeat 3] [--server-loop uvloop] [--client-loop uvloop]
         [--profile-client out.prof] [--profile-server out.prof]
 
+Path options (per-trip latency checks for the Modal placements, ``deploy/modal/README.md``):
+
+* ``--tls``: the service listens with TLS (a throwaway CA and server certificate for 127.0.0.1) and the
+  client verifies it, as on Modal (TLS end to end);
+* ``--delay-ms D``: the client reaches the service through a small TCP proxy (:mod:`delay_proxy`) that
+  delays every chunk by ``D / 2`` ms in each direction, so a round trip gains exactly ``D`` ms on top
+  of the proxy's own hop. ``--delay-ms 0`` measures that hop alone. If Nagle, delayed ACKs or TLS
+  record buffering added latency per trip, ``p50(D) - p50(0)`` would exceed ``D`` (a Nagle/delayed-ACK
+  stall costs about 40 ms on Linux);
+* ``--check-nodelay``: report ``TCP_NODELAY`` of the client's compute-stream socket and of every
+  accepted socket in the service process (``nodelay`` in the JSON line).
+
 Prints a JSON line per run (latency percentiles in microseconds, CPU (user + system) per call of the
 client and of the service process, peak RSS of the service process) and, with several runs, a
 summary line with the median p50 per (rows, variant). Run from ``pgw/`` with ``PYTHONPATH=src`` to
@@ -88,6 +100,69 @@ class StubKernel:
         return self._out[: x.shape[0]]
 
 
+def _report_nodelay_on_signal() -> None:
+    """Service process (``--check-nodelay``): on SIGUSR1 (sent by the client after its warm-up), print
+    ``TCP_NODELAY`` of every connected TCP socket held by an asyncio transport (the accepted
+    connections) to stderr as one JSON line."""
+    import gc
+    import signal
+    import threading
+
+    def run() -> None:
+        seen: list[int] = []
+        for obj in gc.get_objects():
+            if isinstance(obj, asyncio.BaseTransport):
+                sock = obj.get_extra_info("socket")
+                if sock is not None and sock.family in (socket.AF_INET, socket.AF_INET6) \
+                        and sock.type == socket.SOCK_STREAM:
+                    try:
+                        sock.getpeername()
+                        seen.append(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY))
+                    except OSError:  # the listening socket, or closed
+                        pass
+        print(json.dumps({"server_nodelay": seen}), file=sys.stderr, flush=True)
+
+    signal.signal(signal.SIGUSR1, lambda *_: threading.Thread(target=run, daemon=True).start())
+
+
+def _make_tls(td: Path) -> tuple[Path, Path, Path]:
+    """Throwaway CA + server certificate for 127.0.0.1: ``(ca, cert, key)``."""
+    import datetime as dt
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    now = dt.datetime.now(dt.UTC)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "bench CA")])
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name).public_key(ca_key.public_key())
+          .serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(minutes=5))
+          .not_valid_after(now + dt.timedelta(days=1))
+          .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+          .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, crl_sign=True,
+                                       content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                       key_agreement=False, encipher_only=False, decipher_only=False), critical=True)
+          .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+          .sign(ca_key, hashes.SHA256()))
+    key = ec.generate_private_key(ec.SECP256R1())
+    cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")]))
+            .issuer_name(ca_name).public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=1))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+                           critical=False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+            .sign(ca_key, hashes.SHA256()))
+    paths = (td / "ca.pem", td / "server.pem", td / "server.key")
+    paths[0].write_bytes(ca.public_bytes(serialization.Encoding.PEM))
+    paths[1].write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    paths[2].write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    return paths
+
+
 def _server(port: int, token_file: str | None, profile: str | None) -> None:
     from pgw.core.types import LinearId, LinearKind, LinearSpec
     from pgw.service.app import create_app
@@ -105,6 +180,13 @@ def _server(port: int, token_file: str | None, profile: str | None) -> None:
     kw: dict[str, Any] = {"allow_unauthenticated": token_file is None}
     if token_file:
         kw["tokens_file"] = Path(token_file)
+    tls_dir = os.environ.get("PGW_BENCH_TLS_DIR")
+    if tls_dir:
+        from pgw.core.settings import TLSConfig
+
+        kw["tls"] = TLSConfig(cert_file=Path(tls_dir) / "server.pem", key_file=Path(tls_dir) / "server.key")
+    if os.environ.get("PGW_BENCH_NODELAY_REPORT"):
+        _report_nodelay_on_signal()
     settings = ServiceSettings(host="127.0.0.1", port=port, server="uvicorn", batch_window_ms=0.0, **kw)
     tuned = False
     if os.environ.get("PGW_BENCH_TUNING") == "1":
@@ -164,15 +246,16 @@ def _proc_stat(pid: int) -> tuple[float, float]:
 
 
 async def _client(port: int, args: argparse.Namespace, token: str | None, server_pid: int, rows: int,
-                  variant: str) -> dict[str, Any]:
+                  variant: str, ca_file: Path | None = None) -> dict[str, Any]:
     import numpy as np
     from pydantic import SecretStr
 
     from pgw.wire.client import ClientConfig, ComputeClient
     from pgw.wire.messages import ComputeItem, ComputeRequest
 
-    cfg = ClientConfig(base_url=f"http://127.0.0.1:{port}", http2=False, stream=not args.http,
-                       token=SecretStr(token) if token else None)
+    scheme = "https" if ca_file is not None else "http"
+    cfg = ClientConfig(base_url=f"{scheme}://127.0.0.1:{port}", http2=False, stream=not args.http,
+                       token=SecretStr(token) if token else None, ca_file=ca_file)
     client = ComputeClient(cfg)
     for _ in range(300):
         if await client.ready():
@@ -198,6 +281,15 @@ async def _client(port: int, args: argparse.Namespace, token: str | None, server
                 lat.append((time.perf_counter() - t0) * 1e6)
 
     await run(200, None)  # warm-up
+    nodelay: list[int] = []
+    for ch in list(getattr(client, "_channels", {}).values()):
+        sock = ch.ws.transport.get_extra_info("socket")
+        if sock is not None:
+            nodelay.append(sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY))
+    if args.check_nodelay:
+        import signal
+
+        os.kill(server_pid, signal.SIGUSR1)
     lat: list[float] = []
     prof = cProfile.Profile() if args.profile_client else None
     if prof is not None:
@@ -230,7 +322,8 @@ async def _client(port: int, args: argparse.Namespace, token: str | None, server
             "server_cpu_us_per_call": round((s1 - s0 + sf1 - sf0) / len(lat) * 1e6, 1),
             "client_sys_us_per_call": round((cf1 - cf0) / len(lat) * 1e6, 1),
             "server_sys_us_per_call": round((sf1 - sf0) / len(lat) * 1e6, 1),
-            "server_peak_rss_mib": _peak_rss_mib(server_pid)}
+            "server_peak_rss_mib": _peak_rss_mib(server_pid),
+            "tls": ca_file is not None, "delay_ms": args.delay_ms, "client_nodelay": nodelay}
 
 
 _MALLOC_VARS = ("MALLOC_TRIM_THRESHOLD_", "MALLOC_TOP_PAD_", "MALLOC_MMAP_THRESHOLD_")
@@ -267,6 +360,11 @@ def main() -> None:
     ap.add_argument("--server-loop", default="asyncio", choices=["asyncio", "uvloop"],
                     help="event loop of the service process (benchmark harness only)")
     ap.add_argument("--client-loop", default="asyncio", choices=["asyncio", "uvloop"])
+    ap.add_argument("--tls", action="store_true", help="TLS end to end (throwaway CA), as on Modal")
+    ap.add_argument("--delay-ms", type=float, default=None,
+                    help="route through a delay proxy adding this many ms per round trip (0: proxy hop only)")
+    ap.add_argument("--check-nodelay", action="store_true",
+                    help="report TCP_NODELAY of the client socket and of the service's accepted sockets")
     ap.add_argument("--profile-client")
     ap.add_argument("--profile-server")
     ap.add_argument("--serve", type=int, help=argparse.SUPPRESS)
@@ -309,15 +407,47 @@ def _one_run(args: argparse.Namespace, rows: int, variant: str) -> dict[str, Any
             cmd += ["--token-file", str(tf)]
         if args.profile_server:
             cmd += ["--profile-server", args.profile_server]
-        proc = subprocess.Popen(cmd, env=_variant_env(variant, args.server_loop))  # noqa: S603
+        env = _variant_env(variant, args.server_loop)
+        ca_file = None
+        if args.tls:
+            ca_file = _make_tls(Path(td))[0]
+            env["PGW_BENCH_TLS_DIR"] = td
+        if args.check_nodelay:
+            env["PGW_BENCH_NODELAY_REPORT"] = "1"
+        proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE if args.check_nodelay else None)  # noqa: S603
+        proxy = None
+        target = port
+        if args.delay_ms is not None:
+            from delay_proxy import DelayProxy
+
+            proxy = DelayProxy(("127.0.0.1", port), one_way_s=args.delay_ms / 2e3)
+            target = proxy.start()
         try:
-            return dict(_run(_client(port, args, token, proc.pid, rows, variant), args.client_loop))
+            res = dict(_run(_client(target, args, token, proc.pid, rows, variant, ca_file), args.client_loop))
+            if args.check_nodelay:
+                res["server_nodelay"] = _read_server_nodelay(proc)
+            return res
         finally:
+            if proxy is not None:
+                proxy.stop()
             proc.send_signal(2)
             try:
                 proc.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+
+def _read_server_nodelay(proc: subprocess.Popen[bytes]) -> Any:
+    """The service's ``server_nodelay`` report from its stderr (``--check-nodelay``)."""
+    assert proc.stderr is not None
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        line = proc.stderr.readline()
+        if not line:
+            break
+        if b"server_nodelay" in line:
+            return json.loads(line)["server_nodelay"]
+    return None
 
 
 if __name__ == "__main__":

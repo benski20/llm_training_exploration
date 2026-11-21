@@ -4,6 +4,7 @@
     python pgw/deploy/modal/launch.py --ttl-min 45
     python pgw/deploy/modal/launch.py --e2e        # scripted wizard + masked chat + exactness check, then stop
     python pgw/deploy/modal/launch.py --e2e --gpu A10G --i6pn --max-trip-ms 1   # latency-gated run
+    python pgw/deploy/modal/launch.py --e2e --gpu T4 --placement colocated      # both parties, one container
     python pgw/deploy/modal/launch.py --show       # print what is live now
     python pgw/deploy/modal/launch.py --stop       # stop both apps and clear the secrets in the Dict
 
@@ -17,10 +18,13 @@ launcher stops the other one and exits instead of waiting; on a start timeout it
 one-time setup token is printed once and then replaced by ``(shown)`` in the Dict, so ``--show``
 cannot print it again (start a new pair if it is lost).
 
-Network: by default the gateway reaches the provider through the provider's public TCP tunnel. With
-``--i6pn`` (or ``PGW_MODAL_I6PN=1``) both parties run on Modal's private IPv6 network instead; if Modal
-has not scheduled both containers within ``--i6pn-schedule-timeout-min`` minutes, the launcher cancels
-the pair and relaunches it on the tunnel. The window runs until each function writes its ``*_boot``
+Placement (``--placement``, ``PGW_MODAL_PLACEMENT``): ``tunnel`` (default) = two containers, the
+gateway reaches the provider through the provider's public TCP tunnel; ``i6pn`` (also ``--i6pn`` or
+``PGW_MODAL_I6PN=1``) = two containers on Modal's private IPv6 network; ``colocated`` = one container
+(app ``pgw-colocated``, ``colocated.py``) running both parties as separate Unix users over loopback TLS
+(lowest latency; see the trust caveat there and in the README). If Modal has not started an ``i6pn`` or
+``colocated`` pair within ``--schedule-timeout-min`` minutes, the launcher cancels it and relaunches the
+pair on the tunnel. The window runs until each function writes its ``*_boot``
 marker, so it covers image pull and container cold start as well as Modal's scheduling; the default is
 therefore longer with a GPU (larger CUDA image, scarcer machines).
 
@@ -60,8 +64,15 @@ DICT_NAME = "pgw-live"
 APPS = ("pgw-provider", "pgw-customer")
 #: Dict keys that belong to one run (cleared before a new pair starts and by --stop).
 RUN_KEYS = ("provider", "customer", "provider_boot", "customer_boot", "e2e", "stop")
-#: Function names per network: (provider, customer).
+#: Where the two parties run and how the gateway reaches the provider (``--placement``).
+PLACEMENTS = ("tunnel", "i6pn", "colocated")
+#: Function names per two-container network: (provider, customer). Kept keyed by "i6pn?" for the tests.
 FUNCTIONS = {False: ("serve", "gateway"), True: ("serve_i6pn", "gateway_i6pn")}
+#: The co-located placement's single function: (app, function).
+COLOCATED_FUNCTION = ("pgw-colocated", "pair")
+#: Apps per placement (deployed and stopped by the launcher; the tunnel apps are always deployed, as the
+#: fallback of the other placements).
+PLACEMENT_APPS = {"tunnel": APPS, "i6pn": APPS, "colocated": (*APPS, COLOCATED_FUNCTION[0])}
 # Modal list prices (modal.com/pricing, 2026-11; check before quoting): per GPU-hour, per core-hour,
 # per GiB-hour. L4 is deliberately absent (see provider.py: no faster than a T4 for the decode GEMV).
 GPU_PRICE_H = {"T4": 0.59, "A10G": 1.10, "L40S": 1.95, "H100": 3.95}
@@ -69,8 +80,18 @@ CORE_H, GIB_H = 0.0473, 0.008
 #: A ``--max-trip-ms`` limit below this cannot pass on the public tunnel (about 5 ms per round trip, 6.8 ms
 #: measured on 2026-11-20), so a tunnel pair is not relaunched for it.
 TUNNEL_FLOOR_MS = 3.0
-#: Default ``--i6pn-schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
+#: Default ``--schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
 I6PN_SCHEDULE_TIMEOUT_MIN = {False: 6.0, True: 10.0}
+
+
+def normalize_placement(value: str | bool | None) -> str:
+    """``--placement`` value (or the legacy ``i6pn`` flag) to one of :data:`PLACEMENTS`."""
+    if isinstance(value, bool):
+        return "i6pn" if value else "tunnel"
+    v = (value or "tunnel").strip().lower()
+    if v not in PLACEMENTS:
+        raise ValueError(f"{value!r}: unknown placement; use one of {', '.join(PLACEMENTS)}")
+    return v
 
 
 def provider_cpus(gpu: str | None) -> float:
@@ -120,23 +141,29 @@ def _ts(t: float) -> str:
     return dt.datetime.fromtimestamp(t, dt.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def deploy(gpu: str | None, customer_gpu: str | None = None) -> None:
-    """``modal deploy`` both apps; the GPUs are fixed at deploy time (``PGW_MODAL_GPU`` for the provider,
-    ``PGW_MODAL_CUSTOMER_GPU`` for the customer gateway's mask factory)."""
+def deploy(gpu: str | None, customer_gpu: str | None = None, placement: str = "tunnel",
+           region: str | None = None) -> None:
+    """``modal deploy`` both apps (and ``colocated.py`` for that placement); the GPUs are fixed at deploy
+    time (``PGW_MODAL_GPU`` for the provider, ``PGW_MODAL_CUSTOMER_GPU`` for the customer gateway's mask
+    factory), and so is the region (``region``: ``None`` keeps ``PGW_MODAL_REGION`` / the apps' default
+    ``us-east``; ``""`` lifts the pin)."""
     env = dict(os.environ)
     for var, val in (("PGW_MODAL_GPU", gpu), ("PGW_MODAL_CUSTOMER_GPU", customer_gpu)):
         if val:
             env[var] = val
         else:
             env.pop(var, None)
-    for f in ("provider.py", "customer.py"):
+    if region is not None:
+        env["PGW_MODAL_REGION"] = region
+    files = ["provider.py", "customer.py"] + (["colocated.py"] if placement == "colocated" else [])
+    for f in files:
         subprocess.run(["modal", "deploy", str(HERE / f)], check=True, env=env)  # noqa: S603, S607
 
 
 def stop() -> None:
     live = modal.Dict.from_name(DICT_NAME, create_if_missing=True)
     live["stop"] = "all"
-    for a in APPS:
+    for a in PLACEMENT_APPS["colocated"]:
         subprocess.run(["modal", "app", "stop", a, "-y"], check=False)  # noqa: S603, S607
     for k in RUN_KEYS:
         live.pop(k, None)
@@ -177,37 +204,55 @@ class PeerWatch:
 
 @dataclass
 class Pair:
-    """One spawned provider/customer pair."""
+    """One spawned provider/customer pair (``placement``: one of :data:`PLACEMENTS`, or the legacy
+    ``i6pn`` bool). In the co-located placement both calls are the same FunctionCall."""
 
     run_id: str
-    i6pn: bool
+    placement: str | bool
     pcall: Any
     ccall: Any
     t0: float
     note: str = ""
 
+    def __post_init__(self) -> None:
+        self.placement = normalize_placement(self.placement)
+
     @property
     def network(self) -> str:
-        return "i6pn" if self.i6pn else "tunnel"
+        return str(self.placement)
+
+    @property
+    def i6pn(self) -> bool:
+        return self.placement == "i6pn"
+
+    @property
+    def colocated(self) -> bool:
+        return self.placement == "colocated"
 
     def watch(self, live: Any) -> PeerWatch:
         return PeerWatch(live, self.run_id, {"provider": self.pcall, "customer": self.ccall})
 
 
-def spawn_pair(live: Any, i6pn: bool, ttl_s: int, e2e: bool,
+def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
                lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto") -> Pair:
-    """Clear the per-run Dict keys and spawn one call of each party on the chosen network."""
+    """Clear the per-run Dict keys and spawn the pair in the chosen placement (two calls, or one
+    co-located call; ``placement`` may be the legacy ``i6pn`` bool)."""
     lookup = lookup or modal.Function.from_name
+    placement = normalize_placement(placement)
     run_id = secrets.token_hex(4)
     for k in RUN_KEYS:
         live.pop(k, None)
-    pfn, cfn = FUNCTIONS[i6pn]
+    if placement == "colocated":
+        call = lookup(*COLOCATED_FUNCTION).spawn(run_id, ttl_s, e2e, local_linears)
+        print(f"run {run_id} (colocated): spawned both parties in one container ({call.object_id})", flush=True)
+        return Pair(run_id, placement, call, call, time.time())
+    pfn, cfn = FUNCTIONS[placement == "i6pn"]
     prov, cust = lookup("pgw-provider", pfn), lookup("pgw-customer", cfn)
     pcall = prov.spawn(run_id, ttl_s)
     ccall = cust.spawn(run_id, ttl_s, e2e, local_linears)
-    print(f"run {run_id} ({'i6pn' if i6pn else 'tunnel'}): spawned provider ({pcall.object_id}) and "
+    print(f"run {run_id} ({placement}): spawned provider ({pcall.object_id}) and "
           f"customer ({ccall.object_id})", flush=True)
-    return Pair(run_id, i6pn, pcall, ccall, time.time())
+    return Pair(run_id, placement, pcall, ccall, time.time())
 
 
 def unscheduled(live: Any, run_id: str) -> list[str]:
@@ -237,7 +282,7 @@ def wait_scheduled(live: Any, pair: Pair, timeout_s: float, *, poll_s: float = 5
 def cancel_pair(live: Any, pair: Pair) -> None:
     """Stop one pair without undeploying the apps (``stop`` would ``modal app stop`` them)."""
     live["stop"] = pair.run_id
-    for call in (pair.pcall, pair.ccall):
+    for call in dict.fromkeys((pair.pcall, pair.ccall)):  # the co-located pair has one call
         try:
             try:
                 call.cancel(terminate_containers=True)
@@ -247,13 +292,15 @@ def cancel_pair(live: Any, pair: Pair) -> None:
             print(f"cancel {getattr(call, 'object_id', '?')}: {type(exc).__name__}", flush=True)
 
 
-def launch_pair(live: Any, *, i6pn: bool, ttl_s: int, e2e: bool, schedule_timeout_s: float,
-                spawn: Callable[..., Pair] = spawn_pair,
+def launch_pair(live: Any, *, placement: str | bool | None = None, ttl_s: int, e2e: bool,
+                schedule_timeout_s: float, spawn: Callable[..., Pair] = spawn_pair,
                 wait: Callable[..., list[str]] = wait_scheduled,
-                cancel: Callable[[Any, Pair], None] = cancel_pair) -> Pair:
-    """Spawn a pair; with i6pn, fall back to the tunnel when Modal does not schedule both in time."""
-    pair = spawn(live, i6pn, ttl_s, e2e)
-    if not i6pn:
+                cancel: Callable[[Any, Pair], None] = cancel_pair, i6pn: bool | None = None) -> Pair:
+    """Spawn a pair; for i6pn and colocated, fall back to the tunnel when Modal does not start it in time
+    (``i6pn`` is the legacy spelling of ``placement``)."""
+    placement = normalize_placement(placement if placement is not None else bool(i6pn))
+    pair = spawn(live, placement, ttl_s, e2e)
+    if placement == "tunnel":
         return pair
     try:
         missing = wait(live, pair, schedule_timeout_s)
@@ -262,11 +309,11 @@ def launch_pair(live: Any, *, i6pn: bool, ttl_s: int, e2e: bool, schedule_timeou
         raise SystemExit(f"{exc}; cancelled the pair") from exc
     if not missing:
         return pair
-    why = (f"i6pn: {', '.join(missing)} not scheduled within {schedule_timeout_s / 60:g} min; "
+    why = (f"{placement}: {', '.join(missing)} not scheduled within {schedule_timeout_s / 60:g} min; "
            "relaunching on the public tunnel")
     print(why, flush=True)
     cancel(live, pair)
-    fallback = spawn(live, False, ttl_s, e2e)
+    fallback = spawn(live, "tunnel", ttl_s, e2e)
     fallback.note = why
     return fallback
 
@@ -311,19 +358,29 @@ def _print_speed(res: dict[str, Any]) -> None:
         return
     ll = sp.get("local_linears") or {}
     print(f"gateway speed settings: local_linears {ll.get('mode')} -> {ll.get('kinds') or 'none'} "
-          f"(start-up rtt {sp.get('measured_rtt_ms')} ms; {ll.get('reason', '')}), float_threads "
+          f"(start-up rtt {sp.get('measured_rtt_ms')} ms over {sp.get('rtt_path') or '?'}; "
+          f"{ll.get('reason', '')}), float_threads "
           f"{sp.get('float_threads')}, lane {sp.get('lane')} ({sp.get('lane_state')}), strict speculation "
           f"{sp.get('spec_rows') or 'off'}; {sp.get('warm_trips_per_token', '?')} round trips per token "
-          "(warm chat)", flush=True)
+          f"(warm chat), {sp.get('warm_tokens_per_s', '?')} tokens/s (warm chat wall time)", flush=True)
+
+
+def path_label(res: dict[str, Any], pair: Pair) -> str:
+    """``placement`` plus the network path the gateway actually used (``loopback``, ``private <addr>``,
+    ``public <host>``; from the service URL it enrolled with), e.g. ``tunnel via public r500.modal.host``."""
+    tl = (res.get("e2e") or {}).get("trip_latency") or {}
+    path = tl.get("path") or (res.get("e2e") or {}).get("network_path")
+    return f"{pair.network} via {path}" if path else pair.network
 
 
 def _print_latency(res: dict[str, Any], pair: Pair) -> None:
     _print_speed(res)
     lat = ((res.get("e2e") or {}).get("trip_latency") or {}).get("warm") or {}
+    where = path_label(res, pair)
     if not lat.get("trips"):
-        print(f"trip latency ({pair.network}): not measured", flush=True)
+        print(f"trip latency ({where}): not measured", flush=True)
         return
-    print(f"trip latency ({pair.network}, warm chat): {lat['trips']} trips, p50 {lat.get('p50_ms')} ms "
+    print(f"trip latency ({where}, warm chat): {lat['trips']} trips, p50 {lat.get('p50_ms')} ms "
           f"(bucket {lat.get('p50_bucket_ms')}), p90 {lat.get('p90_ms')} ms, mean {lat.get('mean_ms')} ms; "
           f"1-row mean {lat.get('rows_1_mean_ms')} ms = service {lat.get('rows_1_service_ms')} + "
           f"rest {lat.get('rows_1_wire_ms')}", flush=True)
@@ -333,8 +390,8 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     """:func:`spawn_pair` with the customer gateway's ``--local-linears`` choice."""
     local = getattr(args, "local_linears", "auto")
 
-    def spawn(live: Any, i6pn: bool, ttl_s: int, e2e: bool) -> Pair:
-        return spawn_pair(live, i6pn, ttl_s, e2e, local_linears=local)
+    def spawn(live: Any, placement: str | bool, ttl_s: int, e2e: bool) -> Pair:
+        return spawn_pair(live, placement, ttl_s, e2e, local_linears=local)
 
     return spawn
 
@@ -345,16 +402,20 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
     tries = max(1, args.tries if args.max_trip_ms is not None else 1)
     code = 1
     for attempt in range(1, tries + 1):
-        pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=True,
+        pair = launch_pair(live, placement=args.placement, ttl_s=ttl_s, e2e=True,
                            schedule_timeout_s=args.i6pn_schedule_timeout_min * 60, spawn=_spawner(args))
         res = wait_e2e(live, pair, ttl_s)
-        print(json.dumps({k: v for k, v in res.items() if k != "log_tail"}, indent=1, default=str))
+        print(json.dumps({k: v for k, v in res.items() if k not in ("log_tail", "service_log_tail")}, indent=1,
+                         default=str))
         print("---- gateway log tail ----\n" + res.get("log_tail", ""))
-        try:
-            pres = pair.pcall.get(timeout=120)
-            print("---- service log tail ----\n" + pres.get("log_tail", "")[-2500:])
-        except Exception as exc:
-            print(f"provider result: {type(exc).__name__}: {exc}")
+        if pair.colocated:  # one call: the service's log comes with the result
+            print("---- service log tail ----\n" + str(res.get("service_log_tail", ""))[-2500:])
+        else:
+            try:
+                pres = pair.pcall.get(timeout=120)
+                print("---- service log tail ----\n" + pres.get("log_tail", "")[-2500:])
+            except Exception as exc:
+                print(f"provider result: {type(exc).__name__}: {exc}")
         if pair.note:
             print(f"note: {pair.note}")
         _print_latency(res, pair)
@@ -369,10 +430,10 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
         code = 2  # latency gate failed or unmeasured
         if verdict == "unmeasured" or attempt == tries:
             break
-        if not pair.i6pn and not args.i6pn and args.max_trip_ms < TUNNEL_FLOOR_MS:
+        if pair.network == "tunnel" and args.placement == "tunnel" and args.max_trip_ms < TUNNEL_FLOOR_MS:
             # every relaunch would be another tunnel pair (a full paid e2e run) with no chance of passing
             print(f"not relaunching: the public tunnel adds about 5 ms per round trip, so a limit below "
-                  f"{TUNNEL_FLOOR_MS:g} ms passes only on i6pn (--i6pn)", flush=True)
+                  f"{TUNNEL_FLOOR_MS:g} ms passes only on i6pn or co-located (--placement)", flush=True)
             break
         cancel_pair(live, pair)  # make sure the old provider is gone: max_containers=1 would queue the new one
         print("relaunching a fresh pair (new placement)", flush=True)
@@ -403,13 +464,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     ",".join(GPU_PRICE_H) + "}",
                     help="provider GPU, fixed at deploy time (default: none = CPU int8 backend; "
                          "PGW_MODAL_GPU sets the default; case-insensitive). Not L4 (see README)")
+    ap.add_argument("--placement", choices=PLACEMENTS, default=None,
+                    help="where the parties run: 'tunnel' (default; two containers, public TCP tunnel), 'i6pn' "
+                         "(two containers, Modal's private IPv6 network), 'colocated' (one container, both "
+                         "parties as separate users over loopback TLS; see the README's trust caveat). "
+                         "PGW_MODAL_PLACEMENT sets the default")
     ap.add_argument("--i6pn", action="store_true", default=os.environ.get("PGW_MODAL_I6PN", "0") == "1",
-                    help="run both parties on Modal's private IPv6 network (off by default; PGW_MODAL_I6PN=1)")
-    ap.add_argument("--i6pn-schedule-timeout-min", type=float, default=None,
-                    help="with --i6pn: relaunch on the public tunnel if both functions have not started "
-                         "within this many minutes (Modal scheduling + image pull + cold start; default "
+                    help="same as --placement i6pn (PGW_MODAL_I6PN=1)")
+    ap.add_argument("--schedule-timeout-min", "--i6pn-schedule-timeout-min", dest="i6pn_schedule_timeout_min",
+                    type=float, default=None,
+                    help="with --placement i6pn or colocated: relaunch on the public tunnel if the pair has not "
+                         "started within this many minutes (Modal scheduling + image pull + cold start; default "
                          f"{I6PN_SCHEDULE_TIMEOUT_MIN[False]:g} without a GPU, "
                          f"{I6PN_SCHEDULE_TIMEOUT_MIN[True]:g} with one)")
+    ap.add_argument("--region", default=None,
+                    help="Modal region of the deployed apps (fixed at deploy time; default: PGW_MODAL_REGION, else "
+                         "us-east). 'any' lifts the pin (risk: the parties land far apart). A region group such as "
+                         "us-east, not a cloud zone such as us-east-1")
     ap.add_argument("--max-trip-ms", type=float, default=None,
                     help="with --e2e: relaunch while the median client-reported round trip of the warm chat "
                          "is above this (off by default)")
@@ -420,7 +491,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "(the tunnel: yes); 'attention' = always; 'off' = every linear on the provider")
     args = ap.parse_args(argv)
     try:
+        env_placement = os.environ.get("PGW_MODAL_PLACEMENT") or None
+        if args.placement is None:
+            args.placement = normalize_placement("i6pn" if args.i6pn else env_placement)
+        elif args.i6pn and args.placement != "i6pn":
+            ap.error(f"--i6pn contradicts --placement {args.placement}")
+    except ValueError as exc:
+        ap.error(f"PGW_MODAL_PLACEMENT: {exc}")
+    args.i6pn = args.placement == "i6pn"
+    if args.region is not None:
+        args.region = "" if args.region.strip().lower() in ("any", "none", "") else args.region.strip()
+    try:
         args.customer_gpu = normalize_gpu(args.customer_gpu)
+        if args.placement == "colocated" and args.customer_gpu:
+            ap.error("--customer-gpu applies to the two-container placements only (the co-located gateway "
+                     "runs on CPU)")
         if args.customer_gpu:  # cost estimates read it
             os.environ["PGW_MODAL_CUSTOMER_GPU"] = args.customer_gpu
         else:
@@ -434,7 +519,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.i6pn_schedule_timeout_min is None:
         args.i6pn_schedule_timeout_min = I6PN_SCHEDULE_TIMEOUT_MIN[args.gpu is not None]
     elif args.i6pn_schedule_timeout_min <= 0:
-        ap.error("--i6pn-schedule-timeout-min must be positive")
+        ap.error("--schedule-timeout-min must be positive")
     if args.max_trip_ms is not None and not args.e2e:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
@@ -445,7 +530,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.deploy_only:
-        deploy(args.gpu, args.customer_gpu)
+        deploy(args.gpu, args.customer_gpu, args.placement, args.region)
         print("deployed; start a pair later with --no-deploy")
         return
     if args.stop:
@@ -457,10 +542,10 @@ def main(argv: list[str] | None = None) -> None:
         return
     ttl_s = int(min(args.ttl_min, 85.0) * 60)
     if not args.no_deploy:
-        deploy(args.gpu, args.customer_gpu)
+        deploy(args.gpu, args.customer_gpu, args.placement, args.region)
     if args.e2e:
         sys.exit(run_e2e(live, args, ttl_s))
-    pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=False,
+    pair = launch_pair(live, placement=args.placement, ttl_s=ttl_s, e2e=False,
                        schedule_timeout_s=args.i6pn_schedule_timeout_min * 60, spawn=_spawner(args))
     watch = pair.watch(live)
     while True:
@@ -484,7 +569,8 @@ def main(argv: list[str] | None = None) -> None:
     cost = sum(cost_per_h(tier, p.get("cpus")).values()) * (exp - pair.t0) / 3600
     note = f"\n  Note: {pair.note}" if pair.note else ""
     print(f"""
-PGW two-party demo is up (run {pair.run_id}, network {pair.network}, provider GPU {p.get('gpu', '?')}).{note}
+PGW two-party demo is up (run {pair.run_id}, placement {pair.network}, path {p.get('network_path') or '?'},
+provider GPU {p.get('gpu', '?')}).{note}
 
   Customer console (setup wizard): {c['console_url']}
   One-time setup token:            {c['setup_token']}   (shown once: --show will not repeat it)

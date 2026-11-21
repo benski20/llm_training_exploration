@@ -99,6 +99,24 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def network_path(url: str | None) -> str:
+    """Label of the network path to a compute service URL, shown next to round-trip figures (admin status,
+    start-up log): ``loopback`` (service on this host), ``private <ip>`` (a private or unique-local
+    address, e.g. a cloud's private network), ``public <host>`` (anything else) or ``unknown``."""
+    try:
+        _scheme, host, _port = origin_of(url or "")
+    except ConfigError:
+        return "unknown"
+    host = host.strip("[]")
+    if _is_loopback(host):
+        return "loopback"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return f"public {host}"
+    return f"private {ip}" if ip.is_private else f"public {ip}"
+
+
 class GatewayModelConfig(BaseModel):
     """One served model."""
 

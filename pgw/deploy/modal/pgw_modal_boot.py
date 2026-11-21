@@ -12,6 +12,10 @@ Customer (gateway):
   * :func:`start_gateway` runs ``pgw gateway serve`` in setup mode and returns the one-time setup token
     it prints.
 
+Co-located placement (``colocated.py``): both parties in one container, each as its own Unix user
+(:func:`party_dir`, ``user=`` of the start functions) with its own 0700 working directory, and with the
+Modal runtime's variables removed from their environments (:func:`clean_env`).
+
 The same functions drive the local rehearsal (``local_rehearsal.py``), so what runs on Modal is what
 was tested here.
 """
@@ -77,6 +81,44 @@ def _ca(common_name: str, days: float) -> tuple[Any, Any]:
             .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
             .sign(key, hashes.SHA256()))
     return key, cert
+
+
+def clean_env(prefixes: tuple[str, ...] = ("PGW_",)) -> dict[str, str]:
+    """This process's environment without ``prefixes`` and without the Modal runtime's ``MODAL_*``
+    variables: the service and the gateway never use Modal, so their processes do not inherit its
+    container settings (task id, server URL, ...)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith((*prefixes, "MODAL_"))}
+
+
+def party_dir(path: Path, user: str | None) -> Path:
+    """Create ``path`` (mode 0700) and, with ``user``, hand it and everything below it to that user, so
+    the other party's user cannot list or read it. Returns ``path``."""
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    if user is not None:
+        import pwd
+
+        pw = pwd.getpwnam(user)
+        for root, dirs, files in os.walk(path):
+            for name in [*dirs, *files]:
+                os.chown(Path(root) / name, pw.pw_uid, pw.pw_gid, follow_symlinks=False)
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    return path
+
+
+def as_user(env: dict[str, str], user: str | None, home: Path | None = None) -> dict[str, Any]:
+    """``subprocess.Popen`` keyword arguments that run a child as ``user`` (its primary group, no supplementary
+    groups, umask 077) with ``HOME`` (and the Hugging Face / Triton caches) under ``home``. ``{}`` without
+    a user (the two-container placements: each party already has its own container)."""
+    if user is None:
+        return {}
+    if home is not None:
+        env.update({"HOME": str(home), "HF_HOME": str(home / ".cache" / "huggingface"),
+                    "TRITON_CACHE_DIR": str(home / ".triton"), "XDG_CACHE_HOME": str(home / ".cache")})
+    import pwd
+
+    env["USER"] = env["LOGNAME"] = user
+    return {"user": user, "group": pwd.getpwnam(user).pw_gid, "extra_groups": [], "umask": 0o077}
 
 
 def i6pn_address() -> str | None:
@@ -152,7 +194,7 @@ def service_env(work: Path, pack: Path, pki: dict[str, Path], public_url: str, p
         if not p.exists():
             fd = os.open(p, os.O_WRONLY | os.O_CREAT, 0o600)
             os.close(fd)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
+    env = clean_env()
     env.update({
         "PGW_LOG_LEVEL": "INFO",
         "PGW_SERVICE_HOST": "0.0.0.0",  # noqa: S104 - reached through the Modal TCP tunnel
@@ -185,12 +227,16 @@ def _tee(stream: IO[bytes], sink: IO[bytes], on_line: Any = None) -> None:
 
 
 def start_logged(cmd: list[str], env: dict[str, str], logfile: Path, on_line: Any = None,
-                 redact: re.Pattern[bytes] | None = None) -> subprocess.Popen[bytes]:
-    """Start ``cmd``; its output goes to ``logfile`` and stdout (``redact`` matches are masked on stdout)."""
+                 redact: re.Pattern[bytes] | None = None, user_kw: dict[str, Any] | None = None,
+                 cwd: Path | None = None) -> subprocess.Popen[bytes]:
+    """Start ``cmd``; its output goes to ``logfile`` and stdout (``redact`` matches are masked on stdout).
+    ``user_kw`` (:func:`as_user`) runs it as another user; the log file is written by this process."""
     logfile.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: S603
-                            stdin=subprocess.DEVNULL)
-    fh = logfile.open("ab")
+                            stdin=subprocess.DEVNULL, cwd=cwd, **(user_kw or {}))
+    # 0600: in the co-located placement this process is root and the log file is the parent's (the
+    # gateway's log holds its setup token), never readable by the other party's user.
+    fh = os.fdopen(os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab")
 
     class _Both:
         def write(self, b: bytes) -> None:
@@ -223,14 +269,17 @@ def wait_ready(url: str, proc: subprocess.Popen[bytes], *, verify: Any = True, t
     raise RuntimeError(f"{url} not ready after {timeout_s:.0f}s")
 
 
-def start_service(env: dict[str, str], logfile: Path) -> subprocess.Popen[bytes]:
-    return start_logged([sys.executable, "-m", "pgw.cli", "service", "serve"], env, logfile)
+def start_service(env: dict[str, str], logfile: Path, user_kw: dict[str, Any] | None = None,
+                  cwd: Path | None = None) -> subprocess.Popen[bytes]:
+    return start_logged([sys.executable, "-m", "pgw.cli", "service", "serve"], env, logfile, user_kw=user_kw,
+                        cwd=cwd)
 
 
-def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str) -> dict[str, Any]:
+def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str,
+                           user_kw: dict[str, Any] | None = None, cwd: Path | None = None) -> dict[str, Any]:
     r = subprocess.run([sys.executable, "-m", "pgw.cli", "service", "enroll", "create", "--tenant", tenant,  # noqa: S603
                         "--ttl", ttl, "--models", MODEL_NAME, "--note", note, "--json"],
-                       env=env, capture_output=True, text=True, check=False)
+                       env=env, capture_output=True, text=True, check=False, cwd=cwd, **(user_kw or {}))
     if r.returncode != 0:
         raise RuntimeError(f"enroll create failed: {r.stderr[-2000:]}")
     out: dict[str, Any] = json.loads(r.stdout)
@@ -263,7 +312,7 @@ GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads
 
 def gateway_env(config_dir: Path, data_dir: Path, port: int,
                 model_options: dict[str, Any] | None = None) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PGW_")}
+    env = clean_env()
     env.update({
         "PGW_LOG_LEVEL": "INFO",
         "PGW_GATEWAY_HOST": "0.0.0.0",  # noqa: S104 - reached through the Modal HTTPS tunnel
@@ -281,7 +330,8 @@ def gateway_env(config_dir: Path, data_dir: Path, port: int,
     return env
 
 
-def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300) -> tuple[subprocess.Popen[bytes], str]:
+def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300, user_kw: dict[str, Any] | None = None,
+                  cwd: Path | None = None) -> tuple[subprocess.Popen[bytes], str]:
     """``pgw gateway serve`` (setup mode); returns the process and the setup token it printed."""
     found: list[str] = []
     ev = threading.Event()
@@ -294,8 +344,100 @@ def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300) ->
 
     # The token goes to the log file only; the container's stdout (Modal logs) shows it masked.
     proc = start_logged([sys.executable, "-m", "pgw.cli", "gateway", "serve"], env, logfile, on_line,
-                        redact=re.compile(rb"pgw-setup-[A-Za-z0-9_-]{8,}"))
+                        redact=re.compile(rb"pgw-setup-[A-Za-z0-9_-]{8,}"), user_kw=user_kw, cwd=cwd)
     if not ev.wait(timeout_s):
         proc.kill()
         raise RuntimeError(f"gateway printed no setup token; see {logfile}")
     return proc, found[0]
+
+
+# ------------------------------------------------------------------------------------------------
+# which network path a service URL takes (reported next to every RTT figure)
+# ------------------------------------------------------------------------------------------------
+def network_path(service_url: str | None) -> str:
+    """Label of the path a gateway takes to ``service_url``: ``loopback`` (both parties on one host:
+    the co-located placement), ``private <addr>`` (a private or unique-local address: Modal's i6pn, or
+    an intra-cluster address), ``public <host>`` (e.g. the public TCP tunnel's relay host) or
+    ``unknown``."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(service_url or "").hostname
+    except ValueError:
+        host = None
+    if not host:
+        return "unknown"
+    if host == "localhost":
+        return "loopback"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return f"public {host}"
+    if ip.is_loopback:
+        return "loopback"
+    if ip.is_private:
+        return f"private {ip}"
+    return f"public {ip}"
+
+
+# ------------------------------------------------------------------------------------------------
+# co-located placement: both parties on one host, each as its own user (colocated.py, local_rehearsal.py)
+# ------------------------------------------------------------------------------------------------
+PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
+
+
+def ensure_user(name: str) -> None:
+    """Create system user ``name`` (own group, no login shell, no home) unless it exists (root only)."""
+    import pwd
+
+    try:
+        pwd.getpwnam(name)
+    except KeyError:
+        subprocess.run(["useradd", "--system", "--user-group", "--shell", "/usr/sbin/nologin",  # noqa: S603, S607
+                        "--no-create-home", name], check=True)
+
+
+def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user: str | None, log_dir: Path,
+                         tenant: str = "customer-demo", code_ttl: str = "90m", note: str = "co-located demo",
+                         public_url: str | None = None) -> dict[str, Any]:
+    """The provider's compute service on ``127.0.0.1:port`` only (TLS, a fresh PKI for 127.0.0.1), run as
+    ``user`` in ``work`` (0700, owned by that user once its PKI and state files exist), plus a fresh
+    single-use enrollment code. ``public_url`` (default ``https://127.0.0.1:port``) is the URL the code
+    points the gateway at (e.g. a delay proxy on loopback). Returns ``proc``, ``url``, ``code``, ``pki``,
+    ``env`` and ``ca_sha256``."""
+    party_dir(work / "home", None)
+    pki = make_pki(work / "pki", ["127.0.0.1", "localhost"])
+    url = public_url or f"https://127.0.0.1:{port}"
+    env = service_env(work, pack, pki, url, port, device=device)
+    env["PGW_SERVICE_HOST"] = "127.0.0.1"  # nothing outside this host can reach it
+    party_dir(work, user)  # everything below is the provider's from here on
+    kw = as_user(env, user, work / "home")
+    party_dir(log_dir, None)
+    proc = start_service(env, log_dir / "service.log", user_kw=kw, cwd=work)
+    t0 = time.time()
+    wait_ready(f"https://127.0.0.1:{port}/readyz", proc, verify=str(pki["service_ca"]), timeout_s=900)
+    log(f"service ready in {time.time() - t0:.0f}s (127.0.0.1:{port}, user {user or 'same'})")
+    code = create_enrollment_code(env, tenant, code_ttl, note, user_kw=kw, cwd=work)
+    from pgw.enroll.service import ca_fingerprint, load_ca_pem
+
+    return {"proc": proc, "url": url, "code": code, "pki": pki, "env": env,
+            "ca_sha256": ca_fingerprint(load_ca_pem(pki["service_ca"])).hex()}
+
+
+def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Path,
+                        model_options: dict[str, Any] | None = None,
+                        hide_gpu: bool = True) -> tuple[subprocess.Popen[bytes], str]:
+    """The customer's gateway in setup mode as ``user`` in ``root`` (0700), without the provider's GPU
+    (``hide_gpu``). Returns the process and its one-time setup token."""
+    party_dir(root / "home", None)
+    party_dir(root, user)
+    env = gateway_env(root / "config", root / "data", port, model_options)
+    if hide_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = ""  # the provider's GPU is not the customer's
+    env.setdefault("OMP_WAIT_POLICY", "PASSIVE")  # as in customer.py's image
+    kw = as_user(env, user, root / "home")
+    party_dir(log_dir, None)
+    gw, token = start_gateway(env, log_dir / "gateway.log", user_kw=kw, cwd=root)
+    wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
+    log(f"gateway in setup mode on :{port} (user {user or 'same'})")
+    return gw, token
