@@ -962,6 +962,12 @@ class MaskedBackend(LinearBackend):
         self._local_fast_on: bool | None = None
         self._local_fast_checked: dict[tuple[int, int, float, int], bool] = {}
         self._local_zero_r: dict[int, np.ndarray] = {}
+        #: Single-session decode prefetch (:meth:`_maybe_prefetch`): on with synchronous trips (the gateway
+        #: thread then waits in a GIL-free ``recv`` during every trip, which is when the prefetch thread
+        #: derives); ``PGW_PREFETCH_DECODE`` overrides. Rows staged per (reservation, linear) at a time.
+        self.prefetch_decode = self.mask_prefetch and _env_flag("PGW_PREFETCH_DECODE", self.sync_trips)
+        self.decode_prefetch_rows = 8
+        self._decode_pf: dict[tuple[int, str], int] = {}
         #: :meth:`_local_fast` on ``pgw_fast.local_linear_into`` (one fused native call; ``PGW_LOCAL_NATIVE=0``
         #: keeps the numpy + ``torch._int_mm`` form). Same self-check per shape against the reference.
         self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
@@ -1860,6 +1866,23 @@ class MaskedBackend(LinearBackend):
         cap = int(self.prefetch_max_rows)
         items = [(res, lid, rows * max(1, int(self.prefetch_depth))) for res, lid, rows in need.values()
                  if 0 < rows <= cap and (multi or rows >= 3)]
+        if not items and self.prefetch_decode:
+            # Single-session decode (L2): stage the next ``decode_prefetch_rows`` rows of this (reservation,
+            # linear) once every ``decode_prefetch_rows`` calls, so the derivation runs on the prefetch
+            # thread while trips are in flight (the gateway thread waits in recv, GIL free) and the next
+            # tokens take staged rows. Same rows, same order (a cache of the next takes); nothing sent changes.
+            depth = int(self.decode_prefetch_rows)
+            for key, (res, lid, rows) in need.items():
+                if rows > 2:
+                    continue
+                left = self._decode_pf.get(key, 0) - rows
+                if left > 0:
+                    self._decode_pf[key] = left
+                    continue
+                self._decode_pf[key] = max(1, depth)
+                items.append((res, lid, depth))
+            if len(self._decode_pf) > 4096:  # bounded (keys of ended sessions)
+                self._decode_pf.clear()
         if not items:
             return
         with self._prefetch_lock:
@@ -2179,20 +2202,20 @@ class MaskedBackend(LinearBackend):
             w8n = self._local_w8n.get(lid.key)
             if w8n is None:
                 w8n = self._local_w8n[lid.key] = w.w8t.numpy()
-            out = np.empty((rows, meta.out_features), dtype=np.float32)
+            res = np.empty((rows, meta.out_features), dtype=np.float32)
             sx = np.empty(rows, dtype=np.float64)
             try:
                 status = native.fast.local_linear_into(
                     xf, w8n, scale, bias, ring.k, ring.a, int(ring.cap or 0),
-                    float(meta.wnorm or 0.0) if ring.cap else 0.0, bound, sx, out,
-                    0 if n * meta.out_features >= self.local_pool_min_macs else 1)
+                    float(meta.wnorm or 0.0) if ring.cap else 0.0, bound,
+                    sx, res, 0 if n * meta.out_features >= self.local_pool_min_macs else 1)
             except ValueError as exc:
                 if str(exc).startswith("ring_overflow"):
                     raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
                 raise ShapeError(str(exc)) from exc
             if status:
                 self._raise_status(int(status), 0, lid, rows, bound)
-            return torch.from_numpy(out)
+            return torch.from_numpy(res)
         zeros = self._local_zero_r.get(n)
         if zeros is None or zeros.shape[0] < rows:
             zeros = self._local_zero_r[n] = np.zeros((self.local_fast_max_rows, n), dtype=np.int64)
@@ -2390,7 +2413,7 @@ class MaskedBackend(LinearBackend):
         request = None
         if chunks:
             request = ComputeRequest(
-                request_id=uuid.uuid4().hex,
+                request_id=os.urandom(16).hex(),  # 32 random hex digits, as uuid4().hex (cheaper)
                 fingerprint=self.fingerprint,
                 ring=self.ring.name,
                 items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]

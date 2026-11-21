@@ -85,7 +85,7 @@ def test_native_local_refuses_like_the_reference(qwen_pack: InMemoryPack, monkey
     x = torch.randn(2, qwen_pack.arch.hidden_size)
     be.forward_local([LinearCall(lid, x)])  # the self-check passes first
     assert list(be._local_fast_checked.values()) == [True] and be._local_w8n
-    scale, bias, bound = be._consts(lid, be._meta.get(lid))
+    scale, bias, _bound = be._consts(lid, be._meta.get(lid))
     monkeypatch.setattr(be, "_consts", lambda *_: (scale, bias, 0))  # every nonzero output is out of range
     with pytest.raises(IntegrityError) as ei:
         be.forward_local([LinearCall(lid, x)])

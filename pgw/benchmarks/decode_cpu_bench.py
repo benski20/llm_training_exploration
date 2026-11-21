@@ -125,6 +125,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 ComputeResult(i.linear, i.rows, bytes(i.rows * outm[i.linear] * nb)) for i in req.items))
 
         def compute_sync(self, req: Any) -> Any:
+            if args.service_delay_ms > 0:  # stand-in for network + provider time (GIL released, like recv)
+                time.sleep(args.service_delay_ms / 1e3)
             return self._answer(req)
 
         async def compute(self, req: Any) -> Any:
@@ -209,7 +211,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "backend_ms_per_token": round(med["backend_ms_per_token"] * full / lay, 2),
         },
         "outputs_repeat_identical": all(o == outs[0] for o in outs),
-        **({"breakdown_ms_per_token": {k: {"wall": round(1e3 * v[0] / ntok, 3), "thread_cpu": round(1e3 * v[1] / ntok, 3),
+        **({"breakdown_ms_per_token": {k: {"wall": round(1e3 * v[0] / ntok, 3),
+                                           "thread_cpu": round(1e3 * v[1] / ntok, 3),
                                            "calls_per_token": round(v[2] / ntok, 2)}
                                        for k, v in sorted(timers.items())}} if timers is not None else {}),
         "first_tokens": outs[0][0][:8],
@@ -221,8 +224,6 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         print(s.getvalue(), file=sys.stderr)
         ntok = max(1, args.repeat * args.tokens)
         for want in args.callees:  # compact callee table, microseconds per generated token
-            for (fname, line, func), (_cc, _nc, _tt, _ct, callers) in st.stats.items():  # type: ignore[attr-defined]
-                pass
             for key, val in st.stats.items():  # type: ignore[attr-defined]
                 if key[2] != want:
                     continue
@@ -281,7 +282,7 @@ def _time_head(model: Any, logprobs: int, reps: int = 7) -> float:
     from pgw.engine.lm_head import lm_head_logits
     from pgw.engine.sampling import Sampler, SamplingParams
 
-    head = model._head  # noqa: SLF001 - benchmark
+    head = model._head
     h = torch.randn(1, head.shape[1] if hasattr(head, "shape") else model.arch.hidden_size)
     sampler = Sampler(SamplingParams(temperature=0.0, logprobs=logprobs, max_tokens=1))
     ts = []
@@ -307,6 +308,7 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--logprobs", type=int, default=0)
     ap.add_argument("--no-noise", action="store_true")
+    ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--breakdown", action="store_true", help="per-stage wall and thread CPU per token")
     ap.add_argument("--profile-top", type=int, default=30)

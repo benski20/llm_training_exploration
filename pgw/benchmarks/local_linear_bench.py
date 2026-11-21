@@ -8,6 +8,7 @@ Usage:
 Prints the median microseconds per call (calling-thread CPU and wall) for each shape (``n x m``).
 """
 
+# ruff: noqa: B023  (closures run inside the loop iteration that defines them)
 from __future__ import annotations
 
 import argparse
