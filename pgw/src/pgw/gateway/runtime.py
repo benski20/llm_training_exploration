@@ -597,6 +597,11 @@ class ModelRuntime:
                                stream_with_transport=real_network)
         if c.lane == "off":
             return client
+        if c.lane == "stream":
+            from pgw.wire.sync_stream import build_sync_stream_client
+
+            # The same WebSocket stream endpoint on service_url (on the egress allowlist, checked above).
+            return build_sync_stream_client(client)
         from pgw.wire.service_lane import build_lane_client
 
         # The lane socket is local (UDS only; a TCP ticket is refused): the egress allowlist is unaffected.
@@ -752,6 +757,9 @@ class ModelRuntime:
         """``lane`` = auto/required: ask the service for a trip-lane ticket now (start-up, not on the first
         token). ``required`` refuses to start without one (the model stays ``connecting`` and retries)."""
         lane = self.config.lane
+        if lane == "stream":  # blocking stream lane: opens its connection on the first synchronous trip
+            self.lane_state = "stream" if getattr(client, "sync_stream", False) is True else "off"
+            return
         opener = getattr(client, "open", None)
         if lane == "off" or not callable(opener) or self.fingerprint is None:
             self.lane_state = "off"
@@ -1350,6 +1358,9 @@ class ModelRuntime:
         if stats is not None:
             out["lane_stats"] = {k: v for k, v in vars(stats).items() if isinstance(v, int | float | bool)}
             out["lane_fallbacks"] = dict(getattr(stats, "fallback_reasons", {}) or {})
+        sstats = getattr(self.client, "sync_stream_stats", None)
+        if sstats is not None:
+            out["stream_lane_stats"] = {k: v for k, v in vars(sstats).items() if isinstance(v, int | float | str)}
         return out
 
     def status(self) -> dict[str, Any]:

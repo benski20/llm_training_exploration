@@ -138,6 +138,7 @@ def test_local_linear_refuses_out_of_range_outputs_like_the_masked_path(qwen_pac
                                                                         monkeypatch: pytest.MonkeyPatch) -> None:
     be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
                        local_linears="attention")
+    be.local_fast_max_rows = 0  # the reference path (the fast path: test_local_fast_refuses_out_of_range)
     lid = LinearId(0, LinearKind.QKV)
     x = torch.randn(2, qwen_pack.arch.hidden_size)
     be.forward_local([LinearCall(lid, x)])
