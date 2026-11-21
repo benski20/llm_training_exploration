@@ -15,12 +15,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import shutil
+import threading
 import time
 import warnings
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +44,8 @@ from pgw.hemask.lwe import (
 )
 from pgw.hemask.ntt import big_planes_mm_small  # exact NTT/CRT product; falls back to fastmm
 
-__all__ = ["MAX_GROUPS_PER_PASS", "MAX_INFLIGHT", "HEMaskBackend", "HintStore", "verify_rows"]
+__all__ = ["MAX_GROUPS_PER_PASS", "MAX_INFLIGHT", "MAX_PIPELINE_DEPTH", "HEJob", "HEMaskBackend", "HintStore",
+           "verify_rows"]
 
 log = logging.getLogger(__name__)
 
@@ -162,6 +165,8 @@ class HintStore:
 MAX_GROUPS_PER_PASS = 16
 #: Most maskgen requests in flight per backend (``E6``: fills the link on high-latency paths).
 MAX_INFLIGHT = 4
+#: Most :meth:`HEMaskBackend.submit` jobs the factory keeps outstanding (``M1``: stage overlap across linears).
+MAX_PIPELINE_DEPTH = 8
 
 
 def verify_rows(r: np.ndarray, wr: np.ndarray, cu: np.ndarray, cw: np.ndarray, mask: int) -> np.ndarray:
@@ -214,6 +219,15 @@ class HEMaskBackend:
             ``"auto"`` = the gateway GPU when the CUDA engine is chosen and its self-test passed, else the
             CPU engines; ``None`` = the CPU engines; a device name (tests: ``"cpu"`` runs the device code
             on CPU tensors). Same ciphertext distribution and the same decrypted bits either way.
+        pipeline_depth: ``0`` (default): the factory calls :meth:`matmul` one linear at a time, so a
+            segment's stages run back to back (with a few groups per linear, one request per call:
+            encrypt, provider, decrypt in series). ``>= 1``: the factory uses :meth:`submit` and keeps up
+            to this many jobs (linears or chunks) outstanding, so encryption of job ``k + 1``, the provider
+            work on ``k`` and the decryption of ``k - 1`` overlap (one encryption thread, ``max_inflight``
+            request threads, one decryption thread; native kernels release the GIL). Same requests, same
+            ciphertexts, same decrypted bits; only the start times move (see :meth:`submit`).
+        pipeline_bytes: Soft cap on the factory's outstanding job memory with ``pipeline_depth``
+            (``r``, output and ciphertexts; at least one job is always outstanding).
     """
 
     #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
@@ -222,7 +236,8 @@ class HEMaskBackend:
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
                  max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
-                 encrypt: str = "dense", device: str | None = "auto"):
+                 encrypt: str = "dense", device: str | None = "auto", pipeline_depth: int = 0,
+                 pipeline_bytes: int = 1 << 30):
         if encrypt not in ("dense", "ntt_pre"):
             raise ConfigError(f"encrypt must be 'dense' or 'ntt_pre', got {encrypt!r}")
         self.params = HEParams(k=ring.k, rank=hints.rank)
@@ -236,6 +251,8 @@ class HEMaskBackend:
         self.max_inflight = max(1, min(MAX_INFLIGHT, int(max_inflight)))
         self.groups_per_pass = max(1, min(MAX_GROUPS_PER_PASS, int(groups_per_pass)))
         self.pass_bytes = max(1, int(pass_bytes))
+        self.pipeline_depth = max(0, min(MAX_PIPELINE_DEPTH, int(pipeline_depth)))
+        self.pipeline_bytes = max(1, int(pipeline_bytes))
         self.specs = {s.id.key: s for s in pack.linear_specs()}
         for key, norm in hints.meta["row_norms"].items():
             self.params.check_noise(norm, key)
@@ -273,7 +290,13 @@ class HEMaskBackend:
         #: Where the products run: ``device:<dev>`` (fused device passes) or the fastmm/NTT CPU engine name.
         self.engine = f"device:{dev}" if dev is not None else engine()
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0,
-                      "passes": 0, "max_inflight": 0}
+                      "passes": 0, "max_inflight": 0, "jobs": 0}
+        self._stats_lock = threading.Lock()
+        self._dev_lock = threading.Lock()  # the device passes are not used from two threads at once
+        self._busy = 0  # submitted jobs not finished yet (wall_s counts the time with at least one)
+        self._busy_t0 = 0.0
+        self._stage_pools: tuple[ThreadPoolExecutor, ThreadPoolExecutor] | None = None
+        self._stage_pools_lock = threading.Lock()
         log.info("encrypted mask factory: encryption/decryption on %s%s", self.engine,
                  f" (hint cache {self._dev.cache.budget / 2**30:.1f} GiB)" if self._dev is not None else "")
         self._pool = ThreadPoolExecutor(max_workers=self.max_inflight, thread_name_prefix="pgw-hemask-remote")
@@ -299,7 +322,8 @@ class HEMaskBackend:
             out: list[MaskCiphertext] = self._fast.encrypt(rn)
             return out
         if self._dev is not None:
-            cts, b = self._dev.encrypt(rn, n)
+            with self._dev_lock:
+                cts, b = self._dev.encrypt(rn, n)
             for gi, ct in enumerate(cts):
                 ct.b = np.ascontiguousarray(b[:, gi * DEGREE:(gi + 1) * DEGREE])
             return cts
@@ -331,7 +355,8 @@ class HEMaskBackend:
         """
         hint = self.hints.hint(linear)
         if self._dev is not None and hint.ndim == 3:
-            self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+            with self._dev_lock:
+                self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
             return
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
@@ -397,6 +422,202 @@ class HEMaskBackend:
         finally:
             offset.fill(0)  # 128 * column sums of S
 
+    def _add_stats(self, **kw: float) -> None:
+        with self._stats_lock:
+            for key, v in kw.items():
+                self.stats[key] += v
+
+    def _flush_pass(self, linear: str, ready: deque[tuple[np.ndarray, list[MaskCiphertext], int]],
+                    pass_groups: int, out: np.ndarray, m: int) -> None:
+        """Decrypt the oldest ``pass_groups`` ready groups (fewer at the end) into ``out``, splitting a
+        reply across passes when it does not fit; wipes the secrets of the groups it took."""
+        t1 = time.perf_counter()
+        take: list[tuple[np.ndarray, list[MaskCiphertext], int]] = []
+        groups = 0
+        while ready and groups < pass_groups:
+            y, cts, s0 = ready[0]
+            k = min(len(cts), pass_groups - groups)
+            if k == len(cts):
+                take.append(ready.popleft())
+            else:
+                head_rows = sum(ct.rows for ct in cts[:k])
+                take.append((y[:, :k * DEGREE], cts[:k], s0))
+                ready[0] = (y[:, k * DEGREE:], cts[k:], s0 + head_rows)
+            groups += k
+        try:
+            self._decrypt_into(linear, take, out, m)
+        finally:
+            for _, cts, _ in take:
+                for ct in cts:
+                    ct.wipe()
+        self._add_stats(decrypt_s=time.perf_counter() - t1, groups=groups, passes=1)
+
+    # ---- asynchronous jobs (pipeline_depth >= 1) ------------------------------------------------
+    def _pools(self) -> tuple[ThreadPoolExecutor, ThreadPoolExecutor]:
+        with self._stage_pools_lock:
+            if self._stage_pools is None:
+                self._stage_pools = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-encrypt"),
+                                     ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-decrypt"))
+            return self._stage_pools
+
+    def job_bytes(self, linear: str, rows: int) -> int:
+        """Gateway memory of one outstanding job of ``rows`` masks (``r``, output, ciphertexts and
+        replies; an estimate used against :attr:`pipeline_bytes`)."""
+        spec = self.specs[linear]
+        return 8 * rows * (2 * spec.in_features + 2 * spec.out_features)
+
+    def _job_started(self) -> None:
+        with self._stats_lock:
+            if self._busy == 0:
+                self._busy_t0 = time.perf_counter()
+            self._busy += 1
+            self.stats["jobs"] += 1
+
+    def _job_ended(self) -> None:
+        with self._stats_lock:
+            self._busy -= 1
+            if self._busy == 0:
+                self.stats["wall_s"] += time.perf_counter() - self._busy_t0
+
+    def _timed_remote(self, linear: str, b: np.ndarray) -> np.ndarray:
+        t0 = time.perf_counter()
+        try:
+            return self.remote(linear, b)
+        finally:
+            self._add_stats(remote_s=time.perf_counter() - t0)
+
+    def submit(self, linear: str, r: torch.Tensor) -> HEJob:
+        """Start ``W8 r mod 2^K`` for ``(rows, n)`` masks ``r`` and return at once (:class:`HEJob`).
+
+        The same work as :meth:`matmul` (same batches of ``groups_per_call`` groups, same requests, same
+        decryption passes and the same output bits), split into stages that run in their own threads:
+        encryption (one thread, jobs in submission order), the provider requests (``max_inflight``
+        threads, queued in submission order) and decryption (one thread, jobs in order). While the caller
+        keeps several jobs outstanding, job ``k + 1`` is encrypted while the provider works on ``k`` and
+        ``k - 1`` is decrypted. ``r`` must stay unchanged until the job is done (:meth:`HEJob.result` or
+        :meth:`HEJob.cancel` returned). The provider sees the same ciphertexts, sizes and counts as with
+        :meth:`matmul`; only the start times of the requests move, and they depend on stage times that
+        are functions of the (public) shapes, not of the masks.
+        """
+        spec = self.specs[linear]
+        n, m = spec.in_features, spec.out_features
+        if r.ndim != 2 or r.shape[1] != n:
+            raise ConfigError(f"{linear}: masks must be (rows, {n}), got {tuple(r.shape)}")
+        rn = r.numpy() if isinstance(r, torch.Tensor) else np.asarray(r)
+        job = HEJob(linear, rn, n, m)
+        enc_pool, dec_pool = self._pools()
+        self._job_started()
+        try:
+            enc_pool.submit(self._stage_encrypt, job)
+        except BaseException:  # the pool is shut down: the job never runs
+            self._job_ended()
+            raise
+        dec_pool.submit(self._stage_decrypt, job)
+        return job
+
+    def _stage_encrypt(self, job: HEJob) -> None:
+        """Encrypt the job's batches and send each one; hands ``(s0, cts, reply future)`` to the decryption
+        stage through ``job.items`` and always ends the queue with ``None`` (or the exception)."""
+        rows = job.rows
+        step = DEGREE * self.groups_per_call
+        cts: list[MaskCiphertext] = []
+        end: BaseException | None = None
+        try:
+            for s0 in range(0, rows, step):
+                if job.aborted.is_set():
+                    break
+                t0 = time.perf_counter()
+                cts = self._encrypt(job.rn[s0:min(s0 + step, rows)], job.n)
+                b = np.concatenate([ct.b for ct in cts], axis=1)
+                for ct in cts:
+                    ct.b = _NO_B  # the request owns the ciphertext now
+                self._add_stats(encrypt_s=time.perf_counter() - t0)
+                fut = self._pool.submit(self._timed_remote, job.linear, b)
+                del b
+                job.items.put((s0, cts, fut))  # the decryption stage owns (and wipes) cts from here
+                cts = []
+        except BaseException as exc:  # handed to the decryption stage, which reports it
+            end = exc
+            for ct in cts:
+                ct.wipe()
+        finally:
+            job.items.put(end)
+
+    def _stage_decrypt(self, job: HEJob) -> None:
+        """Decrypt the job and complete ``job.future`` (after the job stopped counting as busy)."""
+        res: torch.Tensor | None = None
+        err: BaseException | None = None
+        try:
+            res = self._decrypt_job(job)
+        except BaseException as exc:  # delivered through the job's future
+            err = exc
+        finally:
+            self._job_ended()
+        if err is not None:
+            job.future.set_exception(err)
+        else:
+            job.future.set_result(res)
+
+    def _decrypt_job(self, job: HEJob) -> torch.Tensor:
+        """Collect the job's replies in order and decrypt them in passes; wipes every secret it got."""
+        out = np.empty((job.rows, job.m), dtype=np.int64)
+        pass_groups = self._pass_groups(job.m)
+        ready: deque[tuple[np.ndarray, list[MaskCiphertext], int]] = deque()
+        pending: deque[tuple[int, list[MaskCiphertext], Future[np.ndarray]]] = deque()
+        ended = False
+        try:
+            while True:
+                item = job.items.get()
+                if item is None or isinstance(item, BaseException):
+                    ended = True
+                    if item is not None:
+                        raise item
+                    break
+                pending.append(item)
+                # decrypt what has arrived (in order) while later batches are encrypted or remote
+                while pending and pending[0][2].done():
+                    self._collect(job, pending, ready, pass_groups, out)
+            while pending:
+                self._collect(job, pending, ready, pass_groups, out)
+            while ready:
+                if job.aborted.is_set():
+                    raise CancelledError()
+                self._flush_pass(job.linear, ready, pass_groups, out, job.m)
+            if job.aborted.is_set():
+                raise CancelledError()
+            return torch.from_numpy(out)
+        except BaseException:
+            out.fill(0)
+            raise
+        finally:
+            while not ended:  # the encryption stage always ends the queue
+                item = job.items.get()
+                if item is None or isinstance(item, BaseException):
+                    ended = True
+                else:
+                    pending.append(item)
+            for _, cts, fut in pending:
+                fut.cancel()
+                for ct in cts:
+                    ct.wipe()
+            for _, cts, _ in ready:
+                for ct in cts:
+                    ct.wipe()
+
+    def _collect(self, job: HEJob, pending: deque[tuple[int, list[MaskCiphertext], Future[np.ndarray]]],
+                 ready: deque[tuple[np.ndarray, list[MaskCiphertext], int]], pass_groups: int,
+                 out: np.ndarray) -> None:
+        """Move the oldest reply to ``ready`` (waiting for it) and decrypt full passes."""
+        if job.aborted.is_set():
+            raise CancelledError()
+        s0, cts, fut = pending[0]
+        y = fut.result()
+        self._check_reply(job.linear, y, cts, job.m)  # on failure the stage's finally wipes cts
+        pending.popleft()
+        ready.append((y, cts, s0))
+        while sum(len(c) for _, c, _ in ready) >= pass_groups:
+            self._flush_pass(job.linear, ready, pass_groups, out, job.m)
+
     def _pass_groups(self, m: int) -> int:
         """Groups per decryption pass: ``groups_per_pass`` within ``pass_bytes`` of replies (>= 1)."""
         return max(1, min(self.groups_per_pass, self.pass_bytes // (m * DEGREE * 8)))
@@ -434,30 +655,7 @@ class HEMaskBackend:
             return sum(len(cts) for _, cts, _ in ready)
 
         def flush() -> None:
-            """Decrypt the oldest ``pass_groups`` ready groups (fewer at the end), splitting a reply
-            across passes when it does not fit."""
-            t1 = time.perf_counter()
-            take: list[tuple[np.ndarray, list[MaskCiphertext], int]] = []
-            groups = 0
-            while ready and groups < pass_groups:
-                y, cts, s0 = ready[0]
-                k = min(len(cts), pass_groups - groups)
-                if k == len(cts):
-                    take.append(ready.popleft())
-                else:
-                    head_rows = sum(ct.rows for ct in cts[:k])
-                    take.append((y[:, :k * DEGREE], cts[:k], s0))
-                    ready[0] = (y[:, k * DEGREE:], cts[k:], s0 + head_rows)
-                groups += k
-            try:
-                self._decrypt_into(linear, take, out, m)
-            finally:
-                for _, cts, _ in take:
-                    for ct in cts:
-                        ct.wipe()
-            self.stats["decrypt_s"] += time.perf_counter() - t1
-            self.stats["groups"] += groups
-            self.stats["passes"] += 1
+            self._flush_pass(linear, ready, pass_groups, out, m)
 
         try:
             for s0, s1 in batches:
@@ -498,3 +696,34 @@ class HEMaskBackend:
 
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
+
+
+class HEJob:
+    """One :meth:`HEMaskBackend.submit` job: ``W8 r`` of one chunk, computed in the stage threads."""
+
+    def __init__(self, linear: str, rn: np.ndarray, n: int, m: int):
+        self.linear = linear
+        self.rn = rn
+        self.n = n
+        self.m = m
+        self.rows = int(rn.shape[0])
+        self.aborted = threading.Event()
+        self.future: Future[torch.Tensor] = Future()
+        #: ``(s0, cts, reply future)`` from the encryption stage, ended by ``None`` or an exception.
+        self.items: queue.SimpleQueue[Any] = queue.SimpleQueue()
+
+    def done(self) -> bool:
+        return self.future.done()
+
+    def result(self, timeout: float | None = None) -> torch.Tensor:
+        """``(rows, m)`` int64 ``W8 r mod 2^K`` (the caller owns and wipes it); raises the stage's error."""
+        return self.future.result(timeout)
+
+    def cancel(self) -> None:
+        """Stop the job, wait until no stage reads ``r`` any more and wipe the output if it finished."""
+        self.aborted.set()
+        try:
+            out = self.future.result()
+        except BaseException:  # cancelled or failed: nothing to wipe
+            return
+        out.zero_()

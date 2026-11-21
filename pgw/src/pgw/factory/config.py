@@ -136,6 +136,12 @@ class FactorySettings(PGWSettings):
         "operations; needs pgw_ntt)",
     )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
+    he_max_inflight: int = Field(2, ge=1, le=4, description="Provider requests in flight at once (encrypted mode)")
+    he_pipeline_depth: int = Field(
+        0, ge=0, le=8, description="Encrypted mode: chunks (across linears) outstanding at once, so that encryption, "
+        "the provider's work and decryption of consecutive chunks overlap (0 = stages in series per chunk). Same "
+        "requests, ciphertexts and masks; the provider sees the same sizes and counts",
+    )
     he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
