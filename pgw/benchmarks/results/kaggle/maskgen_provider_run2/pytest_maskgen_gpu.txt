@@ -1,0 +1,16 @@
+........................s.........ssssssss....ssss...................... [ 49%]
+........................................................................ [ 98%]
+..                                                                       [100%]
+=============================== warnings summary ===============================
+tests/service/test_maskgen_gpu.py::test_cuda_run_item_matches_previous_path[v1:56:16-96-64-256]
+  /tmp/pgwsrc/pgw/src/pgw/service/maskgen_gpu.py:321: UserWarning: The given buffer is not writable, and PyTorch does not support non-writable tensors. This means you can write to the underlying (supposedly non-writable) buffer using the tensor. You may want to copy the buffer to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_new.cpp:1586.)
+    src = torch.frombuffer(memoryview(data).cast("B"), dtype=torch.uint8) if len(data) else \
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/service/test_maskgen_gpu.py:139: needs the Triton interpreter
+SKIPPED [8] tests/service/test_maskgen_gpu.py:168: needs the Triton interpreter
+SKIPPED [4] tests/service/test_maskgen_gpu.py:184: needs the Triton interpreter
+133 passed, 13 skipped, 1 warning in 70.88s (0:01:10)
+
+---stderr---

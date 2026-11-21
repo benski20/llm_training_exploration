@@ -205,3 +205,56 @@ kernel.
 
 Planned: the K32 ring (less network and hint), a smaller rank once the lattice estimate allows it,
 and moving hint building to the provider with Freivalds verification (faster setup for 70B).
+
+## Provider throughput at scale
+
+On CUDA the provider runs each maskgen item end to end on the GPU (`pgw.service.maskgen_gpu`). The
+v2 bit-packing stores whole-byte fields as plain arrays, so they are already byte planes. Only the
+`bb mod 8` tail bits need decoding, and that happens on the device. The provider runs `ceil(bb/8)`
+planes (7 for the default 53-bit upload; the previous path ran 8). A Triton kernel recombines the
+planes after the int8 GEMM. Before it serves, it is checked once per device against the torch
+reference. The v1 byte cut and the v2 rounding and bit-packing also run on the device. Only the
+packed reply (`yb/8` bytes per element) comes back to the host. The request upload is one
+multi-threaded pinned copy, and the reply goes out without another host copy. The items of a
+request run concurrently, with `maskgen_concurrency` slots for each CUDA device, so layers placed
+on several GPUs work in parallel. The output bytes are identical to the previous path. The
+`gpu` tests and the benchmark compare them with it and with the CPU `matmul_mod64` reference.
+
+| Switch (service env) | Default | Effect |
+|---|---|---|
+| `PGW_SERVICE_MASKGEN_FUSED` | on | `0` restores the previous CUDA path (host-side v2 unpack/pack) |
+| `PGW_SERVICE_MASKGEN_YIELD_MS` | 0 (off) | Each maskgen block (64 MB of partial sums) waits up to this long while decode rows are queued |
+| `PGW_SERVICE_MASKGEN_CONCURRENCY` | 2 per CUDA device | Concurrent items per device |
+
+Measured on Kaggle 2x T4 (4 vCPU) with `benchmarks/maskgen_provider_bench.py`, which runs one layer
+of each linear at real shapes and scales by the layer count. Default upload v2 53/35 bits, best
+`conc`. Raw results are in `benchmarks/results/kaggle/maskgen_provider_run{1,2}`.
+
+| Model | Before (1 T4) | After, 1 T4 | After, 2 T4 (layers sharded) |
+|---|---|---|---|
+| Qwen2.5-0.5B | 217 slots/s | 1,910 slots/s (g4) to 2,150 (g16) | 3,840 slots/s (g16) |
+| Qwen2.5-7B | 43 slots/s (4.4 TOPS) | 255 slots/s (23 TOPS) | 450 slots/s (41 TOPS) |
+| Llama-3-70B shapes | 8.3 slots/s | 23 slots/s (22 TOPS) | 46 slots/s (44 TOPS) |
+
+The same box measured about 28 to 37 TOPS for a bare 8192³ int8 GEMM (the T4 throttles at 70 W).
+At 7B and 70B the provider now runs at 70 to 80% of that GEMM ceiling. Per 7B gate_up item at 4
+groups: GEMM 48 ms, device pack 21 ms, D2H 13 ms, combine 6 ms (the torch ops took 30 ms), unpack
+5 ms.
+
+Decode interference: with saturating maskgen at 7B, the p50/p99 latency of an 8-row qkv decode
+GEMM was 12 / 84 ms (alone: 0.7 / 1.1 ms). With `PGW_SERVICE_MASKGEN_YIELD_MS=5` it was
+2.0 / 19.7 ms. The yield is opt-in, because it lowers maskgen throughput when decode is busy.
+
+**Projection to 70B dense.** One slot is 6.85e10 MACs per plane (80 layers), or 9.6e11 int8 ops
+with 7 planes:
+
+* T4: about 23 slots/s per GPU (measured above).
+* A10G: about 150 slots/s, assuming about 150 effective TOPS.
+* H100: about 1,200 slots/s, assuming about 1,200 effective dense TOPS.
+
+The wire then becomes the limit. At 70B a slot is 28 MB up and 29 MB down (v2 53/35:
+Σn = 4.26M, Σm = 6.72M), so a 100 Gbit/s link carries only about 200 slots/s. Encrypted masks at
+70B throughput therefore need the provider and the customer's mask factory close together
+(same region, multi-100G), or masks generated ahead of time in off-peak hours. Reducing the
+per-slot wire is a cryptographic change. Such a change needs its own reviewed scheme and stays
+off by default.
