@@ -517,7 +517,7 @@ JOBS: dict[str, dict] = {
     # 64 identical greedy requests at once on one gateway (every output compared with the plaintext reference),
     # then 64 requests over 2 and 3 gateway processes on the same store and service (request i to gateway i mod N),
     # then the service alone (pgw.service.loadtest, N sessions x 1 row: the provider's ceiling without a gateway).
-    # A/B: model config float_threads 1 (the self-checked decode thread scope) as variant "ft1"; the sharded
+    # A/B: the old thread count (float_threads null) as variant "ft_off" against the default 1; the sharded
     # gateways use it too. Reported per level: generated tokens/s, gateway and service CPU cores used, engine steps.
     "pgw-x4-concurrency": {"exclude": X4_EXCLUDE, "steps": [
         BUILD_NATIVE,
@@ -525,7 +525,7 @@ JOBS: dict[str, dict] = {
         {"kind": "validate", "label": "qwen05_conc", "args": [
             "--model", QWEN05, "--label", "qwen05_conc", "--device", "cuda", "--ref-device", "cuda",
             "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "24",
-            "--concurrent", "1", "8", "32", "64", "--variant", 'ft1={"float_threads": 1}',
+            "--concurrent", "1", "8", "32", "64", "--variant", 'ft_off={"float_threads": null}',
             "--shard-gateways", "2", "3", "--shard-concurrent", "64", "--shard-config", '{"float_threads": 1}',
             "--loadtest", "1x1", "8x1", "32x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 3600},
@@ -533,7 +533,7 @@ JOBS: dict[str, dict] = {
         {"kind": "validate", "label": "qwen15_conc", "args": [
             "--model", QWEN15, "--label", "qwen15_conc", "--device", "cuda", "--ref-device", "cuda",
             "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "16",
-            "--concurrent", "1", "64", "--variant", 'ft1={"float_threads": 1}',
+            "--concurrent", "1", "64", "--variant", 'ft_off={"float_threads": null}',
             "--shard-gateways", "2", "--shard-concurrent", "64", "--shard-config", '{"float_threads": 1}',
             "--loadtest", "1x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 3600},
