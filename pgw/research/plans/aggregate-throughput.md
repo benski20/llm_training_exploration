@@ -42,7 +42,22 @@ fixes. Tags as in `scale-north-star.md`: **measured**, **derived**, **estimate**
 
 ## 3. Results
 
-KAGGLE_RESULTS_PENDING
+CPU-side only so far (all **measured** on the shared 4-vCPU dev box, null service; GPU runs were not done in this
+package: the Kaggle quota was busy and GPU measurements are run centrally after merge).
+
+| what | 1 chat | 8 chats | 32 chats |
+|---|---|---|---|
+| plaintext engine step, 0.5B shapes, default threads (`profile_token`) | 13.6 ms | 56 ms | 214 ms |
+| same, `float_threads 1` | 11.6 ms | 40 ms | 136 ms |
+| gateway masking per row-token, 0.5B, 96 trips (`profile_gateway --sessions N`) | 15.5 ms | 8.9 ms | 7.9 ms |
+| e2e tokens/s, synthetic 4-layer model, 1 gateway process (`e2e_local --null-service`) | 143-163 | 202-232 | 234-317 |
+
+Gateway processes sharing 32 chats (aligned windows, `float_threads 1`): 1 process 317, 2 processes 538, 4 processes
+923 tokens/s. Two plaintext threads in one process: 158 vs 283 tokens/s (slower).
+
+**Estimate** for the T4 run (0.5B, real service): one gateway process flattens near `1 / 15 ms` = about 60 generated
+tokens/s from about 16 chats on, and 2-3 processes should approach 2x on the 4-vCPU Kaggle VM (2 cores, plus the
+service's own CPU). The command to measure it is in section 7.
 
 ## 4. Privacy and exactness
 
@@ -75,3 +90,19 @@ KAGGLE_RESULTS_PENDING
 - Per-row gateway CPU: the masking path (about half) and per-sequence attention (exact batching across sequences of
   different cache lengths is not bit-identical in general, so it needs a deterministic attention kernel).
 - 7B and larger: run the same job (`--shard-gateways`) to size gateway cores per 1k tokens/s.
+
+## 7. GPU measurement to run
+
+```
+python benchmarks/gpu_validate.py --model Qwen/Qwen2.5-0.5B-Instruct --label qwen05_conc --device cuda \
+  --ref-device cuda --ring K32A12C27 --plain-dtype bfloat16 --delete-hf --max-tokens 24 \
+  --concurrent 1 8 32 64 --variant 'ft_off={"float_threads": null}' \
+  --shard-gateways 2 3 --shard-concurrent 64 \
+  --loadtest 1x1 8x1 32x1 64x1 --loadtest-tokens 4 --factory-bench-slots 64 --out results/x4
+```
+
+Measures generated tokens/s, gateway and service cores and bit-identity at 1/8/32/64 concurrent chats on one gateway
+(new default `float_threads 1`), the same on the old thread count (`ft_off_*`), 64 chats over 2 and 3 gateway
+processes (`shard<N>_concurrent_64`), and the service alone at 1-64 sessions (`service_loadtest`). About 16 GB of
+masks; roughly 20-30 min on a T4 (pack, reference and factory included), less on an H100 (**estimate**). Kaggle job
+entries with the same steps: `pgw-x4-concurrency` (0.5B + 1.5B) and `pgw-x4-concurrency-7b`.
