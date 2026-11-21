@@ -340,6 +340,8 @@ class _Extent:
         self.seg = seg
         self.first_row = first_row  #: reservation-global index of the extent's first row
         self.end_row = first_row + ext.count
+        #: Header index of every linear of this extent's segment (segments may list different linears).
+        self.li: dict[str, int] = {lin.id: i for i, lin in enumerate(seg.header.linears)}
         self._secrets: bytearray | None = None
         self.seed: bytes | None = None
         self._uw_views: list[memoryview] = []
@@ -432,11 +434,23 @@ class MaskReservation:
             row += ext.count
         self._slots = row
         h0 = self._extents[0].seg.header
-        self._linears: dict[str, tuple[int, SegmentLinear]] = {lin.id: (i, lin) for i, lin in enumerate(h0.linears)}
+        # Segments may list different linears (a factory with skip_linear_kinds writes only some): the
+        # reservation covers the linears every extent has (taking any other raises), each extent reads a
+        # linear at its own header index (_Extent.li).
+        lin0 = {lin.id: lin for lin in h0.linears}
+        common = set(lin0)
         for e in self._extents[1:]:
             h = e.seg.header
-            if h.fingerprint != h0.fingerprint or h.ring != h0.ring or h.linears != h0.linears:
+            if h.fingerprint != h0.fingerprint or h.ring != h0.ring:
                 raise MaskStoreError("segments of one reservation disagree on model, ring or linears")
+            hl = {lin.id: lin for lin in h.linears}
+            if any(hl[k] != lin0[k] for k in common & set(hl)):
+                raise MaskStoreError("segments of one reservation disagree on model, ring or linears")
+            common &= set(hl)
+        if not common:
+            raise MaskStoreError("segments of one reservation have no linear in common")
+        self._linears: dict[str, tuple[int, SegmentLinear]] = {
+            lin.id: (i, lin) for i, lin in enumerate(h0.linears) if lin.id in common}
         if h0.fingerprint != fingerprint or h0.ring != ring.name:
             raise MaskStoreError("segment header does not match the reserved fingerprint/ring")
         self._checks = h0.checks
@@ -608,7 +622,8 @@ class MaskReservation:
         ex = self._extents[ei]
         rows = min(max_rows, ex.end_row - start)
         chk = self._compact_locked(key, ei) if checks else None
-        li, lin = self._linears[key]
+        lin = self._linears[key][1]
+        li = ex.li[key]
         slot0 = ex.ext.start + (start - ex.first_row)
         cs = ex.seg.header.chunk_slots
         j = slot0 // cs
@@ -758,7 +773,8 @@ class MaskReservation:
         self, key: str, ei: int, ex: _Extent, start: int, rows: int, compact: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Rows ``[start, start + rows)`` of ``key`` (all in extent ``ei``); does not move the cursor."""
-        li, lin = self._linears[key]
+        lin = self._linears[key][1]
+        li = ex.li[key]
         slot0 = ex.ext.start + (start - ex.first_row)
         r = self._mask_rows_locked(ei, ex, key, lin.in_features, slot0, rows)
         wr = self._read_wr(ei, ex, li, lin, slot0, rows, compact)
@@ -906,7 +922,8 @@ class MaskReservation:
         hit = self._uw_cache.get((ei, key))
         if hit is None:
             ex = self._extents[ei]
-            li, lin = self._linears[key]
+            lin = self._linears[key][1]
+            li = ex.li[key]
             seed, uw_views = ex.secrets()
             h = ex.seg.header
 
@@ -1595,6 +1612,10 @@ class MaskStore:
         self._below: dict[tuple[str, str], bool] = {}
         #: Reservations of this process that are not closed (None while being constructed).
         self._open_reservations: dict[str, MaskReservation | None] = {}
+        #: (fingerprint, ring) -> linears every reservation must cover (:meth:`require_linears`).
+        self._required: dict[tuple[str, str], frozenset[str]] = {}
+        #: segment id -> linear ids its header lists (headers are immutable; read once).
+        self._seg_linears: dict[str, frozenset[str]] = {}
         self._tainted: str | None = None
         self._verified = False
         #: Test hook: called with a point name ("after_commit", "after_witness").
@@ -2494,6 +2515,7 @@ class MaskStore:
         rp = RingParams.from_name(rname)
         rid = uuid.uuid4().hex
         exhausted: MaskExhaustedError | None = None
+        lacking: list[str] = []  # active segments without a required linear (require_linears)
         with self._lock.hold():
             self._ready()
             try:
@@ -2511,10 +2533,14 @@ class MaskStore:
                     ]
                     picked: list[tuple[SegmentRow, int]] = []
                     need = slots
+                    required = self._required.get((fingerprint, rname))
                     for r in rows:
                         if need == 0:
                             break
                         self._check_row(m.store_id, r)
+                        if required is not None and not self._covers(r, required):
+                            lacking.append(r.segment_id)  # never handed out; retired below
+                            continue
                         take = min(need, r.slots - r.next_slot)
                         if take > 0:
                             picked.append((r, take))
@@ -2572,6 +2598,8 @@ class MaskStore:
                     _live_discard(rid)
                     self._mark_closed(rid, slots)
                     raise
+        if lacking:
+            self._retire_lacking(fingerprint, rname)
         if exhausted is not None:
             self._after_inventory_change(fingerprint, rname)
             raise exhausted
@@ -2603,6 +2631,87 @@ class MaskStore:
         )
         self._after_inventory_change(fingerprint, rname)
         return res
+
+    # ---- linears a gateway needs (factory skip_linear_kinds) -----------------------------------------
+    def require_linears(self, fingerprint: str, ring: RingParams | str, linear_ids: Sequence[str] | None) -> int:
+        """Declare the linears every reservation of ``(fingerprint, ring)`` must cover; ``None`` clears it.
+
+        The gateway calls this at start-up with the linears it sends to the service (all of them, unless
+        its ``local_linears`` computes some on the gateway for every step), derived from public
+        configuration only. Active segments whose header lacks one of them (written by a factory with
+        ``skip_linear_kinds``) are **retired** now and whenever :meth:`reserve` meets one: their remaining
+        slots are written off (consumed, never handed out, shredded like any consumed segment), so the
+        inventory counts only usable masks and the factory refills. Masks are never reused and a
+        reservation never lacks a linear its caller takes. Returns the number of segments retired.
+        """
+        key = (fingerprint, _ring_name(ring))
+        with self._lock.hold():
+            if linear_ids is None:
+                self._required.pop(key, None)
+                return 0
+            self._required[key] = frozenset(str(x) for x in linear_ids)
+        return self._retire_lacking(*key)
+
+    def _covers(self, r: SegmentRow, required: frozenset[str]) -> bool:
+        """Whether segment ``r``'s header lists every linear of ``required`` (header read once, cached).
+        An unreadable header counts as covering: opening the segment fails loudly later, and
+        :meth:`verify_integrity` writes such files off."""
+        lins = self._seg_linears.get(r.segment_id)
+        if lins is None:
+            try:
+                with SegmentFile(self.root / r.relpath) as seg:
+                    lins = frozenset(lin.id for lin in seg.header.linears)
+            except (MaskStoreError, OSError):
+                return True
+            self._seg_linears[r.segment_id] = lins
+        return required <= lins
+
+    def _retire_lacking(self, fingerprint: str, rname: str) -> int:
+        """Write off the active segments of ``(fingerprint, rname)`` that lack a required linear."""
+        retired: list[tuple[str, int]] = []
+        with self._lock.hold():
+            required = self._required.get((fingerprint, rname))
+            if required is None:
+                return 0
+            self._ready()
+            with self._txn() as conn:
+                m = self._load_meta(conn)
+                self._check_consumed_sum(conn, m)
+                self._sync_witnesses(conn, m, None)
+                rows = [SegmentRow.from_row(t) for t in conn.execute(
+                    SELECT_SEGMENTS + " WHERE fingerprint=? AND ring=? AND status=? ORDER BY seq",
+                    (fingerprint, rname, SegmentStatus.ACTIVE.value))]
+                for r in rows:
+                    self._check_row(m.store_id, r)
+                    if self._covers(r, required):
+                        continue
+                    m.generation += 1
+                    m.consumed += r.slots - r.next_slot
+                    self._update_row(conn, m.store_id, r, next_slot=r.slots, status=SegmentStatus.CONSUMED,
+                                     gen=m.generation)
+                    retired.append((r.segment_id, r.slots - r.next_slot))
+                if retired:
+                    self._write_meta(conn, m)
+                    conn.execute(
+                        "INSERT INTO counters(fingerprint, ring, consumed, burned) VALUES(?,?,?,?)"
+                        " ON CONFLICT(fingerprint, ring) DO UPDATE SET consumed = consumed + excluded.consumed,"
+                        " burned = burned + excluded.burned",
+                        (fingerprint, rname, sum(n for _, n in retired), sum(n for _, n in retired)),
+                    )
+            if retired:
+                self._advance_witnesses(m)
+        if retired:
+            log.warning(
+                "mask store: retired %d segment(s) of %s %s (%d unused slots written off): they lack linears this "
+                "gateway sends to the service (written by a factory with skip_linear_kinds; unset it so the factory "
+                "makes full segments)", len(retired), short_fingerprint(fingerprint), rname, sum(n for _, n in retired))
+            if self.settings.shred_consumed:
+                try:
+                    self._gc_segments({sid for sid, _ in retired})
+                except PGWError as exc:
+                    log.warning("shredding retired segments failed: %s", exc.message)
+            self._after_inventory_change(fingerprint, rname)
+        return len(retired)
 
     def _require_external_counter(self) -> None:
         """Refuse to hand out masks without an external monotonic counter (finding: snapshot restore).

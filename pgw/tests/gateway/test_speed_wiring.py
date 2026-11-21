@@ -73,6 +73,33 @@ async def _masked(tiny_pack_dir: Path, tmp_path: Path, store: Any, transport: An
 
 
 # ---- local linears ---------------------------------------------------------------------------------------
+async def test_local_attention_serves_from_segments_without_qkv_o(tiny_pack_dir: Path, tmp_path: Path,
+                                                                    gw_pack: Any, make_store: Any, keys: ApiKeyStore,
+                                                                    key: str, reference: dict[str, Any]) -> None:
+    """Factory ``skip_linear_kinds = qkv,o`` + gateway ``local_linears = attention``: bit-identical answers from
+    segments that hold no attention masks; a restart with local linears off retires them (never uses them)."""
+    from pgw.factory import MaskGenerator
+
+    store = make_store(0)
+    gen = MaskGenerator(gw_pack, DEFAULT_RING, skip_kinds={"qkv", "o"})
+    gen.generate_into_store(store, 256, chunk_slots=16, factory_id="test")
+    svc = InProcessService(gw_pack)
+    out, _status, rt = await _masked(tiny_pack_dir, tmp_path, store, svc.transport, keys, key,
+                                    {"local_linears": "attention"})
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    assert sorted(k.rsplit(".", 1)[1] for k in rt.mask_linears_needed()) == sorted(
+        ["gate_up", "down"] * (len(rt.mask_linears_needed()) // 2))
+    avail = store.available_slots(gw_pack.fingerprint, DEFAULT_RING)
+    assert avail > 0
+    # restarted with every linear remote: the partial segment is retired (written off), not served from
+    app = create_app(masked_settings(tiny_pack_dir, tmp_path / "off"), mask_store=store,
+                     transports={MODEL: svc.transport}, key_store=keys)
+    async with gateway(app) as c:
+        assert store.available_slots(gw_pack.fingerprint, DEFAULT_RING) == 0
+        r = await c.post("/v1/chat/completions", json=CHAT, headers=auth(key))
+        assert r.status_code != 200  # no usable masks: refused, never served with missing masks
+
+
 @pytest.mark.parametrize("mode", ["attention", "auto"])
 async def test_local_linears_bit_identical(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any, make_store: Any,
                                            keys: ApiKeyStore, key: str, reference: dict[str, Any], mode: str) -> None:
