@@ -62,6 +62,7 @@ __all__ = [
     "decode_maskgen_response",
     "encode_maskgen_request",
     "encode_maskgen_response",
+    "encode_maskgen_response_parts",
     "le_words",
     "pack_bits",
     "pack_y",
@@ -184,7 +185,8 @@ def _versions(v: Any) -> tuple[int, ...]:
 def _load(data: bytes | bytearray | memoryview, kind: str, versions: tuple[int, ...] = (_VERSION,)
           ) -> dict[str, Any]:
     try:
-        obj = msgpack.unpackb(bytes(data), raw=False, strict_map_key=True, max_bin_len=1 << 31)
+        # msgpack reads any buffer: no copy of a bytearray/memoryview body (``bin`` values are copied out)
+        obj = msgpack.unpackb(data, raw=False, strict_map_key=True, max_bin_len=1 << 31)
     except Exception as exc:
         raise ProtocolError(f"maskgen: malformed msgpack ({type(exc).__name__})") from exc
     if not isinstance(obj, dict) or obj.get("type") != kind:
@@ -268,6 +270,49 @@ def encode_maskgen_response(resp: MaskgenResponse) -> bytes:
         "v": resp.version, "type": "maskgen_result", "id": resp.request_id, **_vs(resp.versions),
         "items": [{"linear": it.linear, "cols": it.cols, "y": it.y} for it in resp.items],
     }, use_bin_type=True))
+
+
+def _bin_header(n: int) -> bytes:
+    """msgpack ``bin`` header for ``n`` bytes (the smallest form, as ``msgpack.packb`` writes it)."""
+    if n < 1 << 8:
+        return b"\xc4" + n.to_bytes(1, "big")
+    if n < 1 << 16:
+        return b"\xc5" + n.to_bytes(2, "big")
+    if n < 1 << 32:
+        return b"\xc6" + n.to_bytes(4, "big")
+    raise ValueError("bin payload too large for msgpack")
+
+
+def encode_maskgen_response_parts(resp: MaskgenResponse) -> list[bytes | bytearray | memoryview]:
+    """:func:`encode_maskgen_response` as buffers whose concatenation is byte-identical, without copying ``y``.
+
+    The ``y`` payloads (e.g. read-only views of pinned device-copy buffers) are returned as they are, so a
+    sender can write them straight to the socket.
+    """
+    pk = msgpack.Packer(use_bin_type=True)
+    head: dict[str, Any] = {"v": resp.version, "type": "maskgen_result", "id": resp.request_id, **_vs(resp.versions)}
+    pre = bytearray(pk.pack_map_header(len(head) + 1))
+    for k, v in head.items():
+        pre += pk.pack(k)
+        pre += pk.pack(v)
+    pre += pk.pack("items")
+    pre += pk.pack_array_header(len(resp.items))
+    parts: list[bytes | bytearray | memoryview] = []
+    for it in resp.items:
+        pre += pk.pack_map_header(3)
+        pre += pk.pack("linear")
+        pre += pk.pack(it.linear)
+        pre += pk.pack("cols")
+        pre += pk.pack(it.cols)
+        pre += pk.pack("y")
+        y = memoryview(it.y).cast("B") if not isinstance(it.y, (bytes, bytearray)) else it.y
+        pre += _bin_header(len(y))
+        parts.append(bytes(pre))
+        parts.append(y)
+        pre = bytearray()
+    if pre:
+        parts.append(bytes(pre))
+    return parts
 
 
 def decode_maskgen_response(data: bytes | bytearray | memoryview, req: MaskgenRequest,

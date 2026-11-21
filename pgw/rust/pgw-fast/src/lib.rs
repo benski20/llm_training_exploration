@@ -8,6 +8,7 @@
 //! | [`finish`] | `MaskedBackend._finish`: unpack `y_hat`, Freivalds check, unmask, range check, dequantize (`finish_group`: several sessions' chunks of one linear in one pass over the shared check vectors) |
 //! | [`prepare`] | `MaskedBackend._prepare`: quantize (capped), mask, pack |
 //! | [`store`] | `MaskReservation.take`: decrypt `W r` chunks, derive `r` |
+//! | [`bitpack`] | `pgw.hemask.wire.pack_bits` / `unpack_bits` around maskgen requests (fused modulus switch, reply shift) |
 //! | [`writer`] | `SegmentWriter.write_linear` / `RawSegmentWriter.write_chunk`: pack, AES-256-GCM, `pwrite` (Unix only) |
 //! | [`lmhead`] | `h @ lm_head^T` (float32, several rows per pass over the head, fixed summation order; same bits as `pgw.engine.lm_head.lm_head_reference`) |
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
@@ -22,6 +23,7 @@
 use pyo3::prelude::*;
 
 pub mod attn;
+pub mod bitpack;
 pub mod finish;
 pub mod hemask;
 pub mod lane;
@@ -45,6 +47,7 @@ fn version() -> &'static str {
 fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     attn::register(m)?;
+    bitpack::register(m)?;
     finish::register(m)?;
     hemask::register(m)?;
     lane::register(m)?;

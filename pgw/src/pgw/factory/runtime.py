@@ -116,11 +116,43 @@ def build_he_backend(settings: FactorySettings, pack: Any, ring: str) -> Any:
     q_bits = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank).q
     hints = HintStore.open_or_build(Path(hint_root), pack, settings.he_rank, q_bits)
     out = {s.id.key: s.out_features for s in pack.linear_specs()}
-    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits)
+    he_params = HEParams(k=RingParams.from_name(ring).k, rank=settings.he_rank)
+    norms = (getattr(hints, "meta", None) or {}).get("row_norms") if settings.he_wire_v2 else None
+    remote = RemoteMulmod64(client, pack.fingerprint, out, timeout_s=settings.he_timeout_s, q_bits=q_bits,
+                            params=he_params if norms else None, row_norms=norms, wire_v2=settings.he_wire_v2,
+                            bulk=build_bulk_client(settings, token), bulk_split=settings.he_bulk_split)
     log.info("factory: encrypted mask generation for %s via %s (rank %d, hint %.2f GB)",
              pack.short_fingerprint, settings.he_service_url, settings.he_rank, hints.nbytes / 1e9)
     return HEMaskBackend(pack, RingParams.from_name(ring), hints, remote, groups_per_call=settings.he_groups_per_call,
                          encrypt=settings.he_encrypt)
+
+
+def build_bulk_client(settings: FactorySettings, token: Any = None) -> Any:
+    """:class:`pgw.hemask.bulk.BulkMaskgenClient` for ``he_bulk_port`` (``None`` when unset)."""
+    if settings.he_bulk_port is None or settings.he_service_url is None:
+        return None
+    from urllib.parse import urlsplit
+
+    from pgw.hemask.bulk import BulkMaskgenClient
+    from pgw.wire import ClientConfig
+    from pgw.wire.client import build_ssl_context
+
+    url = urlsplit(settings.he_service_url)
+    host = url.hostname or "127.0.0.1"
+    ctx = None
+    if url.scheme == "https":
+        cfg = ClientConfig(base_url=settings.he_service_url, ca_file=settings.he_ca_file,
+                           client_cert_file=settings.he_client_cert_file, client_key_file=settings.he_client_key_file)
+        ctx = build_ssl_context(cfg)  # registered: renewed client certificates reach new connections
+        ctx.set_alpn_protocols(["pgw-maskgen-bulk"])
+    elif host not in ("127.0.0.1", "::1", "localhost"):
+        raise ConfigError("he_bulk_port with a plain-http service URL is only allowed on a loopback host")
+    auth = f"Bearer {token.get_secret_value()}" if token is not None else None
+    log.info("factory: maskgen bulk channel %s:%d (tls=%s, split %d)", host, settings.he_bulk_port, ctx is not None,
+             settings.he_bulk_split)
+    return BulkMaskgenClient(host, settings.he_bulk_port, ssl_context=ctx, server_hostname=host if ctx else None,
+                             authorization=auth, timeout_s=settings.he_timeout_s,
+                             max_conns=max(4, 4 * settings.he_bulk_split))
 
 
 _WATCHED: dict[tuple[str, str], threading.Thread] = {}

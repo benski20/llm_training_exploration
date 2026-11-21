@@ -47,6 +47,58 @@ BUILD_NATIVE = {
     "timeout": 1200,
 }
 
+#: pgw-maskgen-bulk keeps its bundle under Kaggle's push limit: only the service tests and benches it runs.
+MASKGEN_BULK_DROP = [
+    'tests/service/test_app.py',
+    'tests/service/test_auth.py',
+    'tests/service/test_auth_revocation.py',
+    'tests/service/test_batcher.py',
+    'tests/service/test_enroll.py',
+    'tests/service/test_gpu_exec.py',
+    'tests/service/test_gpu_graphs.py',
+    'tests/service/test_grouped_compute.py',
+    'tests/service/test_hardening.py',
+    'tests/service/test_kernels.py',
+    'tests/service/test_lane_graph.py',
+    'tests/service/test_lane_server.py',
+    'tests/service/test_loadtest_and_rules.py',
+    'tests/service/test_maskgen_fast.py',
+    'tests/service/test_mtls_identity.py',
+    'tests/service/test_registry.py',
+    'tests/service/test_server_frame_lane.py',
+    'benchmarks/chat_speed_model.py',
+    'benchmarks/delay_proxy.py',
+    'benchmarks/e2e_local.py',
+    'benchmarks/gateway_gpu_bench.py',
+    'benchmarks/gateway_probe.py',
+    'benchmarks/gpu_kernel_bench.py',
+    'benchmarks/gpu_validate.py',
+    'benchmarks/hemask_bench.py',
+    'benchmarks/hemask_encrypt_bench.py',
+    'benchmarks/hemask_ntt_bench.py',
+    'benchmarks/lane_bench.py',
+    'benchmarks/lm_head_bench.py',
+    'benchmarks/mask_pipeline_bench.py',
+    'benchmarks/native_finish_bench.py',
+    'benchmarks/native_prepare_bench.py',
+    'benchmarks/native_store_bench.py',
+    'benchmarks/net_floor_bench.py',
+    'benchmarks/profile_gateway.py',
+    'benchmarks/profile_prefill.py',
+    'benchmarks/profile_token.py',
+    'benchmarks/provider_trip_bench.py',
+    'benchmarks/quant_quality.py',
+    'benchmarks/quant_quality_gpu.py',
+    'benchmarks/round_trip_model.py',
+    'benchmarks/scale_provider_bench.py',
+    'benchmarks/scale_sizing.py',
+    'benchmarks/spec_accept_bench.py',
+    'benchmarks/spec_cost_bench.py',
+    'benchmarks/stack_bench.py',
+    'benchmarks/trip_profile.py',
+    'benchmarks/triton_gemv_bench.py',
+]
+
 JOBS: dict[str, dict] = {
     # run 27 (after the phase-2 merge; run 26 had the same steps after phase 1): 7B single stream with the decode-only accounting and per-trip split,
     # aggregate throughput at 4/8/16 streams, the network floor and the gateway CPU profile (all layers warm).
@@ -249,6 +301,43 @@ JOBS: dict[str, dict] = {
          "cmd": "python benchmarks/maskgen_provider_bench.py --presets qwen2.5-0.5b qwen2.5-7b llama3-70b "
                 "--modes fused --conc 2 4 --rounds 4 --decode --profile "
                 "--json /kaggle/working/maskgen_provider.json", "timeout": 5400},
+    ]},
+    # package M2 (maskgen transport): the factory's provider stage end to end on one T4 as on Modal (TLS on
+    # loopback, real CUDA kernels): HTTP route vs the bulk maskgen channel (and split requests), v1 vs v2, 0.5B
+    # and 7B layer shapes; the same with a zero-cost stub provider (transport floor of this CPU); the GPU stage
+    # profile of one item; exactness of every transport against the CPU reference; the bulk/GPU tests.
+    "pgw-maskgen-bulk": {"machine_shape": "NvidiaTeslaT4",
+                         "exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                     "tests/console", "tests/factory", "tests/engine", "tests/wire",
+                                     "tests/native", "tests/core", "tests/cli", "tests/docs", "tests/deploy",
+                                     "tests/benchmarks", "docs", "research", "console", "tests/vectors",
+                                     "SPEC.md", "INTERFACE_NOTES.md", "tests/modelpack", "tests/observability",
+                                     "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py",
+                                     "tests/hemask", "rust/pgw-core-rs/tests", "benchmarks/RESULTS.md", "src/pgw/console",
+                                     *MASKGEN_BULK_DROP],
+                         "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi || true",
+         "timeout": 60},
+        {"kind": "pytest", "name": "pytest_maskgen_bulk_gpu",
+         "args": ["tests/service/test_maskgen_bulk.py", "tests/service/test_maskgen_gpu.py",
+                  "tests/service/test_maskgen.py", "-q", "-rs", "--timeout", "1800"], "timeout": 2400},
+        {"kind": "shell", "name": "wire_bench_05b_real",
+         "cmd": "python benchmarks/maskgen_wire_bench.py --preset qwen2.5-0.5b --server-compute real --tls "
+                "--formats v1 v2 --transports http bulk bulk:2 --repeat 5 "
+                "--json /kaggle/working/wire_05b_real.json", "timeout": 2400},
+        {"kind": "shell", "name": "wire_bench_05b_stub",
+         "cmd": "python benchmarks/maskgen_wire_bench.py --preset qwen2.5-0.5b --server-compute stub --tls "
+                "--formats v2 --transports http bulk bulk:2 --repeat 5 "
+                "--json /kaggle/working/wire_05b_stub.json", "timeout": 1800},
+        {"kind": "shell", "name": "wire_bench_7b_real",
+         "cmd": "python benchmarks/maskgen_wire_bench.py --preset qwen2.5-7b --server-compute real --tls "
+                "--formats v2 --transports http bulk bulk:2 --repeat 3 "
+                "--json /kaggle/working/wire_7b_real.json", "timeout": 3600},
+        {"kind": "shell", "name": "maskgen_provider_profile",
+         "cmd": "python benchmarks/maskgen_provider_bench.py --presets qwen2.5-0.5b qwen2.5-7b --modes fused "
+                "--formats v2:53:35 --groups 2 --conc 2 --rounds 4 --no-multi-gpu --profile --profile-groups 2 "
+                "--decode --decode-groups 2 --json /kaggle/working/maskgen_provider.json", "timeout": 2400},
     ]},
     # scale plan (research/plans/scale-north-star.md): provider ring-GEMM throughput at decode batches 1..1024 for
     # Llama-3-70B and Mixtral-8x22B shapes (K32, exact spot check), oblivious-MoE overhead, plain factory rate.

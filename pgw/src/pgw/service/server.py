@@ -352,6 +352,7 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
         log.info("shutdown requested; draining")
         await state.handler.wait_idle(settings.drain_timeout_s)
 
+    bulk = _start_maskgen_bulk(settings, state, loop)
     if settings.server == "uvicorn":
         main = _serve_uvicorn(app, settings, stop, drained)
     else:
@@ -377,11 +378,31 @@ async def serve_async(settings: ServiceSettings, *, shutdown_event: asyncio.Even
         await asyncio.gather(*tasks)
     finally:
         stop.set()
+        if bulk is not None:
+            await asyncio.to_thread(bulk.close)
         for t in tasks:
             if not t.done():
                 t.cancel()
         for signum in installed:
             loop.remove_signal_handler(signum)
+
+
+def _start_maskgen_bulk(settings: ServiceSettings, state: Any, loop: asyncio.AbstractEventLoop) -> Any:
+    """The bulk maskgen listener (:mod:`pgw.service.maskgen_bulk`) when ``maskgen_bulk_port`` is set, else None."""
+    if settings.maskgen_bulk_port is None:
+        return None
+    from pgw.service.maskgen_bulk import MaskgenBulkServer
+
+    ctx = None
+    if settings.tls.enabled:
+        ctx = build_hypercorn_config(settings).create_ssl_context()  # the main listener's TLS and client-cert policy
+        ctx.set_alpn_protocols(["pgw-maskgen-bulk"])
+    elif settings.host.strip("[]") not in _LOOPBACK_HOSTS:  # pragma: no cover - rejected by ServiceSettings
+        raise ConfigError("maskgen_bulk_port without TLS is only allowed on a loopback host")
+    srv = MaskgenBulkServer(state.handler, loop, ctx, host=settings.host, port=settings.maskgen_bulk_port,
+                            verify_peer=_needs_peer_identity(settings), max_conns=settings.maskgen_bulk_max_conns)
+    srv.start()
+    return srv
 
 
 def serve(settings: ServiceSettings | None = None) -> None:

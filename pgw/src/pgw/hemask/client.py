@@ -36,19 +36,22 @@ check and the online Freivalds checks are unchanged.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 import os
+import threading
 import time
 import uuid
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
 from pgw.core.errors import ConfigError, ErrorCode, PGWError
-from pgw.hemask.lwe import HEParams
+from pgw.hemask.lwe import DEGREE, HEParams
 from pgw.hemask.wire import (
     MASKGEN_PATH,
     V2_MIN_B_BITS,
@@ -71,6 +74,8 @@ __all__ = [
     "V2Format",
     "check_v2",
     "switch_down",
+    "switch_pack",
+    "unpack_shift",
     "v2_formats",
     "v2_noise_bound",
 ]
@@ -185,6 +190,49 @@ def switch_down(b: np.ndarray, q_bits: int, b_bits: int, rng: np.random.Generato
     return out
 
 
+def _native(name: str) -> Any:
+    from pgw.core.native import fast, native_available
+
+    return getattr(fast, name) if native_available(name) else None
+
+
+def switch_pack(b: np.ndarray, q_bits: int, b_bits: int, rng: np.random.Generator | None = None) -> bytearray:
+    """``pack_bits(switch_down(b, q_bits, b_bits, rng), b_bits)``: the v2 upload of ``b``.
+
+    With ``pgw_fast`` the switch and the packing run as one multi-threaded native pass, byte-identical to the
+    numpy functions for the same dither. ``rng=None`` (production): a fresh dither, drawn natively by ChaCha20
+    from a fresh ``os.urandom`` seed (never stored), or by a fresh numpy generator without ``pgw_fast``. With
+    ``rng``, the dither is ``rng``'s draw exactly as :func:`switch_down` makes it (tests).
+    """
+    nat = _native("he_switch_pack")
+    s = q_bits - b_bits
+    if nat is None or not 0 <= s < 8:
+        if rng is None:
+            rng = np.random.default_rng(int.from_bytes(os.urandom(16), "little"))  # fresh dither, never stored
+        return pack_bits(switch_down(b, q_bits, b_bits, rng), b_bits)
+    flat = np.ascontiguousarray(b, dtype=np.uint64).reshape(-1)
+    if not s:
+        d: Any = None
+    elif rng is None:
+        d = os.urandom(32)  # seed of the fresh dither (dropped after the call)
+    else:
+        d = rng.integers(0, 1 << s, size=flat.size, dtype=np.uint8)  # the draw switch_down makes
+    out: bytearray = nat(flat, d, q_bits, b_bits)
+    return out
+
+
+def unpack_shift(data: bytes | bytearray | memoryview, count: int, bits: int, shift: int) -> np.ndarray:
+    """``unpack_bits(data, count, bits) << shift`` (uint64, 1-D): native when ``pgw_fast`` has it."""
+    nat = _native("he_unpack_shift")
+    if nat is not None and isinstance(data, bytes):
+        out: np.ndarray = nat(data, count, bits, shift)
+        return out
+    v = unpack_bits(data, count, bits)
+    if shift:
+        v <<= np.uint64(shift)
+    return v
+
+
 class RemoteMulmod64:
     """``W8 b mod 2^q`` computed by the compute service for one model pack.
 
@@ -207,13 +255,24 @@ class RemoteMulmod64:
             two upload widths is chosen per linear by total bytes.
         guard_bits: Reply bits above ``K`` (at least).
         margin_bits: Noise margin below half the scaling factor.
+        bulk: Optional :class:`pgw.hemask.bulk.BulkMaskgenClient` (the service's bulk maskgen channel). Requests
+            go there first; a transport failure or a retryable refusal resends the same body over HTTP.
+        bulk_split: With ``bulk``, a request of several 256-column groups is sent as up to this many
+            concurrent requests of whole groups (each on its own connection and thread), so TLS, packing and
+            unpacking run in parallel. The split depends on the group count only.
     """
 
     def __init__(self, client: Any, fingerprint: str, out_features: dict[str, int], *, timeout_s: float = 600.0,
                  drop_bits: int = 16, q_bits: int = 64, params: HEParams | None = None,
                  row_norms: Mapping[str, float] | None = None, wire_v2: bool = True, upload_switch: bool = True,
-                 guard_bits: int = DEFAULT_GUARD_BITS, margin_bits: int = DEFAULT_MARGIN_BITS):
+                 guard_bits: int = DEFAULT_GUARD_BITS, margin_bits: int = DEFAULT_MARGIN_BITS,
+                 bulk: Any = None, bulk_split: int = 1):
         self.client = client
+        self.bulk = bulk
+        self.bulk_split = max(1, int(bulk_split))
+        self.calls_bulk = 0
+        self._split_pool: ThreadPoolExecutor | None = None
+        self._split_lock = threading.Lock()
         self.drop_bits = drop_bits
         self.q_bits = q_bits
         self.fingerprint = fingerprint
@@ -318,9 +377,8 @@ class RemoteMulmod64:
             item = MaskgenItem(linear, cols, pack_b(b, self.q_bits), self.drop_bits, self.q_bits)
             version = 1
         else:
-            rng = np.random.default_rng(int.from_bytes(os.urandom(16), "little"))  # fresh dither, never stored
-            bq = switch_down(b, self.q_bits, fmt.b_bits, rng)
-            item = MaskgenItem(linear, cols, pack_bits(bq, fmt.b_bits), 0, 64, fmt.b_bits, fmt.y_bits)
+            # fresh dither per request, never stored
+            item = MaskgenItem(linear, cols, switch_pack(b, self.q_bits, fmt.b_bits), 0, 64, fmt.b_bits, fmt.y_bits)
             version = 2
         req = MaskgenRequest(uuid.uuid4().hex, self.fingerprint, (item,), version, self.versions)
         return req, encode_maskgen_request(req)
@@ -333,9 +391,8 @@ class RemoteMulmod64:
             m = self.out_features[linear]
             if fmt is None:
                 return unpack_y(resp.items[0].y, (m, cols), self.drop_bits, self.q_bits)
-            v = unpack_bits(resp.items[0].y, m * cols, fmt.y_bits)
-            v <<= np.uint64(self.q_bits - fmt.y_bits)  # y mod 2^q up to the rounding and switch errors
-            return v.reshape(m, cols)
+            # y mod 2^q up to the rounding and switch errors
+            return unpack_shift(resp.items[0].y, m * cols, fmt.y_bits, self.q_bits - fmt.y_bits).reshape(m, cols)
         return decode
 
     def _post_sync(self, linear: str, b: np.ndarray, fmt: V2Format | None) -> np.ndarray:
@@ -343,8 +400,18 @@ class RemoteMulmod64:
         self.calls += 1
         self.calls_v2 += fmt is not None
         self.bytes_up += len(body)
-        out: np.ndarray = self.client.post_raw_sync(MASKGEN_PATH, body, req.request_id,
-                                                     self._decode(req, linear, int(b.shape[1]), fmt),
+        decode = self._decode(req, linear, int(b.shape[1]), fmt)
+        bulk = self.bulk
+        if bulk is not None and bulk.usable():
+            try:
+                y: np.ndarray = bulk.call(body, req.request_id, decode)
+                self.calls_bulk += 1
+                return y
+            except PGWError as exc:
+                if not (exc.details.get("bulk_transport") or exc.retryable):
+                    raise  # the service's answer (e.g. a version refusal): the same over HTTP
+                log.warning("maskgen bulk channel: %s; sending this request over HTTP", exc.message)
+        out: np.ndarray = self.client.post_raw_sync(MASKGEN_PATH, body, req.request_id, decode,
                                                      timeout_s=self.timeout_s)
         return out
 
@@ -364,6 +431,30 @@ class RemoteMulmod64:
 
     def __call__(self, linear: str, b: np.ndarray) -> np.ndarray:
         """Blocking call (from a worker thread). Returns ``y`` (``m x cols`` uint64, ``mod 2^q``)."""
+        groups = int(b.shape[1]) // DEGREE if b.ndim == 2 and b.shape[1] % DEGREE == 0 else 1
+        pieces = min(self.bulk_split, groups) if self.bulk is not None and self.bulk.usable() else 1
+        if pieces <= 1:
+            return self._call_one(linear, b)
+        # whole groups per piece (a function of the group count only), sent concurrently
+        bounds = [DEGREE * (groups * i // pieces) for i in range(pieces + 1)]
+        pool = self._pool_for_split()
+        futs = [pool.submit(self._call_one, linear, b[:, c0:c1]) for c0, c1 in itertools.pairwise(bounds)]
+        try:
+            ys = [f.result() for f in futs]
+        except BaseException:
+            for f in futs:
+                f.cancel()
+            raise
+        return np.concatenate(ys, axis=1)
+
+    def _pool_for_split(self) -> ThreadPoolExecutor:
+        with self._split_lock:
+            if self._split_pool is None:
+                self._split_pool = ThreadPoolExecutor(max_workers=4 * self.bulk_split,
+                                                      thread_name_prefix="pgw-maskgen-bulk")
+            return self._split_pool
+
+    def _call_one(self, linear: str, b: np.ndarray) -> np.ndarray:
         fmt = self._use(linear, int(b.shape[0]))
         if fmt is not None:
             try:

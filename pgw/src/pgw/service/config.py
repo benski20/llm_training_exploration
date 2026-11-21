@@ -214,6 +214,15 @@ class ServiceSettings(PGWSettings):
         8, ge=1, le=8, description="Largest rows per item the lane serves; bigger calls use the stream channel",
     )
 
+    # ---- bulk maskgen channel (pgw.hemask.bulk) -------------------------------------------
+    maskgen_bulk_port: int | None = Field(
+        None, ge=0, le=65535, description="Port of the bulk maskgen channel: the /pgw/v1/maskgen messages over "
+        "threaded TLS sockets (same certificate, authentication, admission and GPU path; several times the HTTP "
+        "route's throughput for encrypted mask generation). Off (None) by default. Plain TCP only when the main "
+        "listener has no TLS and binds a loopback address",
+    )
+    maskgen_bulk_max_conns: int = Field(16, ge=1, le=1024, description="Open bulk maskgen connections at most")
+
     # ---- lifecycle / misc ----------------------------------------------------------------
     drain_timeout_s: float = Field(30.0, ge=0, description="Max wait for in-flight work on shutdown")
     metrics_enabled: bool = True
@@ -294,6 +303,11 @@ class ServiceSettings(PGWSettings):
             if value != type(self).model_fields[name].default:
                 raise ValueError(f"{name}={value!r} is not available in this build (pending {package}); "
                                  "leave it at its default")
+        if self.maskgen_bulk_port is not None:
+            if self.maskgen_bulk_port == self.port and self.port != 0:
+                raise ValueError("maskgen_bulk_port must differ from port")
+            if not self.tls.enabled and self.host.strip("[]") not in ("127.0.0.1", "::1", "localhost"):
+                raise ValueError("maskgen_bulk_port without TLS is only allowed on a loopback host")
         if self.lane == "uds" and self.lane_socket is None:
             raise ValueError("lane = 'uds' needs lane_socket")
         if self.lane == "tcp":

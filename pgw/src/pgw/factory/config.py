@@ -137,6 +137,20 @@ class FactorySettings(PGWSettings):
     )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_timeout_s: float = Field(600.0, gt=0, description="Budget per provider request")
+    he_wire_v2: bool = Field(
+        True, description="Offer maskgen wire v2 (bit-packed: q-3 bit uploads, K+3 bit replies; about 10% fewer "
+        "bytes than v1) for every linear whose noise budget allows it (pgw.hemask.client). Every factory row is "
+        "verified after decryption either way",
+    )
+    he_bulk_port: int | None = Field(
+        None, ge=1, le=65535, description="Port of the service's bulk maskgen channel (service maskgen_bulk_port; "
+        "same host and TLS settings as he_service_url). Several times the HTTP route's throughput; requests fall "
+        "back to HTTP when it is unreachable. Off (None) by default",
+    )
+    he_bulk_split: int = Field(
+        1, ge=1, le=8, description="With he_bulk_port: a request of several 256-slot groups is sent as up to this "
+        "many concurrent requests of whole groups (parallel TLS and packing)",
+    )
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
     error_backoff_s: float = Field(10.0, gt=0, description="Initial back-off after a failed run (doubles to 600 s)")
