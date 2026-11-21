@@ -73,17 +73,21 @@ HE_GATEWAY_7B = {"dense_amx": None, "ntt": 0.0242}
 #: ``stages``: each stage alone on layer 0, as full-model slots/s (``encrypt`` ntt_pre on the 4 vCPUs,
 #: ``provider`` = wire + service + T4 GEMM, ``decrypt`` device passes on GPU 1). Source:
 #: benchmarks/he_e2e_bench.py, Kaggle job pgw-x3-he-e2e-7b (benchmarks/results/kaggle/x3_he_e2e_7b).
-#: The T4x2 run has not happened yet (Kaggle queue); until then the stage rates are, per stage:
-#: ``encrypt`` 75.4 slots/s: ntt_pre alone on the 4-vCPU dev container (measured, he_e2e_bench --cpu, 7B
-#: shapes, 2026-11-21); ``decrypt`` 24.3 slots/s: CPU int8 (AMX) decryption alone on the same box (measured;
-#: device passes on a T4 not yet measured); ``provider`` 240 slots/s: Kaggle T4 maskgen at 7B shapes, fused
-#: path, one GPU (benchmarks/results/kaggle/maskgen_provider_run2, measured, wire excluded). ``pipeline``:
-#: 5.66 slots/s is the dev container's whole factory with a CPU provider (measured, not a T4 figure), so it
-#: is not used for the pairs. ``hint_disk_gb_per_s``: O_DIRECT read of a hint file on the dev container.
+#: Measured on Kaggle T4x2 (4 vCPU Xeon @ 2.0 GHz, 2026-11-21), all 28 layers, every row Freivalds-checked, two
+#: runs (benchmarks/results/kaggle/x3_he_e2e_7b and x3_he_e2e_7b_r2). Best whole factory: 6.36 slots/s (run 2,
+#: config ntt_dev_v2: ntt_pre encryption on the CPU, device decryption on GPU 1, wire v2; 5.53 with v1, 5.70 with
+#: dense device encryption). ``stages`` (run 2, ntt_dev_v2, each alone on layer 0, 1024 rows): encrypt 58.0,
+#: provider 10.8, decrypt 34.5 slots/s (device; 17.1 with CPU decryption on this host). The provider round trip
+#: is the bottleneck at 7B: GPU 0 at 3 % utilisation, 0.2 provider CPU cores busy. The same item function called
+#: in the gateway process (no HTTP, same bytes) gives 17.0 slots/s and a whole factory of 8.0 slots/s, so about
+#: half is the HTTP transport and the rest the host-side byte handling of 11.6-12.8 MB per slot; the fused
+#: maskgen GEMM alone runs 240 slots/s (maskgen_provider_run2). ``hint_disk_gb_per_s``: O_DIRECT read on the dev
+#: container (the Kaggle dd figure, 4.6 GB/s, came from the page cache).
 HE_E2E_7B_T4X2: dict[str, Any] = {
-    "config": "ntt_pre encrypt (CPU) + CPU decrypt, provider T4 (stage mix, see above)",
-    "pipeline": None,
-    "stages": {"encrypt": 75.4, "provider": 240.0, "decrypt": 24.3},
+    "config": "ntt_dev_v2 (ntt_pre CPU encrypt, device decrypt on GPU 1, provider service on GPU 0, wire v2)",
+    "pipeline": 6.36,
+    "stages": {"encrypt": 58.0, "provider": 10.76, "decrypt": 34.5},
+    "provider_no_http": 17.04,
     "hint_disk_gb_per_s": 2.25,
 }
 
@@ -94,7 +98,8 @@ def he_e2e_rates(shape: Shape, groups_per_pass: int = 6, disk_gb_per_s: float | 
 
     The 7B stage rates are measured; another model's rate scales each stage by its work per slot: encryption
     by the inputs ``L n`` (one NTT row per input feature), decryption by the hint rows ``L m``, the provider by
-    ``L m n``. ``overlapped`` (all stages concurrent, the target of the overlap work in HEMaskBackend) is the
+    ``L m n`` (pessimistic: at 7B the provider is bound by its request path, whose bytes grow as ``L (n + m)``,
+    not by the GEMM). ``overlapped`` (all stages concurrent, the target of the overlap work in HEMaskBackend) is the
     slowest stage; ``serial`` is today's structure (``1 / sum(1 / rate)``). The hint read bound is the disk
     rate over the hint bytes read per slot (the whole hint once per decryption pass of ``groups_per_pass``
     256-slot groups) and applies when the hint does not fit in RAM.
