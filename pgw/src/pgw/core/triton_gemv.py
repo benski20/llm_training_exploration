@@ -819,13 +819,43 @@ def _enable_multirow(key: str, device: torch.device | str) -> int:
         return 0
 
 
+#: Oldest CUDA compute capability with an int8 tensor-core ``tl.dot`` in Triton (MMA v2 is sm_80+).
+DOT_MIN_CAPABILITY = (8, 0)
+
+
+def _dot_unsupported(device: torch.device | str) -> str | None:
+    """Why the tensor-core variant cannot compile on ``device`` (``None``: try it).
+
+    Triton lowers ``tl.dot`` to tensor cores (MMA) only from sm_80. On older GPUs (T4 = sm_75) it
+    takes the FMA fallback, which up-casts the operands with ``arith.extf``: invalid for int8, so the
+    compile fails in ``TritonGPUAccelerateMatmul`` ("PassManager::run failed"; reproduced offline with
+    Triton 3.9 for sm_75, and on Kaggle and Modal T4s). An fp16 digit variant does compile there but
+    also runs on the FMA path (no ``mma`` in the PTX), so it would be no faster than the CUDA-core
+    kernels. Deciding from the capability up front makes the choice deterministic and skips a
+    failing compile at every start.
+    """
+    dev = torch.device(device)
+    if dev.type != "cuda":
+        return None
+    try:
+        cc = tuple(torch.cuda.get_device_capability(dev.index if dev.index is not None else 0))
+    except Exception:  # pragma: no cover - broken driver: let the self-check decide
+        return None
+    if cc < DOT_MIN_CAPABILITY:
+        return (f"compute capability {cc[0]}.{cc[1]} < {DOT_MIN_CAPABILITY[0]}.{DOT_MIN_CAPABILITY[1]}: "
+                "Triton has no int8 tensor-core dot there")
+    return None
+
+
 def self_check(device: torch.device | str) -> bool:
     """True if triton imports and the fused kernel matches the digit-GEMM path bit for bit on ``device``.
 
     Checks the heuristic configurations of every variant, then each table rule of the device (a rule
     that fails is dropped), then the stream variant for 2-8 rows (per :data:`MULTIROW_MODES`; a
     failure switches it off). Cached per device. Any exception (compile failure, unsupported GPU)
-    counts as a failure of the part that raised it.
+    counts as a failure of the part that raised it. On GPUs older than :data:`DOT_MIN_CAPABILITY`
+    the tensor-core variant is not tried (:func:`_dot_unsupported`): the CUDA-core kernels are checked
+    directly.
     """
     key = _key(device)
     with _GUARD:
@@ -833,8 +863,12 @@ def self_check(device: torch.device | str) -> bool:
             return _SELF_CHECK[key]
         ok = False
         if triton_available():
+            no_dot = _dot_unsupported(device)
+            if no_dot is not None:
+                log.info("fused ring GEMV on %s: tensor-core variant skipped (%s); CUDA-core kernels", key, no_dot)
+                _NO_DOT.add(key)
             ok, why = _run_check(key, device)
-            if not ok:
+            if not ok and key not in _NO_DOT:
                 # retry with the CUDA-core kernel alone (one-row calls only)
                 log.warning("fused ring GEMV (tensor-core variant) failed its self-check on %s (%s); retrying "
                             "with the CUDA-core variant for one-row calls", key, why)
