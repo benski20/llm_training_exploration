@@ -182,7 +182,12 @@ def big_planes_mm_small(
     default ``8 - P``; missing bytes count as zero)."""
     _rows, npl, k = planes.shape
     first = 8 - npl if first_byte is None else first_byte
-    if native is not None and 1 <= npl <= 8 and 0 <= first and first + npl <= 8 and np.asarray(small).shape[0] == k:
+    from pgw.hemask.fastmm import engine
+
+    # A gateway GPU runs the dense byte-plane GEMM far faster than the CPU NTT: leave the product to it.
+    on_cpu = engine() != "cuda"
+    shapes_ok = 1 <= npl <= 8 and 0 <= first and first + npl <= 8 and np.asarray(small).shape[0] == k
+    if on_cpu and native is not None and shapes_ok:
         sec = secrets_of(small)
         if sec is not None:
             try:

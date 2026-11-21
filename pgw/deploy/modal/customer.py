@@ -43,10 +43,14 @@ DICT_NAME = "pgw-live"
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
+# Optional GPU for the customer gateway (PGW_MODAL_CUSTOMER_GPU=T4 at deploy time). It runs the encrypted mask
+# factory's encrypt/decrypt GEMMs and random-number generation on the customer's own GPU (customer side: the
+# provider still sees only ciphertexts). Default none (CPU torch image, CPU products).
+CUSTOMER_GPU = os.environ.get("PGW_MODAL_CUSTOMER_GPU") or None
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
-    .pip_install("torch==2.15.0", index_url="https://download.pytorch.org/whl/cpu")
+    .pip_install("torch==2.15.0", **({} if CUSTOMER_GPU else {"index_url": "https://download.pytorch.org/whl/cpu"}))
     .add_local_dir(PGW / "src", "/opt/pgw-src/src", copy=True, ignore=["**/__pycache__", "**/*.so"])
     .add_local_file(PGW / "pyproject.toml", "/opt/pgw-src/pyproject.toml", copy=True)
     .add_local_file(PGW / "README.md", "/opt/pgw-src/README.md", copy=True)
@@ -139,8 +143,8 @@ def _e2e(live: modal.Dict, run_id: str, url: str, token: str, deadline: float, l
     }
 
 
-_FN: dict = dict(cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1, min_containers=0, retries=0,
-                 region=REGION)
+_FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=8192, timeout=MAX_LIFETIME_S, max_containers=1,
+                 min_containers=0, retries=0, region=REGION)
 
 
 @app.function(**_FN, i6pn=False)

@@ -82,7 +82,9 @@ def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
     """Hourly list price of each party (provider cores: ``cpus``, else :func:`provider_cpus`)."""
     cores = provider_cpus(gpu) if cpus is None else float(cpus)
     prov = (GPU_PRICE_H[gpu] if gpu else 0.0) + cores * CORE_H
-    return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": 4 * CORE_H + 8 * GIB_H}
+    cgpu = normalize_gpu(os.environ.get("PGW_MODAL_CUSTOMER_GPU"))
+    cust = (GPU_PRICE_H[cgpu] if cgpu else 0.0) + 4 * CORE_H + 8 * GIB_H
+    return {"pgw-provider": prov + 6 * GIB_H, "pgw-customer": cust}
 
 
 def normalize_gpu(value: str | None) -> str | None:
@@ -118,13 +120,15 @@ def _ts(t: float) -> str:
     return dt.datetime.fromtimestamp(t, dt.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def deploy(gpu: str | None) -> None:
-    """``modal deploy`` both apps; the provider's GPU is fixed at deploy time (``PGW_MODAL_GPU``)."""
+def deploy(gpu: str | None, customer_gpu: str | None = None) -> None:
+    """``modal deploy`` both apps; the GPUs are fixed at deploy time (``PGW_MODAL_GPU`` for the provider,
+    ``PGW_MODAL_CUSTOMER_GPU`` for the customer gateway's mask factory)."""
     env = dict(os.environ)
-    if gpu:
-        env["PGW_MODAL_GPU"] = gpu
-    else:
-        env.pop("PGW_MODAL_GPU", None)
+    for var, val in (("PGW_MODAL_GPU", gpu), ("PGW_MODAL_CUSTOMER_GPU", customer_gpu)):
+        if val:
+            env[var] = val
+        else:
+            env.pop(var, None)
     for f in ("provider.py", "customer.py"):
         subprocess.run(["modal", "deploy", str(HERE / f)], check=True, env=env)  # noqa: S603, S607
 
@@ -392,6 +396,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="reuse the deployed apps (their GPU is whatever was deployed)")
     ap.add_argument("--deploy-only", action="store_true",
                     help="build the images and deploy both apps, start nothing (no running cost)")
+    ap.add_argument("--customer-gpu", default=os.environ.get("PGW_MODAL_CUSTOMER_GPU") or "none",
+                    help="GPU for the customer gateway (fixed at deploy time; default none): runs the encrypted "
+                         "mask factory's encryption on the customer's own GPU")
     ap.add_argument("--gpu", default=os.environ.get("PGW_MODAL_GPU") or "none", metavar="{none," +
                     ",".join(GPU_PRICE_H) + "}",
                     help="provider GPU, fixed at deploy time (default: none = CPU int8 backend; "
@@ -412,6 +419,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
                          "(the tunnel: yes); 'attention' = always; 'off' = every linear on the provider")
     args = ap.parse_args(argv)
+    try:
+        args.customer_gpu = normalize_gpu(args.customer_gpu)
+        if args.customer_gpu:  # cost estimates read it
+            os.environ["PGW_MODAL_CUSTOMER_GPU"] = args.customer_gpu
+        else:
+            os.environ.pop("PGW_MODAL_CUSTOMER_GPU", None)
+    except ValueError as exc:
+        ap.error(f"--customer-gpu / PGW_MODAL_CUSTOMER_GPU: {exc}")
     try:  # also validates a PGW_MODAL_GPU default, which argparse would not check against choices
         args.gpu = normalize_gpu(args.gpu)
     except ValueError as exc:
@@ -430,7 +445,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.deploy_only:
-        deploy(args.gpu)
+        deploy(args.gpu, args.customer_gpu)
         print("deployed; start a pair later with --no-deploy")
         return
     if args.stop:
@@ -442,7 +457,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     ttl_s = int(min(args.ttl_min, 85.0) * 60)
     if not args.no_deploy:
-        deploy(args.gpu)
+        deploy(args.gpu, args.customer_gpu)
     if args.e2e:
         sys.exit(run_e2e(live, args, ttl_s))
     pair = launch_pair(live, i6pn=args.i6pn, ttl_s=ttl_s, e2e=False,

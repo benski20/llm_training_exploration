@@ -184,6 +184,25 @@ JOBS: dict[str, dict] = {
          "cmd": "PGW_HEMASK_ENGINE=cuda python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda "
                 "--groups 4", "timeout": 1800},
     ]},
+    # encrypted masks with a GPU on the customer gateway (Modal --customer-gpu): exactness of every hemask path
+    # with the CUDA engine picked automatically (the CPU NTT must step aside), then encrypt/decrypt cost per slot
+    # at the Modal demo's 0.5B K32 shapes on the GPU vs the CPU int8 engine (same box).
+    "pgw-he-gateway-gpu": {"exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                       "tests/console", "tests/factory", "tests/engine", "tests/wire", "tests/native",
+                                       "tests/core", "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks",
+                                       "docs", "research", "console", "tests/vectors", "SPEC.md",
+                                       "INTERFACE_NOTES.md", "tests/service", "tests/modelpack", "tests/observability",
+                                       "STATUS.md", "benchmarks/gpu_validate.py", "benchmarks/profile_token.py"],
+                           "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_hemask_auto_cuda", "args": ["tests/hemask", "-q", "-rs", "--timeout", "1800"],
+         "timeout": 2400},
+        *[{"kind": "shell", "name": f"hemask_bench_05b_k32_{eng}",
+           "cmd": f"PGW_HEMASK_ENGINE={eng} python benchmarks/hemask_bench.py --preset qwen2.5-0.5b --device cuda "
+                  "--groups 4 --k 32", "timeout": 1800}
+          for eng in ("cuda", "cpu_int8")],
+    ]},
     # (a) GPU kernel tests + full suite with the e2e service on CUDA + ring benches + 0.5B end to end
     "pgw-gpu-tests": {"steps": [
         {"kind": "shell", "name": "probe_int_mm", "cmd": "python benchmarks/kaggle/probe_int_mm.py", "timeout": 300},
@@ -287,7 +306,7 @@ def main() -> None:
                 "enable_internet": True, "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
                 "model_sources": []}
         if meta["enable_gpu"]:
-            meta["machine_shape"] = "NvidiaTeslaP100"
+            meta["machine_shape"] = "NvidiaTeslaT4"
         (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=1))
         print(d, f"{(d / 'run.py').stat().st_size / 1e6:.2f} MB")
 
