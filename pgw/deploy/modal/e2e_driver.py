@@ -28,8 +28,11 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         sampler_path: str | None = None, float_threads: int | None = None,
         float_ops: str | None = None, ab: list[tuple[str, Any]] | None = None,
         ab_cleanup: Any = None, ab_chats: int = 3, sustain_min_stock: int = 0,
-        private: dict[str, Any] | None = None) -> dict[str, Any]:
+        private: dict[str, Any] | None = None, ref_int_threads: int | None = None) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
+
+    ``ref_int_threads`` (``--gateway-env PGW_MODAL_REF_INT_THREADS=N``): the plaintext reference's exact integer
+    products on N threads (``wizard_client.plaintext_reference(int_threads=)``; same bits), for large targets.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
     the wizard waits for enough mask slots for both chats and the warm window starts after the first chat's
@@ -113,7 +116,7 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     st = json.loads((config_dir / "setup" / "state.json").read_text())
     t = time.time()
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32,
-                                  float_threads=float_threads, float_ops=float_ops)
+                                  float_threads=float_threads, float_ops=float_ops, int_threads=ref_int_threads)
     ref_s = time.time() - t
     cmp = wiz.compare(out, ref)
     sustain: dict[str, Any] | None = None

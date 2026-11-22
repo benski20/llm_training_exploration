@@ -15,6 +15,18 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: Qwen2.5-32B co-located Modal run prepared (CPU-only gateway, H100 provider; not run)
+
+`launch.py --model qwen2.5-32b-instruct` (H100 only, `--gateway-cache` required): the provider's 37.5 GB pack from a
+provider-side Volume (`prepare_provider_pack`, CPU container, download + pack inside Modal), the gateway side's pack and
+114.4 GB hint (not about 78 GB: 4.65M output rows x 24,576 bytes) built once by `--prepare-cache` on a customer-side T4
+container (hint on the T4, customer-chosen seed; never on the provider), a free fingerprint preflight before every run,
+and a fail-fast in the container without a cached pack and hint. Sizing: provider 48 GiB, gateway 160 GiB (hint and
+pack in the page cache), slot 18.6 MB, keep-up divisor 16; plaintext reference's exact integer products on 16 threads
+(`PGW_MODAL_REF_INT_THREADS`, same bits); `--mask-source gpu-service` hook for the GPU mask service (refused until
+wired); `--dry-run`. Commands, sizes and cost (prep about $1-2 once, short plain e2e about $1.5-2.5 at $7.51/h, TTL 30
+min; expected plain 3.5-5 tok/s): `deploy/modal/README.md`, "Qwen2.5-32B co-located".
+
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
 Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model

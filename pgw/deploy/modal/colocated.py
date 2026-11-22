@@ -54,12 +54,23 @@ MODELS = {
     "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
     "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
     "qwen2.5-7b-instruct": ("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
+    "qwen2.5-32b-instruct": ("Qwen/Qwen2.5-32B-Instruct", "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd"),
 }
 MODEL_NAME = (os.environ.get("PGW_MODAL_MODEL") or "qwen2.5-0.5b-instruct").strip().lower()
 if MODEL_NAME not in MODELS:
     raise ValueError(f"PGW_MODAL_MODEL={MODEL_NAME!r}: use one of {', '.join(MODELS)}")
 MODEL_REPO, MODEL_REVISION = MODELS[MODEL_NAME]
-PACK = "/opt/packs/" + MODEL_NAME
+#: Targets whose provider pack lives in a provider-side Volume instead of the image
+#: (= pgw_modal_boot.VOLUME_PACK_MODELS, a test checks it): the 32B's 37.5 GB pack (65.5 GB download) is not baked
+#: into the image (it would be rebuilt on every source change); ``prepare_provider_pack`` fills the Volume once and ``pair`` copies the pack into the
+#: provider's own directory (its user's) before the service starts.
+VOLUME_PACK_MODELS = ("qwen2.5-32b-instruct",)
+VOLUME_PACK = MODEL_NAME in VOLUME_PACK_MODELS
+PROVIDER_PACK_VOLUME = os.environ.get("PGW_MODAL_PROVIDER_PACK_VOLUME") or "pgw-provider-packs"
+PROVIDER_PACK_ROOT = Path("/provider-packs")
+provider_pack_volume = (modal.Volume.from_name(PROVIDER_PACK_VOLUME, create_if_missing=True) if VOLUME_PACK
+                        else None)
+PACK = "/srv/pgw-provider/pack" if VOLUME_PACK else "/opt/packs/" + MODEL_NAME
 # Strict speculation with a draft model (launch.py --spec-draft; PGW_MODAL_DRAFT=1 at deploy time), as in
 # customer.py: a pack of Qwen2.5-0.5B-Instruct the gateway runs in plaintext (here on the CPU: the gateway's
 # process sees no GPU) to propose tokens. Default: no draft (prompt lookup only).
@@ -83,18 +94,23 @@ PROVIDER_CPUS = float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if GPU e
 GATEWAY_CPUS = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
 #: Memory: the provider's 6 GiB plus the gateway's (8 GiB; 16 GiB with a target larger than the 0.5B or the draft,
 #: = customer.py's MEMORY_MIB / pgw_modal_boot.customer_memory_mib).
-#: Qwen2.5-7B: the provider stages its 7.6 GB int8 pack in host memory (16 GiB); the gateway holds its own pack
-#: (mapped), the float32 embedding (2.2 GB), packs the checkpoint in the wizard and its factory reads a 34 GB
-#: encryption hint through the page cache (48 GiB). A request, not a limit.
-MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"
-              else 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192))
+#: Large targets, (provider GiB, gateway GiB) (= launch.py COLOCATED_MEM_GIB; a test checks it). A request, not a limit.
+#: Qwen2.5-7B: the provider stages its int8 pack in host memory (16 GiB); the gateway holds its own pack (mapped), the
+#: float32 embedding (2.2 GB), packs the checkpoint in the wizard and its factory reads a 34 GB encryption hint
+#: through the page cache (48 GiB).
+#: Qwen2.5-32B: the provider stages 31.2 GB of int8 linears (48 GiB). The gateway (160 GiB): the factory streams the
+#: whole 114 GB hint once per hint pass (every <= 16 256-slot groups) and derives the Freivalds keys from the 37.5 GB
+#: pack per segment, so both stay in the page cache (152 GB) instead of being re-read from disk by each worker; plus
+#: the float32 embedding and LM head (6.2 GB), the factory workers' buffers and, during the e2e's plaintext
+#: reference (root process), a resident int8 copy of the linears (31 GB; page cache gives way meanwhile).
+COLOCATED_MEM_GIB = {"qwen2.5-7b-instruct": (16, 48), "qwen2.5-32b-instruct": (48, 160)}
+_SMALL_GATEWAY_GIB = 16 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8
+PROVIDER_GIB, GATEWAY_GIB = COLOCATED_MEM_GIB.get(MODEL_NAME, (6, _SMALL_GATEWAY_GIB))
 #: ``launch.py --gateway-mem-gib`` / ``--provider-mem-gib`` (deploy time): explicit sizes (a request, not a limit), e.g.
 #: the CPU-only 7B gateway with the draft, a large mask stock and several factory workers (hint pages, segments).
-if os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB") or os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB"):
-    MEMORY_MIB = 1024 * (int(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB")
-                             or (16 if MODEL_NAME == "qwen2.5-7b-instruct" else 6))
-                         + int(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB")
-                               or (48 if MODEL_NAME == "qwen2.5-7b-instruct" else 16 if DRAFT else 8)))
+PROVIDER_GIB = int(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB") or PROVIDER_GIB)
+GATEWAY_GIB = int(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB") or GATEWAY_GIB)
+MEMORY_MIB = 1024 * (PROVIDER_GIB + GATEWAY_GIB)
 #: ``launch.py --gateway-cache`` (deploy time, ``PGW_MODAL_GATEWAY_CACHE=1``; off by default): a Modal Volume of the
 #: gateway side's public set-up artefacts (the model pack and the encrypted-mask hint ``H = W8 A``), mounted at
 #: ``/cache`` (root only; the parties never see it): restored into the gateway's data directory before it starts and
@@ -106,7 +122,9 @@ CACHE_VOLUME = os.environ.get("PGW_MODAL_CACHE_VOLUME") or "pgw-gateway-cache"
 CACHE_ROOT = Path("/cache")
 cache_volume = modal.Volume.from_name(CACHE_VOLUME, create_if_missing=True) if GATEWAY_CACHE else None
 #: Disk: Modal's default ephemeral disk (at least 512 GiB, the smallest request it accepts) holds the 7B's
-#: checkpoint (15 GB), two packs (7.6 GB each), the encryption hint (34 GB) and the mask store (4.2 MB per slot).
+#: checkpoint (15 GB), two packs (10.9 GB each), the encryption hint (34 GB) and the mask store (5.6 MB per slot);
+#: and the 32B's two pack copies (2 x 37.5 GB), its hint (114 GB) and a 1536-slot store (18.6 MB per slot, 29 GB):
+#: about 220 GB (no checkpoint: both packs come from Volumes).
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
 PROVIDER_USER, CUSTOMER_USER = "pgwprov", "pgwcust"
 #: Escape hatch, fixed at deploy time (``PGW_MODAL_COLOCATED_USERS=0``): run both parties as root (still
@@ -130,6 +148,7 @@ RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT el
                "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
                "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1"),
                "PGW_MODAL_GATEWAY_CACHE": "1" if GATEWAY_CACHE else "0", "PGW_MODAL_CACHE_VOLUME": CACHE_VOLUME,
+               "PGW_MODAL_PROVIDER_PACK_VOLUME": PROVIDER_PACK_VOLUME,
                **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
@@ -158,9 +177,11 @@ image = (
         "cd / && python -c 'from pgw.core import native; assert native.fast is not None; print(native.fast.version())'",
         "cd / && python -c 'from pgw.hemask import ntt; assert ntt.available(); print(\"pgw_ntt\", ntt.info())'",
     )
-    .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
-                  " && rm -rf /root/.cache/huggingface && chmod -R a+rX /opt/packs")
 )
+if not VOLUME_PACK:  # the 32B's provider pack comes from its Volume (prepare_provider_pack), not the image
+    image = image.run_commands(
+        f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
+        " && rm -rf /root/.cache/huggingface && chmod -R a+rX /opt/packs")
 if DRAFT:
     image = image.run_commands(
         f"python -m pgw.cli pack {DRAFT_REPO} {DRAFT_PACK} --name draft --revision {DRAFT_REVISION} -q"
@@ -182,7 +203,8 @@ app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
 @app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
               max_containers=1, min_containers=0, retries=0, region=REGION,
-              volumes={str(CACHE_ROOT): cache_volume} if cache_volume is not None else {})
+              volumes={**({str(CACHE_ROOT): cache_volume} if cache_volume is not None else {}),
+                       **({str(PROVIDER_PACK_ROOT): provider_pack_volume} if provider_pack_volume is not None else {})})
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
          spec_rows: int = 0, lane: str = "stream", gateway_env: dict | None = None,
          provider_env: dict | None = None, sustain_s: float = 0.0) -> dict:
@@ -244,6 +266,23 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         boot.log(f"gateway cache restore: {result['cache_restore']}")
         genv.setdefault("PGW_SETUP_REUSE_PACK", "1")  # the wizard uses the restored pack iff it verifies
     try:
+        # launch.py --mask-source: today's MLWE factory (default) or the GPU mask service (hook; refused until wired)
+        mask_source = genv.get("PGW_MODAL_MASK_SOURCE") or "factory"
+        genv.update(boot.mask_source_env(mask_source))
+        # the 32B: never fall back to a download + CPU hint build inside the TTL on the expensive container
+        boot.require_cached_setup(MODEL_NAME, result.get("cache_restore") or {}, mask_source)
+        if VOLUME_PACK:  # the provider's pack from its Volume into its own directory (owned by its user below)
+            src = boot.provider_pack_path(PROVIDER_PACK_ROOT, MODEL_NAME)
+            if not (src / "manifest.json").is_file():
+                raise RuntimeError(f"no provider pack in Volume {PROVIDER_PACK_VOLUME} ({src}); run launch.py ... "
+                                   "--prepare-cache first")
+            try:
+                PROVIDER_PACK_ROOT.chmod(0o700)  # root only, as /cache: neither party's process reads the Volume
+            except OSError:
+                pass
+            pwork.mkdir(parents=True, exist_ok=True, mode=0o700)
+            result["provider_pack_copy"] = boot.copy_tree(src, Path(PACK), threads=16)
+            boot.log(f"provider pack copied from its Volume: {result['provider_pack_copy']}")
         # ---- provider: own user, own directory, loopback listener only (pgw_modal_boot.start_provider_party)
         # launch.py --lane tls: the service also serves its native trip lane over TLS on LANE_PORT (opt-in)
         prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
@@ -312,7 +351,11 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                # starts once N mask slots are in stock (at most 240 s of waiting)
                                                sustain_min_stock=int((gateway_env or {}).get(
                                                    "PGW_MODAL_SUSTAIN_MIN_STOCK") or 0),
-                                               private=private)
+                                               private=private,
+                                               # --gateway-env PGW_MODAL_REF_INT_THREADS=N: the plaintext
+                                               # reference's exact integer products on N threads (same bits)
+                                               ref_int_threads=int(genv.get("PGW_MODAL_REF_INT_THREADS") or 0)
+                                               or None)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
@@ -418,17 +461,46 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     return result
 
 
-@app.function(gpu="T4", cpu=8.0, memory=32768 if MODEL_NAME == "qwen2.5-7b-instruct" else 16384, timeout=60 * 60,
+#: One-off set-up containers (``launch.py --prepare-cache``). The 32B: 65.5 GB download + 37.5 GB pack + 114 GB hint on
+#: local disk (Modal's default ephemeral disk, >= 512 GiB), more cores for packing, and a 150 min timeout (estimated
+#: 25-45 min: download 2-11, pack 5-10, hint on the T4 about 12, copies into the Volume 3-11; billed by the second).
+_BIG_PREP = MODEL_NAME in VOLUME_PACK_MODELS
+PREP_CPUS = 16.0 if _BIG_PREP else 8.0
+PREP_MEMORY_MIB = 49152 if _BIG_PREP else 32768 if MODEL_NAME == "qwen2.5-7b-instruct" else 16384
+PREP_TIMEOUT_S = (150 if _BIG_PREP else 60) * 60
+
+
+def _pack_from_hub(out: Path) -> dict:
+    """Download the pinned revision inside this container and pack it with the same command as the image build
+    (``pgw.cli pack``, default shard size and float32 plain tensors: the same fingerprint as every other pack of it),
+    then delete the checkpoint. Returns seconds and bytes."""
+    import shutil
+    import subprocess
+
+    t0 = time.time()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["python", "-m", "pgw.cli", "pack", MODEL_REPO, str(out), "--name", MODEL_NAME,  # noqa: S603, S607
+                    "--revision", MODEL_REVISION, "-q"], check=True)
+    shutil.rmtree(Path.home() / ".cache" / "huggingface", ignore_errors=True)
+    return {"seconds": round(time.time() - t0, 1),
+            "bytes": sum(f.stat().st_size for f in out.rglob("*") if f.is_file())}
+
+
+@app.function(gpu="T4", cpu=PREP_CPUS, memory=PREP_MEMORY_MIB, timeout=PREP_TIMEOUT_S,
               max_containers=1, min_containers=0, retries=0, region=REGION,
               volumes={str(CACHE_ROOT): cache_volume} if cache_volume is not None else {})
 def prepare_cache(force: bool = False) -> dict:
     """Fill the gateway side's cache (``launch.py --prepare-cache``; needs ``--gateway-cache``) on a cheap T4
-    container, before an expensive run: the target's pack (from this image: public weights; the wizard reuses it
-    only if it verifies in full to the enrolled fingerprint) and the encrypted-mask hint ``H = W8 A`` built with a
-    fresh customer-side seed for ``A`` on the T4 (``PGW_HINT_DEVICE=cuda``: the CPU path's bits, self-checked first;
-    213 s for the 7B against about 20 min on 16 vCPUs). No provider process runs here."""
+    container, before an expensive run: the target's pack (public weights; the wizard reuses it only if it verifies
+    in full to the enrolled fingerprint) and the encrypted-mask hint ``H = W8 A`` built with a fresh customer-side
+    seed for ``A`` on the T4 (``PGW_HINT_DEVICE=cuda``: the CPU path's bits, self-checked first; 213 s for the 7B
+    against about 20 min on 16 vCPUs). No provider process runs here and no provider Volume is mounted: a
+    customer-side container. The pack: copied from this image, or for a :data:`VOLUME_PACK_MODELS` target (the
+    32B) downloaded from the pinned revision and packed here, as the gateway's own wizard would. Resumable: a pack
+    or hint already in the cache is kept (``force`` rebuilds both); the pack is committed before the hint starts."""
     import shutil
     import sys
+    import tempfile
 
     sys.path.insert(0, "/opt/pgw-modal")
     import pgw_modal_boot as boot
@@ -442,15 +514,21 @@ def prepare_cache(force: bool = False) -> dict:
     out: dict = {"model": MODEL_NAME}
     if force:
         shutil.rmtree(paths["pack"].parent, ignore_errors=True)
+    src_pack = Path(PACK)
+    if VOLUME_PACK:
+        src_pack = Path(tempfile.mkdtemp(prefix="pgw-pack-")) / MODEL_NAME
     if not (paths["pack"] / "manifest.json").is_file():
+        if VOLUME_PACK:
+            out["pack_build"] = _pack_from_hub(src_pack)
         paths["pack"].parent.mkdir(parents=True, exist_ok=True)
-        out["pack"] = boot.copy_tree(Path(PACK), paths["pack"])
-    import tempfile
-
+        out["pack"] = boot.copy_tree(src_pack, paths["pack"], threads=16)
+        cache_volume.commit()  # a later hint failure keeps the pack
+    elif VOLUME_PACK:
+        src_pack = paths["pack"]  # resume: the hint from the cached pack (read from the Volume)
     work = Path(tempfile.mkdtemp(prefix="pgw-hint-"))
     if not any(d.is_dir() and (d / "meta.json").is_file() for d in paths["hemask"].glob("*")):
         os.environ["PGW_HINT_DEVICE"] = "cuda"
-        job = HintBuildJob(Path(PACK), boot.RING, work)
+        job = HintBuildJob(src_pack, boot.RING, work)
         t_h = time.time()
         job.run()
         st = job.status()
@@ -460,9 +538,43 @@ def prepare_cache(force: bool = False) -> dict:
         for d in work.glob("*"):
             if d.is_dir() and (d / "meta.json").is_file():
                 paths["hemask"].mkdir(parents=True, exist_ok=True)
-                out[f"hint {d.name}"] = boot.copy_tree(d, paths["hemask"] / d.name)
+                out[f"hint {d.name}"] = boot.copy_tree(d, paths["hemask"] / d.name, threads=16)
     cache_volume.commit()
     out["seconds"] = round(time.time() - t0, 1)
     out["cache"] = {str(p.relative_to(CACHE_ROOT)): sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
                     for p in (paths["pack"], paths["hemask"]) if p.exists()}
+    return out
+
+
+@app.function(cpu=PREP_CPUS, memory=PREP_MEMORY_MIB, timeout=PREP_TIMEOUT_S, max_containers=1, min_containers=0,
+              retries=0, region=REGION,
+              volumes={str(PROVIDER_PACK_ROOT): provider_pack_volume} if provider_pack_volume is not None else {})
+def prepare_provider_pack(force: bool = False) -> dict:
+    """The provider side's one-off set-up for a :data:`VOLUME_PACK_MODELS` target (``launch.py --prepare-cache`` runs
+    it next to ``prepare_cache``): download the pinned revision inside Modal, pack it (the image build's command)
+    and store it in the provider's pack Volume. CPU only, no GPU; mounts only the provider's Volume (never the
+    gateway cache). Kept if already there unless ``force``."""
+    import shutil
+    import sys
+    import tempfile
+
+    sys.path.insert(0, "/opt/pgw-modal")
+    import pgw_modal_boot as boot
+
+    if provider_pack_volume is None:
+        raise RuntimeError(f"{MODEL_NAME}: its provider pack is baked into the image (not a Volume target)")
+    t0 = time.time()
+    dst = boot.provider_pack_path(PROVIDER_PACK_ROOT, MODEL_NAME)
+    out: dict = {"model": MODEL_NAME, "volume": PROVIDER_PACK_VOLUME}
+    if force:
+        shutil.rmtree(dst, ignore_errors=True)
+    if not (dst / "manifest.json").is_file():
+        local = Path(tempfile.mkdtemp(prefix="pgw-pack-")) / MODEL_NAME
+        out["pack_build"] = _pack_from_hub(local)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        out["pack"] = boot.copy_tree(local, dst, threads=16)
+        provider_pack_volume.commit()
+    man = json.loads((dst / "manifest.json").read_text())
+    out.update(fingerprint=man.get("fingerprint"), seconds=round(time.time() - t0, 1),
+               bytes=sum(f.stat().st_size for f in dst.rglob("*") if f.is_file()))
     return out

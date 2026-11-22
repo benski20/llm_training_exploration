@@ -850,6 +850,114 @@ provider sees one pass per generated token). Slots per token include the 41-slot
 speculative phase's 1-row trip split is empty (every decode item has 2 rows); the plain phase's: 0.24 ms (service
 0.07, wire 0.18). Spend for the prep and both runs: about $0.2.
 
+### Qwen2.5-32B co-located: CPU-only gateway, H100 provider (prepared 2026-11-22, not run)
+
+`--model qwen2.5-32b-instruct` (pinned revision `5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd`) is ready for a short
+plain-decoding e2e: every linear remote, H100 80GB provider, CPU-only gateway, the MLWE mask factory with a cached
+hint. Nothing was run on Modal; the numbers below are estimates scaled from the 7B H100 run (plain 11 tok/s, 112
+trips per token, 0.26 ms per trip, 45 GB cache restore in 12 s). Validated locally: tests and `--dry-run`.
+
+**Sizes** (`pgw_modal_boot.model_sizes`; from the checkpoint's config: 64 layers, hidden 5120, intermediate 27648,
+8 KV heads, so 4.65M output rows over the linears, 3.35x the 7B's 1.39M):
+
+| artefact | 32B | 7B (for scale) |
+|---|---|---|
+| checkpoint download (bf16, 17 shards) | 65.5 GB | 15.2 GB |
+| pack: int8 linears + float32 embedding and LM head | 31.2 + 6.2 = **37.5 GB** | 6.5 + 4.4 = 10.9 GB |
+| encryption hint (24,576 bytes per output row) | **114.4 GB** | 34.2 GB |
+| mask slot (`W r mod 2^32`, every linear remote) | **18.6 MB** | 5.56 MB |
+| trips per token (4 per layer) | 256 | 112 |
+
+(The 7B's pack is 10.9 GB with float32 plain tensors, which is what the 45 GB restore of its H100 run held with the
+34.2 GB hint; the 32B hint is 114 GB, not about 78 GB.)
+
+**What changed for it** (all opt-in by `--model`; library and demo defaults unchanged):
+
+* **The provider's pack comes from a provider-side Volume** (`pgw-provider-packs`, `PGW_MODAL_PROVIDER_PACK_VOLUME`),
+  not the image: baking 37.5 GB (a 65.5 GB download) into the image would rebuild it on every source change.
+  `prepare_provider_pack` (a CPU container: 16 cores, 48 GiB; mounts only that Volume) downloads the pinned revision
+  inside Modal and packs it with the image build's own command (`pgw.cli pack`, same shard size and float32 plain
+  tensors, so the same fingerprint). In a run, the root parent copies it from the Volume (mounted 0700, root only)
+  into `/srv/pgw-provider/pack`, which becomes the provider user's with the rest of its directory; the gateway never
+  reads it.
+* **The gateway side's pack and hint come from the gateway cache** (`--gateway-cache`, required for the 32B).
+  `prepare_cache` (the T4 container, now 16 cores / 48 GiB / 150 min for the 32B; mounts only the gateway cache)
+  downloads and packs the checkpoint itself, as the gateway's wizard would, commits the pack, then builds `H = W8 A`
+  on the T4 with a fresh customer-side seed (`hint_gpu`, self-checked; the CPU path's bits). Neither container runs a
+  provider process or mounts the other side's Volume; the hint is still never built by the provider (README "Gateway
+  cache": selective-failure attack). Resumable: a cached pack or hint is kept.
+* `launch.py --prepare-cache` runs both containers in parallel and then a **preflight** (free: reads the two
+  manifests and lists the hint directory through the Modal API, no container) that the provider's pack, the cached
+  pack and a hint carry the same fingerprint. Every 32B run repeats the preflight before deploying and refuses
+  without it; in the container, `require_cached_setup` refuses to start the parties if the restore brought no pack or
+  no hint (the wizard would otherwise download 65.5 GB and build the hint on the gateway CPU: about 65-70 min on
+  16 vCPUs, beyond the TTL).
+* **Sizing** (`COLOCATED_MEM_GIB`, same table in `launch.py` and `colocated.py`): provider 48 GiB (31.2 GB of int8
+  linears staged), gateway 160 GiB: the factory streams the whole 114 GB hint once per hint pass and derives the
+  Freivalds keys from the pack per segment, so the hint and pack (152 GB) stay in the page cache instead of being
+  re-read from disk by every worker; plus the float32 embedding and head (6.2 GB), the workers' buffers and, during
+  the e2e's plaintext reference, a resident int8 copy of the linears (31 GB). Requests, not limits; if Modal refuses
+  208 GiB, `--gateway-mem-gib 112` still runs (hint pages re-read from disk; slower factory, enough for this run).
+  Disk: about 220 GB in the run (two pack copies, the hint, a 1536-slot store), 217 GB in `prepare_cache`; the
+  default ephemeral disk (>= 512 GiB) holds both. `--gpu` must be `H100` for the 32B (refused otherwise).
+* **Factory keep-up**: `FACTORY_SLOT_DIVISOR` 16 (segments of 128 slots = 2.4 GB, refill below 384 to 512, yield
+  156-375). The short run below overrides it (256-slot segments, target 1536, refill below 640).
+* **Plaintext reference on 16 threads for the integer products** (`--gateway-env PGW_MODAL_REF_INT_THREADS=16`,
+  default off): the e2e's reference runs the 32B on the root process's CPU with the gateway's pinned 1 float thread;
+  single-threaded int8 GEMMs over 31 GB per token would take an estimated 10-15 min. Only `exact_int_matmul` (int8
+  digit GEMMs, int32 accumulation: the same integers in any order) gets the threads; quantization, float ops and the
+  head stay on the pinned count, so the reference's bits are unchanged (tested bit-identical on the tiny pack).
+  Estimated 2-4 min (loading and transposing 31 GB of linears included).
+* **`--mask-source {factory,gpu-service}`** (default `factory`): a hook for the customer-side GPU mask service built
+  in a separate package. `gpu-service` is refused by the launcher (`GPU_MASK_SERVICE_READY = False`) and in the
+  container (`pgw_modal_boot.mask_source_env` raises) until that package wires it; it then reaches the gateway as
+  `PGW_MODAL_MASK_SOURCE`, the preflight and `require_cached_setup` stop asking for a hint (the pack is still
+  needed), and the same short run below works with `--mask-source gpu-service` added (no hint build at all; where
+  its GPU lives, e.g. a second GPU in the co-located container, is that package's choice and changes the price).
+* `--dry-run` (any target): validates the arguments, prints the deploy environment, the run's gateway/provider
+  environment, the sizes and the keep-up, and the cost per hour, then exits without any Modal call.
+
+**Commands** (from `pgw/deploy/modal`; the same deploy flags for both steps):
+
+```bash
+FLAGS="--placement colocated --gpu H100 --model qwen2.5-32b-instruct --gateway-cache --gateway-cpus 32 --provider-cpus 8"
+# 1) once: provider pack (CPU container) + gateway cache pack and hint (T4 container), in parallel, then the preflight
+python launch.py $FLAGS --prepare-cache
+# 2) the short e2e: plain decoding, exactness, 60 s back to back (redeploys the small image in seconds)
+python launch.py $FLAGS --e2e --ttl-min 30 \
+  --local-linears off --float-ops native --trip-native --prime-check --sustain-s 60 \
+  --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=640 \
+  --gateway-env PGW_FACTORY_TARGET_SLOTS=1536 --gateway-env PGW_FACTORY_LOW_WATER_SLOTS=640 \
+  --gateway-env PGW_FACTORY_SEGMENT_SLOTS=256 --gateway-env PGW_FACTORY_WORKERS=4 \
+  --gateway-env PGW_FACTORY_CPU_THREADS=4 --gateway-env PGW_FACTORY_NICE=10 \
+  --gateway-env PGW_POOL_WORKERS=8 --gateway-env PGW_THREAD_NAMES=1 --gateway-env PGW_MODAL_REF_INT_THREADS=16
+```
+
+Append `--dry-run` to either to see the plan for free. Mask budget of step 2: the wizard waits for one 256-slot
+segment; the five 32-token chats before the reference take about 5 x 73 = 365 slots plus burned reservations; the
+60 s window, at an estimated 3.5-5 tok/s with 64-token chats (prompt 41), takes 3-5 chats = 315-525 slots. So the
+factory fills to 1536 (28.6 GB) during the chats and the reference, does not refill above 640, and the window starts
+at once with >= 640 in stock (`PGW_MODAL_SUSTAIN_MIN_STOCK`; it waits at most 240 s otherwise). The window then
+measures decoding without the factory competing for cores (the keep-up at 32B is not what this run measures).
+
+**Cost and time (Modal list prices, estimates).**
+
+| step | container | price | expected time | expected cost | cap |
+|---|---|---|---|---|---|
+| 1 `prepare_cache` | T4 + 16 cores + 48 GiB | $1.73/h | 25-45 min: download 65.5 GB 2-11, pack 5-10, copy 37.5 GB into the Volume 1-3, hint on the T4 about 12 (213 s x 3.35), copy 114 GB 2-8 | $0.7-1.3 | 150 min, $4.3 |
+| 1 `prepare_provider_pack` (parallel) | 16 cores + 48 GiB | $1.14/h | 10-25 min | $0.2-0.5 | 150 min, $2.9 |
+| 2 short e2e | H100 + 40 cores + 208 GiB | $7.51/h | 12-20 min: start 2-4, Volume copies 1-4 (37.5 + 152 GB at the 7B's 0.9-3.75 GB/s), service start with 31 GB to the H100 1-2, wizard with a full pack verification 1-2, first segment about 1, chats 1, reference 2-4, window 1, shutdown 1 | **$1.5-2.5** | TTL 30 min, $3.75 |
+
+Total about **$2.5-4.3**, at most $11 if every container ran to its cap. Storage: the gateway cache grows by 152 GB
+and the provider Volume holds 37.5 GB; check Modal's current Volume storage price, and when the decision is made
+remove them (`modal volume rm pgw-gateway-cache qwen2.5-32b-instruct -r`, `modal volume delete pgw-provider-packs`).
+
+**Expected outcome (estimate, not measured).** Short context (about 100 tokens), so attention is small. Per token:
+256 trips x 0.3-0.35 ms (the H100 GEMVs are 1.4-2x the 7B's bytes) = 77-90 ms, gateway CPU about 0.4-0.45 ms per trip
+(the 7B's per-trip cost scaled by the 1.45x vector sizes) = 100-115 ms, the CPU LM head over 1.56 GB of bfloat16 25-40
+ms: 200-245 ms, i.e. **plain about 3.5-5 tok/s** (the 7B's 11 tok/s scaled by 2.3-3x). Speculation, the masked head and
+the gateway attention work in `research/plans/scaling-32b-70b.md` are what would take it toward 25-30.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

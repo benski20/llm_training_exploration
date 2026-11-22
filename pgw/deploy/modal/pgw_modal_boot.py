@@ -46,6 +46,7 @@ MODELS: dict[str, tuple[str, str]] = {
     "qwen2.5-1.5b-instruct": ("Qwen/Qwen2.5-1.5B-Instruct", "989aa7980e4cf806f80c7fef2b1adb7bc71aa306"),
     "qwen2.5-3b-instruct": ("Qwen/Qwen2.5-3B-Instruct", "aa8e72537993ba99e69dfaafa59ed015b17504d1"),
     "qwen2.5-7b-instruct": ("Qwen/Qwen2.5-7B-Instruct", "a09a35458c702b33eeacc393d103063234e8bc28"),
+    "qwen2.5-32b-instruct": ("Qwen/Qwen2.5-32B-Instruct", "5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd"),
 }
 #: The speculation draft baked into the customer image with ``PGW_MODAL_DRAFT=1`` (``launch.py --spec-draft``):
 #: Qwen2.5-0.5B-Instruct, the same tokenizer as every target above. It runs in plaintext on the gateway only.
@@ -498,6 +499,91 @@ def restart_gateway(proc: subprocess.Popen[bytes], port: int, log_dir: Path,
 
 
 # ------------------------------------------------------------------------------------------------
+# Qwen2.5-32B (co-located only): sizes, the provider's pack Volume, the mask-source hook
+# ------------------------------------------------------------------------------------------------
+#: Public sizes of the targets that need explicit sizing (bytes; from the checkpoints' configs and the pack format:
+#: int8 linears + float32 embedding and LM head (``plain_dtype`` float32) + scales and norms). The hint is 24,576
+#: bytes per output row of every linear (rank 16 x 256 columns x 6 byte planes), a mask slot 4 bytes per output row.
+#: 7B: 1.39M output rows (hint 34.2 GB, slot 5.56 MB, pack 10.9 GB: the 45 GB cache restore of the 7B H100 run);
+#: 32B: 64 layers x (7168 + 5120 + 55296 + 5120) = 4.65M output rows; 31.2 GB of int8 linears + 6.2 GB float32
+#: embedding and head.
+MODEL_SIZES = {
+    "qwen2.5-7b-instruct": {"out_rows": 28 * (4608 + 3584 + 37888 + 3584), "pack_bytes": 10_900_000_000,
+                            "checkpoint_bytes": 15_230_000_000},
+    "qwen2.5-32b-instruct": {"out_rows": 64 * (7168 + 5120 + 55296 + 5120), "pack_bytes": 37_500_000_000,
+                             "checkpoint_bytes": 65_530_000_000},
+}
+HINT_BYTES_PER_ROW = 16 * 256 * 6
+SLOT_BYTES_PER_ROW = 4
+
+
+def model_sizes(model: str) -> dict[str, int]:
+    """Pack, hint, slot and checkpoint bytes of a target in :data:`MODEL_SIZES` (``{}`` otherwise)."""
+    s = MODEL_SIZES.get(model.strip().lower())
+    if s is None:
+        return {}
+    return {**s, "hint_bytes": s["out_rows"] * HINT_BYTES_PER_ROW, "slot_bytes": s["out_rows"] * SLOT_BYTES_PER_ROW}
+
+
+#: Targets whose *provider* pack comes from a provider-side Modal Volume instead of the image (``colocated.py``):
+#: baking a 37.5 GB pack (a 65.5 GB download) into the image would rebuild it on every source change. The Volume
+#: (``PGW_MODAL_PROVIDER_PACK_VOLUME``, default ``pgw-provider-packs``) is filled once by ``prepare_provider_pack``
+#: (a CPU container that downloads the pinned revision inside Modal and packs it; it mounts no gateway Volume) and
+#: mounted root-only in the co-located container; the parent copies the pack into the provider's own directory
+#: (owned by the provider's user) before the service starts. The gateway never reads it: its pack comes from the
+#: gateway cache (packed by the customer side's ``prepare_cache``) and must verify in full to the enrolled
+#: fingerprint, as before.
+VOLUME_PACK_MODELS = ("qwen2.5-32b-instruct",)
+#: Targets whose encryption hint must come from the gateway cache: the in-run CPU build (about 20 min on 16 vCPUs for
+#: the 7B's 34 GB, so about 65-70 min for the 32B's 114 GB) does not fit the TTL. The run refuses to start its
+#: parties without a restored pack and hint (:func:`require_cached_setup`) unless the masks come from elsewhere.
+HINT_CACHE_REQUIRED_MODELS = ("qwen2.5-32b-instruct",)
+
+
+def provider_pack_path(volume_root: Path, model: str) -> Path:
+    """``<volume>/<model>/pack``: the provider's pack in its Volume (``prepare_provider_pack``)."""
+    return Path(volume_root) / model / "pack"
+
+
+#: Where the gateway's masks come from (``launch.py --mask-source``; ``PGW_MODAL_MASK_SOURCE`` in the gateway's run-time
+#: environment). ``factory`` (default): today's encrypted (MLWE) mask factory in the gateway party, which needs the
+#: hint. ``gpu-service``: the customer-side GPU mask service (``W8 r`` computed by the customer on a GPU of its own;
+#: no hint, no provider work), built in a separate package. Hook only: :func:`mask_source_env` refuses it until that
+#: package fills it in, and ``launch.py`` refuses it before anything is deployed (``GPU_MASK_SERVICE_READY``).
+MASK_SOURCES = ("factory", "gpu-service")
+
+
+def mask_source_env(source: str | None) -> dict[str, str]:
+    """Gateway-party environment for a mask source (:data:`MASK_SOURCES`). ``factory``: nothing to add.
+    ``gpu-service``: not wired yet (raises ``NotImplementedError``; the GPU mask service package replaces this
+    branch with its settings and the container start-up that runs the service)."""
+    src = (source or "factory").strip().lower()
+    if src not in MASK_SOURCES:
+        raise ValueError(f"mask source {source!r}: use one of {', '.join(MASK_SOURCES)}")
+    if src == "gpu-service":
+        raise NotImplementedError("PGW_MODAL_MASK_SOURCE=gpu-service: the GPU mask service is not wired into the "
+                                  "Modal demo yet (hook: pgw_modal_boot.mask_source_env)")
+    return {}
+
+
+def require_cached_setup(model: str, restore: dict[str, Any], mask_source: str | None = "factory") -> None:
+    """Refuse a run of a :data:`HINT_CACHE_REQUIRED_MODELS` target whose cache restore brought no pack, or no hint
+    with the MLWE factory: the wizard would download the checkpoint and build the hint on the gateway's CPU for
+    longer than the TTL, on the expensive container. Raises ``RuntimeError`` naming the fix (``--prepare-cache``)."""
+    if model not in HINT_CACHE_REQUIRED_MODELS:
+        return
+    restore = restore or {}
+    missing = []
+    if "pack" not in restore:
+        missing.append("pack")
+    if (mask_source or "factory") == "factory" and not any(str(k).startswith("hint ") for k in restore):
+        missing.append("encryption hint")
+    if missing:
+        raise RuntimeError(f"{model}: the gateway cache restored no {' and no '.join(missing)} ({restore}); fill it "
+                           "first with launch.py ... --gateway-cache --prepare-cache")
+
+
+# ------------------------------------------------------------------------------------------------
 # Gateway-side cache of public set-up artefacts (``launch.py --gateway-cache``; a Modal Volume)
 # ------------------------------------------------------------------------------------------------
 #: Layout under the cache root: ``<model>/pack`` (the model pack: public weights, verified in full against the
@@ -639,8 +725,10 @@ COLOCATED_FACTORY_KEEP_UP = {
 #: Mask bytes per slot grow with the model (gate_up masks of a 0.5B slot: 0.93 MB; 1.5B 2.0 MB; 3B 3.2 MB; 7B
 #: 4.2 MB) and the factory's slots per second shrink about as much, so the keep-up's slot counts are divided by
 #: this per target (segments land in about the same time; the stock holds about the same seconds of decode).
+#: Qwen2.5-32B with every linear remote: 18.6 MB per slot (4.65M output rows x 4 bytes), 3.35x the 7B's 5.56 MB:
+#: 16 (segments of 128 slots, 2.4 GB; refill below 384 to 512).
 FACTORY_SLOT_DIVISOR = {"qwen2.5-0.5b-instruct": 1, "qwen2.5-1.5b-instruct": 2, "qwen2.5-3b-instruct": 4,
-                        "qwen2.5-7b-instruct": 4}
+                        "qwen2.5-7b-instruct": 4, "qwen2.5-32b-instruct": 16}
 _KEEP_UP_SLOT_KEYS = ("PGW_FACTORY_YIELD_MIN_SLOTS", "PGW_FACTORY_YIELD_FULL_SLOTS", "PGW_FACTORY_SEGMENT_SLOTS",
                       "PGW_FACTORY_LOW_WATER_SLOTS", "PGW_FACTORY_TARGET_SLOTS")
 
