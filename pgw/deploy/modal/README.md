@@ -407,9 +407,12 @@ decoded token (about 48 ms): trips 12 ms, the masked trips' gateway work 10 ms, 
 
 ### Lean per-trip path and the UDS lane (2026-11-22, package T3b)
 
-* `PGW_TRIP_FAST=1` and `PGW_NOISE_ASYNC_SAMPLED=1` (gateway; library defaults off, `colocated_gateway_env` turns
-  them on; `--gateway-env PGW_TRIP_FAST=0` for an A/B): see `MaskedBackend.trip_fast` / `noise_async_sampled`.
-  Same bytes on the wire, same checks on every row, same noise statistics.
+* `PGW_TRIP_FAST=1` (gateway; library default off, `colocated_gateway_env` turns it on; `--gateway-env
+  PGW_TRIP_FAST=0` for an A/B): see `MaskedBackend.trip_fast`. Same bytes on the wire, same checks on every row,
+  same noise statistics.
+* `PGW_NOISE_ASYNC_SAMPLED=1` stays **off** in the demo too: it lets a sampled call's own payload leave before its
+  noise statistics finish, so an alarm would block only the next payload. That is weaker than the inline check and
+  saves only ~30 µs per trip on average.
 * `--lane uds` (co-located): the provider's service serves its native lane on `/srv/pgw-lane/lane.sock`
   (`PGW_SERVICE_LANE=uds`, `PGW_SERVICE_LANE_PEER_UIDS` = the gateway user's uid only); the directory is the
   provider's, 0710 with the gateway user's group, and root widens the socket from 0600 to 0660 for that group once

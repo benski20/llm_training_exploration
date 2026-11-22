@@ -484,7 +484,7 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
            # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
            # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
-           "PGW_TRIP_FAST": "1", "PGW_NOISE_ASYNC_SAMPLED": "1"}
+           "PGW_TRIP_FAST": "1"}
     if local_linears in SKIP_KINDS_BY_LOCAL:
         env["PGW_FACTORY_SKIP_LINEAR_KINDS"] = SKIP_KINDS_BY_LOCAL[local_linears]
     return env
