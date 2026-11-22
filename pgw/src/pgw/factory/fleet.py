@@ -278,13 +278,6 @@ class FleetScheduler(FactoryScheduler):
             self.ledger.claim(plan.fingerprint, plan.ring, plan.slots_per_segment, self._segment_bytes(plan))
             return plan
 
-    def _produce(self, plan: RefillPlan) -> str:
-        gen = self.generators[(plan.fingerprint, plan.ring)]
-        shard = getattr(getattr(gen, "remote", None), "remote", None)
-        if hasattr(shard, "begin_segment"):
-            shard.begin_segment()
-        return super()._produce(plan)
-
     def run_once(self) -> list[str]:
         """Produce segments one claim at a time until the fleet as a whole reaches target.
 
@@ -419,9 +412,34 @@ def worker_settings(settings: Any, k: int, root: Path) -> Any:
         upd["device"] = settings.devices[k % len(settings.devices)]
     if settings.metrics_port is not None:
         upd["metrics_port"] = int(settings.metrics_port) + k
+    if getattr(settings, "he_service_urls", None) or getattr(settings, "he_service_url", None):
+        # One hint W8.A for the whole fleet (the classic factory's default location), not one per worker
+        # state dir: building it is minutes and GBs for 7B. Workers build it one at a time (_hint_build_lock).
+        upd["he_hint_dir"] = settings.he_hint_dir or Path(settings.state_dir or ".") / "hemask"
     if not settings.cpu_threads and n > 1:
         upd["cpu_threads"] = max(1, (os.cpu_count() or 1) // n)
     return settings.model_copy(update=upd)
+
+
+@contextlib.contextmanager
+def _hint_build_lock(settings: Any) -> Iterator[None]:
+    """Serialise the one-time HE hint build across a fleet's workers sharing one hint directory.
+
+    ``HintStore.build`` replaces an existing hint directory on rename, and hints are mmapped lazily, so
+    two workers building at once could leave one of them with another's ``W8.A`` (its segments would
+    then fail the Freivalds check). With the lock the first worker builds and the others open its hint.
+    """
+    hint_dir = getattr(settings, "he_hint_dir", None)
+    if hint_dir is None:
+        yield
+        return
+    Path(hint_dir).mkdir(parents=True, exist_ok=True)
+    fd = os.open(Path(hint_dir) / ".fleet-build.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def _worker_main(settings_json: str, k: int, n: int, root: str, store_overrides: dict[str, Any],
@@ -440,7 +458,8 @@ def _worker_main(settings_json: str, k: int, n: int, root: str, store_overrides:
     store = open_store(**store_overrides)
     throttle = Throttle(s.max_slots_per_hour / n if s.max_slots_per_hour else 0.0, s.duty_cycle)
     packs = open_packs(s)
-    gens = build_generators(s, packs, throttle, worker_index=k, workers=n)
+    with _hint_build_lock(s):
+        gens = build_generators(s, packs, throttle, worker_index=k, workers=n)
     sched = FleetScheduler(s, build_sink(s, store), gens, throttle=throttle,
                            ledger=ProductionLedger(Path(root), f"w{k}"))
     health = None

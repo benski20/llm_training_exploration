@@ -246,6 +246,44 @@ def test_he_segments_sharded_over_two_providers_bit_identical(tmp_path: Path, ti
     assert all(np.asarray(b).dtype == np.uint64 for b in p0.seen + p1.seen)
 
 
+def test_scheduler_selects_service_per_segment_single_process() -> None:
+    """The classic (workers=1) scheduler also begins a segment on a sharded remote, so rotation and
+    failover over several he_service_urls work without a fleet."""
+    a, b = _Rec("a"), _Rec("b")
+    shard = SegmentShardedRemote([a, b], rotate=True)
+    seen: list[str] = []
+
+    class _Gen:
+        remote = type("_HE", (), {"remote": shard})()
+        device = "cpu"
+
+        def generate_into_store(self, sink: Any, slots: int, **kw: Any) -> str:
+            seen.append(shard("x", None))
+            return f"seg{len(seen)}"
+
+    class _Sink:
+        def available_slots(self, fp: str, ring: Any) -> int:
+            return 0
+
+    sched = FactoryScheduler.__new__(FactoryScheduler)
+    sched.generators = {("ab" * 32, "K40A12"): _Gen()}
+    sched.settings = type("_S", (), {"checks": 2, "chunk_slots": None, "factory_id": "f"})()
+    sched.state = type("_St", (), {"in_progress": None, "record_segment": lambda *a: None, "last_run_at": 0,
+                                   "last_error": None})()
+    sched._save_state = lambda: None
+    sched.sink = _Sink()
+    sched.ring_sink = None
+    sched.throttle = None
+    sched.metrics = type("_M", (), {"segment_done": lambda *a: None, "run_ok": lambda *a: None})()
+    sched.last_progress_at = 0.0
+    from pgw.factory.scheduler import RefillPlan
+
+    plan = RefillPlan("ab" * 32, "K40A12", 1, 16, "test", 0, 0, 16)
+    for _ in range(3):
+        sched._produce(plan)
+    assert seen == ["a", "b", "a"]
+
+
 # ---- store safety: concurrent writer processes and readers ----------------------------------------
 def test_concurrent_writer_and_reader_processes_never_share_slots(tmp_path: Path) -> None:
     key = tmp_path / "kek"
@@ -333,6 +371,8 @@ def test_worker_settings_assign_devices_services_and_state(tmp_path: Path) -> No
     assert [w.metrics_port for w in ws] == [9100, 9101, 9102]
     assert len({w.factory_id for w in ws}) == 3 and all(w.workers == 1 for w in ws)
     assert s.he_urls == ("https://a", "https://b")
+    # one shared HE hint for the whole fleet (classic location), never one per worker state dir
+    assert {w.he_hint_dir for w in ws} == {tmp_path / "hemask"}
     with pytest.raises(ValueError):
         FactorySettings(pack_path=tmp_path, workers=2, output="export", export_dir=tmp_path)
 

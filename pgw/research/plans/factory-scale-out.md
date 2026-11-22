@@ -33,7 +33,13 @@ pgw factory run ...                      # or --workers 4; Helm: scaleOut.worker
 * `SegmentShardedRemote`: before each segment the scheduler calls `begin_segment()`, and every request of
   that segment then goes to one service. A worker stays on its service (pinned). If a segment fails, the
   segment is aborted and its seed is never used again, and the worker's next segment moves to the next
-  service (failover). With fewer workers than services, a worker rotates services per segment.
+  service (failover). With fewer workers than services, a worker rotates services per segment. The hook
+  lives in `FactoryScheduler._produce`, so a single-process factory (`workers=1`) with several
+  `he_service_urls` rotates and fails over too (review fix; before it stayed on the first service).
+* One HE hint per fleet: workers share `he_hint_dir` (default `<state_dir or .>/hemask`, as the classic
+  factory) and build it under an exclusive lock, one worker at a time (review fix: per-worker state dirs
+  meant N hint builds, and a shared dir without the lock let concurrent builds replace each other's
+  `W8.A`; the Freivalds check would have rejected those segments, so this was a liveness, not a safety, bug).
 
 ## 2. Store safety under concurrent writers and readers
 
