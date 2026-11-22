@@ -36,8 +36,8 @@ fixes. Tags as in `scale-north-star.md`: **measured**, **derived**, **estimate**
   request i to gateway i mod N).
 - `benchmarks/e2e_local.py --null-service` isolates the gateway (zero weights, a service stub returning zeros).
   New: `--float-threads`, `--profile`, `--start-at` (align the timed window of several processes).
-- Kaggle job `pgw-x4-concurrency` (`benchmarks/kaggle/build.py`): 0.5B at 1/8/32/64 chats (default and
-  `float_threads 1`), 64 chats over 2 and 3 gateways, service-only load tests at 1/8/32/64 sessions; 1.5B at 1/64 and
+- Kaggle job `pgw-x4-concurrency` (`benchmarks/kaggle/build.py`): 0.5B at 1/8/32/64 chats (the new default
+  `float_threads 1` and the old thread count as variant `ft_off`), 64 chats over 2 and 3 gateways, service-only load tests at 1/8/32/64 sessions; 1.5B at 1/64 and
   64 over 2 gateways.
 
 ## 3. Results
@@ -64,7 +64,9 @@ service's own CPU). The command to measure it is in section 7.
 - **float_threads = 1** changes only how many OpenMP threads the gateway uses for its own plaintext float ops of
   decode passes. Nothing the provider sees changes (same trips, rows, bytes, schedule). Exactness: the per-row-count
   self-check (`float_threads_self_check`, rows 1..8, cache lengths to 4100) compares the bits with the process
-  thread count at start-up and keeps the old count if any output differs; the gateway tests compare answers and
+  thread count at start-up and keeps the old count if any output differs (at 7B shapes only 1-4 rows per
+  sequence pass, so larger speculative verify passes keep the process count; the check costs about 7-8 s at
+  model load on the loaded 4-vCPU dev box, measured); the gateway tests compare answers and
   logprobs with the plaintext reference for the default, explicit and environment settings.
 - **Sharded gateways** are independent, complete gateways: each holds its own sessions, reservations (from the shared
   store, each slot used once: the store's cross-process lock and cursors), engine and checks. The provider sees N
@@ -81,7 +83,11 @@ service's own CPU). The command to measure it is in section 7.
   mask store and API keys file, behind an L4 balancer with affinity by API key. `max_concurrent_sessions` per process
   = expected chats / processes.
 - Keep `float_threads` at its default (1).
-- Leave cores for the service process when it is on the same host (it used CPU on every trip in the Kaggle run).
+- Per-key rate limits and quotas are counted per process: with affinity by API key each key's limits apply in
+  one process as before; without affinity a key gets up to N times its limits. Only one process holds the
+  store's gateway owner lock (closing a dead predecessor's reservations at once); the others log a warning and
+  leave stale leases to `lease_timeout_s`.
+- Leave cores for the service process when it is on the same host (it does CPU work on every trip).
 
 ## 6. What is left
 

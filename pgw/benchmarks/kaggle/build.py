@@ -538,6 +538,19 @@ JOBS: dict[str, dict] = {
             "--loadtest", "1x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
          "timeout": 3600},
     ]},
+    # X4 review run (short): 0.5B only, 1/16/64 chats on one gateway with the new default and the old thread count
+    # (ft_off), 64 chats over 2 gateway processes, the service alone at 1 and 64 sessions.
+    "pgw-x4-concurrency-short": {"exclude": X4_EXCLUDE, "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu; nproc; nvidia-smi || true; df -h /tmp", "timeout": 60},
+        {"kind": "validate", "label": "qwen05_conc", "args": [
+            "--model", QWEN05, "--label", "qwen05_conc", "--device", "cuda", "--ref-device", "cuda",
+            "--ring", "K32A12C27", "--plain-dtype", "bfloat16", "--delete-hf", "--max-tokens", "24",
+            "--concurrent", "1", "16", "64", "--variant", 'ft_off={"float_threads": null}',
+            "--shard-gateways", "2", "--shard-concurrent", "64", "--shard-config", '{"float_threads": 1}',
+            "--loadtest", "1x1", "64x1", "--loadtest-tokens", "4", "--factory-bench-slots", "64"],
+         "timeout": 3000},
+    ]},
     # X4 at 7B (after the float_threads default became 1): 1, 16 and 32 chats on one gateway, 32 chats over 2
     # gateway processes, and the service alone at 1 and 32 sessions. About 22 GB of masks.
     "pgw-x4-concurrency-7b": {"exclude": X4_EXCLUDE, "steps": [
