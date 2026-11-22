@@ -486,8 +486,13 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     * ``PGW_PIPELINE_BLOCKS=1``: a prompt round trip goes out as one item of all its rows instead of four
       overlapping row blocks (a fixed, public split of the public row count; the provider sees one larger
       item per prompt trip): half the gateway hops of a prompt pass (prompt pass 550 ms median vs 700-800).
+    * ``PGW_FACTORY_YIELD_FILE`` / ``PGW_FACTORY_YIELD_MIN_SLOTS`` (S4, ``pgw.core.factory_yield``): the encrypted
+      factory steps aside while masked passes run and at least 1000 mask slots are in stock (its encrypted maskgen
+      traffic and the provider's maskgen GEMMs slowed each decoded token by about 4 ms); below that it runs at full
+      speed. Same masks, requests and bytes. The file is in the gateway party's home (``/srv/pgw/home``).
     """
     env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
+           "PGW_FACTORY_YIELD_FILE": "/srv/pgw/home/factory-yield", "PGW_FACTORY_YIELD_MIN_SLOTS": "1000",
            # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
            # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
            "PGW_TRIP_FAST": "1",
@@ -496,6 +501,11 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     if local_linears in SKIP_KINDS_BY_LOCAL:
         env["PGW_FACTORY_SKIP_LINEAR_KINDS"] = SKIP_KINDS_BY_LOCAL[local_linears]
     return env
+
+
+#: The provider party's environment in the co-located demo (S4): decode graphs on the GPU's highest-priority
+#: stream, ahead of the encrypted factory's maskgen GEMMs (``pgw.service.gpu_exec.trip_stream_priority``).
+COLOCATED_PROVIDER_ENV = {"PGW_SERVICE_TRIP_STREAM_PRIORITY": "high"}
 
 
 #: The gateway party's environment when it has its own GPU (``split_gpus``): its encrypted mask factory stays on the

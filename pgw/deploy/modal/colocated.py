@@ -211,7 +211,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                          lane_port=LANE_PORT if lane == "tls" else None,
                                          # launch.py --lane uds: the product's same-host lane, gateway uid only
                                          lane_socket=LANE_SOCKET if lane == "uds" else None, lane_client_user=cuser,
-                                         extra_env={**boot.checked_env(provider_env), **gsplit.get("provider", {})})
+                                         extra_env={**boot.COLOCATED_PROVIDER_ENV, **boot.checked_env(provider_env),
+                                                    **gsplit.get("provider", {})})
         svc = prov["proc"]
         procs.append(svc)
         url, code = prov["url"], prov["code"]

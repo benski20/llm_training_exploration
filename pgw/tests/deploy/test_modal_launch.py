@@ -616,7 +616,7 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     assert launch.parse_args([]).lane == "stream"  # default unchanged off the co-located placement
     assert launch.parse_args([]).local_linears == "auto"
     co = launch.parse_args(["--placement", "colocated"])  # co-located defaults (measured on Modal)
-    assert (co.lane, co.local_linears) == ("tls", "attention_down")
+    assert (co.lane, co.local_linears) == ("uds", "attention_down")
     with pytest.raises(SystemExit):  # the provider's lane port is on its loopback only
         launch.parse_args(["--lane", "tls"])
     args = launch.parse_args(["--placement", "colocated", "--lane", "tls", "--local-linears", "auto"])
@@ -630,7 +630,7 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
         p.run_id, 600, True, "auto", 0, "tls", {"OMP_NUM_THREADS": "1", "PGW_FLOAT_OPS": "native"}, {}, 0.0)
     args0 = launch.parse_args(["--placement", "colocated", "--float-threads", "0", "--float-ops", "torch"])
     launch._spawner(args0)(FakeDict(), "colocated", 600, True)
-    assert log[-1][2][1:] == (600, True, "attention_down", 0, "tls")  # 0 = each process's default count
+    assert log[-1][2][1:] == (600, True, "attention_down", 0, "uds")  # 0 = each process's default count
     with pytest.raises(SystemExit):
         launch.parse_args(["--float-threads", "1"])  # co-located only
     spawn(FakeDict(), "tunnel", 600, True)  # the tunnel fallback keeps the stream lane
@@ -648,6 +648,8 @@ def test_colocated_gateway_env_skips_only_fixed_local_kinds() -> None:
     env = boot.colocated_gateway_env("attention_down")  # prompt-pass settings of the co-located demo
     assert env["PGW_PROMPT_PREFETCH"] == "1" and env["PGW_PIPELINE_BLOCKS"] == "1"
     assert boot.GATEWAY_GPU_FACTORY_ENV["PGW_LOCAL_GPU_PREFILL_ROWS"] == "64"
+    assert env["PGW_FACTORY_YIELD_FILE"].startswith("/srv/pgw/home/") and int(env["PGW_FACTORY_YIELD_MIN_SLOTS"]) > 0
+    assert boot.COLOCATED_PROVIDER_ENV == {"PGW_SERVICE_TRIP_STREAM_PRIORITY": "high"}
     with pytest.raises(ValueError):
         boot.checked_env({"LD_PRELOAD": "x"})
     assert boot.checked_env({"PGW_X": 1}) == {"PGW_X": "1"}

@@ -595,7 +595,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "(one round trip per layer); "
                          "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
     ap.add_argument("--lane", choices=["stream", "tls", "uds"], default=None,
-                    help="customer gateway's trip lane (default: 'tls' co-located, 'stream' otherwise): 'stream' = "
+                    help="customer gateway's trip lane (default: 'uds' co-located, 'stream' otherwise): 'stream' = "
                          "the blocking stream lane (WebSocket, msgpack, Python TLS); 'tls' (--placement colocated "
                          "only) = the provider also serves its "
                          "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
@@ -670,7 +670,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.local_linears is None:
         args.local_linears = "attention_down" if args.placement == "colocated" else "auto"
     if args.lane is None:
-        args.lane = "tls" if args.placement == "colocated" else "stream"
+        args.lane = "uds" if args.placement == "colocated" else "stream"  # S4: exact, 0.29 vs 0.44 ms per trip
     if args.lane in ("tls", "uds") and args.placement != "colocated":
         ap.error(f"--lane {args.lane} needs --placement colocated (the provider's lane is on its host only)")
     if args.float_threads is None:
