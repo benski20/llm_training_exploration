@@ -259,10 +259,15 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                float_threads=pin, float_ops=float_ops,
                                                # --gateway-env PGW_MODAL_AB=base,pin,...: in-run A/B diagnostics
                                                ab=boot.ab_phases((gateway_env or {}).get("PGW_MODAL_AB", "")),
-                                               ab_cleanup=boot.ab_cleanup)
+                                               ab_cleanup=boot.ab_cleanup,
+                                               # --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=N: the sustain window
+                                               # starts once N mask slots are in stock (at most 240 s of waiting)
+                                               sustain_min_stock=int((gateway_env or {}).get(
+                                                   "PGW_MODAL_SUSTAIN_MIN_STOCK") or 0))
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
+                    sus["keep_up"] = boot.keep_up(sus, sus["factory"])
                     sus["cores"] = sampler.cores(sus["t0"], sus["t1"])
                 w = result["e2e"].get("warm_window")
                 if w:
@@ -274,7 +279,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"]
                                 and result["e2e"].get("stream_identical") is not False
-                                and all(r.get("identical", True) for r in result["e2e"].get("ab") or []))
+                                and all(r.get("identical", True) for r in result["e2e"].get("ab") or [])
+                                # --sustain-s: every back-to-back chat gave the same streamed answer
+                                and (result["e2e"].get("sustain") or {}).get("identical") is not False)
                 reason = "e2e finished"
             else:
                 while time.time() < deadline:

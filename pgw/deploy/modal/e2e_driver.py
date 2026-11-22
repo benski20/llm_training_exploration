@@ -27,7 +27,7 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0, sustain_s: float = 0.0,
         sampler_path: str | None = None, float_threads: int | None = None,
         float_ops: str | None = None, ab: list[tuple[str, Any]] | None = None,
-        ab_cleanup: Any = None, ab_chats: int = 3) -> dict[str, Any]:
+        ab_cleanup: Any = None, ab_chats: int = 3, sustain_min_stock: int = 0) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
@@ -107,23 +107,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     ref_s = time.time() - t
     cmp = wiz.compare(out, ref)
     sustain: dict[str, Any] | None = None
-    if sustain_s > 0:  # chats back to back (launch.py --sustain-s): tokens/s and factory rate under decode load
-        if sampler_path:  # PGW_STACK_SAMPLER in the gateway: count the sustain window alone
-            Path(sampler_path + ".reset").touch()
-        t0, toks, n, wall, err = time.time(), 0, 0, 0.0, None
-        while time.time() - t0 < sustain_s:
-            try:
-                o = wiz.chat(local_url, key, model_name, PROMPT, 64)
-            except Exception as exc:  # e.g. masks ran out: report, never fail the exactness result
-                err = f"{type(exc).__name__}: {str(exc)[:300]}"
-                break
-            toks += int(((o.get("usage") or {}).get("completion_tokens")) or 0)
-            wall += float(o["_wall_s"])
-            n += 1
-        t1 = time.time()
-        sustain = {"t0": t0, "t1": t1, "chats": n, "tokens": toks, "seconds": round(t1 - t0, 2),
-                   "tokens_per_s": round(toks / max(1e-9, t1 - t0), 2),
-                   "tokens_per_s_in_chats": round(toks / max(1e-9, wall), 2), "error": err}
+    if sustain_s > 0:  # chats back to back (launch.py --sustain-s): tokens/s and factory keep-up under decode load
+        sustain = _sustain(local_url, key, adm, model_name, out, sustain_s, sampler_path, sustain_min_stock)
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
     model_status = next((m for m in status.get("models", []) if m.get("name") == model_name), {})
@@ -210,3 +195,82 @@ def _ab_streams(local_url: str, key: str, model_name: str, ref_out: dict[str, An
             except Exception:  # noqa: S110 - best effort; the run's shutdown terminates the parties anyway
                 pass
     return rows
+
+
+def _stock(local_url: str, adm: str, model_name: str) -> int | None:
+    try:
+        m = wiz.admin_get(local_url, adm, "/admin/masks")
+        v = ((m.get("models") or {}).get(model_name) or {}).get("available_slots")
+        return None if v is None else int(v)
+    except Exception:
+        return None
+
+
+def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[str, Any], sustain_s: float,
+             sampler_path: str | None, min_stock: int) -> dict[str, Any]:
+    """Streamed greedy chats back to back on loopback for ``sustain_s``: per-chat decode rate, exactness (every
+    chat must equal the first one, and its first tokens the exactness-checked chat), and the mask stock every 2 s
+    (``stock``: ``[seconds since t0, slots]``) so the factory's keep-up is visible (colocated.py adds the
+    factory's production from its log). ``min_stock``: first wait (at most 240 s) for that many slots."""
+    import threading
+
+    t_wait = time.time()
+    s_wait = _stock(local_url, adm, model_name)
+    while min_stock and (s_wait is None or s_wait < min_stock) and time.time() - t_wait < 240:
+        time.sleep(2)
+        s_wait = _stock(local_url, adm, model_name)
+    waited = round(time.time() - t_wait, 1)
+    if sampler_path:  # PGW_STACK_SAMPLER in the gateway: count the sustain window alone
+        Path(sampler_path + ".reset").touch()
+    series: list[list[float]] = []
+    stop = threading.Event()
+    t0 = time.time()
+
+    def sample() -> None:
+        while True:
+            v = _stock(local_url, adm, model_name)
+            if v is not None:
+                series.append([round(time.time() - t0, 1), v])
+            if stop.wait(2.0):
+                return
+
+    th = threading.Thread(target=sample, daemon=True)
+    th.start()
+    want_lp = [y["logprob"] for y in ref_out["choices"][0]["logprobs"]["content"]]
+    first: dict[str, Any] | None = None
+    toks = n = 0
+    dec_rates: list[float] = []
+    ttfts: list[float] = []
+    identical = True
+    err = None
+    while time.time() - t0 < sustain_s:
+        try:
+            o = wiz.chat_stream(local_url, key, model_name, PROMPT, 64)
+        except Exception as exc:  # e.g. masks ran out: report, never fail the exactness result
+            err = f"{type(exc).__name__}: {str(exc)[:300]}"
+            break
+        if first is None:
+            first = o
+            identical = o["logprobs"][:len(want_lp)] == want_lp  # its first tokens = the exactness-checked chat
+        else:
+            identical = identical and o["text"] == first["text"] and o["logprobs"] == first["logprobs"]
+        toks += int(o["tokens"])
+        n += 1
+        if o.get("decode_tokens_per_s"):
+            dec_rates.append(float(o["decode_tokens_per_s"]))
+        if o.get("ttft_s") is not None:
+            ttfts.append(float(o["ttft_s"]))
+    t1 = time.time()
+    stop.set()
+    th.join(5)
+    ts = sorted(dec_rates)
+    return {"t0": t0, "t1": t1, "chats": n, "tokens": toks, "seconds": round(t1 - t0, 2),
+            "tokens_per_s": round(toks / max(1e-9, t1 - t0), 2), "error": err, "streamed": True,
+            "identical": bool(identical and n > 0), "min_stock_wait_s": waited, "min_stock": min_stock,
+            "decode_tokens_per_s_median": ts[len(ts) // 2] if ts else None,
+            "decode_tokens_per_s_mean": round(sum(ts) / len(ts), 2) if ts else None,
+            "decode_tokens_per_s_min": ts[0] if ts else None,
+            "decode_tokens_per_s_all": dec_rates, "ttft_s_median": sorted(ttfts)[len(ttfts) // 2] if ttfts else None,
+            "stock": series, "stock_start": series[0][1] if series else None,
+            "stock_end": series[-1][1] if series else None,
+            "stock_min": min(x[1] for x in series) if series else None}

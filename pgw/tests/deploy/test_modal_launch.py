@@ -679,3 +679,29 @@ def test_float_ops_native_is_the_colocated_default() -> None:
     assert launch.parse_args(["--placement", "colocated", "--float-ops", "torch"]).float_ops == "torch"
     with pytest.raises(SystemExit):
         launch.parse_args(["--float-ops", "native"])
+
+
+def test_factory_segments_and_keep_up(tmp_path: Path) -> None:
+    import time as _t
+
+    boot = _load("pgw_modal_boot")
+    t0 = 1_800_000_000.0
+
+    def stamp(t: float) -> str:
+        return _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(t)) + ",000"
+
+    log = tmp_path / "gateway.log"
+    log.write_text("\n".join([
+        f"{stamp(t0 + 20)} INFO pgw.factory segment abc: 0.5B K32 2048 slots in 50.00s (41.0 slots/s = x; rng 0s; "
+        "he: 8 groups, yielded to decode 12.50s",  # started before the window, landed inside
+        f"{stamp(t0 + 60)} INFO pgw.factory segment abd: 0.5B K32 2048 slots in 30.00s (68.3 slots/s = x)",
+        f"{stamp(t0 + 500)} INFO pgw.factory segment abe: 0.5B K32 2048 slots in 30.00s (68.3 slots/s = x)",
+    ]) + "\n")
+    f = boot.factory_segments(log, t0, t0 + 100)
+    assert f["committed_slots"] == 4096 and len(f["segments"]) == 1 and f["segments_outside_window"] == 2
+    assert f["committed"][0]["yielded_s"] == 12.5
+    sus = {"seconds": 100.0, "stock": [[0.0, 6000], [50.0, 5000], [100.0, 6000]], "stock_start": 6000,
+           "stock_end": 6000, "stock_min": 5000}
+    ku = boot.keep_up(sus, f)
+    assert ku["produced_slots"] == 4096 and ku["consumption_slots_per_s"] == pytest.approx(40.96)
+    assert ku["keeps_up"] and ku["production_slots_per_s"] == pytest.approx(40.96)

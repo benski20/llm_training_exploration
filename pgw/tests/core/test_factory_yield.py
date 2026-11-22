@@ -59,3 +59,55 @@ def test_reader_from_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv(fy.ENV_HOLD_S, "0.5")
     r = fy.reader()
     assert r is not None and r.hold_s == 0.5 and r.max_s == 30.0
+
+
+def test_partial_yield_duty_follows_stock(tmp_path: Path) -> None:
+    p = tmp_path / "yield"
+    stock = [6000]
+    w = fy.YieldWriter(p, lambda: stock[0], min_slots=2000, full_slots=6000, duty_period_s=1.0,
+                       stock_period_s=0.0, horizon_s=0.0)
+    fy._activity[0] = 1e6
+    assert w.tick(now=1e6 + 0.01) and w.duty == 1.0  # at FULL: always
+    stock[0] = 3000  # a quarter of the band: yield in the first quarter of each 1 s cycle only
+    fy._activity[0] = 2e6
+    got = []
+    for i in range(100):
+        t = 2e6 + i / 100
+        fy._activity[0] = t
+        got.append(w.tick(now=t))
+    assert w.duty == pytest.approx(0.25) and 20 <= sum(got) <= 30
+    stock[0] = 1999
+    fy._activity[0] = 3e6
+    assert not w.tick(now=3e6) and w.duty == 0.0  # below the low mark: never
+
+
+def test_default_is_all_or_nothing(tmp_path: Path) -> None:
+    w = fy.YieldWriter(tmp_path / "y", lambda: 2000, min_slots=2000, stock_period_s=0.0)
+    assert w.full_slots == 2000
+    got = []
+    for i in range(10):
+        fy._activity[0] = 5e6 + i / 10
+        got.append(w.tick(now=5e6 + i / 10))
+    assert all(got)
+
+
+def test_horizon_raises_low_mark_when_draining(tmp_path: Path) -> None:
+    p = tmp_path / "yield"
+    stock = [5000]
+    w = fy.YieldWriter(p, lambda: stock[0], min_slots=1000, horizon_s=60.0, rate_window_s=30.0,
+                       stock_period_s=1.0)
+    t = 7e6
+    for _ in range(20):  # 50 slots/s consumed while decoding, the factory yielding
+        fy._activity[0] = t
+        w.tick(now=t)
+        stock[0] -= 50
+        t += 1.0
+    # 50 slots/s x 60 s = 3000 > stock 4050 - ... : low mark 3000; stock 4000 still above
+    assert w.rate == pytest.approx(50, rel=0.1) and w.low == pytest.approx(3000, rel=0.1)
+    for _ in range(25):
+        fy._activity[0] = t
+        w.tick(now=t)
+        stock[0] -= 50
+        t += 1.0
+    fy._activity[0] = t
+    assert stock[0] < w.low and not w.tick(now=t)  # drained below rate x horizon: the factory runs

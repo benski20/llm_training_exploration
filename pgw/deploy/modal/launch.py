@@ -493,6 +493,15 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
         print(json.dumps({k: v for k, v in res.items() if k not in ("log_tail", "service_log_tail")}, indent=1,
                          default=str))
         print("---- gateway log tail ----\n" + res.get("log_tail", ""))
+        sus = (res.get("e2e") or {}).get("sustain") or {}
+        if sus:  # --sustain-s: one line on decode rate and the mask factory's keep-up
+            ku = sus.get("keep_up") or {}
+            print(f"sustain: {sus.get('chats')} chats in {sus.get('seconds')}s, {sus.get('tokens_per_s')} tok/s "
+                  f"overall, streamed decode median {sus.get('decode_tokens_per_s_median')} (min "
+                  f"{sus.get('decode_tokens_per_s_min')}) tok/s, identical {sus.get('identical')}, error "
+                  f"{sus.get('error')}; masks: consumption {ku.get('consumption_slots_per_s')} slots/s, factory "
+                  f"{ku.get('production_slots_per_s')} slots/s, stock {ku.get('stock_start')} -> "
+                  f"{ku.get('stock_end')} (min {ku.get('stock_min')})", flush=True)
         if pair.colocated:  # one call: the service's log comes with the result
             print("---- service log tail ----\n" + str(res.get("service_log_tail", ""))[-2500:])
         else:

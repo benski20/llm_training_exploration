@@ -470,6 +470,20 @@ def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300, us
 SKIP_KINDS_BY_LOCAL = {"attention": "qkv,o", "attention_down": "qkv,o,down"}
 
 
+#: Mask factory keep-up in the co-located demo (S5, measured on Modal; see deploy/modal/README.md, "Factory
+#: keep-up under back-to-back chats"). The all-or-nothing yield at 1000 slots starved the store after 130 s of
+#: back-to-back chats: the factory made nothing above 1000 slots and a 4096-slot segment could not land below it.
+#: Now: partial yield between 2500 and 6000 slots (the factory's duty cycle grows as the stock falls), no yield
+#: below 45 s of observed consumption, 2048-slot segments (about half the time to land), refill whenever the stock
+#: is below 6144 (to 8192) and a 2 s scheduler poll (was 30 s: up to 30 s of no production after a drain started).
+COLOCATED_FACTORY_KEEP_UP = {
+    "PGW_FACTORY_YIELD_MIN_SLOTS": "2500", "PGW_FACTORY_YIELD_FULL_SLOTS": "6000",
+    "PGW_FACTORY_YIELD_HORIZON_S": "45", "PGW_FACTORY_YIELD_PERIOD_S": "3",
+    "PGW_FACTORY_SEGMENT_SLOTS": "2048", "PGW_FACTORY_LOW_WATER_SLOTS": "6144", "PGW_FACTORY_TARGET_SLOTS": "8192",
+    "PGW_FACTORY_POLL_INTERVAL_S": "2",
+}
+
+
 def colocated_gateway_env(local_linears: str) -> dict[str, str]:
     """Gateway-party environment of the co-located demo (measured on Modal, see deploy/modal/README.md):
 
@@ -492,7 +506,7 @@ def colocated_gateway_env(local_linears: str) -> dict[str, str]:
       speed. Same masks, requests and bytes. The file is in the gateway party's home (``/srv/pgw/home``).
     """
     env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4",
-           "PGW_FACTORY_YIELD_FILE": "/srv/pgw/home/factory-yield", "PGW_FACTORY_YIELD_MIN_SLOTS": "1000",
+           "PGW_FACTORY_YIELD_FILE": "/srv/pgw/home/factory-yield", **COLOCATED_FACTORY_KEEP_UP,
            # T3: the one-call trip path and the sampled noise statistics off the critical path (same bytes,
            # checks and statistics; library defaults off, see MaskedBackend.trip_fast / noise_async_sampled)
            "PGW_TRIP_FAST": "1",
@@ -583,13 +597,16 @@ def checked_env(extra: dict[str, Any] | None) -> dict[str, str]:
 
 _SEGMENT_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) .*segment \S+: .*?(\d+) slots in ([\d.]+)s "
                          r"\(([\d.]+) slots/s")
+_YIELDED_RE = re.compile(r"yielded to decode ([\d.]+)s")
 
 
 def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
-    """Mask factory segments (``segment ...: N slots in Ss (R slots/s ...``) in ``logfile`` that ran entirely
-    inside ``[t0, t1]`` (epoch seconds; log times are local time), with their summed rate: what the factory
-    produced while the chats of that window decoded."""
+    """Mask factory segments (``segment ...: N slots in Ss (R slots/s ...``) in ``logfile`` (epoch seconds; log
+    times are local time): ``segments`` ran entirely inside ``[t0, t1]`` (with their summed rate), ``committed``
+    landed in the store inside the window (whenever they started; ``committed_slots`` is what the factory added
+    to the stock meanwhile, ``production_slots_per_s`` that over the window length)."""
     inside: list[dict[str, float]] = []
+    committed: list[dict[str, float]] = []
     other = 0
     try:
         lines = logfile.read_text(errors="replace").splitlines()
@@ -601,14 +618,41 @@ def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
             continue
         end = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) + int(m.group(2)) / 1e3
         slots, secs = int(m.group(3)), float(m.group(4))
+        y = _YIELDED_RE.search(line)
+        row = {"slots": slots, "seconds": secs, "slots_per_s": float(m.group(5)),
+               "start_offset_s": round(end - secs - t0, 1), "end_offset_s": round(end - t0, 1),
+               "yielded_s": float(y.group(1)) if y else 0.0}
+        if t0 <= end <= t1 + 1.0:
+            committed.append(row)
         if end - secs >= t0 - 1.0 and end <= t1 + 1.0:
-            inside.append({"slots": slots, "seconds": secs, "slots_per_s": float(m.group(5)),
-                           "start_offset_s": round(end - secs - t0, 1)})
+            inside.append(row)
         else:
             other += 1
     tot_s = sum(x["seconds"] for x in inside)
+    cslots = sum(int(x["slots"]) for x in committed)
     return {"segments": inside, "segments_outside_window": other,
-            "slots_per_s": round(sum(x["slots"] for x in inside) / tot_s, 2) if tot_s else None}
+            "slots_per_s": round(sum(x["slots"] for x in inside) / tot_s, 2) if tot_s else None,
+            "committed": committed, "committed_slots": cslots,
+            "production_slots_per_s": round(cslots / max(1e-9, t1 - t0), 2)}
+
+
+def keep_up(sustain: dict[str, Any], factory: dict[str, Any]) -> dict[str, Any]:
+    """Factory keep-up over a sustain window: consumption = (stock at start + slots the factory committed - stock
+    at the end) / seconds (slots/s), the factory's production rate over the same window, and the stock trend."""
+    s0, s1 = sustain.get("stock_start"), sustain.get("stock_end")
+    secs = float(sustain.get("seconds") or 0.0)
+    series = sustain.get("stock") or []
+    if s0 is None or s1 is None or secs <= 0 or len(series) < 2:
+        return {"error": "no stock samples"}
+    span = float(series[-1][0] - series[0][0]) or secs
+    prod = sum(int(x["slots"]) for x in factory.get("committed") or []
+               if series[0][0] <= x["end_offset_s"] <= series[-1][0] + 0.5)
+    cons = (s0 + prod - s1) / span
+    half = [x for x in series if x[0] >= series[-1][0] / 2]
+    return {"consumption_slots_per_s": round(cons, 2), "production_slots_per_s": round(prod / span, 2),
+            "produced_slots": prod, "stock_start": s0, "stock_end": s1, "stock_min": sustain.get("stock_min"),
+            "stock_second_half_change": (half[-1][1] - half[0][1]) if len(half) >= 2 else None,
+            "keeps_up": prod / span >= cons or s1 >= s0}
 
 
 # ------------------------------------------------------------------------------------------------
