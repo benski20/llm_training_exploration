@@ -161,6 +161,26 @@ async def test_float_threads_bit_identical(tiny_pack_dir: Path, tmp_path: Path, 
         assert rt.model.float_threads == 1 and status["speed"]["float_threads"] == 1
 
 
+@pytest.mark.parametrize("kw, env, want", [({}, None, 1), ({"float_threads": None}, None, None),
+                                           ({}, "2", 2), ({"float_threads": 1}, "2", 1)])
+async def test_float_threads_default_on(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any, make_store: Any,
+                                        keys: ApiKeyStore, key: str, reference: dict[str, Any],
+                                        monkeypatch: pytest.MonkeyPatch, kw: dict[str, Any], env: str | None,
+                                        want: int | None) -> None:
+    """Default 1 (self-checked); explicit null keeps the process count; PGW_FLOAT_THREADS applies when the model
+    entry does not set it; an explicit setting wins over the variable. Answers stay bit-identical."""
+    if env is not None:
+        monkeypatch.setenv("PGW_FLOAT_THREADS", env)
+    else:
+        monkeypatch.delenv("PGW_FLOAT_THREADS", raising=False)
+    if torch.get_num_threads() <= 2:
+        pytest.skip("needs a process thread count above 2 to tell the settings apart")
+    svc = InProcessService(gw_pack)
+    out, status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(200), svc.transport, keys, key, kw)
+    assert out["logprobs"] == reference["logprobs"] and out["message"] == reference["message"]
+    assert rt.model.float_threads == want and status["speed"]["float_threads"] == want
+
+
 async def test_trip_engine_prefill_pipeline_bit_identical(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
                                                           make_store: Any, keys: ApiKeyStore, key: str,
                                                           monkeypatch: pytest.MonkeyPatch) -> None:

@@ -50,6 +50,16 @@ needs a coordinated format change. Also new: an opt-in batched native claim over
 (`PGW_MASK_RING_BATCHED_CLAIM=1`; off because the native ChaCha20 is slower here), the sustained
 producer/consumer bench `benchmarks/mask_ram_path_bench.py`, and an end-to-end test of the encrypted
 factory -> ring -> gateway path (bit-identical to the local factory).
+## Update 2026-11-21: aggregate throughput with many chats (X4)
+
+Write-up: [research/plans/aggregate-throughput.md](research/plans/aggregate-throughput.md). Cross-session batching
+already runs (one trip per linear for all live chats; the service concatenates rows), so aggregate tokens/s flattens
+at one gateway CPU core: the plaintext thread does masking, float ops and the LM head for every row in series. Two
+plaintext threads in one process are slower (GIL). Changes: `float_threads` defaults to 1 on CPU engines
+(self-checked; engine step at 0.5B shapes 214 -> 136 ms with 32 chats, measured on 4 vCPUs); several gateway
+processes per host over one mask store scale aggregate throughput (1/2/4 processes: 317/538/923 tokens/s on the dev
+box, null service, measured). `gpu_validate.py` gained `--variant`, `--shard-gateways` and per-level CPU cores; GPU
+numbers pending (command in the write-up, section 7).
 
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 

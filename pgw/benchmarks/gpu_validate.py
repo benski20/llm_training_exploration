@@ -425,9 +425,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     # 3. mask store + factory
     n_prompt = len(ref["prompt_ids"])
     per_req = n_prompt + args.max_tokens
-    concurrent = [c for c in args.concurrent if c > 1]
+    concurrent = [c for c in args.concurrent if c >= 1]
     n_requests = 2 + sum(concurrent)  # non-streaming, streaming, concurrent batches
     slots = per_req * n_requests + 16
+    # extra single-gateway configurations (model config A/B): the same levels each, plus chat and stream
+    extra_variants: list[tuple[str, dict[str, Any], list[int]]] = []
+    for spec in args.variant or []:
+        name, _, cfg = spec.partition("=")
+        extra_variants.append((f"{name}_", json.loads(cfg) if cfg else {}, concurrent))
+        slots += per_req * (2 + sum(concurrent))
+    # sharded gateways: N gateway processes on this host, one store and one service, requests round-robin
+    shard_levels = [c for c in (args.shard_concurrent or concurrent) if c >= 1]
+    slots += per_req * (sum(shard_levels) + max(args.shard_gateways or [0])) * len(args.shard_gateways or [])
     spec_variants = _spec_variants(args, draft_pack)
     for _, _, spec_conc in spec_variants:  # room for speculation rows (spec_row_budget <= 3 per token)
         slots += (n_prompt + args.max_tokens * 3) * (2 + sum(spec_conc))
@@ -488,19 +497,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         R["gpu_mem_MB_service_loaded"] = gpu_mem_mb()
         svc_url = f"http://127.0.0.1:{svc_port}"
         models = sec / "models.json"
-        variants: list[tuple[str, dict[str, Any], list[int]]] = [("", {}, concurrent), *pingpong_variants,
-                                                                 *spec_variants]
+        variants: list[tuple[str, dict[str, Any], list[int]]] = [("", {}, concurrent), *extra_variants,
+                                                                 *pingpong_variants, *spec_variants]
+        R["levels_note"] = ("concurrent_<n>: n identical greedy requests at once on one gateway; "
+                            "generated_tokens_per_s = n * max_tokens / wall (prefill included in the wall); "
+                            "gateway_cores = gateway CPU seconds / wall")
+        base_cfg: dict[str, Any] = {"name": args.label, "pack_path": str(pack), "fingerprint": fp, "ring": args.ring,
+                                    "service_url": svc_url, "service_token_file": str(sec / "service_token"),
+                                    "max_concurrent_sessions": max(4, *args.concurrent, args.spec_concurrent or 0,
+                                                                   *(args.shard_concurrent or [])),
+                                    "service_timeout_s": 600}
         gw: subprocess.Popen[bytes] | None = None
         for prefix, extra, conc_list in variants:
             if gw is not None:  # the next gateway reuses the store; stop the previous one first
                 gw.terminate()
                 gw.wait(timeout=120)
-            models.write_text(json.dumps([{"name": args.label, "pack_path": str(pack), "fingerprint": fp,
-                                           "ring": args.ring, "service_url": svc_url,
-                                           "service_token_file": str(sec / "service_token"),
-                                           "max_concurrent_sessions":
-                                               max(4, *args.concurrent, args.spec_concurrent or 0),
-                                           "service_timeout_s": 600, **extra}]))
+            models.write_text(json.dumps([{**base_cfg, **extra}]))
             models.chmod(0o600)
             gw_port = free_port()
             gw_env = {**env, "PGW_GATEWAY_HOST": "127.0.0.1", "PGW_GATEWAY_PORT": str(gw_port),
@@ -645,10 +657,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                     trust_env=False)
                     return {"status": rr.status_code, "json": rr.json() if rr.status_code == 200 else rr.text[:500]}
 
+                sc0 = proc_cpu_seconds(svc.pid)
                 with cf.ThreadPoolExecutor(n_conc) as ex:
                     res = list(ex.map(one, range(n_conc)))
                 wall = time.perf_counter() - t0
                 c1, s1 = proc_cpu_seconds(gw.pid), status()
+                sc1 = proc_cpu_seconds(svc.pid)
                 db = num_delta(s0["backend"], s1["backend"])
                 ok = [x for x in res if x["status"] == 200]
                 same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"]
@@ -660,6 +674,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "generated_tokens_per_s": round(len(ok) * args.max_tokens / wall, 3),
                     "all_tokens_per_s": round(len(ok) * ntok / wall, 3),
                     "gateway_cpu_s_per_token_incl_prefill": round((c1 - c0) / max(1, len(ok) * ntok), 4),
+                    "gateway_cores": round((c1 - c0) / wall, 3),
+                    "service_cores": round((sc1 - sc0) / wall, 3),
                     "backend_delta": db,
                     "trip_split_incl_prefill": trip_split(s0.get("client_timing"), s1.get("client_timing")),
                     # engine steps and how many were split in two cohorts (ping-pong); empty on older gateways
@@ -674,6 +690,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                                                      if k not in ("backend_delta", "trip_split_incl_prefill",
                                                                   "engine_delta")})
                 save()
+
+        # 6b. sharded gateways (one process each, same store, same service); requests round-robin over them
+        if gw is not None and args.shard_gateways:
+            gw.terminate()
+            gw.wait(timeout=120)
+            gw = None
+        for n_gw in args.shard_gateways or []:
+            models.write_text(json.dumps([{**base_cfg, **json.loads(args.shard_config or "{}")}]))
+            models.chmod(0o600)
+            R.update(run_shards(args, stack, env, models, keys, store, kek, work, svc, ref, api_key, n_gw,
+                                shard_levels, ntok_per_req=n_prompt + args.max_tokens))
+            save()
 
         # 7. service load test (decode rows, all layers), batch 1 and batched
         R["service_loadtest"] = {}
@@ -710,6 +738,80 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     R["ok"] = True
     save()
     return R
+
+
+def run_shards(args: argparse.Namespace, stack: Stack, env: dict[str, str], models: Path, keys: Path, store: Path,
+               kek: Path, work: Path, svc: subprocess.Popen[bytes], ref: dict[str, Any], api_key: str, n_gw: int,
+               levels: list[int], ntok_per_req: int) -> dict[str, Any]:
+    """``n_gw`` gateway processes (``models``: the base model config plus ``--shard-config``) on one
+    host and one mask store; each concurrency level sends its requests round-robin over them (request i to
+    gateway i mod n_gw). Every gateway is a complete, independent gateway: its own engine, sessions and
+    reservations; the store's file lock serializes reservations across processes. Returns
+    ``shard<n>_concurrent_<level>`` entries."""
+    import httpx
+
+    urls: list[str] = []
+    procs: list[subprocess.Popen[bytes]] = []
+    out: dict[str, Any] = {}
+    try:
+        for i in range(n_gw):
+            port = free_port()
+            gw_env = {**env, "PGW_GATEWAY_HOST": "127.0.0.1", "PGW_GATEWAY_PORT": str(port),
+                      "PGW_GATEWAY_MODELS_FILE": str(models), "PGW_GATEWAY_API_KEYS_FILE": str(keys),
+                      "PGW_GATEWAY_ADMIN_TOKEN": ADMIN, "PGW_GATEWAY_MASKSTORE_ROOT": str(store),
+                      "PGW_GATEWAY_AUDIT_LOG_FILE": str(work / "state" / f"audit_shard{i}.jsonl"),
+                      "PGW_GATEWAY_TOKENS_PER_MINUTE": "10000000", "PGW_GATEWAY_REQUESTS_PER_MINUTE": "10000",
+                      "PGW_MASKSTORE_ROOT": str(store), "PGW_MASKSTORE_KEY_FILE": str(kek),
+                      "PGW_MASKSTORE_LOW_WATER_SLOTS": "1"}
+            p = stack.start(f"gateway_shard{n_gw}_{i}", ["gateway", "serve"], gw_env)
+            procs.append(p)
+            urls.append(f"http://127.0.0.1:{port}")
+        for i, (p, u) in enumerate(zip(procs, urls, strict=True)):
+            stack.wait_ready(f"{u}/readyz", p, f"gateway_shard{n_gw}_{i}")
+        label = json.loads(models.read_text())[0]["name"]
+        body = {"model": label, "messages": [{"role": "user", "content": args.prompt}], "temperature": 0,
+                "max_tokens": args.max_tokens, "ignore_eos": True, "logprobs": True, "top_logprobs": 2}
+        hdr = {"Authorization": f"Bearer {api_key}"}
+
+        def one(i: int) -> dict[str, Any]:
+            rr = httpx.post(f"{urls[i % n_gw]}/v1/chat/completions", json=body, headers=hdr, timeout=7200,
+                            trust_env=False)
+            return {"status": rr.status_code, "json": rr.json() if rr.status_code == 200 else rr.text[:500]}
+
+        # warm every gateway (first-pass caches, threads) with one request each, outside the timing
+        with cf.ThreadPoolExecutor(n_gw) as ex:
+            list(ex.map(one, range(n_gw)))
+        for n_conc in levels:
+            c0 = [proc_cpu_seconds(p.pid) for p in procs]
+            sc0 = proc_cpu_seconds(svc.pid)
+            t0 = time.perf_counter()
+            with cf.ThreadPoolExecutor(n_conc) as ex:
+                res = list(ex.map(one, range(n_conc)))
+            wall = time.perf_counter() - t0
+            c1 = [proc_cpu_seconds(p.pid) for p in procs]
+            sc1 = proc_cpu_seconds(svc.pid)
+            ok = [x for x in res if x["status"] == 200]
+            same = [[c["token"] for c in x["json"]["choices"][0]["logprobs"]["content"]] == ref["tokens"] for x in ok]
+            gcpu = sum(b - a for a, b in zip(c0, c1, strict=True))
+            rc = {"gateways": n_gw, "requests": n_conc, "ok": len(ok), "tokens_identical": same,
+                  "all_identical": bool(ok) and all(same) and len(ok) == n_conc,
+                  "errors": [x for x in res if x["status"] != 200][:3], "wall_s": round(wall, 2),
+                  "generated_tokens_per_s": round(len(ok) * args.max_tokens / wall, 3),
+                  "all_tokens_per_s": round(len(ok) * ntok_per_req / wall, 3),
+                  "gateway_cpu_s_per_token_incl_prefill": round(gcpu / max(1, len(ok) * ntok_per_req), 4),
+                  "gateway_cores": round(gcpu / wall, 3), "service_cores": round((sc1 - sc0) / wall, 3),
+                  "gateway_cores_each": [round((b - a) / wall, 3) for a, b in zip(c0, c1, strict=True)]}
+            out[f"shard{n_gw}_concurrent_{n_conc}"] = rc
+            log(f"shard{n_gw} concurrent {n_conc}:", {k: v for k, v in rc.items() if k != "tokens_identical"})
+    finally:
+        for p in procs:
+            p.terminate()
+        for p in procs:
+            try:
+                p.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                p.kill()
+    return out
 
 
 def _spec_variants(args: argparse.Namespace, draft_pack: Path | None) -> list[tuple[str, dict[str, Any], list[int]]]:
@@ -772,6 +874,16 @@ def main() -> int:
                          "ping-pong (model config engine_pingpong; results under 'pingpong_*')")
     ap.add_argument("--pingpong-min-sessions", type=int, default=None,
                     help="model config engine_pingpong_min_sessions for the --pingpong run (default: the gateway's, 5)")
+    ap.add_argument("--variant", nargs="*", default=None,
+                    help="extra single-gateway runs as NAME=JSON (model config entries added for that gateway, e.g. "
+                         "ff1='{\"float_threads\": 1}'): chat, stream and the --concurrent levels each, under "
+                         "'NAME_*'")
+    ap.add_argument("--shard-gateways", type=int, nargs="*", default=None,
+                    help="also run N gateway processes on this host over one store and one service (one run per "
+                         "N); requests round-robin; results under 'shard<N>_concurrent_<level>'")
+    ap.add_argument("--shard-concurrent", type=int, nargs="*", default=None,
+                    help="concurrency levels of the sharded runs (default: --concurrent)")
+    ap.add_argument("--shard-config", default=None, help="JSON model config entries for the sharded gateways")
     ap.add_argument("--attribute", action=argparse.BooleanOptionalAction, default=False,
                     help="run each gateway under benchmarks/gateway_probe.py and split the decode 'unaccounted' time "
                          "(float ops, LM head, sampling, step glue, loop) in the streaming phase; off by default "

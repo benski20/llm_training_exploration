@@ -549,7 +549,8 @@ sends the service anything it does not already see (`docs/operations/install-on-
   the pass count equals the generated length, so neither row counts nor pass counts depend on the text
   (closes the speculation leak of 3.4). The reservation is `prompt + max_tokens + (max_tokens-1)(spec_rows-1)`.
   Requests of one API key and OpenAI `user` run as one conversation (each after the previous one's dummy passes).
-- `float_threads`: decode float ops on that many torch threads, enabled only after a bit-identity self-check.
+- `float_threads`: decode float ops on that many torch threads, enabled only after a bit-identity self-check
+  (default 1 on CPU engines; the check failing keeps the process thread count).
 - Ending or aborting a session waits for and drops its deferred checks (`release_session_checks`) before
   the reservation is burned; a deferred-check failure is an integrity failure (9.5) and the session and its
   KV cache are discarded, never resumed.

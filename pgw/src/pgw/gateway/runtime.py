@@ -974,7 +974,10 @@ class ModelRuntime:
         if c.lane != "off" and os.environ.get("PGW_SYNC_DECODE", "").strip() == "":
             # decode passes on the plaintext thread when the backend says a trip is fast (lane + TripEngine)
             self.model.sync_decode = True
-        if c.float_threads is not None:
+        # default 1 (an explicit model setting wins; without one, PGW_FLOAT_THREADS as the model applied it)
+        env_set = os.environ.get("PGW_FLOAT_THREADS", "").strip() != "" and "float_threads" not in c.model_fields_set
+        if (c.float_threads is not None and not env_set
+                and getattr(getattr(self.model, "device", None), "type", "cpu") == "cpu"):
             self.model.enable_float_threads(c.float_threads)  # self-checked: stays off if the bits differ
         self.draft_model = self._load_draft()
         spec: dict[str, Any] = {}

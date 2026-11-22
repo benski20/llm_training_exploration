@@ -274,10 +274,11 @@ class GatewayModelConfig(BaseModel):
         "of the same conversation (API key and OpenAI 'user') starts after those passes. False (default) = off",
     )
     float_threads: int | None = Field(
-        None, ge=1, le=256, description="Torch threads for the gateway's plaintext float ops of decode passes "
+        1, ge=1, le=256, description="Torch threads for the gateway's plaintext float ops of decode passes "
         "(norms, RoPE, attention); enabled only when a start-up self-check shows the same bits as the default "
-        "thread count. 1 measured 2-5 ms per token faster on a 4-vCPU gateway. None (default) = the process "
-        "thread count, or PGW_FLOAT_THREADS",
+        "thread count, else the process thread count is kept. 1 (default) measured 2-5 ms per token faster on a "
+        "4-vCPU gateway with one chat and 36% less float time per engine step with 32 chats (0.5B shapes). Only "
+        "CPU engines. None = the process thread count, or PGW_FLOAT_THREADS",
     )
     float_ops: Literal["torch", "native"] = Field(
         "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
