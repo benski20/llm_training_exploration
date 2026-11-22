@@ -700,9 +700,23 @@ class FeatureHeadDrafter(BuiltinDrafter):
     uses_features = True
     supports_tree = True
 
+    #: ``FeatureHeadDrafter.from_file`` format (``benchmarks/feature_head_train.py`` writes it).
+    FILE_FORMAT = "pgw-feature-head-v1"
+    KERNELS = ("auto", "float", "native_int8")
+
     def __init__(self, weights: dict[str, torch.Tensor], embed: torch.Tensor, vocab: Sequence[int], *,
-                 target_vocab: int | None = None):
+                 target_vocab: int | None = None, kernel: str = "float", ring: Any = None,
+                 int8: dict[str, tuple[torch.Tensor, torch.Tensor]] | None = None, threads: int = 1):
+        """``weights``: float ``w_in`` (d, 2H), ``b_in``, ``w1``, ``b1``, ``w2``, ``b2``, ``w_out`` (H, d) and
+        optionally ``u`` (V, d), the reduced-vocabulary LM head ``H_V W_out`` (default ``E_V W_out``: right
+        for a tied target only). ``kernel``: ``"float"`` (float32 products), ``"native_int8"`` (int8 per-row
+        weights on the native local-linear kernel, ``pgw_fast.local_linear_into``: a quarter of the bytes;
+        needs ``ring``) or ``"auto"`` (native when available, else float). ``int8``: per-row int8 weights and
+        scales to use as they are (the file's), else they are quantized from ``weights``. Drafts are
+        proposals only: the kernel changes speed and acceptance, never the outputs."""
         f32 = torch.float32
+        if kernel not in self.KERNELS:
+            raise ConfigError(f"FeatureHeadDrafter kernel must be one of {self.KERNELS}")
         self.w_in = weights["w_in"].to(f32)
         self.b_in = weights["b_in"].to(f32)
         self.w1 = weights["w1"].to(f32)
@@ -711,14 +725,79 @@ class FeatureHeadDrafter(BuiltinDrafter):
         self.b2 = weights["b2"].to(f32)
         self.w_out = weights["w_out"].to(f32)
         self.embed = embed
+        hidden = int(self.w_out.shape[0])
+        if int(embed.shape[1]) != hidden or tuple(self.w_in.shape) != (int(self.w_out.shape[1]), 2 * hidden):
+            raise ConfigError(f"draft head shapes do not match the target (hidden size {int(embed.shape[1])})")
         self.vocab = torch.tensor([int(t) for t in vocab], dtype=torch.long)
-        self.u = (embed[self.vocab].to(f32) @ self.w_out).contiguous()  # (V, d)
+        if "u" in weights:
+            self.u = weights["u"].to(f32).contiguous()
+            if tuple(self.u.shape) != (int(self.vocab.numel()), int(self.w_out.shape[1])):
+                raise ConfigError("draft head: u must be (len(vocab), d)")
+        else:
+            self.u = (embed[self.vocab].to(f32) @ self.w_out).contiguous()  # (V, d)
         self.model = None
         self.lookup = 0
         self.lookup_min_n = 3
         self.target_vocab = target_vocab if target_vocab is not None else int(embed.shape[0])
         self.draft_vocab = None
         self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0}
+        if kernel == "auto":
+            from pgw.engine.backends import NativeInt8DraftBackend
+
+            kernel = "native_int8" if ring is not None and NativeInt8DraftBackend.available() else "float"
+        self.kernel = kernel
+        self._lin: dict[str, Callable[[torch.Tensor], torch.Tensor]] | None = None
+        if kernel == "native_int8":
+            self._lin = self._native_linears(ring, int8 or {}, threads)
+        # the full-vocabulary row the reduced logits are scattered into: one reused buffer (only the V
+        # entries are rewritten per row; a fresh 0.6 MB row per step costs ~1 ms in page faults on a 7B vocab)
+        self._buf = torch.full((int(self.target_vocab),), float("-inf"))
+        self._keep = self.vocab < int(self.target_vocab)
+        self._all_kept = bool(self._keep.all())
+        self._vocab_kept = self.vocab[self._keep]
+
+    def _native_linears(self, ring: Any, int8: dict[str, tuple[torch.Tensor, torch.Tensor]],
+                        threads: int) -> dict[str, Callable[[torch.Tensor], torch.Tensor]]:
+        """Per-row int8 products on the native kernel. ``W_in`` is split into its feature and token halves:
+        the kernel quantizes each input row as a whole, and the target feature (outliers in the hundreds)
+        would swamp the token embedding (~1e-2) in one row."""
+        from pgw.core.ring import quantize_weight_rows
+        from pgw.engine.backends import NativeInt8DraftBackend, _native_int8_linear
+
+        if ring is None or not NativeInt8DraftBackend.available():
+            raise ConfigError("FeatureHeadDrafter kernel 'native_int8' needs pgw_fast (local_linear_into) and a ring")
+        hidden = int(self.w_out.shape[0])
+
+        def q(name: str, w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            if name in int8:
+                w8, sc = int8[name]
+                return w8.to(torch.int8), sc.to(torch.float32)
+            return quantize_weight_rows(w)
+
+        mats = {n: q(n, w) for n, w in (("w_in", self.w_in), ("w1", self.w1), ("w2", self.w2),
+                                        ("w_out", self.w_out), ("u", self.u))}
+        w8, sc = mats.pop("w_in")
+        mats["w_in_f"] = (w8[:, :hidden].contiguous(), sc)
+        mats["w_in_e"] = (w8[:, hidden:].contiguous(), sc)
+        return {n: _native_int8_linear(w8, sc, None, ring, threads) for n, (w8, sc) in mats.items()}
+
+    @classmethod
+    def from_file(cls, path: Any, embed: torch.Tensor, *, target_vocab: int | None = None, kernel: str = "auto",
+                  ring: Any = None, threads: int = 1) -> FeatureHeadDrafter:
+        """Load a trained head (``benchmarks/feature_head_train.py``: int8 per-row weights and scales, float
+        biases, the reduced vocabulary and ``U = H_V W_out``). Checked against the target's hidden size."""
+        blob = torch.load(path, map_location="cpu", weights_only=True)
+        if not isinstance(blob, dict) or blob.get("format") != cls.FILE_FORMAT:
+            raise ConfigError(f"{path}: not a feature-head file ({cls.FILE_FORMAT})")
+        if int(blob["hidden"]) != int(embed.shape[1]):
+            raise ConfigError(f"{path}: head for hidden size {blob['hidden']}, target has {int(embed.shape[1])}")
+        q8 = {k: (v["w8"], v["scale"]) for k, v in blob["int8"].items()}
+        w = {k: w8.to(torch.float32) * sc.to(torch.float32)[:, None] for k, (w8, sc) in q8.items()}
+        w.update({k: v.to(torch.float32) for k, v in blob["bias"].items()})
+        tv = target_vocab if target_vocab is not None else int(embed.shape[0])
+        if any(int(t) < 0 or int(t) >= tv for t in blob["vocab"]):
+            raise ConfigError(f"{path}: vocabulary ids outside the target's vocabulary")
+        return cls(w, embed, blob["vocab"], target_vocab=tv, kernel=kernel, ring=ring, int8=q8, threads=threads)
 
     def nbytes_per_step(self, bytes_per_weight: int = 1) -> int:
         """Weights read by one draft step (int8: 1 byte per weight)."""
@@ -737,15 +816,21 @@ class FeatureHeadDrafter(BuiltinDrafter):
 
     def _step(self, f: torch.Tensor, toks: Sequence[int]) -> tuple[torch.Tensor, torch.Tensor]:
         e = self.embed[torch.tensor([int(t) for t in toks], dtype=torch.long)].to(torch.float32)
-        z = torch.cat([f, e], dim=1) @ self.w_in.T + self.b_in
-        z = z + torch.nn.functional.silu(z @ self.w1.T + self.b1) @ self.w2.T + self.b2
-        return z @ self.w_out.T, z @ self.u.T
+        lin = self._lin
+        if lin is None:
+            z = torch.cat([f, e], dim=1) @ self.w_in.T + self.b_in
+            z = z + torch.nn.functional.silu(z @ self.w1.T + self.b1) @ self.w2.T + self.b2
+            return z @ self.w_out.T, z @ self.u.T
+        z = lin["w_in_f"](f) + lin["w_in_e"](e) + self.b_in
+        z = z + lin["w2"](torch.nn.functional.silu(lin["w1"](z) + self.b1)) + self.b2
+        return lin["w_out"](z), lin["u"](z)
 
-    def _full(self, lv: torch.Tensor) -> torch.Tensor:
-        out = torch.full((int(self.target_vocab),), float("-inf"))
-        keep = self.vocab < out.numel()
-        out[self.vocab[keep]] = lv[keep]
-        return out
+    def _full(self, lv: torch.Tensor, copy: bool = False) -> torch.Tensor:
+        """Reduced-vocabulary logits as a full-vocabulary row (-inf outside V). The shared buffer is returned
+        unless ``copy`` (sampled requests: the sampler may work on the row in place)."""
+        buf = self._buf
+        buf.index_copy_(0, self._vocab_kept, lv if self._all_kept else lv[self._keep])
+        return buf.clone() if copy else buf
 
     def propose(self, jobs: Sequence[DraftJob]) -> None:
         live = [j for j in jobs if j.k > 0]
@@ -794,7 +879,7 @@ class FeatureHeadDrafter(BuiltinDrafter):
             self.stats["steps"] += 1
             for r, (inf, nd) in enumerate(rows):
                 inf["feat"][nd + 1_000_000] = fp[r]  # predicted feature after node nd (for its children)
-                self._tree_children(inf, nd, self._full(lv[r]), tv)
+                self._tree_children(inf, nd, self._full(lv[r], copy=inf["job"].sampler is not None), tv)
         for inf in info:
             inf["job"].out = [int(x) for x in inf["toks"][1:]]
 

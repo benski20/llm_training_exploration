@@ -626,6 +626,57 @@ async def test_cpu_only_gateway_strict_speculation_native(tiny_pack_dir: Path, t
         assert sp["drafter_stats"]["calls"] > 0
 
 
+def _write_head(pack_dir: Path, path: Path, d: int = 16) -> None:
+    """A random head in the trained-file format for the tiny pack (drafts are proposals: any head is exact)."""
+    from pgw.core.ring import quantize_weight_rows
+    from pgw.engine import PlainBackend, TransformerModel
+    from pgw.modelpack import ModelPack
+
+    pack = ModelPack.open(pack_dir)
+    emb = TransformerModel(pack, PlainBackend(pack, DEFAULT_RING)).embed_tokens.to(torch.float32)
+    h = int(emb.shape[1])
+    g = torch.Generator().manual_seed(3)
+    vocab = list(range(0, int(emb.shape[0]), 2))
+    w = {k: torch.randn(*s, generator=g) * 0.1 for k, s in
+         (("w_in", (d, 2 * h)), ("w1", (2 * d, d)), ("w2", (d, 2 * d)), ("w_out", (h, d)))}
+    w["u"] = emb[torch.tensor(vocab)] @ w["w_out"]
+    torch.save({"format": "pgw-feature-head-v1", "target": "tiny", "hidden": h, "d": d, "vocab": vocab,
+                "int8": {k: dict(zip(("w8", "scale"), quantize_weight_rows(v), strict=True)) for k, v in w.items()},
+                "bias": {"b_in": torch.zeros(d), "b1": torch.zeros(2 * d), "b2": torch.zeros(d)}}, path)
+
+
+async def test_cpu_only_gateway_strict_speculation_feature_head(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                                make_store: Any, keys: ApiKeyStore,
+                                                                key: str) -> None:
+    """``draft_backend = 'feature_head'`` + ``draft_head_path``: the gateway drafts with a target-feature head
+    (no draft model) under padded strict speculation; the same bits as the gateway without speculation, R
+    rows per decode pass, the same pass count; head counters in the admin speed status."""
+    from pgw.engine.generate import FeatureHeadDrafter
+    from pgw.engine.model import native_float_available
+
+    if not native_float_available():
+        pytest.skip("pgw_fast without the native float path")
+    base_kw: dict[str, Any] = {"local_linears": "off", "float_ops": "native"}
+    svc0 = InProcessService(gw_pack)
+    ref, _, _ = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="ref"), svc0.transport, keys, key,
+                              base_kw)
+    head_path = tmp_path / "head.pt"
+    _write_head(tiny_pack_dir, head_path)
+    kw: dict[str, Any] = {**base_kw, "draft_backend": "feature_head", "draft_head_path": str(head_path),
+                          "spec_rows": 3, "spec_strict_passes": True, "spec_mask_rows": 3, "spec_mask_credit": 16}
+    svc = InProcessService(gw_pack)
+    out, _status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="spec"), svc.transport, keys,
+                                     key, kw)
+    assert out["message"] == ref["message"] and out["logprobs"] == ref["logprobs"]
+    passes0 = [int(x.shape[0]) for lid, x in svc0.received if lid == "0.qkv"]
+    passes = [int(x.shape[0]) for lid, x in svc.received if lid == "0.qkv"]
+    assert passes == [3 if rows == 1 else rows for rows in passes0]
+    assert rt.draft_model is None
+    assert isinstance(rt.generator._drafter, FeatureHeadDrafter)
+    sp = rt._speed_status()
+    assert sp["drafter_stats"]["steps"] == 2 * sum(1 for n in passes if n == 3)  # R - 1 per decode pass
+
+
 # ---- configuration -----------------------------------------------------------------------------------------
 def _cfg(**kw: Any) -> GatewayModelConfig:
     base: dict[str, Any] = {"name": "m", "pack_path": Path("/nonexistent/pack"), "fingerprint": "ab" * 32,
@@ -640,6 +691,13 @@ def _cfg(**kw: Any) -> GatewayModelConfig:
     ({"spec_rows": 3, "spec_strict_passes": True, "draft_pack_path": "/x", "spec_pipeline_steps": 3},
      "at most spec_rows - 1"),
     ({"draft_backend": "fast"}, "draft_backend"),
+    ({"draft_backend": "feature_head"}, "go together"),
+    ({"draft_head_path": "/h.pt"}, "go together"),
+    ({"draft_backend": "feature_head", "draft_head_path": "/h.pt"}, "needs spec_rows and spec_strict_passes"),
+    ({"draft_backend": "feature_head", "draft_head_path": "/h.pt", "spec_rows": 3, "spec_strict_passes": True,
+      "spec_lookup": 3}, "excludes draft_pack_path"),
+    ({"draft_backend": "feature_head", "draft_head_path": "/h.pt", "spec_rows": 3, "spec_strict_passes": True,
+      "draft_pack_path": "/x"}, "excludes draft_pack_path"),
 ])
 def test_cpu_gateway_spec_validation(kw: dict[str, Any], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -653,6 +711,10 @@ def test_cpu_only_strict_speculation_config_is_accepted() -> None:
              draft_backend="native_int8", spec_rows=4, spec_strict_passes=True, spec_mask_rows=4,
              spec_mask_credit=160, spec_pipeline_steps=0)
     assert c.speculates and c.spec_pipeline_steps == 0
+    h = _cfg(local_linears="off", float_ops="native", device="cpu", draft_backend="feature_head",
+             draft_head_path="/h.pt", spec_rows=4, spec_strict_passes=True, spec_mask_rows=4, spec_mask_credit=160)
+    assert h.speculates and h.draft_pack_path is None
+    assert _cfg().draft_head_path is None and _cfg().draft_backend == "auto"  # defaults off
 
 
 def test_phase_a_settings_are_no_longer_pending() -> None:

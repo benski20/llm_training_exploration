@@ -1077,6 +1077,8 @@ class ModelRuntime:
                 spec["drafter"] = PipelinedDrafter(
                     self.draft_model, post_steps=c.spec_pipeline_steps,
                     target_vocab=getattr(self.model.arch, "vocab_size", None))
+            elif c.draft_head_path is not None:
+                spec["drafter"] = self._load_draft_head()
         #: the pipelined drafter (``spec_pipeline_steps``), for its counters in the admin speed status
         self.spec_drafter = spec.get("drafter")
         self.generator = Generator(
@@ -1099,6 +1101,23 @@ class ModelRuntime:
                 max_entries=c.prefix_cache_max_entries)
         self.tokenizer = tokenizer
         self.pack = pack
+
+    def _load_draft_head(self) -> Any:
+        """The target-feature draft head (``draft_backend = 'feature_head'``): plaintext, local to the gateway;
+        it reads the target's final hidden state the gateway computes anyway and the embedding table it holds
+        for the embedding lookup. int8 weights on the native kernel when available (else float32)."""
+        import torch
+
+        from pgw.engine.generate import FeatureHeadDrafter
+
+        path = self.config.draft_head_path
+        emb = self.model.embed_tokens
+        head = FeatureHeadDrafter.from_file(
+            path, emb if emb.dtype == torch.float32 else emb.to(torch.float32),
+            target_vocab=getattr(self.model.arch, "vocab_size", None), kernel="auto", ring=self.ring)
+        log.info("model %s: strict speculation with draft head %s (%s kernel, %.1f MB per draft step int8)",
+                 self.name, path, head.kernel, head.nbytes_per_step() / 1e6)
+        return head
 
     def _load_draft(self) -> TransformerModel | None:
         """The speculative-decoding draft model: plaintext, local to the gateway (never sent anywhere)."""

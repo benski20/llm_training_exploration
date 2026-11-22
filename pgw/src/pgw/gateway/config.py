@@ -44,12 +44,12 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
-    "draft_backend", "spec_pipeline_steps", "head_mode",
+    "draft_backend", "spec_pipeline_steps", "head_mode", "draft_head_path",
 })
 #: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
 #: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,
 #: whose row and pass counts depend on how predictable the text is.
-_PRESET_DRAFT_SOURCES = ("spec_lookup", "draft_pack_path")
+_PRESET_DRAFT_SOURCES = ("spec_lookup", "draft_pack_path", "draft_head_path")
 
 #: Modes that run without the compute service (no privacy protocol involved). Development only.
 DEV_MODES: frozenset[str] = frozenset({"plain", "float"})
@@ -169,12 +169,22 @@ class GatewayModelConfig(BaseModel):
         "proposal is always spec_tokens long: a shorter match is completed by the draft model, or dropped",
     )
     draft_device: str | None = Field(None, description="Device of the draft model (default: the model's device)")
-    draft_backend: Literal["auto", "native_int8", "torch_int8", "float"] = Field(
+    draft_backend: Literal["auto", "native_int8", "torch_int8", "float", "feature_head"] = Field(
         "auto", description="CPU draft model kernels: 'auto' (default, today's choice: torch weight-only int8 when "
         "it measures faster than float32, else float32); 'native_int8' = the native exact local-linear kernel "
         "(pgw_fast.local_linear_into: int8 weights, 1 byte per weight resident, columns over the native pool's "
         "cores; the draft's int8 head too), measured 3-5x faster than torch int8 on a 4-vCPU Xeon; 'torch_int8'; "
-        "'float'. Drafts are proposals only: outputs are unchanged by this setting",
+        "'float'. 'feature_head' = no draft model: a target-feature draft head (draft_head_path) drafts from the "
+        "target's own final hidden state, which the gateway holds in plaintext (a few MB per draft step instead "
+        "of ~0.5 GB). Drafts are proposals only: outputs are unchanged by this setting",
+    )
+    draft_head_path: Path | None = Field(
+        None, description="With draft_backend = 'feature_head': the trained head file (benchmarks/"
+        "feature_head_train.py; pgw.engine.generate.FeatureHeadDrafter.from_file: int8 weights, a reduced "
+        "vocabulary, U = LM-head rows x W_out), for this target model (hidden size checked at start-up). Strict "
+        "speculation only (spec_rows + spec_strict_passes; no draft_pack_path, spec_lookup or "
+        "spec_pipeline_steps): one head step per draft row, the same every pass. A public artefact (derived "
+        "from public weights). None (default) = off",
     )
     spec_pipeline_steps: int | None = Field(
         None, ge=0, le=7, description="Strict speculation with a draft model (spec_rows, draft_pack_path, no "
@@ -415,9 +425,9 @@ class GatewayModelConfig(BaseModel):
             if not self.spec_strict_passes:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_strict_passes (without it the pass count "
                                  "reveals how many drafts were accepted)")
-            if self.spec_lookup <= 0 and self.draft_pack_path is None:
+            if self.spec_lookup <= 0 and self.draft_pack_path is None and self.draft_head_path is None:
                 raise ValueError(f"model {self.name!r}: spec_rows needs a draft source "
-                                 "(spec_lookup or draft_pack_path)")
+                                 "(spec_lookup, draft_pack_path or draft_head_path)")
             if self.spec_tokens == 0:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
         if self.spec_mask_rows is not None:
@@ -435,6 +445,14 @@ class GatewayModelConfig(BaseModel):
                                  "(and no spec_lookup)")
             if self.spec_pipeline_steps > self.spec_rows - 1:
                 raise ValueError(f"model {self.name!r}: spec_pipeline_steps must be at most spec_rows - 1")
+        if (self.draft_backend == "feature_head") != (self.draft_head_path is not None):
+            raise ValueError(f"model {self.name!r}: draft_backend = 'feature_head' and draft_head_path go together")
+        if self.draft_head_path is not None:
+            if self.spec_rows is None or not self.spec_strict_passes:
+                raise ValueError(f"model {self.name!r}: draft_head_path needs spec_rows and spec_strict_passes")
+            if self.draft_pack_path is not None or self.spec_lookup > 0 or self.spec_pipeline_steps is not None:
+                raise ValueError(f"model {self.name!r}: draft_head_path excludes draft_pack_path, spec_lookup and "
+                                 "spec_pipeline_steps (the head is the only draft source)")
         if self.spec_mask_credit is not None and self.spec_mask_rows is None:
             raise ValueError(f"model {self.name!r}: spec_mask_credit needs spec_mask_rows")
         if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":
@@ -463,7 +481,8 @@ class GatewayModelConfig(BaseModel):
     @property
     def speculates(self) -> bool:
         """Speculative decoding is on (a draft source and spec_tokens > 0)."""
-        return (self.spec_lookup > 0 or self.draft_pack_path is not None) and self.spec_tokens > 0
+        return ((self.spec_lookup > 0 or self.draft_pack_path is not None or self.draft_head_path is not None)
+                and self.spec_tokens > 0)
 
     def resolved_service_token(self) -> SecretStr | None:
         """The service bearer token: ``service_token`` or the stripped contents of ``service_token_file``.
