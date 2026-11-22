@@ -867,6 +867,11 @@ head (at 7B 1.09 GB bfloat16 in RAM and per pass; at 0.5B the head is the tied e
 +`4 x vocab` bytes per slot (+0.61 MB: +11% at 7B, +50% at 0.5B); hint +3.7 GB at 7B. No sizing flag changes are
 needed (`--gateway-mem-gib` can drop by about 2 GB at 7B).
 
+Quality of the int8 head against the float head (`benchmarks/masked_head_quality.py`, Qwen2.5-0.5B-Instruct, K32A12C27,
+exact int8 layers on `PlainBackend`, 12 chat prompts teacher-forced, 504 positions): top-1 agreement 99.60% (2 of 504
+positions differ), |delta logprob| of the float head's top-1 token mean 0.012, max 0.060, max over the whole vocabulary
+0.37. The 0.5B's head is the tied embedding table; the 7B's untied head is not measured here.
+
 Rings: the head's `in_features` is the hidden size, so its bounds are the qkv linear's: K32A12C27 ring check 21 bits
 with 7 vectors, `p31` 31 bits with one (`2B = 2^28 < p`); K32A8 ring check 28 bits (`p31` 31); K40A12 / K48A20 ring
 check only (`p31` needs K32). All exact in tests; the T4 runs used K32A12C27 + `p31`.

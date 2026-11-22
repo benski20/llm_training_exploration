@@ -53,6 +53,22 @@ def _texts(tok: Any, wikitext: str | None, passages: int, passage_tokens: int) -
     return out
 
 
+def _int8_head(x: torch.Tensor, hw: tuple[torch.Tensor, torch.Tensor, float], ring: Any) -> torch.Tensor:
+    """:class:`pgw.engine.PlainBackend`'s head product (quantize rows, exact integer product, rescale), in
+    blocks of output rows to bound memory (every output element depends only on its row and column)."""
+    from pgw.core.ring import dequantize_outputs, quantize_activations
+    from pgw.engine.backends import exact_int_matmul
+
+    w8, scale, wnorm = hw
+    xq, sx = quantize_activations(x, ring, wnorm if ring.cap else None)
+    parts = []
+    for a in range(0, int(w8.shape[0]), 8192):
+        w8t = w8[a : a + 8192].t().contiguous()
+        yq = exact_int_matmul(xq, w8t, ring.a)
+        parts.append(dequantize_outputs(yq, sx, scale[a : a + 8192], None, torch.float32))
+    return torch.cat(parts, dim=1)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pack", required=True)
@@ -60,9 +76,10 @@ def main() -> None:
     ap.add_argument("--wikitext", default=None, help="a wikitext parquet file (passages of more than 400 chars)")
     ap.add_argument("--passages", type=int, default=8)
     ap.add_argument("--passage-tokens", type=int, default=192)
-    ap.add_argument("--layers", choices=("float", "plain"), default="float",
+    ap.add_argument("--layers", choices=("float", "bf16", "plain"), default="float",
                     help="backend of the decoder layers: 'float' (dequantized int8 weights, fast; both heads see the "
-                         "same hidden rows either way) or 'plain' (the exact int8 reference, slow on a CPU)")
+                         "same hidden rows either way), 'bf16' (the same in bfloat16: half the memory) or 'plain' "
+                         "(the exact int8 reference, slow on a CPU)")
     ap.add_argument("--gen-prompts", type=int, default=0)
     ap.add_argument("--gen-tokens", type=int, default=24)
     ap.add_argument("--json", default=None)
@@ -70,7 +87,6 @@ def main() -> None:
 
     from pgw.core.ring import RingParams
     from pgw.engine import ChatTokenizer, Generator, PlainBackend, SamplingParams, TransformerModel
-    from pgw.engine.backends import LinearCall
     from pgw.engine.masked_head import MaskedHeadPack, enable_masked_head
     from pgw.engine.model import SequenceInput, rms_norm
     from pgw.modelpack import ModelPack
@@ -81,10 +97,15 @@ def main() -> None:
     tok = ChatTokenizer.from_pack(pack)
     from pgw.engine import FloatBackend
 
-    layers = (lambda pk: FloatBackend(pk, ring)) if args.layers == "float" else (lambda pk: PlainBackend(pk, ring))
+    layers = {"float": lambda pk: FloatBackend(pk, ring),
+              "bf16": lambda pk: FloatBackend(pk, ring, dtype=torch.bfloat16),
+              "plain": lambda pk: PlainBackend(pk, ring)}[args.layers]
     flt = TransformerModel(pack, layers(pack))
-    head_be = PlainBackend(hpack, ring)
     lid = hpack.head_id
+    lw = hpack.load_linear(lid)  # the int8 head the provider serves (per-row int8 of the pack's plain head)
+    from pgw.modelpack.loader import row_norm_sq_max
+
+    hw = (lw.w8, lw.scale, __import__("math").sqrt(float(row_norm_sq_max(lw.w8))))
     last = int(pack.arch.num_layers) - 1
     rows = agree = 0
     d_top: list[torch.Tensor] = []
@@ -96,8 +117,8 @@ def main() -> None:
         la = flt.forward_batch([s])[0]
         h = s.hidden[last]  # type: ignore[index]
         x = rms_norm(h, flt.final_norm, flt.eps).to(torch.float32)  # as the model norms all_logits rows
-        lb = head_be.forward_many([LinearCall(lid, x.contiguous(), None)])[0]
-        pa, pb = torch.log_softmax(la.double(), -1), torch.log_softmax(lb.double(), -1)
+        lb = _int8_head(x, hw, ring)
+        pa, pb = torch.log_softmax(la, -1), torch.log_softmax(lb, -1)
         top_a, top_b = la.argmax(-1), lb.argmax(-1)
         n = int(la.shape[0])
         ag = int((top_a == top_b).sum())
