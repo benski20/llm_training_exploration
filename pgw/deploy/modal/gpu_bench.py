@@ -101,9 +101,18 @@ def h100_c16(cmd: str, timeout_min: float = 40) -> dict:
     return _run(cmd, timeout_min)
 
 
+# Provider scaling (benchmarks/provider_scale_bench.py): 1-row trip service time at 7B/32B/72B shapes on 1, 2
+# and 4 GPUs (output-row tensor parallel, graph replay vs the persistent worker). 4 x H100: about $16/h of GPU
+# plus CPU and memory; a full run is ~10-15 min including the image build (see deploy/modal/README.md).
+@app.function(gpu="H100:4", cpu=32.0, **{**_KW, "memory": 65536})
+def h100x4_c32(cmd: str, timeout_min: float = 40) -> dict:
+    return _run(cmd, timeout_min)
+
+
 @app.local_entrypoint()
 def main(cmd: str, target: str = "t4_c16", timeout_min: float = 40, out: str = "") -> None:
-    fn = {"t4_c4": t4_c4, "t4_c16": t4_c16, "h100_c16": h100_c16, "c8": c8, "c16": c16}[target]
+    fn = {"t4_c4": t4_c4, "t4_c16": t4_c16, "h100_c16": h100_c16, "h100x4_c32": h100x4_c32, "c8": c8,
+          "c16": c16}[target]
     res = fn.remote(cmd, timeout_min)
     text = json.dumps(res, indent=1)
     if out:

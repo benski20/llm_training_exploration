@@ -68,6 +68,13 @@ class ServiceSettings(PGWSettings):
     devices: list[str] = Field(
         default_factory=list, description="Devices for multi-GPU placement, e.g. ['cuda:0','cuda:1']"
     )
+    tp_devices: list[str] = Field(
+        default_factory=list,
+        description="Output-row tensor parallel (opt-in): split every linear's int8 weight by output rows over "
+        "these devices in this order (e.g. ['cuda:0','cuda:1','cuda:2','cuda:3']); a trip's masked input is "
+        "broadcast, each GPU computes its row slice and the slices are gathered in order into the same reply "
+        "bytes as on one device. `devices` and `placement` are ignored when set. Empty (default) = off",
+    )
     placement: Literal["single", "by_layer"] = Field(
         "by_layer", description="How linears are spread over `devices` (contiguous layer ranges by bytes)"
     )

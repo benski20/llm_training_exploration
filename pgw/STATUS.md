@@ -15,6 +15,40 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: provider for 32B/70B-class: output-row TP, persistent trip worker, lane coalescing (opt-in, CPU-tested)
+
+Provider side of the scaling plan (targets 3-4); what the provider computes and sees is unchanged (masked `x_hat` in,
+`y_hat` out, same bytes), and every knob defaults off.
+
+- **Output-row tensor parallel** (`tp_devices`, `PGW_SERVICE_TP_DEVICES='["cuda:0",...]'`):
+  `pgw.service.tensor_parallel.ShardedKernel` splits each linear's int8 weight by output rows (balanced, 16-aligned
+  boundaries) over N devices in one process; the input is broadcast, shards run concurrently (caller thread + per-group
+  helpers, each shard on its own device executor, stream, pinned staging and CUDA graphs), slices are concatenated in
+  row order: byte-identical to one device (no reduction). Maskgen entry points concatenate row blocks too. A TP group
+  is one scheduling unit for the batcher. A failed shard fails the call only after every shard finished (no partial
+  reply). Lane: per-(linear, rows) graphs per shard reading one pinned input, registered as one lane graph; the native
+  lane launches all shards and gathers rows in order (`cuda.rs` `GraphShard`, `gather_rows`), self-checked at startup.
+- **Persistent trip worker** (`PGW_SERVICE_EXEC=persistent`): `pgw.service.persistent` (NVRTC-compiled resident kernel
+  per GPU: block 0 polls a doorbell in mapped pinned memory, grid copies x, wrapping-u32 ring GEMV with 16-byte weight
+  loads, coalesced writes of its output columns straight into the shared mapped reply buffer, `done` after a system
+  fence) and `rust/pgw-lane/src/persistent.rs` (per trip: device locks, one body copy, doorbell per shard, spin on
+  `done`; no launch, no Python). Rows 1-4; larger calls fall to graphs. Startup self-check vs the kernel path; a
+  mismatch, an error status or a worker that does not answer disables it (graphs / kernel path serve).
+- **Multi-tenant coalescing on the lane** (`PGW_SERVICE_COALESCE=1`): `rust/pgw-lane/src/coalesce.rs` merges calls of
+  the same (model, linear, ring) that wait while that key runs into one device call (FIFO, <= lane_max_rows rows); an
+  idle key runs at once and alone (window 0, no copy). Replies are cut per call; admission and per-tenant accounting
+  stay per call; a failed merged call retries each member alone. (The stream/Python path already coalesced across
+  tenants in `BatchScheduler` with window 0.)
+- Tests (CPU; fake multi-device = repeated `cpu`, emulated workers on the same memory protocol, the real native lane):
+  `tests/service/test_tensor_parallel.py`, `tests/service/test_lane_persistent.py`; Rust: `cargo test -p pgw-lane`
+  (coalescer, persistent executor with device-emulating threads incl. TP gather, stall and error disable, graph shard
+  tiling). Not reached: nothing ran on a GPU; the CUDA kernel, the TP graph capture and the timings are unverified.
+- Ready to run (not run, no Modal spend): `modal run deploy/modal/gpu_bench.py --target h100x4_c32 --timeout-min 30
+  --out provider_scale.json --cmd "python benchmarks/provider_scale_bench.py --presets 7b,32b,72b --tp 1,2,4
+  --rows 1,2 --iters 400 --json /tmp/provider_scale.json"` (4 x H100, about $16/h plus CPU; ~10-15 min, ~$3-4).
+  A 1-GPU subset (`--target h100_c16 --tp 1`) is ~$1. Reports per preset, TP and rows: kernel / graph / persistent
+  service time per trip, the GEMV device floor and the overhead above it (target <= 15-25 us; gather <= 5 us).
+
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
 Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model
