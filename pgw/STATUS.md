@@ -15,6 +15,19 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: fused2 prototype, 2 provider trips per layer (WP-B4, opt-in, new reference; not promoted)
+
+`pgw.engine.fused2` (default off; the gateway still refuses `schedule = "fused2"`): trip A = o + residual add +
+gate_up, trip B = down + residual add + next qkv, RMSNorm's `1/rms` applied by the gateway after the product,
+residual in fixed point on the o / down output grid, norm gains folded into the next linear at pack time.
+Trips per token 4L (+1) -> **2L + 1** (70B 321 -> 161). Same elements on the wire and in the store; ring K40
+(1.25x bytes) or K48 (1.5x); no extra factory products (masks reparametrized, `r_R = v - W1 r_x`); both stages
+checked with Freivalds over F_(2^61-1). Plain and masked (in-process factory and provider) backends,
+masked == plain bit for bit, tamper tests (`tests/engine/test_fused2.py`). Quality on Qwen2.5-0.5B (1020
+wikitext tokens): ppl 23.63 (float 23.67, int8 reference 23.51), but top-1 = float 93.0% vs 96.4% for the int8
+reference. **Not no-compromise as measured**; next: a folding variant that closes the top-1 gap, then 7B.
+Design, numbers, follow-ups: `research/plans/fused2-two-trips-per-layer.md`.
+
 ## Update 2026-11-22: the 7B CPU-only-gateway speculation run is ready to launch (Modal launcher, opt-in)
 
 One co-located run measures Qwen2.5-7B on an H100 provider with a CPU-only, weight-free gateway (every linear remote,

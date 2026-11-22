@@ -63,7 +63,7 @@ def float_logits(model: Any, ids: torch.Tensor) -> torch.Tensor:
     return model(ids[None]).logits[0].float()
 
 
-def engine_runner(pack: Any, cfg: str, state: dict[str, torch.Tensor] | None) -> tuple[Any, Any]:
+def engine_runner(pack: Any, cfg: str, state: Any) -> tuple[Any, Any]:
     from pgw.core.ring import RingParams
     from pgw.engine.backends import PlainBackend
     from pgw.engine.fused2 import Fused2PlainBackend, Fused2Weights, enable_fused2, hf_float_linears
@@ -88,7 +88,7 @@ def engine_logits(model: Any, ids: torch.Tensor) -> torch.Tensor:
 
 
 def stats(logits: torch.Tensor, ids: torch.Tensor) -> tuple[float, int, torch.Tensor]:
-    lp = torch.log_softmax(logits[:-1].double(), dim=-1)
+    lp = torch.log_softmax(logits[:-1].float(), dim=-1)
     nll = -lp.gather(1, ids[1:, None]).sum().item()
     return nll, len(ids) - 1, logits[:-1].argmax(-1)
 
@@ -100,6 +100,8 @@ def main() -> None:
     ap.add_argument("--seq", type=int, default=512)
     ap.add_argument("--json", default=None)
     ap.add_argument("--threads", type=int, default=0)
+    ap.add_argument("--save-prompts", default=None, help="path prefix: keep each config's prompt logprobs")
+    ap.add_argument("--pack", default=None, help="an on-disk pgw pack of the same checkpoint (less memory)")
     ap.add_argument("--ref", default=None, help="cache of the float reference (and the int8 prompt logprobs)")
     args = ap.parse_args()
     if args.threads:
@@ -138,8 +140,14 @@ def main() -> None:
     if args.json and Path(args.json).is_file():
         results = json.loads(Path(args.json).read_text())
     results["float"] = {"ppl": ref["ppl"], "tokens": ref["tokens"]}
-    state = {k: v for k, v in load_file(str(d / "model.safetensors")).items()}
-    pack = InMemoryPack.from_state_dict(state, arch_config_from_hf(json.loads((d / "config.json").read_text())))
+    state = d / "model.safetensors"  # read lazily, one linear at a time (low memory)
+    if args.pack:
+        from pgw.modelpack import ModelPack
+
+        pack = ModelPack.open(args.pack)
+    else:
+        pack = InMemoryPack.from_state_dict(load_file(str(state)),
+                                            arch_config_from_hf(json.loads((d / "config.json").read_text())))
     base_prompt: list[torch.Tensor] | None = ref.get("int8")
     for cfg in args.configs:
         t0 = time.time()
@@ -151,6 +159,8 @@ def main() -> None:
             cnt += b
             agree += float((top == rt).sum())
         lps = [torch.log_softmax(engine_logits(model, p).double(), -1) for p in prompts]
+        if args.save_prompts:
+            torch.save({"lps": [lp.float() for lp in lps]}, f"{args.save_prompts}.{cfg.replace(':', '_')}.pt")
         d_next = max(float((lp - rp)[torch.arange(len(p) - 1), p[1:]].abs().max())
                      for lp, rp, p in zip(lps, ref_prompt, prompts, strict=True))
         d_inf = max(float((lp - rp).abs().max()) for lp, rp in zip(lps, ref_prompt, strict=True))

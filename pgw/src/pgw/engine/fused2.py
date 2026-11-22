@@ -98,7 +98,6 @@ class F2Linear:
     Attributes:
         key: Name, e.g. ``"3.o"``, ``"3.gate_up/f2"`` (folded), ``"4.qkv/f2"``.
         w8: int8 ``(m, n)``.
-        w8t: int8 ``(n, m)`` contiguous (gateway exact products).
         scale: float64 ``(m,)`` row scales (the float32 scales widened).
         bias: float64 ``(m,)`` or None.
         wnorm: ``max_i ||w8_i||_2``.
@@ -107,11 +106,15 @@ class F2Linear:
 
     key: str
     w8: torch.Tensor
-    w8t: torch.Tensor
     scale: torch.Tensor
     bias: torch.Tensor | None
     wnorm: float
     sigma: float = 0.0
+
+    @property
+    def w8t(self) -> torch.Tensor:
+        """``(n, m)`` view of ``w8`` (the exact digit product reads ``w8`` itself)."""
+        return self.w8.t()
 
     @property
     def m(self) -> int:
@@ -128,7 +131,7 @@ def _make_linear(key: str, w8: torch.Tensor, sw: torch.Tensor, bias: torch.Tenso
     w64 = w8.to(torch.float64)
     wnorm = float(w64.pow(2).sum(dim=1).sqrt().max())
     sig = float(torch.linalg.matrix_norm(w64, ord=2)) * _SIGMA_MARGIN if sigma else 0.0
-    return F2Linear(key, w8, w8.t().contiguous(), sw.to(torch.float32).to(torch.float64), None if bias is None
+    return F2Linear(key, w8, sw.to(torch.float32).to(torch.float64), None if bias is None
                     else bias.to(torch.float32).to(torch.float64), wnorm, sig)
 
 
@@ -139,16 +142,50 @@ def _fold(key: str, w: torch.Tensor, d: torch.Tensor, bias: torch.Tensor | None)
     return _make_linear(key, w8, sw, bias)
 
 
-def hf_float_linears(state_dict: Mapping[str, torch.Tensor], arch: Any) -> dict[str, torch.Tensor]:
-    """Float weights of the folded linears (qkv and gate_up of every layer) from an HF state dict."""
+class _LazyFloat(Mapping[str, torch.Tensor]):
+    def __init__(self, keys: list[str], load: Any):
+        self._keys, self._load = keys, load
+
+    def __getitem__(self, key: str) -> torch.Tensor:
+        if key not in self._keys:
+            raise KeyError(key)
+        return self._load(key)
+
+    def __iter__(self) -> Any:
+        return iter(self._keys)
+
+    def __len__(self) -> int:
+        return len(self._keys)
+
+
+def hf_float_linears(state_dict: Mapping[str, torch.Tensor] | Any, arch: Any) -> Mapping[str, torch.Tensor]:
+    """Float weights of the folded linears (qkv and gate_up of every layer) from an HF state dict.
+
+    ``state_dict`` is a mapping or a safetensors file path; either way each linear is materialized only
+    when :class:`Fused2Weights` asks for it (low memory)."""
     from pgw.modelpack.arch import hf_linear_parts
 
-    out: dict[str, torch.Tensor] = {}
-    for layer in range(arch.num_layers):
-        for kind in (LinearKind.QKV, LinearKind.GATE_UP):
-            parts = hf_linear_parts(arch.arch, layer, kind)
-            out[f"{layer}.{kind.value}"] = torch.cat([state_dict[wn].detach().float() for _, wn, _ in parts], dim=0)
-    return out
+    if not isinstance(state_dict, Mapping):
+        from safetensors import safe_open
+
+        path = str(state_dict)
+
+        def get(name: str) -> torch.Tensor:
+            with safe_open(path, framework="pt") as f:
+                return f.get_tensor(name)
+    else:
+        def get(name: str) -> torch.Tensor:
+            return state_dict[name]
+
+    kinds = (LinearKind.QKV, LinearKind.GATE_UP)
+    keys = [f"{layer}.{kind.value}" for layer in range(arch.num_layers) for kind in kinds]
+
+    def load(key: str) -> torch.Tensor:
+        layer, kind = key.split(".")
+        parts = hf_linear_parts(arch.arch, int(layer), LinearKind(kind))
+        return torch.cat([get(wn).detach().float() for _, wn, _ in parts], dim=0)
+
+    return _LazyFloat(keys, load)
 
 
 class Fused2Weights:

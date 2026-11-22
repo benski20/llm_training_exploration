@@ -1,0 +1,73 @@
+{
+ "float": {
+  "ppl": 23.66532553681752,
+  "tokens": 1020
+ },
+ "f2:K40A12C37": {
+  "ppl": 23.635379930093332,
+  "top1_vs_float": 0.9303921568627451,
+  "prompt_max_dlogprob_next_vs_float": 2.2595138489351676,
+  "prompt_max_dlogprob_vocab_vs_float": 6.576031317474165,
+  "prompt_top1_vs_float": 0.9489795918367347,
+  "seconds": 2316.1238465309143,
+  "act_bits_hist": {
+   "4": 10,
+   "5": 18,
+   "6": 96,
+   "7": 132,
+   "8": 34,
+   "9": 39,
+   "10": 324,
+   "11": 3077,
+   "12": 50126
+  },
+  "rows_below_A": 0.06925876411170528,
+  "max_out_bits": {
+   "single": 22.44879008170262,
+   "H": 27.330535244073506,
+   "Z": 34.33507268027784
+  }
+ },
+ "f2:K48A12C45": {
+  "ppl": 23.62860497538707,
+  "top1_vs_float": 0.9294117647058824,
+  "prompt_max_dlogprob_next_vs_float": 2.3011227223331367,
+  "prompt_max_dlogprob_vocab_vs_float": 6.747686535651582,
+  "prompt_top1_vs_float": 0.9489795918367347,
+  "seconds": 2316.604811191559,
+  "act_bits_hist": {
+   "12": 53856
+  },
+  "rows_below_A": 0.0,
+  "max_out_bits": {
+   "single": 22.44879008170262,
+   "H": 34.169454766049704,
+   "Z": 41.273705693985406
+  }
+ },
+ "std:K32A12C27": {
+  "ppl": 23.509506726482112,
+  "top1_vs_float": 0.9637254901960784,
+  "prompt_max_dlogprob_next_vs_float": 2.448519288385155,
+  "prompt_max_dlogprob_vocab_vs_float": 6.552995053216524,
+  "prompt_top1_vs_float": 0.9693877551020408,
+  "seconds": 1395.6542258262634
+ },
+ "_setup": {
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "data": "wikitext-2-raw test, first 1024 tokens, 4 non-overlapping windows of 256",
+  "prompts": "6 fixed prompts (benchmarks/fused2_quality.py PROMPTS)",
+  "int8_reference": "std:K32A12C27 = standard 4-trip schedule, PlainBackend, on-disk pgw pack",
+  "fused2_fold": "f2: norm gains folded into the float checkpoint weights before int8 rounding",
+  "prompt_vs_int8": {
+   "f2:K40A12C37": {
+    "max_dlogprob_next": 1.4499,
+    "top1": 0.969
+   },
+   "f2:K48A12C45": {
+    "max_dlogprob_next": 1.3951,
+    "top1": 0.969
+   }
+  }
+ }
+}
