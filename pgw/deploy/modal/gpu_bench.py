@@ -41,13 +41,14 @@ image = (
         "python rust/tools/build_ntt.py --site && rm -rf rust/target $HOME/.cargo/registry",
     )
     .add_local_dir(PGW / "benchmarks", "/opt/pgw-src/benchmarks", ignore=["**/__pycache__", "results/**", "kaggle/**"])
+    .add_local_dir(PGW / "tests", "/opt/pgw-src/tests", ignore=["**/__pycache__", "vectors/**", "**/*.bin"])
 )
 app = modal.App("pgw-gpu-bench", image=image)
 
 
 def _run(cmd: str, timeout_min: float) -> dict:
     t = time.time()
-    env = {**os.environ, "PYTHONPATH": "/opt/pgw-src/src", "PGW_OFFLINE": "1"}
+    env = {**os.environ, "PYTHONPATH": "/opt/pgw-src/src:/opt/pgw-src", "PGW_OFFLINE": "1"}
     try:
         p = subprocess.run(["bash", "-lc", cmd], cwd="/opt/pgw-src", env=env, capture_output=True, text=True,
                            timeout=timeout_min * 60)
