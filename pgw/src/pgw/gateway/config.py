@@ -326,11 +326,14 @@ class GatewayModelConfig(BaseModel):
         "4-vCPU gateway with one chat and 36% less float time per engine step with 32 chats (0.5B shapes). Only "
         "CPU engines. None = the process thread count, or PGW_FLOAT_THREADS",
     )
-    float_ops: Literal["torch", "native"] = Field(
+    float_ops: Literal["torch", "native", "native-blocked", "native-bf16kv", "native-blocked-bf16kv"] = Field(
         "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
         "reference); 'native' = the pinned native formulation (pgw_fast: fixed-order RMSNorm, SiLU and "
         "row-deterministic attention; a new reference: logits differ from 'torch' in the last bits, so the plaintext "
-        "reference compared against must use it too, e.g. PGW_FLOAT_OPS=native). Unset: PGW_FLOAT_OPS or 'torch'",
+        "reference compared against must use it too, e.g. PGW_FLOAT_OPS=native). 'native-blocked': v2 attention "
+        "(fixed 256-position blocks merged in block order, parallel over KV heads and blocks with "
+        "PGW_ATTN_THREADS; the same bits for any thread count). '-bf16kv': the KV cache stored as bfloat16 (half "
+        "the bytes). Each is its own reference. Unset: PGW_FLOAT_OPS or 'torch'",
     )
     head_mode: Literal["gateway", "provider_int8"] = Field(
         "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "
