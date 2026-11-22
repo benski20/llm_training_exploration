@@ -334,3 +334,12 @@ def test_per_trip_cpu_derived_figures() -> None:
     d = boot.per_trip_cpu(sus)
     assert d["gateway_cpu_ms_per_trip"] == 10.0 and d["slots_per_token"] == 2.0 and d["trips_per_token"] == 25.0
     assert sus["derived"]["factory_vs_consumption"]["factory_window_slots_per_s"] == 30.0
+
+
+def test_setup_token_regex_keeps_trailing_dash_and_underscore() -> None:
+    """The setup token is base64url: it may end in ``-`` or ``_``; a word-boundary regex dropped a trailing ``-``
+    and the wizard login then failed with 401 (seen on an H100 run)."""
+    boot = _boot()
+    for tok in ("pgw-setup-abcDEF123-", "pgw-setup-abcDEF123_", "pgw-setup-ab-cd_EF12"):
+        m = boot._TOKEN_RE.search(f"    {tok}\n")
+        assert m and m.group(1) == tok

@@ -309,7 +309,7 @@ def create_enrollment_code(env: dict[str, str], tenant: str, ttl: str, note: str
 # ------------------------------------------------------------------------------------------------
 # customer: gateway in setup mode
 # ------------------------------------------------------------------------------------------------
-_TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
+_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])(pgw-setup-[A-Za-z0-9_-]{8,})(?![A-Za-z0-9_-])")
 
 
 #: Speed settings the setup wizard writes into the customer's ``models.json`` (``setup_model_options``).
