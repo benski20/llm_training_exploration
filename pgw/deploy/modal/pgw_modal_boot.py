@@ -541,7 +541,7 @@ def split_gpus(provider_user: str | None, gateway_user: str | None) -> dict[str,
 
 
 #: Variable prefixes a run may add to a party's environment (``launch.py --gateway-env`` / ``--provider-env``).
-EXTRA_ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
+EXTRA_ENV_PREFIXES = ("PGW_", "OMP_", "MKL_", "GOMP_")
 
 
 def checked_env(extra: dict[str, Any] | None) -> dict[str, str]:
@@ -680,6 +680,8 @@ def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Pat
         env["CUDA_VISIBLE_DEVICES"] = ""  # the provider's GPU is not the customer's
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")  # as in customer.py's image
     env.update(extra_env or {})
+    if env.get("OMP_WAIT_POLICY") == "unset":  # --gateway-env OMP_WAIT_POLICY=unset: the OpenMP default policy
+        del env["OMP_WAIT_POLICY"]
     kw = as_user(env, user, root / "home")
     party_dir(log_dir, None)
     gw, token = start_gateway(env, log_dir / "gateway.log", user_kw=kw, cwd=root)

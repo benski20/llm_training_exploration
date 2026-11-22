@@ -154,6 +154,30 @@ def main() -> None:
         per[f"{c['n']}x{c['m']}"] = {k: round(1e6 * statistics.median(v), 1)
                                      for k, v in (("prepare_us", tp), ("replay_sync_us", tr), ("finish_us", tf))}
     res["per_call"] = per
+    # the gateway's class (pgw.engine.local_gpu.LocalGpuProducts): same products, checked against the CPU kernel
+    from pgw.engine.local_gpu import LocalGpuProducts
+
+    gp = LocalGpuProducts(dev, ring.k, ring.a, ring.cap, max_n=max(n for n, _ in shapes),
+                          max_m=max(m for _, m in shapes))
+    for li, row in enumerate(layers):
+        for c in row:
+            gp.add(f"{li}.{c['n']}x{c['m']}", torch.from_numpy(np.ascontiguousarray(c["w8t"].T)))
+    bad = 0
+    for li, row in enumerate(layers):
+        for c in row:
+            gp.forward(f"{li}.{c['n']}x{c['m']}", xs[c["n"]], c["wnorm"], c["scale"], None, c["bound"], c["out"], sx)
+            cpu_call(c, 1)
+            bad += int(not np.array_equal(c["out"].view(np.uint32), c["ref"].view(np.uint32)))
+    res["class_mismatches"] = bad
+    keyed = [(f"{li}.{c['n']}x{c['m']}", c) for li, row in enumerate(layers) for c in row]
+    ts = []
+    for rep in range(args.reps + 1):
+        t0 = time.perf_counter()
+        for key, c in keyed:
+            gp.forward(key, xs[c["n"]], c["wnorm"], c["scale"], None, c["bound"], c["out"], sx)
+        if rep:
+            ts.append(time.perf_counter() - t0)
+    res["class_gpu_ms"] = round(1e3 * statistics.median(ts), 3)
     print(json.dumps(res, indent=1))
 
 

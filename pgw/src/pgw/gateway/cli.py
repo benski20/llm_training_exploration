@@ -69,6 +69,9 @@ def serve(host: str | None, port: int | None) -> None:
 
     common = CommonSettings()
     configure_logging(common.log_level, json_lines=common.log_json)
+    from pgw.core.stack_sampler import maybe_start
+
+    maybe_start()  # PGW_STACK_SAMPLER (diagnostics; off by default)
     settings = _settings_with_wizard_env(GatewaySettings())
     from pgw.gateway.setup import should_run_setup
 

@@ -428,7 +428,7 @@ def _print_latency(res: dict[str, Any], pair: Pair) -> None:
 
 
 #: Variable prefixes ``--gateway-env`` / ``--provider-env`` may set (PGW settings and thread-count knobs only).
-ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
+ENV_PREFIXES = ("PGW_", "OMP_", "MKL_", "GOMP_")
 
 
 def parse_env_pairs(items: list[str]) -> dict[str, str]:

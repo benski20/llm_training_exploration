@@ -36,6 +36,7 @@ service's log tail.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 import traceback
@@ -232,7 +233,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
 
                 result["e2e"] = e2e_driver.run(live, run_id, gurl, token, deadline,
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
-                                               spec_rows=spec_rows, sustain_s=sustain_s)
+                                               spec_rows=spec_rows, sustain_s=sustain_s,
+                                               sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"))
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
@@ -241,6 +243,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 if w:
                     result["e2e"]["warm_cores"] = sampler.cores(w[0] - 0.6, w[1] + 0.6)
                 sampler.stop()
+                spath = (gateway_env or {}).get("PGW_STACK_SAMPLER")
+                if spath and Path(spath).exists():  # --gateway-env PGW_STACK_SAMPLER=...: the sampled stacks
+                    result["stack_sample"] = json.loads(Path(spath).read_text())
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"

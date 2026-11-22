@@ -1077,12 +1077,14 @@ class TransformerModel:
         for si, y_raw in enumerate(qkv):
             y = y_raw.to(self.dtype)
             rows = int(y.shape[0])
-            q = y[:, :nq].reshape(rows, nh, hd)
-            k = y[:, nq : nq + nk].reshape(rows, kvh, hd)
             v = y[:, nq + nk :].reshape(rows, kvh, hd)
             cos, sin = st.rope[si]
-            q = ops.rope(q, cos, sin)
-            k = ops.rope(k, cos, sin)
+            # q and k rotated in one call: the rotation is per (row, head) element with the row's cos/sin, so
+            # the q and k heads side by side get exactly the operations they get one tensor at a time
+            qk = ops.rope(y[:, : nq + nk].reshape(rows, nh + kvh, hd), cos, sin)
+            q, k = qk[:, :nh], qk[:, nh:]
+            if not q.is_contiguous():
+                q = q.contiguous()
             k_all, v_all = caches[si].append(layer, k, v)
             tail = min(int(seqs[si].serial_tail), rows)
             if tail <= 0:

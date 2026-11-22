@@ -74,6 +74,7 @@ class LocalGpuProducts:
         from pgw.core import triton_gemv
 
         self.device = device
+        self._index = device.index if device.index is not None else torch.cuda.current_device()
         self.k, self.a, self.cap = int(k), int(a), int(cap)
         self.fused_rows = max(1, int(triton_gemv.max_rows(device)))
         self.graph_rows = tuple(sorted({int(r) for r in graph_rows if 1 <= int(r) <= self.fused_rows}))
@@ -150,17 +151,21 @@ class LocalGpuProducts:
                 pin_in, pin_out = self._pin_in[: rows * n * 4], self._pin_out[: rows * m * 4]
                 try:
                     _fast.trip_prepare_into(xf, zr, k, a, cap, wnorm, pin_in, sx)
-                    stream = self._stream
-                    with torch.cuda.device(self.device), torch.cuda.stream(stream):
+                    ev = self._event
+                    if torch.cuda.current_device() == self._index:
+                        # the usual case (the gateway sees one GPU): replay on the calling thread's current
+                        # stream, without entering device/stream contexts (a few microseconds each)
                         g.replay()
-                        if self.spin:
-                            self._event.record(stream)
+                        ev.record()
+                    else:
+                        with torch.cuda.device(self.device), torch.cuda.stream(self._stream):
+                            g.replay()
+                            ev.record(self._stream)
                     if self.spin:  # a few tens of microseconds: poll instead of a blocking wait
-                        ev = self._event
                         while not ev.query():
                             pass
                     else:
-                        stream.synchronize()
+                        ev.synchronize()
                     status, _ = _fast.trip_finish_into(pin_out, zwr, sx, scale, bias, k, bound, out)
                 finally:
                     pin_in.fill(0)

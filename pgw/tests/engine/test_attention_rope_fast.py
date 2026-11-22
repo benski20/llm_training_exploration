@@ -103,3 +103,19 @@ def test_model_layer_rope_unchanged_end_to_end(which: str, request: pytest.Fixtu
         model_mod.apply_rope = orig
     for a, b in zip(fast, ref, strict=True):
         assert torch.equal(a, b)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_q_and_k_rotated_together_equal_separately(dtype: torch.dtype) -> None:
+    """``_layer_standard`` rotates q and k in one call on the qkv output's view: the same bits as two calls."""
+    g = torch.Generator().manual_seed(11)
+    for hd, nh, kvh in ((64, 14, 2), (128, 28, 4)):
+        emb = RotaryEmbedding(hd, 1e6, None, max_position_embeddings=32768)
+        for start, t in ((0, 1), (300, 1), (0, 41), (17, 5)):
+            cos, sin = emb.cos_sin(start, t, dtype)
+            y = torch.randn(t, (nh + 2 * kvh) * hd, generator=g).to(dtype)
+            nq, nk = nh * hd, kvh * hd
+            q_ref = apply_rope(y[:, :nq].reshape(t, nh, hd), cos, sin)
+            k_ref = apply_rope(y[:, nq : nq + nk].reshape(t, kvh, hd), cos, sin)
+            qk = apply_rope(y[:, : nq + nk].reshape(t, nh + kvh, hd), cos, sin)
+            assert torch.equal(_bits(qk[:, :nh]), _bits(q_ref)) and torch.equal(_bits(qk[:, nh:]), _bits(k_ref))
