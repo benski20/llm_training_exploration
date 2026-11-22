@@ -158,7 +158,8 @@ draft time: a tree of depth D costs D steps whatever its width.
 `benchmarks/draft_head_train.py` (self-distillation on the 1.5B's own features and greedy labels; teacher-forced
 bf16 HF forward; 2-fold cross-validation by prompt on the 24 exact chat answers, plus the 0.5B / 3B answers to
 the training-fold prompts and 3.3k wikitext tokens): 6.6k training windows. d = 384, V = 8192, 10 epochs: train
-top-1 at depth 1 0.94, **held-out 0.13**: the head memorises its training text. The 1.5B prefill ran at ~7
+top-1 at depth 1 0.94, **held-out 0.13**: the head memorises its training text. A smaller, regularised head
+(d = 128, V = 4096, weight decay 0.1, 3 epochs; 0.6 M + 0.5 M weights) reaches train 0.41 and held-out 0.10. The 1.5B prefill ran at ~7
 tokens/s on this box (load 35-50 from other jobs; two runs were OOM-killed and the scratch directory was
 wiped twice), so no more data was feasible. This says nothing about what a properly trained head reaches; it
 says the head must be trained offline on EAGLE-scale data (tens of millions of target-feature tokens; public
