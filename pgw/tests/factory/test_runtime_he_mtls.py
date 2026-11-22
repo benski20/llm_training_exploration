@@ -96,13 +96,13 @@ def test_watch_client_cert_reloads_on_change(tmp_path: Path, monkeypatch: pytest
 @pytest.mark.parametrize("v2", [False, True])
 def test_he_wire_v2_setting_plans_v2_from_the_hint_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                                          v2: bool) -> None:
-    """``he_wire_v2`` (default off) hands the HE parameters and the customer's own hint-store row norms to the
+    """``he_wire_v2`` (default on) hands the HE parameters and the customer's own hint-store row norms to the
     maskgen client, which plans the per-linear v2 formats from them; off, the client speaks v1 only."""
     import pgw.factory.runtime as rt
     import pgw.hemask.backend as hb
     import pgw.hemask.client as hc
 
-    assert FactorySettings(pack_path=tmp_path).he_wire_v2 is False
+    assert FactorySettings(pack_path=tmp_path).he_wire_v2 is True
     seen: dict[str, Any] = {}
 
     class _Hints:
@@ -130,4 +130,4 @@ def test_he_wire_v2_setting_plans_v2_from_the_hint_store(tmp_path: Path, monkeyp
     if v2:
         assert seen["row_norms"] == {"0.qkv": 1000.0} and seen["params"].k == 32 and seen["params"].q == 56
     else:
-        assert "params" not in seen and "row_norms" not in seen
+        assert seen.get("params") is None and seen.get("row_norms") is None and seen.get("wire_v2") is False
