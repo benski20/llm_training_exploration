@@ -147,6 +147,10 @@ async def test_streaming_reuse_and_integrity_failure_wipes(tiny_pack_dir: Path, 
     async with gateway(app) as c:
         rt = app.state.pgw.runtime.get(MODEL)
         await _converse(c, key, 1)
+        for _ in range(200):  # the cache is committed after the reservation close (executor thread)
+            if len(rt.prefix_cache) == 1:
+                break
+            await asyncio.sleep(0.01)
         assert len(rt.prefix_cache) == 1
         cache = next(iter(rt.prefix_cache._entries.values())).cache
         rt._on_integrity_failure(IntegrityError("Freivalds check failed (test)"))
@@ -187,6 +191,10 @@ async def test_real_integrity_failure_discards(tiny_pack_dir: Path, tmp_path: Pa
         rt = app.state.pgw.runtime.get(MODEL)
         await _converse(c, key, 1)
         await _converse(c, key, 1, user="other")
+        for _ in range(200):  # committed after the reservation close (executor thread)
+            if len(rt.prefix_cache) == 2:
+                break
+            await asyncio.sleep(0.01)
         assert len(rt.prefix_cache) == 2
         bad["on"] = True
         msgs = [{"role": "user", "content": "x"}]
