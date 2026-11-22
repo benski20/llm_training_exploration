@@ -333,7 +333,7 @@ class ModelRegistry:
         Raises:
             ConfigError: the pack has no plain head tensor (e.g. a linears-only export).
         """
-        from pgw.engine.masked_head import MaskedHeadPack
+        from pgw.modelpack.masked_head import MaskedHeadPack
 
         hp = MaskedHeadPack(pack)
         spec = hp.linear_specs()[-1]
