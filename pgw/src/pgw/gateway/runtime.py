@@ -468,6 +468,8 @@ class ModelRuntime:
         #: ``fn(event, model, reason)`` called on safety events (integrity failure, noise alarm).
         self.safety_listeners: list[Callable[[str, str, str], object]] = []
         self.fingerprint: str = ""
+        #: The pack's own fingerprint with head_mode = "provider_int8" (``fingerprint`` is then the derived one).
+        self.base_fingerprint: str | None = None
         self.max_context = 0
         self.started = False
         self.started_at: float | None = None
@@ -698,6 +700,14 @@ class ModelRuntime:
                 self._fail(exc)
                 raise
             try:
+                if self.config.head_mode == "provider_int8":
+                    # the masked LM head (opt-in): the pack plus its int8 head as one more masked linear, under
+                    # the fingerprint derived here from the verified pack (the service must serve exactly that);
+                    # the float head is never loaded
+                    from pgw.engine.masked_head import MaskedHeadPack
+
+                    self.base_fingerprint = pack.fingerprint
+                    pack = MaskedHeadPack(pack, float_head=False)
                 if hasattr(pack, "check_ring"):
                     pack.check_ring(self.ring)
                 self.fingerprint = pack.fingerprint
@@ -989,7 +999,14 @@ class ModelRuntime:
         if os.environ.get("PGW_PREFILL_PROFILE", "").strip() == "1":  # prompt-pass timings (gateway-local)
             self.model.prefill_profile = {}
         head_dev = os.environ.get("PGW_LM_HEAD_DEVICE", "").strip().lower() or c.lm_head_device
-        if head_dev not in ("", "cpu"):
+        if c.head_mode == "provider_int8":  # the masked LM head: one more masked call per pass, no float head
+            from pgw.engine.masked_head import enable_masked_head
+
+            head = enable_masked_head(self.model)
+            self.lm_head_policy = {"device": "provider_int8", "linear": head.lid.key,
+                                   "fingerprint": self.fingerprint,
+                                   "base_fingerprint": getattr(self, "base_fingerprint", None)}
+        elif head_dev not in ("", "cpu"):
             from pgw.engine.lm_head_gpu import enable_gpu_lm_head
 
             self.lm_head_policy = enable_gpu_lm_head(self.model, head_dev)
@@ -1502,12 +1519,19 @@ class ModelRuntime:
             "reason": reason,
             "fingerprint": self.fingerprint,
             "fingerprint_short": short_fingerprint(self.fingerprint) if self.fingerprint else None,
+            "head_mode": self.config.head_mode,
             "ring": self.ring.name,
             "max_context": self.max_context,
             "sessions": self.admission.status(),
             "breaker": self.breaker.status(),
             "freivalds_rate": self.config.freivalds_rate if self.mode == "masked" else None,
         }
+        if self.config.head_mode == "provider_int8":
+            # the masked LM head: fingerprint is the derived one, base_fingerprint the pack's (config.fingerprint)
+            bfp = getattr(self, "base_fingerprint", None)
+            out["masked_head"] = {"linear": (f"{self.model.num_layers}.lm_head" if self.model is not None else None),
+                                  "base_fingerprint": bfp,
+                                  "base_fingerprint_short": short_fingerprint(bfp) if bfp else None}
         if self.mode == "masked":
             out["service"] = dict(self.service_info)
             out["speed"] = self._speed_status()
@@ -1715,6 +1739,13 @@ class InferenceRuntime:
         paths = list(dict.fromkeys(m.pack_path for m in masked))
         defaults: dict[str, Any] = {"pack_path": paths[0], "extra_pack_paths": tuple(paths[1:]),
                     "rings": tuple(dict.fromkeys(m.ring for m in masked))}
+        heads = {m.head_mode == "provider_int8" for m in masked}
+        if heads == {True}:  # masks for the derived masked-head packs (the in-process factory takes one setting)
+            defaults["masked_head"] = True
+        elif len(heads) > 1:
+            log.warning("masked models mix head_mode settings; the in-process factory makes masks for the base "
+                        "packs only (models with head_mode = 'provider_int8' need an external factory with "
+                        "masked_head = true)")
         run_dir = cfg.run_dir or Path(self.settings.data_dir) / "maskring"
         if cfg.factory_process:  # v2: supervised child over a private socketpair, shared sealed slabs
             import json
@@ -1727,6 +1758,7 @@ class InferenceRuntime:
                 PGW_FACTORY_EXTRA_PACK_PATHS=json.dumps([str(p) for p in defaults["extra_pack_paths"]]),
                 PGW_FACTORY_RINGS=json.dumps(list(defaults["rings"])),
                 PGW_FACTORY_STATE_DIR=str(run_dir),
+                **({"PGW_FACTORY_MASKED_HEAD": "true"} if defaults.get("masked_head") else {}),
             )
             try:  # one factory per GPU on this host (v1 embedded, v2 child) - same lock as v1
                 lock = acquire_device_lock(env.get("PGW_FACTORY_DEVICE", "auto"))

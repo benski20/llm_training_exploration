@@ -154,7 +154,71 @@ class HintStore:
     @classmethod
     def open_or_build(cls, root: Path, pack: Any, rank: int, q_bits: int = 64) -> HintStore:
         hs = cls.open(root, pack.fingerprint, rank, q_bits)
-        return hs if hs is not None else cls.build(root, pack, rank, q_bits=q_bits)
+        if hs is not None:
+            return hs
+        base_fp = getattr(pack, "base_fingerprint", None)  # a MaskedHeadPack (pgw.engine.masked_head)
+        if base_fp:
+            base = cls.open(root, str(base_fp), rank, q_bits)
+            if base is not None:
+                return cls.extend(root, base, pack, rank, q_bits=q_bits)
+        return cls.build(root, pack, rank, q_bits=q_bits)
+
+    @classmethod
+    def extend(cls, root: Path, base: HintStore, pack: Any, rank: int, *, q_bits: int = 64,
+               planes_fn: Any = None) -> HintStore:
+        """The hint of a pack whose linears are ``base``'s plus more (the masked-LM-head pack): ``base``'s files
+        hard-linked (no copy), the extra linears' ``W8 A`` computed with ``base``'s public seed. The result is
+        exactly :meth:`build` of ``pack`` with that seed (the seed was chosen by this customer for ``base``;
+        reusing a public ``A`` across linears is what one hint already does)."""
+        params = HEParams(k=16, rank=rank, q_bits=q_bits)
+        planes = q_bits // 8 - 1
+        if int(base.meta.get("q_bits", 64)) != q_bits or base.rank != rank:
+            raise ConfigError("base hint store has another rank / q")
+        final = cls.dir_for(root, pack.fingerprint, rank, q_bits)
+        tmp = final.with_name(final.name + f".building-{os.getpid()}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        t0 = time.monotonic()
+        base_keys = set((base.meta.get("row_norms") or {}).keys())
+        specs = list(pack.linear_specs())
+        extra = [s for s in specs if s.id.key not in base_keys]
+        try:
+            for s in specs:
+                if s.id.key in base_keys:
+                    src = base.path / f"{s.id.key}.npy"
+                    try:
+                        os.link(src, tmp / src.name)
+                    except OSError:  # another file system: copy
+                        shutil.copyfile(src, tmp / src.name)
+            n_max = max(s.in_features for s in specs)
+            a = public_matrix(base.a_seed, n_max, params)
+            norms = dict(base.meta.get("row_norms") or {})
+            for s in extra:
+                lw = pack.load_linear(s.id)
+                w = lw.w8.numpy() if isinstance(lw.w8, torch.Tensor) else np.asarray(lw.w8)
+                m, n = w.shape
+                norms[s.id.key] = float(np.sqrt((w.astype(np.float64) ** 2).sum(1)).max())
+                out = np.lib.format.open_memmap(tmp / f"{s.id.key}.npy", mode="w+", dtype=np.int8,
+                                                shape=(m, planes, params.dim))
+                for c0 in range(0, params.dim, _BUILD_COLS):
+                    blk = a[:n, c0:c0 + _BUILD_COLS]
+                    pl = planes_fn(w, blk) if planes_fn is not None else to_planes(matmul_mod64(w, blk))
+                    out[:, :, c0:c0 + _BUILD_COLS] = pl[:, 1:1 + planes]
+                out.flush()
+                del out, w, lw
+            meta = {**base.meta, "fingerprint": pack.fingerprint, "row_norms": norms, "created": time.time(),
+                    "extends": base.meta.get("fingerprint")}
+            (tmp / _META).write_text(json.dumps(meta, indent=1))
+            if final.exists():
+                shutil.rmtree(final)
+            tmp.rename(final)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        log.info("HE hint for %s extended from %s in %.0f s (+%d linear(s): %s)", pack.fingerprint[:12],
+                 str(base.meta.get("fingerprint"))[:12], time.monotonic() - t0, len(extra),
+                 ", ".join(s.id.key for s in extra))
+        return cls(final, meta)
 
     def hint(self, linear: str) -> np.ndarray:
         h = self._maps.get(linear)

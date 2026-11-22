@@ -245,6 +245,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     # launch.py --float-ops native: the gateway's pinned native float path (PGW_FLOAT_OPS); the reference follows it
     float_ops = (gateway_env or {}).get("PGW_FLOAT_OPS") or None
     result["float_ops"] = float_ops or "torch"
+    # launch.py --masked-head: the LM head as a masked linear (head_mode = "provider_int8"); the reference follows it
+    masked_head = (gateway_env or {}).get("PGW_MODAL_MASKED_HEAD", "0") == "1"
+    result["masked_head"] = masked_head
     # launch.py --gateway-gpu: one GPU per party (provider: the first, gateway: the second), else the gateway has none
     gsplit: dict = {}
     if os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1":
@@ -317,6 +320,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             # and its LM head too (the CPU kernel's fixed summation order as one GPU kernel: the same logits bit
             # for bit, self-checked at start-up, else the CPU; PGW_LM_HEAD_DEVICE=cpu via --gateway-env turns it off)
             gdev = {"local_linears_device": "cuda", "lm_head_device": "cuda"} if gsplit.get("gateway") else {}
+            if masked_head:  # no float head on the gateway at all: the head is one more masked linear
+                gdev = {k: v for k, v in gdev.items() if k != "lm_head_device"}
+                gdev["head_mode"] = "provider_int8"
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
@@ -343,7 +349,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
                                                spec_rows=spec_rows, sustain_s=sustain_s,
                                                sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"),
-                                               float_threads=pin, float_ops=float_ops,
+                                               float_threads=pin, float_ops=float_ops, masked_head=masked_head,
                                                # --gateway-env PGW_MODAL_AB=base,pin,...: in-run A/B diagnostics
                                                ab=boot.ab_phases((gateway_env or {}).get("PGW_MODAL_AB", "")),
                                                ab_cleanup=boot.ab_cleanup,

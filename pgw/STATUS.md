@@ -297,8 +297,8 @@ per token (66.6 MB of Freivalds vectors and 6.7 MB of r keystream per token domi
 - **Masked remote LM head (opt-in)**: `pgw.engine.masked_head` (`MaskedHeadPack`, `enable_masked_head`), linear
   `"<L>.lm_head"` (new `LinearKind.LM_HEAD`, never in `LINEAR_ORDER`), int8 per-row head, domain-separated
   fingerprint, every row range- and Freivalds-checked (synchronously: the last linear). New pinned reference
-  (int8 head); masked == plain bit for bit in `tests/engine/test_masked_head.py`. Library API only (service, factory
-  CLI and gateway runtime not wired).
+  (int8 head); masked == plain bit for bit in `tests/engine/test_masked_head.py`. Wired end to end, opt-in (package
+  W3, below): gateway `head_mode = "provider_int8"`, service `masked_head = "also"|"only"`, factory `masked_head`.
 - AVX2 Freivalds output half (identical results): gate_up 140 -> 47 us, 7B head 668 -> 470 us per call.
 - `PGW_EMBED_COMPACT=1` (opt-in): bfloat16-exact embedding table kept in bfloat16 (2.18 -> 1.09 GB RAM at 7B).
 - Storage at 7B (K32): 0 linear weights, 1.09 GB embeddings, 6.17 MB of `W r` per token (185 MB/s at 30 tokens/s;

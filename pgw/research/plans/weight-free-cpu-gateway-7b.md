@@ -19,9 +19,9 @@ confidential VM) in the provider's region, the customer premises a thin client.
   its check is synchronous before the logits are sampled) and releases the float head (1.09 GB at 7B).
   The logits are those of the int8 head: a **new pinned reference** (like `float_ops = "native"`). Tests
   (`tests/engine/test_masked_head.py`): masked == plain bit for bit (sync, async, TripEngine one-call path),
-  a tampered head result is refused, close to the float head (same argmax on the tiny model). Library API
-  only: the service registry, factory CLI and gateway runtime do not wire it (both parties must wrap the
-  same pack).
+  a tampered head result is refused, close to the float head (same argmax on the tiny model). Since wired
+  end to end, opt-in (see section 7): gateway `head_mode = "provider_int8"`, service `masked_head`, factory
+  `masked_head`, Modal `launch.py --masked-head`.
 * **AVX2 Freivalds output half** (`trip.rs`: `fo_run` dispatches an AVX2 build; wrapping integer arithmetic,
   identical results). Warm, per call: gate_up 140 -> 47 us, qkv 17 -> 9 us, the 7B head 668 -> 470 us.
 * **`PGW_EMBED_COMPACT=1`** (opt-in): a bfloat16-exact embedding table stays bfloat16 in RAM (1.09 instead of

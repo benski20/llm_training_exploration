@@ -542,6 +542,10 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
         genv.setdefault("PGW_GATEWAY_PRIME_CHECK", "true")
     if (getattr(args, "mask_source", None) or "factory") != "factory":  # hook (pgw_modal_boot.mask_source_env)
         genv["PGW_MODAL_MASK_SOURCE"] = args.mask_source
+    if getattr(args, "masked_head", False):  # the masked LM head: service, factory and gateway model option
+        penv.setdefault("PGW_SERVICE_MASKED_HEAD", "also")
+        genv["PGW_MODAL_MASKED_HEAD"] = "1"
+        genv.setdefault("PGW_FACTORY_MASKED_HEAD", "true")
     if getattr(args, "ab_plain", None) is not None:  # in-run A/B: the same run again without speculation
         genv["PGW_MODAL_AB_PLAIN"] = f"{float(args.ab_plain):g}"
     if getattr(args, "he_bulk", False):  # --he-bulk: the provider's bulk maskgen channel, used by the factory
@@ -882,6 +886,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--placement colocated: one-vector Freivalds check over F_p (factory "
                          "PGW_FACTORY_CHECK_FIELD=p31, gateway PGW_GATEWAY_PRIME_CHECK). Not with --spec-mask: padding "
                          "rows refuse prime extents")
+    ap.add_argument("--masked-head", action="store_true",
+                    help="--placement colocated: the masked LM head (opt-in; head_mode = 'provider_int8'): the "
+                         "provider serves each pack also under its derived masked-head fingerprint "
+                         "(PGW_SERVICE_MASKED_HEAD=also; the int8 head derived from its own pack), the gateway's "
+                         "factory makes masks for it (PGW_FACTORY_MASKED_HEAD; its hint extends the base hint), the "
+                         "gateway sends the head as one more masked linear per pass and never loads the float head, "
+                         "and the e2e's plaintext reference uses the same int8 head (a new pinned reference). "
+                         "Memory: provider +vocab x hidden int8 (0.55 GB at 7B), gateway -1.09 GB (bf16 head) at 7B")
     ap.add_argument("--ab-plain", type=float, default=None, metavar="SUSTAIN_S",
                     help="--e2e --placement colocated --spec-rows: after the speculative phase, restart the gateway "
                          "without speculation (same pack, mask store, keys) and measure plain decoding in the same "
@@ -1003,6 +1015,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.spec_pipeline_steps is not None and not 0 <= args.spec_pipeline_steps <= max(0, args.spec_rows - 1):
         ap.error("--spec-pipeline-steps must be in [0, --spec-rows - 1]")
     colo_only = {"--trip-native": args.trip_native, "--prime-check": args.prime_check,
+                 "--masked-head": args.masked_head,
                  "--ab-plain": args.ab_plain is not None, "--gateway-cache": args.gateway_cache,
                  "--gateway-cpus": args.gateway_cpus is not None, "--gateway-mem-gib": args.gateway_mem_gib is not None,
                  "--provider-mem-gib": args.provider_mem_gib is not None}

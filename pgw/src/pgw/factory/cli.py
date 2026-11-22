@@ -377,6 +377,10 @@ def status_cmd(packs: tuple[Path, ...], as_json: bool, low_water: int | None, ta
     plan_only: dict[tuple[str, str], Any] = {}
     for p in pack_paths:
         pack = ModelPack.open(p, verify="fingerprint", components=("linears",))
+        if s.masked_head:  # segments are made for the derived masked-head fingerprint
+            from pgw.engine.masked_head import MaskedHeadPack
+
+            pack = MaskedHeadPack(pack)
         specs = pack.linear_specs()
         for r in s.ring_names:
             rp = RingParams.from_name(r)

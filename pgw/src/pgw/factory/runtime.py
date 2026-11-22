@@ -57,12 +57,19 @@ def open_store(store_settings: Any = None, **overrides: Any) -> Any:
 
 
 def open_packs(settings: FactorySettings) -> list[Any]:
-    """Open every configured pack with ``components=("linears",)`` and full verification."""
+    """Open every configured pack with ``components=("linears",)`` and full verification (``masked_head``: wrapped
+    in :class:`pgw.engine.masked_head.MaskedHeadPack`, whose head is derived from the hash-checked plain head)."""
     from pgw.modelpack import ModelPack
 
     packs = []
     for p in settings.all_pack_paths:
-        pack = ModelPack.open(p, verify="full", components=("linears",))
+        pack: Any = ModelPack.open(p, verify="full", components=("linears",))
+        if getattr(settings, "masked_head", False):
+            from pgw.engine.masked_head import MaskedHeadPack
+
+            base_fp = pack.short_fingerprint
+            pack = MaskedHeadPack(pack)
+            log.info("factory: masked LM head on: masks for %s (derived from %s)", pack.short_fingerprint, base_fp)
         log.info("factory loaded pack %s (%s) from %s", pack.name, pack.short_fingerprint, Path(p).name)
         packs.append(pack)
     return packs

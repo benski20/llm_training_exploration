@@ -116,6 +116,13 @@ class FactorySettings(PGWSettings):
         "true = on (still self-tested; never used when the test fails). Needs self_check_rows != 0 (the output "
         "self-check re-derives sampled r rows on the CPU). Same derivation and output",
     )
+    masked_head: bool = Field(
+        False, description="Masks for the masked LM head (opt-in; pgw.engine.masked_head): every pack is wrapped in "
+        "MaskedHeadPack, so segments are made for its derived fingerprint and carry the head linear "
+        "'<num_layers>.lm_head' (its int8 weight derived here from the pack's hash-checked plain head; the pack "
+        "needs its plain tensors). For gateways with head_mode = 'provider_int8'. The encrypted factory extends "
+        "the base pack's hint (same public seed) instead of rebuilding it. Default off",
+    )
     skip_linear_kinds: str = Field(
         "", description="Comma-separated linear kinds (qkv, o, gate_up, down) whose masks are NOT generated: "
         "opt-in, for gateways whose local_linears is fixed in configuration (e.g. 'attention' with local_max_rows "

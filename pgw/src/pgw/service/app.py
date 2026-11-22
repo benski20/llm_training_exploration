@@ -93,7 +93,8 @@ class ServiceState:
             "loaded": self.loaded,
             "draining": self.draining,
             "models": [
-                {"name": m.name, "fp": m.short_fingerprint, "rings": list(m.rings), "devices": m.devices()}
+                {"name": m.name, "fp": m.short_fingerprint, "rings": list(m.rings), "devices": m.devices(),
+                 **({"masked_head": True, "base_fp": m.base_fingerprint[:12]} if m.base_fingerprint else {})}
                 for m in self.registry.models()
             ],
             "inflight": self.handler.inflight,
@@ -171,6 +172,7 @@ def _build_state(
             verify=s.verify_packs, cache_float=s.cache_float_weights, warmup=s.warmup,
             cuda_graphs=s.cuda_graphs, cuda_graph_buckets=s.cuda_graph_buckets, triton_gemv=s.triton_gemv,
             tp_devices=s.tp_devices or None,
+            masked_head=s.masked_head,
         )
     has_creds = s.tokens_file is not None or s.mtls_tenants_file is not None
     if authenticator is None and (has_creds or not s.allow_unauthenticated):
@@ -293,8 +295,15 @@ def create_app(
         from pgw.enroll.service import add_enroll_routes
 
         def _served() -> list[dict[str, Any]]:
-            return [{"name": m.name, "fingerprint": m.fingerprint, "rings": list(m.rings), "pack_path": m.pack_path}
-                    for m in state.registry.models()]
+            # enrollment names packs by their own (manifest) fingerprint: a masked-head entry is listed as its base
+            # pack (the gateway derives the head fingerprint itself), once
+            out: dict[str, dict[str, Any]] = {}
+            for m in state.registry.models():
+                fp = m.base_fingerprint or m.fingerprint
+                e = out.setdefault(fp, {"name": m.name, "fingerprint": fp, "rings": list(m.rings),
+                                        "pack_path": m.pack_path, "masked_head": False})
+                e["masked_head"] = bool(e["masked_head"] or m.base_fingerprint)
+            return list(out.values())
 
         add_enroll_routes(app, s, state.handler.authenticator, _served)
 
