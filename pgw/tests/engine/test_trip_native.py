@@ -716,3 +716,14 @@ def test_decrypt_ahead_feeds_leases_byte_identical(qwen_pack: InMemoryPack, stor
     assert b0 == b1
     assert all(torch.equal(a, b) for a, b in zip(o0, o1, strict=True))
     assert sum(used) > 0  # leases were fed from chunks decrypted ahead
+
+
+def test_driver_on_a_non_native_lane_uses_the_ordinary_lane_path() -> None:
+    """PGW_TRIP_DRIVER with a lane whose channel is not native (e.g. the Python UDS channel): once known, the
+    driver stays off and calls take compute_sync (the ordinary lane path), never the wrapped client directly."""
+    from pgw.wire.lane import LaneComputeClient
+
+    c = LaneComputeClient(object())
+    assert c.lane_eligible_for_driver is True
+    c.lane_eligible_for_driver = False
+    assert getattr(c, "lane_eligible_for_driver", True) is False

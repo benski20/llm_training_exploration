@@ -4345,13 +4345,18 @@ class MaskedBackend(LinearBackend):
         if prep.request is None:
             return self._finish(prep, None, 0.0)
         t0 = time.perf_counter()
-        drive = self.trip_driver and prep.ticket is not None and hasattr(self.client, "trip_ticket")
+        drive = (self.trip_driver and prep.ticket is not None and hasattr(self.client, "trip_ticket")
+                 and getattr(self.client, "lane_eligible_for_driver", True))
         if drive:
             done = self._finish_lease(prep, None, 0.0, drive=True)
             if done is not None:
                 return done
         try:
-            if drive:
+            if drive and not getattr(self.client, "lane_eligible_for_driver", True):
+                # the lane's channel cannot take the driver (e.g. the Python UDS channel): use the ordinary
+                # lane path, which still serves the call on the lane (same request bytes and id)
+                response = self.client.compute_sync(prep.request)
+            elif drive:
                 response = self.client.fallback_sync(prep.request)
             elif hasattr(self.client, "compute_sync"):
                 response = self.client.compute_sync(prep.request)

@@ -602,6 +602,9 @@ class LaneComputeClient:
     def __init__(self, client: Any, config: LaneConfig | None = None, *,
                  channel_factory: Callable[[LaneTicket, bytearray], Any] | None = None):
         self._client = client
+        #: False once a lane channel turned out not to be native: the per-trip driver (PGW_TRIP_DRIVER) then
+        #: stays off and calls use the ordinary lane path.
+        self.lane_eligible_for_driver = True
         self.lane_config = config or LaneConfig()
         self.lane_stats = LaneStats(native=native_channel_class() is not None and self.lane_config.native is not False)
         self._factory = channel_factory or (lambda t, s: open_channel(t, s, client.config, self.lane_config))
@@ -917,6 +920,10 @@ class LaneComputeClient:
         cls = native_channel_class()
         if rows > int(ch.max_rows) or cls is None or not isinstance(ch, cls):
             self._release(ch, gen)
+            if rows <= int(ch.max_rows):
+                # not a native channel: the driver can never use this lane; the caller then sends the call on
+                # the ordinary lane path (compute_sync), not on the wrapped client
+                self.lane_eligible_for_driver = False
             self.lane_stats._fallback("ineligible:rows" if rows > int(ch.max_rows) else "ineligible:channel")
             return None
         t0 = time.monotonic()
