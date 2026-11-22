@@ -16,8 +16,8 @@
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
 //! | [`lane_service`] | chat-speed WP-A1: Python bindings of the service trip lane (`rust/pgw-lane`): `LaneService`, `LaneDeviceLock` |
 //! | [`trip`] | stub (chat-speed WP-A4a): `prepare_into` / `finish_into` for the TripEngine; registers nothing yet |
-//! | [`layer`] | stub (chat-speed WP-B1): opt-in native deterministic layer float path; registers nothing yet |
-//! | [`attn`] | stub (chat-speed WP-B1): opt-in row-deterministic attention; registers nothing yet |
+//! | [`layer`] | opt-in pinned float formulation (`float_ops = "native"`): RMSNorm, residual add + RMSNorm, SiLU gate (fixed order, no FMA, no libm) |
+//! | [`attn`] | opt-in row-deterministic attention over the KV cache, fused with RoPE and the cache write (`float_ops = "native"`) |
 //!
 //! Every function is bit-identical to the Python path (tests in `pgw/tests/native/`), takes numpy
 //! arrays / bytes without copying, and releases the GIL while it computes.

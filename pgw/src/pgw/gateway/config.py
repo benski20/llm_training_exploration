@@ -61,7 +61,6 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
 #: speculation) that silently does not happen. The implementing package removes its entry.
 PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "float_ops": "WP-B1 (native deterministic float path)",
     "head_mode": "WP-B2 (provider int8 LM head)",
     "schedule": "WP-B4 (fused2 schedule)",
     "prefix_cache": "WP-B3 (prefix cache)",
@@ -306,8 +305,9 @@ class GatewayModelConfig(BaseModel):
     )
     float_ops: Literal["torch", "native"] = Field(
         "torch", description="Gateway plaintext float path (norms, RoPE, attention): 'torch' (default, today's "
-        "reference); 'native' = the deterministic native path with row-deterministic attention (a new reference: "
-        "logits differ from 'torch' in the last bits)",
+        "reference); 'native' = the pinned native formulation (pgw_fast: fixed-order RMSNorm, SiLU and "
+        "row-deterministic attention; a new reference: logits differ from 'torch' in the last bits, so the plaintext "
+        "reference compared against must use it too, e.g. PGW_FLOAT_OPS=native). Unset: PGW_FLOAT_OPS or 'torch'",
     )
     head_mode: Literal["gateway", "provider_int8"] = Field(
         "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "
