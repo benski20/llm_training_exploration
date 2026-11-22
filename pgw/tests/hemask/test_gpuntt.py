@@ -175,8 +175,8 @@ def test_triton_kernels_in_interpreter():
     env = dict(os.environ, TRITON_INTERPRET="1")
     src = os.path.join(os.path.dirname(G.__file__), "..", "..")
     env["PYTHONPATH"] = os.path.abspath(src) + os.pathsep + env.get("PYTHONPATH", "")
-    res = subprocess.run([sys.executable, "-c", _INTERP], env=env, capture_output=True, text=True, timeout=900)
-    if "triton_available" in res.stderr or "AssertionError" in res.stderr and "TRITON" in res.stderr:
+    res = subprocess.run([sys.executable, "-c", _INTERP], env=env, capture_output=True, text=True, timeout=900)  # noqa: S603
+    if "triton_available" in res.stderr or ("AssertionError" in res.stderr and "TRITON" in res.stderr):
         pytest.skip(f"triton interpreter unavailable: {res.stderr[-300:]}")
     assert res.returncode == 0 and "OK" in res.stdout, res.stderr[-2000:]
 

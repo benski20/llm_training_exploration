@@ -155,6 +155,15 @@ def test_backend_ntt_dev_exact(q_bits: int, monkeypatch: pytest.MonkeyPatch) -> 
         got = be.matmul(key, torch.from_numpy(r))
         assert np.array_equal(got.numpy(), _ref_wr(w.astype(np.int64), r, ring.k))
     assert calls
+    # a failing device hint product (e.g. out of device memory) falls back to the CPU product, same bits
+
+    def _boom(*a: object, **k: object) -> None:
+        raise RuntimeError("device out of memory")
+
+    monkeypatch.setattr(be._ntt_dev, "hint_mm", _boom)
+    r = rng.integers(0, 1 << ring.k, size=(77, 160), dtype=np.int64)
+    got = be.matmul("b", torch.from_numpy(r))
+    assert np.array_equal(got.numpy(), _ref_wr(weights["b"].astype(np.int64), r, ring.k))
     monkeypatch.setattr(ntt_dev, "_TESTED", {})
     monkeypatch.setattr(ntt_dev, "self_test", lambda *a, **k: False)
     fb = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider, encrypt="ntt_dev", device="cpu")

@@ -719,7 +719,7 @@ def gpu_ntt_for(a: np.ndarray, params: HEParams, device: str | None = "auto",
     :func:`self_test`, else ``None`` (the caller falls back to the CPU paths)."""
     if device in (None, "auto"):
         if not torch.cuda.is_available():
-            log.warning("he_encrypt='ntt_gpu': no CUDA device; falling back to the CPU path")
+            log.warning("GPU NTT engine (pgw.hemask.gpuntt): no CUDA device; falling back to the CPU path")
             return None
         device = "cuda"
     dev = torch.device(device)
@@ -729,7 +729,7 @@ def gpu_ntt_for(a: np.ndarray, params: HEParams, device: str | None = "auto",
     try:
         return GpuNTTHE(a, params, dev, **kw)
     except Exception as exc:  # out of device memory for A in NTT form, ...
-        log.error("he_encrypt='ntt_gpu': could not start the GPU NTT engine (%s); falling back to the CPU path",
+        log.error("GPU NTT engine (pgw.hemask.gpuntt) could not start (%s); falling back to the CPU path",
                   exc)
         return None
 

@@ -343,8 +343,12 @@ class HEMaskBackend:
         smat = np.concatenate([ct.secret for it in items for ct in it[1]], axis=1)
         try:
             nat = None
+            corr = None
             if self._ntt_dev is not None and hint.ndim == 3 and _ntt_dev_decrypt():
-                corr = self._ntt_dev.hint_mm(hint, smat, first_byte=1)  # H S on the device NTT, same bits
+                try:
+                    corr = self._ntt_dev.hint_mm(hint, smat, first_byte=1)  # H S on the device NTT, same bits
+                except Exception as e:  # e.g. device out of memory: the CPU product below gives the same bits
+                    log.warning("device NTT hint product failed (%s); using the CPU product", e)
             # Fused native path first: on an AMX host it measured faster than the NTT product (115 vs 153 ms for a
             # 0.5B gate_up group of 1024 slots, bit-identical); the NTT product serves hosts without it.
             elif hint.ndim == 3 and engine() == "cpu_int8":
@@ -354,7 +358,7 @@ class HEMaskBackend:
             if nat is not None:
                 self._decrypt_native(nat, hint, smat, items, out)
                 return
-            if self._ntt_dev is None or hint.ndim != 3 or not _ntt_dev_decrypt():
+            if corr is None:
                 corr = big_planes_mm_small(hint, smat, first_byte=1)
         finally:
             smat.fill(0)
