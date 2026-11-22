@@ -33,9 +33,9 @@ pub(crate) fn verr(s: impl Into<String>) -> PyErr {
     PyValueError::new_err(s.into())
 }
 
-const LN2_HI: f64 = 6.931_471_803_691_238_164_90e-01; // upper bits of ln 2 (k * LN2_HI exact for |k| < 2^20)
-const LN2_LO: f64 = 1.908_214_929_270_587_700_02e-10;
-const LOG2E: f64 = std::f64::consts::LOG2_E;
+pub(crate) const LN2_HI: f64 = 6.931_471_803_691_238_164_90e-01; // upper bits of ln 2 (k * LN2_HI exact for |k| < 2^20)
+pub(crate) const LN2_LO: f64 = 1.908_214_929_270_587_700_02e-10;
+pub(crate) const LOG2E: f64 = std::f64::consts::LOG2_E;
 
 /// `e^x` in float64 from IEEE operations only (no libm, no FMA, no branches, so it vectorizes):
 /// `x = k ln2 + r`, `|r| <= ln2 / 2` (`k` rounded to nearest-even by adding `1.5 * 2^52`), a degree-12
@@ -93,6 +93,7 @@ macro_rules! isa_dispatch {
         }
     };
 }
+#[allow(unused_imports)]
 pub(crate) use isa_dispatch;
 
 /// `sum x_i^2` in float64: 8 lane sums (`i mod 8`, in order), then `((l0+l1)+(l2+l3))+((l4+l5)+(l6+l7))`.

@@ -96,10 +96,14 @@ class KVCache:
 
     def numpy_views(self) -> tuple[Any, Any]:
         """``(k, v)`` numpy views ``(layers, capacity, kvh, hd)`` of the storage (CPU only; the native float
-        path writes a pass's keys and values into them). Valid until :meth:`reserve` grows the storage."""
+        path writes a pass's keys and values into them; a bfloat16 cache as ``uint16`` bit patterns). Valid
+        until :meth:`reserve` grows the storage."""
         hit = self._np
         if hit is None or hit[0] is not self._k:
-            hit = self._np = (self._k, self._k.numpy(), self._v.numpy())
+            if self.dtype == torch.bfloat16:  # numpy has no bfloat16: the bit patterns as uint16
+                hit = self._np = (self._k, self._k.view(torch.uint16).numpy(), self._v.view(torch.uint16).numpy())
+            else:
+                hit = self._np = (self._k, self._k.numpy(), self._v.numpy())
         return hit[1], hit[2]
 
     def append(self, layer: int, k: torch.Tensor, v: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

@@ -51,7 +51,8 @@ from pgw.engine.pack import linear_split_sizes
 from pgw.engine.rope import RotaryEmbedding, apply_rope
 
 __all__ = [
-    "FloatOps", "GatewayHead", "HeadMode", "NativeFloatOps", "PassState", "Schedule", "SequenceInput",
+    "FLOAT_OPS_NAMES", "FloatOps", "GatewayHead", "HeadMode", "NativeFloatOps", "PassState", "Schedule",
+    "SequenceInput",
     "StandardSchedule", "TorchFloatOps", "TransformerModel",
     "causal_self_check", "float_threads_self_check", "native_float_available", "rms_norm",
 ]
@@ -526,6 +527,17 @@ def _np32(t: torch.Tensor) -> Any:
     return t.numpy()
 
 
+#: Float path names (``TransformerModel.set_float_ops``, gateway ``float_ops``): ``torch`` (default) and the
+#: pinned native formulations. ``-blocked``: the v2 attention (fixed 256-position blocks merged in block
+#: order; parallel over KV heads and blocks; v1 bits whenever the prefix fits in one block). ``-bf16kv``: the
+#: KV cache stored as bfloat16 (rounded to nearest even when written; half the bytes). Each name is its own
+#: reference: the gateway and its plaintext reference must select the same one.
+FLOAT_OPS_NAMES = ("torch", "native", "native-blocked", "native-bf16kv", "native-blocked-bf16kv")
+
+#: Block size (positions) of the v2 ("blocked") native attention: part of the pinned formulation.
+NATIVE_ATTN_BLOCK = 256
+
+
 class NativeFloatOps(FloatOps):
     """The pinned native float formulation of a layer (``float_ops = "native"``; opt-in).
 
@@ -539,21 +551,50 @@ class NativeFloatOps(FloatOps):
     the residual adds are torch's bits), so the gateway and the plaintext reference must both use it;
     logits stay within the HF closeness tolerances. The final norm before the LM head (``rms_norm`` /
     ``norm_rows`` of this class) stays torch's. CPU and float32 only.
+
+    Attention variants (each a separate pinned reference, see :data:`FLOAT_OPS_NAMES`): ``attn_block`` 0 =
+    v1 (``j``-order sums over the whole prefix), ``B > 0`` = v2 (blocks of ``B`` positions; ``pgw`` pins
+    :data:`NATIVE_ATTN_BLOCK`); ``kv_bf16``: bfloat16 KV storage. ``attn_threads`` (env
+    ``PGW_ATTN_THREADS``; 0 = automatic: one thread for decode-sized passes) only changes speed: the units
+    (row, KV head, block) are merged in a fixed order, so the bits are the same for any thread count.
     """
 
     name = "native"
 
-    def __init__(self) -> None:
+    def __init__(self, attn_block: int = 0, kv_bf16: bool = False, attn_threads: int | None = None) -> None:
         if not native_float_available():
             raise ConfigError("float_ops='native' needs the pgw_fast native extension with the float path "
                               "(rust/tools/build_fast.py)")
+        if attn_block < 0:
+            raise ConfigError("attn_block must be >= 0")
+        if (attn_block or kv_bf16) and not native.native_available("float_rope_attend_bf16"):
+            raise ConfigError("blocked attention / bf16 KV storage need a newer pgw_fast (rebuild it)")
         self.fast = native.fast
+        self.attn_block = int(attn_block)
+        self.kv_bf16 = bool(kv_bf16)
+        if attn_threads is None:
+            attn_threads = _env_int("PGW_ATTN_THREADS") or 0
+        self.attn_threads = max(0, int(attn_threads))
+        self.name = "native" + ("-blocked" if self.attn_block else "") + ("-bf16kv" if self.kv_bf16 else "")
+
+    @property
+    def kv_dtype(self) -> torch.dtype:
+        """Storage dtype of the KV cache this formulation reads."""
+        return torch.bfloat16 if self.kv_bf16 else torch.float32
+
+    def _kw(self) -> dict[str, int]:
+        # an older pgw_fast (v1 only, no keywords) still serves the default formulation
+        if self.attn_block or self.attn_threads:
+            return {"threads": self.attn_threads, "block": self.attn_block}
+        return {}
 
     def attention(self, model: TransformerModel, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
                   start: int) -> torch.Tensor:
         t = int(q.shape[0])
         out = torch.empty((t, int(q.shape[1]) * int(q.shape[2])), dtype=torch.float32)
-        self.fast.float_attend(_np32(q), _np32(k), _np32(v), int(start), float(model.scale), out.numpy())
+        # a bf16 cache widens to float32 exactly: the same bits as the native bf16 cache path
+        self.fast.float_attend(_np32(q), _np32(k), _np32(v), int(start), float(model.scale), out.numpy(),
+                               **self._kw())
         return out
 
     def silu_mul(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
@@ -819,19 +860,22 @@ class TransformerModel:
         )
 
     def set_float_ops(self, name: str) -> None:
-        """Select the float path by name: ``"torch"`` (default, today's reference) or ``"native"``
-        (:class:`NativeFloatOps`, a new pinned reference; CPU float32 models only). The gateway and its
-        plaintext reference must select the same one (``PGW_FLOAT_OPS`` sets it at load)."""
+        """Select the float path by name: ``"torch"`` (default, today's reference) or a native formulation
+        (:class:`NativeFloatOps`, a new pinned reference; CPU float32 models only): ``"native"``,
+        ``"native-blocked"`` (v2 blocked attention), ``"native-bf16kv"`` / ``"native-blocked-bf16kv"``
+        (bfloat16 KV storage). The gateway and its plaintext reference must select the same one
+        (``PGW_FLOAT_OPS`` sets it at load). Caches made afterwards by :meth:`new_cache` use its KV dtype."""
         name = (name or "torch").strip().lower()
         if name == "torch":
             self.float_ops = None
             return
-        if name != "native":
-            raise ConfigError(f"unknown float_ops {name!r} (torch or native)")
+        if name not in FLOAT_OPS_NAMES:
+            raise ConfigError(f"unknown float_ops {name!r} (one of {', '.join(FLOAT_OPS_NAMES)})")
         if self.device.type != "cpu" or self.dtype != torch.float32:
             raise ConfigError("float_ops='native' needs a CPU float32 model")
-        self.float_ops = NativeFloatOps()
-        log.info("float ops: native pinned formulation (RMSNorm, RoPE, attention, SiLU in pgw_fast)")
+        self.float_ops = NativeFloatOps(attn_block=NATIVE_ATTN_BLOCK if "-blocked" in name else 0,
+                                        kv_bf16=name.endswith("-bf16kv"))
+        log.info("float ops: %s pinned formulation (RMSNorm, RoPE, attention, SiLU in pgw_fast)", name)
 
     @property
     def supports_pad_rows(self) -> bool:
@@ -876,7 +920,9 @@ class TransformerModel:
     def new_cache(self, max_len: int | None = None) -> KVCache:
         """Empty KV cache sized for this model (``max_len`` defaults to the model context length)."""
         cap = max_len if max_len is not None else self.arch.max_position_embeddings
-        return KVCache(self.num_layers, self.num_kv_heads, self.head_dim, cap, self.dtype, self.device,
+        ops = self.float_ops
+        dtype = ops.kv_dtype if isinstance(ops, NativeFloatOps) else self.dtype
+        return KVCache(self.num_layers, self.num_kv_heads, self.head_dim, cap, dtype, self.device,
                        initial_len=min(cap, 256))
 
     # ---- forward -------------------------------------------------------------------------------
@@ -1245,9 +1291,14 @@ class TransformerModel:
         for si, y in enumerate(qkv):
             rows = int(y.shape[0])
             out = torch.empty((rows, nh * self.head_dim), dtype=f32)
-            kc, vc = caches[si].numpy_views()
+            cache = caches[si]
+            if (cache.dtype == torch.bfloat16) != ops.kv_bf16:
+                raise ConfigError(f"KV cache dtype {cache.dtype} does not match float_ops {ops.name!r} (make caches "
+                                  "with new_cache after set_float_ops)")
+            kc, vc = cache.numpy_views()
             cos, sin = rope_np[si]
-            fast.float_rope_attend(_np32(y), cos, sin, kc, vc, layer, starts[si], nh, self.scale, out.numpy())
+            attend = fast.float_rope_attend_bf16 if ops.kv_bf16 else fast.float_rope_attend
+            attend(_np32(y), cos, sin, kc, vc, layer, starts[si], nh, self.scale, out.numpy(), **ops._kw())
             attn_out.append(out)
         o = yield [LinearCall(lid_o, x, sess) for x, sess in zip(attn_out, sessions, strict=True)]
         hs2, normed = [], []

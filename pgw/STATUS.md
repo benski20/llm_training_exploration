@@ -101,6 +101,38 @@ weights (no HE, no hint). Up to 14B the CPU-only encrypted factory stays the def
   no route to the provider.
 - Not done: the gateway's in-memory mask ring is not fed by the mask service directly (segments go through the
   encrypted store, whose volume bandwidth binds at 72B); no real GPU instance (L4/A10G) measured; no cloud apply.
+## Update 2026-11-22: parallel, deterministic gateway attention (v2 "blocked") and bf16 KV storage (opt-in, local)
+
+The bound at 32B-72B (gateway attention over the private KV cache) now has a parallel native kernel. Defaults are
+unchanged (`float_ops="torch"`; `"native"` keeps its bits). Code: `rust/pgw-fast/src/attn.rs`,
+`NativeFloatOps` / `FLOAT_OPS_NAMES` in `engine/model.py`; tests: `tests/engine/test_native_attention_v2.py`,
+`attn.rs` unit tests; benchmark: `benchmarks/attn_cpu_bench.py`.
+
+- **Engine**: units (row, KV head, 256-position block) run on a persistent pool. Per-block partial sums (den in
+  float64, acc in float32, each from 0 in position order) are merged in block order. The bits therefore do not
+  depend on the thread count, the ISA (explicit AVX-512 and AVX2 kernels: the same 16-lane dot and tree, a
+  vector `exp_f64`, no FMA) or the rows per pass. `float_ops="native-blocked"` is the new pinned formulation (v2);
+  plain `"native"` (v1) runs on the same engine with one block per row: the same bits as before, now also
+  parallel over KV heads. v2 equals v1 whenever the prefix fits in one block (< 256 positions). `PGW_ATTN_THREADS`
+  sets the thread count (0 = automatic, as before).
+- **bf16 KV** (`"native-bf16kv"`, `"native-blocked-bf16kv"`; each its own reference): the cache stores bfloat16,
+  rounded to nearest even like torch's `.to(torch.bfloat16)`, and widens exactly to float32 when read. Half
+  the bytes. Quality on Qwen2.5-0.5B is **not measured yet**. The check `test_bf16_kv_quality_qwen05b` (max |delta
+  logprob| of the float32-KV top-1 token and top-1 agreement over about 570 positions, 3 blocks; also v2 vs v1)
+  is written, but the memory cgroup killed it twice on this shared box. On the tiny models, bf16 KV stays within
+  2e-2 of HF.
+- **Exactness, tested**: 1-7 threads and ISA caps AVX-512/AVX2/scalar give identical logits; R-row prompt and
+  verify passes equal 1-row decoding; masked == plain (tokens and logprobs); speculation identical; HF
+  closeness at 1e-4 (2e-2 with bf16 KV); v2 vs v1 within 1e-5; v1 equals the original kernel bit for bit
+  (Rust test against the kept `attend_row_ref`). 74 engine tests pass with the new extension.
+- **Speed** (this box: 4 shared vCPUs with load average 45-52 from other jobs, so wall clocks are about 3x CPU time
+  and thread scaling cannot be measured cleanly; numbers are single-thread CPU time per layer, decode row):
+  72B at 2k context, v2: 4.3 ms float32 KV (15.6 GFLOP/s, 3.9 GB/s per core), 3.3 ms bf16 KV (20.5 GFLOP/s); v1
+  engine: 8.1 ms. The pre-SIMD build of the same engine took 11.7 ms. 8k context: 19.6 ms float32 / 15.3 ms bf16
+  (v1 36.2 ms). 7B at 2k: 2.0 / 1.6 ms. The best 4-thread wall time was 2.5x the 1-thread time (7B at 512 and
+  2k). **Extrapolation** at 15-20 GFLOP/s per core: 600 GFLOP/s needs about 30-40 cores, so the target is not
+  shown on this box. A 72B row at 2k has 64 units, and 256 at 8k: enough parallelism for 48 cores. Next: measure
+  on an idle 16-48 core VM (`attn_cpu_bench.py --threads 1,8,16,32`).
 
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
