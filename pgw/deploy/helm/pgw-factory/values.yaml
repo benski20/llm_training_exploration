@@ -120,6 +120,33 @@ config:
   factoryId: ""                # recorded in segment headers; default = release name
   extraEnv: {}
 
+# Horizontal scale-out (pgw.factory.fleet, PGW_FACTORY_WORKERS): worker processes in this pod feeding
+# the store concurrently. They coordinate through an in-flight ledger under the store volume
+# (<store>/masks/fleet), so together they stop at targetSlots; the store itself serialises
+# registration and hand-out (no slot is ever handed out twice). With gpu.enabled, set gpu.count to the
+# number of GPUs and devices to one entry per GPU (worker k uses devices[k % len]).
+# config.cpuThreads is split across the workers. Worker k serves /metrics on metrics.port + k; the
+# probes and the ServiceMonitor use worker 0 (a dead worker is restarted by the in-pod supervisor).
+scaleOut:
+  workers: 1
+  devices: []                  # e.g. [cuda:0, cuda:1]
+
+# Encrypted mask generation (pgw.hemask): the provider multiplies MLWE-encrypted masks; no local GEMMs,
+# no plaintext masks leave the pod. Several serviceUrls shard segments across provider GPUs/services
+# (every request of one segment goes to one service). Needs egress to the services: add them to
+# networkPolicy.egress.extraRules (and dns.enabled when the URLs are names).
+encrypted:
+  enabled: false
+  serviceUrls: []              # e.g. [https://pgw-service-0.provider:8443, https://pgw-service-1.provider:8443]
+  tokenSecret:
+    name: ""                   # Secret holding the service bearer token (REQUIRED when enabled)
+    key: token
+  caConfigMap: ""              # optional ConfigMap with the service CA bundle (key ca.crt)
+  hintDir: ""                  # one-time hint W8.A; default <store.mountPath>/hemask
+  rank: 16
+  groupsPerCall: 4
+  encrypt: dense               # dense | ntt_pre (same ciphertexts; ntt_pre needs pgw_ntt in the image)
+
 # Internal /metrics + /healthz listener (liveness: recent scheduler progress, no failure streak).
 metrics:
   enabled: true

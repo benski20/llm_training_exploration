@@ -155,6 +155,12 @@ class FactorySettings(PGWSettings):
         0.0, ge=0, description="RAM (GB) for hints kept in NTT form ('ntt_pre' / 'auto'): 12 bytes per coefficient, "
         "twice the stored hint (Qwen2.5-0.5B: about 15 GB for all linears). 0 = none (default)",
     )
+    he_service_urls: tuple[str, ...] = Field(
+        (), description="Encrypted mode with several compute services (provider GPUs or hosts): segments are sharded "
+        "over them, never their contents: every request of one segment goes to one service. Worker k of a fleet "
+        "starts on url[k % len] and keeps it (a failed segment moves the next one to the next service); with fewer "
+        "workers than services each worker rotates per segment. Overrides he_service_url",
+    )
     he_groups_per_call: int = Field(4, ge=1, le=16, description="256-slot groups per provider request")
     he_max_inflight: int = Field(2, ge=1, le=4, description="Provider requests in flight at once (encrypted mode)")
     he_pipeline_depth: int = Field(
@@ -176,6 +182,17 @@ class FactorySettings(PGWSettings):
     he_bulk_split: int = Field(
         1, ge=1, le=8, description="With he_bulk_port: a request of several 256-slot groups is sent as up to this "
         "many concurrent requests of whole groups (parallel TLS and packing)",
+    )
+    # ---- horizontal scale-out (pgw.factory.fleet) ------------------------------------------------
+    workers: int = Field(
+        1, ge=1, le=64,
+        description="Factory worker processes feeding the same mask store concurrently (pgw.factory.fleet). Workers "
+        "coordinate through an in-flight ledger next to the store so that together they stop at target_slots; each "
+        "has its own state directory and lock. 1 = the classic single-process factory",
+    )
+    devices: tuple[str, ...] = Field(
+        (), description="Per-worker devices for local generation: worker k uses devices[k % len] (e.g. "
+        "'[\"cuda:0\", \"cuda:1\"]'). Empty = `device` for every worker",
     )
     # ---- crash safety -----------------------------------------------------------------------
     state_dir: Path | None = Field(None, description="Factory state/lock directory (default: store root)")
@@ -232,6 +249,8 @@ class FactorySettings(PGWSettings):
         lw, tg = self.low_water_slots, self.target_slots
         if lw is not None and tg is not None and tg < lw:
             raise ValueError("target_slots must be >= low_water_slots")
+        if self.workers > 1 and self.output != "store":
+            raise ValueError("workers > 1 needs output='store' (export staging is per process)")
         if (self.he_client_cert_file is None) != (self.he_client_key_file is None):
             raise ValueError("he_client_cert_file and he_client_key_file must be set together")
         from pgw.hemask.mlwe_ring import check_rank
@@ -241,6 +260,13 @@ class FactorySettings(PGWSettings):
         except ConfigError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+    @property
+    def he_urls(self) -> tuple[str, ...]:
+        """Compute services for encrypted generation (``he_service_urls``, else ``he_service_url``; may be empty)."""
+        if self.he_service_urls:
+            return tuple(dict.fromkeys(self.he_service_urls))
+        return (self.he_service_url,) if self.he_service_url else ()
 
     @property
     def ring_names(self) -> tuple[str, ...]:

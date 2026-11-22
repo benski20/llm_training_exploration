@@ -616,7 +616,7 @@ def _factory_settings_for(pack_path: Path) -> Any:
 def _mask_supply_backend(fs: Any, pack: Any, ring: str) -> tuple[Any, str]:
     """``(remote backend or None, mode)``. Encrypted mode only when the factory uses it and its hint
     exists: building the hint is a one-time factory job, far too heavy for the doctor."""
-    if fs is None or not getattr(fs, "he_service_url", None):
+    if fs is None or not (getattr(fs, "he_urls", None) or getattr(fs, "he_service_url", None)):
         return None, "local"
     from pgw.core.ring import RingParams
     from pgw.factory.runtime import build_he_backend

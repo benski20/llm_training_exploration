@@ -198,11 +198,15 @@ def generate_cmd(packs: tuple[Path, ...], slots: int | None, segments: int, ring
 @click.option("--nice", type=int, default=None, help="CPU niceness increment (low priority)")
 @click.option("--threads", "cpu_threads", type=int, default=None, help="torch CPU threads")
 @click.option("--poll", "poll_interval_s", type=float, default=None, help="Inventory poll interval (s)")
+@click.option("--workers", type=int, default=None,
+              help="Worker processes feeding the store concurrently (pgw.factory.fleet; default "
+                   "PGW_FACTORY_WORKERS or 1)")
 @_with_common
 @_handle_errors
 def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_water: int | None, target: int | None,
             max_slots_per_hour: float | None, duty_cycle: float | None, nice: int | None, cpu_threads: int | None,
-            poll_interval_s: float | None, rings: tuple[str, ...], device: str | None, backend: str | None,
+            poll_interval_s: float | None, workers: int | None, rings: tuple[str, ...], device: str | None,
+            backend: str | None,
             chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
             export_dir: Path | None, recipient_key: Path | None,
                  partner_key: Path | None, destination_store: str | None, he_service: str | None = None,
@@ -215,10 +219,18 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
         pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None,
         segment_slots=segment_slots, low_water_slots=low_water, target_slots=target,
         max_slots_per_hour=max_slots_per_hour, duty_cycle=duty_cycle, nice=nice, cpu_threads=cpu_threads,
-        poll_interval_s=poll_interval_s,
+        poll_interval_s=poll_interval_s, workers=workers,
         **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
                                 destination_store, he_service, he_token_file, he_hint_dir),
     )
+    if s.workers > 1:
+        if once:
+            raise click.UsageError("--once runs a single process; use --workers 1")
+        from pgw.factory.fleet import run_fleet
+
+        click.echo(f"starting a factory fleet of {s.workers} worker processes", err=True)
+        run_fleet(s, _store_overrides(store_root, key_file))
+        return
     apply_process_priority(s.nice, s.cpu_threads)
     store = None if s.output == "export" else open_store(**_store_overrides(store_root, key_file))
     sched = build_scheduler(s, store)

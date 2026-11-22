@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import fcntl
 import hashlib
 import logging
 import os
@@ -26,7 +28,7 @@ from pgw.maskstore.format import (
     encode_header,
 )
 
-__all__ = ["RawSegmentWriter", "crypto_erase", "shred_file", "wipe_and_unlink"]
+__all__ = ["RawSegmentWriter", "crypto_erase", "partial_in_use", "shred_file", "wipe_and_unlink"]
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +77,12 @@ class RawSegmentWriter:
             self._fd: int | None = os.open(self.tmp_path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
         except OSError as exc:
             raise MaskStoreError(f"cannot create segment file: {exc.strerror}") from exc
+        # Liveness of this partial file for every other process: an exclusive flock held from creation until
+        # the file is renamed into place (or aborted). Clean-up of partial files skips locked ones
+        # (:func:`partial_in_use`), so a factory worker that restarts after a crash, or the gateway's gc,
+        # never deletes the temp file of a concurrent writer (several factory workers per store).
+        with contextlib.suppress(OSError):  # a fresh O_EXCL file: nobody else can hold it
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
             pre = SEGMENT_MAGIC + struct.pack("<I", len(self.header_raw)) + self.header_raw
             os.pwrite(self._fd, pre, 0)
@@ -201,11 +209,13 @@ class RawSegmentWriter:
         try:
             if self.fsync:
                 os.fsync(self._fd)
-            os.close(self._fd)
-            self._fd = None
             if self.final_path.exists() and not replace:
                 raise MaskStoreError(f"segment file {self.final_path.name} already exists")
+            # Rename while the fd (and its flock) is still open: the partial file is never unlocked
+            # before it stops being a partial file.
             os.replace(self.tmp_path, self.final_path)
+            os.close(self._fd)
+            self._fd = None
             if self.fsync:
                 fsync_dir(self.final_path.parent)
         except OSError as exc:
@@ -234,6 +244,25 @@ class RawSegmentWriter:
             self.tmp_path.unlink(missing_ok=True)
         except OSError as exc:  # pragma: no cover
             log.warning("could not remove partial segment %s: %s", self.tmp_path.name, exc.strerror)
+
+
+def partial_in_use(path: Path) -> bool:
+    """True while a live :class:`RawSegmentWriter` (any process) holds ``path``, a ``.part`` temp file.
+
+    Probes the writer's exclusive ``flock`` with a shared non-blocking one. A missing file or a
+    filesystem without ``flock`` reports False (the caller's age rule then applies, as before).
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError as exc:
+        return exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
+    finally:
+        os.close(fd)  # closing drops the probe lock too
+    return False
 
 
 def _zero_bytes(buf: bytearray) -> None:

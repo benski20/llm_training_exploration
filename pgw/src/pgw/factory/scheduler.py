@@ -526,6 +526,12 @@ class FactoryScheduler:
     # ---- execution ---------------------------------------------------------------------------
     def _produce(self, plan: RefillPlan) -> str:
         gen = self.generators[(plan.fingerprint, plan.ring)]
+        # Encrypted mode with several compute services (pgw.factory.fleet.SegmentShardedRemote): pick the
+        # service for this whole segment (rotation / failover happen only between segments).
+        shard = getattr(getattr(gen, "remote", None), "remote", None)
+        begin = getattr(shard, "begin_segment", None)
+        if callable(begin):
+            begin()
         st = self.state
         ring_tier = plan.tier == "ring"
         if not ring_tier:  # a ring segment leaves nothing on disk to recover after a crash

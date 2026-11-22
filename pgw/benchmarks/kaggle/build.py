@@ -683,6 +683,34 @@ JOBS: dict[str, dict] = {
             "--factory-bench-slots", "256"],
          "timeout": 6600},
     ]},
+    # package X1 (horizontal scale-out of the encrypted mask factory): N factory worker processes
+    # (pgw.factory.fleet) on one mask store, maskgen sharded by segment over two provider services (one per T4,
+    # real `pgw service serve` on loopback). Customer-side HE on the CPU (workers do not see the GPUs). Aggregate
+    # steady slots/s at 1 / 2 / 4 workers with 2 provider GPUs vs 1 (control), 0.5B shapes (4 layers) and one 7B
+    # layer. Results: research/plans/factory-scale-out.md.
+    "pgw-factory-scale-t4x2": {"machine_shape": "NvidiaTeslaT4x2",
+                               "exclude": ["scripts", "tests", "docs", "research", "console", "SPEC.md",
+                                           "INTERFACE_NOTES.md", "STATUS.md", "src/pgw/console", "benchmarks/results",
+                                           "benchmarks/RESULTS.md", "benchmarks/kaggle",
+                                           # every benchmark but the scale bench and its delay proxy
+                                           *sorted(f"benchmarks/{q.name}" for q in (HERE.parent).glob("*.py")
+                                                   if q.name not in ("factory_scale_bench.py", "delay_proxy.py"))],
+                               "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info", "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi || true",
+         "timeout": 60},
+        *[{"kind": "shell", "name": f"factory_scale_05b_{tag}",
+           "cmd": "PGW_OFFLINE=1 python benchmarks/factory_scale_bench.py --preset qwen2.5-0.5b --layers 4 "
+                  f"--workers 1 2 4 --provider-devices {devs} --segment-slots 512 --segments-per-worker 3 "
+                  f"--he-encrypt ntt_pre --work /tmp/fs05b --json /kaggle/working/factory_scale_05b_{tag}.json",
+           "timeout": 2400}
+          for tag, devs in (("2gpu", "cuda:0 cuda:1"), ("1gpu", "cuda:0"))],
+        {"kind": "shell", "name": "factory_scale_7b_l1_2gpu",
+         "cmd": "PGW_OFFLINE=1 python benchmarks/factory_scale_bench.py --preset qwen2.5-7b --layers 1 "
+                "--workers 1 2 --provider-devices cuda:0 cuda:1 --segment-slots 512 --segments-per-worker 2 "
+                "--he-encrypt ntt_pre --work /tmp/fs7b --json /kaggle/working/factory_scale_7b_l1_2gpu.json",
+         "timeout": 2400},
+    ]},
     # fallback if 7B does not fit / is too slow
     "pgw-gpu-3b": {"steps": [
         {"kind": "validate", "label": "qwen3b", "args": [

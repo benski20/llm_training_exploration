@@ -57,6 +57,26 @@ factory skip them (about 16% of the mask bytes and of the decryption at 0.5B). T
 start-up which linears it sends; segments lacking one of them are retired (written off, never reserved),
 so changing the gateway's setting later is safe: unset the factory setting and it refills with full
 segments.
+### Several workers and several provider GPUs
+
+One factory process runs encrypt, provider call and decrypt for one segment at a time. To use more
+cores and more provider GPUs, run a fleet of worker processes on the same store:
+
+```bash
+PGW_FACTORY_WORKERS=4 \
+PGW_FACTORY_HE_SERVICE_URLS='["https://compute-0.example.net:8443", "https://compute-1.example.net:8443"]' \
+pgw factory run --pack /packs/qwen2.5-7b --store /var/lib/pgw/masks --key-file /etc/pgw/kek ...
+```
+
+(`pgw factory run --workers 4`; Helm: `scaleOut.workers`, `encrypted.serviceUrls`.) The workers
+coordinate through an in-flight ledger under `<store>/fleet`, so together they stop at the target.
+Worker `k` sends every request of a segment to service `k mod len(urls)`; segments are sharded,
+never split, so each service sees the same request format and sizes as with one service. A segment
+that fails on one service is aborted (its seed is never used) and the worker's next segment goes to
+the next service. With fewer workers than services, each worker rotates per segment. The store
+serialises segment registration and hand-out across processes, and each writer locks its partial
+file, so a restarting worker never deletes a peer's segment in progress. Details and measurements:
+`research/plans/factory-scale-out.md`.
 
 ## The one-time hint
 
