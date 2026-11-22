@@ -325,6 +325,31 @@ replies): `PGW_LANE_SPIN_US` (gateway TripChannel reply poll, default 50), `PGW_
 poll, default 50), `PGW_SERVICE_LANE_READ_SPIN_US` (new: the lane server polls a connection for its next request
 before blocking; UDS by peek, TLS by non-blocking reads into the session, default 0). `PGW_MODAL_APP_SUFFIX`
 (deploy time) suffixes the app and Dict names so parallel experiments do not replace each other's apps.
+### Native pinned float path (2026-11-22, package T3)
+
+`--float-ops native` (co-located; now the co-located default, `--float-ops torch` = as before): the gateway runs
+the layer float ops (RMSNorm, residual adds, RoPE, attention over the KV cache, SiLU gate) in `pgw_fast`
+(`rust/pgw-fast/src/layer.rs`, `attn.rs`) through `PGW_FLOAT_OPS=native`, one native call between consecutive
+linears, and the e2e's plaintext reference uses the same path (`wizard_client.plaintext_reference(float_ops=)`).
+It is a **new pinned reference**: a fixed order of IEEE operations without FMA or libm, so its bits depend on
+neither the ISA (AVX2 and baseline builds agree) nor torch's thread count nor how many rows share a pass; RMSNorm,
+attention and SiLU differ from torch's in the last bits (RoPE and the residual adds are torch's bits). The final
+norm and the LM head are unchanged. Privacy unchanged (local gateway math only; the provider receives the same).
+
+Measured (T4, `attention_down`, TLS lane, factory capped: `PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`,
+target 8000; float threads pinned to 1; both runs logprobs bit-identical, text equal, repeat identical; per
+decoded token = (chat time - time to first token) / (tokens - 1), from the gateway's audit log):
+
+| float ops | warm chat | back to back | ms per decoded token (7 chats) |
+|---|---|---|---|
+| torch (A/B baseline, same day) | 11.6 tok/s | 12.7 | 62-64 (one 68) |
+| native (`--float-ops native`) | 14.9 tok/s | 13.4 | 49-53 (one 83: host hiccup) |
+| native (the new co-located default) | 13.7 tok/s (16.2 on loopback) | 16.6 | 46-49 |
+
+About 11-16 ms per decoded token saved (Modal's CPU and gVisor make each of the 40-odd torch calls per layer
+and the per-step thread scoping more expensive than locally: on the dev box the same change saves 5-6 ms, from
+12-13 to 7-8 ms of float ops and engine glue per token in `benchmarks/decode_cpu_bench.py`). Back to back the gain
+is smaller because time to first token (0.6-1.2 s, prompt pass) is a third of a 52-token chat.
 
 ## Trip latency and the `--max-trip-ms` gate
 

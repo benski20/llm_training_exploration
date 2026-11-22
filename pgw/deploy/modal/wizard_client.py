@@ -185,12 +185,14 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
 
 
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
-                        float_threads: int | None = None) -> dict[str, Any]:
+                        float_threads: int | None = None, float_ops: str | None = None) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process).
 
     ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
     ops run on exactly this many threads, the count the gateway's process is pinned to, so both compute the same
     thread-count-dependent kernels (CPU SDPA) the same way. ``None``: this process's default count.
+    ``float_ops``: the gateway's float path (``"native"``: the pinned native formulation, ``PGW_FLOAT_OPS`` /
+    the model setting ``float_ops``); ``None``: the model's default (``PGW_FLOAT_OPS`` or torch).
     """
     import asyncio
 
@@ -200,7 +202,7 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         prev = torch.get_num_threads()
         torch.set_num_threads(int(float_threads))
         try:
-            return plaintext_reference(pack_path, ring, messages, max_tokens)
+            return plaintext_reference(pack_path, ring, messages, max_tokens, float_ops=float_ops)
         finally:
             torch.set_num_threads(prev)
 
@@ -213,6 +215,8 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
             tok = ChatTokenizer.from_pack(pack)
             ids = tok.apply_chat_template(messages, add_generation_prompt=True)
             model = TransformerModel(pack, PlainBackend(pack, RingParams.from_name(ring)))
+            if float_ops:
+                model.set_float_ops(float_ops)
             gen = Generator(model, tok, max_batch=1)
             params = SamplingParams(max_tokens=max_tokens, temperature=0.0, logprobs=0)
             res = await gen.agenerate(ids, params, session=None)
