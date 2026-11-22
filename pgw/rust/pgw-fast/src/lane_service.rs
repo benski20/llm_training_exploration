@@ -13,8 +13,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pgw_lane::admission::{Admission, Limits, Refusal};
-use pgw_lane::cuda::{driver_status, GraphExecutor, GraphSpec};
+use pgw_lane::coalesce::Coalescer;
+use pgw_lane::cuda::{driver_status, GraphExecutor, GraphShard, GraphSpec};
 use pgw_lane::exec::{micros, Call, Chain, DeviceLock, Done, Executor, LinearEntry, ModelEntry, RingEntry};
+use pgw_lane::persistent::{GroupSpec, LinearSlot, PersistentExecutor, WorkerSpec};
 use pgw_lane::proto::{Status, TICKET_LEN};
 use pgw_lane::server::{LaneServer, ServerConfig, TlsListen};
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
@@ -123,6 +125,8 @@ pub struct PyLaneService {
     server: LaneServer,
     admission: Arc<Admission>,
     graphs: Arc<GraphExecutor>,
+    persistent: Arc<PersistentExecutor>,
+    coalescer: Option<Arc<Coalescer>>,
     has_py: bool,
 }
 
@@ -155,7 +159,8 @@ impl PyLaneService {
                         tenant_rows_per_s = None, tenant_burst_rows = None, retry_after_ms = 1000,
                         executor = None, use_graphs = false, spin_us = 50, poll_ms = 100,
                         open_timeout_s = 10.0, stall_timeout_s = 30.0, tls_addr = None, tls_cert_pem = None,
-                        tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false, read_spin_us = 0))]
+                        tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false, read_spin_us = 0,
+                        persistent = false, coalesce = false, coalesce_max_rows = 0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -181,6 +186,9 @@ impl PyLaneService {
         tls_client_ca_pem: Option<Vec<u8>>,
         require_client_cert: bool,
         read_spin_us: u64,
+        persistent: bool,
+        coalesce: bool,
+        coalesce_max_rows: u16,
     ) -> PyResult<Self> {
         // TCP lane: TLS 1.3 only (there is no plaintext TCP listener)
         let tls = match tls_addr {
@@ -213,7 +221,26 @@ impl PyLaneService {
         let has_py = executor.is_some();
         let secondary: Option<Arc<dyn Executor>> =
             executor.map(|f| Arc::new(PyExecutor { func: f }) as Arc<dyn Executor>);
-        let primary: Option<Arc<dyn Executor>> = if use_graphs { Some(graphs.clone()) } else { None };
+        // device executors, tried in order: persistent worker (opt-in), CUDA graphs; then optionally
+        // wrapped in the coalescer (opt-in); the Python path last (it batches in the BatchScheduler)
+        let gl = graphs.clone();
+        let pers = Arc::new(PersistentExecutor::new(Arc::new(move |d| gl.device_lock(d))));
+        pers.set_spin_us(spin_us.max(200));
+        let graph_ex: Option<Arc<dyn Executor>> = if use_graphs { Some(graphs.clone()) } else { None };
+        let device: Option<Arc<dyn Executor>> = if persistent {
+            Some(Arc::new(Chain { primary: Some(pers.clone()), secondary: graph_ex }))
+        } else {
+            graph_ex
+        };
+        let mut coalescer = None;
+        let primary: Option<Arc<dyn Executor>> = match device {
+            Some(d) if coalesce => {
+                let c = Arc::new(Coalescer::new(d, if coalesce_max_rows == 0 { max_rows } else { coalesce_max_rows }));
+                coalescer = Some(c.clone());
+                Some(c as Arc<dyn Executor>)
+            }
+            other => other,
+        };
         let chain: Arc<dyn Executor> = Arc::new(Chain { primary, secondary });
         let cfg = ServerConfig {
             path,
@@ -231,7 +258,7 @@ impl PyLaneService {
         let server = py
             .allow_threads(move || LaneServer::start(cfg, adm, Some(chain)))
             .map_err(|e| PyOSError::new_err(format!("lane listener: {e}")))?;
-        Ok(PyLaneService { server, admission, graphs, has_py })
+        Ok(PyLaneService { server, admission, graphs, persistent: pers, coalescer, has_py })
     }
 
     /// Socket path.
@@ -373,8 +400,10 @@ impl PyLaneService {
     }
 
     /// Register a captured graph for `(model, linear, ring, rows)`. The caller keeps the graph,
-    /// stream and pinned buffers alive until `clear_graphs()` returns.
+    /// stream and pinned buffers alive until `clear_graphs()` returns. With `shards` (tensor
+    /// parallel) every shard's graph reads `h_in` and writes its own pinned output.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (model, linear, ring, rows, device, exec, stream, h_in, in_len, h_out, out_len, shards = None))]
     fn register_graph(
         &self,
         model: u32,
@@ -388,8 +417,22 @@ impl PyLaneService {
         in_len: usize,
         h_out: usize,
         out_len: usize,
+        shards: Option<Vec<(i32, usize, usize, usize, usize, usize)>>,
     ) -> PyResult<()> {
-        let spec = GraphSpec { device, exec, stream, h_in, in_len, h_out, out_len };
+        // shards: tensor parallel, `[(device, exec, stream, h_out, row_bytes, col0)]` in shard order
+        let shards = shards
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(device, exec, stream, h_out, row_bytes, col0)| GraphShard {
+                device,
+                exec,
+                stream,
+                h_out,
+                row_bytes,
+                col0,
+            })
+            .collect();
+        let spec = GraphSpec { device, exec, stream, h_in, in_len, h_out, out_len, shards };
         // SAFETY: the Python owner guarantees the pointers stay valid until `clear_graphs` (documented contract).
         unsafe { self.graphs.register(model, linear, ring, rows, spec) }.map_err(PyRuntimeError::new_err)
     }
@@ -433,6 +476,107 @@ impl PyLaneService {
     fn clear_graphs(&self, py: Python<'_>) {
         let g = self.graphs.clone();
         py.allow_threads(move || g.clear());
+    }
+
+    /// Register persistent-worker group `group`: `workers = [(device, ctrl_addr)]` (shard order), the
+    /// shared mapped input and output buffers. The caller keeps the memory and the resident kernels
+    /// alive until `clear_persistent()` returns.
+    #[allow(clippy::too_many_arguments)]
+    fn register_persistent_group(
+        &self,
+        group: u32,
+        workers: Vec<(i32, usize)>,
+        h_in: usize,
+        in_cap: usize,
+        h_out: usize,
+        out_cap: usize,
+    ) -> PyResult<()> {
+        let spec = GroupSpec {
+            workers: workers.into_iter().map(|(device, ctrl)| WorkerSpec { device, ctrl }).collect(),
+            h_in,
+            in_cap,
+            h_out,
+            out_cap,
+        };
+        // SAFETY: the Python owner keeps the memory valid until `clear_persistent` (documented contract).
+        unsafe { self.persistent.register_group(group, spec) }.map_err(PyRuntimeError::new_err)
+    }
+
+    /// Serve `(model, linear, ring)` from table entry `table` of group `group`.
+    #[allow(clippy::too_many_arguments)]
+    fn register_persistent_linear(
+        &self,
+        model: u32,
+        linear: u32,
+        ring: u16,
+        group: u32,
+        table: u32,
+        n: u32,
+        m: u32,
+        max_rows: u16,
+    ) -> PyResult<()> {
+        self.persistent
+            .register_linear(model, linear, ring, LinearSlot { group, table, n, m, max_rows })
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// One trip through the persistent workers exactly as a lane call would (startup self-check, bench).
+    fn run_persistent<'py>(
+        &self,
+        py: Python<'py>,
+        model: u32,
+        linear: u32,
+        ring: u16,
+        rows: u16,
+        body: &[u8],
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let p = self.persistent.clone();
+        let input = body.to_vec();
+        let r = py.allow_threads(move || {
+            let mut out = Vec::new();
+            p.run_key((model, linear, ring), rows, &input, &mut out, None).map(|_| out)
+        });
+        match r {
+            Ok(out) => Ok(PyBytes::new(py, &out)),
+            Err(e) => Err(PyRuntimeError::new_err(format!("persistent trip refused: {}", e.status.name()))),
+        }
+    }
+
+    fn set_persistent_timeout_us(&self, us: u64) {
+        self.persistent.set_timeout_us(us);
+    }
+
+    fn disable_persistent(&self, reason: &str) {
+        self.persistent.disable(reason);
+    }
+
+    #[getter]
+    fn persistent_disabled_reason(&self) -> Option<String> {
+        self.persistent.disabled_reason()
+    }
+
+    #[getter]
+    fn persistent_count(&self) -> usize {
+        self.persistent.len()
+    }
+
+    /// Forget the persistent workers (waits for in-flight trips). Stop the kernels only after this.
+    fn clear_persistent(&self, py: Python<'_>) {
+        let p = self.persistent.clone();
+        py.allow_threads(move || p.clear());
+    }
+
+    /// Coalescer counters (`None` when coalescing is off).
+    fn coalesce_stats<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(c) = &self.coalescer else { return Ok(None) };
+        let s = c.stats();
+        let d = PyDict::new(py);
+        d.set_item("merged_batches", s.merged_batches)?;
+        d.set_item("merged_calls", s.merged_calls)?;
+        d.set_item("alone", s.alone)?;
+        d.set_item("retried", s.retried)?;
+        d.set_item("max_rows", s.max_rows)?;
+        Ok(Some(d))
     }
 
     /// Stop the listener (idle connections close within one poll interval; a call in flight finishes).

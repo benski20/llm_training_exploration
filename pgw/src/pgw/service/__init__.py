@@ -9,6 +9,8 @@ Modules:
 
 * :mod:`~pgw.service.kernels` - exact ring GEMM per linear (``cuda_int8``, ``cpu_int8``, ``cpu_f64``, ``cpu_f32``).
 * :mod:`~pgw.service.registry` - packs by fingerprint, multi-GPU placement by layer.
+* :mod:`~pgw.service.tensor_parallel` - opt-in output-row tensor parallel kernels (one linear over N GPUs).
+* :mod:`~pgw.service.persistent` - opt-in persistent GPU trip worker (descriptor ring, no launch per trip).
 * :mod:`~pgw.service.batcher` - cross-request/tenant dynamic batching per ``(fp, ring, linear)``.
 * :mod:`~pgw.service.auth` - bearer-token (SHA-256 hashed) and mTLS tenant identity.
 * :mod:`~pgw.service.handler` - admission control, quotas, the wire ``ComputeHandler``.
@@ -25,10 +27,12 @@ from pgw.service.kernels import ComputeKernel, cpu_int8_available
 from pgw.service.metrics import ServiceMetrics
 from pgw.service.registry import ModelRegistry, RegisteredModel, place_layers
 from pgw.service.server import build_hypercorn_config, serve, serve_async
+from pgw.service.tensor_parallel import ShardedKernel, TPGroup
 
 __all__ = [
     "BatchScheduler", "BatchStats", "BatchTiming", "ComputeKernel", "ModelRegistry", "RegisteredModel",
-    "ServiceHandler", "ServiceMetrics", "ServiceSettings", "ServiceState", "TenantAuthenticator",
+    "ServiceHandler", "ServiceMetrics", "ServiceSettings", "ServiceState", "ShardedKernel", "TPGroup",
+    "TenantAuthenticator",
     "TenantIdentity", "TokenBucket", "build_hypercorn_config", "cpu_int8_available", "create_app",
     "create_metrics_app", "hash_token", "place_layers", "serve", "serve_async",
 ]

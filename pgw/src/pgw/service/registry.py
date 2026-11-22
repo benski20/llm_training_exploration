@@ -18,6 +18,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import torch
 
@@ -33,6 +34,7 @@ from pgw.core.ring import RingParams
 from pgw.core.types import LinearId, LinearKind, LinearSpec
 from pgw.service.gpu_exec import GRAPH_BUCKETS, validate_buckets
 from pgw.service.kernels import ComputeKernel, resolve_backend, resolve_device
+from pgw.service.tensor_parallel import ShardedKernel, TPGroup
 
 __all__ = ["ModelRegistry", "RegisteredModel", "place_layers"]
 
@@ -73,7 +75,7 @@ class RegisteredModel:
     name: str
     fingerprint: str
     specs: Sequence[LinearSpec]
-    kernels: dict[str, ComputeKernel]
+    kernels: dict[str, ComputeKernel | ShardedKernel]
     rings: tuple[str, ...] = ()
     pack_path: Path | None = None
     placement: dict[int, str] = field(default_factory=dict)
@@ -98,9 +100,13 @@ class RegisteredModel:
         return sum(k.device_bytes for k in self.kernels.values())
 
     def kernel(self, linear: str) -> ComputeKernel:
-        """Kernel for ``linear``; raises :class:`ProtocolError` for an unknown linear id."""
+        """Kernel for ``linear``; raises :class:`ProtocolError` for an unknown linear id.
+
+        With tensor parallelism this is a :class:`~pgw.service.tensor_parallel.ShardedKernel`, which implements
+        the interface the service uses (duck typed; typed as :class:`ComputeKernel` for the callers).
+        """
         try:
-            return self.kernels[linear]
+            return cast(ComputeKernel, self.kernels[linear])
         except KeyError as exc:
             raise ProtocolError(f"unknown linear {linear!r}", details={"linear": linear}) from exc
 
@@ -110,8 +116,8 @@ class RegisteredModel:
         return name in self.rings
 
     def devices(self) -> list[str]:
-        """Distinct devices used by this model."""
-        return sorted({str(k.device) for k in self.kernels.values()})
+        """Distinct devices used by this model (every shard's device for tensor-parallel kernels)."""
+        return sorted({str(d) for k in self.kernels.values() for d in getattr(k, "devices", [k.device])})
 
 
 def place_layers(layer_bytes: Sequence[int], devices: Sequence[str]) -> dict[int, str]:
@@ -167,6 +173,10 @@ class ModelRegistry:
         cuda_graph_buckets: Padded GEMM row counts with a graph.
         triton_gemv: CUDA kernels serve small ``K <= 32`` calls with the fused Triton ring GEMV once
             its device self-check passed (see :class:`ComputeKernel`).
+        tp_devices: Output-row tensor parallel (opt-in; :mod:`pgw.service.tensor_parallel`): every linear
+            is split by output rows over these devices (in this order) and served by a
+            :class:`~pgw.service.tensor_parallel.ShardedKernel`; ``devices`` and ``placement`` are then
+            ignored. CPU may repeat (fake multi-device for tests). Empty (default): off.
     """
 
     def __init__(
@@ -183,12 +193,15 @@ class ModelRegistry:
         cuda_graphs: bool = True,
         cuda_graph_buckets: Sequence[int] = GRAPH_BUCKETS,
         triton_gemv: bool = True,
+        tp_devices: Sequence[str] | None = None,
     ):
         if placement not in ("single", "by_layer"):
             raise ConfigError(f"unknown placement {placement!r}; use 'single' or 'by_layer'")
         if verify not in ("full", "fingerprint"):
             raise ConfigError(f"unknown verify mode {verify!r}; use 'full' or 'fingerprint'")
-        devs = list(devices) if devices else [device]
+        self.tp_group: TPGroup | None = TPGroup(tp_devices) if tp_devices else None
+        devs = [str(d) for d in self.tp_group.devices] if self.tp_group is not None else (
+            list(devices) if devices else [device])
         resolved = [resolve_device(d) for d in devs]
         uniq: list[torch.device] = []
         for d in resolved:
@@ -242,14 +255,21 @@ class ModelRegistry:
                 )
             specs = pack.linear_specs()
             placement = self._placement(specs, pack.num_layers)
-            kernels: dict[str, ComputeKernel] = {}
+            kernels: dict[str, ComputeKernel | ShardedKernel] = {}
             for spec in specs:
                 lw = pack.load_linear(spec.id)
-                kernels[spec.id.key] = ComputeKernel(
-                    spec, lw.w8, device=placement[spec.id.layer], backend=self.backend, cache_float=self.cache_float,
-                    cuda_graphs=self.cuda_graphs, graph_buckets=self.cuda_graph_buckets,
-                    triton_gemv=self.triton_gemv,
-                )
+                if self.tp_group is not None:
+                    kernels[spec.id.key] = ShardedKernel(
+                        spec, lw.w8, self.tp_group, backend=self.backend, cache_float=self.cache_float,
+                        cuda_graphs=self.cuda_graphs, graph_buckets=self.cuda_graph_buckets,
+                        triton_gemv=self.triton_gemv,
+                    )
+                else:
+                    kernels[spec.id.key] = ComputeKernel(
+                        spec, lw.w8, device=placement[spec.id.layer], backend=self.backend,
+                        cache_float=self.cache_float, cuda_graphs=self.cuda_graphs,
+                        graph_buckets=self.cuda_graph_buckets, triton_gemv=self.triton_gemv,
+                    )
                 del lw
             entry = RegisteredModel(
                 name=pack.name, fingerprint=fp, specs=tuple(specs), kernels=kernels, rings=rings,
@@ -288,6 +308,8 @@ class ModelRegistry:
 
     def _placement(self, specs: Sequence[LinearSpec], num_layers: int) -> dict[int, str]:
         devs = [str(d) for d in self.devices]
+        if self.tp_group is not None:  # every layer on the whole group (the first device is its scheduling key)
+            return {i: str(self.tp_group.devices[0]) for i in range(num_layers)}
         if self.placement == "single" or len(devs) == 1:
             return {i: devs[0] for i in range(num_layers)}
         layer_bytes = [0] * num_layers
@@ -375,7 +397,8 @@ class ModelRegistry:
         acc: dict[str, dict[str, object]] = {str(d): {"device": str(d), "bytes": 0, "linears": 0} for d in self.devices}
         for m in self.models():
             for k in m.kernels.values():
-                e = acc.setdefault(str(k.device), {"device": str(k.device), "bytes": 0, "linears": 0})
-                e["bytes"] = int(e["bytes"]) + k.device_bytes  # type: ignore[call-overload]
-                e["linears"] = int(e["linears"]) + 1  # type: ignore[call-overload]
+                for part in getattr(k, "shards", [k]):
+                    e = acc.setdefault(str(part.device), {"device": str(part.device), "bytes": 0, "linears": 0})
+                    e["bytes"] = int(e["bytes"]) + part.device_bytes  # type: ignore[call-overload]
+                    e["linears"] = int(e["linears"]) + 1  # type: ignore[call-overload]
         return list(acc.values())

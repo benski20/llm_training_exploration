@@ -226,6 +226,18 @@ def _read_spin_us() -> int:
         raise ConfigError(f"PGW_SERVICE_LANE_READ_SPIN_US must be an integer, got {raw!r}") from exc
 
 
+def _coalesce_wanted() -> bool:
+    """``PGW_SERVICE_COALESCE=1`` (default off): concurrent lane calls of the same linear and ring (any
+    tenants) that wait while that linear runs are merged into one device call; a call on an idle linear
+    runs at once (no window). Replies are cut back per call (``rust/pgw-lane/src/coalesce.rs``)."""
+    v = os.environ.get("PGW_SERVICE_COALESCE", "0").strip().lower()
+    if v in ("", "0", "false", "no", "off"):
+        return False
+    if v in ("1", "true", "yes", "on"):
+        return True
+    raise ConfigError(f"PGW_SERVICE_COALESCE must be 0 or 1, got {v!r}")
+
+
 def _graphs_wanted() -> bool:
     """``PGW_SERVICE_LANE_GRAPHS=0`` turns CUDA-graph replay off (the lane then uses the kernel path)."""
     return os.environ.get("PGW_SERVICE_LANE_GRAPHS", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -270,6 +282,8 @@ class LaneManager:
         self._identities: dict[str, dict[str, Any]] = {}
         self._graphs: list[Any] = []  # torch graphs and buffers kept alive while registered
         self.graph_report = GraphReport()
+        self._persistent: list[Any] = []  # pgw.service.persistent groups (opt-in)
+        self.persistent_report: Any = None
         self.unavailable_reason: str | None = None
 
     # ---- lifecycle ---------------------------------------------------------------------------
@@ -317,6 +331,14 @@ class LaneManager:
         self.loop = loop
         cap_ms = int(min(s.max_deadline_s or 120.0, 3600.0) * 1000)
         use_graphs = _graphs_wanted() and self._any_cuda()
+        from pgw.service.persistent import exec_mode
+
+        opt: dict[str, Any] = {}
+        if _coalesce_wanted():
+            opt["coalesce"] = True
+        use_persistent = exec_mode() == "persistent" and self._any_cuda()
+        if use_persistent:
+            opt["persistent"] = True
         listen: dict[str, Any] = {}
         if self.transport == "tcp":
             if not hasattr(fast.LaneService, "port"):
@@ -340,14 +362,19 @@ class LaneManager:
             tenant_burst_rows=float(s.tenant_burst_rows) if s.tenant_burst_rows else None,
             retry_after_ms=round(s.retry_after_s * 1000), executor=self._py_execute, use_graphs=use_graphs,
             spin_us=_spin_us(), **listen,
-            **({"read_spin_us": rs} if (rs := _read_spin_us()) else {}),
+            **({"read_spin_us": rs} if (rs := _read_spin_us()) else {}), **opt,
         )
         for m in self.state.registry.models():
             self._slot_for(m.fingerprint)
         self.state.handler.lane_admission = self.svc
-        if use_graphs:
+        if use_graphs or use_persistent:
             self._install_device_locks()
+        if use_graphs:
             self.graph_report = capture_lane_graphs(self)
+        if use_persistent:  # pragma: no cover - GPU only
+            from pgw.service.persistent import start_lane_persistent
+
+            self.persistent_report = start_lane_persistent(self)
         off = self.graph_report.disabled
         where = f"TLS port {self.svc.port}" if self.transport == "tcp" else str(s.lane_socket)
         log.info("trip lane listening on %s (max rows %d, graphs %d%s)", where, s.lane_max_rows,
@@ -374,6 +401,10 @@ class LaneManager:
                 pass
         await asyncio.to_thread(svc.stop, timeout)
         await asyncio.to_thread(svc.clear_graphs)
+        if self._persistent:
+            from pgw.service.persistent import stop_lane_persistent
+
+            await asyncio.to_thread(stop_lane_persistent, self)
         self.drain_metrics()
         self._graphs.clear()
         if getattr(self.state.handler, "lane_admission", None) is svc:
@@ -552,14 +583,19 @@ class LaneManager:
                 "graphs": self.svc.graph_count, "graphs_disabled": self.svc.graphs_disabled_reason}
 
     # ---- CUDA --------------------------------------------------------------------------------
+    def _devices(self) -> set[str]:
+        """Every device a served kernel uses (all shards of tensor-parallel kernels)."""
+        return {str(d) for m in self.state.registry.models() for k in m.kernels.values()
+                for d in getattr(k, "devices", [k.device])}
+
     def _any_cuda(self) -> bool:
-        return any(str(k.device).startswith("cuda") for m in self.state.registry.models() for k in m.kernels.values())
+        return any(d.startswith("cuda") for d in self._devices())
 
     def _install_device_locks(self) -> None:  # pragma: no cover - GPU only
         """Make the lane and the Python path share one lock per device (one call per device)."""
         from pgw.service.gpu_exec import device_executor
 
-        for dev in {str(k.device) for m in self.state.registry.models() for k in m.kernels.values()}:
+        for dev in self._devices():
             d = torch.device(dev)
             if d.type == "cuda":
                 ex = device_executor(d)
@@ -637,6 +673,7 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
     rows_list = list(rows_list or range(1, int(mgr.settings.lane_max_rows) + 1))
     try:  # pragma: no cover - GPU only
         by_dev: dict[str, list[tuple[int, int, int, Any, RingParams]]] = {}
+        sharded: list[tuple[int, int, int, Any, RingParams]] = []
         for fp, slot in mgr._slots.items():
             t = mgr._tables[slot]
             model = mgr.state.registry.get(fp)
@@ -647,12 +684,16 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
                         rep.skipped["ring_not_k32"] = rep.skipped.get("ring_not_k32", 0) + 1
                     elif kern.device.type != "cuda" or not kern.triton_gemv:
                         rep.skipped["no_fused_gemv"] = rep.skipped.get("no_fused_gemv", 0) + 1
+                    elif getattr(kern, "shards", None) is not None:
+                        sharded.append((slot, li, ri, kern, ring))
                     else:
                         by_dev.setdefault(str(kern.device), []).append((slot, li, ri, kern, ring))
         for dev, entries in by_dev.items():
             _capture_device(mgr, torch.device(dev), entries, rows_list, rep, inject_mismatch)
             if rep.disabled:
                 break
+        if sharded and not rep.disabled:
+            _capture_sharded(mgr, sharded, rows_list, rep, inject_mismatch)
     except Exception as exc:  # pragma: no cover - GPU only
         rep.disabled = f"capture failed: {type(exc).__name__}: {str(exc)[:200]}"
     if rep.disabled:
@@ -728,6 +769,88 @@ def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[
                     if got != want:
                         rep.disabled = (f"graph replay differs from the digit-GEMM path ({kern.linear}, rows={rows}, "
                                         f"case {case})")
+                        return
+                rep.checked += 1
+
+
+def _capture_sharded(mgr: LaneManager, entries: list[tuple[int, int, int, Any, RingParams]], rows_list: list[int],
+                     rep: GraphReport, inject_mismatch: bool) -> None:  # pragma: no cover - GPU only
+    """Tensor-parallel lane graphs: per (linear, ring, rows) one graph per shard on its own device and stream,
+    all reading the same pinned input (broadcast) and each writing its own pinned output slice; registered as
+    one lane graph whose shards the native lane launches together and gathers in order. Self-checked through
+    the native serving path against the kernel path (byte-identical to one GPU)."""
+    from pgw.core.triton_gemv import max_rows, ring_gemv
+    from pgw.service.gpu_exec import device_executor, trip_stream
+
+    groups = {tuple(str(d) for d in k.devices) for *_, k, _ in entries}
+    for devs in groups:
+        mine = [e for e in entries if tuple(str(d) for d in e[3].devices) == devs]
+        dlist = [torch.device(d) for d in devs]
+        rl = [r for r in rows_list if all(r <= max_rows(d) for d in dlist)]
+        if not rl:
+            rep.skipped["device_rows"] = rep.skipped.get("device_rows", 0) + len(mine)
+            continue
+        rmax = max(rl)
+        n_max = max(int(k.in_features) for *_, k, _ in mine)
+        h_in = torch.zeros(rmax * n_max, dtype=torch.int32, pin_memory=True)
+        mgr._graphs.append(h_in)
+        per: list[dict[str, Any]] = []
+        for j, d in enumerate(dlist):
+            m_max = max(int(k.shards[j].out_features) for *_, k, _ in mine)
+            with torch.cuda.device(d):
+                st = {"dev": d, "stream": trip_stream(d), "pool": torch.cuda.graph_pool_handle(),
+                      "h_out": torch.zeros(rmax * m_max, dtype=torch.int32, pin_memory=True),
+                      "d_in": torch.zeros(rmax * n_max, dtype=torch.int32, device=d),
+                      "d_out": torch.zeros(rmax * m_max, dtype=torch.int32, device=d), "ex": device_executor(d)}
+            mgr._graphs.extend([st["h_out"], st["d_in"], st["d_out"], st["stream"]])
+            per.append(st)
+        rng = np.random.default_rng(0x7A11)
+        for slot, li, ri, kern, ring in mine:
+            n, m = int(kern.in_features), int(kern.out_features)
+            for rows in rl:
+                hin = h_in[: rows * n].view(rows, n)
+                shards: list[tuple[int, int, int, int, int, int]] = []
+                for sk, (m0, m1), st in zip(kern.shards, kern.bounds, per, strict=True):
+                    mj = m1 - m0
+                    w = sk._pw._w_dev
+                    xin = st["d_in"][: rows * n].view(rows, n)
+                    yout = st["d_out"][: rows * mj].view(rows, mj)
+                    hout = st["h_out"][: rows * mj].view(rows, mj)
+
+                    def body(xin: torch.Tensor = xin, hin: torch.Tensor = hin, yout: torch.Tensor = yout,
+                             hout: torch.Tensor = hout, w: torch.Tensor = w, n: int = n, mj: int = mj) -> None:
+                        xin.copy_(hin, non_blocking=True)
+                        ring_gemv(xin, w, 32, n=n, m=mj, out=yout)
+                        hout.copy_(yout, non_blocking=True)
+
+                    d, stream = st["dev"], st["stream"]
+                    with torch.cuda.device(d), st["ex"].lock:
+                        stream.wait_stream(torch.cuda.current_stream(d))
+                        with torch.cuda.stream(stream):
+                            body()
+                        stream.synchronize()
+                        g = torch.cuda.CUDAGraph()
+                        with torch.cuda.graph(g, pool=st["pool"], stream=stream, capture_error_mode="thread_local"):
+                            body()
+                        exec_ptr = _as_ptr(g.raw_cuda_graph_exec())
+                    mgr._graphs.extend([g, w])
+                    shards.append((int(d.index or 0), exec_ptr, int(stream.cuda_stream), int(hout.data_ptr()),
+                                   mj * 4, m0 * 4))
+                mgr.svc.register_graph(slot, li, ri, rows, shards[0][0], 0, 0, int(h_in.data_ptr()), rows * n * 4,
+                                       0, rows * m * 4, shards)
+                rep.captured += 1
+                for case in range(3):
+                    if case == 0:
+                        x = torch.from_numpy(rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64))
+                    else:
+                        x = torch.full((rows, n), 0 if case == 2 else (1 << 32) - 1, dtype=torch.int64)
+                    got = bytes(mgr.svc.run_graph(slot, li, ri, rows, pack_ring(x, ring)))
+                    want = pack_ring(kern.run_compact(x, ring), ring)
+                    if inject_mismatch:
+                        want = bytes([want[0] ^ 1]) + want[1:]
+                    if got != want:
+                        rep.disabled = (f"tensor-parallel graph replay differs from the kernel path ({kern.linear}, "
+                                        f"rows={rows}, case {case})")
                         return
                 rep.checked += 1
 
