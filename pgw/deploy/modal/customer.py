@@ -103,7 +103,7 @@ if DRAFT:
         " && rm -rf /root/.cache/huggingface")
 image = (
     image
-    .env(RUNTIME_ENV)
+    .env({**RUNTIME_ENV, **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
     .add_local_file(HERE / "wizard_client.py", "/opt/pgw-modal/wizard_client.py")
     .add_local_file(HERE / "trip_gate.py", "/opt/pgw-modal/trip_gate.py")

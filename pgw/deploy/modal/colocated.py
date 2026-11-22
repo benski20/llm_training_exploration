@@ -223,7 +223,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             # on the CPU: the gateway's process sees no GPU)
             spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
             # with its own GPU (gsplit), the gateway's exact local linears run there (self-checked, else the CPU)
-            gdev = {"local_linears_device": "cuda"} if gsplit.get("gateway") else {}
+            # and its LM head too (the CPU kernel's fixed summation order as one GPU kernel: the same logits bit
+            # for bit, self-checked at start-up, else the CPU; PGW_LM_HEAD_DEVICE=cpu via --gateway-env turns it off)
+            gdev = {"local_linears_device": "cuda", "lm_head_device": "cuda"} if gsplit.get("gateway") else {}
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,

@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import logging
 import os
+import weakref
+from typing import Any
 
 import torch
 
@@ -126,6 +128,26 @@ def lm_head_reference(h: torch.Tensor, w: torch.Tensor, block: int = 4096) -> to
     return out
 
 
+#: Heads with a device copy that computes the same bits (``id(w) -> (weakref(w), head)``; see
+#: :func:`attach_device_head`).
+_DEVICE_HEADS: dict[int, tuple[Any, Any]] = {}
+
+
+def attach_device_head(w: torch.Tensor, head: Any) -> None:
+    """Route :func:`lm_head_logits` of ``w`` to ``head.logits(h)`` (a :class:`pgw.engine.lm_head_gpu.GpuLmHead`
+    that passed its bit-for-bit self-check against this module's kernel). ``head=None`` detaches."""
+    if head is None:
+        _DEVICE_HEADS.pop(id(w), None)
+        return
+    _DEVICE_HEADS[id(w)] = (weakref.ref(w), head)
+
+
+def device_head(w: torch.Tensor) -> Any:
+    """The attached device head of ``w``, or ``None``."""
+    hit = _DEVICE_HEADS.get(id(w))
+    return hit[1] if hit is not None and hit[0]() is w else None
+
+
 def lm_head_logits(h: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     """float32 logits ``(R, V)`` of normalized rows ``h (R, D)`` against the head ``w (V, D)``.
 
@@ -136,6 +158,10 @@ def lm_head_logits(h: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     kernel) computes on the CPU and returns CPU logits: the same bits as the per-chunk reference on
     the GPU (element-wise float32 products and sums are correctly rounded on both).
     """
+    if _DEVICE_HEADS:
+        dev = device_head(w)
+        if dev is not None and h.dtype == torch.float32:
+            return dev.logits(h)  # type: ignore[no-any-return]
     if w.device.type == "cpu" and h.device.type != "cpu":
         h = h.detach().to("cpu")
     if native_lm_head() and h.device.type == "cpu" and w.device.type == "cpu" and h.dtype == torch.float32:

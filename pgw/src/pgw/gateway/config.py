@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 #: check (exactness is kept bit for bit; privacy is unchanged), so a deployment may preset them for the wizard.
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
-    "local_max_rows", "float_threads",
+    "local_max_rows", "lm_head_device", "float_threads",
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
@@ -261,6 +261,12 @@ class GatewayModelConfig(BaseModel):
         "gateway GPU) or 'auto' (the GPU when it is faster). The GPU is used only after a start-up check found its "
         "integer outputs identical to the CPU's; quantization, the range check and dequantization stay on the CPU, "
         "so the outputs are the same bits either way",
+    )
+    lm_head_device: Literal["cpu", "cuda"] = Field(
+        "cpu", description="Where the float32 LM head runs: 'cpu' (default, the native kernel) or 'cuda' (a "
+        "gateway GPU: the same fixed summation order as one GPU kernel, pgw.engine.lm_head_gpu). The GPU is used "
+        "only after a start-up check found its logits identical to the CPU kernel's bit for bit; otherwise the "
+        "CPU is kept. PGW_LM_HEAD_DEVICE overrides it",
     )
     local_rtt_ms: float | None = Field(
         None, gt=0, description="Round trip (ms) local_linears = 'auto' compares with. None = measured at start-up "

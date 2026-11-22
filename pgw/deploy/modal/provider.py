@@ -92,7 +92,7 @@ image = (
     )
     .run_commands(f"python -m pgw.cli pack {MODEL_REPO} {PACK} --name {MODEL_NAME} --revision {MODEL_REVISION} -q"
                   " && rm -rf /root/.cache/huggingface")
-    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV})
+    .env({"PYTHONUNBUFFERED": "1", **RUNTIME_ENV, **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})})
     .add_local_file(HERE / "pgw_modal_boot.py", "/opt/pgw-modal/pgw_modal_boot.py")
 )
 

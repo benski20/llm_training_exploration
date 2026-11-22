@@ -33,6 +33,7 @@ pub mod lane_service;
 pub mod layer;
 pub mod lmhead;
 pub mod local;
+pub mod localgpu;
 pub mod noise;
 pub mod prepare;
 pub mod store;
@@ -59,6 +60,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     layer::register(m)?;
     lmhead::register(m)?;
     local::register(m)?;
+    localgpu::register(m)?;
     noise::register(m)?;
     prepare::register(m)?;
     store::register(m)?;
