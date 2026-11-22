@@ -242,6 +242,33 @@ On the Kaggle T4 box (job `pgw-colocated-t4`, same bench): TLS loopback p50 0.85
 1.07 ms, +17 ms 18.44 ms (17.37 ms over the proxy hop); `TCP_NODELAY` set on the client socket and on
 all four accepted service sockets.
 
+### Co-located throughput (2026-11-22): defaults and where a token's time goes
+
+`--placement colocated` now defaults to `--local-linears attention_down` and `--lane tls`, and gives the
+gateway party `pgw_modal_boot.colocated_gateway_env()`: `PGW_FACTORY_SKIP_LINEAR_KINDS` for a fixed local
+mode (the factory then makes only the masks of linears the gateway sends; gate_up alone for
+attention_down), `PGW_POOL_SPIN_US=2000` and `PGW_POOL_WORKERS=4`. `--gateway-env` / `--provider-env`
+(PGW_/OMP_/MKL_ keys) add or override settings per run; `--sustain-s N` chats back to back after the
+exactness check and reports tokens/s, the mask factory segments finished meanwhile and the cores each
+party used. The e2e also sends the warm chat once more on loopback (`warm_loopback_tokens_per_s`, same
+answer required) to separate the gateway from Modal's HTTPS edge.
+
+Measured (T4, 14 cores, Qwen2.5-0.5B, 41-token prompt; every run logprobs bit-identical and repeat
+identical; factory kept busy with `PGW_FACTORY_TARGET_SLOTS=8000`, 1024-slot segments):
+
+| config | warm chat (edge) | back-to-back chats (loopback) | trips/token | 1-row trip | factory while decoding |
+|---|---|---|---|---|---|
+| before (lead, attention_down, stream lane, all masks) | 4.07 tok/s | - | 26.25 | 3.18 ms | - |
+| attention_down, TLS lane, gate_up masks only | 10.1-11.5 | 13.1-13.5 | 26.25 | 0.54-0.57 ms | 138 slots/s on 2.5 cores |
+| attention (qkv, o local), TLS lane, gate_up + down masks | 9.2 | 9.4 | 52.5 | 0.47 ms | 5.7 cores |
+
+Per decoded token (attention_down, in-container, about 57-62 ms): round trips about 12 ms (24 x 0.5 ms),
+mask prepare + finish about 10.6 ms, local qkv/o/down GEMVs 17-25 ms (148 MB of int8 weights streamed
+from DRAM per token; the native pool helps little under gVisor, where waking a sleeping worker is slow),
+LM head + sampling 3.5-4 ms, float ops and Python 12-15 ms. Time to first token 520-640 ms (local linears
+of the 41 prompt rows about 210 ms, mask reads about 80 ms, float ops and Python about 150 ms). Modal's
+HTTPS edge adds 0.5-0.7 s to the warm chat. Not reached: 30 tokens/s (see STATUS.md).
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

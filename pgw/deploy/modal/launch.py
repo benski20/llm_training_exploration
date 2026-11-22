@@ -397,7 +397,8 @@ def _print_speed(res: dict[str, Any]) -> None:
           f"{ll.get('reason', '')}), float_threads "
           f"{sp.get('float_threads')}, lane {sp.get('lane')} ({sp.get('lane_state')}), strict speculation "
           f"{sp.get('spec_rows') or 'off'}; {sp.get('warm_trips_per_token', '?')} round trips per token "
-          f"(warm chat), {sp.get('warm_tokens_per_s', '?')} tokens/s (warm chat wall time)", flush=True)
+          f"(warm chat), {sp.get('warm_tokens_per_s', '?')} tokens/s (warm chat wall time; "
+          f"{sp.get('warm_loopback_tokens_per_s', '?')} sent on loopback, without Modal's HTTPS edge)", flush=True)
     if sp.get("spec_rows"):
         print(f"strict speculation: warm answer {sp.get('warm_answer_tokens_per_s', '?')} tokens/s; dummy passes "
               f"after the first chat took {sp.get('spec_drain_wait_s', '?')} s", flush=True)

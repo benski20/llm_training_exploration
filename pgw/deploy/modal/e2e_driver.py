@@ -74,6 +74,9 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
                              "path": path}
     if snap_errors:
         trips["errors"] = snap_errors
+    # The same warm chat sent to the gateway on loopback (no Modal HTTPS edge on the way): what the
+    # gateway itself delivers; reported next to the edge figure, never instead of it. Same answer required.
+    out3 = wiz.chat(local_url, key, model_name, PROMPT, 32) if not spec_rows else None
     st = json.loads((config_dir / "setup" / "state.json").read_text())
     t = time.time()
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32)
@@ -105,6 +108,9 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         speed["warm_trips_per_token"] = round(trips["warm"]["trips"] / warm_tokens, 2)
     if warm_tokens and out2.get("_wall_s"):
         speed["warm_tokens_per_s"] = round(warm_tokens / float(out2["_wall_s"]), 2)
+    if out3 is not None and out3.get("_wall_s"):
+        t3 = int(((out3.get("usage") or {}).get("completion_tokens")) or 0)
+        speed["warm_loopback_tokens_per_s"] = round(t3 / float(out3["_wall_s"]), 2)
     if spec_rows:
         speed["spec_drain_wait_s"] = round(drain_s, 1)
         if warm_tokens:
@@ -118,6 +124,10 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         "repeat_identical": out["choices"][0]["message"]["content"] == out2["choices"][0]["message"]["content"]
         and [x["logprob"] for x in out["choices"][0]["logprobs"]["content"]]
         == [x["logprob"] for x in out2["choices"][0]["logprobs"]["content"]],
+        "loopback_repeat_identical": None if out3 is None else (
+            out3["choices"][0]["message"]["content"] == out["choices"][0]["message"]["content"]
+            and [x["logprob"] for x in out3["choices"][0]["logprobs"]["content"]]
+            == [x["logprob"] for x in out["choices"][0]["logprobs"]["content"]]),
         "reference_text": ref["text"], "reference_s": ref_s, "compare": cmp,
         "admin_status": status, "admin_masks": masks, "trip_latency": trips, "speed": speed,
         "network_path": path, "sustain": sustain, "warm_window": [tw0, tw1],

@@ -15,6 +15,25 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: co-located chat throughput on Modal (package T1)
+
+Goal was 30-40 tokens/s for one Qwen2.5-0.5B chat on the co-located Modal placement; reached **10-11 tokens/s
+warm chat (12-13.5 tokens/s back to back), from 4.0-4.7**, every run logprobs bit-identical and repeat
+identical. Details and the per-token breakdown: `deploy/modal/README.md`, "Co-located throughput".
+
+- Co-located defaults: `attention_down` + TLS lane; the encrypted factory skips the local kinds
+  (`PGW_FACTORY_SKIP_LINEAR_KINDS`, gate_up masks only): 138 slots/s on 2.5 cores while chats decode, so
+  the factory no longer competes with decode (it was the 4.07 tok/s run's main loss) and keeps up 10x over.
+- Local linears of any row count take the native kernel (prompt passes no longer use the two-digit torch
+  int8 GEMM, 10-140 ms per call on Modal's AVX2 hosts); decode GEMVs split input features over the pool.
+- Pool knobs `PGW_POOL_SPIN_US`, `PGW_POOL_WORKERS`; launcher `--gateway-env`, `--provider-env`,
+  `--sustain-s`, loopback warm-chat figure; `gpu_bench.py` CPU targets `c8`/`c16`.
+- What is left per decoded token (about 57-62 ms): round trips 12 ms, mask prepare/finish 10.6 ms, local
+  GEMVs 17-25 ms (148 MB of int8 weights from DRAM; pool threads scale poorly under gVisor), LM head 3.5-4 ms,
+  float ops and Python 12-15 ms; time to first token 520-640 ms. `float_threads = 1` stays off on Modal's
+  AVX-512 hosts: torch's CPU SDPA gives different bits at 1 and 14-16 threads there (the self-check is right
+  to refuse; the plaintext reference itself depends on the thread count on those hosts). Tried and dropped
+  (no gain on Modal): cache warm-ahead of local weights, a 200 us GIL switch interval.
 ## Update 2026-11-21: encrypted mask factory, gateway side (package M3)
 
 Design and numbers: [research/plans/he-gateway-decrypt.md](research/plans/he-gateway-decrypt.md).
