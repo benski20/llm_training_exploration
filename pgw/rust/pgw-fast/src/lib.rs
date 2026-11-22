@@ -27,6 +27,8 @@ use pyo3::prelude::*;
 
 pub mod attn;
 pub mod bitpack;
+#[cfg(unix)]
+pub mod decode;
 pub mod finish;
 pub mod hemask;
 pub mod lane;
@@ -56,6 +58,8 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(version, m)?)?;
     attn::register(m)?;
     bitpack::register(m)?;
+    #[cfg(unix)]
+    decode::register(m)?;
     finish::register(m)?;
     hemask::register(m)?;
     lane::register(m)?;

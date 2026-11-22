@@ -140,7 +140,7 @@ fn rms_rows_body(xs: &[f32], ws: &[f32], eps: f64, os: &mut [f32], n: usize) {
         rms_norm_row(x, ws, eps, o);
     }
 }
-isa_dispatch!(fn rms_rows => rms_rows_body(xs: &[f32], ws: &[f32], eps: f64, os: &mut [f32], n: usize));
+isa_dispatch!(pub(crate) fn rms_rows => rms_rows_body(xs: &[f32], ws: &[f32], eps: f64, os: &mut [f32], n: usize));
 
 #[inline(always)]
 fn add_body(hs: &[f32], ys: &[f32], os: &mut [f32]) {
@@ -148,7 +148,7 @@ fn add_body(hs: &[f32], ys: &[f32], os: &mut [f32]) {
         *o = h + y;
     }
 }
-isa_dispatch!(fn add_rows => add_body(hs: &[f32], ys: &[f32], os: &mut [f32]));
+isa_dispatch!(pub(crate) fn add_rows => add_body(hs: &[f32], ys: &[f32], os: &mut [f32]));
 
 #[inline(always)]
 fn silu_rows_body(gs: &[f32], os: &mut [f32], inter: usize) {
@@ -156,7 +156,7 @@ fn silu_rows_body(gs: &[f32], os: &mut [f32], inter: usize) {
         silu_mul_row(&row[..inter], &row[inter..], o);
     }
 }
-isa_dispatch!(fn silu_rows => silu_rows_body(gs: &[f32], os: &mut [f32], inter: usize));
+isa_dispatch!(pub(crate) fn silu_rows => silu_rows_body(gs: &[f32], os: &mut [f32], inter: usize));
 
 fn shape2(a: &Bound<'_, PyArray2<f32>>, name: &str) -> PyResult<(usize, usize)> {
     if !a.is_c_contiguous() {

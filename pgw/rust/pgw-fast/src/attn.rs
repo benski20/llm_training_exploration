@@ -806,7 +806,7 @@ pub fn attend_rows<T: Kv>(q: &[f32], k: &[T], v: &[T], rows: usize, start: usize
 }
 
 /// Threads for a pass: one for decode-sized work, more for long prompts (bits do not depend on it).
-fn auto_threads(rows: usize, start: usize, threads: usize) -> usize {
+pub(crate) fn auto_threads(rows: usize, start: usize, threads: usize) -> usize {
     if threads > 0 {
         return threads;
     }

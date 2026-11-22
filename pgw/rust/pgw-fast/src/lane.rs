@@ -853,6 +853,11 @@ mod chan {
         ) -> Result<(u8, u32), LaneError> {
             self.inner.lock().unwrap_or_else(|p| p.into_inner()).trip(h, body, out, timeout)
         }
+
+        /// Largest rows per trip (crate callers; the hello ack's).
+        pub(crate) fn max_rows_raw(&self) -> u16 {
+            self.max_rows
+        }
     }
 
     #[pymethods]

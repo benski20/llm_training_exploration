@@ -45,6 +45,7 @@ import torch.nn.functional as F
 from pgw.core import native
 from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.types import LinearId, LinearKind, ModelArch
+from pgw.engine import decode_native as _decode_native
 from pgw.engine.backends import DUMMY, PAD_ROWS, LinearBackend, LinearCall
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
 from pgw.engine.lm_head import compact_head, lm_head_logits, native_lm_head
@@ -1209,7 +1210,14 @@ class TransformerModel:
             self._capture(capture, st, -1)
         sched = self.schedule
         pads = self._pad_plan(seqs, ids)
-        for layer in range(self.num_layers):
+        first_layer = 0
+        if (pads is None and sched is None and not capture and getattr(self.backend, "decode_native", False)
+                and getattr(_decode_native.sync_pass, "on", False)):
+            nd = _decode_native.driver_for(self)
+            if nd is not None and nd.eligible(st):  # PGW_DECODE_NATIVE: every layer in the native driver
+                nd.run(st)
+                first_layer = self.num_layers
+        for layer in range(first_layer, self.num_layers):
             if pads is not None:
                 yield from self._padded(self._layer_standard(layer, st), pads)
             elif sched is None:
@@ -1598,6 +1606,9 @@ class TransformerModel:
         """Run several sequences in lockstep; one ``forward_many`` per linear group for all of them."""
         gen = self._steps(seqs)
         rows = self._pass_rows(seqs)
+        tls = _decode_native.sync_pass
+        outer = getattr(tls, "on", False)
+        tls.on = True  # a synchronous pass: the native decode driver may run it (PGW_DECODE_NATIVE)
         try:
             finished, out = self._advance_local(gen, None, rows)
             while not finished:
@@ -1605,6 +1616,7 @@ class TransformerModel:
                 finished, out = self._advance_local(gen, res, rows)
             return out  # type: ignore[no-any-return]
         finally:
+            tls.on = outer
             gen.close()  # drop references to activations promptly on failure
 
     # ---- off-loop execution ----------------------------------------------------------------------

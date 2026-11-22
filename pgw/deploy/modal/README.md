@@ -718,6 +718,7 @@ library defaults unchanged).
 | `--spec-pipeline-steps M` | pipelined drafter (`spec_pipeline_steps`; prompt lookup off, as the config requires) | wizard `models.json` |
 | `--spec-mask C[/B]` (existing, now also at run time) | padded strict speculation, public charge of C slots per pass | wizard `models.json` |
 | `--trip-native` | `PGW_TRIP_NATIVE=1` next to the demo's `PGW_TRIP_FAST=1` | gateway environment |
+| `--decode-native` (with `--trip-native`) | `PGW_DECODE_NATIVE=1`: the native decode driver (a decode pass's decoder layers in one GIL-free native call; STATUS 2026-11-22 "native decode driver") | gateway environment |
 | `--prime-check` | `PGW_FACTORY_CHECK_FIELD=p31` + `PGW_GATEWAY_PRIME_CHECK=true`; **refused with `--spec-mask`** (padding rows refuse prime extents, fail closed) | factory + gateway environment |
 | `--ab-plain S` | after the speculative phase: rewrite `models.json` without the speculation keys, restart the gateway process (same pack, mask store, keys, service, enrollment; normal mode from the finished wizard), 1 warm-up + 3 streamed chats, then `S` seconds back to back | `colocated.py` |
 | `--gateway-cache`, `--prepare-cache` | the gateway side's cache Volume (below) | deploy / one-off T4 container |

@@ -537,6 +537,8 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
         genv.setdefault("PGW_MODAL_SPEC_MASK", args.spec_mask.strip())
     if getattr(args, "trip_native", False):  # one native call per side of each trip (with PGW_TRIP_FAST, on co-located)
         genv.setdefault("PGW_TRIP_NATIVE", "1")
+    if getattr(args, "decode_native", False):  # the native decode driver (needs --trip-native; library default off)
+        genv.setdefault("PGW_DECODE_NATIVE", "1")
     if getattr(args, "prime_check", False):  # one-vector Freivalds check over F_p: factory format + gateway acceptance
         genv.setdefault("PGW_FACTORY_CHECK_FIELD", "p31")
         genv.setdefault("PGW_GATEWAY_PRIME_CHECK", "true")
@@ -882,6 +884,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--trip-native", action="store_true",
                     help="--placement colocated: the native per-trip path (PGW_TRIP_NATIVE=1 next to the demo's "
                          "PGW_TRIP_FAST=1; library default off)")
+    ap.add_argument("--decode-native", action="store_true",
+                    help="--trip-native: the native decode driver (PGW_DECODE_NATIVE=1: a decode pass's decoder layers "
+                         "in one GIL-free native call; library default off)")
     ap.add_argument("--prime-check", action="store_true",
                     help="--placement colocated: one-vector Freivalds check over F_p (factory "
                          "PGW_FACTORY_CHECK_FIELD=p31, gateway PGW_GATEWAY_PRIME_CHECK). Not with --spec-mask: padding "
@@ -1014,6 +1019,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--draft-backend / --spec-pipeline-steps need --spec-draft (the draft model)")
     if args.spec_pipeline_steps is not None and not 0 <= args.spec_pipeline_steps <= max(0, args.spec_rows - 1):
         ap.error("--spec-pipeline-steps must be in [0, --spec-rows - 1]")
+    if args.decode_native and not args.trip_native:
+        ap.error("--decode-native needs --trip-native")
     colo_only = {"--trip-native": args.trip_native, "--prime-check": args.prime_check,
                  "--masked-head": args.masked_head,
                  "--ab-plain": args.ab_plain is not None, "--gateway-cache": args.gateway_cache,

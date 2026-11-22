@@ -952,6 +952,65 @@ class LaneComputeClient:
         self.lane_stats.bytes_received += REPLY.size + out_len
         return res, dt, out_len
 
+    # ---- the native decode driver (PGW_DECODE_NATIVE) --------------------------------------------------
+    def driver_channel(self, fingerprint: str, ring: str, rows: int,
+                       deadline_ms: int | None) -> tuple[Any, Any, int, int, float] | None:
+        """A native channel of this client's pool for a native decode driver call of ``rows``-row trips:
+        ``(lane, channel, gen, ring index, trip timeout_s)``, or ``None`` (the driver then hands every trip
+        back and the caller sends it with :meth:`compute_sync`, which counts the fallback reason). Give the
+        channel back with :meth:`driver_release`."""
+        if self._lane is None and not self._closed and time.monotonic() >= self._off_until:
+            with contextlib.suppress(Exception):
+                self.open_sync(fingerprint, ring, if_needed=True)
+        lane = self._lane
+        if lane is None or fingerprint != lane.ticket.fingerprint:
+            return None
+        ring_ix = lane.rings.get(ring)
+        if ring_ix is None or not 1 <= int(rows) <= lane.ticket.max_rows:
+            return None
+        if self.lane_config.trip_timeout_s is not None:
+            timeout = float(self.lane_config.trip_timeout_s)
+        elif deadline_ms:
+            timeout = deadline_ms / 1000.0
+        else:
+            timeout = float(getattr(self._client.config, "request_timeout_s", 60.0))
+        try:
+            got = self._acquire(lane, timeout)
+        except Exception as exc:  # opening a connection failed: the lane is down for a while
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{type(exc).__name__}")
+            return None
+        if got is None:
+            return None
+        ch, gen = got
+        cls = native_channel_class()
+        if cls is None or not isinstance(ch, cls) or int(rows) > int(ch.max_rows):
+            self._release(ch, gen)
+            if cls is None or not isinstance(ch, cls):
+                self.lane_eligible_for_driver = False
+            return None
+        return lane, ch, gen, int(ring_ix), timeout
+
+    def driver_release(self, lane: Any, ch: Any, gen: int, *, trips: int = 0, sent: int = 0, received: int = 0,
+                       last_rtt_s: float | None = None, status: int = 0, error: str | None = None) -> None:
+        """Give a :meth:`driver_channel` channel back with the driver's lane statistics; ``status``/``error``:
+        the trip the lane did not serve (a refusal status, or a channel error that closed the channel), counted
+        and acted on exactly as :meth:`trip_ticket` does."""
+        self.lane_stats.trips += int(trips)
+        self.lane_stats.bytes_sent += int(sent)
+        self.lane_stats.bytes_received += int(received)
+        if last_rtt_s is not None and (trips or status or error):
+            self.lane_stats.last_rtt_s = float(last_rtt_s)
+        self._release(ch, gen)
+        if error is not None:
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{error}")
+        elif status:
+            name = Status(status).name if status in Status._value2member_map_ else str(status)
+            if status in CLOSING_STATUSES:
+                self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"status:{name}")
+
     def fallback_sync(self, request: ComputeRequest) -> ComputeResponse:
         """The wrapped client's blocking compute (after :meth:`trip_ticket` returned ``None``)."""
         return cast(ComputeResponse, self._client.compute_sync(request))

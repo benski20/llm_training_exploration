@@ -1201,6 +1201,14 @@ class MaskedBackend(LinearBackend):
         #: Same payload bytes, header and request id, same checks, outputs, statistics and fallback (a call the
         #: lane does not serve goes to the wrapped client with the same request, finished as before).
         self.trip_driver = self.trip_native and _env_flag("PGW_TRIP_DRIVER", False)
+        #: With :attr:`trip_native` (``PGW_DECODE_NATIVE``, default off): a decode pass of one sequence on the native
+        #: float path runs its decoder layers in ``pgw_fast.DecodeDriver`` (:mod:`pgw.engine.decode_native`): the
+        #: float operations and every trip (lease prepare, duplicate-row check, native lane trip, finish with every
+        #: check) with the GIL released, Python once per call (``PGW_DECODE_NATIVE_LAYERS`` layers, 0 = all). Same
+        #: rows, payload bytes, request-id format, checks and outputs; trips the lane does not serve take the
+        #: ordinary fallback with the same request.
+        self.decode_native = (self.trip_native and _env_flag("PGW_DECODE_NATIVE", False)
+                              and native_available("DecodeDriver"))
         self._verifiers: dict[tuple[str, int], Any] = {}
         #: id(lease) -> (min_soundness_bits, size of the soundness cache) when its extent was verified
         self._lease_sound: dict[int, tuple[float, int]] = {}
@@ -1899,6 +1907,33 @@ class MaskedBackend(LinearBackend):
         return prep
 
     # ---- native per-trip path (PGW_TRIP_NATIVE) ------------------------------------------------------
+    def _trip_lease_for(self, res: Any, leases: dict[str, Any], lid: LinearId, meta: _MaskedMeta, t: int) -> Any:
+        """The lease serving the next ``t`` rows of ``lid`` (the attached one, or a new one: the window's
+        ``ensure`` / exhaustion pre-check and the extent's soundness check run before any row is taken), or
+        ``None`` (the ordinary path)."""
+        key = lid.key
+        lease = leases.get(key)
+        sound = (float(self.min_soundness_bits), len(self._sound_ok))
+        if lease is not None and self._lease_sound.get(id(lease)) != sound:
+            # soundness policy changed since this lease's extent was verified: verify again before any row
+            lease.detach()
+        if lease is None or key == res.trip_step_key or not lease.ready(t):
+            n = meta.in_features
+            vkey = (key, n)
+            verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
+            if verify is None and self.min_soundness_bits > 0:
+                verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
+            if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
+                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), prime_ok=True)
+            else:
+                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
+            if lease is None:
+                return None
+            if len(self._lease_sound) > 65536:
+                self._lease_sound.clear()
+            self._lease_sound[id(lease)] = (float(self.min_soundness_bits), len(self._sound_ok))
+        return lease
+
     def _prepare_trip_lease(self, call: LinearCall) -> _Prepared | None:
         """:meth:`_prepare_trip_one` as one native call (:attr:`trip_native`), or ``None`` (no row taken,
         nothing drawn): the reservation hands no lease for this call, so the caller takes that path.
@@ -1920,25 +1955,9 @@ class MaskedBackend(LinearBackend):
             raise ShapeError(f"{lid}: x must be (T, {n}), got {tuple(x.shape)}")
         t = int(x.shape[0])
         key = lid.key
-        lease = leases.get(key)
-        sound = (float(self.min_soundness_bits), len(self._sound_ok))
-        if lease is not None and self._lease_sound.get(id(lease)) != sound:
-            # soundness policy changed since this lease's extent was verified: verify again before any row
-            lease.detach()
-        if lease is None or key == res.trip_step_key or not lease.ready(t):
-            vkey = (key, n)
-            verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
-            if verify is None and self.min_soundness_bits > 0:
-                verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
-            if self.prime_check:  # prime-field extents are leased only to a gateway that runs their check
-                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0), prime_ok=True)
-            else:
-                lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
-            if lease is None:
-                return None
-            if len(self._lease_sound) > 65536:
-                self._lease_sound.clear()
-            self._lease_sound[id(lease)] = (float(self.min_soundness_bits), len(self._sound_ok))
+        lease = self._trip_lease_for(res, leases, lid, meta, t)
+        if lease is None:
+            return None
         if x.dtype != torch.float32 or x.device.type != "cpu":
             x = x.to("cpu", torch.float32)
         xn = x.detach().numpy()
