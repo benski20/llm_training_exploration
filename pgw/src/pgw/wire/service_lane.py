@@ -215,9 +215,11 @@ class ServiceLaneOpener:
     (indices in its order); the linear shapes from the model the client connected to.
     """
 
-    def __init__(self, client: Any, lane_config: LaneConfig):
+    def __init__(self, client: Any, lane_config: LaneConfig, *, tcp_ports: Any = None):
         self._client = client
         self._lane_config = lane_config
+        #: TCP lane ports the gateway may connect to (its egress allowlist for the service host); None = any
+        self._tcp_ports: frozenset[int] | None = None if tcp_ports is None else frozenset(int(p) for p in tcp_ports)
         self._used: set[bytes] = set()
         self._used_lock = threading.Lock()
 
@@ -249,6 +251,9 @@ class ServiceLaneOpener:
                 port = int(d["port"])
                 if not 0 < port < 65536 or d.get("alpn", "pgw-lane/1") != "pgw-lane/1":
                     raise ProtocolError("lane ticket names a bad port or protocol")
+                if self._tcp_ports is not None and port not in self._tcp_ports:
+                    raise ProtocolError(f"lane ticket names port {port}, which is not on the gateway's egress "
+                                        "allowlist for the service host (add https://<host>:<port>)")
                 return LaneTicket(*common, port=port)
             return LaneTicket(*common, path=str(d["socket"]))
         except ProtocolError:
@@ -356,17 +361,19 @@ def _connect_tls(native: Any, config: Any, ticket: LaneTicket, secret: bytes | b
 
 def build_lane_client(client: Any, *, uds_dir: str | None = None, pool_wait_s: float = 0.01,
                       max_channels: int = 4, transports: tuple[str, ...] = ("uds",), spin_us: int = 50,
-                      native: bool | None = False) -> LaneComputeClient:
+                      native: bool | None = False, tcp_ports: Any = None) -> LaneComputeClient:
     """Wrap ``client`` (a connected-or-connecting :class:`~pgw.wire.client.ComputeClient`, or a wrapper of one
     such as :class:`~pgw.wire.sync_stream.SyncStreamClient`) so eligible calls use the service's trip lane,
     everything else (and every lane failure) the wrapped client with the byte-identical request.
     ``transports``: ``("uds",)`` (a service on this host) or ``("tcp",)`` (TLS to the service URL's host).
     ``native``: None = the native channel when the extension has it, False (default, as before) = the Python
-    channel on UDS. The TCP lane always uses the native channel (there is no Python TLS channel for A1 frames)."""
+    channel on UDS. The TCP lane always uses the native channel (there is no Python TLS channel for A1 frames).
+    ``tcp_ports``: the only TCP lane ports accepted from a ticket (the gateway passes the ports its egress
+    allowlist allows on the service host); ``None`` = any port (tests and tools without an allowlist)."""
     bad = set(transports) - {"uds", "tcp"}
     if bad or not transports:
         raise ValueError(f"unknown lane transports {sorted(bad)}")
     cfg = LaneConfig(native=native, uds_dir=uds_dir, pool_wait_s=pool_wait_s, max_channels=max_channels,
                      transports=tuple(transports), spin_us=spin_us)
-    opener = ServiceLaneOpener(client, cfg)
+    opener = ServiceLaneOpener(client, cfg, tcp_ports=tcp_ports)
     return LaneComputeClient(opener, cfg, channel_factory=opener.channel)

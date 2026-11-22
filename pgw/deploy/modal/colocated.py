@@ -190,7 +190,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
-                                                                **boot.lane_options(lane)})
+                                                                **boot.lane_options(lane)},
+                                                 egress=boot.lane_egress(lane, LANE_PORT))
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,

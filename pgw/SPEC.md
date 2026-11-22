@@ -547,7 +547,8 @@ sends the service anything it does not already see (`docs/operations/install-on-
 - `lane = "tls"`: decode calls over the service's TCP+TLS trip lane (`PGW_SERVICE_LANE=tcp`,
   `PGW_SERVICE_LANE_PORT`): TLS 1.3 only (rustls on both ends; the service's own certificate; the gateway
   verifies it against `service_ca_file` as the `service_url` host and connects only to that host, on the
-  ticket's port; ALPN `pgw-lane/1`). The ticket comes from `lane/open` on the regular channel (bearer token
+  ticket's port, and only when `https://<host>:<port>` is on the gateway's `egress_allowlist`, else the lane is
+  not used; ALPN `pgw-lane/1`). The ticket comes from `lane/open` on the regular channel (bearer token
   and client certificate checked as for compute; revoking the token closes the lane connections). When the
   gateway presented a client certificate on `lane/open`, the ticket is bound to that certificate's SHA-256
   and only a TLS connection presenting the same certificate (verified against the service's client CA) can

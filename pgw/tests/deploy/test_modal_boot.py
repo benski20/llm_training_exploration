@@ -213,3 +213,12 @@ def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) ->
     assert c.lane == "tls"
     col = (MODAL_DIR / "colocated.py").read_text()
     assert "lane_port=LANE_PORT if lane == \"tls\" else None" in col and "boot.lane_options(lane)" in col
+    # the gateway connects to a TCP lane port only when it is on its egress allowlist
+    assert "egress=boot.lane_egress(lane, LANE_PORT)" in col
+    assert boot.lane_egress("tls", 8444) == ["https://127.0.0.1:8444"] and boot.lane_egress("stream", None) == []
+    with pytest.raises(ValueError):
+        boot.lane_egress("tls", None)
+    from pgw.gateway import GatewaySettings
+
+    gs = GatewaySettings(egress_allowlist=boot.lane_egress("tls", 8444), models=[c], admin_token="x" * 32)
+    assert ("https", "127.0.0.1", 8444) in gs.egress_origins()

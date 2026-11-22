@@ -89,10 +89,11 @@ def main() -> None:
         public_url = f"https://127.0.0.1:{proxy.start()}"
     procs = []
     result: dict = {"device": args.device, "users": args.users, "delay_ms": args.delay_ms, "lane": args.lane}
+    lane_port = free_port() if args.lane == "tls" else None
     try:
         p = boot.start_provider_party(prov, pack, port, device=args.device, user=puser, log_dir=logs,
                                       code_ttl="2h", note="local rehearsal", public_url=public_url,
-                                      lane_port=free_port() if args.lane == "tls" else None)
+                                      lane_port=lane_port)
         procs.append(p["proc"])
         code = p["code"]
         boot.log(f"enrollment code created (id {code['id']}) for {p['url']}")
@@ -100,7 +101,8 @@ def main() -> None:
         gw, token = boot.start_gateway_party(cust, gport, user=cuser, log_dir=logs,
                                              model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                             "local_linears": args.local_linears,
-                                                            **boot.lane_options(args.lane)})
+                                                            **boot.lane_options(args.lane)},
+                                             egress=boot.lane_egress(args.lane, lane_port))
         procs.append(gw)
         base = f"http://127.0.0.1:{gport}"
         if args.through == "admin":

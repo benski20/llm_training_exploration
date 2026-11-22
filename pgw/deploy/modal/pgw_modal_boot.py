@@ -343,6 +343,16 @@ def lane_options(lane: str) -> dict[str, Any]:
     return {"lane": lane}
 
 
+def lane_egress(lane: str, lane_port: int | None, host: str = "127.0.0.1") -> list[str]:
+    """The gateway's extra egress origin for ``launch.py --lane tls``: the provider's lane port on ``host`` (the
+    gateway connects to a TCP lane port only when it is on its egress allowlist). Empty for ``stream``."""
+    if lane != "tls":
+        return []
+    if lane_port is None:
+        raise ValueError("lane = 'tls' needs the provider's lane port")
+    return [f"https://{host}:{int(lane_port)}"]
+
+
 #: Customer container memory (MiB): the 0.5B demo fits 8 GiB; a larger target (its float32 embedding and head, the
 #: local attention weights, packing it in the wizard) plus the 0.5B draft gets 16 GiB (about $0.064/h more).
 CUSTOMER_MEMORY_MIB = {"default": 8192, "large": 16384}
@@ -512,12 +522,15 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
 
 def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Path,
                         model_options: dict[str, Any] | None = None,
-                        hide_gpu: bool = True) -> tuple[subprocess.Popen[bytes], str]:
+                        hide_gpu: bool = True, egress: list[str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
     """The customer's gateway in setup mode as ``user`` in ``root`` (0700), without the provider's GPU
-    (``hide_gpu``). Returns the process and its one-time setup token."""
+    (``hide_gpu``). ``egress``: extra allowed outbound origins (the gateway's ``egress_allowlist``; e.g. the
+    provider's TCP+TLS lane port, :func:`lane_egress`). Returns the process and its one-time setup token."""
     party_dir(root / "home", None)
     party_dir(root, user)
     env = gateway_env(root / "config", root / "data", port, model_options)
+    if egress:
+        env["PGW_GATEWAY_EGRESS_ALLOWLIST"] = json.dumps(list(egress))
     if hide_gpu:
         env["CUDA_VISIBLE_DEVICES"] = ""  # the provider's GPU is not the customer's
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")  # as in customer.py's image
