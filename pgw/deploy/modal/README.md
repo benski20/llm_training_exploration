@@ -334,6 +334,11 @@ repeat identical; prompt pass = median of the last 6 passes, ms):
 | prompt prefetch | 700 (515-907) | 145 | 32-69 | 67-449 | 13.2 | 13.3 |
 | + GPU prompt graphs + one item per trip | 550 (452-761) | 82-89 | 19-74 | 212-523 | 12.6 | 14.0 |
 | + GPU prompt graphs, four blocks | 800 (572-852) | 85-96 | 34-74 | 53-431 | 11.8 | 13.2 |
+| demo defaults, merged with the native float path, GPU LM head and lean trips | 440 (396-771) | 73-79 | - | 211-580 | 21.6 | 21.7 |
+
+In the merged run every prompt-row local linear took the new graphs (1080 prompt-block calls, 0 eager calls) and
+the time to first token was 0.40-0.82 s: bimodal, following the service's answers to the 41-row items (about 220
+ms or about 570 ms per pass).
 
 What is left of a prompt pass is mostly the service's answers to multi-row items (200-500 ms for 24 trips,
 host-dependent: the provider's T4 has no fused multi-row kernel and the replies take the Python stream channel)
