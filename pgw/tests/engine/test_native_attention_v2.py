@@ -170,7 +170,11 @@ def test_float_ops_names_and_cache_dtype(qwen_pack: InMemoryPack, monkeypatch: p
     assert isinstance(m2.float_ops, NativeFloatOps) and m2.float_ops.kv_bf16 and m2.float_ops.attn_block
 
 
-def _quality(q_pack: InMemoryPack, ids: list[int], names: tuple[str, ...]) -> dict[str, torch.Tensor]:
+def _quality(q_pack: InMemoryPack, ids: list[int], names: tuple[str, ...]) -> dict[str, tuple[float, float]]:
+    """Per formulation vs the first: (max |delta logprob| of the reference's top-1 token, top-1 agreement).
+    Each forward is reduced right away (the full-vocab logprobs of a long prompt are large)."""
+    ref_top: torch.Tensor | None = None
+    ref_lp: torch.Tensor | None = None
     out = {}
     for name in names:
         model = TransformerModel(q_pack, FloatBackend(q_pack, RING_K40_A12))
@@ -178,9 +182,17 @@ def _quality(q_pack: InMemoryPack, ids: list[int], names: tuple[str, ...]) -> di
         assert isinstance(model.float_ops, NativeFloatOps)
         model.float_ops.attn_threads = 4
         with torch.no_grad():
-            logits = model.forward(torch.tensor(ids), model.new_cache(len(ids) + 8), all_logits=True)
-        out[name] = torch.log_softmax(logits.to(torch.float64), dim=-1)
+            lp = torch.log_softmax(model.forward(torch.tensor(ids), model.new_cache(len(ids) + 8), all_logits=True),
+                                   dim=-1)
         del model
+        top = lp.argmax(-1)
+        if ref_top is None:
+            ref_top = top
+        at = lp.gather(1, ref_top[:, None])[:, 0].to(torch.float64)
+        if ref_lp is None:
+            ref_lp = at
+        out[name] = (float((at - ref_lp).abs().max()), float((top == ref_top).double().mean()))
+        del lp
         gc.collect()
     return out
 
@@ -188,8 +200,8 @@ def _quality(q_pack: InMemoryPack, ids: list[int], names: tuple[str, ...]) -> di
 @pytest.mark.network
 @pytest.mark.slow
 def test_bf16_kv_quality_qwen05b(qwen05b_dir: Path) -> None:
-    """bf16 KV vs float32 KV on Qwen2.5-0.5B over a ~700-token text (several 256-blocks): max |delta logprob|
-    of the float32-KV top-1 token, top-1 agreement; and blocked (v2) vs v1 at float32 KV."""
+    """bf16 KV vs float32 KV on Qwen2.5-0.5B over a ~560-token prompt (several 256-blocks): max |delta logprob|
+    of the float32-KV top-1 token and top-1 agreement over all positions; also blocked (v2) vs v1."""
     q_pack = InMemoryPack.from_hf(qwen05b_dir, name="qwen2.5-0.5b-instruct")
     tok = ChatTokenizer(qwen05b_dir)
     text = " ".join([
@@ -198,21 +210,13 @@ def test_bf16_kv_quality_qwen05b(qwen05b_dir: Path) -> None:
         "attention the largest piece of gateway work at large model sizes, so it is split over heads and",
         "blocks of positions on many cores, with a fixed order of summation so that every thread count",
         "gives the same bits.",
-    ] * 8)
+    ] * 7)
     ids = tok.apply_chat_template([{"role": "user", "content": "Summarize: " + text}])
     assert len(ids) > 2 * NATIVE_ATTN_BLOCK
-    lp = _quality(q_pack, ids, ("native", "native-blocked", "native-blocked-bf16kv"))
-    ref, v2, bf = lp["native"], lp["native-blocked"], lp["native-blocked-bf16kv"]
-    top = ref.argmax(-1)
-
-    def stats(x: torch.Tensor) -> tuple[float, float, float]:
-        d_top = (x.gather(1, top[:, None]) - ref.gather(1, top[:, None])).abs()
-        return float(d_top.max()), float((x - ref).abs().max()), float((x.argmax(-1) == top).double().mean())
-
-    v2_top, v2_all, v2_agree = stats(v2)
-    bf_top, bf_all, bf_agree = stats(bf)
-    print(f"\n[quality] Qwen2.5-0.5B, {len(ids)} positions: blocked vs v1: max|dlogprob| top-1 {v2_top:.2e}, "
-          f"all {v2_all:.2e}, top-1 agreement {v2_agree:.4f}; bf16 KV vs f32 KV (blocked): max|dlogprob| top-1 "
-          f"{bf_top:.3e}, all-vocab {bf_all:.3e}, top-1 agreement {bf_agree:.4f}")
-    assert v2_agree == 1.0 and v2_top < 1e-3
-    assert bf_agree >= 0.97 and bf_top < 0.25
+    q = _quality(q_pack, ids, ("native-blocked", "native", "native-blocked-bf16kv"))
+    (v1_d, v1_agree), (bf_d, bf_agree) = q["native"], q["native-blocked-bf16kv"]
+    print(f"\n[quality] Qwen2.5-0.5B, {len(ids)} positions vs native-blocked (float32 KV): v1 max|dlogprob| "
+          f"{v1_d:.2e}, top-1 agreement {v1_agree:.4f}; bf16 KV max|dlogprob| {bf_d:.3e}, top-1 agreement "
+          f"{bf_agree:.4f}")
+    assert v1_agree == 1.0 and v1_d < 1e-3
+    assert bf_agree >= 0.97 and bf_d < 0.25

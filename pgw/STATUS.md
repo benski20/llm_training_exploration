@@ -31,7 +31,10 @@ unchanged (`float_ops="torch"`; `"native"` keeps its bits). Code: `rust/pgw-fast
   sets the thread count (0 = automatic, as before).
 - **bf16 KV** (`"native-bf16kv"`, `"native-blocked-bf16kv"`; each its own reference): the cache stores bfloat16,
   rounded to nearest even like torch's `.to(torch.bfloat16)`, and widens exactly to float32 when read. Half
-  the bytes. Quality on Qwen2.5-0.5B: see the quality line below.
+  the bytes. Quality on Qwen2.5-0.5B is **not measured yet**. The check `test_bf16_kv_quality_qwen05b` (max |delta
+  logprob| of the float32-KV top-1 token and top-1 agreement over about 570 positions, 3 blocks; also v2 vs v1)
+  is written, but the memory cgroup killed it twice on this shared box. On the tiny models, bf16 KV stays within
+  2e-2 of HF.
 - **Exactness, tested**: 1-7 threads and ISA caps AVX-512/AVX2/scalar give identical logits; R-row prompt and
   verify passes equal 1-row decoding; masked == plain (tokens and logprobs); speculation identical; HF
   closeness at 1e-4 (2e-2 with bf16 KV); v2 vs v1 within 1e-5; v1 equals the original kernel bit for bit
