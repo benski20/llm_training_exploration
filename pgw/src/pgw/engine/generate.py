@@ -20,7 +20,8 @@ import torch
 
 from pgw.core.errors import ConfigError, MaskExhaustedError, PGWError
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
-from pgw.engine.model import SequenceInput, TransformerModel, rms_norm
+from pgw.engine.model import NativeFloatOps, SequenceInput, TransformerModel, rms_norm
+from pgw.engine.prefix_cache import PrefixHit, PrefixSink
 from pgw.engine.sampling import Sampler, SamplingParams, fast_topk
 from pgw.engine.tokenizer import ChatTokenizer, IncrementalDecoder
 
@@ -132,6 +133,10 @@ class _SeqState:
     t_lane: float = 0.0  # when the sequence joined the prefill lane queue
     feature: torch.Tensor | None = None  # target's final hidden state at the row that produced the pending token
     last_input: Any = None
+    # conversation prefix reuse (pgw.engine.prefix_cache)
+    reused: int = 0  # prompt positions whose KV rows came from an earlier turn (no prompt-pass row, no mask)
+    sink: Any = None  # PrefixSink: where the KV cache goes when the request ends cleanly
+    keep_cache: bool = False  # the cache was handed to the sink (not cleared by _release_local)
 
     @property
     def done(self) -> bool:
@@ -1424,6 +1429,8 @@ class Generator:
         params: SamplingParams,
         session: object | None,
         own_session: bool = False,
+        prefix: PrefixHit | None = None,
+        prefix_sink: PrefixSink | None = None,
     ) -> _SeqState:
         """Validate a request and build its state.
 
@@ -1431,9 +1438,20 @@ class Generator:
             own_session: The generator takes ownership of ``session`` and closes it (burning unused
                 mask slots) when the request ends. Sessions made by ``session_factory`` are always owned.
                 On a validation error an owned session is closed before the error propagates.
+            prefix: A cached KV prefix of this prompt (conversation reuse): its ``length`` leading positions are
+                not run again; the prompt pass carries only the rest. The generator owns (and wipes) it.
+            prefix_sink: Where the KV cache goes when the request ends cleanly (otherwise it is wiped).
         """
         own = bool(own_session and session is not None)
+        built: _SeqState | None = None
+        for handle in (prefix, prefix_sink):
+            if handle is not None:
+                handle.claimed = True  # the engine owns it now (wiped / settled by the engine on every path)
         try:
+            if prefix is not None or prefix_sink is not None:
+                ok, why = self.prefix_reuse_supported()
+                if not ok:
+                    raise ConfigError(f"KV prefix reuse is not exact on this engine: {why}")
             prompt = [int(t) for t in prompt_ids]
             if not prompt:
                 raise ConfigError("prompt must contain at least one token")
@@ -1452,7 +1470,17 @@ class Generator:
             else:  # LENGTH at the plain limit; the cache has room for a full pass of fixed rows beyond it
                 cap = min(len(prompt) + params.max_tokens, ctx)
                 alloc = cap + fixed
-            need = self.mask_rows_needed(len(prompt), params.max_tokens)
+            reused = 0
+            if prefix is not None:
+                reused = int(prefix.length)
+                pc = prefix.cache
+                if not 0 < reused < len(prompt) or pc.length < reused:
+                    raise ConfigError("KV prefix does not fit the prompt")
+                m = self.model
+                if ((pc.num_layers, pc.num_kv_heads, pc.head_dim, pc.dtype, pc.device.type)
+                        != (m.num_layers, m.num_kv_heads, m.head_dim, m.dtype, torch.device(m.device).type)):
+                    raise ConfigError("KV prefix of another model layout")
+            need = self.mask_rows_needed(len(prompt), params.max_tokens, reused)
             if session is None and self.session_factory is not None:
                 session = self.session_factory(need)
                 own = session is not None
@@ -1461,46 +1489,70 @@ class Generator:
             stop_ids = set(params.stop_token_ids)
             if not params.ignore_eos:
                 stop_ids.update(self._eos)
+            if prefix is not None:
+                cache = prefix.cache
+                cache.rebind(reused, alloc)
+            else:
+                cache = self.model.new_cache(alloc)
             st = _SeqState(
                 prompt=prompt,
                 params=params,
                 session=session,
                 own_session=own,
-                cache=self.model.new_cache(alloc),
+                cache=cache,
                 draft_cache=self.draft.new_cache(cap) if self.draft is not None else None,
                 sampler=Sampler(params, prompt),
                 decoder=self.tokenizer.incremental_decoder() if self.tokenizer is not None else None,
                 stop_ids=frozenset(stop_ids),
-                pending=list(prompt),
+                pending=prompt[reused:],
                 limit=cap,
+                ctx=prompt[:reused],
+                reused=reused,
+                sink=prefix_sink,
             )
+            prefix = prefix_sink = None  # the state owns them now
+            built = st
             if self._drafter is not None and fixed is not None:
                 st.dstate = self._drafter.open(prompt, cap + 2 * fixed)
             return st
         except BaseException:
+            if built is not None:
+                built.cache.clear()
+                if built.sink is not None:
+                    built.sink.discard()
+            if prefix is not None:
+                prefix.wipe()
+            if prefix_sink is not None:
+                prefix_sink.discard()
             if own and session is not None:
                 self._close_session(session)
             raise
 
-    def mask_rows_needed(self, prompt_tokens: int, max_tokens: int) -> int:
+    def mask_rows_needed(self, prompt_tokens: int, max_tokens: int, reused: int = 0) -> int:
         """Mask rows a request's reservation must hold: ``prompt + max_tokens`` (as without speculation:
         speculation only uses spare rows), or, with ``spec_rows`` and masked filler rows,
         ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)``: every pass after the prefill then takes
         ``spec_rows`` rows (strict-mode dummy passes too); with ``spec_mask_rows`` = C (padding rows),
-        ``prompt + C * (max_tokens - 1)``: every decode pass charges C (:meth:`charge_target`)."""
-        base = int(prompt_tokens) + int(max_tokens)
+        ``prompt + C * (max_tokens - 1)``: every decode pass charges C (:meth:`charge_target`).
+
+        ``reused``: leading prompt positions whose KV rows come from an earlier turn of the conversation
+        (:mod:`pgw.engine.prefix_cache`); they take no prompt-pass row and no mask, so ``prompt`` above is
+        ``prompt_tokens - reused`` (the decode schedule is unchanged)."""
+        rows0 = int(prompt_tokens) - int(reused)
+        base = rows0 + int(max_tokens)
         if self.spec_rows is None:
             return base
         ctx = int(self.model.arch.max_position_embeddings)
         passes = max(0, min(int(max_tokens), ctx - int(prompt_tokens)) - 1)  # decode (and dummy) passes
         if self.spec_mask_rows is not None:
-            return self.charge_target(prompt_tokens, passes)
+            return self.charge_target(rows0, passes)
         return base + passes * (self.spec_rows - 1)
 
     def charge_target(self, prompt_tokens: int, decode_passes: int) -> int:
         """``spec_mask_rows`` mode: mask slots a session holds before its decode pass ``j = decode_passes``:
         ``prompt + j + min(B, floor((C - 1) * j))`` (no cap: ``prompt + floor(C * j)``), a function of public
-        quantities only (prompt length, pass index, C, B)."""
+        quantities only (prompt-pass rows, pass index, C, B). ``prompt_tokens`` counts the prompt-pass rows
+        (without a reused conversation prefix)."""
         assert self.spec_mask_rows is not None
         j = int(decode_passes)
         extra = math.floor((self.spec_mask_rows - 1) * j)  # exact (a fraction)
@@ -1512,11 +1564,12 @@ class Generator:
         """Public mask schedule: before decode pass ``j`` (dummy passes too) the session holds
         :meth:`charge_target` slots. ``charge_to`` (a growing reservation) extends by windows on this schedule
         only, never on demand; a fixed reservation already holds everything (no call)."""
-        target = self.charge_target(len(st.prompt), st.passes)
+        rows0 = len(st.prompt) - st.reused  # prompt-pass rows (a reused prefix takes none)
+        target = self.charge_target(rows0, st.passes)
         fn = getattr(st.session, "charge_to", None)
         if callable(fn):
             fn(target)
-        self.spec_stats["charged_rows"] = float(target - len(st.prompt))
+        self.spec_stats["charged_rows"] = float(target - rows0)
 
     @staticmethod
     def _check_fixed_reservation(session: object, need: int) -> None:
@@ -1539,15 +1592,18 @@ class Generator:
         """A random token id (filler rows and dummy passes; masked or padding, never emitted)."""
         return secrets.randbelow(self._fill_vocab)
 
-    def _close_session(self, session: object) -> None:
+    def _close_session(self, session: object) -> bool:
         """Close (burn) a mask reservation. First the backend's deferred integrity checks of that session are
         waited for and dropped (``release_session_checks``: a session that ends or aborts between a deferred
-        check and its join); a failure there is reported by the backend (breaker), never raised here."""
+        check and its join); a failure there is reported by the backend (breaker), never raised here.
+        Returns False when such a check failed (or could not be joined): the session's KV cache is not kept."""
+        ok = True
         release = getattr(getattr(self.model, "backend", None), "release_session_checks", None)
         if callable(release):
             try:
-                release(session)
+                ok = release(session) is not False
             except Exception:  # pragma: no cover - the hook reports, never raises
+                ok = False
                 log.exception("releasing deferred checks of a session failed")
         close = getattr(session, "close", None)
         if close is not None:
@@ -1555,10 +1611,68 @@ class Generator:
                 close()
             except Exception:  # pragma: no cover - defensive
                 log.exception("closing session reservation failed")
+        return ok
+
+    # ---- conversation prefix reuse ------------------------------------------------------------------
+    def prefix_reuse_supported(self) -> tuple[bool, str]:
+        """Whether a cached KV prefix gives bit-identical results to recomputing the prompt on this engine:
+        every K/V row and logit row must depend only on its own token and the cache prefix it attends to,
+        never on how many rows share a pass (the earlier turn computed its generated tokens one row per pass,
+        the recompute would run them inside one prompt block). True for the native float path (fixed-order
+        per-row kernels) with a ``rows_exact`` backend (per-row activation scales, exact integer products) and
+        the default head and schedule. torch's float kernels (SDPA, RMSNorm reductions) choose blockings by
+        shape and thread count, so they are refused."""
+        m = self.model
+        if not isinstance(getattr(m, "float_ops", None), NativeFloatOps):
+            return False, "needs float_ops='native' (torch float kernels are not row-invariant)"
+        be = getattr(m, "backend", None)
+        if not bool(getattr(be, "rows_exact", False)):
+            return False, f"backend {type(be).__name__} is not row-exact"
+        if getattr(m, "head_mode", None) is not None or getattr(m, "schedule", None) is not None:
+            return False, "needs the default head and schedule"
+        if getattr(m, "lm_head_fn", None) is not None:
+            return False, "needs the exact gateway LM head"
+        return True, "ok"
+
+    def _reusable(self, st: _SeqState) -> KVCache | None:
+        """The sequence's KV cache if it may go to its prefix sink: a clean end (stop or length, not
+        cancelled, strict-mode dummy passes done) of a sequence whose mask session (if any) it owns, so that
+        session's deferred checks are joined before the cache is kept. Marks the cache as kept."""
+        if st.sink is None or st.keep_cache:
+            return None
+        clean = (st.finish in (FinishReason.STOP, FinishReason.LENGTH) and not st.cancelled
+                 and not self._owes(st) and (st.session is None or st.own_session) and st.cache.length > 0)
+        if not clean:
+            return None
+        st.keep_cache = True
+        return st.cache
+
+    def _settle(self, st: _SeqState, kv: KVCache | None, ok: bool) -> None:
+        """Hand a kept cache to the prefix sink (``ok``: the session's checks passed) or wipe it."""
+        sink, st.sink = st.sink, None
+        if sink is None:
+            if kv is not None:
+                kv.clear()
+            return
+        try:
+            if kv is not None and ok:
+                tokens = (st.prompt + st.generated)[: kv.length]
+                sink.commit(tokens, kv)
+            else:
+                sink.discard(kv)
+        except Exception:  # pragma: no cover - defensive: never keep a cache after a failure
+            log.exception("storing the conversation KV cache failed")
+            if kv is not None:
+                kv.clear()
+
+    def _close_and_settle(self, session: object, st: _SeqState, kv: KVCache | None) -> None:
+        ok = self._close_session(session)
+        self._settle(st, kv, ok)
 
     def _release_local(self, st: _SeqState) -> None:
         """Free a sequence's caches, drafter state and conversation slot (no reservation close)."""
-        st.cache.clear()
+        if not st.keep_cache:
+            st.cache.clear()
         if st.draft_cache is not None:
             st.draft_cache.clear()
         if st.dstate is not None and self._drafter is not None:
@@ -1575,10 +1689,16 @@ class Generator:
         """Synchronous release (blocking API only: closes an owned session on this thread)."""
         if st.t_end is None:
             st.t_end = time.perf_counter()
-        if st.own_session and st.session is not None:
-            st.own_session = False
-            self._close_session(st.session)
-        self._release_local(st)
+        kv = self._reusable(st)
+        ok = True
+        try:
+            if st.own_session and st.session is not None:
+                st.own_session = False
+                ok = self._close_session(st.session)
+            self._release_local(st)
+        finally:
+            if st.sink is not None or kv is not None:
+                self._settle(st, kv, ok)
 
     def _arelease(self, st: _SeqState) -> None:
         """Release from async code without blocking the event loop.
@@ -1590,17 +1710,21 @@ class Generator:
         """
         if st.t_end is None:
             st.t_end = time.perf_counter()
+        kv = self._reusable(st)
         session = st.session if st.own_session else None
         st.own_session = False
         self._release_local(st)
         if session is None:
+            if st.sink is not None or kv is not None:
+                self._settle(st, kv, True)
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:  # pragma: no cover - not inside a loop: plain synchronous close
-            self._close_session(session)
+            self._close_and_settle(session, st, kv)
             return
-        fut = loop.run_in_executor(None, self._close_session, session)
+        # the kept cache goes to its sink only after the session's deferred checks were joined
+        fut = loop.run_in_executor(None, self._close_and_settle, session, st, kv)
         self._closing.add(fut)
         fut.add_done_callback(self._closing.discard)
 
@@ -1695,6 +1819,8 @@ class Generator:
             timings["spec_accepted"] = float(st.spec_accepted)
         if st.draft_ms:
             timings["draft_ms"] = st.draft_ms
+        if st.reused:
+            timings["prefix_reused"] = float(st.reused)
         if self.spec_rows is not None:
             # provider-visible passes (dummy passes included); a strict-mode result returned before its
             # background dummy passes have run reports the final count and how many are still due
@@ -1876,7 +2002,7 @@ class Generator:
         if self.spec_rows is not None:
             return (st.dstate is not None and not st.passes
                     and bool(getattr(self._drafter, "needs_prefill", True)))
-        return st.draft_cache is not None and st.draft_cache.length == 0 and not st.ctx and not st.drafts
+        return st.draft_cache is not None and st.draft_cache.length == 0 and not st.generated and not st.drafts
 
     async def _forward_with_draft_prefill(self, batch: Sequence[_SeqState], warm: Sequence[_SeqState]) -> list[Any]:
         """The target's masked forward; the draft reads new prompts in its own thread meanwhile.
@@ -1921,8 +2047,8 @@ class Generator:
         if self.draft is None:
             return
         dv = self._draft_vocab
-        feeds = [SequenceInput([t if dv is None or t < dv else dv - 1 for t in st.pending], _dcache(st))
-                 for st in states]
+        feeds = [SequenceInput([t if dv is None or t < dv else dv - 1 for t in st.ctx + st.pending], _dcache(st))
+                 for st in states]  # the whole prompt (ctx: a reused conversation prefix)
         with self._draft_lock:
             self.draft.forward_batch(feeds)
 
@@ -2018,7 +2144,7 @@ class Generator:
         finishing. The session's held rows bound it too (a safety net; never binding with ``charge_to``)."""
         left = st.params.max_tokens - len(st.generated)
         cap = min(left - 1, st.limit - st.cache.length - len(st.pending),
-                  self.charge_target(len(st.prompt), st.passes) - st.masks - len(st.pending))
+                  self.charge_target(len(st.prompt) - st.reused, st.passes) - st.masks - len(st.pending))
         lid = self._masked_linear() or _FIRST_LINEAR
         reserved = getattr(st.session, "reserved_rows", None)
         if callable(reserved):
@@ -2175,6 +2301,12 @@ class Generator:
 
     def _consume_step(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
         """Emit this step's tokens: one, or (speculative) every draft the sampler agrees with plus one."""
+        events = self._consume_step_inner(st, logits)
+        if st.sink is not None and st.done and st.finish in (FinishReason.STOP, FinishReason.LENGTH):
+            st.sink.finishing()  # before the last event is out: the next turn waits for the commit
+        return events
+
+    def _consume_step_inner(self, st: _SeqState, logits: torch.Tensor) -> list[TokenEvent]:
         if self.spec_rows is not None:
             return self._consume_fixed(st, logits)
         pending = st.pending
@@ -2221,13 +2353,16 @@ class Generator:
         *,
         session: object | None = None,
         own_session: bool = False,
+        prefix: PrefixHit | None = None,
+        prefix_sink: PrefixSink | None = None,
     ) -> Iterator[TokenEvent]:
         """Blocking token stream. Closing the iterator early stops generation.
 
         ``own_session=True`` hands ``session`` to the generator, which closes it at the end. In strict
-        mode the dummy passes still due run after the last event (or after an early close).
+        mode the dummy passes still due run after the last event (or after an early close). ``prefix`` /
+        ``prefix_sink``: conversation KV-prefix reuse (:mod:`pgw.engine.prefix_cache`).
         """
-        st = self._new_state(prompt_ids, params, session, own_session)
+        st = self._new_state(prompt_ids, params, session, own_session, prefix, prefix_sink)
         drain = False
         try:
             while not st.done:
@@ -2255,9 +2390,12 @@ class Generator:
         *,
         session: object | None = None,
         own_session: bool = False,
+        prefix: PrefixHit | None = None,
+        prefix_sink: PrefixSink | None = None,
     ) -> GenerationResult:
-        """Blocking full generation (``own_session``: close ``session`` when done)."""
-        st = self._new_state(prompt_ids, params, session, own_session)
+        """Blocking full generation (``own_session``: close ``session`` when done; ``prefix`` /
+        ``prefix_sink``: conversation KV-prefix reuse)."""
+        st = self._new_state(prompt_ids, params, session, own_session, prefix, prefix_sink)
         try:
             while not st.done:
                 self._step_sync([st])
@@ -2306,14 +2444,17 @@ class Generator:
         session: object | None = None,
         own_session: bool = False,
         conversation: str | None = None,
+        prefix: PrefixHit | None = None,
+        prefix_sink: PrefixSink | None = None,
     ) -> AsyncIterator[TokenEvent]:
         """Async token stream (used by the gateway SSE endpoint); cancellation stops generation.
 
         With ``own_session=True`` the generator closes ``session`` (burning unused slots) at a safe
         point: never while a batched step that uses it is in flight. ``conversation``: in strict mode a
         request waits until the previous request of the same conversation has finished its dummy passes.
+        ``prefix`` / ``prefix_sink``: conversation KV-prefix reuse (:mod:`pgw.engine.prefix_cache`).
         """
-        st = self._new_state(prompt_ids, params, session, own_session)
+        st = self._new_state(prompt_ids, params, session, own_session, prefix, prefix_sink)
         st.conv = conversation if self.spec_strict else None
         inner = self._astream_state(st)
         try:
@@ -2330,13 +2471,15 @@ class Generator:
         session: object | None = None,
         own_session: bool = False,
         conversation: str | None = None,
+        prefix: PrefixHit | None = None,
+        prefix_sink: PrefixSink | None = None,
     ) -> GenerationResult:
         """Async full generation (batched with other concurrent requests; see :meth:`astream`).
 
         In strict mode the result is returned with the answer; the dummy passes still due run in the
         background (:meth:`wait_drained`).
         """
-        st = self._new_state(prompt_ids, params, session, own_session)
+        st = self._new_state(prompt_ids, params, session, own_session, prefix, prefix_sink)
         st.conv = conversation if self.spec_strict else None
         inner = self._astream_state(st)
         try:
@@ -2531,8 +2674,8 @@ class Generator:
 
     # ---- prefill lane ----------------------------------------------------------------------------
     def _lane_eligible(self, st: _SeqState) -> bool:
-        return (self.prefill_lane and not st.passes and not st.ctx and st.session is not None
-                and len(st.prompt) >= self.prefill_lane_min_tokens)
+        return (self.prefill_lane and not st.passes and not st.generated and st.session is not None
+                and len(st.pending) >= self.prefill_lane_min_tokens)
 
     def _pick_prefill(self) -> list[_SeqState]:
         """The next lane pass: waiting prompts shortest first with aging (length minus ``prefill_aging``
@@ -2544,7 +2687,8 @@ class Generator:
             self._lane_wait.remove(st)
             self._active.append(st)  # released by the batching loop
         held = {id(s.session) for s in self._active if s.session is not None}
-        order = sorted(self._lane_wait, key=lambda s: (len(s.prompt) - self.prefill_aging * (now - s.t_lane), s.t_lane))
+        order = sorted(self._lane_wait,
+                       key=lambda s: (len(s.pending) - self.prefill_aging * (now - s.t_lane), s.t_lane))
         group: list[_SeqState] = []
         rows = 0
         for st in order:
@@ -2553,11 +2697,11 @@ class Generator:
                 self._lane_wait.remove(st)
                 self._active.append(st)
                 continue
-            if group and rows + len(st.prompt) > self.prefill_lane_rows:
+            if group and rows + len(st.pending) > self.prefill_lane_rows:
                 continue
             group.append(st)
             held.add(sid)
-            rows += len(st.prompt)
+            rows += len(st.pending)
         for st in group:
             self._lane_wait.remove(st)
         return group

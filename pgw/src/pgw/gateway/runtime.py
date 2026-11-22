@@ -58,6 +58,7 @@ from pgw.engine import (
     TransformerModel,
 )
 from pgw.engine.backends import Int8DraftBackend, NativeInt8DraftBackend, int8_lm_head, native_int8_lm_head
+from pgw.engine.prefix_cache import ConversationPrefixCache, PrefixHit, PrefixSink
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, network_path, origin_of
 from pgw.gateway.egress import EgressGuardTransport
 from pgw.gateway.masks import WindowedReservation
@@ -291,6 +292,12 @@ class ActiveSession:
     #: Strict speculation: requests of one conversation run one after another, each after the previous
     #: one's dummy passes (the engine's per-conversation FIFO); ``None`` outside strict mode.
     conversation: str | None = None
+    #: Conversation KV-prefix reuse (``prefix_cache = "conversation"``): the cached prefix this request
+    #: continues from (its positions need no prompt-pass row and no mask) and where its own cache goes.
+    prefix: PrefixHit | None = None
+    prefix_sink: PrefixSink | None = None
+    #: Prompt positions served from the conversation's cached KV prefix.
+    prefix_reused: int = 0
     _closed: bool = False
     _outer: Any = None
     _outer_done: bool = False
@@ -304,14 +311,32 @@ class ActiveSession:
         whose synchronous prologue takes ownership before any suspension point.
         """
         if self.reservation is None:
-            return {}
+            return self._prefix_kwargs()
         if self.handed_over:
             raise ConfigError("mask reservation already handed to the engine")
         self.handed_over = True
         kw: dict[str, Any] = {"session": self.reservation, "own_session": True}
         if self.conversation is not None:
             kw["conversation"] = self.conversation
+        kw.update(self._prefix_kwargs())
         return kw
+
+    def _prefix_kwargs(self) -> dict[str, Any]:
+        kw: dict[str, Any] = {}
+        if self.prefix is not None:
+            kw["prefix"] = self.prefix
+        if self.prefix_sink is not None:
+            kw["prefix_sink"] = self.prefix_sink
+        return kw
+
+    def _drop_prefix(self) -> None:
+        """Wipe a cached prefix / settle a sink the engine never took (the request ended before it ran)."""
+        hit, sink = self.prefix, self.prefix_sink
+        self.prefix = self.prefix_sink = None
+        if hit is not None and not hit.claimed:
+            hit.wipe()
+        if sink is not None and not sink.claimed:
+            sink.discard()
 
     async def run(self) -> GenerationResult:
         """Non-streaming generation."""
@@ -363,7 +388,7 @@ class ActiveSession:
                 t_prev = now
                 n += 1
                 self.completion_tokens = n
-                self.masks_consumed = ev.masks or (len(self.prompt_ids) + n - 1)
+                self.masks_consumed = ev.masks or (len(self.prompt_ids) - self.prefix_reused + n - 1)
                 if ev.finish_reason is not None:
                     self.finish_reason = str(ev.finish_reason)
                 yield ev
@@ -396,6 +421,7 @@ class ActiveSession:
             if outer is not None and not self._outer_done:
                 with contextlib.suppress(RuntimeError):
                     await outer.aclose()
+            self._drop_prefix()
             if self.reservation is not None and not self.handed_over:
                 close = getattr(self.reservation, "close", None)
                 if close is not None:
@@ -517,6 +543,8 @@ class ModelRuntime:
         self._connect_task: asyncio.Task[None] | None = None
         self._retries_seen = 0
         self._prepared: tuple[Any, ChatTokenizer] | None = None
+        #: Conversation KV-prefix reuse (``prefix_cache = "conversation"``; gateway RAM only, SPEC 9.4b).
+        self.prefix_cache: ConversationPrefixCache | None = None
 
     # ---- lifecycle ----------------------------------------------------------------------------
     def _open_pack(self) -> Any:
@@ -559,6 +587,8 @@ class ModelRuntime:
                 log.exception("safety listener failed for %s", event)
 
     def _on_noise_alarm(self, report: Any) -> None:
+        if self.prefix_cache is not None:
+            self.prefix_cache.wipe_all("noise alarm")
         reasons = list(getattr(report, "reasons", []) or [])
         # reasons are test names and p-values only (no payload values, SPEC 11.2)
         self._notify_safety("safety.noise_alarm", "; ".join(str(r) for r in reasons[-2:]) or "alarm")
@@ -670,6 +700,8 @@ class ModelRuntime:
     def _on_integrity_failure(self, exc: BaseException) -> None:
         check = "freivalds" if "Freivalds" in str(getattr(exc, "message", "")) else "range"
         self._integrity.labels(model=self.name, check=check).inc()
+        if self.prefix_cache is not None:  # every cached conversation state is discarded (fail closed)
+            self.prefix_cache.wipe_all("integrity failure")
         self.breaker.trip(exc)
         self._notify_safety("safety.integrity_failure", check)
 
@@ -1056,6 +1088,15 @@ class ModelRuntime:
             pingpong=c.engine_pingpong, pingpong_min_sessions=c.engine_pingpong_min_sessions,
             **spec,
         )
+        if c.prefix_cache == "conversation":
+            ok, why = self.generator.prefix_reuse_supported()
+            if not ok:
+                raise ConfigError(f"model {self.name!r}: prefix_cache = 'conversation' is not exact here: {why}")
+            if self.prefix_cache is not None:
+                self.prefix_cache.close()
+            self.prefix_cache = ConversationPrefixCache(
+                max_bytes=int(c.prefix_cache_max_mb * (1 << 20)), ttl_s=c.prefix_cache_ttl_s,
+                max_entries=c.prefix_cache_max_entries)
         self.tokenizer = tokenizer
         self.pack = pack
 
@@ -1163,6 +1204,9 @@ class ModelRuntime:
                 await s.close()
             if self.generator is not None:
                 await self.generator.wait_closed()
+            if self.prefix_cache is not None:
+                self.prefix_cache.close()
+                self.prefix_cache = None
             if self.model is not None:
                 await asyncio.to_thread(self.model.close)
             yw = getattr(self, "_factory_yield", None)
@@ -1308,20 +1352,26 @@ class ModelRuntime:
 
     async def open_session(
         self, prompt_ids: Sequence[int], params: SamplingParams, *, request_id: str | None = None,
-        conversation: str | None = None,
+        conversation: str | None = None, prefix_key: str | None = None,
     ) -> ActiveSession:
         """Admit a request and reserve its masks (fails fast with ``mask_exhausted`` before compute)."""
-        return (await self.open_sessions([prompt_ids], params, request_id=request_id, conversation=conversation))[0]
+        return (await self.open_sessions([prompt_ids], params, request_id=request_id, conversation=conversation,
+                                         prefix_key=prefix_key))[0]
 
     async def open_sessions(
         self, prompts: Sequence[Sequence[int]], params: SamplingParams, *, request_id: str | None = None,
-        conversation: str | None = None,
+        conversation: str | None = None, prefix_key: str | None = None,
     ) -> list[ActiveSession]:
         """Admit ``len(prompts)`` sequences atomically, then reserve their masks.
 
         All admission slots are taken in one step (no hold-and-wait between concurrent
         multi-prompt requests) and masks are reserved only once every slot is held, so a request
         that times out in the queue never burns masks. Each returned session owns one slot.
+
+        ``prefix_key``: the conversation key of KV-prefix reuse (``prefix_cache = "conversation"``; a
+        single-prompt request only): the request continues from the key's cached turn when its prompt starts
+        with some of that turn's tokens (only the rest is reserved and run), and its own cache is kept for
+        the next turn of the key.
         """
         rid = request_id or uuid.uuid4().hex
         t_open = time.perf_counter()
@@ -1337,10 +1387,20 @@ class ModelRuntime:
             self.check_available()  # state may have changed while queued
             for i, ids in enumerate(ids_list):
                 srid = rid if i == 0 else f"{rid}-{i}"
+                hit, sink = await self._take_prefix(prefix_key if n == 1 else None, ids)
+                reused = hit.length if hit is not None else 0
                 reservation, slots = (None, 0)
                 if self.mode == "masked":
-                    reservation, slots = await self._reserve_for(ids, params, srid)
-                sess = ActiveSession(self, srid, ids, params, reservation, slots, queue_s)
+                    try:
+                        reservation, slots = await self._reserve_for(ids, params, srid, reused)
+                    except BaseException:
+                        if hit is not None:
+                            hit.wipe()
+                        if sink is not None:
+                            sink.discard()
+                        raise
+                sess = ActiveSession(self, srid, ids, params, reservation, slots, queue_s,
+                                     prefix=hit, prefix_sink=sink, prefix_reused=reused)
                 if self.config.spec_strict_passes:
                     # a request's follow-up must not overlap its dummy passes; requests without a
                     # conversation key are keyed by their request id (no ordering with other requests)
@@ -1360,12 +1420,25 @@ class ModelRuntime:
             prof["last_open_ms"] = round(1e3 * (time.perf_counter() - t_open), 2)
         return sessions
 
-    async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str) -> tuple[Any, int]:
-        """Reserve the prompt plus a first window (or everything when windows are disabled)."""
-        need = len(ids) + params.max_tokens
+    async def _take_prefix(self, key: str | None, ids: list[int]) -> tuple[PrefixHit | None, PrefixSink | None]:
+        """Conversation KV-prefix reuse: the key's cached prefix of ``ids`` (if any) and a sink for this turn."""
+        pc = self.prefix_cache
+        if pc is None or not key:
+            return None, None
+        # a finished turn of this conversation may still be on its way in (strict-mode dummy passes, the
+        # session's deferred checks): wait for it rather than recompute the whole prompt
+        await pc.wait_settled(key, float(self.config.prefix_cache_wait_s))
+        return pc.take(key, ids), pc.sink(key)
+
+    async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str,
+                           reused: int = 0) -> tuple[Any, int]:
+        """Reserve the prompt plus a first window (or everything when windows are disabled). ``reused``
+        leading prompt positions come from a cached conversation prefix: they take no mask."""
+        rows0 = len(ids) - int(reused)  # prompt-pass rows
+        need = rows0 + params.max_tokens
         # Speculative decoding may use more rows (rejected drafts); the cap allows it, but the engine
         # only speculates with rows the session already holds, so a short store never fails a request.
-        cap = len(ids) + math.ceil(params.max_tokens * self.spec_factor)
+        cap = rows0 + math.ceil(params.max_tokens * self.spec_factor)
         window = int(self.settings.mask_window_tokens)
         if window <= 0:  # everything up front: reserve what the request needs (speculation uses slack only)
             cap = need
@@ -1373,14 +1446,14 @@ class ModelRuntime:
         if fixed is not None:
             # strict speculation: every decode pass (dummy passes too) takes spec_rows rows, whatever the text;
             # the engine refuses a reservation that could run short before the provider sees a pass
-            need = cap = int(fixed(len(ids), params.max_tokens))
-        first = cap if window <= 0 else min(cap, len(ids) + window)
+            need = cap = int(fixed(len(ids), params.max_tokens, reused))
+        first = cap if window <= 0 else min(cap, rows0 + window)
         if first < cap:
             # Fail fast (before any compute) when the store could not serve the whole request.
             avail = await asyncio.to_thread(self._available_slots)
             if avail < need:
                 raise MaskExhaustedError(
-                    f"not enough mask slots for this request: it can use up to {need} ({len(ids)} prompt + "
+                    f"not enough mask slots for this request: it can use up to {need} ({rows0} prompt + "
                     f"{params.max_tokens} max_tokens) and {avail} are available. Lower max_tokens, or retry when the "
                     "mask factory has added more (the Masks page shows the stock)",
                     details={"needed": need, "available": avail, "model": self.name},
@@ -1481,8 +1554,10 @@ class ModelRuntime:
             "float_threads": getattr(self.model, "float_threads", None),
             "float_ops": getattr(getattr(self.model, "float_ops", None), "name", "torch"),
             "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes, "spec_mask_rows": c.spec_mask_rows,
-            "spec_mask_credit": c.spec_mask_credit,
+            "spec_mask_credit": c.spec_mask_credit, "prefix_cache": c.prefix_cache,
         }
+        if self.prefix_cache is not None:  # counts and sizes only (no keys, no tokens)
+            out["prefix_cache_stats"] = self.prefix_cache.status()
         out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
         gen = getattr(self, "generator", None)
         if c.spec_rows is not None and gen is not None:

@@ -63,7 +63,6 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: speculation) that silently does not happen. The implementing package removes its entry.
 PENDING_SPEED_SETTINGS: dict[str, str] = {
     "schedule": "WP-B4 (fused2 schedule)",
-    "prefix_cache": "WP-B3 (prefix cache)",
 }
 
 
@@ -350,10 +349,26 @@ class GatewayModelConfig(BaseModel):
         "gate_up, down); 'fused2' = two composite round trips (a new reference, gated on a 7B quality check)",
     )
     prefix_cache: Literal["off", "conversation"] = Field(
-        "off", description="Reuse the KV cache of earlier turns: 'off' (default); 'conversation' = within one "
-        "conversation only (the provider then sees prefill rows = the uncached suffix length, a function of public "
-        "token counts)",
+        "off", description="Exact KV-cache reuse across chat turns (SPEC 9.4b): 'off' (default); 'conversation' = "
+        "a request whose prompt (after the chat template) starts with tokens of the previous turn of the same "
+        "conversation key (API key, OpenAI 'user' and the optional x-pgw-conversation-id header) runs only the "
+        "rest through the prompt pass and reserves masks only for it; answers are bit-identical to recomputing. "
+        "The cache is plaintext customer state in gateway RAM only (never spilled), bound to the key, with a TTL "
+        "and a memory budget (LRU, wiped on eviction) and wiped on any integrity failure. Needs float_ops = "
+        "'native' (row-invariant float path). Privacy: the provider sees the suffix's row count instead of the "
+        "whole prompt's, and can tell that a request continued a cached conversation (opt-in for that reason)",
     )
+    prefix_cache_ttl_s: float = Field(
+        600.0, gt=0, le=7 * 86400, description="prefix_cache: a conversation's cached KV state unused this long is "
+        "wiped (seconds)")
+    prefix_cache_max_mb: float = Field(
+        1024.0, gt=0, le=1 << 20, description="prefix_cache: memory budget of the cached KV states (MiB); least "
+        "recently used conversations are wiped first")
+    prefix_cache_max_entries: int = Field(
+        1024, ge=1, le=1 << 20, description="prefix_cache: at most this many conversations are kept")
+    prefix_cache_wait_s: float = Field(
+        30.0, ge=0, le=600, description="prefix_cache: a new turn waits at most this long for the previous turn of "
+        "its conversation to be stored (strict-mode dummy passes, deferred checks) before it recomputes instead")
 
     @field_validator("ring")
     @classmethod
@@ -434,6 +449,15 @@ class GatewayModelConfig(BaseModel):
             raise ValueError(f"model {self.name!r}: lane needs masked mode")
         if self.head_mode == "provider_int8" and self.mode == "float":
             raise ValueError(f"model {self.name!r}: head_mode='provider_int8' needs masked (or plain) mode")
+        if self.prefix_cache != "off":
+            # reused K/V rows are bit-identical to recomputed ones only on the row-invariant native float path
+            # (fixed-order per-row kernels) with exact integer linears; torch's float kernels and the float
+            # backend choose blockings by the number of rows of a pass
+            if self.float_ops != "native" or self.mode == "float":
+                raise ValueError(f"model {self.name!r}: prefix_cache needs float_ops = 'native' (and not mode "
+                                 "'float'): only that path gives reused KV rows the bits of a recompute")
+            if self.device.split(":", 1)[0].strip().lower() != "cpu":
+                raise ValueError(f"model {self.name!r}: prefix_cache needs device = 'cpu'")
         return self
 
     @property

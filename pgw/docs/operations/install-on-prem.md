@@ -196,7 +196,9 @@ plaintext quantized reference, none shows the provider anything new):
   4-vCPU host); enabled only if a start-up self-check gives the same bits (`PGW_FLOAT_THREADS` does
   the same for every model). Default `1` on CPU engines; `null` keeps the process thread count.
 
-`float_ops`, `head_mode`, `schedule` and `prefix_cache` are refused in this build (phase B).
+`head_mode` and `schedule` are refused in this build (phase B). `prefix_cache = "conversation"` (exact KV-cache
+reuse across chat turns, opt-in; needs `float_ops = "native"`; what the provider then sees: SPEC 9.4b) is not a
+preset: it changes what the provider can infer (whether a request continued a cached conversation).
 `PGW_GATEWAY_SETUP_MODEL_OPTIONS` (JSON) presets the speed settings above for the model entry the setup
 wizard writes; security settings cannot be preset there.
 

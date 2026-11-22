@@ -591,3 +591,16 @@ Behaviour changes other components and operators must know about:
   gateway's per-call work independent of the drafts (`research/plans/speculation-no-compromise.md`).
 - Impact: backwards compatible; existing `spec_rows` configs keep masked filler rows.
 - Status: done (this branch)
+
+## 2026-11-22 engine + gateway -> all: conversation KV-prefix reuse (`prefix_cache = "conversation"`, opt-in)
+- What (additive, defaults unchanged): `pgw.engine.prefix_cache` (`ConversationPrefixCache`, `PrefixHit`, `PrefixSink`);
+  `Generator.generate/stream/astream/agenerate(..., prefix=, prefix_sink=)`, `Generator.prefix_reuse_supported()`,
+  `Generator.mask_rows_needed(prompt, max_tokens, reused=0)` (`charge_target` takes prompt-pass rows);
+  `KVCache.rebind/compact`; `LinearBackend.rows_exact` (True: `PlainBackend`, `MaskedBackend`);
+  `MaskedBackend.release_session_checks` returns `bool` (all checks passed); `ModelRuntime.open_session(s)(...,
+  prefix_key=)`; per-model `prefix_cache`, `prefix_cache_ttl_s`, `prefix_cache_max_mb`, `prefix_cache_max_entries`,
+  `prefix_cache_wait_s`; header `x-pgw-conversation-id`; `usage.prompt_tokens_details.cached_tokens` when enabled;
+  audit field `prefix_reused`.
+- Why: a continued chat turn runs (and masks) only its new tokens; outputs bit-identical (SPEC 9.4b).
+- Impact: backwards compatible; `prefix_cache` leaves the pending list (needs `float_ops = "native"`).
+- Status: done (SPEC 9.4b)
