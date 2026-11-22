@@ -87,6 +87,10 @@ service's own CPU). The command to measure it is in section 7.
   one process as before; without affinity a key gets up to N times its limits. Only one process holds the
   store's gateway owner lock (closing a dead predecessor's reservations at once); the others log a warning and
   leave stale leases to `lease_timeout_s`.
+- Run all processes of one store in the same host and PID namespace (one container or VM, not one container each):
+  the owner-lock holder treats every open reservation recorded under another host identity (hostname + PID
+  namespace) as a dead predecessor's and closes it, which would cut off the live chats of a gateway in another
+  container (its slots are burned, never handed out again, so this fails requests but reuses no mask).
 - Leave cores for the service process when it is on the same host (it does CPU work on every trip).
 
 ## 6. What is left
