@@ -222,13 +222,13 @@ def graph_breakdown(dev: torch.device, shapes: list[tuple[int, ...]]) -> dict[st
         h_out = torch.zeros((1, m), dtype=torch.int32, pin_memory=True)
         d_in = torch.zeros((1, n), dtype=torch.int32, device=dev)
         d_out = torch.zeros((1, m), dtype=torch.int32, device=dev)
-        parts = {
-            "h2d": lambda: d_in.copy_(h_in, non_blocking=True),
-            "d2h": lambda: h_out.copy_(d_out, non_blocking=True),
-            "kernel": lambda: ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),
-            "h2d_d2h": lambda: (d_in.copy_(h_in, non_blocking=True), h_out.copy_(d_out, non_blocking=True)),
-            "full": lambda: (d_in.copy_(h_in, non_blocking=True), ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),
-                             h_out.copy_(d_out, non_blocking=True)),
+        parts = {  # each body runs within its own iteration
+            "h2d": lambda: d_in.copy_(h_in, non_blocking=True),  # noqa: B023
+            "d2h": lambda: h_out.copy_(d_out, non_blocking=True),  # noqa: B023
+            "kernel": lambda: ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),  # noqa: B023
+            "h2d_d2h": lambda: (d_in.copy_(h_in, non_blocking=True), h_out.copy_(d_out, non_blocking=True)),  # noqa: B023
+            "full": lambda: (d_in.copy_(h_in, non_blocking=True), ring_gemv(d_in, w, 32, n=n, m=m, out=d_out),  # noqa: B023
+                             h_out.copy_(d_out, non_blocking=True)),  # noqa: B023
         }
         row: dict[str, float] = {}
         for name, body in parts.items():

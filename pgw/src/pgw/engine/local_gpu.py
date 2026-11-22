@@ -75,6 +75,28 @@ class _Linear:
     execs: dict[int, int]  # rows -> cudaGraphExec_t address (native launch)
 
 
+#: Measured 1-row launch configurations of the local graphs per GPU model and ``(n, m)``:
+#: ``(block_m, block_n, split_k, num_warps)`` (``benchmarks/local_gemv_sweep.py``).
+#: Tesla T4 (2026-11-22, graph replay + synchronize / kernel device time, default -> chosen): Qwen2.5-0.5B
+#: qkv 43 -> 36 us / 13.0 -> 10.0 us, o 35 -> 35 us / 9.9 -> 7.6 us, down 66 -> 46 us / 31.5 -> 14.2 us (no
+#: split-K, so no memset node in the graph).
+ONE_ROW_CONFIGS: dict[str, dict[tuple[int, int], tuple[int, int, int, int]]] = {
+    "Tesla T4": {(896, 1152): (8, 512, 1, 1), (896, 896): (8, 1024, 1, 1), (4864, 896): (4, 1024, 1, 1)},
+}
+
+
+def _env_configs() -> dict[tuple[int, int], tuple[int, int, int, int]]:
+    out: dict[tuple[int, int], tuple[int, int, int, int]] = {}
+    for item in os.environ.get("PGW_LOCAL_GPU_GEMV", "").split(";"):
+        if ":" not in item:
+            continue
+        shape, cfg = item.split(":", 1)
+        n, m = (int(v) for v in shape.lower().split("x"))
+        bm, bn, sk, nw = (int(v) for v in cfg.split(","))
+        out[(n, m)] = (bm, bn, sk, nw)
+    return out
+
+
 def _as_ptr(handle: Any) -> int:
     """A CUDA handle as an integer address (torch returns an int or a cuda-python object)."""
     if isinstance(handle, int):
@@ -136,6 +158,26 @@ class LocalGpuProducts:
         self._h_in_ptr, self._h_in_bytes = int(self._h_in.data_ptr()), int(self._h_in.numel()) * 4
         self._h_out_ptr, self._h_out_bytes = int(self._h_out.data_ptr()), int(self._h_out.numel()) * 4
 
+    def gemv_config(self, rows: int, n: int, m: int) -> Any:
+        """Launch configuration of the graph's ring GEMV for ``rows`` rows of an ``(m, n)`` weight: an entry of
+        ``PGW_LOCAL_GPU_GEMV`` (``"NxM:block_m,block_n,split_k,num_warps;..."``, 1-row graphs), else the
+        measured table of this GPU model (:data:`ONE_ROW_CONFIGS`), else ``None`` (the provider's heuristic).
+        Any configuration computes the same integers (wrapping 32-bit sums); the backend self-checks every
+        linear against the CPU reference before use."""
+        if rows != 1:
+            return None
+        from pgw.core.triton_gemv import GemvConfig, device_name
+
+        spec = _env_configs().get((n, m))
+        if spec is None and os.environ.get("PGW_LOCAL_GPU_TABLE", "1").strip().lower() not in ("0", "no", "off"):
+            spec = ONE_ROW_CONFIGS.get(device_name(self.device), {}).get((n, m))
+        if spec is None:
+            return None
+        bm, bn, sk, nw = spec
+        cfg = GemvConfig(1, bm, bn, sk, nw)
+        cfg.validate()
+        return cfg
+
     def add(self, key: str, w8: torch.Tensor) -> None:
         """Upload ``w8`` (int8 ``(m, n)``, any device) and capture its graphs. Call at start-up."""
         from pgw.core.triton_gemv import ring_gemv
@@ -153,10 +195,12 @@ class LocalGpuProducts:
                 d_out = self._d_out[: rows * m].view(rows, m)
                 h_out = self._h_out[: rows * m].view(rows, m)
 
+                cfg = self.gemv_config(rows, n, m)
+
                 def body(d_in: torch.Tensor = d_in, h_in: torch.Tensor = h_in, d_out: torch.Tensor = d_out,
-                         h_out: torch.Tensor = h_out) -> None:
+                         h_out: torch.Tensor = h_out, cfg: Any = cfg) -> None:
                     d_in.copy_(h_in, non_blocking=True)
-                    ring_gemv(d_in, w, 32, n=n, m=m, out=d_out)
+                    ring_gemv(d_in, w, 32, n=n, m=m, out=d_out, config=cfg)
                     h_out.copy_(d_out, non_blocking=True)
 
                 stream.wait_stream(torch.cuda.current_stream(self.device))

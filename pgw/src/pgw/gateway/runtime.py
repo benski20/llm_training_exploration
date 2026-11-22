@@ -1403,6 +1403,7 @@ class ModelRuntime:
             "local_linears": dict(getattr(be, "local_policy", {}) or {"mode": c.local_linears}),
             "lm_head": dict(getattr(self, "lm_head_policy", None) or {"device": "cpu"}),
             "local_gpu_stats": dict(getattr(getattr(be, "_local_gpu", None), "stats", None) or {}),
+            "local_linear_timing": dict(getattr(be, "local_linear_timing", None) or {}),
             "measured_rtt_ms": round(self.measured_rtt_s * 1e3, 3) if self.measured_rtt_s is not None else None,
             "rtt_path": network_path(c.service_url),
             "trip_engine": bool(getattr(be, "trip_engine", False)),

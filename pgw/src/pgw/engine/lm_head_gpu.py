@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -154,6 +155,34 @@ class GpuLmHead:
         self._out_host = torch.zeros((self.max_rows, self.v), dtype=torch.float32, pin_memory=pin)
         self._stream = torch.cuda.Stream(device) if device.type == "cuda" else None  # type: ignore[no-untyped-call]
         self.calls = 0
+        #: calls and wall seconds of :meth:`logits` (live; the gateway's status shows it)
+        self.stats: dict[str, float] = {"calls": 0, "s": 0.0}
+        #: 1-row calls (decode) replay a captured CUDA graph [H2D, kernel, D2H] (PGW_LM_HEAD_GRAPH=0: plain launches)
+        self._graph: Any = None
+        if (self._stream is not None and not self.interpret
+                and os.environ.get("PGW_LM_HEAD_GRAPH", "1").strip().lower() not in ("0", "false", "no", "off")):
+            self._capture()
+
+    def _capture(self) -> None:
+        def body() -> None:
+            self._h[:1].copy_(self._h_host[:1], non_blocking=True)
+            self._launch(1)
+            self._out_host[:1].copy_(self._out[:1], non_blocking=True)
+
+        try:
+            with torch.cuda.device(self.device):
+                assert self._stream is not None
+                self._stream.wait_stream(torch.cuda.current_stream(self.device))
+                with torch.cuda.stream(self._stream):
+                    body()  # compiles the kernel outside the capture
+                self._stream.synchronize()
+                g = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(g, stream=self._stream, capture_error_mode="thread_local"):
+                    body()
+                self._graph = g
+        except Exception as exc:  # plain launches serve it
+            log.warning("LM head: no CUDA graph (%s: %s)", type(exc).__name__, str(exc)[:200])
+            self._graph = None
 
     def _launch(self, rows: int) -> None:
         kern = _lm_head_kernel
@@ -170,10 +199,17 @@ class GpuLmHead:
         if r == 0:
             return torch.empty((0, self.v), dtype=torch.float32)
         parts = []
+        t0 = time.perf_counter()
         with self._lock:
             for i in range(0, r, self.max_rows):
                 n = min(self.max_rows, r - i)
                 self._h_host[:n].copy_(hc[i : i + n])
+                if n == 1 and self._graph is not None:
+                    with torch.cuda.stream(self._stream):
+                        self._graph.replay()
+                    self._stream.synchronize()
+                    parts.append(self._out_host[:1].clone())
+                    continue
                 if self._stream is None or self.interpret:
                     self._h[:n].copy_(self._h_host[:n])
                     self._launch(n)
@@ -187,6 +223,8 @@ class GpuLmHead:
                     self._stream.synchronize()
                 parts.append(self._out_host[:n].clone())
         self.calls += 1
+        self.stats["calls"] += 1
+        self.stats["s"] += time.perf_counter() - t0
         return parts[0] if len(parts) == 1 else torch.cat(parts)
 
     def self_check(self, w_cpu: torch.Tensor, rows: int = 4) -> str | None:
@@ -225,8 +263,6 @@ def enable_gpu_lm_head(model: Any, device: str = "cuda") -> dict[str, Any]:
     """Compute ``model``'s LM head on ``device`` if the GPU kernel's logits equal the CPU kernel's bit for bit
     on the self-check rows (then :func:`pgw.engine.lm_head.lm_head_logits` routes the head there); returns the
     policy (``device``, ``reason``, ``setup_s``). Any failure keeps the CPU."""
-    import time
-
     from pgw.engine.lm_head import attach_device_head
 
     t0 = time.perf_counter()
@@ -250,7 +286,8 @@ def enable_gpu_lm_head(model: Any, device: str = "cuda") -> dict[str, Any]:
         log.warning("LM head: stays on the CPU (%s)", why)
         return policy
     attach_device_head(w, head)
-    policy.update(device=str(dev), reason="identical logits")
+    head.stats["calls"], head.stats["s"] = 0, 0.0  # count serving calls only
+    policy.update(device=str(dev), reason="identical logits", stats=head.stats)
     log.info("LM head: on %s (fixed-order kernel, identical logits on the self-check rows; %.2f s)", dev,
              policy["setup_s"])
     return policy

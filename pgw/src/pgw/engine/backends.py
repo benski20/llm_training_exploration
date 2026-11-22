@@ -1018,6 +1018,10 @@ class MaskedBackend(LinearBackend):
         #: ``lid.key -> f(x) -> y``: lean 1-row decode calls of the GPU's native kernel
         #: (:meth:`pgw.engine.local_gpu.LocalGpuProducts.one_row`), self-checked like the GPU path; empty = none.
         self._local_one_row: dict[str, Any] = {}
+        #: Wall time of :meth:`forward_local` (local linears only, unlike ``stats.local_seconds``, which also
+        #: counts the masked trips' gateway work): 1-row steps (decode) and the rest (prompt passes).
+        self.local_linear_timing: dict[str, float] = {"decode_calls": 0, "decode_s": 0.0, "other_calls": 0,
+                                                       "other_s": 0.0}
         self._local_gpu_mismatch = ""  # the failing case of the last GPU self-check (diagnostics)
         #: ``n * m`` from which a native local linear spreads its columns over the native pool. A decode step
         #: reads every local weight once from DRAM (the model's int8 weights do not stay in cache between
@@ -2907,14 +2911,23 @@ class MaskedBackend(LinearBackend):
             if (fn is not None and x.dtype == torch.float32 and x.ndim == 2 and x.shape[0] == 1
                     and x.device.type == "cpu" and not x.requires_grad and x.is_contiguous()):
                 y = fn(x)
-                self.stats.add(local_calls=1, local_rows=1, local_seconds=time.perf_counter() - t0)
+                dt = time.perf_counter() - t0
+                self.stats.add(local_calls=1, local_rows=1, local_seconds=dt)
+                lt = self.local_linear_timing
+                lt["decode_calls"] += 1
+                lt["decode_s"] += dt
                 return [y]
         for c in calls:
             if not self.local_linear(c.id):
                 raise ConfigError(f"{c.id} is not a local linear")
         out = _grouped_forward(_LocalView(self), calls)
-        self.stats.add(local_calls=len(calls), local_rows=sum(int(c.x.shape[0]) for c in calls),
-                       local_seconds=time.perf_counter() - t0)
+        dt = time.perf_counter() - t0
+        rows = sum(int(c.x.shape[0]) for c in calls)
+        self.stats.add(local_calls=len(calls), local_rows=rows, local_seconds=dt)
+        lt = self.local_linear_timing
+        kind = "decode" if rows == len(calls) == 1 else "other"
+        lt[kind + "_calls"] += len(calls)
+        lt[kind + "_s"] += dt
         return out
 
     def _take(self, res: Any, lid: LinearId, max_rows: int, want_checks: bool) -> tuple[int, Any, Any, Any]:
