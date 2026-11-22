@@ -28,7 +28,7 @@ and the UDS lane".
   taken, so the separate pre-check lookup is gone; lean finish; cached constants for one-call local linears.
   Same masks, draws, payload bytes, checks on every row, outputs and wiping (tests/engine/test_trip_fast.py).
   Dev box, per trip: prepare 339 -> 279 us, finish 155 -> 153 us; local linear 330 -> 317 us per call.
-- `PGW_NOISE_ASYNC_SAMPLED` (default off; co-located on): a sampled call's every-call checks stay inline, its
+- `PGW_NOISE_ASYNC_SAMPLED` (default off, also off in the co-located demo: the sampled payload leaves before its statistics finish): a sampled call's every-call checks stay inline, its
   statistics (about 400 us) run on a worker on wiped copies, in call order, joined before the next prepare (an
   alarm blocks the next payload, fail closed). Statistics identical to inline (tested).
 - `launch.py --lane uds` (co-located, opt-in): the product's same-host UDS lane between the two party users;
