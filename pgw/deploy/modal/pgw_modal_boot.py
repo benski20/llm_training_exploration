@@ -329,6 +329,29 @@ _TOKEN_RE = re.compile(r"\b(pgw-setup-[A-Za-z0-9_-]{8,})\b")
 #: way, while every pass would carry and mask ``spec_rows`` rows (``spec_rows`` times the mask supply).
 GATEWAY_MODEL_OPTIONS: dict[str, Any] = {"local_linears": "auto", "float_threads": 1, "lane": "stream"}
 
+#: Gateway trip-lane choices of ``launch.py --lane`` (``tls``: co-located placement only).
+LANES = ("stream", "tls")
+
+
+def lane_options(lane: str) -> dict[str, Any]:
+    """Gateway model options for ``launch.py --lane``: ``stream`` (default, as :data:`GATEWAY_MODEL_OPTIONS`) or
+    ``tls``, the native TCP+TLS trip lane of a provider started with ``lane_port`` (:func:`start_provider_party`):
+    binary header and rustls instead of WebSocket/msgpack and Python ssl, the GIL released per trip, the same
+    masked bytes, request ids and schedule; any call it cannot take goes to the blocking stream lane."""
+    if lane not in LANES:
+        raise ValueError(f"lane must be one of {LANES}, got {lane!r}")
+    return {"lane": lane}
+
+
+def lane_egress(lane: str, lane_port: int | None, host: str = "127.0.0.1") -> list[str]:
+    """The gateway's extra egress origin for ``launch.py --lane tls``: the provider's lane port on ``host`` (the
+    gateway connects to a TCP lane port only when it is on its egress allowlist). Empty for ``stream``."""
+    if lane != "tls":
+        return []
+    if lane_port is None:
+        raise ValueError("lane = 'tls' needs the provider's lane port")
+    return [f"https://{host}:{int(lane_port)}"]
+
 
 #: Customer container memory (MiB): the 0.5B demo fits 8 GiB; a larger target (its float32 embedding and head, the
 #: local attention weights, packing it in the wizard) plus the 0.5B draft gets 16 GiB (about $0.064/h more).
@@ -471,17 +494,22 @@ def ensure_user(name: str) -> None:
 
 def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user: str | None, log_dir: Path,
                          tenant: str = "customer-demo", code_ttl: str = "90m", note: str = "co-located demo",
-                         public_url: str | None = None) -> dict[str, Any]:
+                         public_url: str | None = None, lane_port: int | None = None) -> dict[str, Any]:
     """The provider's compute service on ``127.0.0.1:port`` only (TLS, a fresh PKI for 127.0.0.1), run as
     ``user`` in ``work`` (0700, owned by that user once its PKI and state files exist), plus a fresh
     single-use enrollment code. ``public_url`` (default ``https://127.0.0.1:port``) is the URL the code
-    points the gateway at (e.g. a delay proxy on loopback). Returns ``proc``, ``url``, ``code``, ``pki``,
-    ``env`` and ``ca_sha256``."""
+    points the gateway at (e.g. a delay proxy on loopback). ``lane_port``: also serve the native trip lane
+    over TLS 1.3 on ``127.0.0.1:lane_port`` (``lane = "tcp"``: the service's certificate, client certificates
+    verified against the client-issuing CA and bound to the lane ticket). Returns ``proc``, ``url``, ``code``,
+    ``pki``, ``env`` and ``ca_sha256``."""
     party_dir(work / "home", None)
     pki = make_pki(work / "pki", ["127.0.0.1", "localhost"])
     url = public_url or f"https://127.0.0.1:{port}"
     env = service_env(work, pack, pki, url, port, device=device)
-    env["PGW_SERVICE_HOST"] = "127.0.0.1"  # nothing outside this host can reach it
+    env["PGW_SERVICE_HOST"] = "127.0.0.1"  # nothing outside this host can reach it (the lane port too)
+    if lane_port is not None:
+        env["PGW_SERVICE_LANE"] = "tcp"
+        env["PGW_SERVICE_LANE_PORT"] = str(int(lane_port))
     party_dir(work, user)  # everything below is the provider's from here on
     kw = as_user(env, user, work / "home")
     party_dir(log_dir, None)
@@ -498,12 +526,15 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
 
 def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Path,
                         model_options: dict[str, Any] | None = None,
-                        hide_gpu: bool = True) -> tuple[subprocess.Popen[bytes], str]:
+                        hide_gpu: bool = True, egress: list[str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
     """The customer's gateway in setup mode as ``user`` in ``root`` (0700), without the provider's GPU
-    (``hide_gpu``). Returns the process and its one-time setup token."""
+    (``hide_gpu``). ``egress``: extra allowed outbound origins (the gateway's ``egress_allowlist``; e.g. the
+    provider's TCP+TLS lane port, :func:`lane_egress`). Returns the process and its one-time setup token."""
     party_dir(root / "home", None)
     party_dir(root, user)
     env = gateway_env(root / "config", root / "data", port, model_options)
+    if egress:
+        env["PGW_GATEWAY_EGRESS_ALLOWLIST"] = json.dumps(list(egress))
     if hide_gpu:
         env["CUDA_VISIBLE_DEVICES"] = ""  # the provider's GPU is not the customer's
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")  # as in customer.py's image

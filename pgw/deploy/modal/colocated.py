@@ -92,6 +92,8 @@ SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT else "0",
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
+#: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
+LANE_PORT = 8444
 #: Both parties' logs, written by the (root) parent process: 0700 root, files 0600.
 LOGS = Path("/var/log/pgw")
 
@@ -138,7 +140,7 @@ app = modal.App("pgw-colocated", image=image)
 @app.function(gpu=GPU, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
               max_containers=1, min_containers=0, retries=0, region=REGION)
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
-         spec_rows: int = 0) -> dict:
+         spec_rows: int = 0, lane: str = "stream") -> dict:
     """Provider service and customer gateway in this container, over loopback TLS (module docstring)."""
     import sys
 
@@ -154,7 +156,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     deadline = t_boot + min(ttl_s, MAX_LIFETIME_S - 120)
     gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
     boot.log(f"co-located pair: torch {torch.__version__}, GPU {gpu}")
-    result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS}
+    result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS, "lane": lane}
     puser, cuser = (PROVIDER_USER, CUSTOMER_USER) if SEPARATE_USERS else (None, None)
     if not SEPARATE_USERS:
         boot.log("PGW_MODAL_COLOCATED_USERS=0: both parties run as root (separate processes and directories)")
@@ -167,8 +169,10 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     token = ""
     try:
         # ---- provider: own user, own directory, loopback listener only (pgw_modal_boot.start_provider_party)
+        # launch.py --lane tls: the service also serves its native trip lane over TLS on LANE_PORT (opt-in)
         prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
-                                         log_dir=LOGS, note=f"modal co-located demo {run_id}")
+                                         log_dir=LOGS, note=f"modal co-located demo {run_id}",
+                                         lane_port=LANE_PORT if lane == "tls" else None)
         svc = prov["proc"]
         procs.append(svc)
         url, code = prov["url"], prov["code"]
@@ -186,7 +190,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
             gw, token = boot.start_gateway_party(croot, GATEWAY_PORT, user=cuser, log_dir=LOGS,
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
-                                                                "local_linears": local_linears, **spec})
+                                                                "local_linears": local_linears, **spec,
+                                                                **boot.lane_options(lane)},
+                                                 egress=boot.lane_egress(lane, LANE_PORT))
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,

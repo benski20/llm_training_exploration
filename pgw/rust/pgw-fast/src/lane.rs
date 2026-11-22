@@ -191,7 +191,7 @@ fn u32le(b: &[u8], at: usize) -> u32 {
 }
 
 #[cfg(unix)]
-pub use chan::{Channel, LaneError, TripChannel};
+pub use chan::{map_service_status, Channel, Framing, LaneError, TripChannel};
 
 /// The connection and the Python class (Unix only: the UDS transport; the TCP+TLS transport is shared).
 #[cfg(unix)]
@@ -203,9 +203,12 @@ mod chan {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use pgw_lane::proto::{
+        Kind as SvcKind, ReplyHeader as SvcReply, RequestHeader as SvcRequest, REPLY_HEADER_LEN as SVC_REPLY_LEN,
+    };
     use pyo3::exceptions::{PyConnectionRefusedError, PyOSError};
     use rustls::pki_types::pem::PemObject;
-    use rustls::pki_types::{CertificateDer, ServerName};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 
     // ---------------------------------------------------------------------------------------------
     // connection
@@ -238,21 +241,29 @@ mod chan {
             }
         }
 
-        /// Header and body: one `writev` on a socket; one TLS write (records) and a flush on TLS.
-        fn send(&mut self, hdr: &[u8], body: &[u8], scratch: &mut Vec<u8>) -> io::Result<()> {
+        /// Header and body: one `writev` on a socket; on TLS both are sealed into records straight from the
+        /// caller's buffers (no plaintext copy) and the records go out with vectored socket writes.
+        fn send(&mut self, hdr: &[u8], body: &[u8], _scratch: &mut Vec<u8>) -> io::Result<()> {
             match self {
                 Conn::Uds(s) => write_all_vectored(s, hdr, body),
                 Conn::Tls(s) => {
-                    if body.len() <= 64 << 10 {
-                        scratch.clear();
-                        scratch.extend_from_slice(hdr);
-                        scratch.extend_from_slice(body);
-                        s.write_all(scratch)?;
-                    } else {
-                        s.write_all(hdr)?;
-                        s.write_all(body)?;
+                    let mut bufs = [IoSlice::new(hdr), IoSlice::new(body)];
+                    let mut slices: &mut [IoSlice<'_>] = &mut bufs;
+                    while !slices.is_empty() && slices.iter().any(|b| !b.is_empty()) {
+                        let n = s.conn.writer().write_vectored(slices)?;
+                        if n == 0 {
+                            return Err(io::Error::new(io::ErrorKind::WriteZero, "TLS writer took nothing"));
+                        }
+                        IoSlice::advance_slices(&mut slices, n);
                     }
-                    s.flush()
+                    while s.conn.wants_write() {
+                        match s.conn.write_tls(&mut s.sock) {
+                            Ok(_) => {}
+                            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Ok(())
                 }
             }
         }
@@ -305,9 +316,35 @@ mod chan {
         }
     }
 
+    /// Frame format of a connection: this module's (WP-A3 `PGWH`/`PGWT`) or the service lane's
+    /// (`rust/pgw-lane`, WP-A1: `PGWL` 48-byte requests, 40-byte `PGWR` replies). Both carry the same public
+    /// fields and the same packed `x_hat` / `y_hat` bytes.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Framing {
+        Lane,
+        Service,
+    }
+
+    /// A service-lane (A1) status as this client's [`status`] (the mapping of
+    /// `pgw.wire.service_lane.map_service_status`): per-call refusals are a non-closing `BUSY` (that call
+    /// goes to the stream channel), every status after which the service closes the connection is a
+    /// closing status here.
+    pub fn map_service_status(code: u16) -> u8 {
+        match code {
+            0 => status::OK,
+            1 | 2 | 3 | 5 => status::BUSY,
+            4 => status::DEADLINE,
+            16 | 21 => status::BAD_HEADER,
+            19 | 20 => status::BAD_TICKET,
+            23 => status::DRAINING,
+            _ => status::INTERNAL,
+        }
+    }
+
     /// The client end of one lane connection (no Python types; `TripChannel` wraps it).
     pub struct Channel {
         conn: Option<Conn>,
+        framing: Framing,
         nonblocking: bool,
         read_to: Option<Duration>,
         write_to: Option<Duration>,
@@ -320,6 +357,7 @@ mod chan {
         fn new(conn: Conn, spin: Duration) -> Self {
             Channel {
                 conn: Some(conn),
+                framing: Framing::Lane,
                 nonblocking: false,
                 read_to: None,
                 write_to: None,
@@ -351,6 +389,21 @@ mod chan {
             Self::over_uds(sock, ticket, timeout, spin)
         }
 
+        /// The service lane (A1 frames) over a connected Unix domain socket; `max_rows` from the ticket.
+        pub fn over_uds_service(
+            sock: UnixStream,
+            ticket: &[u8; TICKET_LEN],
+            timeout: Duration,
+            spin: Duration,
+            max_rows: u16,
+        ) -> Result<Self, LaneError> {
+            let mut ch = Channel::new(Conn::Uds(sock), spin);
+            ch.framing = Framing::Service;
+            ch.max_rows = max_rows;
+            ch.hello(ticket, timeout)?;
+            Ok(ch)
+        }
+
         /// TCP + TLS 1.3 (rustls/ring), the server verified against `ca_pem` for `server_name`.
         pub fn connect_tls(
             host: &str,
@@ -361,6 +414,50 @@ mod chan {
             timeout: Duration,
             spin: Duration,
         ) -> Result<Self, LaneError> {
+            Self::connect_tls_with(host, port, server_name, ca_pem, None, ticket, timeout, spin, Framing::Lane, 0)
+        }
+
+        /// The service lane (A1 frames) over TCP + TLS 1.3, optionally presenting a client certificate
+        /// (`client` = PEM chain and PEM private key); `max_rows` from the ticket.
+        #[allow(clippy::too_many_arguments)]
+        pub fn connect_tls_service(
+            host: &str,
+            port: u16,
+            server_name: &str,
+            ca_pem: &[u8],
+            client: Option<(&[u8], &[u8])>,
+            ticket: &[u8; TICKET_LEN],
+            timeout: Duration,
+            spin: Duration,
+            max_rows: u16,
+        ) -> Result<Self, LaneError> {
+            Self::connect_tls_with(
+                host,
+                port,
+                server_name,
+                ca_pem,
+                client,
+                ticket,
+                timeout,
+                spin,
+                Framing::Service,
+                max_rows,
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn connect_tls_with(
+            host: &str,
+            port: u16,
+            server_name: &str,
+            ca_pem: &[u8],
+            client: Option<(&[u8], &[u8])>,
+            ticket: &[u8; TICKET_LEN],
+            timeout: Duration,
+            spin: Duration,
+            framing: Framing,
+            max_rows: u16,
+        ) -> Result<Self, LaneError> {
             let mut roots = rustls::RootCertStore::empty();
             for cert in CertificateDer::pem_slice_iter(ca_pem) {
                 let cert = cert.map_err(|e| LaneError::Protocol(format!("CA bundle: {e}")))?;
@@ -370,16 +467,33 @@ mod chan {
                 return Err(LaneError::Protocol("CA bundle holds no certificate".into()));
             }
             let provider = Arc::new(rustls::crypto::ring::default_provider());
-            let mut cfg = rustls::ClientConfig::builder_with_provider(provider)
+            let builder = rustls::ClientConfig::builder_with_provider(provider)
                 .with_protocol_versions(&[&rustls::version::TLS13])
                 .map_err(|e| LaneError::Protocol(format!("TLS config: {e}")))?
-                .with_root_certificates(roots)
-                .with_no_client_auth();
+                .with_root_certificates(roots);
+            let mut cfg = match client {
+                None => builder.with_no_client_auth(),
+                Some((cert_pem, key_pem)) => {
+                    let mut chain = Vec::new();
+                    for c in CertificateDer::pem_slice_iter(cert_pem) {
+                        chain.push(c.map_err(|e| LaneError::Protocol(format!("client certificate: {e}")))?);
+                    }
+                    if chain.is_empty() {
+                        return Err(LaneError::Protocol("client certificate file holds no certificate".into()));
+                    }
+                    let key = PrivateKeyDer::from_pem_slice(key_pem)
+                        .map_err(|e| LaneError::Protocol(format!("client key: {e}")))?;
+                    builder
+                        .with_client_auth_cert(chain, key)
+                        .map_err(|e| LaneError::Protocol(format!("client certificate/key: {e}")))?
+                }
+            };
             cfg.alpn_protocols = vec![ALPN.to_vec()];
             let name = ServerName::try_from(server_name.to_string())
                 .map_err(|e| LaneError::Protocol(format!("server name: {e}")))?;
-            let tls = rustls::ClientConnection::new(Arc::new(cfg), name)
+            let mut tls = rustls::ClientConnection::new(Arc::new(cfg), name)
                 .map_err(|e| LaneError::Protocol(format!("TLS: {e}")))?;
+            tls.set_buffer_limit(None); // a whole request is sealed at once and flushed in `send`
             let mut last = io::Error::new(io::ErrorKind::NotFound, "host resolves to no address");
             let mut tcp = None;
             for addr in (host, port).to_socket_addrs()? {
@@ -405,6 +519,8 @@ mod chan {
                 Some(_) => return Err(LaneError::Protocol("the server selected another ALPN protocol".into())),
             }
             let mut ch = Channel::new(Conn::Tls(Box::new(stream)), spin);
+            ch.framing = framing;
+            ch.max_rows = max_rows;
             ch.read_to = Some(timeout);
             ch.write_to = Some(timeout);
             ch.hello(ticket, timeout)?;
@@ -412,6 +528,9 @@ mod chan {
         }
 
         fn hello(&mut self, ticket: &[u8; TICKET_LEN], timeout: Duration) -> Result<(), LaneError> {
+            if self.framing == Framing::Service {
+                return self.hello_service(ticket, timeout);
+            }
             let mut hello = encode_hello(ticket);
             let deadline = Instant::now() + timeout;
             let res = (|| {
@@ -435,6 +554,43 @@ mod chan {
             })();
             hello.zeroize();
             self.scratch.zeroize();
+            if res.is_err() {
+                self.close();
+            }
+            res
+        }
+
+        /// The service lane's `open` frame (48-byte header, kind 1, body = the ticket) and its 40-byte answer.
+        fn hello_service(&mut self, ticket: &[u8; TICKET_LEN], timeout: Duration) -> Result<(), LaneError> {
+            let hdr = SvcRequest {
+                kind: SvcKind::Open,
+                request_id: [0; 16],
+                linear: 0,
+                rows: 0,
+                ring: 0,
+                deadline_ms: 0,
+                body_len: TICKET_LEN as u32,
+            }
+            .encode();
+            let deadline = Instant::now() + timeout;
+            let res = (|| {
+                if self.max_rows == 0 {
+                    return Err(LaneError::Protocol("the ticket serves no rows".into()));
+                }
+                self.timeouts(Some(timeout), Some(timeout))?;
+                let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
+                conn.send(&hdr, &ticket[..], &mut self.scratch)?;
+                let mut rb = [0u8; SVC_REPLY_LEN];
+                self.read_hybrid(&mut rb, None, deadline)?;
+                let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane open reply".into()))?;
+                if r.body_len != 0 {
+                    return Err(LaneError::Protocol("lane open reply with a body".into()));
+                }
+                if r.status.code() != 0 {
+                    return Err(LaneError::Refused(map_service_status(r.status.code())));
+                }
+                Ok(())
+            })();
             if res.is_err() {
                 self.close();
             }
@@ -576,6 +732,9 @@ mod chan {
             if h.body_len as usize != body.len() || h.rows == 0 {
                 return Err(LaneError::Protocol("header does not describe the body".into()));
             }
+            if self.framing == Framing::Service {
+                return self.trip_service(h, body, out, timeout);
+            }
             let start = Instant::now();
             let deadline = start + timeout;
             let hdr = h.encode();
@@ -597,6 +756,57 @@ mod chan {
             }
             if r.status != status::OK {
                 return Ok((r.status, r.compute_us));
+            }
+            if r.body_len as usize != out.len() {
+                return Err(LaneError::Protocol("reply body has the wrong length".into()));
+            }
+            let spin_left = spin_until.filter(|t| Instant::now() < *t);
+            self.read_hybrid(out, spin_left, deadline)?;
+            self.set_nb(false)?;
+            Ok((status::OK, r.compute_us))
+        }
+
+        /// One service-lane (A1) call: the same public fields (request id, linear, rows, ring, deadline,
+        /// body length) in the 48-byte header, the same body; the status is mapped to this client's codes.
+        fn trip_service(
+            &mut self,
+            h: &RequestHeader,
+            body: &[u8],
+            out: &mut [u8],
+            timeout: Duration,
+        ) -> Result<(u8, u32), LaneError> {
+            let deadline = Instant::now() + timeout;
+            let hdr = SvcRequest {
+                kind: SvcKind::Call,
+                request_id: h.request_id,
+                linear: u32::from(h.linear),
+                rows: h.rows,
+                ring: u16::from(h.ring),
+                deadline_ms: h.deadline_ms,
+                body_len: h.body_len,
+            }
+            .encode();
+            self.set_nb(false)?;
+            let rto = self.read_to;
+            let wto = Some(match self.write_to {
+                Some(t) if t <= timeout && t * 10 >= timeout * 9 => t,
+                _ => timeout.max(Duration::from_millis(1)),
+            });
+            self.timeouts(rto, wto)?;
+            let conn = self.conn.as_mut().ok_or(LaneError::Closed)?;
+            conn.send(&hdr, body, &mut self.scratch)?;
+            let spin_until = if self.spin.is_zero() { None } else { Some(Instant::now() + self.spin) };
+            let mut rb = [0u8; SVC_REPLY_LEN];
+            self.read_hybrid(&mut rb, spin_until, deadline)?;
+            let r = SvcReply::parse(&rb).ok_or_else(|| LaneError::Protocol("not a lane reply".into()))?;
+            if r.request_id != h.request_id {
+                return Err(LaneError::Protocol("reply does not answer the request".into()));
+            }
+            if r.status.code() != 0 {
+                if r.body_len != 0 {
+                    return Err(LaneError::Protocol("refusal with a body".into()));
+                }
+                return Ok((map_service_status(r.status.code()), r.compute_us));
             }
             if r.body_len as usize != out.len() {
                 return Err(LaneError::Protocol("reply body has the wrong length".into()));
@@ -674,6 +884,63 @@ mod chan {
             let to = secs(timeout_s)?;
             let spin = Duration::from_micros(spin_us.min(1_000_000));
             let ch = py.allow_threads(|| Channel::connect_tls(&host, port, &server_name, &ca_pem, &t, to, spin));
+            Ok(Self::wrap(ch.map_err(to_py)?))
+        }
+
+        /// Connect to the **service** lane's Unix domain socket (`rust/pgw-lane` frames, `pgw.service.lane`)
+        /// and present `ticket`; `max_rows` is the ticket's.
+        #[staticmethod]
+        #[pyo3(signature = (path, ticket, timeout_s, max_rows, spin_us = 50))]
+        fn connect_service_uds(
+            py: Python<'_>,
+            path: String,
+            ticket: &Bound<'_, PyAny>,
+            timeout_s: f64,
+            max_rows: u16,
+            spin_us: u64,
+        ) -> PyResult<Self> {
+            let t = ticket_of(ticket)?;
+            let to = secs(timeout_s)?;
+            let spin = Duration::from_micros(spin_us.min(1_000_000));
+            let ch = py.allow_threads(|| {
+                let sock = connect_uds_timeout(&path, to)?;
+                Channel::over_uds_service(sock, &t, to, spin, max_rows)
+            });
+            Ok(Self::wrap(ch.map_err(to_py)?))
+        }
+
+        /// Connect to the **service** lane on `host:port` with TLS 1.3 (server verified as `server_name`
+        /// against `ca_pem`; with `client_cert_pem` / `client_key_pem` it presents that client certificate)
+        /// and present `ticket`; `max_rows` is the ticket's. There is no plaintext TCP variant.
+        #[staticmethod]
+        #[pyo3(signature = (host, port, server_name, ca_pem, ticket, timeout_s, max_rows, spin_us = 50,
+                            client_cert_pem = None, client_key_pem = None))]
+        #[allow(clippy::too_many_arguments)]
+        fn connect_service_tls(
+            py: Python<'_>,
+            host: String,
+            port: u16,
+            server_name: String,
+            ca_pem: Vec<u8>,
+            ticket: &Bound<'_, PyAny>,
+            timeout_s: f64,
+            max_rows: u16,
+            spin_us: u64,
+            client_cert_pem: Option<Vec<u8>>,
+            client_key_pem: Option<Vec<u8>>,
+        ) -> PyResult<Self> {
+            let t = ticket_of(ticket)?;
+            let to = secs(timeout_s)?;
+            let spin = Duration::from_micros(spin_us.min(1_000_000));
+            let key = client_key_pem.map(zeroize::Zeroizing::new);
+            let client = match (&client_cert_pem, &key) {
+                (Some(c), Some(k)) => Some((c.as_slice(), k.as_slice())),
+                (None, None) => None,
+                _ => return Err(PyValueError::new_err("client_cert_pem and client_key_pem go together")),
+            };
+            let ch = py.allow_threads(|| {
+                Channel::connect_tls_service(&host, port, &server_name, &ca_pem, client, &t, to, spin, max_rows)
+            });
             Ok(Self::wrap(ch.map_err(to_py)?))
         }
 
@@ -841,10 +1108,19 @@ fn lane_pack_hello<'py>(py: Python<'py>, ticket: &Bound<'py, PyAny>) -> PyResult
     Ok(out)
 }
 
+/// The client status for a service-lane (A1) status code (`pgw.wire.service_lane.map_service_status`).
+#[cfg(unix)]
+#[pyfunction]
+fn lane_map_service_status(code: u16) -> u8 {
+    chan::map_service_status(code)
+}
+
 /// Register this module's functions in `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(unix)]
     m.add_class::<TripChannel>()?;
+    #[cfg(unix)]
+    m.add_function(wrap_pyfunction!(lane_map_service_status, m)?)?;
     m.add_function(wrap_pyfunction!(lane_pack_request, m)?)?;
     m.add_function(wrap_pyfunction!(lane_unpack_request, m)?)?;
     m.add_function(wrap_pyfunction!(lane_pack_reply, m)?)?;
@@ -1085,6 +1361,69 @@ mod tests {
             assert!(matches!(ch.trip(&h, &body, &mut small, Duration::from_secs(5)), Err(LaneError::Protocol(_))));
             assert!(ch.closed());
             srv.join().unwrap();
+        }
+    }
+
+    /// The service-lane (A1) framing: open frame, an OK call, a non-closing refusal, then a reply for
+    /// another request id (protocol error: the channel closes).
+    #[test]
+    fn service_frames_over_a_socket_pair() {
+        use pgw_lane::proto::{
+            Kind as SK, ReplyHeader as SR, RequestHeader as SQ, Status as SS, REQUEST_HEADER_LEN as SQ_LEN,
+        };
+        let (a, mut b) = UnixStream::pair().unwrap();
+        let srv = std::thread::spawn(move || {
+            let mut hb = [0u8; SQ_LEN];
+            b.read_exact(&mut hb).unwrap();
+            let h = SQ::parse(&hb).unwrap();
+            assert_eq!((h.kind, h.rows, h.body_len), (SK::Open, 0, 32));
+            let mut tk = [0u8; 32];
+            b.read_exact(&mut tk).unwrap();
+            assert_eq!(tk, [9u8; 32]);
+            b.write_all(&SR::refusal(SS::Ok, [0; 16], 0).encode()).unwrap();
+            let mut body = [0u8; 8];
+            b.read_exact(&mut hb).unwrap();
+            let h = SQ::parse(&hb).unwrap();
+            assert_eq!((h.kind, h.linear, h.rows, h.ring, h.deadline_ms, h.body_len), (SK::Call, 3, 2, 1, 250, 8));
+            b.read_exact(&mut body).unwrap();
+            assert_eq!(body, [5u8; 8]);
+            let r = SR {
+                status: SS::Ok,
+                request_id: h.request_id,
+                queue_us: 0,
+                compute_us: 7,
+                retry_after_ms: 0,
+                body_len: 4,
+            };
+            b.write_all(&r.encode()).unwrap();
+            b.write_all(&[1, 2, 3, 4]).unwrap();
+            b.read_exact(&mut hb).unwrap();
+            let h = SQ::parse(&hb).unwrap();
+            b.read_exact(&mut body).unwrap();
+            b.write_all(&SR::refusal(SS::Fallback, h.request_id, 0).encode()).unwrap();
+            b.read_exact(&mut hb).unwrap();
+            b.read_exact(&mut body).unwrap();
+            b.write_all(&SR::refusal(SS::Fallback, [0xEE; 16], 0).encode()).unwrap();
+        });
+        let mut ch =
+            Channel::over_uds_service(a, &[9u8; 32], Duration::from_secs(5), Duration::from_micros(20), 4).unwrap();
+        assert_eq!(ch.max_rows(), 4);
+        let h = RequestHeader { ring: 1, linear: 3, rows: 2, deadline_ms: 250, body_len: 8, request_id: rid(1) };
+        let mut out = [0u8; 4];
+        assert_eq!(ch.trip(&h, &[5u8; 8], &mut out, Duration::from_secs(5)).unwrap(), (status::OK, 7));
+        assert_eq!(out, [1, 2, 3, 4]);
+        let h2 = RequestHeader { request_id: rid(2), ..h };
+        assert_eq!(ch.trip(&h2, &[5u8; 8], &mut out, Duration::from_secs(5)).unwrap().0, status::BUSY);
+        assert!(!ch.closed());
+        let h3 = RequestHeader { request_id: rid(3), ..h };
+        assert!(matches!(ch.trip(&h3, &[5u8; 8], &mut out, Duration::from_secs(5)), Err(LaneError::Protocol(_))));
+        assert!(ch.closed());
+        srv.join().unwrap();
+        for (code, want) in [(0u16, status::OK), (4, status::DEADLINE), (5, status::BUSY), (19, status::BAD_TICKET)] {
+            assert_eq!(map_service_status(code), want);
+        }
+        for code in [16u16, 17, 18, 19, 20, 21, 22, 23, 99] {
+            assert!(status::closing(map_service_status(code)), "{code}");
         }
     }
 

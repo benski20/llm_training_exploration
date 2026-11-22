@@ -1,16 +1,21 @@
-//! The lane listener: a Unix domain socket, one thread per connection (a connection carries one
-//! call at a time; a gateway opens one per worker), blocking reads with periodic shutdown checks.
+//! The lane listener: a Unix domain socket, or TCP with TLS 1.3 ([`crate::tls`]); one thread per
+//! connection (a connection carries one call at a time; a gateway opens one per worker), blocking
+//! reads with periodic shutdown checks.
 //!
-//! Per connection: SO_PEERCRED uid check, then an `open` frame with a single-use ticket (bound to a
-//! tenant and a model) whose header and ticket must both arrive within `open_timeout` of the accept
-//! (one budget for the whole frame), then calls. A connection beyond `max_connections` gets the
-//! fatal [`Status::Busy`] and is closed. Per call: header parse, table and length
-//! checks **before** the body is read, the tenant's revocation generation, shared admission, the
-//! executor (with the call's deadline), the reply. Refusals below [`crate::proto::FATAL_MIN`] keep the
-//! connection; fatal ones close it after the reply.
+//! Per connection: SO_PEERCRED uid check (UDS) or a completed TLS 1.3 handshake (TCP; client
+//! certificate verified when presented), then an `open` frame with a single-use ticket (bound to a
+//! tenant and a model, and on TCP optionally to the client certificate that asked for it) whose
+//! header and ticket must both arrive within `open_timeout` of the accept (one budget for the
+//! handshake and the whole frame), then calls. A connection beyond `max_connections` gets the fatal
+//! [`Status::Busy`] (UDS; a TCP connection is closed before the handshake) and is closed. Per call:
+//! header parse, table and length checks **before** the body is read, the tenant's revocation
+//! generation, shared admission, the executor (with the call's deadline), the reply. Refusals below
+//! [`crate::proto::FATAL_MIN`] keep the connection; fatal ones close it after the reply. Both
+//! transports carry the same frames.
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, IoSlice, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -25,12 +30,24 @@ use crate::exec::{Call, Executor, ModelEntry};
 use crate::proto::{Kind, ReplyHeader, RequestHeader, Status, MAX_ROWS, REQUEST_HEADER_LEN, TICKET_LEN};
 use crate::stats::Stats;
 use crate::sync::{MutexExt, RwLockExt};
+use crate::tls::TlsIo;
+
+/// TCP + TLS listener settings (instead of the Unix domain socket).
+#[derive(Clone, Debug)]
+pub struct TlsListen {
+    /// Address to bind (port 0 = any free port; [`LaneServer::local_addr`] tells which).
+    pub addr: SocketAddr,
+    /// TLS 1.3 server configuration ([`crate::tls::server_config`]).
+    pub config: Arc<rustls::ServerConfig>,
+}
 
 /// Listener configuration.
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
-    /// Socket path (created; a stale socket file is replaced, a live one is an error).
+    /// Socket path (created; a stale socket file is replaced, a live one is an error). Unused with `tls`.
     pub path: PathBuf,
+    /// Listen on TCP with TLS instead of the Unix domain socket.
+    pub tls: Option<TlsListen>,
     /// Allowed peer uids (empty = this process's effective uid only).
     pub peer_uids: Vec<u32>,
     /// Largest rows served (1..=8); calls with more rows (up to 8) get `Fallback`.
@@ -51,6 +68,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
             path: PathBuf::new(),
+            tls: None,
             peer_uids: Vec::new(),
             max_rows: MAX_ROWS,
             deadline_cap_ms: 120_000,
@@ -67,6 +85,49 @@ struct Ticket {
     tenant: String,
     model: u32,
     expires: Instant,
+    /// SHA-256 of the client certificate the connection must present (TLS only).
+    cert: Option<[u8; 32]>,
+}
+
+/// One accepted connection.
+enum Io {
+    Uds(UnixStream),
+    Tls(Box<TlsIo>),
+}
+
+impl Io {
+    fn set_read_timeout(&self, d: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Io::Uds(s) => s.set_read_timeout(d),
+            Io::Tls(s) => s.set_read_timeout(d),
+        }
+    }
+
+    /// Header and body in one `writev` (UDS) or one batch of TLS records.
+    fn send(&mut self, hdr: &[u8], body: &[u8]) -> std::io::Result<()> {
+        match self {
+            Io::Uds(s) => write_all_vectored(s, hdr, body),
+            Io::Tls(s) => s.send(hdr, body),
+        }
+    }
+
+    fn close(&mut self) {
+        match self {
+            Io::Uds(s) => {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+            Io::Tls(s) => s.close(),
+        }
+    }
+}
+
+impl Read for Io {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Io::Uds(s) => s.read(buf),
+            Io::Tls(s) => s.read(buf),
+        }
+    }
 }
 
 /// State shared by the listener, the connections and the owner.
@@ -93,6 +154,7 @@ impl Shared {
 pub struct LaneServer {
     shared: Arc<Shared>,
     cfg: ServerConfig,
+    local: Option<SocketAddr>,
     listener: Mutex<Option<JoinHandle<()>>>,
     conns: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
@@ -152,13 +214,13 @@ enum ReadErr {
 
 /// Fill `buf`. While nothing of the frame has arrived and `idle` is set, waits indefinitely
 /// (checking shutdown every poll); once a byte arrived, the frame must complete within `stall`.
-fn read_full(s: &mut UnixStream, buf: &mut [u8], sh: &Shared, idle: bool, stall: Duration) -> Result<(), ReadErr> {
+fn read_full(s: &mut Io, buf: &mut [u8], sh: &Shared, idle: bool, stall: Duration) -> Result<(), ReadErr> {
     read_until(s, buf, sh, idle, stall, None)
 }
 
 /// [`read_full`] that also fails once `by` passes, whatever has arrived (the pre-auth budget).
 fn read_until(
-    s: &mut UnixStream,
+    s: &mut Io,
     buf: &mut [u8],
     sh: &Shared,
     idle: bool,
@@ -193,9 +255,12 @@ fn read_until(
     Ok(())
 }
 
-fn write_reply(s: &mut UnixStream, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
-    let hb = h.encode();
-    let mut bufs = [IoSlice::new(&hb), IoSlice::new(body)];
+fn write_reply(s: &mut Io, h: &ReplyHeader, body: &[u8]) -> std::io::Result<()> {
+    s.send(&h.encode(), body)
+}
+
+fn write_all_vectored(s: &mut UnixStream, hb: &[u8], body: &[u8]) -> std::io::Result<()> {
+    let mut bufs = [IoSlice::new(hb), IoSlice::new(body)];
     let mut slices: &mut [IoSlice<'_>] = &mut bufs;
     while !slices.is_empty() && slices.iter().any(|b| !b.is_empty()) {
         match s.write_vectored(slices) {
@@ -208,7 +273,7 @@ fn write_reply(s: &mut UnixStream, h: &ReplyHeader, body: &[u8]) -> std::io::Res
     Ok(())
 }
 
-fn refuse(s: &mut UnixStream, status: Status, id: [u8; 16], retry_after_ms: u32) -> std::io::Result<()> {
+fn refuse(s: &mut Io, status: Status, id: [u8; 16], retry_after_ms: u32) -> std::io::Result<()> {
     write_reply(s, &ReplyHeader::refusal(status, id, retry_after_ms), &[])
 }
 
@@ -263,22 +328,34 @@ struct Conn {
     generation: u64,
 }
 
-fn open(s: &mut UnixStream, sh: &Shared, cfg: &ServerConfig) -> Option<Conn> {
-    let uid = match peer_uid(s) {
-        Ok(u) => u,
-        Err(_) => {
+/// What the transport established about the peer before the `open` frame.
+enum Peer {
+    /// Unix domain socket: SO_PEERCRED checked against the allowed uids.
+    Uds,
+    /// TLS: the SHA-256 of the verified client certificate, if one was presented.
+    Tls(Option<[u8; 32]>),
+}
+
+fn open(s: &mut Io, sh: &Shared, cfg: &ServerConfig, peer: Peer, by: Instant) -> Option<Conn> {
+    if let (Peer::Uds, Io::Uds(u)) = (&peer, &*s) {
+        let allowed = match peer_uid(u) {
+            Ok(uid) => {
+                if cfg.peer_uids.is_empty() {
+                    uid == effective_uid()
+                } else {
+                    cfg.peer_uids.contains(&uid)
+                }
+            }
+            Err(_) => false,
+        };
+        if !allowed {
             let _ = refuse(s, Status::PeerRefused, [0; 16], 0);
             return None;
         }
-    };
-    let allowed = if cfg.peer_uids.is_empty() { uid == effective_uid() } else { cfg.peer_uids.contains(&uid) };
-    if !allowed {
-        let _ = refuse(s, Status::PeerRefused, [0; 16], 0);
-        return None;
     }
-    // one budget for the whole open frame, counted from the accept: a slow peer cannot hold a
-    // connection slot unauthenticated for longer than `open_timeout`
-    let by = Some(Instant::now() + cfg.open_timeout);
+    // one budget for the whole open frame (and, on TLS, the handshake), counted from the accept: a
+    // slow peer cannot hold a connection slot unauthenticated for longer than `open_timeout`
+    let by = Some(by);
     let mut hb = [0u8; REQUEST_HEADER_LEN];
     if read_until(s, &mut hb, sh, false, cfg.open_timeout, by).is_err() {
         return None;
@@ -307,6 +384,18 @@ fn open(s: &mut UnixStream, sh: &Shared, cfg: &ServerConfig) -> Option<Conn> {
             return None;
         }
     };
+    // A ticket issued to a gateway that presented a client certificate on `lane/open` is good only on
+    // a TLS connection presenting that same certificate (the ticket is spent either way).
+    if let Some(want) = entry.cert {
+        let ok = match peer {
+            Peer::Tls(Some(got)) => ticket_eq(&want, &got),
+            _ => false,
+        };
+        if !ok {
+            let _ = refuse(s, Status::Unauthenticated, h.request_id, 0);
+            return None;
+        }
+    }
     let model = match sh.models.pread().get(&entry.model) {
         Some(m) => m.clone(),
         None => {
@@ -321,16 +410,71 @@ fn open(s: &mut UnixStream, sh: &Shared, cfg: &ServerConfig) -> Option<Conn> {
     Some(Conn { tenant: entry.tenant, model, model_id: entry.model, generation })
 }
 
-fn serve(mut s: UnixStream, sh: Arc<Shared>, cfg: ServerConfig) {
+enum Listener {
+    Uds(UnixListener),
+    Tcp(TcpListener),
+}
+
+impl Listener {
+    /// The next connection, in blocking mode (the listener itself is non-blocking).
+    fn accept(&self) -> std::io::Result<Accepted> {
+        match self {
+            Listener::Uds(l) => {
+                let (s, _) = l.accept()?;
+                s.set_nonblocking(false)?;
+                Ok(Accepted::Uds(s))
+            }
+            Listener::Tcp(l) => {
+                let (s, _) = l.accept()?;
+                s.set_nonblocking(false)?;
+                Ok(Accepted::Tcp(s))
+            }
+        }
+    }
+}
+
+/// A freshly accepted connection, before its transport set-up.
+enum Accepted {
+    Uds(UnixStream),
+    Tcp(TcpStream),
+}
+
+fn serve(acc: Accepted, sh: Arc<Shared>, cfg: ServerConfig) {
+    let by = Instant::now() + cfg.open_timeout;
+    let (mut s, peer) = match acc {
+        Accepted::Uds(u) => (Io::Uds(u), Peer::Uds),
+        Accepted::Tcp(t) => {
+            let Some(tl) = cfg.tls.as_ref() else { return };
+            let stop = || sh.shutdown.load(Ordering::SeqCst);
+            match TlsIo::accept(t, tl.config.clone(), cfg.poll, cfg.open_timeout, cfg.stall_timeout, stop) {
+                Ok(io) => {
+                    let d = io.peer_cert_digest();
+                    (Io::Tls(Box::new(io)), Peer::Tls(d))
+                }
+                Err(_) => {
+                    sh.stats.connection(false);
+                    return;
+                }
+            }
+        }
+    };
     let _ = s.set_read_timeout(Some(cfg.poll));
-    let conn = open(&mut s, &sh, &cfg);
+    let conn = open(&mut s, &sh, &cfg, peer, by);
     sh.stats.connection(conn.is_some());
-    let Some(conn) = conn else { return };
+    let Some(conn) = conn else {
+        s.close();
+        return;
+    };
+    serve_calls(&mut s, &sh, &cfg, conn);
+    s.close();
+}
+
+fn serve_calls(s: &mut Io, sh: &Arc<Shared>, cfg: &ServerConfig, conn: Conn) {
     let mut body: Vec<u8> = Vec::new();
     let mut out: Vec<u8> = Vec::new();
     let mut hb = [0u8; REQUEST_HEADER_LEN];
     loop {
-        if read_full(&mut s, &mut hb, &sh, true, cfg.stall_timeout).is_err() {
+        if read_full(s, &mut hb, sh, true, cfg.stall_timeout).is_err() {
             return;
         }
         let received = Instant::now();
@@ -338,41 +482,41 @@ fn serve(mut s: UnixStream, sh: Arc<Shared>, cfg: ServerConfig) {
             Ok(h) => h,
             Err((st, id)) => {
                 sh.stats.request(&conn.tenant, st.name(), 0.0);
-                let _ = refuse(&mut s, st, id, 0);
+                let _ = refuse(s, st, id, 0);
                 return;
             }
         };
         let id = h.request_id;
-        let fatal = |s: &mut UnixStream, st: Status| {
+        let fatal = |s: &mut Io, st: Status| {
             sh.stats.request(&conn.tenant, st.name(), received.elapsed().as_secs_f64());
             let _ = refuse(s, st, id, 0);
         };
         if h.kind != Kind::Call {
-            fatal(&mut s, Status::NotOpen);
+            fatal(s, Status::NotOpen);
             return;
         }
         if sh.generation(&conn.tenant) != conn.generation {
-            fatal(&mut s, Status::Unauthenticated);
+            fatal(s, Status::Unauthenticated);
             return;
         }
         let (Some(lin), Some(ring)) =
             (conn.model.linears.get(h.linear as usize), conn.model.rings.get(h.ring as usize))
         else {
-            fatal(&mut s, Status::UnknownLinear);
+            fatal(s, Status::UnknownLinear);
             return;
         };
         if h.rows > MAX_ROWS {
-            fatal(&mut s, Status::BadHeader);
+            fatal(s, Status::BadHeader);
             return;
         }
         let bpe = ring.bytes_per_element as u64;
         let want_in = h.rows as u64 * lin.n as u64 * bpe;
         if h.body_len as u64 != want_in {
-            fatal(&mut s, Status::BadLength);
+            fatal(s, Status::BadLength);
             return;
         }
         body.resize(want_in as usize, 0);
-        if read_full(&mut s, &mut body, &sh, false, cfg.stall_timeout).is_err() {
+        if read_full(s, &mut body, sh, false, cfg.stall_timeout).is_err() {
             return;
         }
         let out_len = (h.rows as u64 * lin.m as u64 * bpe) as usize;
@@ -433,13 +577,13 @@ fn serve(mut s: UnixStream, sh: Arc<Shared>, cfg: ServerConfig) {
                     d.compute_us as f64 * 1e-6,
                 );
                 sh.stats.request(&conn.tenant, Status::Ok.name(), received.elapsed().as_secs_f64());
-                if write_reply(&mut s, &rh, &out).is_err() {
+                if write_reply(s, &rh, &out).is_err() {
                     return;
                 }
             }
             Err(r) => {
                 sh.stats.request(&conn.tenant, r.status.name(), received.elapsed().as_secs_f64());
-                if refuse(&mut s, r.status, id, r.retry_after_ms).is_err() || r.status.is_fatal() {
+                if refuse(s, r.status, id, r.retry_after_ms).is_err() || r.status.is_fatal() {
                     return;
                 }
             }
@@ -457,8 +601,22 @@ impl LaneServer {
         if cfg.max_rows == 0 || cfg.max_rows > MAX_ROWS {
             return Err(std::io::Error::new(ErrorKind::InvalidInput, "max_rows must be in 1..=8"));
         }
-        let listener = bind(&cfg.path)?;
-        listener.set_nonblocking(true)?;
+        let listener = match &cfg.tls {
+            None => {
+                let l = bind(&cfg.path)?;
+                l.set_nonblocking(true)?;
+                Listener::Uds(l)
+            }
+            Some(t) => {
+                let l = TcpListener::bind(t.addr)?;
+                l.set_nonblocking(true)?;
+                Listener::Tcp(l)
+            }
+        };
+        let local = match &listener {
+            Listener::Tcp(l) => Some(l.local_addr()?),
+            Listener::Uds(_) => None,
+        };
         let shared = Arc::new(Shared {
             admission,
             stats: Arc::new(Stats::default()),
@@ -474,10 +632,18 @@ impl LaneServer {
         let handle = std::thread::Builder::new().name("pgw-lane-accept".into()).spawn(move || {
             while !sh.shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((mut s, _)) => {
-                        let _ = s.set_nonblocking(false);
+                    Ok(acc) => {
                         if sh.connections.load(Ordering::SeqCst) >= cfg2.max_connections {
-                            let _ = refuse(&mut s, Status::Busy, [0; 16], 1000);
+                            match acc {
+                                Accepted::Uds(s) => {
+                                    let mut io = Io::Uds(s);
+                                    let _ = refuse(&mut io, Status::Busy, [0; 16], 1000);
+                                }
+                                // no TLS session yet to refuse in: close before the handshake
+                                Accepted::Tcp(t) => {
+                                    let _ = t.shutdown(std::net::Shutdown::Both);
+                                }
+                            }
                             continue;
                         }
                         sh.connections.fetch_add(1, Ordering::SeqCst);
@@ -488,7 +654,7 @@ impl LaneServer {
                             let _slot = slot;
                             // a panic ends this connection only: the guards release its admission
                             // and connection counts during unwinding, locks recover from poisoning
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(s, sh3, cfg3)));
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(acc, sh3, cfg3)));
                         });
                         if let Ok(h) = h {
                             let mut v = c2.plock();
@@ -503,7 +669,7 @@ impl LaneServer {
                 }
             }
         })?;
-        Ok(LaneServer { shared, cfg, listener: Mutex::new(Some(handle)), conns })
+        Ok(LaneServer { shared, cfg, local, listener: Mutex::new(Some(handle)), conns })
     }
 
     /// Shared state (admission, stats).
@@ -539,10 +705,28 @@ impl LaneServer {
 
     /// Accept `ticket` (single use) for `tenant` and model `model` until `ttl` from now.
     pub fn add_ticket(&self, ticket: [u8; TICKET_LEN], tenant: &str, model: u32, ttl: Duration) {
+        self.add_bound_ticket(ticket, tenant, model, ttl, None);
+    }
+
+    /// [`Self::add_ticket`], and with `cert` (SHA-256 of a DER client certificate, [`crate::tls::cert_digest`])
+    /// the ticket opens only a TLS connection that presents that certificate.
+    pub fn add_bound_ticket(
+        &self,
+        ticket: [u8; TICKET_LEN],
+        tenant: &str,
+        model: u32,
+        ttl: Duration,
+        cert: Option<[u8; 32]>,
+    ) {
         let now = Instant::now();
         let mut t = self.shared.tickets.plock();
         t.retain(|v| v.expires > now);
-        t.push(Ticket { key: ticket, tenant: tenant.to_owned(), model, expires: now + ttl });
+        t.push(Ticket { key: ticket, tenant: tenant.to_owned(), model, expires: now + ttl, cert });
+    }
+
+    /// The bound TCP address (TLS listener), `None` for the Unix domain socket.
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.local
     }
 
     /// Unused tickets.
@@ -569,7 +753,9 @@ impl LaneServer {
         if let Some(h) = self.listener.plock().take() {
             let _ = h.join();
         }
-        let _ = std::fs::remove_file(&self.cfg.path);
+        if self.cfg.tls.is_none() {
+            let _ = std::fs::remove_file(&self.cfg.path);
+        }
         let t0 = Instant::now();
         let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.conns.plock());
         for h in handles {

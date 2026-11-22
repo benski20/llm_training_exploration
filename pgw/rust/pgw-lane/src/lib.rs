@@ -5,7 +5,7 @@
 //! Python on the hot path when CUDA graphs are available.
 //!
 //! * [`proto`]: the fixed binary header (public fields only) and the status / refusal codes.
-//! * [`server`]: the Unix-domain-socket listener: SO_PEERCRED uid check, single-use tickets issued
+//! * [`server`]: the listener (Unix domain socket with an SO_PEERCRED uid check, or TCP + TLS), single-use tickets issued
 //!   by the Python service (`POST /pgw/v1/lane/open`, same authentication as compute), shape, size
 //!   and deadline enforcement before a body is read, revocation, draining.
 //! * [`admission`]: draining flag, global and per-tenant in-flight caps and the per-tenant row
@@ -17,8 +17,10 @@
 //!   spin-then-block wait. Registered only after a startup equality self-check on the device.
 //!
 //! The provider only ever sees one-time-padded `x_hat` and the resulting `y_hat`, exactly as on
-//! the WebSocket path: the lane changes framing and latency, never content. TCP+TLS is not built
-//! yet (the Python service refuses `lane = "tcp"`).
+//! the WebSocket path: the lane changes framing and latency, never content.
+//! * [`tls`]: the TCP transport, TLS 1.3 only (rustls/ring): the service's certificate, client
+//!   certificates verified against its client CA, tickets optionally bound to the client certificate
+//!   that requested them. Same frames as the Unix domain socket.
 //!
 //! Python bindings live in `pgw-fast` (`lane_service.rs`).
 
@@ -29,6 +31,7 @@ pub mod proto;
 pub mod server;
 pub mod stats;
 mod sync;
+pub mod tls;
 
 /// Version of the lane wire format this crate implements.
 pub const LANE_PROTOCOL_VERSION: u16 = proto::VERSION;

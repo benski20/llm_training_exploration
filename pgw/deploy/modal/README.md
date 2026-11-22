@@ -289,8 +289,38 @@ logprobs) and shows the provider nothing new:
   call it cannot complete is resent byte-identically on the regular stream channel. `/admin/status`
   shows `lane_state = "stream"` and `stream_lane_stats` (calls, fallbacks, opens).
 
-Not used here: the native trip lane (`lane = "auto"`; a Unix socket for a service on the gateway's host,
-and the provider is remote). Strict speculation is available but off by default; see the next section.
+* `lane = "tls"` (`launch.py --placement colocated --lane tls`; opt-in, co-located only): the provider's
+  service also serves its native trip lane over TLS 1.3 on `127.0.0.1:8444` (`PGW_SERVICE_LANE=tcp`), and
+  the gateway sends decode trips there instead of the WebSocket: a 48-byte binary header instead of
+  msgpack, rustls in both processes instead of Python `ssl` and asyncio, the GIL released for the whole trip
+  on the gateway (one `writev`, spin-then-block wait), CUDA-graph replay without Python on the provider for
+  1-row calls. Same encryption and authentication as the stream lane: TLS 1.3 to `127.0.0.1` verified
+  against the CA pinned at enrollment, the ticket from `lane/open` (tenant bearer token checked) and bound
+  to the gateway's enrollment client certificate, which the lane connection must present. Same masked
+  bytes, request ids and call schedule; any call it cannot take goes byte-identically to the blocking
+  stream lane. `/admin/status` shows `lane_state = "open"` and `lane_stats`.
+
+Not used here: the UDS trip lane (`lane = "auto"`; the two parties run as different users with separate
+directories). Strict speculation is available but off by default; see the next section.
+
+Per 1-row call over loopback TLS, **measured** on a shared 4-vCPU box (2026-11-21, load average 30-40, so
+only the ratios mean much; medians of 3 interleaved runs of 2000-3000 calls; `benchmarks/wire_overhead_bench.py
+--tls --sync stream|lane --service-lane tcp` against the real service app with zero-cost stub kernels, and
+`benchmarks/lane_tls_bench.py` for the transport alone):
+
+| path | 0.5B shapes p50 / mean | 7B shapes p50 / mean |
+|---|---|---|
+| blocking stream lane (`lane = "stream"`, today's Modal setting) | 346 / 795 us | 546 / 1019 us |
+| TCP+TLS lane (`lane = "tls"`), service kernel path in Python (a CPU provider; multi-row calls on a T4) | 219 / 395 us | 346 / 814 us |
+| same two, gateway process with 2 busy Python threads (`--gil-load 2`) | 2157 / 3100 vs 280 / 975 us | |
+| TCP+TLS lane transport alone (rustls both ends, a no-Python-work executor: what CUDA-graph replay leaves) | 23 / 74 us | 73 / 67 us (with mTLS) |
+
+The stream lane's cost is Python on both ends (msgpack, WebSocket framing and masking, `ssl` records,
+asyncio on the service, and a GIL hand-off at every socket call on the gateway), not TLS: the same TLS 1.3
+in Rust costs tens of microseconds. With CUDA graphs (1-row calls on a T4) the provider runs no Python per
+trip at all. *Estimate* for the co-located T4 0.5B chat (not measured): the 1-row trip falls from 1.9 ms
+(service 0.39 + rest 1.52) to about 0.3-0.5 ms, i.e. about 52 x 2.7 ms = 0.14 s of trips per token becomes
+0.02-0.03 s, so about 4.7 -> 9-10 tokens/s with the gateway's 70 ms of CPU per token unchanged.
 
 `launch.py --e2e` prints the settings in effect (`local_linears` decision, start-up RTT, round trips
 per token of the warm chat) next to `trip_latency`; the per-trip gate is unchanged (fewer trips per
