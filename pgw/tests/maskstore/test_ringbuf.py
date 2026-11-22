@@ -224,6 +224,107 @@ def test_ring_matches_store(rings: Any, store: Any, model: ToyModel, rname: str)
     b.close()
 
 
+@pytest.mark.parametrize("rname", ["K32A12C27", "K40A12", "K48A20"])
+def test_direct_row_reads_match_chunk_copies(rings: Any, model: ToyModel, rname: str) -> None:
+    """Zero-copy reads (``RamSegment.read_wr_rows``) decode exactly the rows of the copied chunks, for every
+    slot range (including ranges that span chunks), in the int64 and the compact form."""
+    from pgw.core.packing import unpack_ring
+
+    rp = ring_from_setting(rname)
+    ring = rings(model, ring=rp)
+    publish(ring, model, chunk_slots=4)
+    res = ring.reserve(SLOTS)
+    seg = res._extents[0].seg
+    lay = seg.layout
+    for li, s in enumerate(model.specs):
+        full = torch.cat([unpack_ring(seg.decrypt_into(lay.wr_chunk(li, j)), (lay.chunk_rows(j), s.out_features), rp)
+                          for j in range(lay.chunks_per_linear)])
+        for slot0, rows in [(0, 1), (3, 2), (2, 7), (0, SLOTS), (SLOTS - 1, 1)]:
+            for compact in (False, True):
+                got = seg.read_wr_rows(li, slot0, rows, compact=compact)
+                assert got.flags.writeable and got.flags.owndata
+                assert got.dtype == (np.uint32 if compact and rp.k <= 32 else np.int64)
+                assert np.array_equal(got.astype(np.int64), full[slot0:slot0 + rows].numpy())
+        with pytest.raises(MaskStoreError):
+            seg.read_wr_rows(li, SLOTS - 1, 2, compact=False)
+    # the take path uses the direct reads: no per-reservation chunk copies are cached
+    take_all(res, model.specs[0].id.key)
+    assert not res._chunk_cache
+    res.close()
+    with pytest.raises(MaskStoreError):
+        seg.read_wr_rows(0, 0, 1, compact=False)
+    ring2 = rings(model, ring=rp)
+    publish(ring2, model)
+    seg2 = ring2.reserve(4)._extents[0].seg
+    ring2.close()
+    with pytest.raises(MaskStoreError):
+        seg2.read_wr_rows(0, 0, 1, compact=False)
+
+
+@pytest.mark.parametrize("threads", [1, 3])
+def test_batched_claim_on_ring_matches_sequential(rings: Any, model: ToyModel, threads: int,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """``take_checked_many`` over ring reservations (native, rows read from the slabs under the slab
+    locks) hands out exactly the rows the sequential ``take_checked`` loop does: same r, same W r, same
+    check vectors, same cursors, across extent boundaries and with prefetched rows."""
+    from pgw.maskstore import store as store_mod
+    from pgw.maskstore import take_checked_many
+
+    if not store_mod._native_claim:
+        pytest.skip("pgw_fast.claim_rows_many not built")
+    monkeypatch.setattr(ringbuf.RingReservation, "batched_claim", True)
+    calls = []
+    real = store_mod.native.fast.claim_rows_many
+    monkeypatch.setattr(store_mod.native.fast, "claim_rows_many", lambda *a, **kw: calls.append(1) or real(*a, **kw))
+    a, b = rings(model, ring=K32), rings(model, ring=K32)
+    for _ in range(3):
+        seed = os.urandom(32)
+        publish(a, model, seed=seed, chunk_slots=4)
+        publish(b, model, seed=seed, chunk_slots=4)
+    sizes = [5, 11, 7, 20]  # 20 spans two slabs
+    ra = [a.reserve(n) for n in sizes]
+    rb = [b.reserve(n) for n in sizes]
+    keys = [s.id.key for s in model.specs]
+    ra[1].prefetch(keys[0], 3)
+    rb[1].prefetch(keys[0], 3)
+    rng = random.Random(7)
+    while any(x.remaining(k) for x in ra for k in keys):
+        reqs = [(i, k, rng.randint(1, 4)) for i in range(len(sizes)) for k in keys if ra[i].remaining(k)]
+        got = take_checked_many([(ra[i], k, n, True) for i, k, n in reqs], threads=threads)
+        for (i, k, n), g in zip(reqs, got, strict=True):
+            w = rb[i].take_checked(k, n, True)
+            assert g[0] == w[0]
+            assert torch.equal(g[1], w[1]) and torch.equal(g[2].to(torch.int64), w[2].to(torch.int64))
+            assert g[3][0][1] == w[3][0][1]  # (segment id, linear): segment ids differ between the two rings
+            assert np.array_equal(g[3][1], w[3][1]) and np.array_equal(g[3][2], w[3][2])
+    assert calls  # the native batched path ran (no fallback to the sequential loop)
+    for x in ra + rb:
+        x.close()
+
+
+def test_batched_claim_on_closed_ring_raises(rings: Any, model: ToyModel, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pgw.maskstore import store as store_mod
+    from pgw.maskstore import take_checked_many
+
+    if not store_mod._native_claim:
+        pytest.skip("pgw_fast.claim_rows_many not built")
+    monkeypatch.setattr(ringbuf.RingReservation, "batched_claim", True)
+    ring = rings(model, ring=K32)
+    publish(ring, model)
+    res = ring.reserve(4)
+    seg = res._extents[0].seg
+    with seg.slab_lock:
+        seg._slab.gen += 1  # a recycled slab: the re-check under the lock refuses it
+        try:
+            with pytest.raises(MaskStoreError):
+                seg.wr_view_locked(0)
+        finally:
+            seg._slab.gen -= 1
+    ring.close()
+    with pytest.raises(PGWError):
+        take_checked_many([(res, model.specs[0].id.key, 1, True)])
+
+
 def test_close_burns_never_rewinds(rings: Any, model: ToyModel) -> None:
     ring = rings(model)
     sid, _ = publish(ring, model)

@@ -33,6 +33,23 @@ Design and numbers: [research/plans/he-gateway-decrypt.md](research/plans/he-gat
   bytes at 0.5B). The gateway declares at start-up which linears it sends (`MaskStore.require_linears`);
   segments lacking one are retired (written off, never reserved), so a later configuration change cannot run
   short or reuse a mask. Reservations may now span segments with different linear sets.
+## Update 2026-11-21: mask data path at high bandwidth (package X2)
+
+Memo: `research/plans/mask-ram-path-x2.md`. At 1k tokens/s a 7B gateway needs 5.6 GB/s of `W r`, a
+70B deployment 27 GB/s, so masks go factory -> locked RAM ring -> gateway, with the encrypted disk
+store as the outage reserve. Measured on the 4-vCPU dev box (A/B against the base commit, per full
+slot): the factory writes into the ring at 0.85 ms per 7B slot (store: 9.6 ms). The gateway take was
+the limit, and is now faster: **7B 172 -> 276 slots/s per core, 0.5B 350 -> 586** (store tier: 89 and
+150, unchanged). Ring segments are now read in place under the slab lock
+(`RamSegment.read_wr_rows`) instead of each session copying a 1 MiB chunk. The rows are unchanged,
+and so are single use, wipe-on-consume and the recycled-slab checks. The remaining floor is the pad
+keystream (1.8 ms per 7B slot, 8 keystream bytes per element by SPEC 7.2), not the `W r` bytes
+(0.37 ms memcpy). `W r` is already K-bit packed at rest and in RAM, so packing cannot remove anything
+more exactly. A pad-format v2 (4 keystream bytes per element at K <= 32) would halve the floor; it
+needs a coordinated format change. Also new: an opt-in batched native claim over ring reservations
+(`PGW_MASK_RING_BATCHED_CLAIM=1`; off because the native ChaCha20 is slower here), the sustained
+producer/consumer bench `benchmarks/mask_ram_path_bench.py`, and an end-to-end test of the encrypted
+factory -> ring -> gateway path (bit-identical to the local factory).
 
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 

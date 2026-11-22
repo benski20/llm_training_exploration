@@ -625,6 +625,18 @@ class MaskReservation:
         lin = self._linears[key][1]
         li = ex.li[key]
         slot0 = ex.ext.start + (start - ex.first_row)
+        if hasattr(ex.seg, "wr_view_locked") and key not in self._stage:
+            # In-memory ring segment: the job reads the linear's rows straight from the slab;
+            # ``take_checked_many`` holds the slab lock (and re-checks the slab) around the native call.
+            self._cursor[key] = start + rows  # advance first: these rows are never handed out again
+            rkey = self._rkey_cache.get((ei, key))
+            if rkey is None:
+                seed, _ = ex.secrets()
+                rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
+            if slot0 + rows >= ex.ext.start + ex.ext.count:
+                ends.append((ei, key))
+            src = _SlabSource(ex.seg, li)
+            return ("job", rows, (rkey, lin.in_features, slot0, src, slot0, rows, lin.out_features), chk)
         cs = ex.seg.header.chunk_slots
         j = slot0 // cs
         in_chunk = slot0 - j * cs
@@ -665,6 +677,8 @@ class MaskReservation:
             return True
         ei = self._cursor_extent(key, start)
         ex = self._extents[ei]
+        if hasattr(ex.seg, "wr_view_locked"):
+            return False  # ring rows are read from the slab: no chunk buffer to replace
         rows = min(max_rows, ex.end_row - start)
         slot0 = ex.ext.start + (start - ex.first_row)
         cs = ex.seg.header.chunk_slots
@@ -800,6 +814,11 @@ class MaskReservation:
         self, ei: int, ex: _Extent, li: int, lin: SegmentLinear, slot0: int, rows: int, compact: bool = False
     ) -> torch.Tensor:
         """``W r`` rows as int64, or (``compact``, K <= 32, native) uint32: same values, half the bytes."""
+        direct = getattr(ex.seg, "read_wr_rows", None)
+        if direct is not None:
+            # In-memory ring segment: rows decoded straight from locked RAM (no per-reservation
+            # chunk copy; same values, same checks). ``ringbuf.RamSegment.read_wr_rows``.
+            return torch.from_numpy(direct(li, slot0, rows, compact=compact and _native_unpack32))
         layout = ex.seg.layout
         cs = ex.seg.header.chunk_slots
         bpe = layout.bpe
@@ -1058,7 +1077,7 @@ def take_checked_many(
     reqs = list(requests)
     fast = (
         _native_claim
-        and all(type(r[0]) is MaskReservation and r[0].ring.k <= 32 for r in reqs)
+        and all(_batched_claim_ok(r[0]) and r[0].ring.k <= 32 for r in reqs)
         and len({r[0].ring.k for r in reqs}) <= 1  # one native call unpacks/reduces with one ring width
     )
     if not fast or not reqs:
@@ -1094,7 +1113,8 @@ def take_checked_many(
         """Run the queued jobs; then zero replaced buffers and do extent-end cleanups."""
         try:
             if jobs:
-                outs = native.fast.claim_rows_many(jobs, k, nthreads)
+                with _SlabSource.pinned(jobs) as ready:
+                    outs = native.fast.claim_rows_many(ready, k, nthreads)
                 for i, (rows, chk), (r_np, wr_np) in zip(job_at, job_meta, outs, strict=True):
                     results[i] = (rows, torch.from_numpy(r_np), torch.from_numpy(wr_np), chk)
         finally:
@@ -1148,6 +1168,58 @@ def take_checked_many(
         for lk in reversed(locks):
             lk.release()
     return results
+
+
+def _batched_claim_ok(res: Any) -> bool:
+    """Plain reservations, and subclasses that declare ``batched_claim`` (ring reservations)."""
+    t = type(res)
+    return t is MaskReservation or (isinstance(res, MaskReservation) and bool(getattr(t, "batched_claim", False)))
+
+
+class _SlabSource:
+    """Placeholder ``buf`` of a native claim job whose ``W r`` rows live in a ring slab.
+
+    :meth:`pinned` takes every involved slab lock (fixed order), re-checks each slab (ring open, same
+    generation, readable; ``RamSegment.wr_view_locked``) and swaps in views of the slab memory; the
+    locks stay held until the native call returned, exactly as a copy-out holds the slab lock."""
+
+    __slots__ = ("li", "seg")
+
+    def __init__(self, seg: Any, li: int):
+        self.seg = seg
+        self.li = li
+
+    @staticmethod
+    @contextlib.contextmanager
+    def pinned(jobs: list[tuple[Any, ...]]) -> Iterator[list[tuple[Any, ...]]]:
+        srcs = [j[3] for j in jobs if isinstance(j[3], _SlabSource)]
+        if not srcs:
+            yield jobs
+            return
+        locks: dict[int, Any] = {}
+        for src in srcs:
+            lk = src.seg.slab_lock
+            locks.setdefault(id(lk), lk)
+        order = [locks[i] for i in sorted(locks)]
+        views: list[memoryview] = []
+        held: list[Any] = []
+        try:
+            for lk in order:
+                lk.acquire()
+                held.append(lk)
+            ready = []
+            for j in jobs:
+                if isinstance(j[3], _SlabSource):
+                    v = j[3].seg.wr_view_locked(j[3].li)
+                    views.append(v)
+                    j = (*j[:3], v, *j[4:])
+                ready.append(j)
+            yield ready
+        finally:
+            for v in views:
+                v.release()
+            for lk in reversed(held):
+                lk.release()
 
 
 def _wipe_claim(o: Any) -> None:
