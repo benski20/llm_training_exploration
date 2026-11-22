@@ -1184,6 +1184,12 @@ class MaskedBackend(LinearBackend):
         #: segments, chained tiers) and calls a lease cannot serve take the :attr:`trip_fast` path.
         self.trip_native = (self.trip_fast and _env_flag("PGW_TRIP_NATIVE", False)
                             and native_available("TripLease") and self.ring.k % 8 == 0 and self.ring.k <= 56)
+        #: With :attr:`trip_native` and a lane client (``PGW_TRIP_DRIVER``, default off): a leased trip's lane call
+        #: and finish are one native call (``TripTicket.lane_finish`` via ``LaneComputeClient.trip_ticket``): the
+        #: reply is read straight into the finish (no response objects, no zero-filled reply buffer, no copy).
+        #: Same payload bytes, header and request id, same checks, outputs, statistics and fallback (a call the
+        #: lane does not serve goes to the wrapped client with the same request, finished as before).
+        self.trip_driver = self.trip_native and _env_flag("PGW_TRIP_DRIVER", False)
         self._verifiers: dict[tuple[str, int], Any] = {}
         #: id(lease) -> (min_soundness_bits, size of the soundness cache) when its extent was verified
         self._lease_sound: dict[int, tuple[float, int]] = {}
@@ -2016,10 +2022,15 @@ class MaskedBackend(LinearBackend):
             pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-noise")
         self._noise_pending = pool.submit(run)
 
-    def _finish_lease(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+    def _finish_lease(self, prep: _Prepared, response: Any, remote_s: float,
+                      drive: bool = False) -> list[torch.Tensor] | None:
         """:meth:`_finish_one` for a trip of the native per-trip path: the same response checks, one
         ``ticket.finish`` (Freivalds when drawn, synchronously or deferred to the helper thread; unmask,
-        range check, rescale, W r zeroed), the same statistics and integrity reporting."""
+        range check, rescale, W r zeroed), the same statistics and integrity reporting.
+
+        ``drive`` (:attr:`trip_driver`): the lane call itself runs here, fused with the finish
+        (``client.trip_ticket``); ``None`` if the lane did not serve the call (nothing wiped: the caller sends
+        the request through the fallback client and calls this again with its response)."""
         t0 = time.perf_counter()
         req = prep.request
         tk = prep.ticket
@@ -2029,40 +2040,71 @@ class MaskedBackend(LinearBackend):
         rows = int(tk.rows)
         bytes_down = 0
         pending = None
-        try:
-            if getattr(response, "request_id", None) != req.request_id:
-                raise ProtocolError("compute response id does not match the request")
-            results = tuple(response.items)
-            if len(results) != 1:
-                raise ProtocolError(f"compute response has {len(results)} items, expected 1")
-            item = results[0]
-            if item.linear != lid.key or int(item.rows) != rows:
-                raise ProtocolError(
-                    "compute response item does not match the request",
-                    details={"expected": lid.key, "got": str(item.linear)},
-                )
-            y = item.y_hat
-            bytes_down = len(y)
-            yb = y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8)
+        fin = None
+        if drive:
             scale, bias, bound = self._consts(lid, meta)
             threads = 0 if rows * meta.out_features >= int(self.trip_pool_min_elems) else 1
+            split = (self.trip_split if self.trip_split >= 2
+                     and rows * meta.out_features >= self.trip_split_min_elems else 0)
             try:
-                if self.trip_split >= 2 and rows * meta.out_features >= self.trip_split_min_elems:
-                    status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defer, threads,
-                                                          self.trip_split)
-                else:
-                    status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defer, threads)
+                got = self.client.trip_ticket(req, tk, scale, bias, bound, prep.defer, threads, split)
             except ValueError as exc:
+                prep.wipe()
                 raise ProtocolError(f"compute response item is malformed: {exc}") from exc
-            if status:
-                if pending is not None:  # its verdict no longer matters: wait (it reads y_hat and u)
-                    pending.wait()
-                    pending = None
-                self._raise_status(status, bad, lid, rows, bound)
-            if pending is not None:
-                with self._pending_lock:
-                    self._pending.append(_PendingCheck(prep.reservations, pending, lid, rows, req.request_id))
-                self.stats.add(deferred_checks=1)
+            except BaseException:
+                prep.wipe()
+                raise
+            if got is None:
+                return None
+            fin, lane_s, bytes_down = got
+            remote_s = lane_s
+            t0 = time.perf_counter()
+        try:
+            if fin is not None:
+                status, bad, out, pending = fin
+                if status:
+                    if pending is not None:
+                        pending.wait()
+                        pending = None
+                    self._raise_status(status, bad, lid, rows, bound)
+                if pending is not None:
+                    with self._pending_lock:
+                        self._pending.append(_PendingCheck(prep.reservations, pending, lid, rows, req.request_id))
+                    self.stats.add(deferred_checks=1)
+            else:
+                if getattr(response, "request_id", None) != req.request_id:
+                    raise ProtocolError("compute response id does not match the request")
+                results = tuple(response.items)
+                if len(results) != 1:
+                    raise ProtocolError(f"compute response has {len(results)} items, expected 1")
+                item = results[0]
+                if item.linear != lid.key or int(item.rows) != rows:
+                    raise ProtocolError(
+                        "compute response item does not match the request",
+                        details={"expected": lid.key, "got": str(item.linear)},
+                    )
+                y = item.y_hat
+                bytes_down = len(y)
+                yb = y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8)
+                scale, bias, bound = self._consts(lid, meta)
+                threads = 0 if rows * meta.out_features >= int(self.trip_pool_min_elems) else 1
+                try:
+                    if self.trip_split >= 2 and rows * meta.out_features >= self.trip_split_min_elems:
+                        status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defer, threads,
+                                                              self.trip_split)
+                    else:
+                        status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defer, threads)
+                except ValueError as exc:
+                    raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+                if status:
+                    if pending is not None:  # its verdict no longer matters: wait (it reads y_hat and u)
+                        pending.wait()
+                        pending = None
+                    self._raise_status(status, bad, lid, rows, bound)
+                if pending is not None:
+                    with self._pending_lock:
+                        self._pending.append(_PendingCheck(prep.reservations, pending, lid, rows, req.request_id))
+                    self.stats.add(deferred_checks=1)
         except IntegrityError as exc:
             self.stats.add(integrity_failures=1)
             log.error("integrity check failed: request=%s code=%s details=%s", req.request_id, exc.code, exc.details)
@@ -4285,8 +4327,15 @@ class MaskedBackend(LinearBackend):
         if prep.request is None:
             return self._finish(prep, None, 0.0)
         t0 = time.perf_counter()
+        drive = self.trip_driver and prep.ticket is not None and hasattr(self.client, "trip_ticket")
+        if drive:
+            done = self._finish_lease(prep, None, 0.0, drive=True)
+            if done is not None:
+                return done
         try:
-            if hasattr(self.client, "compute_sync"):
+            if drive:
+                response = self.client.fallback_sync(prep.request)
+            elif hasattr(self.client, "compute_sync"):
                 response = self.client.compute_sync(prep.request)
             else:
                 response = _run_coro_blocking(self.client.compute(prep.request))  # type: ignore[attr-defined]

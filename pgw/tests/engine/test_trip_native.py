@@ -99,7 +99,7 @@ def _scenario(pack: Any, template: Path, monkeypatch: pytest.MonkeyPatch, fast: 
     _env(monkeypatch, fast, nat, noise_async)
     st = _Store(template, pack)
     monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n, *windows))
-    client = LocalComputeClient(pack, record=True)
+    client = kw.pop("client", None) or LocalComputeClient(pack, record=True)
     noise = _Seeded()
     model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise, **kw)
     model.backend.freivalds_rate = 1.0
@@ -164,6 +164,49 @@ def test_native_split_equals_plain_and_bytes_identical(qwen_pack: InMemoryPack, 
     _same(ref, out)
     assert served > 0 and sent == base_sent and stats == base_stats
     assert snap["integrity_failures"] == 0
+
+
+@pytest.mark.parametrize("split", [0, 2])
+def test_native_driver_over_the_lane(qwen_pack: InMemoryPack, store_template: Path, monkeypatch: pytest.MonkeyPatch,
+                                     split: int) -> None:
+    """``PGW_TRIP_DRIVER``: the lane call and the finish in one native call (``TripTicket.lane_finish``) on a native
+    lane channel. Same logits as plain, the same provider payloads in the same order as without the driver, and
+    lane refusals / broken connections fall back to the wrapped client with the same request."""
+    from pgw.wire.lane import LaneComputeClient, LaneConfig, native_channel_class
+    from tests.engine.test_trip_engine import _LaneLocal
+
+    if native_channel_class() is None or not hasattr(native.fast.TripTicket, "lane_finish"):
+        pytest.skip("pgw_fast without the native lane channel / driver")
+    ref = _plain_ref(qwen_pack)
+    monkeypatch.setenv("PGW_TRIP_SPLIT", str(split))
+    monkeypatch.setenv("PGW_TRIP_SPLIT_MIN_ELEMS", "1")
+    runs = []
+    for driver, faults in ((False, ""), (True, ""), (True, "refuse"), (True, "drop")):
+        monkeypatch.setenv("PGW_TRIP_DRIVER", "1" if driver else "0")
+        with tempfile.TemporaryDirectory(prefix="pgwl") as d:
+            local = _LaneLocal(qwen_pack, d)
+            if faults == "refuse":  # refused trips (the provider saw the payload): sent again on the wrapped client
+                local.lane.refuse_next = [8, 8]
+            elif faults == "drop":  # a dropped connection: the lane cools down, everything on the wrapped client
+                local.lane.drop_next = 1
+            lane = LaneComputeClient(local, LaneConfig(native=None))
+            try:
+                out, sent, stats, (served, _, snap) = _scenario(qwen_pack, store_template, monkeypatch, True, True,
+                                                                client=lane)
+            finally:
+                lane.close()
+            _same(ref, out)
+            assert served > 0 and snap["integrity_failures"] == 0
+            reasons = lane.lane_stats.fallback_reasons
+            if faults == "drop":
+                assert reasons.get("error:OSError") == 1
+            else:
+                assert lane.lane_stats.trips > 0
+            if faults == "refuse":
+                assert reasons.get("status:BUSY") == 2
+            runs.append((sent, stats))
+    assert runs[1] == runs[0]  # byte-identical payloads and noise statistics with and without the driver
+    assert runs[2][1] == runs[0][1] and runs[3][1] == runs[0][1]
 
 
 def test_native_async_mode(qwen_pack: InMemoryPack, store_template: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -878,6 +878,77 @@ class LaneComputeClient:
         return ComputeResponse(request.request_id, (ComputeResult(it.linear, rows, y),),
                                ServerTiming(0.0, compute_us / 1000.0, rows))
 
+    def trip_ticket(self, request: ComputeRequest, ticket: Any, scale: Any, bias: Any, bound: int, defer: bool,
+                    threads: int, split: int) -> tuple[Any, float, int] | None:
+        """The native per-trip driver (``PGW_TRIP_DRIVER``, opt-in): the lane call and the trip's finish in one
+        native call (``pgw_fast.TripTicket.lane_finish``: header + payload out, the reply read straight into the
+        finish, GIL released) on a native channel of this client's pool.
+
+        Returns ``(finish_result, lane_seconds, reply_bytes)``, or ``None`` when the lane did not serve the call
+        (the same eligibility, pool, refusal and error handling and statistics as :meth:`compute_sync`); the ticket
+        is then untouched and the caller sends the same request with :meth:`fallback_sync`.
+        """
+        self._ensure_open_sync(request)
+        lane, reason, plan = self._plan(request)
+        if lane is None:
+            self.lane_stats._fallback(reason)
+            return None
+        ring_ix, lin_ix, rows, rid, deadline, body, out_len = plan
+        if not isinstance(body, bytes):
+            self.lane_stats._fallback("ineligible:body")
+            return None
+        timeout = self._timeout(request)
+        try:
+            got = self._acquire(lane, timeout)
+        except Exception as exc:  # opening a connection failed: the lane is down for a while
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{type(exc).__name__}")
+            return None
+        if got is None:
+            with self._cv:
+                spent = self._lane is lane and self._count == 0 and time.monotonic() >= lane.expires
+            if spent:
+                self._drop_lane(only=lane)
+                self.lane_stats._fallback("expired")
+            else:
+                self.lane_stats._fallback("busy:pool")
+            return None
+        ch, gen = got
+        cls = native_channel_class()
+        if rows > int(ch.max_rows) or cls is None or not isinstance(ch, cls):
+            self._release(ch, gen)
+            self.lane_stats._fallback("ineligible:rows" if rows > int(ch.max_rows) else "ineligible:channel")
+            return None
+        t0 = time.monotonic()
+        try:
+            status, _compute_us, err, res = ticket.lane_finish(ch, ring_ix, lin_ix, rid, deadline, body, timeout,
+                                                              scale, bias, bound, defer, threads, split)
+        except BaseException:  # the finish rejected the reply (malformed): the channel itself is fine
+            self._release(ch, gen)
+            raise
+        dt = time.monotonic() - t0
+        if err is not None:  # broken connection, timeout, protocol violation: channel closed
+            self._release(ch, gen)
+            self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"error:{err}")
+            return None
+        self.lane_stats.trips += 1
+        self.lane_stats.bytes_sent += REQUEST.size + len(body)
+        self.lane_stats.last_rtt_s = dt
+        self._release(ch, gen)
+        if status != Status.OK:
+            name = Status(status).name if status in Status._value2member_map_ else str(status)
+            if status in CLOSING_STATUSES:
+                self._drop_lane(cool_down=True, only=lane)
+            self.lane_stats._fallback(f"status:{name}")
+            return None
+        self.lane_stats.bytes_received += REPLY.size + out_len
+        return res, dt, out_len
+
+    def fallback_sync(self, request: ComputeRequest) -> ComputeResponse:
+        """The wrapped client's blocking compute (after :meth:`trip_ticket` returned ``None``)."""
+        return cast(ComputeResponse, self._client.compute_sync(request))
+
     def compute_sync(self, request: ComputeRequest) -> ComputeResponse:
         """Blocking compute: the lane when it takes the call, else the wrapped client (same request)."""
         self._ensure_open_sync(request)

@@ -33,8 +33,17 @@ over many cores), first part. Default off; exact; no format change.
   the existing column split of the pool with `c` tasks (exact).
 - **r ahead for any rows**: a lease now derives the next trip's `r` for as many rows as the current trip (was 1-row
   trips only), on `PGW_TRIP_R_HELPERS` helper threads (default 1); single use (used only by the trip that takes
-  exactly those rows, else zeroed; wiped on detach/close).
+  exactly those rows, else zeroed; wiped on detach/close). Measured (`TripLease.prepare` wall, 300 us between trips, min of 38 trips, 72B
+  shapes): down R = 1 220 -> 152 us, R = 2 433 -> 252 us; gate_up R = 1 57 -> 32 us, R = 2 108 -> 57 us (r is ~40%
+  of a prepare). Medians on this overloaded box were not better (the helper is not scheduled in time).
 - Wiring: `PGW_TRIP_SPLIT=c`, `PGW_TRIP_SPLIT_MIN_ELEMS` (default 8192) on the native per-trip path in `backends.py`.
+- **Native lane + finish per trip** (`PGW_TRIP_DRIVER=1`, with `PGW_TRIP_NATIVE` and a lane client; default off):
+  `TripTicket.lane_finish` sends the payload on the native `TripChannel` and reads the reply straight into the finish
+  (one GIL-free native call after `lease.prepare`; no response objects, no zero-filled reply buffer, no copy), via
+  `LaneComputeClient.trip_ticket` (same eligibility, pool, refusal/error handling and statistics; a call the lane does
+  not serve goes to the wrapped client with the same request, the ticket untouched). Noise-monitor every-call checks
+  stay inline between the two calls; sampled statistics unchanged. Test: `test_native_driver_over_the_lane` (masked ==
+  plain, byte-identical payloads and noise statistics with/without it, refusals and a dropped connection fall back).
 - Benchmarks: `native_trip_floor_bench.py --preset 7b|32b|72b --rows R --cores c [--r-offcore] [--stat min]`,
   `trip_native_bench.py --rows R --split c --r-ahead 0|1` (payload hashes compared across runs); presets for Qwen2.5-32B
   (64 L, 5120/27648, 40/8 heads) and Qwen2.5-72B (80 L, 8192/29568, 64/8), vocab 152064 (`PGW_BENCH_VOCAB` shrinks the
@@ -51,8 +60,12 @@ over many cores), first part. Default off; exact; no format change.
 - **Not reached**: the multi-core speed-up could not be measured here: the box ran at load average 40-57 on 4 vCPUs
   (other jobs), the pool workers were rarely scheduled in time (the calling thread took ~80% of the tasks: 100 vs 121
   us of its own CPU for a 72B down prepare at c = 4) and wall times did not improve. Needs a quiet many-core VM
-  (with `PGW_POOL_SPIN_US` raised so the workers stay awake between trips). Item 3 of the task (a native per-layer
-  driver / lane call inside the native trip, <= 20 us Python per trip) was not built.
+  (with `PGW_POOL_SPIN_US` raised so the workers stay awake between trips). The <= 20 us Python per trip target is
+  not reached: profiled at 0.5B shapes over the in-process reference lane (`trip_native_bench.py --lane --driver
+  --profile`), Python self time is still ~50-60 us per trip on this loaded box, mostly `_prepare_trip_lease` /
+  `forward_many` / `_finish_lease` bookkeeping, and the driver did not lower main-thread CPU measurably (1.80 vs 1.94 ms
+  per 8 trips, noise). A per-layer native driver (prepare -> lane -> finish for consecutive linears with no Python
+  in between) was not built.
 
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 

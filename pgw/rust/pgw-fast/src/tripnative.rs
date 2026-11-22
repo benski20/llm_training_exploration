@@ -808,6 +808,79 @@ impl TripTicket {
         self.c > 0
     }
 
+    /// The lane call and the finish of this trip in one call (``PGW_TRIP_DRIVER``, opt-in): send
+    /// ``body`` (this trip's payload) with the A1 header on ``channel`` (a ``pgw_fast.TripChannel`` the
+    /// caller acquired), read the reply straight into a fresh bytes object (no zero-fill, no copy) and run
+    /// :meth:`finish` on it, the GIL released for both.
+    ///
+    /// Returns ``(lane_status, compute_us, error, result)``. ``result`` is ``finish``'s tuple when the lane
+    /// served the trip (``lane_status == 0``); otherwise it is ``None``, the ticket is untouched and the
+    /// caller sends the same payload through its fallback client and finishes with :meth:`finish`
+    /// (``lane_status``: the lane's refusal status, or 255 with ``error`` naming a channel error, after
+    /// which the channel is closed).
+    #[cfg(unix)]
+    #[pyo3(signature = (channel, ring, linear, request_id, deadline_ms, body, timeout_s, scale, bias, bound,
+                        defer = false, threads = 1, split = 0))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn lane_finish<'py>(
+        &mut self,
+        py: Python<'py>,
+        channel: &Bound<'py, crate::lane::TripChannel>,
+        ring: u8,
+        linear: u16,
+        request_id: &[u8],
+        deadline_ms: u32,
+        body: &Bound<'py, PyBytes>,
+        timeout_s: f64,
+        scale: &Bound<'py, PyAny>,
+        bias: Option<&Bound<'py, PyAny>>,
+        bound: u64,
+        defer: bool,
+        threads: usize,
+        split: usize,
+    ) -> PyResult<(u8, u32, Option<&'static str>, Option<(u8, usize, Bound<'py, PyArray2<f32>>, Option<TripCheck>)>)>
+    {
+        if self.done {
+            return Err(verr("trip ticket already finished or wiped (single use)"));
+        }
+        let rid: [u8; 16] = request_id.try_into().map_err(|_| verr("request_id must be 16 bytes"))?;
+        if !(timeout_s.is_finite() && timeout_s > 0.0 && timeout_s < 1e7) {
+            return Err(verr("timeout_s must be a positive number of seconds"));
+        }
+        let rows = u16::try_from(self.rows).map_err(|_| verr("too many rows for the lane"))?;
+        let src = body.as_bytes();
+        let body_len = u32::try_from(src.len()).map_err(|_| verr("body too large"))?;
+        let olen = self.rows * self.m * (self.k / 8) as usize;
+        // SAFETY: a fresh, unshared bytes object; written by the channel below before anyone sees it (on a
+        // failed trip it is dropped unseen).
+        let reply: Bound<'py, PyBytes> = unsafe {
+            let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), olen as pyo3::ffi::Py_ssize_t);
+            Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked()
+        };
+        // SAFETY: exclusive (just created, not returned yet); `src` is another object (an immutable payload).
+        let dst: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(reply.as_bytes().as_ptr() as *mut u8, olen) };
+        let h = crate::lane::RequestHeader { ring, linear, rows, deadline_ms, body_len, request_id: rid };
+        let to = std::time::Duration::from_secs_f64(timeout_s);
+        let ch = channel.get();
+        let res = py.allow_threads(|| ch.trip_raw(&h, src, dst, to));
+        match res {
+            Ok((0, cus)) => {
+                let fin = self.finish(py, reply.as_any(), scale, bias, bound, defer, threads, split)?;
+                Ok((0, cus, None, Some(fin)))
+            }
+            Ok((st, cus)) => Ok((st, cus, None, None)),
+            Err(e) => {
+                let name = match e {
+                    crate::lane::LaneError::Io(_) => "OSError",
+                    crate::lane::LaneError::Protocol(_) => "ProtocolError",
+                    crate::lane::LaneError::Refused(_) => "Refused",
+                    crate::lane::LaneError::Closed => "Closed",
+                };
+                Ok((255, 0, Some(name), None))
+            }
+        }
+    }
+
     /// Zero everything this ticket holds (a trip that will not be finished). Idempotent.
     fn wipe(&mut self) {
         self.wipe_all();
