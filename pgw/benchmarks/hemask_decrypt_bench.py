@@ -38,6 +38,8 @@ from pgw.hemask.lwe import MaskCiphertext, secret_matrix
 PRESETS = {  # (layers, {kind: (m, n)})
     "qwen2.5-0.5b": (24, {"qkv": (1152, 896), "o": (896, 896), "gate_up": (9728, 896), "down": (896, 4864)}),
     "qwen2.5-7b": (28, {"qkv": (4608, 3584), "o": (3584, 3584), "gate_up": (37888, 3584), "down": (3584, 18944)}),
+    "qwen2.5-32b": (64, {"qkv": (7168, 5120), "o": (5120, 5120), "gate_up": (55296, 5120), "down": (5120, 27648)}),
+    "qwen2.5-72b": (80, {"qkv": (10240, 8192), "o": (8192, 8192), "gate_up": (59136, 8192), "down": (8192, 29568)}),
 }
 
 
@@ -99,20 +101,24 @@ def main() -> None:
             outs: dict[str, np.ndarray] = {}
             for path in args.paths:
                 out = np.zeros((DEGREE * g, rows), dtype=np.int64)
-                best = float("inf")
+                best = best_cpu = float("inf")
                 for _ in range(args.reps + 1):
                     if args.drop_cache:
                         dropped = _drop_cache()
-                    t0 = time.perf_counter()
+                    t0, c0 = time.perf_counter(), time.process_time()
                     if path == "dense":
                         be._decrypt_dense(hint, items, out)
                     else:
                         be._decrypt_ntt(pre if path == "ntt_pre" else hint, items, out)
                     best = min(best, time.perf_counter() - t0)
+                    best_cpu = min(best_cpu, time.process_time() - c0)  # all threads: robust on a shared host
                 outs[path] = out
                 us = best / (rows * g) * 1e6  # per hint row and group
                 kr[f"g{g}_{path}_us_per_row_group"] = round(us, 3)
                 per_slot.setdefault(f"g{g}_{path}", {})[kind] = us * m * layers / DEGREE / 1e3  # ms per slot
+                cpu_us = best_cpu / (rows * g) * 1e6
+                kr[f"g{g}_{path}_cpu_us_per_row_group"] = round(cpu_us, 3)
+                per_slot.setdefault(f"g{g}_{path}_cpu", {})[kind] = cpu_us * m * layers / DEGREE / 1e3
             ref = outs[args.paths[0]]
             kr[f"g{g}_identical"] = all(np.array_equal(ref, o) for o in outs.values())
         res["per_kind"][kind] = kr

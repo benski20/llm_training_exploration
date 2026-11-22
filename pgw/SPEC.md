@@ -759,6 +759,11 @@ containers.
   store a seed and recompute `W r` on the gateway GPU when one exists ("self-factory" mode).
 - Speculative decoding and prefix caching on the gateway (fewer rounds per accepted token).
 - Formal write-up of the security argument and an external audit.
+- Compact-hint encrypted masks (`pks-v3`, research prototype `pgw.hemask.pks` + `rust/pgw-pks`, not wired, off):
+  the provider modulus-switches, packs 16 rows per ring element and key-switches its 7.9 reply to a fresh
+  degree-4096 (production: 8192) ring secret, so the customer's hint shrinks 16x (24.6 KB -> 1.5 KB per output
+  row) and decryption is one length-N NTT product per 16 rows and group. Needs a cryptographic review before any
+  wire change; see `research/plans/he-compact-hint-pks.md`.
 
 ## 17. Amendments v1.1 (integration review; folded from INTERFACE_NOTES.md)
 
