@@ -30,6 +30,7 @@ import functools
 import logging
 import os
 import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from collections.abc import Generator as PyGenerator
 from concurrent.futures import ThreadPoolExecutor
@@ -931,11 +932,15 @@ class TransformerModel:
             return None  # a large (prefill) pass sends every linear (R1: local_max_rows)
         return self._check_results(calls, self.backend.forward_local(calls))  # type: ignore[attr-defined]
 
-    def _advance_local(self, gen: _Steps, value: list[torch.Tensor] | None, rows: int) -> tuple[bool, Any]:
+    def _advance_local(self, gen: _Steps, value: list[torch.Tensor] | None, rows: int,
+                       prof: dict[str, float] | None = None) -> tuple[bool, Any]:
         """:meth:`_step`, then step past calls the backend computes locally (no network hop)."""
         finished, out = self._step(gen, value, rows)
         while not finished:
+            t = time.perf_counter() if prof is not None else 0.0
             res = self._local_results(out)
+            if prof is not None and res is not None:
+                prof["local_ms"] = prof.get("local_ms", 0.0) + 1e3 * (time.perf_counter() - t)
             if res is None:
                 break
             finished, out = self._step(gen, res, rows)
@@ -1289,9 +1294,14 @@ class TransformerModel:
         if getattr(backend, "split_hop", False):
             try:
                 new_rows = sum(len(s.input_ids) for s in seqs)
+                plan = self._prompt_prefetch_plan(backend, rows, new_rows)
+                if plan and None in plan:  # the pass's first remote linear, staged during embedding + local work
+                    src = getattr(backend, "mask_source", None)
+                    backend.prefetch_prompt([(s.session if s.session is not None else src, plan[None],
+                                              len(s.input_ids)) for s in seqs])
                 if not self._inline_safe(seqs, backend):
                     new_rows = -1  # no inline hops in this pass
-                return await self._aforward_split(gen, backend, new_rows, rows)
+                return await self._aforward_split(gen, backend, new_rows, rows, plan)
             finally:
                 gen.close()
         try:
@@ -1379,8 +1389,78 @@ class TransformerModel:
         keep = [j for j in range(blocks) if parts[j]]
         return [parts[j] for j in keep], [where[j] for j in keep]
 
+    def _prompt_prefetch_plan(self, backend: Any, pass_rows: int, total_rows: int) -> dict[Any, Any] | None:
+        """For a prompt pass with ``backend.prompt_prefetch``: ``{remote linear: next remote linear}`` in pass
+        order (the first under the key ``None``), else ``None``. Public schedule only."""
+        if pass_rows <= int(self.inline_max_rows) or not getattr(backend, "prompt_prefetch", False):
+            return None
+        is_local = getattr(backend, "local_linear", None)
+        rows_ok = getattr(backend, "local_rows_ok", None)
+        local_ok = callable(is_local) and (rows_ok is None or rows_ok(total_rows))
+        order: list[Any] = []
+        for layer in range(self.num_layers):
+            lids = self.schedule.linears(self, layer) if self.schedule is not None else self._lids[layer]
+            order.extend(lid for lid in lids if not (local_ok and is_local(lid)))
+        nxt: dict[Any, Any] = {None: order[0]} if order else {}
+        for a, b in zip(order, order[1:]):
+            nxt[a] = b
+        return nxt
+
+    @staticmethod
+    def _prompt_prefetch_kick(backend: Any, plan: dict[Any, Any] | None, calls: Sequence[LinearCall]) -> None:
+        """Stage the rows of the next remote linear of each (session, linear) of ``calls`` (prompt passes)."""
+        if not plan:
+            return
+        want: dict[tuple[int, Any], list[Any]] = {}
+        for c in calls:
+            res = c.session if c.session is not None else getattr(backend, "mask_source", None)
+            nxt = plan.get(c.id)
+            if res is None or nxt is None:
+                continue
+            hit = want.get((id(res), nxt))
+            if hit is None:
+                want[(id(res), nxt)] = [res, nxt, int(c.x.shape[0])]
+            else:
+                hit[2] += int(c.x.shape[0])
+        if want:
+            backend.prefetch_prompt([tuple(v) for v in want.values()])
+
+    #: Prompt-pass profile (``PGW_PREFILL_PROFILE=1``; off by default): wall time of each part of the last
+    #: passes of more than :attr:`inline_max_rows` rows (gateway-local timings only; nothing is sent).
+    prefill_profile: dict[str, Any] | None = None
+
     async def _aforward_split(self, gen: _Steps, backend: Any, new_rows: int = 1 << 30,
-                              pass_rows: int = 1 << 30) -> list[torch.Tensor]:
+                              pass_rows: int = 1 << 30, plan: dict[Any, Any] | None = None) -> list[torch.Tensor]:
+        prof = self.prefill_profile
+        if prof is None or pass_rows <= int(self.inline_max_rows):
+            return await self._aforward_split_impl(gen, backend, new_rows, pass_rows, None, plan)
+        cur: dict[str, float] = {}
+        t0 = time.perf_counter()
+        take0 = getattr(backend, "_take", None)
+        if take0 is not None:
+            def timed_take(*a: Any, **k: Any) -> Any:
+                t = time.perf_counter()
+                try:
+                    return take0(*a, **k)
+                finally:
+                    cur["take_ms"] = cur.get("take_ms", 0.0) + 1e3 * (time.perf_counter() - t)
+            backend._take = timed_take
+        try:
+            return await self._aforward_split_impl(gen, backend, new_rows, pass_rows, cur, plan)
+        finally:
+            if take0 is not None:
+                del backend._take
+            cur["pass_ms"] = 1e3 * (time.perf_counter() - t0)
+            cur["rows"] = float(pass_rows)
+            prof["passes"] = int(prof.get("passes", 0)) + 1
+            prof["last"] = {k: round(v, 2) for k, v in cur.items()}
+            hist = prof.setdefault("recent", [])
+            hist.append(prof["last"])
+            del hist[:-6]
+
+    async def _aforward_split_impl(self, gen: _Steps, backend: Any, new_rows: int, pass_rows: int,
+                                   prof: dict[str, float] | None,
+                                   plan: dict[Any, Any] | None = None) -> list[torch.Tensor]:
         """One plaintext-thread hop per round trip: finish(previous) + model step + prepare(next).
 
         The plaintext segment between two linears only needs the previous results, so verifying and
@@ -1396,13 +1476,22 @@ class TransformerModel:
         def rows(calls: Sequence[LinearCall]) -> int:
             return sum(int(c.x.shape[0]) for c in calls)
 
+        def acc(key: str, t: float) -> None:
+            if prof is not None:
+                prof[key] = prof.get(key, 0.0) + 1e3 * (time.perf_counter() - t)
+
         def finish(prev: Any, response: Any, remote_s: float) -> list[torch.Tensor]:
+            t = time.perf_counter()
             owned.remove(prev)  # finish_prepared always wipes prev
-            return self._check_results(list(prev.calls), backend.finish_prepared(prev, response, remote_s))
+            out = self._check_results(list(prev.calls), backend.finish_prepared(prev, response, remote_s))
+            acc("finish_ms", t)
+            return out
 
         def prepare(calls: Sequence[LinearCall]) -> Any:
+            t = time.perf_counter()
             prep = backend.prepare_calls(calls)
             owned.append(prep)
+            acc("prepare_ms", t)
             return prep
 
         def hop(prev: Any, response: Any, remote_s: float,
@@ -1417,14 +1506,18 @@ class TransformerModel:
                     for j, i in enumerate(last):
                         got[i].append(res[j])
                     res = [g[0] if len(g) == 1 else torch.cat(g, dim=0) for g in got]
-            finished, out = self._advance_local(gen, res, pass_rows)
+            t = time.perf_counter()
+            finished, out = self._advance_local(gen, res, pass_rows, prof)
+            acc("step_ms", t)
             if finished:
                 return True, out
             # Calls of 2+ rows are split in blocks; 1-row calls (decode next to prefills) go wholly
             # into the first block. Pipelined only when the split rows are many enough to pay.
             if big and sum(n for n in (_wire_rows(c) for c in out) if n >= 2) >= big:
                 return False, ("split", out)
-            return False, prepare(out)
+            prep = prepare(out)
+            self._prompt_prefetch_kick(backend, plan, out)  # prompt passes only (plan is None otherwise)
+            return False, prep
 
         last_rt, has_local = self._trip_plan()  # the hop after `last_rt` round trips runs the LM head
         # local linears are computed inside a hop: never on the event loop
@@ -1446,23 +1539,33 @@ class TransformerModel:
                             p = await self.run_plain(prepare, blk)
                             preps.append(p)
                             tasks.append(asyncio.ensure_future(backend.send_prepared(p)))
+                        self._prompt_prefetch_kick(backend, plan, calls)  # after this linear's last take
                         got: list[list[torch.Tensor]] = [[] for _ in calls]
                         for j in range(len(parts) - 1):  # verify block j while later blocks compute
                             r, s = await tasks[j]
                             y = await self.run_plain(finish, preps[j], r, s)
                             for pos, part in zip(where[j], y, strict=True):
                                 got[pos].append(part)
+                        ts = time.perf_counter()
                         rl, sl = await tasks[-1]
+                        acc("send_wait_ms", ts)
                     except BaseException:
                         for task in tasks:
                             task.cancel()
                         raise
                     rt += 1
+                    if prof is not None:
+                        prof["trips"] = prof.get("trips", 0.0) + 1
+                        prof["pipelined_trips"] = prof.get("pipelined_trips", 0.0) + 1
                     finished, out = await self.run_plain(hop, preps[-1], rl, sl, (got, where[-1]))
                     continue
                 prep = out
+                ts = time.perf_counter()
                 response, remote_s = await backend.send_prepared(prep)
+                acc("send_wait_ms", ts)
                 rt += 1
+                if prof is not None:
+                    prof["trips"] = prof.get("trips", 0.0) + 1
                 if (inline_rows and rt < last_rt and self._plain_pending == 0
                         and rows(getattr(prep, "calls", ())) <= inline_rows):
                     finished, out = hop(prep, response, remote_s, None)  # small: no thread hand-off

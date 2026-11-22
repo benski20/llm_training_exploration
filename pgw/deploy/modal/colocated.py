@@ -66,7 +66,9 @@ DRAFT = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
 DRAFT_REPO, DRAFT_REVISION = "Qwen/Qwen2.5-0.5B-Instruct", "7ae557604adf67be50417f59c2c2f167def9a775"
 DRAFT_PACK = "/opt/packs/draft"  # = pgw_modal_boot.DRAFT_PACK
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-DICT_NAME = "pgw-live"
+#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+NS = os.environ.get("PGW_MODAL_NS", "").strip()
+DICT_NAME = "pgw-live" + NS
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
 GPU_TIERS = ("T4", "A10G", "L40S", "H100")
 GPU = os.environ.get("PGW_MODAL_GPU") or None
@@ -101,7 +103,8 @@ RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT el
                "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0",
                "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
-               "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1")}
+               "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1"),
+               **({"PGW_MODAL_NS": NS} if NS else {})}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
 LANE_PORT = 8444
@@ -145,7 +148,7 @@ image = (
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
 
-app = modal.App("pgw-colocated", image=image)
+app = modal.App("pgw-colocated" + NS, image=image)
 
 
 @app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,

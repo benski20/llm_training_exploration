@@ -39,7 +39,9 @@ HERE = Path(__file__).resolve().parent
 # Inside the container this file is /root/<name>.py and the source tree is not there (nor needed).
 PGW = HERE.parents[1] if modal.is_local() else Path("/opt/pgw-src")
 MAX_LIFETIME_S = 88 * 60  # hard cap (function timeout): nothing outlives 90 minutes
-DICT_NAME = "pgw-live"
+#: Optional name suffix of the apps and the Dict (``PGW_MODAL_NS``): parallel runs from separate checkouts do not collide.
+NS = os.environ.get("PGW_MODAL_NS", "").strip()
+DICT_NAME = "pgw-live" + NS
 # Both parties in one region: every token makes ~100 sequential round trips between them, so a
 # cross-region placement (about 85 ms RTT seen) makes decoding 10x slower. PGW_MODAL_REGION="" lifts it.
 REGION = os.environ.get("PGW_MODAL_REGION", "us-east") or None
@@ -63,7 +65,8 @@ MEMORY_MIB = 16384 if DRAFT or MODEL != "qwen2.5-0.5b-instruct" else 8192
 RUNTIME_ENV = {"PGW_MODAL_DRAFT": "1" if DRAFT else "0", "PGW_MODAL_CUSTOMER_GPU": CUSTOMER_GPU or "",
                "PGW_MODAL_MODEL": MODEL,
                # launch.py --spec-mask (L3 padded strict speculation; read by pgw_modal_boot.spec_options)
-               "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", "")}
+               "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
+               **({"PGW_MODAL_NS": NS} if NS else {})}
 
 image = (
     modal.Image.debian_slim(python_version="3.13")
@@ -105,7 +108,7 @@ image = (
     .add_local_file(HERE / "e2e_driver.py", "/opt/pgw-modal/e2e_driver.py")
 )
 
-app = modal.App("pgw-customer", image=image)
+app = modal.App("pgw-customer" + NS, image=image)
 
 _FN: dict = dict(gpu=CUSTOMER_GPU, cpu=4.0, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S, max_containers=1,
                  min_containers=0, retries=0, region=REGION)

@@ -261,3 +261,48 @@ def test_settings_from_environment(monkeypatch: pytest.MonkeyPatch, qwen_pack: A
     monkeypatch.setenv("PGW_MASK_PREFETCH", "1")
     assert _backend(qwen_pack, RecordingClient(qwen_pack)).mask_prefetch
     assert not _backend(qwen_pack, RecordingClient(qwen_pack), mask_prefetch=False).mask_prefetch
+
+
+@native_many
+@pytest.mark.parametrize("wait", [True, False], ids=["staged", "racing"])
+def test_prompt_prefetch_is_byte_identical(twin: Any, tiny_pack: Any, wait: bool) -> None:
+    """``prompt_prefetch`` (PGW_PROMPT_PREFETCH): a prompt pass stages each next remote linear's rows ahead;
+    same payloads, outputs, logprobs and consumption as no prefetch, across extent ends."""
+    import asyncio
+
+    sa, sb = twin
+    tok = ChatTokenizer.from_pack(tiny_pack)
+    ca, cb = RecordingClient(tiny_pack), RecordingClient(tiny_pack)
+    ba = _backend(tiny_pack, ca, mask_prefetch=False)
+    bb = _backend(tiny_pack, cb)
+    assert not bb.prompt_prefetch  # off by default
+    bb.prompt_prefetch = True
+    if wait:
+        bb = _waiting(bb)
+    staged: list[int] = []
+    orig = bb.prefetch_prompt
+
+    def spy(items: Any) -> bool:
+        staged.extend(int(r) for _, _, r in items)
+        return orig(items)
+
+    bb.prefetch_prompt = spy  # type: ignore[method-assign]
+    params = SamplingParams(max_tokens=6, temperature=0, ignore_eos=True)
+    prompt = [256, *range(65, 85)]
+    outs, sessions = [], []
+    for store, backend in ((sa, ba), (sb, bb)):
+        res = store.reserve(tiny_pack.fingerprint, RING, 40)
+        sessions.append(res)
+        gen = Generator(TransformerModel(tiny_pack, backend), tok)
+        outs.append(asyncio.run(gen.agenerate(prompt, params, session=res)))
+    assert outs[0].token_ids == outs[1].token_ids
+    assert outs[0].logprobs == outs[1].logprobs
+    assert ca.items == cb.items  # the provider sees exactly the same bytes
+    assert staged and set(staged) == {len(prompt)}  # prompt rows only (a public count), never decode rows
+    assert bb.wait_prefetch(10.0) and bb.prefetched_rows > 0
+    for key in sessions[0].linear_keys:
+        assert sessions[0].taken(key) == sessions[1].taken(key)
+    for s in sessions:
+        s.close()
+    assert not sessions[1]._stage
+    bb.close()

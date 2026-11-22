@@ -40,3 +40,24 @@ def test_pipelined_prefill_is_identical(qwen_pack: InMemoryPack, prompt_len: int
     expected = 4 * layers * (2 if prompt_len >= TransformerModel.pipeline_min_rows else 1) + 4 * layers
     assert be.stats.round_trips - trips0 == expected  # pipelined halves only for the prefill
     assert be.stats.integrity_failures == 0
+
+
+def test_prefill_profile_records_prompt_pass_only(qwen_pack: InMemoryPack) -> None:
+    """``prefill_profile`` (PGW_PREFILL_PROFILE) times prompt passes; outputs unchanged, decode not recorded."""
+    plain, masked, _ = plain_and_masked(qwen_pack, DEFAULT_RING)
+    ids = list(range(3, 40))
+    ref = plain.forward_batch([SequenceInput(ids, plain.new_cache(64), all_logits=True)])[0]
+    res = LocalMaskReservation(qwen_pack, DEFAULT_RING, len(ids) + 4)
+    masked.prefill_profile = {}
+
+    async def run() -> torch.Tensor:
+        cache = masked.new_cache(64)
+        out = (await masked.aforward_batch([SequenceInput(ids, cache, res, all_logits=True)]))[0]
+        await masked.aforward_batch([SequenceInput([7], cache, res)])
+        return out
+
+    assert torch.equal(asyncio.run(run()), ref)
+    prof = masked.prefill_profile
+    assert prof["passes"] == 1 and prof["last"]["rows"] == len(ids)
+    assert prof["last"]["pass_ms"] > 0 and prof["last"]["trips"] == 4 * qwen_pack.arch.num_layers
+    assert "take_ms" in prof["last"] and "_take" not in vars(masked.backend)

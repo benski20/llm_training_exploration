@@ -324,6 +324,9 @@ class ActiveSession:
             self.finish_reason = str(res.finish_reason)
             if "ttft_ms" in res.timings_ms:
                 self.ttft_s = res.timings_ms["ttft_ms"] / 1e3
+            prof = getattr(self.runtime.model, "prefill_profile", None)
+            if prof is not None:
+                prof["last_timings_ms"] = {k: round(float(v), 2) for k, v in res.timings_ms.items()}
             self.runtime._observe_result(res)
             return res
         except PGWError as exc:
@@ -978,6 +981,8 @@ class ModelRuntime:
         c = self.config
         self.model = TransformerModel(pack, self.backend, device=c.device)
         self.model.inline_max_rows = c.inline_max_rows
+        if os.environ.get("PGW_PREFILL_PROFILE", "").strip() == "1":  # prompt-pass timings (gateway-local)
+            self.model.prefill_profile = {}
         if c.batch_lm_head is not None:
             self.model.batch_lm_head = c.batch_lm_head
         if getattr(self.backend, "trip_engine", False):
@@ -1253,6 +1258,7 @@ class ModelRuntime:
         that times out in the queue never burns masks. Each returned session owns one slot.
         """
         rid = request_id or uuid.uuid4().hex
+        t_open = time.perf_counter()
         self.check_available()
         ids_list = [[int(t) for t in p] for p in prompts]
         n = len(ids_list)
@@ -1283,6 +1289,9 @@ class ModelRuntime:
                 await self.admission.release(n - released)
             raise
         self._active_gauge.labels(model=self.name).set(len(self._sessions))
+        prof = getattr(self.model, "prefill_profile", None)
+        if prof is not None:  # admission + mask reservation of the last request (gateway-local timing)
+            prof["last_open_ms"] = round(1e3 * (time.perf_counter() - t_open), 2)
         return sessions
 
     async def _reserve_for(self, ids: list[int], params: SamplingParams, rid: str) -> tuple[Any, int]:
@@ -1405,6 +1414,9 @@ class ModelRuntime:
             "spec_mask_credit": c.spec_mask_credit,
         }
         out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
+        prof = getattr(self.model, "prefill_profile", None)
+        if prof is not None:
+            out["prefill_profile"] = prof
         stats = getattr(self.client, "lane_stats", None)
         if stats is not None:
             out["lane_stats"] = {k: v for k, v in vars(stats).items() if isinstance(v, int | float | bool)}

@@ -26,6 +26,7 @@ The pinned staging buffers are zeroed after every call (the device buffers are o
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass
 from typing import Any
@@ -96,6 +97,15 @@ class LocalGpuProducts:
         self._zr = np.zeros(r * max_n, dtype=np.int64)  # zero masks (flat: any (rows, n) view is contiguous)
         self._zwr = np.zeros(r * max_m, dtype=np.int64)
         self.stats = {"graph_calls": 0, "eager_calls": 0}
+        #: Prompt passes in blocks of graph replays (``PGW_LOCAL_GPU_BLOCK_ROWS=B``, B one of ``graph_rows``;
+        #: 0 = off, the default): the backend splits a call of more than B rows into B-row blocks, and a
+        #: block of fewer rows replays the smallest larger graph on zero-padded rows. Each output row is
+        #: its own row's exact product (rows are independent), so the bits are those of one call.
+        try:
+            blk = int(os.environ.get("PGW_LOCAL_GPU_BLOCK_ROWS", "0") or 0)
+        except ValueError:
+            blk = 0
+        self.prefill_block_rows = blk if blk in self.graph_rows and blk > 1 else 0
 
     def add(self, key: str, w8: torch.Tensor) -> None:
         """Upload ``w8`` (int8 ``(m, n)``, any device) and capture its graphs. Call at start-up."""
@@ -147,6 +157,12 @@ class LocalGpuProducts:
         with self._lock:
             zr, zwr = self._zeros(rows, n, m)
             g = lin.graphs.get(rows)
+            g_rows = rows
+            if g is None and self.prefill_block_rows and rows < self.prefill_block_rows:
+                # a short block of a prompt pass: the smallest larger graph, its extra rows zero (the pinned
+                # input is all zero outside a call, and a zero row's product is zero)
+                g_rows = min(r for r in self.graph_rows if r > rows)
+                g = lin.graphs.get(g_rows)
             if g is not None:
                 pin_in, pin_out = self._pin_in[: rows * n * 4], self._pin_out[: rows * m * 4]
                 try:
@@ -169,7 +185,7 @@ class LocalGpuProducts:
                     status, _ = _fast.trip_finish_into(pin_out, zwr, sx, scale, bias, k, bound, out)
                 finally:
                     pin_in.fill(0)
-                    pin_out.fill(0)
+                    self._pin_out[: g_rows * m * 4].fill(0)
                 self.stats["graph_calls"] += 1
                 return int(status)
             # more rows than a graph serves (prompt passes): the same three steps without a graph
