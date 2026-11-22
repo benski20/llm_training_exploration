@@ -1,0 +1,12 @@
+[package]
+name = "pgw-pks"
+version = "0.1.0"
+description = "Research prototype (pks-v3, not wired): customer-side kernels of the compact-hint encrypted mask scheme. Length-4096 negacyclic NTTs over 30-bit primes (lazy Montgomery), the reply decryption c0 + c1 t' mod q1 with rounding to W8 r mod 2^32, and the ring-LWE upload pad a t mod 2^56. No dependencies; benchmark binary `pks-bench`."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "pks-bench"
+path = "src/bin/pks_bench.rs"

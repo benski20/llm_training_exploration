@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["pgw-core-rs", "pgw-fast", "pgw-lane", "pgw-ntt"]
+members = ["pgw-core-rs", "pgw-fast", "pgw-lane", "pgw-ntt", "pgw-pks"]
 
 [workspace.package]
 edition = "2021"
