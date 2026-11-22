@@ -731,7 +731,8 @@ class PassState:
         ops: The pass's float ops.
     """
 
-    __slots__ = ("caches", "hs", "ids", "normed", "ops", "rope", "rope_np", "seqs", "sessions", "starts", "trees")
+    __slots__ = ("caches", "extra", "hs", "ids", "normed", "ops", "rope", "rope_np", "seqs", "sessions", "starts",
+                 "trees")
 
     def __init__(self, seqs: Sequence[SequenceInput], ids: list[torch.Tensor], caches: list[KVCache],
                  starts: list[int], rope: list[tuple[torch.Tensor, torch.Tensor]], hs: list[torch.Tensor],
@@ -750,6 +751,8 @@ class PassState:
         self.rope_np: list[tuple[Any, Any]] | None = None
         #: Tree attention plans per sequence (``None``: causal rows); see ``SequenceInput.tree_parents``.
         self.trees: list[_Tree | None] = [None] * len(seqs)
+        #: Per-pass state of a :class:`Schedule` hook (e.g. fused2's fixed-point residual).
+        self.extra: dict[str, Any] = {}
 
 
 def _norm_rows(h: torch.Tensor, norm: torch.Tensor, eps: float) -> torch.Tensor:
@@ -1344,6 +1347,35 @@ class TransformerModel:
         acts = [ops.silu_mul(y[:, :inter].to(self.dtype), y[:, inter:].to(self.dtype)) for y in gu]
         down = yield [LinearCall(lid_down, x, sess) for x, sess in zip(acts, sessions, strict=True)]
         st.hs = [h + y.to(self.dtype) for h, y in zip(hs, down, strict=True)]
+
+    def _fused2_attention(self, layer: int, st: PassState, qkv: list[torch.Tensor]) -> list[torch.Tensor]:
+        """RoPE, KV-cache append and attention of one layer from its qkv outputs (as the standard layer
+        does between its qkv and o trips); used by the fused2 schedule (:mod:`pgw.engine.fused2`)."""
+        ops, caches, starts, seqs = st.ops, st.caches, st.starts, st.seqs
+        nh, kvh, hd = self.num_heads, self.num_kv_heads, self.head_dim
+        nq, nk, _ = self.split_qkv
+        attn_out = []
+        for si, y_raw in enumerate(qkv):
+            y = y_raw.to(self.dtype)
+            rows = int(y.shape[0])
+            v = y[:, nq + nk :].reshape(rows, kvh, hd)
+            cos, sin = st.rope[si]
+            qk = ops.rope(y[:, : nq + nk].reshape(rows, nh + kvh, hd), cos, sin)
+            q, k = qk[:, :nh], qk[:, nh:]
+            if not q.is_contiguous():
+                q = q.contiguous()
+            k_all, v_all = caches[si].append(layer, k, v)
+            tail = min(int(seqs[si].serial_tail), rows)
+            if tail <= 0:
+                attn_out.append(ops.attention(self, q, k_all, v_all, starts[si]))
+            else:
+                st0, head = starts[si], rows - tail
+                parts = [ops.attention(self, q[:head], k_all[: st0 + head], v_all[: st0 + head], st0)] if head else []
+                for j in range(head, rows):
+                    parts.append(ops.attention(self, q[j : j + 1], k_all[: st0 + j + 1], v_all[: st0 + j + 1],
+                                               st0 + j))
+                attn_out.append(torch.cat(parts, dim=0))
+        return attn_out
 
     def _layer_native(self, layer: int, st: PassState,
                       ops: NativeFloatOps) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
