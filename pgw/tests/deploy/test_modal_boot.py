@@ -194,12 +194,17 @@ def test_customer_memory_matches_boot() -> None:
     assert boot.customer_memory_mib("qwen2.5-1.5b-instruct") == boot.CUSTOMER_MEMORY_MIB["large"]
     # the co-located container: the provider's 6 GiB plus the same gateway rule
     col = (MODAL_DIR / "colocated.py").read_text()
-    m = re.search(r"else 6144 \+ \((\d+) if DRAFT or MODEL_NAME != \"([^\"]+)\" else (\d+)\)", col)
+    m = re.search(r"_SMALL_GATEWAY_GIB = (\d+) if DRAFT or MODEL_NAME != \"([^\"]+)\" else (\d+)", col)
     assert m is not None
-    assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
+    assert (1024 * int(m.group(1)), m.group(2), 1024 * int(m.group(3))) == (
         boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])
-    # the 7B (co-located only): 16 GiB provider + 48 GiB gateway
-    assert 'MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"' in col
+    assert "COLOCATED_MEM_GIB.get(MODEL_NAME, (6, _SMALL_GATEWAY_GIB))" in col
+    # the 7B (co-located only): 16 GiB provider + 48 GiB gateway; the 32B: 48 + 160
+    import ast
+
+    table = next(ast.literal_eval(n.value) for n in ast.parse(col).body if isinstance(n, ast.Assign)
+                 and any(getattr(t, "id", "") == "COLOCATED_MEM_GIB" for t in n.targets))
+    assert table == {"qwen2.5-7b-instruct": (16, 48), "qwen2.5-32b-instruct": (48, 160)}
 
 
 def test_factory_keep_up_scales_with_the_target() -> None:
@@ -343,3 +348,68 @@ def test_setup_token_regex_keeps_trailing_dash_and_underscore() -> None:
     for tok in ("pgw-setup-abcDEF123-", "pgw-setup-abcDEF123_", "pgw-setup-ab-cd_EF12"):
         m = boot._TOKEN_RE.search(f"    {tok}\n")
         assert m and m.group(1) == tok
+
+
+def test_32b_sizes_keep_up_and_tables() -> None:
+    """Qwen2.5-32B: public sizes (hint 114 GB, slot 18.6 MB, 7B figures as measured), keep-up scaled by 16, and the
+    Volume-pack / hint-required lists the same in pgw_modal_boot.py, colocated.py and launch.py."""
+    import ast
+
+    boot = _boot()
+    s7, s32 = boot.model_sizes("qwen2.5-7b-instruct"), boot.model_sizes("qwen2.5-32b-instruct")
+    assert round(s7["hint_bytes"] / 1e9, 1) == 34.2 and round(s7["slot_bytes"] / 1e6, 2) == 5.56
+    assert s32["out_rows"] == 4_653_056
+    assert round(s32["hint_bytes"] / 1e9, 1) == 114.4 and round(s32["slot_bytes"] / 1e6, 1) == 18.6
+    assert boot.model_sizes("qwen2.5-0.5b-instruct") == {}
+    ku = boot.factory_keep_up("qwen2.5-32b-instruct")
+    assert ku["PGW_FACTORY_SEGMENT_SLOTS"] == "128" and ku["PGW_FACTORY_TARGET_SLOTS"] == "512"
+    assert ku["PGW_FACTORY_LOW_WATER_SLOTS"] == "384"
+    for name in ("colocated.py", "launch.py"):
+        tree = ast.parse((MODAL_DIR / name).read_text())
+        vals = {t.id: n.value for n in tree.body if isinstance(n, ast.Assign) for t in n.targets
+                if isinstance(t, ast.Name)}
+        assert ast.literal_eval(vals["VOLUME_PACK_MODELS"]) == boot.VOLUME_PACK_MODELS, name
+    assert set(boot.HINT_CACHE_REQUIRED_MODELS) <= set(boot.VOLUME_PACK_MODELS)
+    assert boot.provider_pack_path(Path("/v"), "m") == Path("/v/m/pack")
+
+
+def test_32b_refuses_without_a_cached_pack_and_hint() -> None:
+    boot = _boot()
+    ok = {"pack": {"bytes": 1}, "hint abcd-r16-q56": {"bytes": 2}}
+    boot.require_cached_setup("qwen2.5-32b-instruct", ok)
+    boot.require_cached_setup("qwen2.5-7b-instruct", {})  # the 7B can still build in the run
+    for bad in ({}, {"pack": {}}, {"hint x": {}}, {"error": "boom"}):
+        with pytest.raises(RuntimeError, match="prepare-cache"):
+            boot.require_cached_setup("qwen2.5-32b-instruct", bad)
+    boot.require_cached_setup("qwen2.5-32b-instruct", {"pack": {}}, mask_source="gpu-service")  # no hint needed
+    with pytest.raises(RuntimeError, match="pack"):
+        boot.require_cached_setup("qwen2.5-32b-instruct", {"hint x": {}}, mask_source="gpu-service")
+
+
+def test_mask_source_hook_is_refused_until_wired() -> None:
+    boot = _boot()
+    assert boot.mask_source_env(None) == {} and boot.mask_source_env("factory") == {}
+    with pytest.raises(NotImplementedError, match="mask_source_env"):
+        boot.mask_source_env("gpu-service")
+    with pytest.raises(ValueError):
+        boot.mask_source_env("plain")
+
+
+def test_reference_int_threads_gives_the_same_bits(tiny_pack_dir: Path) -> None:
+    """``plaintext_reference(int_threads=N)`` runs only the exact integer products on N threads: the same tokens and
+    logprobs bit for bit, and the patched function and the thread count are restored afterwards."""
+    import torch
+
+    from pgw.engine import backends
+
+    sys.path.insert(0, str(MODAL_DIR))
+    try:
+        import wizard_client as wiz
+    finally:
+        sys.path.remove(str(MODAL_DIR))
+    msgs = [{"role": "user", "content": "Say hello."}]
+    orig, threads = backends.exact_int_matmul, torch.get_num_threads()
+    a = wiz.plaintext_reference(str(tiny_pack_dir), "K32A12C27", msgs, 6, float_threads=1)
+    b = wiz.plaintext_reference(str(tiny_pack_dir), "K32A12C27", msgs, 6, float_threads=1, int_threads=4)
+    assert a["token_ids"] == b["token_ids"] and a["logprobs"] == b["logprobs"]
+    assert backends.exact_int_matmul is orig and torch.get_num_threads() == threads

@@ -93,11 +93,28 @@ TUNNEL_FLOOR_MS = 3.0
 #: Default ``--schedule-timeout-min`` (minutes until both ``*_boot`` markers): without / with a GPU.
 I6PN_SCHEDULE_TIMEOUT_MIN = {False: 6.0, True: 10.0}
 #: Targets ``--model`` accepts (the same table as ``pgw_modal_boot.MODELS`` / ``provider.py``).
-MODELS = ("qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct", "qwen2.5-7b-instruct")
+MODELS = ("qwen2.5-0.5b-instruct", "qwen2.5-1.5b-instruct", "qwen2.5-3b-instruct", "qwen2.5-7b-instruct",
+          "qwen2.5-32b-instruct")
 #: Targets served only by the co-located placement (``colocated.py`` sizes memory and disk for them; the
 #: two-container apps do not): ``--model`` refuses them elsewhere and ``--placement colocated`` deploys only
 #: ``colocated.py`` for them (no tunnel fallback).
-COLOCATED_ONLY_MODELS = ("qwen2.5-7b-instruct",)
+COLOCATED_ONLY_MODELS = ("qwen2.5-7b-instruct", "qwen2.5-32b-instruct")
+#: Co-located memory of the large targets, (provider GiB, gateway GiB) (= colocated.py COLOCATED_MEM_GIB; a test
+#: checks it). Requests, not limits; the 32B's gateway keeps the 114 GB hint and 37.5 GB pack in the page cache.
+COLOCATED_MEM_GIB = {"qwen2.5-7b-instruct": (16, 48), "qwen2.5-32b-instruct": (48, 160)}
+#: Provider GPUs a target fits (its int8 linears plus maskgen scratch on one device); default: every tier.
+#: Qwen2.5-32B: 31.2 GB of int8 linears; only the H100 (80 GB) is planned (the L40S's 48 GB is untested).
+MODEL_GPUS = {"qwen2.5-32b-instruct": ("H100",)}
+#: Targets whose provider pack lives in a provider-side Volume (= colocated.py / pgw_modal_boot.VOLUME_PACK_MODELS)
+#: and whose encryption hint must be cached (= pgw_modal_boot.HINT_CACHE_REQUIRED_MODELS): ``--prepare-cache`` fills
+#: both Volumes, and a run checks them first (:func:`cache_preflight`, free: no container).
+VOLUME_PACK_MODELS = ("qwen2.5-32b-instruct",)
+PROVIDER_PACK_VOLUME = os.environ.get("PGW_MODAL_PROVIDER_PACK_VOLUME") or "pgw-provider-packs"
+CACHE_VOLUME = os.environ.get("PGW_MODAL_CACHE_VOLUME") or "pgw-gateway-cache"
+#: ``--mask-source`` (= pgw_modal_boot.MASK_SOURCES). ``gpu-service`` is a hook for the customer-side GPU mask
+#: service (built in a separate package): refused here until that package wires it and sets this to True.
+MASK_SOURCES = ("factory", "gpu-service")
+GPU_MASK_SERVICE_READY = False
 #: Port of the provider's bulk maskgen channel in the co-located container (``--he-bulk``; 127.0.0.1 only).
 HE_BULK_PORT = 8445
 DEFAULT_MODEL = MODELS[0]
@@ -132,15 +149,15 @@ def customer_gib() -> int:
     """Customer memory as ``customer.py`` sets it: 16 GiB with a target larger than the 0.5B or the draft
     (``PGW_MODAL_MODEL`` / ``PGW_MODAL_DRAFT``), else 8."""
     model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
-    if model in COLOCATED_ONLY_MODELS:  # colocated.py: the 7B's gateway party (pack, hint pages, factory)
-        return 48
+    if model in COLOCATED_MEM_GIB:  # colocated.py: the large targets' gateway party (pack, hint pages, factory)
+        return COLOCATED_MEM_GIB[model][1]
     return 16 if os.environ.get("PGW_MODAL_DRAFT", "0") == "1" or model != DEFAULT_MODEL else 8
 
 
 def provider_gib() -> int:
-    """Provider memory: 6 GiB, 16 GiB for a co-located-only target (the 7B pack is staged in host memory)."""
+    """Provider memory: 6 GiB, more for a co-located-only target (its int8 pack is staged in host memory)."""
     model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
-    return 16 if model in COLOCATED_ONLY_MODELS else 6
+    return COLOCATED_MEM_GIB[model][0] if model in COLOCATED_MEM_GIB else 6
 
 
 def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
@@ -158,13 +175,12 @@ def colocated_cost_per_h(gpu: str | None, model: str | None = None) -> dict[str,
     """Hourly list price of the co-located container as ``colocated.py`` sizes it (deploy-time environment):
     the provider's GPU (two with ``--gateway-gpu``), provider + gateway cores and memory."""
     model = (model or os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
-    big = model in COLOCATED_ONLY_MODELS
     draft = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
     pcpu = provider_cpus(gpu)
     gcpu = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
-    pmem = float(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB") or (16 if big else 6))
-    gmem = float(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB")
-                 or (48 if big else 16 if draft or model != DEFAULT_MODEL else 8))
+    pdef, gdef = COLOCATED_MEM_GIB.get(model, (6, 16 if draft or model != DEFAULT_MODEL else 8))
+    pmem = float(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB") or pdef)
+    gmem = float(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB") or gdef)
     ngpu = 2 if gpu and os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1" else 1
     gp = (GPU_PRICE_H[gpu] * ngpu) if gpu else 0.0
     out = {"gpu": gp, "cores": (pcpu + gcpu) * CORE_H, "memory": (pmem + gmem) * GIB_H}
@@ -524,6 +540,8 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     if getattr(args, "prime_check", False):  # one-vector Freivalds check over F_p: factory format + gateway acceptance
         genv.setdefault("PGW_FACTORY_CHECK_FIELD", "p31")
         genv.setdefault("PGW_GATEWAY_PRIME_CHECK", "true")
+    if (getattr(args, "mask_source", None) or "factory") != "factory":  # hook (pgw_modal_boot.mask_source_env)
+        genv["PGW_MODAL_MASK_SOURCE"] = args.mask_source
     if getattr(args, "ab_plain", None) is not None:  # in-run A/B: the same run again without speculation
         genv["PGW_MODAL_AB_PLAIN"] = f"{float(args.ab_plain):g}"
     if getattr(args, "he_bulk", False):  # --he-bulk: the provider's bulk maskgen channel, used by the factory
@@ -610,12 +628,103 @@ def prepare_cache(force: bool = False) -> dict[str, Any]:
     """Run ``colocated.py``'s ``prepare_cache`` (a T4 container, no provider process): fill the gateway side's
     cache Volume with the deployed target's pack and encrypted-mask hint, so the next co-located run with
     ``--gateway-cache`` restores them instead of building them (README "Gateway cache")."""
+    model = (os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
     fn = modal.Function.from_name(COLOCATED_FUNCTION[0], "prepare_cache")
     t0 = time.time()
-    out = dict(fn.remote(force))
+    # a Volume-pack target (the 32B): the provider side's pack in its own CPU container, in parallel (no shared Volume)
+    pcall = (modal.Function.from_name(COLOCATED_FUNCTION[0], "prepare_provider_pack").spawn(force)
+             if model in VOLUME_PACK_MODELS else None)
+    out: dict[str, Any] = {"gateway_cache": dict(fn.remote(force))}
+    if pcall is not None:
+        out["provider_pack"] = dict(pcall.get())
+        out["preflight"] = cache_preflight(model)
     out["wall_s"] = round(time.time() - t0, 1)
     print(json.dumps(out, indent=1, default=str), flush=True)
     return out
+
+
+def prepare_cost_per_h(model: str) -> dict[str, float]:
+    """Hourly list price of ``--prepare-cache``'s containers as ``colocated.py`` sizes them (PREP_*): the gateway
+    side's T4 container and, for a Volume-pack target, the provider side's CPU container."""
+    big = model in VOLUME_PACK_MODELS
+    cpus, gib = (16, 48) if big else (8, 32 if model == "qwen2.5-7b-instruct" else 16)
+    out = {"prepare_cache (T4)": GPU_PRICE_H["T4"] + cpus * CORE_H + gib * GIB_H}
+    if big:
+        out["prepare_provider_pack (CPU)"] = cpus * CORE_H + gib * GIB_H
+    return out
+
+
+def dry_run(args: argparse.Namespace) -> dict[str, Any]:
+    """``--dry-run``: what a launch with these arguments would deploy and pass, without any Modal call."""
+    import pgw_modal_boot as boot
+
+    calls: list[dict[str, Any]] = []
+    spawn = _spawner(args)
+    real = globals()["spawn_pair"]
+    globals()["spawn_pair"] = lambda *a, **kw: calls.append(kw)  # capture the run-time environment only
+    try:
+        if args.placement == "colocated":
+            spawn(None, "colocated", int(min(args.ttl_min, 85.0) * 60), args.e2e)
+    finally:
+        globals()["spawn_pair"] = real
+    deploy_env = {k: os.environ[k] for k in sorted(os.environ) if k.startswith("PGW_MODAL_")}
+    sizes = boot.model_sizes(args.model)
+    plan = {"model": args.model, "gpu": args.gpu, "placement": args.placement, "deploy_env": deploy_env,
+            "run": calls[-1] if calls else None,
+            "prepare_cache": args.prepare_cache, "volume_pack": args.model in VOLUME_PACK_MODELS,
+            "sizes_gb": {k: round(v / 1e9, 2) for k, v in sizes.items() if k.endswith("bytes")},
+            "slot_mb": round(sizes["slot_bytes"] / 1e6, 2) if sizes else None,
+            "factory_keep_up": boot.factory_keep_up(args.model)}
+    print(json.dumps(plan, indent=1, default=str), flush=True)
+    print("dry run: nothing deployed or started", flush=True)
+    return plan
+
+
+def _volume_json(volume: str, path: str) -> dict[str, Any] | None:
+    """A small JSON file from a Modal Volume (no container; ``None`` if the Volume or file is missing)."""
+    try:
+        vol = modal.Volume.from_name(volume)
+        return json.loads(b"".join(vol.read_file(path)))
+    except Exception:
+        return None
+
+
+def _volume_dirs(volume: str, path: str) -> list[str]:
+    try:
+        return [e.path.rstrip("/").rsplit("/", 1)[-1] for e in modal.Volume.from_name(volume).listdir(path)]
+    except Exception:
+        return []
+
+
+def cache_preflight(model: str, read_json: Callable[[str, str], dict[str, Any] | None] | None = None,
+                    list_dirs: Callable[[str, str], list[str]] | None = None,
+                    need_hint: bool = True) -> dict[str, Any]:
+    """Before an expensive run of a Volume-pack target (free: reads three small files, starts no container): the
+    provider's pack, the gateway cache's pack and its hint exist and carry the same fingerprint. A mismatch (e.g. a
+    pack format change between the two preparations) would make the wizard download and pack the checkpoint and
+    build the hint on the gateway's CPU, or the run refuse after paying for the H100's start. Returns
+    ``{"ok", "problems", "fingerprints"}``."""
+    read_json = read_json or _volume_json
+    list_dirs = list_dirs or _volume_dirs
+    prov = read_json(PROVIDER_PACK_VOLUME, f"{model}/pack/manifest.json")
+    gw = read_json(CACHE_VOLUME, f"{model}/pack/manifest.json")
+    problems: list[str] = []
+    fps = {"provider_pack": (prov or {}).get("fingerprint"), "gateway_pack": (gw or {}).get("fingerprint")}
+    if prov is None:
+        problems.append(f"no provider pack in Volume {PROVIDER_PACK_VOLUME} ({model}/pack)")
+    if gw is None:
+        problems.append(f"no gateway pack in Volume {CACHE_VOLUME} ({model}/pack)")
+    if prov is not None and gw is not None and fps["provider_pack"] != fps["gateway_pack"]:
+        problems.append("the provider's and the gateway cache's packs differ in fingerprint")
+    if need_hint:
+        hints = [d for d in list_dirs(CACHE_VOLUME, f"{model}/hemask") if not d.endswith(".partial")]
+        fp = fps["gateway_pack"] or fps["provider_pack"] or ""
+        match = [d for d in hints if fp and d.startswith(fp[:16] + "-")]
+        fps["hints"] = hints
+        if not match:
+            problems.append(f"no encryption hint for fingerprint {fp[:16] or '?'} in Volume {CACHE_VOLUME} "
+                            f"({model}/hemask: {hints or 'empty'})")
+    return {"ok": not problems, "problems": problems, "fingerprints": fps}
 
 
 def _print_ab_plain(res: dict[str, Any]) -> None:
@@ -794,6 +903,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--prepare-cache", action="store_true",
                     help="with --gateway-cache: fill the cache for the deployed target on a T4 container (pack + "
                          "hint built on its GPU), then exit; run it once before an expensive co-located run")
+    ap.add_argument("--mask-source", choices=MASK_SOURCES, default="factory",
+                    help="--placement colocated: where the gateway's masks come from: 'factory' (default; the "
+                         "encrypted MLWE mask factory, which needs the hint) or 'gpu-service' (the customer-side GPU "
+                         "mask service: a hook, refused until that package wires it; no hint needed then)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="validate the arguments, print the deploy-time sizing, the run-time environment and the "
+                         "cost estimate, then exit (no Modal call, nothing deployed or spent)")
     ap.add_argument("--allow-self-draft", action="store_true",
                     help="plumbing tests only: allow --spec-draft with the 0.5B target (the draft is the target "
                          "itself, so acceptance is near 1 and nothing is learned about speed)")
@@ -900,6 +1016,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--ab-plain needs --e2e and --spec-rows (it measures the same run without speculation), and >= 0")
     if args.prepare_cache and not args.gateway_cache:
         ap.error("--prepare-cache needs --gateway-cache")
+    if args.mask_source != "factory":
+        if args.placement != "colocated":
+            ap.error("--mask-source needs --placement colocated")
+        if not GPU_MASK_SERVICE_READY:
+            ap.error("--mask-source gpu-service: the GPU mask service is not wired into the Modal demo yet "
+                     "(hook: launch.GPU_MASK_SERVICE_READY / pgw_modal_boot.mask_source_env)")
+    if args.model in MODEL_GPUS and not (args.stop or args.show) and args.gpu not in MODEL_GPUS[args.model]:
+        ap.error(f"--model {args.model} needs --gpu {' or '.join(MODEL_GPUS[args.model])} (its int8 linears and the "
+                 "maskgen scratch on one device)")
+    if args.model in VOLUME_PACK_MODELS and not args.gateway_cache and not (args.stop or args.show):
+        ap.error(f"--model {args.model} needs --gateway-cache (its pack and 114 GB encryption hint are prepared once "
+                 "with --prepare-cache; built in the run they would not fit the TTL)")
     return args
 
 
@@ -932,6 +1060,20 @@ def main(argv: list[str] | None = None) -> None:
               f"{c['memory_gib']:g} GiB: about ${c['total']:.2f}/h at list prices (GPU ${c['gpu']:.2f}, cores "
               f"${c['cores']:.2f}, memory ${c['memory']:.2f}); at most ${c['total'] * min(args.ttl_min, 85) / 60:.2f} "
               f"for --ttl-min {args.ttl_min:g}", flush=True)
+    if args.prepare_cache:
+        pc = prepare_cost_per_h(args.model)
+        print(f"--prepare-cache: {', '.join(f'{k} about ${v:.2f}/h' for k, v in pc.items())} at list prices, billed "
+              "while they run (estimate in README)", flush=True)
+    if args.dry_run:
+        dry_run(args)
+        return
+    if (args.model in VOLUME_PACK_MODELS and not args.prepare_cache and not args.deploy_only
+            and not (args.stop or args.show)):
+        pf = cache_preflight(args.model, need_hint=args.mask_source == "factory")
+        if not pf["ok"]:
+            raise SystemExit(f"{args.model}: not prepared ({'; '.join(pf['problems'])}); run the same flags with "
+                             "--prepare-cache first (nothing was deployed or started)")
+        print(f"cache preflight ok: {pf['fingerprints']}", flush=True)
     if args.deploy_only:
         deploy(args.gpu, args.customer_gpu, args.placement, args.region, args.model, args.spec_draft)
         print("deployed; start a pair later with --no-deploy")

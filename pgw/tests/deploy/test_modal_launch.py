@@ -6,6 +6,8 @@ Nothing here talks to Modal: the launcher's Modal calls are replaced by fakes.""
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -751,3 +753,94 @@ def test_cpu_gateway_speculation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PGW_MODAL_GATEWAY_CPUS", "24")
     c = launch.colocated_cost_per_h("H100", "qwen2.5-7b-instruct")
     assert c["gpu"] == launch.GPU_PRICE_H["H100"] and c["gateway_cpus"] == 24.0
+
+
+_32B = ["--placement", "colocated", "--gpu", "H100", "--model", "qwen2.5-32b-instruct", "--gateway-cache"]
+
+
+def _clear_modal_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in list(os.environ):
+        if var.startswith("PGW_MODAL_"):
+            monkeypatch.delenv(var, raising=False)
+
+
+def test_32b_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 32B: co-located only, H100 only, --gateway-cache required; --mask-source gpu-service refused until wired."""
+    _clear_modal_env(monkeypatch)
+    a = launch.parse_args([*_32B, "--e2e", "--local-linears", "off", "--trip-native", "--prime-check"])
+    assert a.model == "qwen2.5-32b-instruct" and a.mask_source == "factory"
+    for bad in (["--placement", "tunnel"], ["--gpu", "T4"], ["--gpu", "none"], ["--mask-source", "gpu-service"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args([*_32B, *bad])
+    with pytest.raises(SystemExit):
+        launch.parse_args([x for x in _32B if x != "--gateway-cache"])
+    assert launch.parse_args([*_32B, "--prepare-cache"]).prepare_cache
+    monkeypatch.setattr(launch, "GPU_MASK_SERVICE_READY", True)  # once the GPU mask service package wires it
+    a = launch.parse_args([*_32B, "--e2e", "--mask-source", "gpu-service"])
+    calls: list = []
+    monkeypatch.setattr(launch, "spawn_pair", lambda *x, **kw: calls.append(kw))
+    launch._spawner(a)({}, "colocated", 600, True)
+    assert calls[-1]["gateway_env"]["PGW_MODAL_MASK_SOURCE"] == "gpu-service"
+
+
+def test_32b_sizing_and_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_modal_env(monkeypatch)
+    col = _load("colocated")
+    assert col.COLOCATED_MEM_GIB == launch.COLOCATED_MEM_GIB
+    assert col.VOLUME_PACK_MODELS == launch.VOLUME_PACK_MODELS and not col.VOLUME_PACK
+    assert col.provider_pack_volume is None and col.PACK == "/opt/packs/qwen2.5-0.5b-instruct"
+    monkeypatch.setenv("PGW_MODAL_MODEL", "qwen2.5-32b-instruct")
+    monkeypatch.setenv("PGW_MODAL_GPU", "H100")
+    col = _load("colocated")
+    assert col.VOLUME_PACK and col.PACK == "/srv/pgw-provider/pack" and col.provider_pack_volume is not None
+    assert col.MEMORY_MIB == 1024 * (48 + 160) and col.PREP_TIMEOUT_S == 150 * 60
+    assert col.RUNTIME_ENV["PGW_MODAL_PROVIDER_PACK_VOLUME"] == "pgw-provider-packs"
+    for var, val in col.RUNTIME_ENV.items():  # the container's re-import sees the same target and Volume
+        monkeypatch.setenv(var, val)
+    assert _load("colocated").PACK == col.PACK
+    assert hasattr(col, "prepare_provider_pack") and hasattr(col, "prepare_cache")
+    monkeypatch.setenv("PGW_MODAL_GATEWAY_CPUS", "32")
+    monkeypatch.setenv("PGW_MODAL_PROVIDER_CPUS", "8")
+    c = launch.colocated_cost_per_h("H100", "qwen2.5-32b-instruct")
+    assert c["memory_gib"] == 208 and c["total"] == pytest.approx(3.95 + 40 * 0.0473 + 208 * 0.008)
+    pc = launch.prepare_cost_per_h("qwen2.5-32b-instruct")
+    assert pc["prepare_cache (T4)"] == pytest.approx(0.59 + 16 * 0.0473 + 48 * 0.008)
+    assert pc["prepare_provider_pack (CPU)"] == pytest.approx(16 * 0.0473 + 48 * 0.008)
+    assert list(launch.prepare_cost_per_h("qwen2.5-7b-instruct")) == ["prepare_cache (T4)"]
+
+
+def test_cache_preflight_compares_fingerprints() -> None:
+    fp = "sha256:" + "ab" * 32
+    files = {("pgw-provider-packs", "m/pack/manifest.json"): {"fingerprint": fp},
+             ("pgw-gateway-cache", "m/pack/manifest.json"): {"fingerprint": fp}}
+    dirs = {("pgw-gateway-cache", "m/hemask"): [fp[:16] + "-r16-q56"]}
+
+    def pf(f: dict, d: dict, **kw: Any) -> dict:
+        return launch.cache_preflight("m", lambda v, p: f.get((v, p)), lambda v, p: d.get((v, p), []), **kw)
+
+    assert pf(files, dirs)["ok"]
+    r = pf(files, {})
+    assert not r["ok"] and "no encryption hint" in r["problems"][0]
+    assert pf(files, {}, need_hint=False)["ok"]
+    other = {**files, ("pgw-gateway-cache", "m/pack/manifest.json"): {"fingerprint": "sha256:" + "cd" * 32}}
+    assert any("differ" in p for p in pf(other, dirs)["problems"])
+    assert any("no provider pack" in p for p in pf({k: v for k, v in files.items() if k[0] != "pgw-provider-packs"},
+                                                     dirs)["problems"])
+    stale = {("pgw-gateway-cache", "m/hemask"): ["sha256:00000000-r16-q56", fp[:16] + "-r16-q56.partial"]}
+    assert not pf(files, stale)["ok"]
+
+
+def test_dry_run_prints_the_plan_and_calls_nothing(monkeypatch: pytest.MonkeyPatch,
+                                                   capsys: pytest.CaptureFixture[str]) -> None:
+    _clear_modal_env(monkeypatch)
+    for name in ("deploy", "stop", "prepare_cache", "cache_preflight", "spawn_pair"):
+        monkeypatch.setattr(launch, name, lambda *a, n=name, **k: (_ for _ in ()).throw(AssertionError(n)))
+    launch.main([*_32B, "--e2e", "--ttl-min", "30", "--local-linears", "off", "--sustain-s", "60",
+                 "--gateway-cpus", "32", "--provider-cpus", "8", "--gateway-env", "PGW_MODAL_SUSTAIN_MIN_STOCK=640",
+                 "--dry-run"])
+    out = capsys.readouterr().out
+    assert "dry run: nothing deployed or started" in out and "about $7.51/h" in out
+    plan = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    assert plan["volume_pack"] and plan["slot_mb"] == 18.61 and plan["sizes_gb"]["hint_bytes"] == 114.35
+    assert plan["run"]["gateway_env"]["PGW_MODAL_SUSTAIN_MIN_STOCK"] == "640" and plan["run"]["sustain_s"] == 60
+    assert plan["deploy_env"]["PGW_MODAL_MODEL"] == "qwen2.5-32b-instruct"

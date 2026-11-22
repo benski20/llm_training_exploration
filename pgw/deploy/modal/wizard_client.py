@@ -223,7 +223,8 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
 
 
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
-                        float_threads: int | None = None, float_ops: str | None = None) -> dict[str, Any]:
+                        float_threads: int | None = None, float_ops: str | None = None,
+                        int_threads: int | None = None) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process).
 
     ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
@@ -231,10 +232,34 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
     thread-count-dependent kernels (CPU SDPA) the same way. ``None``: this process's default count.
     ``float_ops``: the gateway's float path (``"native"``: the pinned native formulation, ``PGW_FLOAT_OPS`` /
     the model setting ``float_ops``); ``None``: the model's default (``PGW_FLOAT_OPS`` or torch).
+    ``int_threads``: run only the reference's *exact integer* products (``exact_int_matmul``: int8 digit GEMMs with
+    int32 accumulation, the same integers in any summation order) on this many threads and everything else on
+    ``float_threads`` (``PGW_MODAL_REF_INT_THREADS``; for the 32B, whose single-threaded reference would take
+    10-15 min of the run). Same bits by construction; ``None``: off.
     """
     import asyncio
 
     import torch
+
+    if int_threads and int(int_threads) > 1:
+        from pgw.engine import backends
+
+        orig = backends.exact_int_matmul
+
+        def threaded(xq: Any, w8t: Any, value_bits: int) -> Any:
+            prev = torch.get_num_threads()
+            torch.set_num_threads(int(int_threads))
+            try:
+                return orig(xq, w8t, value_bits)
+            finally:
+                torch.set_num_threads(prev)
+
+        backends.exact_int_matmul = threaded
+        try:
+            return plaintext_reference(pack_path, ring, messages, max_tokens, float_threads=float_threads,
+                                       float_ops=float_ops)
+        finally:
+            backends.exact_int_matmul = orig
 
     if float_threads:
         prev = torch.get_num_threads()
