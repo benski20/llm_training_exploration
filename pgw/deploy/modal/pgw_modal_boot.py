@@ -394,6 +394,10 @@ def gateway_env(config_dir: Path, data_dir: Path, port: int,
         # encrypted mask factory: public matrix in NTT form (same ciphertexts bit for bit as "dense", ~10x
         # cheaper on the gateway CPU; see research/plans/he-structured-encryption.md)
         "PGW_FACTORY_HE_ENCRYPT": "ntt_pre",
+        # overlap encryption, the provider's work and decryption across linears (measured on a Modal T4 with
+        # spare gateway cores: 64.5 -> 94.1 slots/s for the full 0.5B, masks bit-identical to the plaintext factory)
+        "PGW_FACTORY_HE_PIPELINE_DEPTH": "8",
+        "PGW_FACTORY_HE_MAX_INFLIGHT": "4",
     })
     return env
 

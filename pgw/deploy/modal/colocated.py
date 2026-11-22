@@ -74,7 +74,8 @@ if GPU is not None and GPU.split(":")[0].upper() == "L4":
                      f"bandwidth-bound decode GEMV, and dearer); use one of {GPU_TIERS}")
 #: Cores per party, as in the two-container apps: the provider 2 with a GPU (4 without), the gateway 4.
 PROVIDER_CPUS = float(os.environ.get("PGW_MODAL_PROVIDER_CPUS") or (2.0 if GPU else 4.0))
-GATEWAY_CPUS = 4.0
+# the gateway runs the encrypted mask factory (encryption, decryption, every-row checks): it scales with cores
+GATEWAY_CPUS = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
 #: Memory: the provider's 6 GiB plus the gateway's (8 GiB; 16 GiB with a target larger than the 0.5B or the draft,
 #: = customer.py's MEMORY_MIB / pgw_modal_boot.customer_memory_mib).
 MEMORY_MIB = 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192)
