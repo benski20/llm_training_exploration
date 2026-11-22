@@ -66,6 +66,76 @@ GPUS: dict[str, dict[str, float | None]] = {
 #: hint held in NTT form, 2026-11-21: 24.2 ms/slot). The NTT-form hint takes 12 bytes per coefficient instead of 6.
 HE_GATEWAY_7B = {"dense_amx": None, "ntt": 0.0242}
 
+#: X3: the whole encrypted factory measured end to end at Qwen2.5-7B shapes (all 28 layers, synthetic int8
+#: weights) on one Kaggle T4x2 VM with 4 vCPUs: the real compute service on GPU 0, the real factory
+#: (MaskGenerator + HEMaskBackend + RemoteMulmod64 over loopback HTTP) on GPU 1, every row Freivalds-checked.
+#: ``pipeline``: full-model slots/s of the generator as it is today (stages per linear run one after another);
+#: ``stages``: each stage alone on layer 0, as full-model slots/s (``encrypt`` ntt_pre on the 4 vCPUs,
+#: ``provider`` = wire + service + T4 GEMM, ``decrypt`` device passes on GPU 1). Source:
+#: benchmarks/he_e2e_bench.py, Kaggle job pgw-x3-he-e2e-7b (benchmarks/results/kaggle/x3_he_e2e_7b).
+#: Measured on Kaggle T4x2 (4 vCPU Xeon @ 2.0 GHz, 2026-11-21), all 28 layers, every row Freivalds-checked, two
+#: runs (benchmarks/results/kaggle/x3_he_e2e_7b and x3_he_e2e_7b_r2). Best whole factory: 6.36 slots/s (run 2,
+#: config ntt_dev_v2: ntt_pre encryption on the CPU, device decryption on GPU 1, wire v2; 5.53 with v1, 5.70 with
+#: dense device encryption). ``stages`` (run 2, ntt_dev_v2, each alone on layer 0, 1024 rows): encrypt 58.0,
+#: provider 10.8, decrypt 34.5 slots/s (device; 17.1 with CPU decryption on this host). The provider round trip
+#: is the bottleneck at 7B: GPU 0 at 3 % utilisation, 0.2 provider CPU cores busy. The same item function called
+#: in the gateway process (no HTTP, same bytes) gives 17.0 slots/s and a whole factory of 8.0 slots/s, so about
+#: half is the HTTP transport and the rest the host-side byte handling of 11.6-12.8 MB per slot; the fused
+#: maskgen GEMM alone runs 240 slots/s (maskgen_provider_run2). ``hint_disk_gb_per_s``: O_DIRECT read on the dev
+#: container (the Kaggle dd figure, 4.6 GB/s, came from the page cache).
+HE_E2E_7B_T4X2: dict[str, Any] = {
+    "config": "ntt_dev_v2 (ntt_pre CPU encrypt, device decrypt on GPU 1, provider service on GPU 0, wire v2)",
+    "pipeline": 6.36,
+    "stages": {"encrypt": 58.0, "provider": 10.76, "decrypt": 34.5},
+    "provider_no_http": 17.04,
+    "hint_disk_gb_per_s": 2.25,
+}
+
+
+def he_e2e_rates(shape: Shape, groups_per_pass: int = 6, disk_gb_per_s: float | None = None,
+                 measured: dict[str, Any] | None = None) -> dict[str, Fig]:
+    """End-to-end encrypted factory rate of one T4x2 "pair" (provider T4 + gateway T4, 4 vCPU) for ``shape``.
+
+    The 7B stage rates are measured; another model's rate scales each stage by its work per slot: encryption
+    by the inputs ``L n`` (one NTT row per input feature), decryption by the hint rows ``L m``, the provider by
+    ``L m n`` (pessimistic: at 7B the provider is bound by its request path, whose bytes grow as ``L (n + m)``,
+    not by the GEMM). ``overlapped`` (all stages concurrent, the target of the overlap work in HEMaskBackend) is the
+    slowest stage; ``serial`` is today's structure (``1 / sum(1 / rate)``). The hint read bound is the disk
+    rate over the hint bytes read per slot (the whole hint once per decryption pass of ``groups_per_pass``
+    256-slot groups) and applies when the hint does not fit in RAM.
+    """
+    meas = HE_E2E_7B_T4X2 if measured is None else measured
+    ref = MODELS["qwen2.5-7b"]
+    a, r = shape.active(), ref.active()
+    ratio = {"encrypt": ref.layers * r["n"] / (shape.layers * a["n"]),
+             "decrypt": ref.layers * r["m"] / (shape.layers * a["m"]),
+             "provider": ref.layers * r["mn"] / (shape.layers * a["mn"])}
+    exact = shape.name == ref.name
+    kind = "derived" if exact else "estimate"
+    out: dict[str, Fig] = {}
+    stages = meas.get("stages") or {}
+    rates = {k: float(v) * ratio[k] for k, v in stages.items() if v}
+    for k, v in rates.items():
+        note = "stage alone, source per stage in HE_E2E_7B_T4X2" + ("" if exact else ", scaled from 7B")
+        out[f"he_pair_{k}_slots_per_s"] = Fig(v, "slots/s", "measured" if exact else "estimate", note)
+    if len(rates) == 3:
+        out["he_pair_overlapped_slots_per_s"] = Fig(min(rates.values()), "slots/s", "estimate",
+                                                    f"slowest stage ({min(rates, key=rates.get)}): stages overlapped")
+        out["he_pair_serial_slots_per_s"] = Fig(1.0 / sum(1.0 / v for v in rates.values()), "slots/s", kind,
+                                                "stages one after another")
+    if meas.get("pipeline") and exact:
+        out["he_pair_pipeline_slots_per_s"] = Fig(float(meas["pipeline"]), "slots/s", "measured",
+                                                  f"whole factory, {meas.get('config')}")
+    hint = shape.layers * shape.all_weights()["m"] * base.HE_RANK * base.HE_DEGREE * 6  # q=2^56: 6 byte planes
+    per_slot = hint / (base.HE_DEGREE * groups_per_pass)
+    out["he_hint_read_per_slot"] = Fig(per_slot / MB, "MB", "analytic",
+                                       f"whole hint once per pass of {groups_per_pass} groups")
+    disk = disk_gb_per_s if disk_gb_per_s is not None else meas.get("hint_disk_gb_per_s")
+    if disk:
+        out["he_hint_disk_bound_slots_per_s"] = Fig(float(disk) * GB / per_slot, "slots/s", "derived",
+                                                    f"hint larger than RAM, read at {float(disk):.2f} GB/s")
+    return out
+
 
 @dataclass(frozen=True)
 class Shape:
@@ -267,6 +337,12 @@ def size(shape: Shape, *, tokens_per_s: float, ring: str = "K32A12C27", gpu: str
         f["gateway_he_s_per_slot"] = Fig(gw_s, "s/slot", "estimate",
                                          f"encrypt+decrypt ({he_gateway}), 7B measured, scaled by rows")
         f["gateway_he_devices"] = Fig(tps * gw_s, "4-vCPU units", "estimate", "slots/s x s/slot")
+        f.update(he_e2e_rates(shape))
+        for key, label in (("he_pair_overlapped_slots_per_s", "overlapped"),
+                           ("he_pair_serial_slots_per_s", "as today")):
+            if key in f:
+                f[f"he_t4x2_pairs_{label.replace(' ', '_')}"] = Fig(
+                    tps / f[key].value, "T4x2 VMs", "estimate", f"end-to-end encrypted factory, stages {label}")
     else:
         f["factory_gpus_plain"] = Fig(plain_flops / (g["ring_tops"] * 1e12), gpu, kind_gpu,
                                       "trusted factory holding the weights")

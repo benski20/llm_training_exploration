@@ -1,0 +1,113 @@
+............................................FF......                     [100%]
+=================================== FAILURES ===================================
+_____________ test_backend_ntt_pre_exact_and_same_ciphertexts[56] ______________
+
+q_bits = 56
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7d4fafbf56d0>
+
+    @needs_ntt
+    @pytest.mark.parametrize("q_bits", [56, 64])
+    def test_backend_ntt_pre_exact_and_same_ciphertexts(q_bits: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        """HEMaskBackend(encrypt='ntt_pre'): exact W8 r through the whole pipeline, and per-group
+        ciphertexts equal to the dense backend's for the same seeds."""
+        import torch
+    
+        import pgw.hemask.lwe as lwe
+        import pgw.hemask.mlwe_ring as mr
+        from pgw.hemask.backend import HEMaskBackend
+    
+        from .test_native_sampling import _Hints, _Pack, _Provider, _ref_wr, _ring_for
+    
+        rng = np.random.default_rng(q_bits)
+        weights = {"a": rng.integers(-127, 128, size=(40, 96)).astype(np.int8),
+                   "b": np.where(rng.random((24, 160)) < 0.5, -127, 127).astype(np.int8)}
+        ring = _ring_for(q_bits)
+        provider = _Provider(weights, q_bits)
+        be = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider, groups_per_call=2,
+                           max_inflight=2, groups_per_pass=3, encrypt="ntt_pre")
+        assert be.encrypt_mode == "ntt_pre" and be._a.size == 0
+        for key, rows in (("a", 5 * DEGREE + 3), ("b", 77)):
+            w = weights[key]
+            r = rng.integers(0, 1 << ring.k, size=(rows, w.shape[1]), dtype=np.int64)
+            got = be.matmul(key, torch.from_numpy(r))
+            assert np.array_equal(got.numpy(), _ref_wr(w.astype(np.int64), r, ring.k))
+        # same seeds -> same ciphertexts as the dense backend
+        dense = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider)
+        r = rng.integers(0, 1 << ring.k, size=(300, 96), dtype=np.int64)
+        seeds = _seeds(2, 40)
+        it = iter(seeds)
+        monkeypatch.setattr(mr, "new_seed", lambda: next(it))
+        fast = be._encrypt(r, 96)
+        it2 = iter(seeds)
+        monkeypatch.setattr(lwe, "new_seed", lambda: next(it2))
+        ref = dense._encrypt(r, 96)
+        assert [c.rows for c in fast] == [c.rows for c in ref] == [256, 44]
+        for x, y in zip(fast, ref, strict=True):
+>           assert np.array_equal(x.b, y.b) and np.array_equal(x.secret, y.secret)
+E           assert (False)
+E            +  where False = <function array_equal at 0x7d50ae919df0>(array([[ 6407245574397937, 49301412054716742, 21882044465207086, ...,\n          286136452523620, 19713021014234452, 68...6733497,  2348419094458823, ...,\n        13340613493237551, 36852892812709452,  5924990916749248]],\n      dtype=uint64), array([[34698979337072174, 35770977209688248, 43403886028855039, ...,\n        34764665271503429, 36212159813201835, 23...2866122, 14187536224677432, ...,\n        65089822730359114, 63387175895757179, 44963378337497174]],\n      dtype=uint64))
+E            +    where <function array_equal at 0x7d50ae919df0> = np.array_equal
+E            +    and   array([[ 6407245574397937, 49301412054716742, 21882044465207086, ...,\n          286136452523620, 19713021014234452, 68...6733497,  2348419094458823, ...,\n        13340613493237551, 36852892812709452,  5924990916749248]],\n      dtype=uint64) = MaskCiphertext(b=array([[ 6407245574397937, 49301412054716742, 21882044465207086, ...,\n          286136452523620, 1971..., ...,  0, -1,  0],\n       [ 0,  0,  1, ...,  1,  0, -1],\n       [ 1,  0,  0, ...,  0,  1,  0]], dtype=int8), rows=256).b
+E            +    and   array([[34698979337072174, 35770977209688248, 43403886028855039, ...,\n        34764665271503429, 36212159813201835, 23...2866122, 14187536224677432, ...,\n        65089822730359114, 63387175895757179, 44963378337497174]],\n      dtype=uint64) = MaskCiphertext(b=array([[34698979337072174, 35770977209688248, 43403886028855039, ...,\n        34764665271503429, 3621..., ...,  0,  0,  0],\n       [ 0,  1,  1, ...,  1,  0,  0],\n       [ 0,  0,  1, ...,  1,  1,  0]], dtype=int8), rows=256).b
+
+tests/hemask/test_mlwe_ring.py:189: AssertionError
+_____________ test_backend_ntt_pre_exact_and_same_ciphertexts[64] ______________
+
+q_bits = 64
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7d4facc76b50>
+
+    @needs_ntt
+    @pytest.mark.parametrize("q_bits", [56, 64])
+    def test_backend_ntt_pre_exact_and_same_ciphertexts(q_bits: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        """HEMaskBackend(encrypt='ntt_pre'): exact W8 r through the whole pipeline, and per-group
+        ciphertexts equal to the dense backend's for the same seeds."""
+        import torch
+    
+        import pgw.hemask.lwe as lwe
+        import pgw.hemask.mlwe_ring as mr
+        from pgw.hemask.backend import HEMaskBackend
+    
+        from .test_native_sampling import _Hints, _Pack, _Provider, _ref_wr, _ring_for
+    
+        rng = np.random.default_rng(q_bits)
+        weights = {"a": rng.integers(-127, 128, size=(40, 96)).astype(np.int8),
+                   "b": np.where(rng.random((24, 160)) < 0.5, -127, 127).astype(np.int8)}
+        ring = _ring_for(q_bits)
+        provider = _Provider(weights, q_bits)
+        be = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider, groups_per_call=2,
+                           max_inflight=2, groups_per_pass=3, encrypt="ntt_pre")
+        assert be.encrypt_mode == "ntt_pre" and be._a.size == 0
+        for key, rows in (("a", 5 * DEGREE + 3), ("b", 77)):
+            w = weights[key]
+            r = rng.integers(0, 1 << ring.k, size=(rows, w.shape[1]), dtype=np.int64)
+            got = be.matmul(key, torch.from_numpy(r))
+            assert np.array_equal(got.numpy(), _ref_wr(w.astype(np.int64), r, ring.k))
+        # same seeds -> same ciphertexts as the dense backend
+        dense = HEMaskBackend(_Pack(weights), ring, _Hints(weights, q_bits), provider)
+        r = rng.integers(0, 1 << ring.k, size=(300, 96), dtype=np.int64)
+        seeds = _seeds(2, 40)
+        it = iter(seeds)
+        monkeypatch.setattr(mr, "new_seed", lambda: next(it))
+        fast = be._encrypt(r, 96)
+        it2 = iter(seeds)
+        monkeypatch.setattr(lwe, "new_seed", lambda: next(it2))
+        ref = dense._encrypt(r, 96)
+        assert [c.rows for c in fast] == [c.rows for c in ref] == [256, 44]
+        for x, y in zip(fast, ref, strict=True):
+>           assert np.array_equal(x.b, y.b) and np.array_equal(x.secret, y.secret)
+E           assert (False)
+E            +  where False = <function array_equal at 0x7d50ae919df0>(array([[11345203412128194545, 15513635709313503558,  5570363794356361006,\n        ...,   996401656186545764,  72645327...731540720464327,\n        ..., 10015697654435653423, 15914106768264531532,\n        12550100864802744256]], dtype=uint64), array([[17685766688892850848, 10994942223398763806,  8291039656098234417,\n        ..., 17689359195831920313,   3889462...908836497552348,\n        ...,  7176322764000716958,  4704050185788861605,\n        11341297969674051208]], dtype=uint64))
+E            +    where <function array_equal at 0x7d50ae919df0> = np.array_equal
+E            +    and   array([[11345203412128194545, 15513635709313503558,  5570363794356361006,\n        ...,   996401656186545764,  72645327...731540720464327,\n        ..., 10015697654435653423, 15914106768264531532,\n        12550100864802744256]], dtype=uint64) = MaskCiphertext(b=array([[11345203412128194545, 15513635709313503558,  5570363794356361006,\n        ...,   996401656186..., ...,  0, -1,  0],\n       [ 0,  0,  1, ...,  1,  0, -1],\n       [ 1,  0,  0, ...,  0,  1,  0]], dtype=int8), rows=256).b
+E            +    and   array([[17685766688892850848, 10994942223398763806,  8291039656098234417,\n        ..., 17689359195831920313,   3889462...908836497552348,\n        ...,  7176322764000716958,  4704050185788861605,\n        11341297969674051208]], dtype=uint64) = MaskCiphertext(b=array([[17685766688892850848, 10994942223398763806,  8291039656098234417,\n        ..., 17689359195831..., ..., -1,  1,  1],\n       [-1, -1,  1, ...,  0, -1,  1],\n       [-1, -1, -1, ...,  0,  0, -1]], dtype=int8), rows=256).b
+
+tests/hemask/test_mlwe_ring.py:189: AssertionError
+=============================== warnings summary ===============================
+tests/hemask/test_devmm.py::test_device_factory_matches_local_factory[K32A12C27-1073741824]
+  /tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py:271: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:213.)
+    return torch.from_numpy(np.ascontiguousarray(blk))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2 failed, 50 passed, 1 warning in 66.92s (0:01:06)
+
+---stderr---

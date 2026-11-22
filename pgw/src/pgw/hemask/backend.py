@@ -300,29 +300,30 @@ class HEMaskBackend:
             self.params.check_noise(norm, key)
         a = public_matrix(hints.a_seed, max(s.in_features for s in self.specs.values()), self.params)
         self._fast: Any = None
-        dev: torch.device | None = None
+        from pgw.hemask.devmm import device_for
+
+        dev: torch.device | None = device_for(self.params) if device == "auto" else (
+            None if device is None else torch.device(device))
         self._ntt_dev = None
         if encrypt == "ntt_dev":
             encrypt, self._ntt_dev = _device_ntt(self.params, device)
+            if self._ntt_dev is not None:
+                dev = None  # the device NTT runs encryption and decryption's H S itself
         if encrypt in ("ntt_pre", "ntt_dev"):
             from pgw.hemask.mlwe_ring import PretransformedEncryptor
 
             # A in NTT form only (same ciphertexts as the dense path, bit for bit), on the CPU NTT or, for
-            # ntt_dev, on the device NTT (pgw.hemask.ntt_dev).
+            # ntt_dev, on the device NTT (pgw.hemask.ntt_dev). With ntt_pre, decryption runs as device passes
+            # on the gateway GPU when there is one (``device``, self-tested like the dense mode), else on the CPU.
             self._fast = (PretransformedEncryptor(a, self.params) if self._ntt_dev is None else
                           PretransformedEncryptor(a, self.params, groups_per_pass=16, device_ntt=self._ntt_dev))
-            self._planes = False
-            self._a: np.ndarray = np.empty((0, self.params.dim), dtype=np.uint64)
+            self._planes = dev is not None
+            self._a: np.ndarray = (np.empty((0, a_plane_count(self.params), self.params.dim), dtype=np.int8)
+                                   if dev is not None else np.empty((0, self.params.dim), dtype=np.uint64))
         else:
             # Public matrix as int8 byte planes for the int8 engines (gateway GPU, CPU AMX/VNNI); as uint64
             # for the float64 engine, which would otherwise rebuild the words on every call. Only the
             # ceil(q/8) low planes are kept (7 at q = 2^56): the top byte vanishes mod 2^q.
-            from pgw.hemask.devmm import device_for
-
-            if device == "auto":
-                dev = device_for(self.params)
-            else:
-                dev = None if device is None else torch.device(device)
             self._planes = dev is not None or engine() != "cpu_f64"
             self._a = self._a_planes(a) if self._planes else a
         self.encrypt_mode = encrypt

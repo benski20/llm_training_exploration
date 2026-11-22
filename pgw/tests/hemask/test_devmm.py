@@ -171,3 +171,160 @@ def test_hint_cache_falls_back_to_streaming_when_the_device_is_full(monkeypatch:
     assert eng.cache.budget == eng.cache.used == hint.nbytes
     assert eng.hint_on_device("a", hint) is not None  # resident hints stay
     assert eng.stats["hint_oom"] == 1
+
+
+def test_hint_cache_keeps_hints_in_use_instead_of_thrashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cycle over more hints than fit: LRU evicted each hint right before its next use (no hits ever); the
+    cache now keeps the hints in use and streams the rest, and stale hints still make room."""
+    p = HEParams(k=32, rank=8)
+    a = public_matrix(bytes(32), 8, p)
+    hint = np.ones((16, 6, p.dim), dtype=np.int8)
+    clock = [1000.0]
+    monkeypatch.setattr(devmm.time, "monotonic", lambda: clock[0])
+
+    def cycle(eng: devmm.DeviceHE, passes: int) -> int:
+        hits = 0
+        for _ in range(passes):
+            for key in "abcd":
+                hits += eng.cache.get(key) is not None
+                eng.hint_on_device(key, hint)
+                clock[0] += 1.0
+        return hits
+
+    monkeypatch.setenv("PGW_HEMASK_GPU_HINT_STALE_S", "0")  # plain LRU: the old behaviour
+    lru = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=2 * hint.nbytes)
+    assert cycle(lru, 3) == 0 and lru.stats["hint_uploads"] == 12
+    monkeypatch.delenv("PGW_HEMASK_GPU_HINT_STALE_S")
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=2 * hint.nbytes)
+    assert cycle(eng, 3) == 4  # a and b resident from the second pass on; c and d streamed
+    assert eng.stats["hint_uploads"] == 2 and eng.stats["hint_misses_streamed"] == 6
+    assert eng.cache.used == eng.cache.budget
+    clock[0] += 601.0  # a and b went stale (another pack is being generated now): they make room
+    assert eng.hint_on_device("x", hint) is not None and eng.cache.get("a") is None
+    assert eng.cache.get("b") is not None and eng.cache.used == 2 * hint.nbytes
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
+@pytest.mark.parametrize("prefetch", ["1", "0"])
+@pytest.mark.parametrize("block_rows", [3, 1 << 20])
+def test_streamed_and_cached_hints_decrypt_the_same(block_rows: int, prefetch: str, device: str,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever the cache keeps, decryption gives the same bits (cached, streamed with the next block's host
+    copy prefetched, after eviction), with one block per pass or many (block_rows=3: 7 blocks of 20 rows)."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(11)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    planes = to_planes(a)[:, :a_plane_count(p)]
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    monkeypatch.setattr(devmm, "_BLOCK_BYTES", hint.shape[1] * DEGREE * 4 * block_rows)
+    monkeypatch.setenv("PGW_HEMASK_HINT_PREFETCH", prefetch)
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    for budget in (0, hint.nbytes, 4 * hint.nbytes):
+        eng = devmm.DeviceHE(planes, p, device, hint_budget=budget)
+        for key in ("x", "y", "x", "z", "x"):
+            cts, b = eng.encrypt(r, n)
+            y = matmul_mod64(w, b, fast=False) & p.q_mask
+            out = np.zeros((rows, m), dtype=np.int64)
+            eng.decrypt_into(key, hint, [(y, cts, 0)], out, p.delta_bits, 32)
+            assert np.array_equal(out, want), (budget, key)
+        if budget == 0 and prefetch == "1":  # the one-buffer path counts CUDA uploads only
+            assert eng.stats["hint_streamed_blocks"] == 5 * -(-m // min(m, max(8, block_rows)))
+
+
+def test_pass_out_of_memory_drops_cached_hints_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A decryption pass that runs out of device memory (7B: the hint cache took the pass workspace) drops cached
+    hints, lowers the budget and reruns: same bits. With nothing cached the error goes up."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(12)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=4 * hint.nbytes)
+    monkeypatch.setattr(devmm, "_OOM_SHRINK", 1)
+    real = devmm.DeviceHE._decrypt_pass
+    fails = {"left": 0}
+
+    def flaky(self: Any, key: str, *args: Any) -> None:
+        if fails["left"]:
+            fails["left"] -= 1
+            self.hint_on_device(key, hint)  # the cache fills, then the workspace allocation fails
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        real(self, key, *args)
+
+    monkeypatch.setattr(devmm.DeviceHE, "_decrypt_pass", flaky)
+
+    def run(key: str) -> np.ndarray:
+        cts, b = eng.encrypt(r, n)
+        y = matmul_mod64(w, b, fast=False) & p.q_mask
+        out = np.zeros((rows, m), dtype=np.int64)
+        eng.decrypt_into(key, hint, [(y, cts, 0)], out, p.delta_bits, 32)
+        return out
+
+    assert np.array_equal(run("x"), want) and eng.cache.used == hint.nbytes
+    fails["left"] = 1
+    assert np.array_equal(run("y"), want)
+    # the hint cached by the failed pass went first; the budget now fits only what is left
+    assert eng.stats["pass_oom_shrinks"] == 1 and eng.cache.used == hint.nbytes < eng.cache.budget < 2 * hint.nbytes
+    assert np.array_equal(run("y"), want)  # streamed from now on: same bits
+    eng.cache.shrink(1 << 40)
+    assert eng.cache.used == eng.cache.budget == 0
+    fails["left"] = 1
+    with pytest.raises(torch.cuda.OutOfMemoryError):  # nothing cached left to drop
+        run("x")
+
+
+def test_pass_failing_part_way_zeroes_its_device_temporaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pass that fails after some blocks (out of memory on the second block's correction) zeroes the secrets
+    (S, its column sums) and the per-block H S partials and y - H S it held; the retry gives the same bits."""
+    p = HEParams(k=32, rank=8)
+    rng = np.random.default_rng(13)
+    n, m, rows = 48, 20, DEGREE
+    a = public_matrix(bytes(32), n, p)
+    w = rng.integers(-127, 128, size=(m, n)).astype(np.int64)
+    hint = to_planes(matmul_mod64(w, a, fast=False))[:, 1:p.q // 8]
+    r = rng.integers(0, 1 << 32, size=(rows, n), dtype=np.int64)
+    want = np.array((r.astype(object) @ w.T.astype(object)) % (1 << 32), dtype=np.int64)
+    monkeypatch.setattr(devmm, "_BLOCK_BYTES", hint.shape[1] * DEGREE * 4 * 8)  # 3 blocks of 8 rows
+    eng = devmm.DeviceHE(to_planes(a)[:, :a_plane_count(p)], p, "cpu", hint_budget=4 * hint.nbytes)
+    seen: list[torch.Tensor] = []
+    real_mm, real_combine = devmm.int_mm, devmm.combine
+    state = {"calls": 0, "fail_at": 2}
+
+    def mm(lhs: torch.Tensor, rhs_t: torch.Tensor) -> torch.Tensor:
+        seen.append(rhs_t)
+        out = real_mm(lhs, rhs_t)
+        seen.append(out)
+        return out
+
+    def comb(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.Tensor:
+        state["calls"] += 1
+        seen.append(offset)
+        if state["calls"] == state["fail_at"]:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory (simulated)")
+        acc = real_combine(part, offset, first_byte)
+        seen.append(acc)
+        return acc
+
+    cts, b = eng.encrypt(r, n)
+    y = matmul_mod64(w, b, fast=False) & p.q_mask
+    monkeypatch.setattr(devmm, "int_mm", mm)
+    monkeypatch.setattr(devmm, "combine", comb)
+    out = np.zeros((rows, m), dtype=np.int64)
+    eng.decrypt_into("x", hint, [(y, cts, 0)], out, p.delta_bits, 32)  # fails once, retried
+    assert np.array_equal(out, want)
+    assert eng.stats["pass_oom_shrinks"] == 1 and len(seen) > 4
+    assert all(not t.any() for t in seen)  # S, its column sums, H S partials, corrections: all zeroed
+    seen.clear()
+    eng.cache.shrink(1 << 40)
+    state["calls"], state["fail_at"] = 0, 1
+    with pytest.raises(torch.cuda.OutOfMemoryError):  # nothing cached: the error goes up, still wiped
+        eng.decrypt_into("x", hint, [(y, cts, 0)], np.zeros((rows, m), dtype=np.int64), p.delta_bits, 32)
+    assert seen and all(not t.any() for t in seen)

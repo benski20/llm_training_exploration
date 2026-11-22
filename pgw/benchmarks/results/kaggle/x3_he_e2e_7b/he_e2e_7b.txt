@@ -1,0 +1,281 @@
+=== gateway config ntt_dev
+hint build 46.1s
+=== gateway config dense_dev
+=== gateway config ntt_dev_c4096
+=== gateway config ntt_dev_stream
+E2E {"slots": 3072, "wall_s": 549.459, "slots_per_s_full_model": 5.59, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 178.86, "encrypt": 65.693, "decrypt": 32.007, "provider_busy": 109.361, "provider_call_sum": 155.813, "rng": 19.04, "check": 12.819, "backend_wall": 165.54}, "he": {"groups": 1344, "encrypt_s": 201.809, "remote_s": 526.481, "decrypt_s": 98.326, "wall_s": 508.539, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}
+STAGES {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.377, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.082, "provider_s": 0.354, "decrypt_s": 0.13, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.078, "provider_s": 1.799, "decrypt_s": 0.895, "exact_rows_ok": true}, "down": {"encrypt_s": 0.39, "provider_s": 1.637, "decrypt_s": 0.104, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.66, "provider": 8.78, "decrypt": 28.79}}
+RESULT {"config": "ntt_dev_stream", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 3.04, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}, "warmup_s": 70.54, "gateway_cpu_cores_busy": 1.54, "window": [1795298466.25, 1795299015.71], "e2e": {"slots": 3072, "wall_s": 549.459, "slots_per_s_full_model": 5.59, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 178.86, "encrypt": 65.693, "decrypt": 32.007, "provider_busy": 109.361, "provider_call_sum": 155.813, "rng": 19.04, "check": 12.819, "backend_wall": 165.54}, "he": {"groups": 1344, "encrypt_s": 201.809, "remote_s": 526.481, "decrypt_s": 98.326, "wall_s": 508.539, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.377, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.082, "provider_s": 0.354, "decrypt_s": 0.13, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.078, "provider_s": 1.799, "decrypt_s": 0.895, "exact_rows_ok": true}, "down": {"encrypt_s": 0.39, "provider_s": 1.637, "decrypt_s": 0.104, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.66, "provider": 8.78, "decrypt": 28.79}}, "process_s": 637.2, "during_measurement": {"provider_cpu_cores_busy": 0.22, "gpu0_util_pct_mean": 2.5, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 7.4, "gpu1_mem_mib_max": 8945.0}}
+=== gateway config ntt_dev_stream_noprefetch
+E2E {"slots": 3072, "wall_s": 552.215, "slots_per_s_full_model": 5.56, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 179.758, "encrypt": 65.497, "decrypt": 34.644, "provider_busy": 107.718, "provider_call_sum": 152.702, "rng": 19.147, "check": 12.85, "backend_wall": 166.424}, "he": {"groups": 1344, "encrypt_s": 201.206, "remote_s": 517.31, "decrypt_s": 106.425, "wall_s": 511.256, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}
+STAGES {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.395, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.085, "provider_s": 0.346, "decrypt_s": 0.134, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.079, "provider_s": 1.822, "decrypt_s": 1.0, "exact_rows_ok": true}, "down": {"encrypt_s": 0.408, "provider_s": 1.681, "decrypt_s": 0.133, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 55.61, "provider": 8.62, "decrypt": 25.97}}
+RESULT {"config": "ntt_dev_stream_noprefetch", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 3.02, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0", "PGW_HEMASK_HINT_PREFETCH": "0"}, "warmup_s": 68.44, "gateway_cpu_cores_busy": 1.52, "window": [1795299101.09, 1795299653.31], "e2e": {"slots": 3072, "wall_s": 552.215, "slots_per_s_full_model": 5.56, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 179.758, "encrypt": 65.497, "decrypt": 34.644, "provider_busy": 107.718, "provider_call_sum": 152.702, "rng": 19.147, "check": 12.85, "backend_wall": 166.424}, "he": {"groups": 1344, "encrypt_s": 201.206, "remote_s": 517.31, "decrypt_s": 106.425, "wall_s": 511.256, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.395, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.085, "provider_s": 0.346, "decrypt_s": 0.134, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.079, "provider_s": 1.822, "decrypt_s": 1.0, "exact_rows_ok": true}, "down": {"encrypt_s": 0.408, "provider_s": 1.681, "decrypt_s": 0.133, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 55.61, "provider": 8.62, "decrypt": 25.97}}, "process_s": 637.8, "during_measurement": {"provider_cpu_cores_busy": 0.21, "gpu0_util_pct_mean": 2.4, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 7.7, "gpu1_mem_mib_max": 8943.0}}
+=== gateway config ntt_dev_c4096_stream
+E2E {"slots": 4096, "wall_s": 693.286, "slots_per_s_full_model": 5.91, "self_checked_rows": 458752, "ms_per_slot_full_model": {"wall": 169.259, "encrypt": 71.666, "decrypt": 30.835, "provider_busy": 116.11, "provider_call_sum": 189.666, "rng": 18.431, "check": 11.231, "backend_wall": 157.535}, "he": {"groups": 1792, "encrypt_s": 293.544, "remote_s": 811.326, "decrypt_s": 126.299, "wall_s": 645.263, "passes": 112, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820435, "bytes_down_per_slot_full_model": 6952971, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 560, "hint_misses_streamed": 112}, "hint_cache_gib": 0.0}
+STAGES {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.083, "provider_s": 0.365, "decrypt_s": 0.145, "exact_rows_ok": true}, "o": {"encrypt_s": 0.075, "provider_s": 0.342, "decrypt_s": 0.128, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.077, "provider_s": 1.845, "decrypt_s": 1.17, "exact_rows_ok": true}, "down": {"encrypt_s": 0.404, "provider_s": 1.663, "decrypt_s": 0.125, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.21, "provider": 8.68, "decrypt": 23.34}}
+RESULT {"config": "ntt_dev_c4096_stream", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 4096, "pass_groups_widest": 16, "hint_build_s": 0.0, "init_s": 3.06, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}, "warmup_s": 70.59, "gateway_cpu_cores_busy": 1.55, "window": [1795299741.14, 1795300434.43], "e2e": {"slots": 4096, "wall_s": 693.286, "slots_per_s_full_model": 5.91, "self_checked_rows": 458752, "ms_per_slot_full_model": {"wall": 169.259, "encrypt": 71.666, "decrypt": 30.835, "provider_busy": 116.11, "provider_call_sum": 189.666, "rng": 18.431, "check": 11.231, "backend_wall": 157.535}, "he": {"groups": 1792, "encrypt_s": 293.544, "remote_s": 811.326, "decrypt_s": 126.299, "wall_s": 645.263, "passes": 112, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820435, "bytes_down_per_slot_full_model": 6952971, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 560, "hint_misses_streamed": 112}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.083, "provider_s": 0.365, "decrypt_s": 0.145, "exact_rows_ok": true}, "o": {"encrypt_s": 0.075, "provider_s": 0.342, "decrypt_s": 0.128, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.077, "provider_s": 1.845, "decrypt_s": 1.17, "exact_rows_ok": true}, "down": {"encrypt_s": 0.404, "provider_s": 1.663, "decrypt_s": 0.125, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.21, "provider": 8.68, "decrypt": 23.34}}, "process_s": 781.9, "during_measurement": {"provider_cpu_cores_busy": 0.23, "gpu0_util_pct_mean": 2.6, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 6.5, "gpu1_mem_mib_max": 9365.0}}
+=== gateway config ntt_dev_lru
+=== gateway config ntt_dev_v2
+=== gateway config dense_dev_c4096
+=== gateway config ntt_cpu:2
+E2E {"slots": 512, "wall_s": 8.601, "slots_per_s_full_model": 4.25, "self_checked_rows": 4096, "ms_per_slot_full_model": {"wall": 235.178, "encrypt": 31.91, "decrypt": 60.73, "provider_busy": 112.157, "provider_call_sum": 112.157, "rng": 19.5, "check": 28.745, "backend_wall": 205.543}, "he": {"groups": 16, "encrypt_s": 1.167, "remote_s": 4.104, "decrypt_s": 2.221, "wall_s": 7.517, "passes": 8, "max_inflight": 0}, "calls": 8, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820454, "bytes_down_per_slot_full_model": 6952983, "device_stats": null, "hint_cache_gib": null}
+STAGES {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.082, "provider_s": 0.371, "decrypt_s": 0.214, "exact_rows_ok": true}, "o": {"encrypt_s": 0.08, "provider_s": 0.381, "decrypt_s": 0.18, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.084, "provider_s": 1.823, "decrypt_s": 1.568, "exact_rows_ok": true}, "down": {"encrypt_s": 0.392, "provider_s": 1.688, "decrypt_s": 0.171, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.27, "provider": 8.58, "decrypt": 17.14}}
+RESULT {"config": "ntt_cpu:2", "encrypt": "ntt_pre", "device_arg": null, "engine": "cuda", "fastmm_engine": "cuda", "layers": 2, "scale_to_full_model": 14.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 2.48, "hint_gb_per_layer": 1.221, "env": {}, "warmup_s": 5.56, "gateway_cpu_cores_busy": 1.33, "window": [1795300609.63, 1795300618.23], "e2e": {"slots": 512, "wall_s": 8.601, "slots_per_s_full_model": 4.25, "self_checked_rows": 4096, "ms_per_slot_full_model": {"wall": 235.178, "encrypt": 31.91, "decrypt": 60.73, "provider_busy": 112.157, "provider_call_sum": 112.157, "rng": 19.5, "check": 28.745, "backend_wall": 205.543}, "he": {"groups": 16, "encrypt_s": 1.167, "remote_s": 4.104, "decrypt_s": 2.221, "wall_s": 7.517, "passes": 8, "max_inflight": 0}, "calls": 8, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820454, "bytes_down_per_slot_full_model": 6952983, "device_stats": null, "hint_cache_gib": null}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.082, "provider_s": 0.371, "decrypt_s": 0.214, "exact_rows_ok": true}, "o": {"encrypt_s": 0.08, "provider_s": 0.381, "decrypt_s": 0.18, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.084, "provider_s": 1.823, "decrypt_s": 1.568, "exact_rows_ok": true}, "down": {"encrypt_s": 0.392, "provider_s": 1.688, "decrypt_s": 0.171, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.27, "provider": 8.58, "decrypt": 17.14}}, "process_s": 30.9, "during_measurement": {"provider_cpu_cores_busy": 0.16, "gpu0_util_pct_mean": 2.6, "gpu0_mem_mib_max": 5257.0, "gpu1_util_pct_mean": 17.4, "gpu1_mem_mib_max": 835.0}}
+provider log tail:
+INFO provider pgw.core.triton_gemv: fused ring GEMV on cuda:0: tensor-core variant skipped (compute capability 7.5 < 8.0: Triton has no int8 tensor-core dot there); CUDA-core kernels
+INFO provider pgw.core.triton_gemv: fused ring GEMV timing gate on cuda:0 (rows: stream/digit ms) 2:1.071/1.060 -> stream variant up to 0 rows
+INFO provider pgw.core.triton_gemv: fused ring GEMV self-check passed on cuda:0 (up to 1 rows; 4 table rules; stream variant up to 0 rows)
+INFO provider uvicorn.error: Started server process [1792]
+INFO provider uvicorn.error: Waiting for application startup.
+INFO provider pgw.service.app: compute service ready: 1 model(s), devices=['cuda:0'], startup 0.01s
+INFO provider uvicorn.error: Application startup complete.
+INFO provider uvicorn.error: Uvicorn running on http://127.0.0.1:53801 (Press CTRL+C to quit)
+INFO provider pgw.service.app: compute service draining: no new requests admitted
+INFO provider pgw.service.server: shutdown requested; draining
+INFO provider uvicorn.error: Shutting down
+INFO provider uvicorn.error: Waiting for application shutdown.
+INFO provider pgw.service.batcher: batch scheduler stopped (drain=True, batches=0, mean_rows=0.0)
+INFO provider pgw.service.app: compute service stopped
+INFO provider uvicorn.error: Application shutdown complete.
+INFO provider uvicorn.error: Finished server process [1792]
+
+SUMMARY {"preset": "qwen2.5-7b", "ring": "K32A12C27", "rank": 16, "slots": 3072, "groups_per_call": 4, "inflight": 2, "wire_v2": false, "host_cpus": 4, "configs": [{"config": "ntt_dev", "error": "exit 1"}, {"config": "dense_dev", "error": "exit 1"}, {"config": "ntt_dev_c4096", "error": "exit 1"}, {"config": "ntt_dev_stream", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 3.04, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}, "warmup_s": 70.54, "gateway_cpu_cores_busy": 1.54, "window": [1795298466.25, 1795299015.71], "e2e": {"slots": 3072, "wall_s": 549.459, "slots_per_s_full_model": 5.59, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 178.86, "encrypt": 65.693, "decrypt": 32.007, "provider_busy": 109.361, "provider_call_sum": 155.813, "rng": 19.04, "check": 12.819, "backend_wall": 165.54}, "he": {"groups": 1344, "encrypt_s": 201.809, "remote_s": 526.481, "decrypt_s": 98.326, "wall_s": 508.539, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.377, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.082, "provider_s": 0.354, "decrypt_s": 0.13, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.078, "provider_s": 1.799, "decrypt_s": 0.895, "exact_rows_ok": true}, "down": {"encrypt_s": 0.39, "provider_s": 1.637, "decrypt_s": 0.104, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.66, "provider": 8.78, "decrypt": 28.79}}, "process_s": 637.2, "during_measurement": {"provider_cpu_cores_busy": 0.22, "gpu0_util_pct_mean": 2.5, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 7.4, "gpu1_mem_mib_max": 8945.0}}, {"config": "ntt_dev_stream_noprefetch", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 3.02, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0", "PGW_HEMASK_HINT_PREFETCH": "0"}, "warmup_s": 68.44, "gateway_cpu_cores_busy": 1.52, "window": [1795299101.09, 1795299653.31], "e2e": {"slots": 3072, "wall_s": 552.215, "slots_per_s_full_model": 5.56, "self_checked_rows": 344064, "ms_per_slot_full_model": {"wall": 179.758, "encrypt": 65.497, "decrypt": 34.644, "provider_busy": 107.718, "provider_call_sum": 152.702, "rng": 19.147, "check": 12.85, "backend_wall": 166.424}, "he": {"groups": 1344, "encrypt_s": 201.206, "remote_s": 517.31, "decrypt_s": 106.425, "wall_s": 511.256, "passes": 224, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820441, "bytes_down_per_slot_full_model": 6952975, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 504, "hint_misses_streamed": 224}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.085, "provider_s": 0.395, "decrypt_s": 0.141, "exact_rows_ok": true}, "o": {"encrypt_s": 0.085, "provider_s": 0.346, "decrypt_s": 0.134, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.079, "provider_s": 1.822, "decrypt_s": 1.0, "exact_rows_ok": true}, "down": {"encrypt_s": 0.408, "provider_s": 1.681, "decrypt_s": 0.133, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 55.61, "provider": 8.62, "decrypt": 25.97}}, "process_s": 637.8, "during_measurement": {"provider_cpu_cores_busy": 0.21, "gpu0_util_pct_mean": 2.4, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 7.7, "gpu1_mem_mib_max": 8943.0}}, {"config": "ntt_dev_c4096_stream", "encrypt": "ntt_pre", "device_arg": "auto", "engine": "device:cuda", "fastmm_engine": "cuda", "layers": 28, "scale_to_full_model": 1.0, "chunk_slots": 4096, "pass_groups_widest": 16, "hint_build_s": 0.0, "init_s": 3.06, "hint_gb_per_layer": 1.221, "env": {"PGW_HEMASK_GPU_HINT_MB": "0"}, "warmup_s": 70.59, "gateway_cpu_cores_busy": 1.55, "window": [1795299741.14, 1795300434.43], "e2e": {"slots": 4096, "wall_s": 693.286, "slots_per_s_full_model": 5.91, "self_checked_rows": 458752, "ms_per_slot_full_model": {"wall": 169.259, "encrypt": 71.666, "decrypt": 30.835, "provider_busy": 116.11, "provider_call_sum": 189.666, "rng": 18.431, "check": 11.231, "backend_wall": 157.535}, "he": {"groups": 1792, "encrypt_s": 293.544, "remote_s": 811.326, "decrypt_s": 126.299, "wall_s": 645.263, "passes": 112, "max_inflight": 1}, "calls": 448, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820435, "bytes_down_per_slot_full_model": 6952971, "device_stats": {"hint_uploads": 0, "hint_streamed_blocks": 560, "hint_misses_streamed": 112}, "hint_cache_gib": 0.0}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.083, "provider_s": 0.365, "decrypt_s": 0.145, "exact_rows_ok": true}, "o": {"encrypt_s": 0.075, "provider_s": 0.342, "decrypt_s": 0.128, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.077, "provider_s": 1.845, "decrypt_s": 1.17, "exact_rows_ok": true}, "down": {"encrypt_s": 0.404, "provider_s": 1.663, "decrypt_s": 0.125, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.21, "provider": 8.68, "decrypt": 23.34}}, "process_s": 781.9, "during_measurement": {"provider_cpu_cores_busy": 0.23, "gpu0_util_pct_mean": 2.6, "gpu0_mem_mib_max": 5255.0, "gpu1_util_pct_mean": 6.5, "gpu1_mem_mib_max": 9365.0}}, {"config": "ntt_dev_lru", "error": "exit 1"}, {"config": "ntt_dev_v2", "error": "exit 1"}, {"config": "dense_dev_c4096", "error": "exit 1"}, {"config": "ntt_cpu:2", "encrypt": "ntt_pre", "device_arg": null, "engine": "cuda", "fastmm_engine": "cuda", "layers": 2, "scale_to_full_model": 14.0, "chunk_slots": 1536, "pass_groups_widest": 13, "hint_build_s": 0.0, "init_s": 2.48, "hint_gb_per_layer": 1.221, "env": {}, "warmup_s": 5.56, "gateway_cpu_cores_busy": 1.33, "window": [1795300609.63, 1795300618.23], "e2e": {"slots": 512, "wall_s": 8.601, "slots_per_s_full_model": 4.25, "self_checked_rows": 4096, "ms_per_slot_full_model": {"wall": 235.178, "encrypt": 31.91, "decrypt": 60.73, "provider_busy": 112.157, "provider_call_sum": 112.157, "rng": 19.5, "check": 28.745, "backend_wall": 205.543}, "he": {"groups": 16, "encrypt_s": 1.167, "remote_s": 4.104, "decrypt_s": 2.221, "wall_s": 7.517, "passes": 8, "max_inflight": 0}, "calls": 8, "wire_v2_calls": 0, "bytes_up_per_slot_full_model": 5820454, "bytes_down_per_slot_full_model": 6952983, "device_stats": null, "hint_cache_gib": null}, "stages": {"rows": 1024, "per_linear_layer0": {"qkv": {"encrypt_s": 0.082, "provider_s": 0.371, "decrypt_s": 0.214, "exact_rows_ok": true}, "o": {"encrypt_s": 0.08, "provider_s": 0.381, "decrypt_s": 0.18, "exact_rows_ok": true}, "gate_up": {"encrypt_s": 0.084, "provider_s": 1.823, "decrypt_s": 1.568, "exact_rows_ok": true}, "down": {"encrypt_s": 0.392, "provider_s": 1.688, "decrypt_s": 0.171, "exact_rows_ok": true}}, "exact": true, "slots_per_s_full_model": {"encrypt": 57.27, "provider": 8.58, "decrypt": 17.14}}, "process_s": 30.9, "during_measurement": {"provider_cpu_cores_busy": 0.16, "gpu0_util_pct_mean": 2.6, "gpu0_mem_mib_max": 5257.0, "gpu1_util_pct_mean": 17.4, "gpu1_mem_mib_max": 835.0}}], "provider": {"pid": 1792, "device": "cuda", "gpu": "Tesla T4", "ready_s": 18.5}, "hint_disk_read": {"file_gb": 0.93, "read_gb": 0.93, "gb_per_s": 4.64, "rc": 0, "dd": ["931135616 bytes (931 MB, 888 MiB) copied, 0.194471 s, 4.8 GB/s"]}}
+
+---stderr---
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 8.0 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 490, in decrypt_into
+    sel = v.t().index_select(0, vidx)  # (valid slots, nb): slot-major, as the store wants
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 74.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 6.81 MiB is free. Including non-PyTorch memory, this process has 14.55 GiB memory in use. Of the allocated memory 13.76 GiB is allocated by PyTorch, and 656.12 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 8.7 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 482, in decrypt_into
+    part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 106, in int_mm
+    out = torch._int_mm(a, b.t())  # pragma: no cover - GPU only
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 222.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 156.81 MiB is free. Including non-PyTorch memory, this process has 14.40 GiB memory in use. Of the allocated memory 13.55 GiB is allocated by PyTorch, and 722.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 9.1 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 482, in decrypt_into
+    part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 106, in int_mm
+    out = torch._int_mm(a, b.t())  # pragma: no cover - GPU only
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 222.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 210.81 MiB is free. Including non-PyTorch memory, this process has 14.35 GiB memory in use. Of the allocated memory 13.59 GiB is allocated by PyTorch, and 628.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 0.0 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 0.0 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 0.0 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 9.1 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 490, in decrypt_into
+    sel = v.t().index_select(0, vidx)  # (valid slots, nb): slot-major, as the store wants
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 74.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 46.81 MiB is free. Including non-PyTorch memory, this process has 14.51 GiB memory in use. Of the allocated memory 13.95 GiB is allocated by PyTorch, and 425.87 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.client: maskgen wire v2 available for 112/112 linears (formats up/down bits [(53, 35), (56, 35)]; worst noise bound 2^21.89 < 2^22)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 9.1 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+INFO gateway pgw.hemask.client: maskgen: the service speaks wire v2; using it for 112 linears
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 482, in decrypt_into
+    part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 106, in int_mm
+    out = torch._int_mm(a, b.t())  # pragma: no cover - GPU only
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 222.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 210.81 MiB is free. Including non-PyTorch memory, this process has 14.35 GiB memory in use. Of the allocated memory 13.59 GiB is allocated by PyTorch, and 628.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.devmm: encrypted mask factory: device engine on cuda passed its self-test (K32, rank 16)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on device:cuda (hint cache 8.7 GiB)
+INFO gateway pgw.factory.streaming: weight streamer: 112/112 linears resident (6223.0 MiB of 6223.0 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 112 linears, 5.56 MB/slot
+Traceback (most recent call last):
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 509, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 429, in main
+    res = gateway(args)
+  File "/tmp/pgwsrc/pgw/benchmarks/he_e2e_bench.py", line 221, in gateway
+    for _ in gen.generate(new_seed(), min(args.warmup_slots, slots), checks=2):  # uploads, compiles, v2 switch
+             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 666, in generate
+    inflight.append(launch(kern, lid, w, task))
+                    ~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 587, in launch
+    wr = kern.matmul(r, self.ring)
+  File "/tmp/pgwsrc/pgw/src/pgw/factory/generator.py", line 156, in matmul
+    out: torch.Tensor = self.backend.matmul(self.linear, r)
+                        ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 486, in matmul
+    flush()
+    ~~~~~^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 452, in flush
+    self._decrypt_into(linear, take, out, m)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/backend.py", line 333, in _decrypt_into
+    self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 482, in decrypt_into
+    part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
+           ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/pgwsrc/pgw/src/pgw/hemask/devmm.py", line 106, in int_mm
+    out = torch._int_mm(a, b.t())  # pragma: no cover - GPU only
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 222.00 MiB. GPU 0 has a total capacity of 14.56 GiB of which 156.81 MiB is free. Including non-PyTorch memory, this process has 14.40 GiB memory in use. Of the allocated memory 13.55 GiB is allocated by PyTorch, and 722.62 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)
+WARNING gateway pgw.wire.client: compute service endpoint http://127.0.0.1:53801 is plaintext http:// (development only)
+INFO gateway pgw.hemask.backend: encrypted mask factory: encryption/decryption on cuda
+INFO gateway pgw.factory.streaming: weight streamer: 8/8 linears resident (444.5 MiB of 444.5 MiB) on cuda
+INFO gateway pgw.factory.generator: mask generator for qwen2.5-7b-synthetic (000000000000) ring K32A12C27 on cuda/cuda_int8, 8 linears, 0.40 MB/slot

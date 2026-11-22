@@ -28,16 +28,23 @@ Privacy: this is customer-side work only. The provider still receives exactly th
 (``A s``, ``H S``, masks, noise) are zeroed after use like their CPU counterparts.
 
 Environment: ``PGW_HEMASK_GPU_HINT_MB`` caps the hint cache (MiB; ``auto`` = 70% of the free device
-memory at start-up minus 1 GiB; ``0`` streams every pass).
+memory at start-up minus 1 GiB; ``0`` streams every pass). ``PGW_HEMASK_GPU_HINT_STALE_S`` (default 600)
+protects hints used that recently from eviction (``0``: plain LRU). ``PGW_HEMASK_HINT_PREFETCH=0`` turns
+off the double-buffered hint stream (next block copied on a helper thread while the device works).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import math
 import os
 import threading
+import time
 import warnings
 from collections import OrderedDict
+from collections.abc import Generator, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 import numpy as np
@@ -125,39 +132,106 @@ def combine(part: torch.Tensor, offset: torch.Tensor, first_byte: int) -> torch.
         if shift:
             term <<= shift
         acc += term
+        term.zero_()  # partial products of the secret (H S or A s planes)
         del term
-    acc += offset.view(1, cols) * _signed(weight)
+    bias = offset.view(1, cols) * _signed(weight)
+    acc += bias
+    bias.zero_()  # column sums of the secret
     return acc
 
 
-class _HintCache:
-    """Device copies of hints, least recently used first out, within ``budget`` bytes."""
+def _stale_s() -> float:
+    raw = os.environ.get("PGW_HEMASK_GPU_HINT_STALE_S", "").strip()
+    try:
+        return max(0.0, float(raw)) if raw else 600.0
+    except ValueError:
+        return 600.0
 
-    def __init__(self, budget: int):
+
+class _HintCache:
+    """Device copies of hints within ``budget`` bytes.
+
+    The factory reads every linear's hint once per pass, in the same order, so the access pattern is a
+    cycle over all hints. When they do not all fit (7B: 34 GB of hints against a 16 GB GPU), least
+    recently used eviction evicts each hint just before it is needed again: every access misses and
+    re-uploads the whole hint. So entries used within the last ``stale_s`` seconds
+    (``PGW_HEMASK_GPU_HINT_STALE_S``, default 600) are never evicted: a hint that does not fit is
+    streamed instead, the resident ones keep hitting, and hints of a pack or ring that is no longer
+    generated make room once they go stale (least recently used first). ``stale_s = 0`` is plain LRU.
+    Which hints are resident never changes a result (cached and streamed passes compute the same bits).
+    """
+
+    def __init__(self, budget: int, stale_s: float | None = None):
         self.budget = max(0, int(budget))
         self.used = 0
+        self.stale_s = _stale_s() if stale_s is None else max(0.0, float(stale_s))
         self._d: OrderedDict[str, torch.Tensor] = OrderedDict()
+        self._last: dict[str, float] = {}
+
+    @staticmethod
+    def _size(t: torch.Tensor) -> int:
+        return t.numel() * t.element_size()
 
     def get(self, key: str) -> torch.Tensor | None:
         t = self._d.get(key)
         if t is not None:
             self._d.move_to_end(key)
+            self._last[key] = time.monotonic()
         return t
 
-    def put(self, key: str, t: torch.Tensor) -> bool:
-        size = t.numel() * t.element_size()
+    def _evictable(self, now: float) -> list[str]:
+        """Keys that may be evicted, least recently used first."""
+        return [k for k in self._d if now - self._last.get(k, -math.inf) >= self.stale_s]
+
+    def fits(self, size: int) -> bool:
+        """Whether ``put`` of ``size`` bytes would succeed (without evicting anything yet)."""
         if size > self.budget:
             return False
-        while self.used + size > self.budget and self._d:
-            _, old = self._d.popitem(last=False)
-            self.used -= old.numel() * old.element_size()
+        if self.used + size <= self.budget:
+            return True
+        free = self.budget - self.used + sum(self._size(self._d[k]) for k in self._evictable(time.monotonic()))
+        return size <= free
+
+    def put(self, key: str, t: torch.Tensor) -> bool:
+        size = self._size(t)
+        if not self.fits(size):
+            return False
+        now = time.monotonic()
+        for k in self._evictable(now):
+            if self.used + size <= self.budget:
+                break
+            self.used -= self._size(self._d.pop(k))
+            self._last.pop(k, None)
         self._d[key] = t
+        self._last[key] = now
         self.used += size
         return True
 
+    def shrink(self, nbytes: int) -> int:
+        """Lower the budget by ``nbytes`` (at least to what is resident minus ``nbytes``) and drop the most
+        recently cached hints until the rest fits, stale or not. Returns the bytes released."""
+        self.budget = max(0, min(self.budget, self.used) - max(0, int(nbytes)))
+        freed = 0
+        while self._d and self.used > self.budget:
+            k, t = self._d.popitem(last=True)
+            self._last.pop(k, None)
+            self.used -= self._size(t)
+            freed += self._size(t)
+        return freed
+
     def clear(self) -> None:
         self._d.clear()
+        self._last.clear()
         self.used = 0
+
+
+def _prefetch_enabled() -> bool:
+    """``PGW_HEMASK_HINT_PREFETCH`` (default on): streamed hint blocks are copied ahead on a helper thread."""
+    return os.environ.get("PGW_HEMASK_HINT_PREFETCH", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+#: Bytes of cached hints dropped per out-of-memory retry of a decryption pass.
+_OOM_SHRINK = 2 << 30
 
 
 def _auto_budget(dev: torch.device) -> int:
@@ -191,6 +265,9 @@ class DeviceHE:
         self.cache = _HintCache(_auto_budget(self.dev) if hint_budget is None else hint_budget)
         self._stage: torch.Tensor | None = None  # pinned staging buffer for streamed hint blocks
         self._stage_ev: Any = None
+        self._stage2: list[torch.Tensor] | None = None  # two staging buffers of the prefetching hint stream
+        self._stage2_ev: list[Any] = [None, None]
+        self._prefetch: ThreadPoolExecutor | None = None
         self.stats = {"hint_uploads": 0, "hint_streamed_blocks": 0}
 
     # ---- helpers ---------------------------------------------------------------------------------
@@ -224,12 +301,65 @@ class DeviceHE:
         self.stats["hint_streamed_blocks"] += 1  # pragma: no cover - GPU only
         return out  # pragma: no cover - GPU only
 
+    def _streamed_blocks(self, hint: np.ndarray, block: int) -> Generator[tuple[int, int, torch.Tensor], None, None]:
+        """``(r0, rows, device copy of hint[r0:r0 + rows])`` for the hint's row blocks, in order.
+
+        Two (pinned) staging buffers: while the device multiplies block ``i``, a helper thread copies block
+        ``i + 1`` out of the hint (a memory map, so this is where the disk reads of a hint larger than RAM
+        happen). The one-buffer path did the host copy, the upload and the product one after another. A
+        buffer is refilled only after its previous upload has completed (CUDA event). Same bytes reach the
+        device either way, so decryption gives the same bits.
+        """
+        m, npl, dim = hint.shape
+        cuda = self.dev.type == "cuda"
+        size = min(block, m) * npl * dim
+        if self._stage2 is None or self._stage2[0].numel() < size:
+            self._stage2 = [torch.empty(size, dtype=torch.int8, pin_memory=cuda) for _ in range(2)]
+            self._stage2_ev = [None, None]
+        bufs, evs = self._stage2, self._stage2_ev
+        if self._prefetch is None:
+            self._prefetch = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-hint")
+        starts = list(range(0, m, block))
+
+        def fill(i: int) -> torch.Tensor:
+            r0 = starts[i]
+            nb = min(block, m - r0)
+            ev = evs[i % 2]
+            if ev is not None:  # pragma: no cover - GPU only
+                ev.synchronize()  # the upload that last read this buffer has finished
+            dst = bufs[i % 2][:nb * npl * dim].view(nb, npl, dim)
+            np.copyto(dst.numpy(), hint[r0:r0 + nb])
+            return dst
+
+        fut: Future[torch.Tensor] | None = self._prefetch.submit(fill, 0)
+        try:
+            for i, r0 in enumerate(starts):
+                assert fut is not None
+                host = fut.result()
+                fut = None
+                if cuda:  # pragma: no cover - GPU only
+                    dev_blk = host.to(self.dev, non_blocking=True)
+                    ev = torch.cuda.Event()  # type: ignore[no-untyped-call]
+                    ev.record()
+                    evs[i % 2] = ev
+                else:
+                    dev_blk = host  # CPU tensors (tests): the caller is done with it before the next fill
+                if i + 1 < len(starts):
+                    fut = self._prefetch.submit(fill, i + 1)
+                self.stats["hint_streamed_blocks"] += 1
+                yield r0, int(host.shape[0]), dev_blk
+        finally:
+            if fut is not None:
+                with contextlib.suppress(Exception):
+                    fut.result()  # never leave a copy into the staging buffer running past this pass
+
     def hint_on_device(self, key: str, hint: np.ndarray) -> torch.Tensor | None:
         """The device copy of ``hint`` (uploaded on first use), or ``None`` when it does not fit the budget."""
         t = self.cache.get(key)
         if t is not None:
             return t
-        if hint.nbytes > self.cache.budget:
+        if not self.cache.fits(hint.nbytes):  # streamed: uploading it would evict a hint still in use
+            self.stats["hint_misses_streamed"] = self.stats.get("hint_misses_streamed", 0) + 1
             return None
         try:
             t = torch.empty(hint.shape, dtype=torch.int8, device=self.dev)
@@ -326,7 +456,31 @@ class DeviceHE:
 
         ``items`` are ``(y, cts, s0)`` as in :meth:`pgw.hemask.backend.HEMaskBackend._decrypt_into`;
         ``hint`` holds byte planes ``1 .. P`` of ``H mod 2^q`` (byte 0 is not needed).
+
+        When the device runs out of memory for the pass itself (the hint cache took the memory the pass
+        workspace needs: 7B hints on a 16 GB T4), cached hints are dropped (``_OOM_SHRINK`` bytes at a time,
+        the budget lowered with them) and the pass runs again from the start; it rewrites every output row,
+        so the result is the same bits. With no cached hint left the error is raised.
         """
+        while True:
+            oom = False
+            try:
+                self._decrypt_pass(key, hint, items, out, delta_bits, k)
+                return
+            except torch.cuda.OutOfMemoryError:
+                if not self.cache.used:
+                    raise
+                oom = True
+            if oom:  # outside the handler: the failed pass's frames (and device tensors) are released
+                freed = self.cache.shrink(_OOM_SHRINK)
+                self.stats["pass_oom_shrinks"] = self.stats.get("pass_oom_shrinks", 0) + 1
+                log.warning("encrypted mask factory: device memory full during a decryption pass; dropped %.2f GiB "
+                            "of cached hints (cache now %.2f GiB) and retried", freed / 2**30, self.cache.used / 2**30)
+                if self.dev.type == "cuda":  # pragma: no cover - GPU only
+                    torch.cuda.empty_cache()
+
+    def _decrypt_pass(self, key: str, hint: np.ndarray, items: list[tuple[np.ndarray, list[MaskCiphertext], int]],
+                      out: np.ndarray, delta_bits: int, k: int) -> None:
         m, npl, dim = hint.shape
         smat_t = np.concatenate([ct.secret.T for it in items for ct in it[1]], axis=0)  # (cols, dim)
         ys = np.concatenate([np.ascontiguousarray(y, dtype=np.uint64) for y, _, _ in items], axis=1)
@@ -353,16 +507,31 @@ class DeviceHE:
             smat_t.fill(0)
             ys.fill(0)
         assert st is not None
-        vidx = torch.from_numpy(valid).to(self.dev)
-        dev_hint = self.hint_on_device(key, hint)
-        half = 1 << (delta_bits - 1)
-        kmask = (1 << k) - 1
-        block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
-        offset = st.sum(1, dtype=torch.int64) * 128
+        # Every device temporary holding secret-derived values (S column sums, H S partials, y - H S, the
+        # selected mask rows) is zeroed in the finally below, also when the pass fails part-way (device
+        # out of memory, retried by decrypt_into): freed device memory is handed to the next allocation.
+        offset: torch.Tensor | None = None
+        part: torch.Tensor | None = None
+        corr: torch.Tensor | None = None
+        v: torch.Tensor | None = None
+        sel: torch.Tensor | None = None
+        host: np.ndarray | None = None
+        blocks: Iterator[tuple[int, int, torch.Tensor]] | None = None
         try:
-            for r0 in range(0, m, block):
-                nb = min(block, m - r0)
-                h = dev_hint[r0:r0 + nb] if dev_hint is not None else self._upload_block(hint[r0:r0 + nb])
+            vidx = torch.from_numpy(valid).to(self.dev)
+            dev_hint = self.hint_on_device(key, hint)
+            half = 1 << (delta_bits - 1)
+            kmask = (1 << k) - 1
+            block = max(8, min(m, _BLOCK_BYTES // (npl * cols * 4)))
+            offset = st.sum(1, dtype=torch.int64) * 128
+            if dev_hint is not None:
+                blocks = ((r0, min(block, m - r0), dev_hint[r0:r0 + block]) for r0 in range(0, m, block))
+            elif _prefetch_enabled():
+                blocks = self._streamed_blocks(hint, block)
+            else:  # PGW_HEMASK_HINT_PREFETCH=0: one staging buffer, host copy / upload / product in turn
+                blocks = ((r0, min(block, m - r0), self._upload_block(hint[r0:r0 + block]))
+                          for r0 in range(0, m, block))
+            for r0, nb, h in blocks:
                 part = int_mm(h.reshape(nb * npl, dim), st).view(nb, npl, cols)
                 corr = combine(part, offset, 1)
                 part.zero_()
@@ -378,10 +547,13 @@ class DeviceHE:
                 out[dst, r0:r0 + nb] = host
                 host.fill(0)
         finally:
-            offset.zero_()
-            st.zero_()
-            yd.zero_()
-
+            if isinstance(blocks, Generator):
+                blocks.close()  # an error part-way: the next block's host copy is waited for, not left running
+            for t in (part, corr, v, sel, offset, st, yd):
+                if t is not None:
+                    t.zero_()
+            if host is not None:
+                host.fill(0)
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
 

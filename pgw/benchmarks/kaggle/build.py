@@ -614,6 +614,45 @@ JOBS: dict[str, dict] = {
                                      "--service-env PGW_SERVICE_GPU_WORKERS_PER_DEVICE=2"),
         )],
     ]},
+    # X3 (scale plan): end-to-end encrypted mask generation at Qwen2.5-7B shapes (all 28 layers, synthetic int8
+    # weights) on a T4x2: the real compute service on GPU 0, the real factory + HEMaskBackend + RemoteMulmod64
+    # over loopback HTTP on GPU 1 (benchmarks/he_e2e_bench.py). Every generated row passes the factory's
+    # Freivalds self-check. Configs: dense device passes (today's GPU-gateway default), ntt_pre encryption with
+    # device decryption (new), hint cache LRU vs keep-in-use, streamed hints, 4096-slot chunks, ntt_pre with CPU
+    # decryption (before). Plus isolated encrypt / provider / decrypt rates, GPU utilisation and CPU per process.
+    "pgw-x3-he-e2e-7b": {"machine_shape": "NvidiaTeslaT4x2",
+                         "exclude": ["scripts", "tests/gateway", "tests/e2e", "tests/maskstore", "tests/enroll",
+                                     "tests/console", "tests/engine", "tests/wire", "tests/native", "tests/core",
+                                     "tests/cli", "tests/docs", "tests/deploy", "tests/benchmarks", "tests/service",
+                                     "tests/modelpack", "tests/observability", "tests/vectors", "tests/factory",
+                                     "tests/moe", "tests/integration", "tests/hemask/test_wire_v2.py",
+                                     "tests/hemask/test_ntt.py", "tests/hemask/test_lwe.py", "benchmarks/kaggle",
+                                     "src/pgw/console", "benchmarks/provider_trip_bench.py",
+                                     "benchmarks/maskgen_provider_bench.py", "benchmarks/scale_provider_bench.py",
+                                     "docs", "research", "console", "SPEC.md", "INTERFACE_NOTES.md", "STATUS.md",
+                                     "benchmarks/RESULTS.md",
+                                     *[f"benchmarks/{b}.py" for b in (
+                                         "chat_speed_model", "e2e_local", "gateway_probe", "gpu_kernel_bench",
+                                         "gpu_validate", "hemask_ntt_bench", "lane_bench", "lm_head_bench",
+                                         "native_finish_bench", "native_prepare_bench", "native_store_bench",
+                                         "net_floor_bench", "profile_gateway", "profile_prefill", "profile_token",
+                                         "quant_quality", "quant_quality_gpu", "spec_cost_bench", "stack_bench",
+                                         "triton_gemv_bench", "wire_overhead_bench", "spec_accept_bench",
+                                         "trip_profile", "mask_pipeline_bench", "round_trip_model")]],
+                         "steps": [
+        BUILD_NATIVE,
+        {"kind": "shell", "name": "cpu_info",
+         "cmd": "lscpu | head -20; nproc; free -g; nvidia-smi; df -h /tmp /kaggle/working", "timeout": 60},
+        {"kind": "pytest", "name": "pytest_hemask_cuda",
+         "args": ["tests/hemask/test_devmm.py", "tests/hemask/test_mlwe_ring.py", "tests/hemask/test_factory_he.py",
+                  "-q", "-rs", "--timeout", "1200"], "timeout": 1800},
+        {"kind": "shell", "name": "he_e2e_7b",
+         "cmd": "python benchmarks/he_e2e_bench.py --preset qwen2.5-7b --layers 28 --slots 3072 --stage-rows 1024 "
+                "--configs ntt_dev dense_dev ntt_dev_c4096 ntt_dev_stream ntt_dev_stream_noprefetch ntt_dev_c4096_stream "
+                "ntt_dev_lru ntt_dev_v2 "
+                "dense_dev_c4096 ntt_cpu:2 --work /tmp/he_e2e --disk-read --budget-s 4200 --config-timeout-s 1500 "
+                "--json /kaggle/working/he_e2e_7b.json", "timeout": 6600},
+    ]},
     # S1: draft acceptance of exact strict speculation on chat prompts (benchmarks/spec_accept_bench.py): tokens
     # per masked pass for each R (greedy, simulated over every R) and the real Generator in strict mode (greedy and
     # sampled; tokens must equal plain decoding). Targets 0.5B (prompt lookup only: the demo today), 1.5B and 3B
@@ -754,6 +793,25 @@ JOBS: dict[str, dict] = {
          "timeout": 6600},
     ]},
 }
+
+# X3 run 2 (run 1 = pgw-x3-he-e2e-7b: provider round trip 8.7 slots/s with GPU 0 at 2.5% busy; resident-hint
+# configs ran out of device memory): resident hints after the out-of-memory fallback, and the provider's maskgen
+# item function called in the gateway process on GPU 0 (inproc: the service's work minus HTTP) to split the
+# transport from the GPU work; wire v2; LRU vs keep-in-use. 1536 slots per config (one chunk per linear).
+JOBS["pgw-x3-he-e2e-7b-r2"] = {"machine_shape": "NvidiaTeslaT4x2",
+                               "exclude": JOBS["pgw-x3-he-e2e-7b"]["exclude"],
+                               "steps": [
+    BUILD_NATIVE,
+    {"kind": "shell", "name": "cpu_info", "cmd": "nproc; free -g; nvidia-smi", "timeout": 60},
+    {"kind": "pytest", "name": "pytest_hemask_cuda",
+     "args": ["tests/hemask/test_devmm.py", "tests/hemask/test_mlwe_ring.py", "tests/hemask/test_factory_he.py",
+              "-q", "-rs", "--timeout", "1200"], "timeout": 1800},
+    {"kind": "shell", "name": "he_e2e_7b",
+     "cmd": "python benchmarks/he_e2e_bench.py --preset qwen2.5-7b --layers 28 --slots 1536 --stage-rows 1024 "
+            "--configs ntt_dev ntt_dev_inproc dense_dev dense_dev_inproc ntt_dev_v2 ntt_dev_lru "
+            "--work /tmp/he_e2e --budget-s 4000 --config-timeout-s 1200 "
+            "--json /kaggle/working/he_e2e_7b.json", "timeout": 6000},
+]}
 
 
 def source_tarball(exclude: tuple[str, ...] = (), include_top: tuple[str, ...] = ()) -> bytes:

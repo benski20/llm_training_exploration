@@ -71,3 +71,22 @@ def test_cli(capsys: pytest.CaptureFixture[str]) -> None:
     out = json.loads(capsys.readouterr().out)
     assert {r["model"] for r in out} == set(ss.MODELS)
     assert ss.main(["--model", "mixtral-8x22b", "--markdown", "--encrypted"]) == 0
+
+
+def test_he_e2e_rates_scale_by_stage_work() -> None:
+    meas = {"stages": {"encrypt": 100.0, "provider": 200.0, "decrypt": 50.0}, "pipeline": 30.0,
+            "hint_disk_gb_per_s": 2.0}
+    r7 = ss.he_e2e_rates(ss.MODELS["qwen2.5-7b"], measured=meas)
+    assert r7["he_pair_overlapped_slots_per_s"].value == pytest.approx(50.0)
+    assert r7["he_pair_serial_slots_per_s"].value == pytest.approx(1 / (1 / 100 + 1 / 200 + 1 / 50))
+    assert r7["he_pair_pipeline_slots_per_s"].kind == "measured"
+    # 7B hint 34.2 GB read once per 6-group pass: ~22 MB per slot
+    assert r7["he_hint_read_per_slot"].value == pytest.approx(34.17e3 / (256 * 6), rel=0.01)
+    assert r7["he_hint_disk_bound_slots_per_s"].value == pytest.approx(
+        2e9 / (r7["he_hint_read_per_slot"].value * 1e6))
+    r70 = ss.he_e2e_rates(ss.MODELS["llama-3-70b"], measured=meas)
+    assert r70["he_pair_provider_slots_per_s"].kind == "estimate"
+    assert r70["he_pair_provider_slots_per_s"].value < r7["he_pair_provider_slots_per_s"].value / 8
+    assert "he_pair_pipeline_slots_per_s" not in r70
+    rep = ss.size(ss.MODELS["llama-3-70b"], tokens_per_s=1000.0, encrypted=True)
+    assert rep.figures["he_t4x2_pairs_overlapped"].value > 0

@@ -6,7 +6,7 @@ import datetime as dt
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -91,3 +91,43 @@ def test_watch_client_cert_reloads_on_change(tmp_path: Path, monkeypatch: pytest
     finally:
         stop.set()
         t.join(5)
+
+
+@pytest.mark.parametrize("v2", [False, True])
+def test_he_wire_v2_setting_plans_v2_from_the_hint_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                         v2: bool) -> None:
+    """``he_wire_v2`` (default off) hands the HE parameters and the customer's own hint-store row norms to the
+    maskgen client, which plans the per-linear v2 formats from them; off, the client speaks v1 only."""
+    import pgw.factory.runtime as rt
+    import pgw.hemask.backend as hb
+    import pgw.hemask.client as hc
+
+    assert FactorySettings(pack_path=tmp_path).he_wire_v2 is False
+    seen: dict[str, Any] = {}
+
+    class _Hints:
+        nbytes = 0
+        meta: ClassVar[dict[str, Any]] = {"row_norms": {"0.qkv": 1000.0}}
+
+    class _Remote:
+        def __init__(self, client: Any, *a: Any, **k: Any):
+            seen.update(k)
+            client.close()
+
+    class _Pack:
+        fingerprint = "ab" * 32
+        short_fingerprint = "abab"
+
+        def linear_specs(self) -> list[Any]:
+            return []
+
+    monkeypatch.setattr(hb.HintStore, "open_or_build", classmethod(lambda cls, *a, **k: _Hints()))
+    monkeypatch.setattr(hc, "RemoteMulmod64", _Remote)
+    monkeypatch.setattr(hb, "HEMaskBackend", lambda *a, **k: object())
+    s = FactorySettings(pack_path=tmp_path, he_service_url="http://127.0.0.1:1", he_hint_dir=tmp_path / "h",
+                        he_wire_v2=v2)
+    rt.build_he_backend(s, _Pack(), "K32A12C27")
+    if v2:
+        assert seen["row_norms"] == {"0.qkv": 1000.0} and seen["params"].k == 32 and seen["params"].q == 56
+    else:
+        assert "params" not in seen and "row_norms" not in seen
