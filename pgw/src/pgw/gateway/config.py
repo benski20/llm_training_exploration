@@ -44,7 +44,7 @@ SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
     "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
-    "draft_backend", "spec_pipeline_steps",
+    "draft_backend", "spec_pipeline_steps", "head_mode",
 })
 #: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
 #: (``spec_rows`` + ``spec_strict_passes``), so a deployment preset can never switch on the variable-row mode,
@@ -62,7 +62,6 @@ _MIN_ADMIN_TOKEN_LEN = 16
 #: while the field is listed, so a configuration can never ask for a mode (e.g. strict-pass
 #: speculation) that silently does not happen. The implementing package removes its entry.
 PENDING_SPEED_SETTINGS: dict[str, str] = {
-    "head_mode": "WP-B2 (provider int8 LM head)",
     "schedule": "WP-B4 (fused2 schedule)",
     "prefix_cache": "WP-B3 (prefix cache)",
 }
@@ -334,7 +333,14 @@ class GatewayModelConfig(BaseModel):
     )
     head_mode: Literal["gateway", "provider_int8"] = Field(
         "gateway", description="LM head: 'gateway' (default) = the exact float32 head on the gateway CPU; "
-        "'provider_int8' = an int8 head as one more masked linear on the service (a new reference)",
+        "'provider_int8' = the masked LM head (pgw.engine.masked_head): the head quantized per row to int8 as one "
+        "more masked linear '<num_layers>.lm_head' on the service (range check and Freivalds on every row, like "
+        "every linear; the service sees one more masked call per pass, of public shape). The gateway never loads "
+        "the float head. The pack fingerprint used with the service and the mask store is then derived from the "
+        "verified pack's (SHA-256('pgw/v1/masked-lm-head' || fingerprint)): the service must serve it "
+        "(masked_head = 'also' / 'only') and the factory make masks for it (masked_head = true). A new pinned "
+        "reference: logits are the int8 head's, not the float head's (the 'plain' dev mode with this setting is "
+        "its plaintext reference). Masked or plain mode only",
     )
     schedule: Literal["standard", "fused2"] = Field(
         "standard", description="Masked linear schedule per layer: 'standard' (default, 4 round trips: qkv, o, "
@@ -423,6 +429,8 @@ class GatewayModelConfig(BaseModel):
                              "GPU with draft_device instead")
         if self.lane != "off" and self.mode != "masked":
             raise ValueError(f"model {self.name!r}: lane needs masked mode")
+        if self.head_mode == "provider_int8" and self.mode == "float":
+            raise ValueError(f"model {self.name!r}: head_mode='provider_int8' needs masked (or plain) mode")
         return self
 
     @property

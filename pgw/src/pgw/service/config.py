@@ -72,6 +72,14 @@ class ServiceSettings(PGWSettings):
         "by_layer", description="How linears are spread over `devices` (contiguous layer ranges by bytes)"
     )
     backend: Literal["auto", "cuda_int8", "cpu_int8", "cpu_f64", "cpu_f32"] = "auto"
+    masked_head: Literal["off", "also", "only"] = Field(
+        "off", description="The LM head as a masked linear (opt-in; pgw.engine.masked_head): 'off' (default); 'also' "
+        "= every pack is also served under its derived masked-head fingerprint (SHA-256('pgw/v1/masked-lm-head' || "
+        "fingerprint)), the layers' kernels shared, plus one linear '<num_layers>.lm_head' of shape (vocab, hidden): "
+        "the pack's plain head (hash-checked) quantized per row to int8 by this service. 'only' = the derived entry "
+        "alone. The service sees one more masked call per pass, of public shape; gateways opt in with "
+        "head_mode = 'provider_int8'. Needs the pack's plain head tensor (lm_head, or embed_tokens when tied)",
+    )
     cache_float_weights: bool = Field(True, description="CPU float backends keep float weight copies")
     warmup: bool = Field(True, description="Run one dummy product per linear at startup")
     cuda_graphs: bool = Field(

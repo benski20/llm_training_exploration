@@ -223,7 +223,8 @@ def wait_idle(base_url: str, admin_token: str, model: str, *, quiet_s: float = 3
 
 
 def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]], max_tokens: int,
-                        float_threads: int | None = None, float_ops: str | None = None) -> dict[str, Any]:
+                        float_threads: int | None = None, float_ops: str | None = None,
+                        masked_head: bool = False) -> dict[str, Any]:
     """Greedy generation on the same pack with the plaintext reference backend (in this process).
 
     ``float_threads``: the pinned float formulation (``launch.py --float-threads``): the reference's torch float
@@ -231,6 +232,8 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
     thread-count-dependent kernels (CPU SDPA) the same way. ``None``: this process's default count.
     ``float_ops``: the gateway's float path (``"native"``: the pinned native formulation, ``PGW_FLOAT_OPS`` /
     the model setting ``float_ops``); ``None``: the model's default (``PGW_FLOAT_OPS`` or torch).
+    ``masked_head`` (``launch.py --masked-head``): the gateway's head_mode = "provider_int8", so the reference uses
+    the same int8 head (:mod:`pgw.engine.masked_head` on the plaintext backend), a new pinned reference.
     """
     import asyncio
 
@@ -240,7 +243,8 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
         prev = torch.get_num_threads()
         torch.set_num_threads(int(float_threads))
         try:
-            return plaintext_reference(pack_path, ring, messages, max_tokens, float_ops=float_ops)
+            return plaintext_reference(pack_path, ring, messages, max_tokens, float_ops=float_ops,
+                                       masked_head=masked_head)
         finally:
             torch.set_num_threads(prev)
 
@@ -249,10 +253,19 @@ def plaintext_reference(pack_path: str, ring: str, messages: list[dict[str, str]
     from pgw.modelpack import ModelPack
 
     async def _run() -> dict[str, Any]:
-        with ModelPack.open(pack_path, verify="fingerprint") as pack:
+        with ModelPack.open(pack_path, verify="fingerprint") as base:
+            pack: Any = base
+            if masked_head:
+                from pgw.engine.masked_head import MaskedHeadPack
+
+                pack = MaskedHeadPack(base, float_head=False)
             tok = ChatTokenizer.from_pack(pack)
             ids = tok.apply_chat_template(messages, add_generation_prompt=True)
             model = TransformerModel(pack, PlainBackend(pack, RingParams.from_name(ring)))
+            if masked_head:
+                from pgw.engine.masked_head import enable_masked_head
+
+                enable_masked_head(model)
             if float_ops:
                 model.set_float_ops(float_ops)
             gen = Generator(model, tok, max_batch=1)

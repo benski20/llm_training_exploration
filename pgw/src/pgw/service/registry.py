@@ -18,6 +18,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -68,6 +69,8 @@ class RegisteredModel:
         pack_path: Pack directory.
         placement: ``{layer: device string}``.
         loaded_at: Unix time of loading.
+        base_fingerprint: For the masked-LM-head entry of a pack (``masked_head``, :mod:`pgw.engine.masked_head`):
+            the base pack's fingerprint (``fingerprint`` is then the derived one). ``None`` for a plain entry.
     """
 
     name: str
@@ -78,6 +81,7 @@ class RegisteredModel:
     pack_path: Path | None = None
     placement: dict[int, str] = field(default_factory=dict)
     loaded_at: float = field(default_factory=time.time)
+    base_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         self._dims: dict[str, tuple[int, int]] = {s.id.key: (s.out_features, s.in_features) for s in self.specs}
@@ -96,6 +100,11 @@ class RegisteredModel:
     def device_bytes(self) -> int:
         """Device memory held by all kernels."""
         return sum(k.device_bytes for k in self.kernels.values())
+
+    @property
+    def masked_head(self) -> bool:
+        """This entry serves a pack with its LM head as a masked linear (derived fingerprint)."""
+        return self.base_fingerprint is not None
 
     def kernel(self, linear: str) -> ComputeKernel:
         """Kernel for ``linear``; raises :class:`ProtocolError` for an unknown linear id."""
@@ -167,6 +176,10 @@ class ModelRegistry:
         cuda_graph_buckets: Padded GEMM row counts with a graph.
         triton_gemv: CUDA kernels serve small ``K <= 32`` calls with the fused Triton ring GEMV once
             its device self-check passed (see :class:`ComputeKernel`).
+        masked_head: The masked LM head (opt-in, :mod:`pgw.engine.masked_head`): ``"off"`` (default);
+            ``"also"`` = every pack is served under its own fingerprint and, with the layers' kernels shared,
+            under the derived masked-head fingerprint with one more linear (the int8 head, derived here from
+            the pack's hash-checked plain head); ``"only"`` = the derived entry alone.
     """
 
     def __init__(
@@ -183,7 +196,11 @@ class ModelRegistry:
         cuda_graphs: bool = True,
         cuda_graph_buckets: Sequence[int] = GRAPH_BUCKETS,
         triton_gemv: bool = True,
+        masked_head: str = "off",
     ):
+        if masked_head not in ("off", "also", "only"):
+            raise ConfigError(f"unknown masked_head {masked_head!r}; use 'off', 'also' or 'only'")
+        self.masked_head = masked_head
         if placement not in ("single", "by_layer"):
             raise ConfigError(f"unknown placement {placement!r}; use 'single' or 'by_layer'")
         if verify not in ("full", "fingerprint"):
@@ -229,9 +246,11 @@ class ModelRegistry:
         try:
             fp = pack.fingerprint
             with self._lock:
-                if fp in self._models:
+                hit = self._models.get(fp) or next(
+                    (m for m in self._models.values() if m.base_fingerprint == fp), None)
+                if hit is not None:
                     log.warning("model pack %s (fp=%s) is already loaded; skipping", pack_path, short_fingerprint(fp))
-                    return self._models[fp]
+                    return hit
             ok = pack.supported_rings([RingParams.from_name(x) for x in self.rings])
             rings = tuple(r for r in self.rings if r in ok)
             if not rings:
@@ -255,17 +274,30 @@ class ModelRegistry:
                 name=pack.name, fingerprint=fp, specs=tuple(specs), kernels=kernels, rings=rings,
                 pack_path=Path(pack_path), placement=placement,
             )
+            head_entry = self._masked_head_entry(pack, entry) if self.masked_head != "off" else None
         finally:
             pack.close()
+        entries = [e for e in (entry if self.masked_head != "only" else None, head_entry) if e is not None]
         if self.warmup:
             ring = RingParams.from_name(entry.rings[0])
-            for k in entry.kernels.values():
-                k.warmup(ring, all_buckets=True)
+            seen: set[int] = set()
+            for e in entries:
+                for k in e.kernels.values():
+                    if id(k) not in seen:
+                        seen.add(id(k))
+                        k.warmup(ring, all_buckets=True)
         with self._lock:
-            existing = self._models.get(fp)
+            existing = self._models.get(entries[0].fingerprint)
             if existing is not None:  # lost a race with a concurrent load
                 return existing
-            self._models[fp] = entry
+            for e in entries:
+                self._models[e.fingerprint] = e
+        if head_entry is not None:
+            log.info("masked LM head for %s: served as fp=%s (%s, %d x %d int8, base fp=%s%s)", entry.name,
+                     head_entry.short_fingerprint, head_entry.specs[-1].id.key, head_entry.specs[-1].out_features,
+                     head_entry.specs[-1].in_features, entry.short_fingerprint,
+                     "; base fingerprint not served" if self.masked_head == "only" else "")
+        entry = entries[0]
         log.info(
             "loaded model %s fp=%s linears=%d rings=%s devices=%s backend=%s bytes=%d in %.2fs",
             entry.name, entry.short_fingerprint, len(entry.kernels), ",".join(entry.rings),
@@ -273,6 +305,37 @@ class ModelRegistry:
             entry.device_bytes, time.perf_counter() - t0,
         )
         return entry
+
+    def _masked_head_entry(self, pack: Any, entry: RegisteredModel) -> RegisteredModel:
+        """The masked-LM-head entry of ``pack``: the derived fingerprint, ``entry``'s kernels (shared, no copy) plus
+        one kernel for the int8 head, which this service derives from its own pack (the plain head tensor,
+        hash-checked against the manifest the fingerprint covers; :class:`pgw.engine.masked_head.MaskedHeadPack`).
+
+        Raises:
+            ConfigError: the pack has no plain head tensor (e.g. a linears-only export).
+        """
+        from pgw.engine.masked_head import MaskedHeadPack
+
+        hp = MaskedHeadPack(pack)
+        spec = hp.linear_specs()[-1]
+        try:
+            lw = hp.load_linear(spec.id)
+        except ConfigError as exc:
+            raise ConfigError(f"masked_head: cannot derive the int8 LM head of {pack.name}: {exc.message} (the "
+                              "service needs the pack's plain head tensor for it)") from exc
+        dev = entry.placement.get(spec.id.layer - 1) or str(self.devices[-1])
+        kern = ComputeKernel(spec, lw.w8, device=dev, backend=self.backend, cache_float=self.cache_float,
+                             cuda_graphs=self.cuda_graphs, graph_buckets=self.cuda_graph_buckets,
+                             triton_gemv=self.triton_gemv)
+        del lw
+        hp.release_head()
+        placement = dict(entry.placement)
+        placement[spec.id.layer] = dev
+        return RegisteredModel(
+            name=entry.name, fingerprint=hp.fingerprint, specs=(*entry.specs, spec),
+            kernels={**entry.kernels, spec.id.key: kern}, rings=entry.rings, pack_path=entry.pack_path,
+            placement=placement, base_fingerprint=entry.fingerprint,
+        )
 
     def register(self, entry: RegisteredModel) -> RegisteredModel:
         """Register an already-built entry (tests, programmatic use). Replaces nothing.
@@ -298,7 +361,11 @@ class ModelRegistry:
     def unload(self, fingerprint: str) -> None:
         """Remove a model (in-flight batches holding kernel references finish normally)."""
         with self._lock:
-            if self._models.pop(fingerprint, None) is None:
+            gone = self._models.pop(fingerprint, None)
+            derived = [fp for fp, m in self._models.items() if m.base_fingerprint == fingerprint]
+            for fp in derived:  # the masked-head entry shares the base pack's kernels
+                self._models.pop(fp, None)
+            if gone is None and not derived:
                 raise ModelNotFoundError(f"model {short_fingerprint(fingerprint)} is not loaded")
         log.info("unloaded model fp=%s", short_fingerprint(fingerprint))
 
@@ -373,8 +440,12 @@ class ModelRegistry:
     def device_summary(self) -> list[dict[str, object]]:
         """Per-device bytes and linear counts (``/readyz`` details, logs)."""
         acc: dict[str, dict[str, object]] = {str(d): {"device": str(d), "bytes": 0, "linears": 0} for d in self.devices}
+        seen: set[int] = set()
         for m in self.models():
             for k in m.kernels.values():
+                if id(k) in seen:  # shared by a pack's masked-head entry
+                    continue
+                seen.add(id(k))
                 e = acc.setdefault(str(k.device), {"device": str(k.device), "bytes": 0, "linears": 0})
                 e["bytes"] = int(e["bytes"]) + k.device_bytes  # type: ignore[call-overload]
                 e["linears"] = int(e["linears"]) + 1  # type: ignore[call-overload]

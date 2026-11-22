@@ -836,8 +836,10 @@ class TransformerModel:
     @property
     def supports_pad_rows(self) -> bool:
         """Speculation padding rows (``SequenceInput.pad_rows`` / ``fixed_item``) are available: the
-        standard layer and head (a :class:`Schedule` or :class:`HeadMode` hook has its own call layout)."""
-        return (self.schedule is None and self.head_mode is None
+        standard layer and head, or a :class:`HeadMode` hook that declares ``supports_pad_rows`` (its calls take
+        the same padding, e.g. the masked head); a :class:`Schedule` hook has its own call layout."""
+        head_ok = self.head_mode is None or bool(getattr(self.head_mode, "supports_pad_rows", False))
+        return (self.schedule is None and head_ok
                 and bool(getattr(self.backend, "supports_fixed_pad", True)))
 
     @property
@@ -1096,6 +1098,8 @@ class TransformerModel:
             c.advance(t.numel())
         if self.head_mode is None:
             return self._logits(seqs, st.hs)
+        if pads is not None:  # the head's calls take the pass's padding too (supports_pad_rows checked it)
+            return (yield from self._padded(self.head_mode.steps(self, seqs, st.hs), pads))
         return (yield from self.head_mode.steps(self, seqs, st.hs))
 
     def _embed(self, t: torch.Tensor) -> torch.Tensor:
@@ -1118,14 +1122,16 @@ class TransformerModel:
             raise ConfigError("padding rows need the standard layer and head (no schedule or head-mode hook)")
         return plan
 
-    def _padded(self, inner: PyGenerator[list[LinearCall], list[torch.Tensor], None],
-                pads: Sequence[tuple[int, bool]]) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
+    def _padded(self, inner: PyGenerator[list[LinearCall], list[torch.Tensor], Any],
+                pads: Sequence[tuple[int, bool]]) -> PyGenerator[list[LinearCall], list[torch.Tensor], Any]:
         """Run a layer's calls with speculation padding (``SequenceInput.pad_rows`` / ``fixed_item``).
 
         A remote call of a sequence with ``p`` padding rows out of ``T`` sends its ``T - p`` real rows plus
         ``meta[PAD_ROWS] = p`` (``p = T``: a ``DUMMY`` call of all its rows); its result gets ``p`` zero rows
         back, so the layer sees ``T`` rows. A local linear (computed on the gateway) gets every row unchanged,
-        so its work does not depend on ``p``. The layer's calls hold one call per sequence, in order.
+        so its work does not depend on ``p``. The layer's calls hold one call per sequence, in order. A head
+        hook's call of the last ``k`` rows takes ``min(p, k)`` padding rows the same way. Returns what ``inner``
+        returns.
         """
         is_local = getattr(self.backend, "local_linear", None)
         rows_ok = getattr(self.backend, "local_rows_ok", None)
@@ -1133,8 +1139,8 @@ class TransformerModel:
         while True:
             try:
                 calls = next(inner) if value is None else inner.send(value)
-            except StopIteration:
-                return
+            except StopIteration as stop:
+                return stop.value
             if len(calls) != len(pads):  # pragma: no cover - the standard layer yields one call per sequence
                 raise ShapeError(f"padded layer step has {len(calls)} calls for {len(pads)} sequences")
             local = bool(calls) and callable(is_local) and is_local(calls[0].id) and (

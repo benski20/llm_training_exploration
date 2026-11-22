@@ -368,6 +368,8 @@ class SetupController:
             "PGW_FACTORY_FIRST_SEGMENT_SLOTS": (os.environ.get("PGW_FACTORY_FIRST_SEGMENT_SLOTS")
                                                 or str(FACTORY_FIRST_SEGMENT_SLOTS)),
         }
+        if self._masked_head():  # head_mode = "provider_int8" preset: masks for the derived masked-head pack
+            env["PGW_FACTORY_MASKED_HEAD"] = "true"
         if files.get("ca"):
             env["PGW_FACTORY_HE_CA_FILE"] = files["ca"]
         if files.get("client_cert") and files.get("client_key"):
@@ -379,6 +381,20 @@ class SetupController:
                     "PGW_MASKSTORE_KEY_FILE": ms["key_file"], "PGW_MASKSTORE_COUNTER": "file",
                     "PGW_MASKSTORE_COUNTER_FILE": ms["counter_file"]})
         return env
+
+    def _masked_head(self) -> bool:
+        """The deployment presets the masked LM head (``head_mode = "provider_int8"`` in setup_model_options)."""
+        opts = self.settings.setup_model_options or {}
+        return str(opts.get("head_mode", "gateway")) == "provider_int8"
+
+    def _mask_fingerprint(self, model: dict[str, Any]) -> str:
+        """The fingerprint masks are made for: the pack's, or the derived masked-head one."""
+        fp = str(model["fingerprint"])
+        if self._masked_head():
+            from pgw.engine.masked_head import head_fingerprint
+
+            return head_fingerprint(fp)
+        return fp
 
     def _start_masks(self) -> None:
         """Hint build, then the supervised factory (idempotent)."""
@@ -416,7 +432,7 @@ class SetupController:
             return None
         n = 0
         for e in st.get("inventory") or []:
-            if isinstance(e, dict) and str(e.get("fingerprint", "")).startswith(model["fingerprint"][:12]):
+            if isinstance(e, dict) and str(e.get("fingerprint", "")).startswith(self._mask_fingerprint(model)[:12]):
                 n += int(e.get("slots_available", 0) or 0)
         return n
 

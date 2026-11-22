@@ -822,9 +822,8 @@ chats, a second stock wait (same `PGW_MODAL_SUSTAIN_MIN_STOCK`, at most 4 min, u
 and a 120 s window), so **$2.5-3.5, at most $3.9 at the 35 min TTL**; step 1 adds about $0.2 once (T4 $0.59/h
 + 8 cores + 32 GiB for about 10 min). Without the cache the gateway builds the hint on its own CPU (about 20 min, +$2.2).
 
-**Expected outcome (model, not measured).** The masked LM head is still library-only (`pgw.engine.masked_head`; not
-wired into the service, factory and runtime), so this run keeps the gateway's bfloat16 LM head on its CPU: 1.09 GB read
-per pass, about 15-30 ms on 16 threads, on top of 112 trips. With trips at 0.3-0.35 ms (H100 GEMV well under the T4's
+**Expected outcome (model, not measured).** Without `--masked-head` (below) this run keeps the gateway's bfloat16 LM
+head on its CPU: 1.09 GB read per pass, about 15-30 ms on 16 threads, on top of 112 trips. With trips at 0.3-0.35 ms (H100 GEMV well under the T4's
 0.57 ms service time) and about 0.15 ms of native gateway CPU per trip, a pass costs about 55-85 ms: plain decoding
 about 12-18 tok/s, R = 2 at about 1.6-1.85 tokens per pass about 20-30 tok/s. So 25 tok/s is plausible but not
 certain with the CPU head; the head is the first lever if it falls short.

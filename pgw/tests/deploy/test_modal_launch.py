@@ -751,3 +751,25 @@ def test_cpu_gateway_speculation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PGW_MODAL_GATEWAY_CPUS", "24")
     c = launch.colocated_cost_per_h("H100", "qwen2.5-7b-instruct")
     assert c["gpu"] == launch.GPU_PRICE_H["H100"] and c["gateway_cpus"] == 24.0
+
+
+def test_masked_head_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--masked-head``: the provider serves the derived fingerprint too, the factory makes its masks, the gateway
+    gets head_mode (via colocated.py); co-located only; off by default."""
+    for var in ("PGW_MODAL_PLACEMENT", "PGW_MODAL_GPU", "PGW_MODAL_MODEL", "PGW_MODAL_DRAFT"):
+        monkeypatch.delenv(var, raising=False)
+    launch = _load("launch")
+    a = launch.parse_args(["--e2e", "--placement", "colocated", "--gpu", "T4", "--masked-head"])
+    calls: list = []
+    monkeypatch.setattr(launch, "spawn_pair", lambda *x, **kw: calls.append(kw))
+    launch._spawner(a)({}, "colocated", 600, True)
+    genv, penv = calls[-1]["gateway_env"], calls[-1]["provider_env"]
+    assert penv["PGW_SERVICE_MASKED_HEAD"] == "also"
+    assert genv["PGW_MODAL_MASKED_HEAD"] == "1" and genv["PGW_FACTORY_MASKED_HEAD"] == "true"
+    off = launch.parse_args(["--e2e", "--placement", "colocated", "--gpu", "T4"])
+    assert not off.masked_head
+    launch._spawner(off)({}, "colocated", 600, True)
+    assert "PGW_SERVICE_MASKED_HEAD" not in calls[-1]["provider_env"]
+    assert "PGW_MODAL_MASKED_HEAD" not in calls[-1]["gateway_env"]
+    with pytest.raises(SystemExit):
+        launch.parse_args(["--placement", "tunnel", "--masked-head"])
