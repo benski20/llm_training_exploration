@@ -524,6 +524,12 @@ decode = streamed (n-1)/(t_last - t_first), three chats per phase):
 Run 3 (no extra flags beyond the factory cap): warm stream 29.9 ms per decoded token = 33.4 tokens/s after the first
 token, TTFT 0.41 s; warm 32-token chat 24.8 tokens/s wall through Modal's edge (24.8 on loopback).
 
+Tried for the prompt pass, not adopted: the provider's bucket CUDA graphs for the 41-row prompt items
+(`--provider-env PGW_SERVICE_CUDA_GRAPHS=true --provider-env "PGW_SERVICE_CUDA_GRAPH_BUCKETS=[32,64,128,256]"`;
+run 4, exact): the prompt pass's service wait stayed bimodal at about 200 or 400 ms per 24 trips (pass 375-578 ms,
+TTFT 0.39 s warm), so the time is not the eager kernels; the stream channel's handling of multi-row items is the
+next suspect (not done here).
+
 Run 2's warm stream: 30.3 ms per decoded token = 33.0 tokens/s after the first token, TTFT 0.46 s (warm chat
 wall 24.4 tokens/s through Modal's edge, 24.6 on loopback; run 1: 27.9 tokens/s streamed, 19.9 / 15.7 wall). With
 the yield, pausing the factory changes nothing measurable any more (base and paused phases overlap). The factory
