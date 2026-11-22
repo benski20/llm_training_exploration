@@ -447,7 +447,7 @@ class LaneManager:
                 return
             try:
                 y = handler.lane_compute_inline(fp, lin, rp, rows, body)
-            except BaseException as exc:  # noqa: BLE001 - handed to the lane thread as is
+            except BaseException as exc:
                 fut.set_exception(exc)
                 return
             if y is not None:

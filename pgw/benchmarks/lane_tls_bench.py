@@ -36,7 +36,6 @@ import argparse
 import json
 import os
 import secrets
-import socket
 import statistics
 import subprocess
 import sys
@@ -159,7 +158,6 @@ def _channel(mode: str, info: dict[str, Any], td: Path, timeout: float, spin_us:
 
 def _one_run(args: argparse.Namespace, mode: str, rows: int) -> dict[str, Any]:
     import numpy as np
-
     from wire_overhead_bench import _make_tls, _proc_stat
 
     with tempfile.TemporaryDirectory(prefix="pgwlt") as tds:

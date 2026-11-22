@@ -46,9 +46,8 @@ import struct
 import threading
 import time
 import uuid
-from typing import Any
-
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from pgw.core.errors import ProtocolError
