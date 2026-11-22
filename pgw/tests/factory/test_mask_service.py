@@ -65,6 +65,20 @@ def test_reference_matches_python_ints() -> None:
     assert ms.reference_uw(up, w, 32, P31).astype(np.int64).tolist() == want
 
 
+@pytest.mark.parametrize("ring", [RING_K32_A8, RING_K40_A12, RING_K48_A20], ids=lambda r: r.name)
+def test_vecmat_kernel_method_exact(ring: Any) -> None:
+    """The Freivalds precomputation on the factory's digit-plane kernel (the CUDA default) is exact."""
+    from pgw.factory.kernels import ring_vecmat
+
+    torch.manual_seed(1)
+    for m, n in ((52, 20), (37, 700), (300, 26)):
+        w = torch.randint(-128, 128, (m, n), dtype=torch.int8)
+        u = SeedExpander(b"\x05" * 32).ring_uniform((7, m), ring.k, "u", f"{m}x{n}")
+        want = ringmm_reference(u, w.t().contiguous(), ring.k).tolist()
+        assert ring_vecmat(u, w, ring, method="kernel").tolist() == want
+        assert ring_vecmat(u, w, ring, method="f64").tolist() == want
+
+
 def _corrupting(gen: MaskGenerator, *, what: str, linear_index: int = -1) -> list[Any]:
     """Make ``gen.generate`` corrupt one element of one linear's W r (or u W); returns the yielded items."""
     seen: list[Any] = []

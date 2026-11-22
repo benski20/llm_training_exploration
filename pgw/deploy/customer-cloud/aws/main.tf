@@ -25,7 +25,7 @@ locals {
   # Masks kept ready at the gateway: decoding at 30 tok/s plus prompt rows (factor 2.5, scaling plan section 6).
   target_slots    = ceil(var.mask_target_seconds * 30 * 2.5)
   low_water_slots = ceil(local.target_slots / 3)
-  segment_slots   = local.p.slot_mb > 15 ? 512 : 2048
+  segment_slots   = 2048 # per-segment fixed costs (check vectors, ~10 s at 72B on a T4) amortize over 2048 slots
   store_gb        = ceil(local.target_slots * local.p.slot_mb / 1000 * 1.3)
   gateway_data_gb = var.gateway_data_volume_gb > 0 ? var.gateway_data_volume_gb : (
   local.p.pack_gb * (local.same_host ? 2 : 1) + (local.supply == "cpu_encrypted" ? 2 * local.p.hint_gb : 0) + local.store_gb + 40)

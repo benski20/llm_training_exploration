@@ -52,11 +52,13 @@ throughput from 32B on (~$0.15). Not included: PrivateLink data processing ($0.0
 the endpoint), NAT data processing during setup (the public weights are downloaded once per VM: ~$1.5 at 32B,
 ~$3.5 at 72B), the provider's compute charges.
 
-**Mask service rate (estimates; the CUDA path is the same code as the measured T4 factory).** Measured: plain
-`W8 r` with the GPU PRNG on a T4, Qwen2.5-7B K32, 356 slots/s (generation only; STATUS 2026-11-20). Scaled by
-linear elements and int8 throughput (L4 and A10G about 1.9x a T4): **32B about 140 slots/s, 72B about 60 slots/s
-per L4 or A10G**, i.e. 1.5x / 0.7x the 72B with-prompts demand. Above roughly 40 slots/s at 72B the
-single writer thread (AES-GCM, ~1.2 GB/s per core) and the volumes (gp3 tops out at 1 GB/s) bind before the GPU:
+**Mask service rate.** Measured on a T4 (Modal, `benchmarks/mask_service_bench.py`: synthetic layers of the
+public shapes, K32, extrapolated by layer count, 1024-slot segments into an encrypted store, start-up check
+passed first): **32B 55-58 slots/s, 72B 30-40 slots/s** (47-50 slots/s with 4096-slot segments, generation
+only); 7B 164-174. A T4's int8 GEMM ceiling at 72B is about 62 slots/s. Estimated for an L4 or A10G (about
+1.5-1.9x a T4's int8 throughput): **32B about 85-110 slots/s, 72B about 60-90 slots/s**, i.e. at or above the
+decode demand (33-40 slots/s) and around the with-prompts demand (~90 slots/s) at 72B. Above roughly 40 slots/s at
+72B the volumes (gp3 tops out at 1 GB/s; a 72B slot is 28 MB) bind before the GPU:
 at 72B put the mask store and the outbox on instance-store NVMe or io2, keep the conversation's KV cache across
 turns (only new tokens need masks), or use a second GPU VM. Measure on your instance with
 `pgw factory mask-service --check-only` (start-up check) and `pgw factory benchmark --pack ... --device cuda`.
@@ -97,7 +99,7 @@ First boot (both VMs in parallel; follow with `aws ssm start-session --target <i
 | 0-5 | Docker, images, enrollment with the code (CA pinned from the code), mask store + KEK | images, waits for the gateway's public values |
 | 5-30 | public pack from Hugging Face (32B: ~65 GB download, ~10-25 min) | the same public pack, fingerprint checked against the enrolled one |
 | 30-35 | recipient key + store id published; waits for the mask service | signing key + outbox certificate published; **start-up check** (bit-identical to the CPU reference) |
-| 35-45 | pulls the first segments, starts the gateway on :8443 | first segments (512 slots each at 32B+) |
+| 35-45 | pulls the first segments, starts the gateway on :8443 | first segments (2048 slots each) |
 
 Then, from a machine in `client_api_cidrs`:
 

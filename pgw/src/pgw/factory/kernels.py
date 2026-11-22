@@ -345,7 +345,8 @@ def _vecmat_digit_bits(inner: int, k: int) -> int:
 
 
 def ring_vecmat(
-    u: torch.Tensor, w8: torch.Tensor, params: RingParams, *, method: Literal["auto", "int8", "f64"] = "auto"
+    u: torch.Tensor, w8: torch.Tensor, params: RingParams, *,
+    method: Literal["auto", "int8", "f64", "kernel"] = "auto",
 ) -> torch.Tensor:
     """Freivalds precomputation ``u @ W8 mod 2^K`` on ``w8``'s device.
 
@@ -353,7 +354,10 @@ def ring_vecmat(
         u: int64 ``(c, m)`` check vectors (any device; moved to ``w8``'s device).
         w8: int8 ``(m, n)`` weight.
         params: Ring parameters.
-        method: ``auto`` (int8 on CPUs where it is exact, else float64), ``int8`` or ``f64``.
+        method: ``auto`` (CUDA: ``kernel``; CPUs: int8 where it is exact and fast, else float64), ``int8``,
+            ``f64`` or ``kernel`` (the factory's own digit-plane GEMM, :class:`RingKernel`, on a transposed copy of
+            ``W8``: ``cuda_int8`` on a GPU, ``cpu_int8`` on a CPU; the same exact kernel as ``W8 r``, instead of
+            float64 GEMMs that run at 1/32-1/64 rate on T4/L4/A10G-class GPUs).
 
     Returns:
         int64 ``(c, n)`` in ``[0, 2^K)`` on the CPU.
@@ -372,8 +376,24 @@ def ring_vecmat(
     dev = w8.device
     if c == 0:
         return torch.zeros((0, n), dtype=torch.int64)
-    if method not in ("auto", "int8", "f64"):
+    if method not in ("auto", "int8", "f64", "kernel"):
         raise ConfigError(f"unknown vecmat method {method!r}")
+    if (method == "kernel" or (method == "auto" and dev.type == "cuda")) and k % 8 == 0 and 8 <= k <= 56:
+        backend = "cuda_int8" if dev.type == "cuda" else "cpu_int8"
+        if backend == "cpu_int8" and not cpu_int8_available():
+            raise BackendUnavailableError("kernel vecmat on a CPU needs an exact torch._int_mm")
+        # u @ W8 = u @ (W8^T)^T: the kernel computes x @ weight^T for weight = W8^T (n, m)
+        wt = w8.t().contiguous()
+        try:
+            dev_out = RingKernel(wt, backend).matmul(u.to(torch.int64), params)
+            out = dev_out.cpu()
+            if dev_out.device.type != "cpu":
+                dev_out.zero_()
+            return out
+        finally:
+            del wt
+    if method == "kernel":
+        raise ConfigError(f"kernel vecmat needs K a multiple of 8 in [8, 56], got {k}")
     if method == "int8" and not (dev.type == "cpu" and cpu_int8_available()):
         raise BackendUnavailableError("int8 vecmat needs a CPU with an exact torch._int_mm")
     if method == "int8" or (method == "auto" and dev.type == "cpu" and cpu_int8_fast()):
