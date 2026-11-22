@@ -304,7 +304,11 @@ Factory schemes at the with-prompts rate (estimates scaled from the 7B measureme
    group of cores; the per-trip fork/join is a spinning pool (<= 4 us).
 4. **Attention** (`attn.rs`): parallel over KV heads and context blocks with the fixed summation order kept
    (partial softmax maxima/sums combined in a fixed tree order; the reference uses the same order, so bits do
-   not depend on the thread count, as for the existing native float path).
+   not depend on the thread count, as for the existing native float path). **Built (2026-11-22, opt-in)**:
+   `float_ops="native-blocked"` (v2: 256-position blocks, an exact global max, per-block den/acc merged in block
+   order; AVX-512/AVX2 kernels with the scalar bits) and `"native[-blocked]-bf16kv"` (bf16 KV storage). Measured
+   per core on a contended 4-vCPU box: 15.6 GFLOP/s / 3.9 GB/s at 72B, 2k context, float32 KV (20.5 GFLOP/s with
+   bf16 KV); 600 GFLOP/s therefore needs about 30-40 cores, not yet measured on a server VM (STATUS.md).
 5. **Provider** (`pgw.service`): `PGW_SERVICE_TP=G` (output-row shards of each linear at load; the pack's
    fingerprint unchanged, shard offsets derived), `PGW_SERVICE_EXEC=graph|persistent`, `PGW_SERVICE_COALESCE=1`
    (opportunistic same-linear coalescing, never waits), `lane_max_rows` raised to cover R x tenants. Wire

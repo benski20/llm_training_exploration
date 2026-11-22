@@ -1211,5 +1211,12 @@ mod tests {
             }
         }
         ISA_CAP.store(2, Ordering::Relaxed);
+        let mut c = f64::MAX;
+        for _ in 0..5 {
+            let c0 = cpu();
+            attend_row_ref(&q, &k, &v, len, dm, &mut o);
+            c = c.min(cpu() - c0);
+        }
+        println!("original single-thread kernel (attend_row_ref): cpu min {:.0} us", c * 1e6);
     }
 }
