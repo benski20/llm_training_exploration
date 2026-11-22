@@ -1492,7 +1492,7 @@ fn trip_freivalds_output<'py>(
 /// the handle keeps both alive and read-borrowed, so a ``pgw_fast`` call that would write either
 /// raises ``ValueError`` meanwhile (``rhs`` is copied).
 #[pyfunction]
-fn trip_freivalds_submit<'py>(
+pub(crate) fn trip_freivalds_submit<'py>(
     y_hat: &Bound<'py, PyAny>,
     u: &Bound<'py, PyAny>,
     rhs: &Bound<'py, PyAny>,

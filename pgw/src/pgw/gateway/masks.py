@@ -96,6 +96,8 @@ class WindowedReservation:
         self.public = bool(public)
         #: Public mode: the highest charge target so far (slots the schedule entitles the session to).
         self.charged = 0
+        #: linear key -> the current part's native trip lease (``PGW_TRIP_NATIVE``; see :meth:`trip_lease`).
+        self.trip_leases: dict[str, Any] = {}
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -336,6 +338,31 @@ class WindowedReservation:
             verify(chk)
         r, wr = part.take(lid, rows)
         return rows, r, wr, chk
+
+    # ---- native trip leases (PGW_TRIP_NATIVE) -----------------------------------------------------
+    @property
+    def trip_step_key(self) -> str | None:
+        """The linear whose every trip goes through :meth:`trip_lease` (and so :meth:`ensure`): the
+        step-start linear, whose ``ensure`` retires parts and starts the ahead reservation. ``None`` in
+        public mode (``ensure`` has no side effects there)."""
+        return None if self.public else self._step_key
+
+    def trip_lease(self, lid: LinearId | str, rows: int, verify: Any = None, wnorm: float = 0.0) -> Any:
+        """:meth:`ensure` (exactly as before a take), then the current part's native trip lease
+        (``MaskReservation.trip_lease``), cached in :attr:`trip_leases`; ``None``: the ordinary path."""
+        self.ensure(lid, rows)
+        with self._lock:
+            if self._closed:
+                raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            part = self._current(lid)
+        fn = getattr(part, "trip_lease", None)
+        lease = None if fn is None else fn(lid, rows, verify, wnorm, strict=False)
+        key = self._k(lid)
+        if lease is None:
+            self.trip_leases.pop(key, None)
+        else:
+            self.trip_leases[key] = lease
+        return lease
 
     def prefetch(self, lid: LinearId | str, rows: int) -> int:
         """``MaskReservation.prefetch`` of the current part (never another part, never an extension)."""

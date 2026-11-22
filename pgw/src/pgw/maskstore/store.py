@@ -469,6 +469,11 @@ class MaskReservation:
         self._staged_bytes = 0
         #: Staged rows that were never handed out when the reservation closed (zeroed, burned).
         self.staged_burned = 0
+        #: linear key -> attached native trip lease (``PGW_TRIP_NATIVE``, :meth:`trip_lease`): while
+        #: attached, the linear's cursor is the lease's (``lease.cursor``), see :meth:`_cur_locked`.
+        self._lease: dict[str, Any] = {}
+        #: The gateway's per-linear lease cache (``MaskedBackend``'s native per-trip path reads it).
+        self.trip_leases = self._lease
 
     def __repr__(self) -> str:
         return (
@@ -527,19 +532,19 @@ class MaskReservation:
         """Rows not yet taken for ``lid``."""
         key = self._key(lid)
         with self._lock:
-            return self._slots - self._cursor[key]
+            return self._slots - self._cur_locked(key)
 
     def taken(self, lid: LinearId | str) -> int:
         """Rows already taken for ``lid``."""
         key = self._key(lid)
         with self._lock:
-            return self._cursor[key]
+            return self._cur_locked(key)
 
     def rows_until_boundary(self, lid: LinearId | str) -> int:
         """Rows of ``lid`` left in the current segment extent."""
         key = self._key(lid)
         with self._lock:
-            cur = self._cursor[key]
+            cur = self._cur_locked(key)
             if cur >= self._slots:
                 return 0
             return self._extents[self._cursor_extent(key, cur)].end_row - cur
@@ -562,6 +567,8 @@ class MaskReservation:
             raise ConfigError(f"rows must be a positive int, got {rows!r}")
         with self._lock:
             self._alive()
+            if self._lease:
+                self._settle_locked(key)
             start = self._cursor[key]
             if start + rows > self._slots:
                 raise MaskExhaustedError(
@@ -597,6 +604,8 @@ class MaskReservation:
             raise ConfigError(f"rows must be a positive int, got {max_rows!r}")
         with self._lock:
             self._alive()
+            if self._lease:
+                self._settle_locked(key)
             start = self._cursor[key]
             if start >= self._slots:
                 raise MaskExhaustedError(
@@ -621,6 +630,8 @@ class MaskReservation:
         Never zeroes a buffer a pending job reads: replaced chunk buffers go to ``deferred`` and
         extent-end cleanups to ``ends`` (both run after the native call)."""
         self._alive()
+        if self._lease:
+            self._settle_locked(key)
         start = self._cursor[key]
         if start >= self._slots:
             raise MaskExhaustedError(
@@ -678,6 +689,8 @@ class MaskReservation:
 
     def _claim_needs_slow_locked(self, key: str, max_rows: int) -> bool:
         """Whether :meth:`_claim_plan_locked` would take ``key``'s next rows by the ordinary path."""
+        if self._lease:
+            self._settle_locked(key)
         start = self._cursor[key]
         if start >= self._slots:
             return False
@@ -703,6 +716,117 @@ class MaskReservation:
             if rkey is not None:
                 _zero(rkey)
 
+    # ---- native trip leases (PGW_TRIP_NATIVE) -----------------------------------------------------
+    #: No step-start linear: a plain reservation has no ``ensure`` (see ``WindowedReservation``).
+    trip_step_key: str | None = None
+
+    def _cur_locked(self, key: str) -> int:
+        """The cursor of ``key``: the attached lease's, else the stored one (lock held)."""
+        lease = self._lease.get(key) if self._lease else None
+        return self._cursor[key] if lease is None else int(lease.cursor)
+
+    def _settle_locked(self, key: str) -> None:
+        """Detach ``key``'s lease (if any) and store its cursor: another path takes rows next."""
+        lease = self._lease.pop(key, None)
+        if lease is not None:
+            self._cursor[key] = int(lease.detach())
+
+    def trip_lease(self, lid: LinearId | str, rows: int, verify: Callable[[Any], None] | None = None,
+                   wnorm: float = 0.0, *, strict: bool = True) -> Any:
+        """A native trip lease serving the next ``rows`` (or more) rows of ``lid`` (``pgw_fast.TripLease``).
+
+        The lease covers the rows from the cursor to the end of the current decrypted ``W r`` chunk (never
+        past the extent): the chunk buffer, the extent's ``r`` stream key and Freivalds vectors are handed
+        to it, and its trips take the rows in order (each exactly once) while the cursor of ``lid`` is the
+        lease's. Any other path that takes rows of ``lid`` detaches it first; :meth:`close` closes it.
+        ``verify`` (soundness) sees the extent's checks before the lease exists (no row consumed).
+
+        Returns the attached lease if it can serve ``rows`` rows, a new one, or ``None`` when no lease can
+        serve the call (rows crossing a chunk or extent, in-memory ring segments, no check vectors, no
+        native extension): the caller then takes the ordinary path. With ``strict``, fewer than ``rows``
+        rows left raises :class:`MaskExhaustedError` (nothing consumed), as the gateway's pre-check does;
+        otherwise that returns ``None`` too.
+        """
+        key = self._key(lid)
+        with self._lock:
+            self._alive()
+            lease = self._lease.get(key)
+            if lease is not None:
+                if lease.ready(rows):
+                    return lease
+                self._settle_locked(key)
+            start = self._cursor[key]
+            if self._slots - start < rows:
+                if not strict:
+                    return None
+                raise MaskExhaustedError("session mask reservation exhausted",
+                                         details={"linear": key, "needed": rows, "remaining": self._slots - start})
+            if not _native_lease or self._checks == 0 or self.ring.k % 8 or self.ring.k > 56:
+                return None
+            ei = self._cursor_extent(key, start)
+            ex = self._extents[ei]
+            seg = ex.seg
+            if not isinstance(seg, SegmentFile):  # in-memory ring segments: the ordinary path
+                return None
+            lin = self._linears[key][1]
+            li = ex.li[key]
+            slot0 = ex.ext.start + (start - ex.first_row)
+            cs = seg.header.chunk_slots
+            j = slot0 // cs
+            in_chunk = slot0 - j * cs
+            layout = seg.layout
+            ext_left = ex.end_row - start
+            first = min(ext_left, layout.chunk_rows(j) - in_chunk)
+            # rows to lease: the rest of the current chunk, then whole chunks while the lease holds at
+            # most TRIP_LEASE_BYTES of W r (and TRIP_LEASE_ROWS rows), never past the extent
+            row_bytes = lin.out_features * layout.bpe
+            want = max(first, min(ext_left, TRIP_LEASE_ROWS, max(1, TRIP_LEASE_BYTES // max(1, row_bytes))))
+            if max(want, first) < rows:
+                return None
+            chk = self._compact_locked(key, ei)
+            if verify is not None:
+                verify(chk)  # raises before anything is handed out
+            self._drop_stage_locked(key)  # staged rows were never handed out: the lease derives them
+            chunks: list[tuple[bytearray, int, int]] = []
+            cached = self._chunk_cache.pop((ei, lin.id), None)
+            try:
+                got, jj, off = 0, j, in_chunk
+                while got < want:
+                    if cached is not None and cached[0] == jj:
+                        buf = cached[1]
+                    else:
+                        reuse = None
+                        if cached is not None:
+                            reuse = cached[1]
+                            _zero(reuse)
+                        buf = _decrypt_buf(seg, layout.wr_chunk(li, jj), reuse)
+                    cached = None
+                    take = min(want - got, layout.chunk_rows(jj) - off)
+                    chunks.append((buf, off, take))
+                    got += take
+                    jj, off = jj + 1, 0
+                if cached is not None:
+                    _zero(cached[1])
+                rkey = self._rkey_cache.get((ei, key))
+                if rkey is None:
+                    seed, _ = ex.secrets()
+                    rkey = self._rkey_cache[(ei, key)] = bytearray(SeedExpander(seed).stream_key("r", key))
+                ring = self.ring
+                lease = native.fast.TripLease(rkey, lin.in_features, lin.out_features, ring.k, ring.a,
+                                              int(ring.cap or 0), float(wnorm), slot0, chunks, start,
+                                              chk[1], chk[2], TRIP_R_AHEAD)
+            except BaseException:
+                for b, _, _ in chunks:
+                    _zero(b)
+                raise
+            n = sum(c[2] for c in chunks)
+            if slot0 + n >= ex.ext.start + ex.ext.count:  # the lease reaches the extent's end
+                done = self._rkey_cache.pop((ei, key), None)
+                if done is not None:
+                    _zero(done)
+            self._lease[key] = lease
+            return lease
+
     #: Most bytes of prefetched (staged) rows one reservation holds (``r`` and ``W r`` together).
     stage_max_bytes = 64 << 20
 
@@ -724,8 +848,8 @@ class MaskReservation:
         if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
             return 0
         with self._lock:
-            if self._closed or key in self._stage:
-                return 0
+            if self._closed or key in self._stage or key in self._lease:
+                return 0  # a native trip lease serves this linear (its rows are derived per trip)
             start = self._cursor[key]
             if start >= self._slots:
                 return 0
@@ -921,7 +1045,7 @@ class MaskReservation:
         key = self._key(lid)
         with self._lock:
             self._alive()
-            cur = self._cursor[key]
+            cur = self._cur_locked(key)
             ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
             return self._compact_locked(key, ei)
 
@@ -937,7 +1061,7 @@ class MaskReservation:
         key = self._key(lid)
         with self._lock:
             self._alive()
-            cur = self._cursor[key]
+            cur = self._cur_locked(key)
             # Before take(): the extent the next rows come from. Once every row of the linear was
             # taken: the last extent (so a caller may also verify after taking).
             ei = self._cursor_extent(key, cur) if cur < self._slots else len(self._extents) - 1
@@ -972,6 +1096,11 @@ class MaskReservation:
             if self._closed:
                 return
             self._closed = True
+            # Native trip leases: no more rows, in-flight trips fail closed, keys zeroized, chunks
+            # zeroed once no trip reads them; the cursor is the lease's (rows handed out).
+            for lk, lease in self._lease.items():
+                self._cursor[lk] = int(lease.close())
+            self._lease.clear()
             for _, buf in self._chunk_cache.values():
                 _zero(buf)
             self._chunk_cache.clear()
@@ -1047,6 +1176,20 @@ def _mask_rows_keyed(key: bytearray, cols: int, k: int, slot0: int, rows: int) -
 
 
 _native_claim = native.native_available("claim_rows_many")
+_native_lease = native.native_available("TripLease")
+
+#: Most ``W r`` bytes (``PGW_TRIP_LEASE_BYTES``, default 1 MiB) and rows (``PGW_TRIP_LEASE_ROWS``, 16) one
+#: native trip lease decrypts ahead (at least the rest of the current chunk). Bounds the decrypted rows a
+#: session holds per linear; larger leases amortize the per-lease Python work over more trips.
+try:
+    TRIP_LEASE_BYTES = max(1, int(os.environ.get("PGW_TRIP_LEASE_BYTES", "") or (1 << 20)))
+    TRIP_LEASE_ROWS = max(1, int(os.environ.get("PGW_TRIP_LEASE_ROWS", "") or 16))
+except ValueError:  # pragma: no cover - bad environment value: defaults
+    TRIP_LEASE_BYTES, TRIP_LEASE_ROWS = 1 << 20, 16
+#: A lease derives its next row's ``r`` on a helper thread after each 1-row trip (``PGW_TRIP_R_AHEAD``,
+#: default on with ``PGW_TRIP_NATIVE``): the same keystream bytes, used only by the trip that takes that
+#: row (zeroed if the lease detaches, closes or the row is taken before it is ready).
+TRIP_R_AHEAD = os.environ.get("PGW_TRIP_R_AHEAD", "1").strip().lower() not in ("0", "false", "no", "off")
 
 #: Threads of the native batched claim (``PGW_MASK_CLAIM_THREADS``; 0 = automatic: the CPU count,
 #: bounded by the work: about one thread per 256 KiB of output).
@@ -1147,10 +1290,10 @@ def take_checked_many(
             need[(id(res), key)] = need.get((id(res), key), 0) + 1
         for (rid, key), n in need.items():
             res = uniq[rid]
-            if res._slots - res._cursor[key] < n:  # each request takes at least one row
+            if res._slots - res._cur_locked(key) < n:  # each request takes at least one row
                 raise MaskExhaustedError(
                     "mask reservation exhausted",
-                    details={"linear": key, "needed": n, "remaining": res._slots - res._cursor[key]},
+                    details={"linear": key, "needed": n, "remaining": res._slots - res._cur_locked(key)},
                 )
         try:
             for i, ((res, _, rows, chk), key) in enumerate(zip(reqs, keys, strict=True)):

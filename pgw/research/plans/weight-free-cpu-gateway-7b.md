@@ -79,6 +79,11 @@ main core here (plus 7 ms on a helper core). Getting to ~8 ms needs, in order of
 
 1. A native per-trip path (take from the RAM ring + prepare + send + receive + finish in one call per
    trip; the payload written straight into the lane's buffer): removes ~50 ms of the 65-75.
+   *Done in part (package W2, `PGW_TRIP_NATIVE`, see STATUS.md):* one native call per side of the lane call
+   fed by a reservation lease (disk segments), `r` of the next row derived ahead on a helper thread. Measured
+   7B trips 48 -> 27 ms per token, decode process CPU 127 -> 78 ms per token (extrapolated, loaded box). Not
+   yet: leases on RAM-ring segments, the `W r` decrypt moved off the main core, the noise every-call check and
+   request object in native code.
 2. A one-vector Freivalds check over a prime field (see 5): check-vector traffic 66.6 -> 9.5 MB per token,
    helper core 7-8 -> 1.6 ms, prepare -1.5 ms.
 3. r off the critical path: the r keystream (3.8-4.4 ms) is independent of the activations, so the

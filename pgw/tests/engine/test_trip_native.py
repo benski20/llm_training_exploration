@@ -1,0 +1,368 @@
+"""The native per-trip path (``PGW_TRIP_NATIVE``): one native call per trip on each side of the lane call,
+fed by a lease the mask reservation hands over. Exact and byte-identical to the ``PGW_TRIP_FAST`` path on
+real store reservations (windowed, several parts, chunk and extent boundaries): same logits as the plain
+reference, the same provider payloads and noise statistics, single-use rows under faults, the same
+soundness/exhaustion checks before any row is taken, wiping, burn-on-close. Default off.
+"""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+import torch
+
+from pgw.core import native
+from pgw.core.errors import IntegrityError, MaskExhaustedError, MaskReuseError, MaskStoreError, RingOverflowError
+from pgw.core.ring import DEFAULT_RING
+from pgw.engine import InMemoryPack, LocalComputeClient, MaskedBackend
+from pgw.engine.backends import LinearCall
+from pgw.gateway.masks import WindowedReservation
+from pgw.observability.noise import OutboundNoiseMonitor
+from pgw.wire.messages import ComputeResponse, ComputeResult
+from tests.engine import test_model_hooks as hooks
+from tests.engine.test_trip_engine import _masked, _plain_ref, _same
+
+pytestmark = pytest.mark.skipif(not native.native_available("TripLease", "trip_prepare_into"),
+                                reason="pgw_fast native trip lease not built")
+
+SLOTS = 600
+
+
+def _env(monkeypatch: pytest.MonkeyPatch, fast: bool, nat: bool, noise_async: bool = False) -> None:
+    monkeypatch.setenv("PGW_TRIP_FAST", "1" if fast else "0")
+    monkeypatch.setenv("PGW_TRIP_NATIVE", "1" if nat else "0")
+    monkeypatch.setenv("PGW_NOISE_ASYNC_SAMPLED", "1" if noise_async else "0")
+
+
+@pytest.fixture(scope="module")
+def store_template(qwen_pack: InMemoryPack) -> Iterator[Path]:
+    """A mask store with small chunks (8 slots) and two segments, copied per run (identical masks)."""
+    from pgw.factory import MaskGenerator
+    from pgw.maskstore import FileKeyProvider, MaskStore
+    from pgw.maskstore.counters import FileMonotonicCounter
+
+    d = Path(tempfile.mkdtemp(prefix="pgw-tn-"))
+    store = MaskStore.open(d / "store", FileKeyProvider(d / "kek", create=True), fsync=False,
+                           counter=FileMonotonicCounter(d / "ctr", fsync=False))
+    gen = MaskGenerator(qwen_pack, DEFAULT_RING)
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, factory_id="t")
+    gen.generate_into_store(store, SLOTS // 2, chunk_slots=8, factory_id="t")
+    store.close()
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+class _Store:
+    def __init__(self, template: Path, pack: Any):
+        from pgw.maskstore import FileKeyProvider, MaskStore
+        from pgw.maskstore.counters import FileMonotonicCounter
+
+        self.dir = Path(tempfile.mkdtemp(prefix="pgw-tn-run-"))
+        shutil.copytree(template, self.dir, dirs_exist_ok=True)
+        self.store = MaskStore.open(self.dir / "store", FileKeyProvider(self.dir / "kek"), fsync=False,
+                                    counter=FileMonotonicCounter(self.dir / "ctr", fsync=False))
+        self.fp = pack.fingerprint
+        self.made: list[Any] = []
+
+    def windowed(self, slots: int, first: int = 5, window: int = 3) -> WindowedReservation:
+        def reserve(n: int) -> Any:
+            return self.store.reserve(self.fp, DEFAULT_RING, n)
+
+        w = WindowedReservation(reserve(min(first, slots)), reserve, cap=slots, window=window)
+        self.made.append(w)
+        return w
+
+    def close(self) -> None:
+        for w in self.made:
+            w.close()
+        self.store.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+class _Seeded(OutboundNoiseMonitor):
+    def __init__(self) -> None:
+        super().__init__(DEFAULT_RING, sample_rate=0.5, fail_closed=True)
+        import random
+
+        self._rng = random.Random(7)
+
+
+def _scenario(pack: Any, template: Path, monkeypatch: pytest.MonkeyPatch, fast: bool, nat: bool,
+              noise_async: bool = False, mode: str = "sync") -> tuple[dict[str, torch.Tensor], list[Any], Any, Any]:
+    _env(monkeypatch, fast, nat, noise_async)
+    st = _Store(template, pack)
+    monkeypatch.setattr(hooks, "_res", lambda p, n, seed: st.windowed(n))
+    client = LocalComputeClient(pack, record=True)
+    noise = _Seeded()
+    model = _masked(pack, client=client, trip_engine=True, sync_trips=True, noise_monitor=noise)
+    model.backend.freivalds_rate = 1.0
+    be = model.backend
+    calls: list[int] = []
+    real = be._prepare_trip_lease
+
+    def spy(call: Any) -> Any:
+        p = real(call)
+        calls.append(0 if p is None else 1)
+        return p
+
+    be._prepare_trip_lease = spy  # type: ignore[method-assign]
+    try:
+        assert be.trip_native == (fast and nat)
+        out = hooks.scenario_run(model, pack, mode, True)
+        be._join_noise()
+        be.join_checks()
+    finally:
+        model.close()
+        st.close()
+    rep = noise.report()
+    stats = (rep.calls, rep.sampled_calls, rep.samples, rep.rows_checked, rep.duplicate_rows, rep.windows)
+    sent = [(lid, tuple(x.shape), x.numpy().tobytes()) for lid, x in client.received]
+    return out, sent, stats, (sum(calls), len(calls), be.stats.snapshot())
+
+
+def test_default_off(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_TRIP_NATIVE", raising=False)
+    monkeypatch.setenv("PGW_TRIP_FAST", "1")
+    be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                       trip_engine=True)
+    assert be.trip_fast and not be.trip_native
+
+
+@pytest.mark.parametrize("noise_async", [False, True])
+def test_native_equals_plain_and_bytes_identical(qwen_pack: InMemoryPack, store_template: Path,
+                                                 monkeypatch: pytest.MonkeyPatch, noise_async: bool) -> None:
+    ref = _plain_ref(qwen_pack)
+    base_out, base_sent, base_stats, _ = _scenario(qwen_pack, store_template, monkeypatch, True, False, noise_async)
+    _same(ref, base_out)
+    out, sent, stats, (served, tried, snap) = _scenario(qwen_pack, store_template, monkeypatch, True, True,
+                                                        noise_async)
+    _same(ref, out)  # masked == plain, bit for bit
+    assert served > 0 and tried > served  # the lease served the decode trips; others fell back
+    assert sent == base_sent  # byte-identical provider payloads, same order
+    assert stats == base_stats  # same noise draws and statistics
+    assert snap["integrity_failures"] == 0
+
+
+def test_native_async_mode(qwen_pack: InMemoryPack, store_template: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ref = _plain_ref(qwen_pack)
+    out, _, _, (served, _, _) = _scenario(qwen_pack, store_template, monkeypatch, True, True, mode="async")
+    _same(ref, out)
+    assert served > 0
+
+
+# ---- unit tests on one reservation ---------------------------------------------------------------------
+@pytest.fixture
+def one(qwen_pack: InMemoryPack, store_template: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    _env(monkeypatch, True, True)
+    st = _Store(store_template, qwen_pack)
+    client = LocalComputeClient(qwen_pack, record=True)
+    model = _masked(qwen_pack, client=client, trip_engine=True, sync_trips=True)
+    model.backend.freivalds_rate = 1.0
+    try:
+        yield st, model.backend, client
+    finally:
+        model.close()
+        st.close()
+
+
+def _x(spec: Any, seed: int = 0) -> torch.Tensor:
+    g = torch.Generator().manual_seed(seed)
+    return torch.randn(1, spec.in_features, generator=g)
+
+
+def test_rows_single_use_in_order(one: Any, qwen_pack: InMemoryPack) -> None:
+    """Every trip takes the next row exactly once; the lease's rows are the store's rows in order."""
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 20)
+    for i in range(20):
+        be.forward_many([LinearCall(spec.id, _x(spec, i), res)])
+        assert res.taken(spec.id) == i + 1
+        assert res.remaining(spec.id) == 19 - i
+    assert len({x.numpy().tobytes() for _, x in client.received}) == 20
+    with pytest.raises(MaskExhaustedError):
+        be.forward_many([LinearCall(spec.id, _x(spec), res)])
+    assert res.taken(spec.id) == 20
+    res.close()
+
+
+def test_fault_after_prepare_burns_the_row(one: Any, qwen_pack: InMemoryPack) -> None:
+    """A transport failure, a tampered result and a malformed reply all leave the row consumed; the
+    next trip uses the next row (never the failed one again), and its result is exact."""
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 12)
+    ref_be = MaskedBackend(qwen_pack, None, LocalComputeClient(qwen_pack), DEFAULT_RING, qwen_pack.fingerprint,
+                           trip_engine=False)
+    real = client.compute_sync
+
+    def broken(req: Any) -> Any:
+        raise ConnectionError("down")
+
+    def tampered(req: Any) -> Any:
+        r = real(req)
+        it = r.items[0]
+        y = bytearray(it.y_hat)
+        y[0] ^= 1
+        return ComputeResponse(r.request_id, (ComputeResult(it.linear, it.rows, bytes(y)),))
+
+    def short(req: Any) -> Any:
+        r = real(req)
+        it = r.items[0]
+        return ComputeResponse(r.request_id, (ComputeResult(it.linear, it.rows, bytes(it.y_hat)[:-1]),))
+
+    x = _x(spec, 3)
+    for fault, exc in ((broken, Exception), (tampered, IntegrityError), (short, Exception)):
+        client.compute_sync = fault  # type: ignore[method-assign]
+        before = res.taken(spec.id)
+        with pytest.raises(exc):
+            be.forward_many([LinearCall(spec.id, x, res)])
+            be.join_checks()  # the tampered trip's check may be deferred
+        assert res.taken(spec.id) == before + 1  # consumed, never handed out again
+        client.compute_sync = real  # type: ignore[method-assign]
+    out = be.forward_many([LinearCall(spec.id, x, res)])[0]
+    be.join_checks()
+    res2 = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 1)
+    assert torch.equal(out, ref_be.forward_many([LinearCall(spec.id, x, res2)])[0])
+    res2.close()
+    payloads = [xs.numpy().tobytes() for _, xs in client.received]
+    assert len(set(payloads)) == len(payloads)  # every payload under a fresh row
+    res.close()
+
+
+def test_soundness_and_exhaustion_before_any_row(one: Any, qwen_pack: InMemoryPack) -> None:
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 3)
+    be.forward_many([LinearCall(spec.id, _x(spec), res)])
+    lease = res.trip_leases[spec.id.key]
+    assert lease.cursor == 1
+    lease.detach()  # the next trip makes a new lease: its soundness check fails before any row
+    be.min_soundness_bits = 10_000.0
+    be._sound_ok.clear()
+    with pytest.raises(MaskStoreError):
+        be.forward_many([LinearCall(spec.id, _x(spec), res)])
+    assert res.taken(spec.id) == 1
+    be.min_soundness_bits = 20.0
+    with pytest.raises(RingOverflowError):  # non-finite: refused before the row is taken
+        be.forward_many([LinearCall(spec.id, torch.full((1, spec.in_features), float("nan")), res)])
+    assert res.taken(spec.id) == 1
+    res.close()
+
+
+def test_close_burns_and_fails_inflight(one: Any, qwen_pack: InMemoryPack) -> None:
+    """Closing the reservation mid-trip: the in-flight trip fails closed (no output), the lease hands
+    out nothing more, and the burned count covers every row past the lease's cursor."""
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 6)
+    be.forward_many([LinearCall(spec.id, _x(spec), res)])
+    prep = be.prepare_calls([LinearCall(spec.id, _x(spec, 1), res)])
+    assert prep.ticket is not None
+    resp = client.compute_sync(prep.request)
+    lease = res.trip_leases[spec.id.key]
+    res.close()
+    assert lease.closed and not lease.ready(1) and lease.left == 0
+    with pytest.raises(MaskReuseError):
+        be.finish_prepared(prep, resp, 0.0)
+    with pytest.raises(MaskReuseError):
+        be.forward_many([LinearCall(spec.id, _x(spec), res)])
+
+
+def test_detach_hands_over_to_ordinary_path(one: Any, qwen_pack: InMemoryPack) -> None:
+    """A multi-row call (ordinary path) after lease trips continues at the lease's cursor."""
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 40)
+    for i in range(3):
+        be.forward_many([LinearCall(spec.id, _x(spec, i), res)])
+    lease = res.trip_leases[spec.id.key]
+    r, wr = res.take(spec.id, 2)  # another path: the lease is detached first
+    assert not lease.ready(1) and res.taken(spec.id) == 5 and spec.id.key not in res.trip_leases
+    r.zero_()
+    wr.zero_()
+    be.forward_many([LinearCall(spec.id, _x(spec, 9), res)])
+    assert res.taken(spec.id) == 6
+    res.close()
+
+
+def test_ticket_single_use_and_wipe(one: Any, qwen_pack: InMemoryPack) -> None:
+    st, be, client = one
+    spec = qwen_pack.linear_specs()[0]
+    res = st.store.reserve(qwen_pack.fingerprint, DEFAULT_RING, 8)
+    prep = be.prepare_calls([LinearCall(spec.id, _x(spec), res)])
+    resp = client.compute_sync(prep.request)
+    tk = prep.ticket
+    be.discard(prep)  # wiped: W r rows zeroed, the ticket refuses to finish
+    scale, bias, bound = be._consts(spec.id, be._meta.get(spec.id))
+    with pytest.raises(ValueError):
+        tk.finish(resp.items[0].y_hat, scale, bias, bound)
+    assert res.taken(spec.id) == 1
+    res.close()
+
+
+@pytest.mark.parametrize("ring_name", ["K40A12", "K48A20", "K24A12C21"])
+def test_other_rings_bytes_identical(qwen_pack: InMemoryPack, monkeypatch: pytest.MonkeyPatch, ring_name: str) -> None:
+    """Rings whose W r is not read in place (K != 32: widened per trip): same payloads and outputs."""
+    from pgw.core.ring import RingParams
+    from pgw.factory import MaskGenerator
+    from pgw.maskstore import FileKeyProvider, MaskStore
+    from pgw.maskstore.counters import FileMonotonicCounter
+
+    ring = RingParams.from_name(ring_name)
+    d = Path(tempfile.mkdtemp(prefix="pgw-tn-ring-"))
+    try:
+        store = MaskStore.open(d / "store", FileKeyProvider(d / "kek", create=True), fsync=False,
+                               counter=FileMonotonicCounter(d / "ctr", fsync=False))
+        MaskGenerator(qwen_pack, ring).generate_into_store(store, 24, chunk_slots=4, factory_id="t")
+        store.close()
+        got = []
+        for nat in (False, True):
+            run = d / f"run{int(nat)}"
+            shutil.copytree(d, run, ignore=shutil.ignore_patterns("run*"))
+            _env(monkeypatch, True, nat)
+            st = MaskStore.open(run / "store", FileKeyProvider(run / "kek"), fsync=False,
+                                counter=FileMonotonicCounter(run / "ctr", fsync=False))
+            client = LocalComputeClient(qwen_pack, record=True, rings=(ring_name,))
+            be = MaskedBackend(qwen_pack, None, client, ring, qwen_pack.fingerprint, trip_engine=True)
+            be.defer_min_out = 0
+            assert be.trip_native == nat
+            res = st.reserve(qwen_pack.fingerprint, ring, 10)
+            outs = []
+            for i in range(10):
+                for spec in qwen_pack.linear_specs()[:2]:
+                    outs.append(be.forward_many([LinearCall(spec.id, _x(spec, i), res)])[0])
+            be.join_checks()
+            res.close()
+            st.close()
+            be.close()
+            got.append((outs, [x.numpy().tobytes() for _, x in client.received]))
+        (o0, b0), (o1, b1) = got
+        assert b0 == b1
+        assert all(torch.equal(a, b) for a, b in zip(o0, o1, strict=True))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_lease_rejects_bad_buffers() -> None:
+    k = bytes(32)
+    u = np.zeros((2, 4), dtype=np.uint32)
+    uw = np.zeros((2, 3), dtype=np.uint32)
+    with pytest.raises(ValueError):  # chunk too small for the lease's rows
+        native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(10), 0, 4)], 0, u, uw)
+    with pytest.raises(ValueError):  # check vectors of another linear
+        native.fast.TripLease(k, 5, 4, 32, 12, 27, 1.0, 0, [(bytearray(64), 0, 1)], 0, u, uw)
+    with pytest.raises(ValueError):
+        native.fast.TripLease(bytes(31), 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(64), 0, 1)], 0, u, uw)
+    with pytest.raises(ValueError):  # no rows
+        native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [], 0, u, uw)
+    lease = native.fast.TripLease(k, 3, 4, 32, 12, 27, 1.0, 0, [(bytearray(16), 0, 1), (bytearray(32), 1, 1)], 7,
+                                  u, uw)
+    assert lease.rows == 2 and lease.cursor == 7 and lease.ready(2) and not lease.ready(3)
+    assert lease.detach() == 7 and not lease.ready(1) and lease.left == 0

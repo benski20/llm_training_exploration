@@ -16,6 +16,7 @@
 //! | [`lane`] | stub (chat-speed WP-A3): native trip lane client; registers nothing yet |
 //! | [`lane_service`] | chat-speed WP-A1: Python bindings of the service trip lane (`rust/pgw-lane`): `LaneService`, `LaneDeviceLock` |
 //! | [`trip`] | stub (chat-speed WP-A4a): `prepare_into` / `finish_into` for the TripEngine; registers nothing yet |
+//! | [`tripnative`] | opt-in `PGW_TRIP_NATIVE`: `TripLease` / `TripTicket`, one native call per trip on each side of the lane call (take rows of a reservation lease, derive `r`, prepare; finish), `r` of the next row derived ahead on a helper thread |
 //! | [`layer`] | opt-in pinned float formulation (`float_ops = "native"`): RMSNorm, residual add + RMSNorm, SiLU gate (fixed order, no FMA, no libm) |
 //! | [`attn`] | opt-in row-deterministic attention over the KV cache, fused with RoPE and the cache write (`float_ops = "native"`) |
 //!
@@ -38,6 +39,7 @@ pub mod noise;
 pub mod prepare;
 pub mod store;
 pub mod trip;
+pub mod tripnative;
 #[cfg(unix)]
 pub mod writer;
 
@@ -65,6 +67,7 @@ fn pgw_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     prepare::register(m)?;
     store::register(m)?;
     trip::register(m)?;
+    tripnative::register(m)?;
     #[cfg(unix)]
     writer::register(m)?;
     Ok(())

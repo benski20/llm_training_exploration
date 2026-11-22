@@ -26,6 +26,42 @@ vs commit-to-commit 46-48 slots/s, stock min 3836-4028). Not the demo default: w
 kernels time-slice with the decode graphs (separate processes; stream priorities do not help across contexts):
 local linear 79 -> 108-119 us/call, warm single chat 25-27 tok/s during the stock ramp. The customer target is now
 GPU-free, so this stays an opt-in. Details: `deploy/modal/README.md`, "Factory HE on the gateway GPU".
+## Update 2026-11-22: native per-trip path, one native call per side of the lane call (package W2, local only)
+
+`PGW_TRIP_NATIVE=1` (with `PGW_TRIP_FAST=1`; library default off). The mask reservation hands the gateway a
+*lease* (`pgw_fast.TripLease`, `rust/pgw-fast/src/tripnative.rs`): the next rows of one linear in decrypted `W r`
+chunks of one extent (at most `PGW_TRIP_LEASE_BYTES` = 1 MiB / `PGW_TRIP_LEASE_ROWS` = 16 rows), the extent's `r`
+stream key and its Freivalds vectors. Per trip: `lease.prepare` (take the row, derive `r`, constant-time
+quantize + mask + pack, Freivalds input half) before the lane call and `ticket.finish` (unmask with `W r` read in
+place, range check, Freivalds sync or deferred, rescale, wipe) after it. `r` of a lease's next row is derived ahead
+on a helper thread (`PGW_TRIP_R_AHEAD`, on by default with the native path). Not reached: <= 20 ms main-core CPU
+per 7B token.
+
+- Single use and accounting: the lease position advances under its lock before any secret is derived; while a
+  lease is attached the linear's cursor is the lease's (`remaining`, `taken`, burn-on-close unchanged); any other
+  path that takes rows of that linear detaches it first; `close()` closes leases (in-flight trips fail closed with
+  `MaskReuseError`). Unused lease rows are zeroed with their chunk (never sent, like a dropped prefetch stage).
+- Same order and checks as `PGW_TRIP_FAST`: window `ensure` / exhaustion pre-check and the extent's soundness check
+  before any row is taken, non-finite activations refused before the row is taken, Freivalds then noise-sampling
+  draws, every-call noise checks inline (sampled statistics inline, or async with `PGW_NOISE_ASYNC_SAMPLED`),
+  uuid4 request ids. Freivalds format confined to `tripnative::check_iface` (calls the existing trip kernels).
+- Served: `MaskReservation` on disk segments (also through `WindowedReservation`). In-memory ring segments and
+  `ChainedReservation` fall back to the `PGW_TRIP_FAST` path.
+- Tests (`tests/engine/test_trip_native.py`): masked == plain bit for bit, byte-identical provider payloads and
+  identical noise statistics on/off (windowed store reservations crossing chunks, extents and parts; K32, K40,
+  K48, K24), single use under transport failure / tampered / malformed replies, soundness and non-finite refusals
+  take no row, close mid-trip fails closed, detach hand-over, ticket single use and wipe.
+- Measured (dev box, 4 shared vCPUs, loaded; stub service): trips only (`benchmarks/trip_native_bench.py`, model
+  order, instant stub, extrapolated to the full model): 7B 48 -> 27 ms per token (median per trip: qkv 214 -> 137,
+  o 146 -> 101, gate_up 203 -> 144, down 372 -> 229 us; masked head about 1 ms either way); 0.5B 34 -> 13.5 ms.
+  Decode (`decode_cpu_bench.py`, 2 layers + masked head, native float ops, `--wnorm-frac 0.3`, stub delay 0.25 ms,
+  extrapolated): 7B 127 -> 78 ms process CPU per token (2-layer run 10.75 -> 7.61 ms), 0.5B 58 -> 38 ms; outputs
+  repeat-identical and equal on/off.
+- Left per trip on the main core: the lease refill (Python AES-GCM decrypt of `W r` chunks, about 1.5-2.5 ms per 7B
+  token, inherent to a disk store; a RAM ring lease would remove it), the masked head (608 KB row per token, 1-row
+  leases), and 40-60 us of Python glue per trip (noise `guard_packed` ~20 us, request object, statistics,
+  deferred-check bookkeeping).
+
 ## Update 2026-11-22: weight-free CPU gateway at 7B shapes (package W1, local only)
 
 Write-up: [research/plans/weight-free-cpu-gateway-7b.md](research/plans/weight-free-cpu-gateway-7b.md). Not reached:

@@ -75,7 +75,7 @@ fn ring_mask(k: u32) -> Result<u64, String> {
 /// Elements `[elem_offset, elem_offset + out.len())` of the ring stream keyed by `key`:
 /// `u64_le(8 keystream bytes) & (2^k - 1)`, stored as `i64` (wrapping for `k = 64`, like numpy's
 /// `astype(np.int64)`). `out` must be zero on entry (the keystream is XORed in).
-fn fill_ring(key: &[u8; 32], elem_offset: u64, out: &mut [i64], k: u32) -> Result<(), String> {
+pub(crate) fn fill_ring(key: &[u8; 32], elem_offset: u64, out: &mut [i64], k: u32) -> Result<(), String> {
     let mask = ring_mask(k)?;
     let beyond = "stream offset beyond the 2^32-block ChaCha20 counter range";
     let byte_off = elem_offset.checked_mul(8).ok_or(beyond)?;

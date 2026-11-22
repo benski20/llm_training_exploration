@@ -799,9 +799,15 @@ class _Prepared:
     fixed: list[_FixedItem] = field(default_factory=list)
     #: Prepared by the one-call trip path (:attr:`MaskedBackend.trip_fast`): finished by ``_finish_one``.
     one: bool = False
+    #: Prepared by the native per-trip path (:attr:`MaskedBackend.trip_native`): its ``pgw_fast.TripTicket``
+    #: (finished by ``_finish_lease``) and whether its Freivalds output half is deferred.
+    ticket: Any = None
+    defer: bool = False
 
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
+        if self.ticket is not None:
+            self.ticket.wipe()
         for fx in self.fixed:
             fx.wipe()
         for ch in self.chunks:
@@ -1041,6 +1047,17 @@ class MaskedBackend(LinearBackend):
         #: them before anything else is taken or sent, so an alarm blocks the next payload (fail closed).
         #: The copies are wiped after the inspection.
         self.noise_async_sampled = self.trip_fast and _env_flag("PGW_NOISE_ASYNC_SAMPLED", False)
+        #: With :attr:`trip_fast` (``PGW_TRIP_NATIVE``, default off): one native call per trip on each side
+        #: of the lane call. The reservation hands a lease (``pgw_fast.TripLease``: the next rows of one
+        #: linear in one decrypted ``W r`` chunk, the extent's ``r`` key and check vectors) and each trip
+        #: makes ``lease.prepare`` (take the rows, derive ``r``, quantize, mask, pack, Freivalds input
+        #: half) and ``ticket.finish`` (unmask, range check, Freivalds, rescale, wipe). Same rows in the
+        #: same order (each once), same check and sampling draws, same payload bytes and request ids, the
+        #: same checks on every row and the same outputs; reservations without leases (in-memory ring
+        #: segments, chained tiers) and calls a lease cannot serve take the :attr:`trip_fast` path.
+        self.trip_native = (self.trip_fast and _env_flag("PGW_TRIP_NATIVE", False)
+                            and native_available("TripLease") and self.ring.k % 8 == 0 and self.ring.k <= 56)
+        self._verifiers: dict[tuple[str, int], Any] = {}
         self._noise_pool: Any = None
         self._noise_pending: Any = None
         #: :meth:`_local_lean_one` constants per linear key (:attr:`trip_fast`).
@@ -1311,6 +1328,10 @@ class MaskedBackend(LinearBackend):
             c = calls[0]
             if (not c.meta and c.x.ndim == 2 and 0 < int(c.x.shape[0]) <= self.max_rows_per_item
                     and self._use_trip(calls)):
+                if self.trip_native:
+                    prep = self._prepare_trip_lease(c)
+                    if prep is not None:
+                        return prep
                 prep = self._prepare_trip_one(c)
                 if self.mask_prefetch:
                     self._maybe_prefetch(calls)
@@ -1713,6 +1734,179 @@ class MaskedBackend(LinearBackend):
         prep.one = True
         prep.reservations = (res,)
         return prep
+
+    # ---- native per-trip path (PGW_TRIP_NATIVE) ------------------------------------------------------
+    def _prepare_trip_lease(self, call: LinearCall) -> _Prepared | None:
+        """:meth:`_prepare_trip_one` as one native call (:attr:`trip_native`), or ``None`` (no row taken,
+        nothing drawn): the reservation hands no lease for this call, so the caller takes that path.
+
+        Same order: shapes, then (in ``trip_lease``) the window's ``ensure`` / the exhaustion pre-check and
+        the extent's soundness check before any row is taken, then the Freivalds draw, the noise-sampling
+        draw, and ``lease.prepare`` (non-finite activations raise there before the row is taken).
+        """
+        t0 = time.perf_counter()
+        res = self._reservation(call)
+        leases = getattr(res, "trip_leases", None)
+        if leases is None:
+            return None
+        lid = call.id
+        meta: _MaskedMeta = self._meta.get(lid)
+        x = call.x
+        n = meta.in_features
+        if x.shape[1] != n:
+            raise ShapeError(f"{lid}: x must be (T, {n}), got {tuple(x.shape)}")
+        t = int(x.shape[0])
+        key = lid.key
+        lease = leases.get(key)
+        if lease is None or key == res.trip_step_key or not lease.ready(t):
+            vkey = (key, n)
+            verify = self._verifiers.get(vkey) if self.min_soundness_bits > 0 else None
+            if verify is None and self.min_soundness_bits > 0:
+                verify = self._verifiers[vkey] = self._sound_verifier(lid, n)
+            lease = res.trip_lease(lid, t, verify, float(meta.wnorm or 0.0))
+            if lease is None:
+                return None
+        if x.dtype != torch.float32 or x.device.type != "cpu":
+            x = x.to("cpu", torch.float32)
+        xn = x.detach().numpy()
+        if not xn.flags.c_contiguous:
+            xn = np.ascontiguousarray(xn)
+        noise = self.noise_monitor
+        plan_call = guard_packed = None
+        if noise is not None:
+            plan_call = getattr(noise, "plan_call", None)
+            guard_packed = getattr(noise, "guard_packed", None)
+            if plan_call is None or guard_packed is None:
+                plan_call = guard_packed = None
+        check = self._should_check()
+        sampled = bool(plan_call()) if plan_call is not None else noise is not None
+        defer = check and self._defer_ok(lid)
+        threads = 0 if t * n >= int(self.trip_pool_min_elems) else 1
+        try:
+            got = lease.prepare(xn, check, sampled, threads)
+        except ValueError as exc:
+            msg = str(exc)
+            if msg.startswith(("ring_overflow", "nonfinite")):
+                raise RingOverflowError(msg.split(":", 1)[-1].strip()) from exc
+            raise ShapeError(msg) from exc
+        if got is None:  # pragma: no cover - ready() was checked under the GIL just before
+            raise MaskReuseError("mask lease could not serve a call it reported ready for")
+        payload, ticket, xh, xq = got
+        try:
+            if noise is not None:
+                noise_async = (self.noise_async_sampled and plan_call is not None
+                               and hasattr(noise, "inspect_planned")
+                               and t * n <= int(getattr(noise, "_max_values", 0) or 0))
+                if guard_packed is not None and (not sampled or noise_async):
+                    guard_packed(payload, t, n)  # every-call checks (duplicate rows)
+                    if sampled and xh is not None:
+                        self._noise_submit_xq(noise, xh, xq)
+                        xq = None
+                elif xh is not None:
+                    if plan_call is not None:
+                        noise.guard(torch.from_numpy(xh), torch.from_numpy(xq), planned=True)  # type: ignore[attr-defined]
+                    else:
+                        noise.guard(torch.from_numpy(xh), torch.from_numpy(xq))  # type: ignore[attr-defined]
+        except BaseException:
+            ticket.wipe()
+            raise
+        finally:
+            if xq is not None:
+                xq.fill(0)
+        from pgw.wire.messages import ComputeItem, ComputeRequest
+
+        request = ComputeRequest(
+            request_id=_uuid4_hex(),  # uuid4 format, as on every path
+            fingerprint=self.fingerprint,
+            ring=self.ring.name,
+            items=(ComputeItem(key, t, payload),),
+            deadline_ms=self.deadline_ms,
+        )
+        prep = _Prepared((call,), [], [], [meta], request, time.perf_counter() - t0)
+        prep.trip = True
+        prep.one = True
+        prep.ticket = ticket
+        prep.defer = defer
+        prep.reservations = (res,)
+        return prep
+
+    def _noise_submit_xq(self, noise: Any, xh: np.ndarray, xq: np.ndarray) -> None:
+        """:meth:`_noise_submit` with ``xq`` already computed (owned here: wiped after the inspection)."""
+        def run() -> None:
+            try:
+                noise.inspect_planned(torch.from_numpy(xh), torch.from_numpy(xq))
+            finally:
+                xh.fill(0)
+                xq.fill(0)
+
+        pool = self._noise_pool
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._noise_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-noise")
+        self._noise_pending = pool.submit(run)
+
+    def _finish_lease(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        """:meth:`_finish_one` for a trip of the native per-trip path: the same response checks, one
+        ``ticket.finish`` (Freivalds when drawn, synchronously or deferred to the helper thread; unmask,
+        range check, rescale, W r zeroed), the same statistics and integrity reporting."""
+        t0 = time.perf_counter()
+        req = prep.request
+        tk = prep.ticket
+        call = prep.calls[0]
+        lid = call.id
+        meta: _MaskedMeta = prep.metas[0]
+        rows = int(tk.rows)
+        bytes_down = 0
+        pending = None
+        try:
+            if getattr(response, "request_id", None) != req.request_id:
+                raise ProtocolError("compute response id does not match the request")
+            results = tuple(response.items)
+            if len(results) != 1:
+                raise ProtocolError(f"compute response has {len(results)} items, expected 1")
+            item = results[0]
+            if item.linear != lid.key or int(item.rows) != rows:
+                raise ProtocolError(
+                    "compute response item does not match the request",
+                    details={"expected": lid.key, "got": str(item.linear)},
+                )
+            y = item.y_hat
+            bytes_down = len(y)
+            yb = y if isinstance(y, bytes) else np.frombuffer(y, dtype=np.uint8)
+            scale, bias, bound = self._consts(lid, meta)
+            threads = 0 if rows * meta.out_features >= int(self.trip_pool_min_elems) else 1
+            try:
+                status, bad, out, pending = tk.finish(yb, scale, bias, bound, prep.defer, threads)
+            except ValueError as exc:
+                raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+            if status:
+                if pending is not None:  # its verdict no longer matters: wait (it reads y_hat and u)
+                    pending.wait()
+                    pending = None
+                self._raise_status(status, bad, lid, rows, bound)
+            if pending is not None:
+                with self._pending_lock:
+                    self._pending.append(_PendingCheck(prep.reservations, pending, lid, rows, req.request_id))
+                self.stats.add(deferred_checks=1)
+        except IntegrityError as exc:
+            self.stats.add(integrity_failures=1)
+            log.error("integrity check failed: request=%s code=%s details=%s", req.request_id, exc.code, exc.details)
+            if self.on_integrity_failure is not None:
+                try:
+                    self.on_integrity_failure(exc)
+                except Exception:  # pragma: no cover - callback must not mask the error
+                    log.exception("on_integrity_failure callback raised")
+            raise
+        finally:
+            prep.wipe()
+        checked = 1 if tk.checked and pending is None else 0
+        skipped = 0 if tk.checked else 1
+        self.stats.add_many(1, rows, 1, len(req.items[0].x_hat), bytes_down, checked, skipped,
+                            remote_s, prep.t_prepare + time.perf_counter() - t0, 0 < rows <= self.decode_max_rows)
+        y_out = torch.from_numpy(out)
+        dev = call.x.device
+        return [y_out if dev.type == "cpu" else y_out.to(dev)]
 
     def _finish_trip(self, prep: _Prepared, results: Sequence[Any], outs: list[list[torch.Tensor]]) -> None:
         """Finish every chunk with ``pgw_fast.trip_finish_into`` (same outputs and statuses as
@@ -3631,6 +3825,8 @@ class MaskedBackend(LinearBackend):
         return [y if dev.type == "cpu" else y.to(dev)]
 
     def _finish(self, prep: _Prepared, response: Any, remote_s: float) -> list[torch.Tensor]:
+        if prep.ticket is not None:
+            return self._finish_lease(prep, response, remote_s)
         if prep.one:
             return self._finish_one(prep, response, remote_s)
         t0 = time.perf_counter()
