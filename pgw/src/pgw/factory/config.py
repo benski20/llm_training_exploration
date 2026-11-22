@@ -124,6 +124,23 @@ class FactorySettings(PGWSettings):
         "it retires it (burned, never reused) and the factory must produce full segments again (unset this). "
         "Not supported with in-memory mask rings (their layout is fixed). Default: every linear",
     )
+    # ---- GPU mask service (pgw.factory.mask_service; customer-cloud deployment, opt-in) ----------
+    mask_service: bool = Field(
+        False, description="Run as the customer-cloud GPU mask service (deploy/customer-cloud): the plain W8 r "
+        "factory on the customer's own GPU from its own copy of the public pack. Before the first segment a "
+        "throw-away segment is generated on the device and compared bit for bit with an independent CPU reference "
+        "(refuses to start on any difference); device memory is scrubbed after every segment; encrypted "
+        "generation, self_check_rows=0, a CPU device (unless mask_service_allow_cpu) and unsigned or unbound "
+        "export are refused. Delivery: output='store' (gateway store on the same host) or output='export' (HPKE + "
+        "signature, pulled by the gateway with 'pgw maskstore pull'). Off by default",
+    )
+    mask_service_allow_cpu: bool = Field(
+        False, description="mask_service: allow running on a CPU device (tests, small models, measurement)")
+    mask_service_check_rows: int = Field(
+        4, ge=2, le=64, description="mask_service start-up check: sampled W r rows per checked linear")
+    mask_service_check_linears: int = Field(
+        8, ge=0, description="mask_service start-up check: linears compared with the CPU reference (first and last "
+        "layer plus evenly spaced ones; 0 = every linear)")
     # ---- encrypted mask generation (pgw.hemask) -----------------------------------------------
     he_service_url: str | None = Field(
         None, description="Compute service URL: get W8.r from the provider on MLWE-encrypted masks instead of "
@@ -264,6 +281,13 @@ class FactorySettings(PGWSettings):
             raise ValueError("workers > 1 needs output='store' (export staging is per process)")
         if (self.he_client_cert_file is None) != (self.he_client_key_file is None):
             raise ValueError("he_client_cert_file and he_client_key_file must be set together")
+        if self.mask_service:
+            from pgw.factory.mask_service import check_mask_service_settings
+
+            try:
+                check_mask_service_settings(self)
+            except ConfigError as exc:
+                raise ValueError(str(exc)) from exc
         from pgw.hemask.mlwe_ring import check_rank
 
         try:

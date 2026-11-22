@@ -212,9 +212,6 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
                  partner_key: Path | None, destination_store: str | None, he_service: str | None = None,
                  he_token_file: Path | None = None, he_hint_dir: Path | None = None) -> None:
     """Keep inventories between low water and target (settings from PGW_FACTORY_* / PGW_MASKSTORE_*)."""
-    from pgw.factory.governor import apply_process_priority
-    from pgw.factory.runtime import build_scheduler, open_store
-
     s = _factory_settings(
         pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None,
         segment_slots=segment_slots, low_water_slots=low_water, target_slots=target,
@@ -223,6 +220,14 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
         **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
                                 destination_store, he_service, he_token_file, he_hint_dir),
     )
+    _run_factory(s, once, store_root, key_file)
+
+
+def _run_factory(s: Any, once: bool, store_root: Path | None, key_file: Path | None) -> None:
+    """Body of ``run`` and ``mask-service``: a fleet, a single scheduler forever, or one plan (``once``)."""
+    from pgw.factory.governor import apply_process_priority
+    from pgw.factory.runtime import build_scheduler, open_store
+
     if s.workers > 1:
         if once:
             raise click.UsageError("--once runs a single process; use --workers 1")
@@ -250,6 +255,83 @@ def run_cmd(packs: tuple[Path, ...], once: bool, segment_slots: int | None, low_
                 click.echo(f"  {i}")
             return
         sched.run_forever()
+
+
+@factory_group.command("mask-service")
+@click.option("--pack", "packs", multiple=True, type=click.Path(path_type=Path), help="Model pack (repeatable)")
+@click.option("--once", is_flag=True, help="Run a single refill plan and exit")
+@click.option("--check-only", is_flag=True, help="Run the bit-exact start-up check against the CPU reference and exit")
+@click.option("--allow-cpu", is_flag=True, default=None,
+              help="Allow a CPU device (measurement, small models); default: refuse without a GPU")
+@click.option("--segment-slots", type=int, default=None)
+@click.option("--low-water", type=int, default=None, help="Refill below this many available slots")
+@click.option("--target", type=int, default=None, help="Refill up to this many slots")
+@click.option("--check-field", type=click.Choice(["ring", "p31"]), default=None, help="Segment check format")
+@click.option("--json", "as_json", is_flag=True, help="--check-only: print the report as JSON")
+@_with_common
+@_handle_errors
+def mask_service_cmd(packs: tuple[Path, ...], once: bool, check_only: bool, allow_cpu: bool | None,
+                     segment_slots: int | None, low_water: int | None, target: int | None, check_field: str | None,
+                     as_json: bool, rings: tuple[str, ...], device: str | None, backend: str | None,
+                     chunk_slots: int | None, checks: int | None, store_root: Path | None, key_file: Path | None,
+                     export_dir: Path | None, recipient_key: Path | None, partner_key: Path | None,
+                     destination_store: str | None, he_service: str | None = None, he_token_file: Path | None = None,
+                     he_hint_dir: Path | None = None) -> None:
+    """Customer-cloud GPU mask service: plain W8 r on this machine's GPU from the public pack (opt-in mode).
+
+    Refuses to start unless a throw-away segment generated on the device is bit-identical to an independent
+    CPU reference. Output: the gateway's mask store on this host (--store) or signed, HPKE-sealed export files
+    for a gateway on another VM (--export-dir ... ; serve them with 'pgw factory outbox-serve')."""
+    if he_service is not None:
+        raise click.UsageError("the mask service computes masks locally; --he-service does not apply")
+    s = _factory_settings(
+        pack_path=packs[0] if packs else None, extra_pack_paths=tuple(packs[1:]) or None,
+        segment_slots=segment_slots, low_water_slots=low_water, target_slots=target, check_field=check_field,
+        mask_service=True, mask_service_allow_cpu=allow_cpu,
+        **_common_overrides(rings, device, backend, chunk_slots, checks, export_dir, recipient_key, partner_key,
+                            destination_store),
+    )
+    if check_only:
+        from pgw.factory.runtime import build_generators, open_packs
+
+        gens = build_generators(s, open_packs(s))  # runs the start-up check; raises on a mismatch
+        reports = [g.mask_service_check.to_dict() for g in gens.values()]
+        if as_json:
+            click.echo(json.dumps(reports, indent=1, default=str))
+        else:
+            for r in reports:
+                click.echo(f"{short_fingerprint(r['fingerprint'])} {r['ring']} ({r['check_field']}) on {r['device']}/"
+                           f"{r['backend']} gpu_prng={r['gpu_prng']}: OK, {len(r['linears_checked'])} linears x "
+                           f"{r['rows_per_linear']} rows bit-identical ({r['wr_elements_compared']:,} W r and "
+                           f"{r['uw_elements_compared']:,} u W elements)")
+        return
+    _run_factory(s, once, store_root, key_file)
+
+
+@factory_group.command("outbox-serve")
+@click.option("--export-dir", type=click.Path(path_type=Path), required=True, help="The mask service's export dir")
+@click.option("--token-file", type=click.Path(path_type=Path, exists=True, dir_okay=False), required=True,
+              help="Shared bearer token (the gateway's 'pgw maskstore pull --token-file')")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address (the VPC-internal address)")
+@click.option("--port", type=int, default=8470, show_default=True)
+@click.option("--tls-cert", type=click.Path(path_type=Path, exists=True, dir_okay=False), default=None)
+@click.option("--tls-key", type=click.Path(path_type=Path, exists=True, dir_okay=False), default=None)
+@_handle_errors
+def outbox_serve_cmd(export_dir: Path, token_file: Path, host: str, port: int, tls_cert: Path | None,
+                     tls_key: Path | None) -> None:
+    """Serve the export outbox to the gateway VM (sealed + signed segments; the gateway deletes after import)."""
+    from pgw.factory.courier import OutboxServer
+
+    srv = OutboxServer(export_dir / "outbox", token_file, host, port, tls_cert_file=tls_cert, tls_key_file=tls_key)
+    click.echo(f"serving {export_dir / 'outbox'} on {srv.url}", err=True)
+    stop = threading.Event()
+    srv.start()
+    try:
+        with _signal_handlers(stop.set):
+            while not stop.wait(1.0):
+                pass
+    finally:
+        srv.stop()
 
 
 @factory_group.command("status")
