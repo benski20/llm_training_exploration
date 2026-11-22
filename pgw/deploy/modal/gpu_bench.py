@@ -33,6 +33,7 @@ image = (
     .add_local_file(PGW / "deploy/hf-space/constraints.txt", "/opt/pgw-src/constraints.txt", copy=True)
     .run_commands("pip install --no-cache-dir -c /opt/pgw-src/constraints.txt "
                   "'/opt/pgw-src[service,pack,gateway,factory]'")
+    .pip_install("pytest")
     .apt_install("curl", "build-essential")
     .add_local_dir(PGW / "rust", "/opt/pgw-src/rust", copy=True, ignore=["target/**", "**/target/**"])
     .run_commands(
