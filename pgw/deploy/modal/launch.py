@@ -596,10 +596,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="--e2e --placement colocated: after the exactness check, chat back to back for this many "
                          "seconds and report tokens/s and the mask factory's segments finished meanwhile (slots/s "
                          "while a chat decodes)")
-    ap.add_argument("--float-ops", choices=("torch", "native"), default="torch",
+    ap.add_argument("--float-ops", choices=("torch", "native"), default=None,
                     help="--placement colocated: the gateway's float path. 'native' = the pinned native formulation "
                          "(pgw_fast: RMSNorm, RoPE, attention, SiLU in a fixed order; PGW_FLOAT_OPS=native), which "
-                         "the e2e's plaintext reference then uses too (a new reference). Default torch")
+                         "the e2e's plaintext reference then uses too (a new reference). Default: native co-located, "
+                         "torch otherwise")
     ap.add_argument("--float-threads", type=int, default=None,
                     help="--placement colocated: the pinned float formulation. The gateway's process runs torch on "
                          "exactly N threads (OMP_NUM_THREADS=N) and the e2e's plaintext reference on the same N, so "
@@ -659,6 +660,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.float_threads = 1 if args.placement == "colocated" else 0
     if args.float_threads < 0 or (args.float_threads and args.placement != "colocated"):
         ap.error("--float-threads needs --placement colocated and N >= 0")
+    if args.float_ops is None:
+        args.float_ops = "native" if args.placement == "colocated" else "torch"
     if args.float_ops != "torch" and args.placement != "colocated":
         ap.error("--float-ops needs --placement colocated")
     if args.gateway_gpu and (args.placement != "colocated" or not args.gpu):

@@ -15,6 +15,28 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: native pinned float path (package T3)
+
+Per decoded token of one Qwen2.5-0.5B chat co-located: **46-53 ms (from 62-64 in a same-day torch A/B); back to
+back 13.4-16.6 tokens/s (12.7), warm chat 13.7-14.9 (11.6)**, every run logprobs bit-identical, text equal, repeat
+identical. Details: `deploy/modal/README.md`,
+"Native pinned float path".
+
+- **New pinned float reference (decision delegated by the user, 2026-11-22), opt-in.** Model setting
+  `float_ops = "native"` (or `PGW_FLOAT_OPS=native`, `TransformerModel.set_float_ops`): RMSNorm, residual adds,
+  RoPE, attention over the KV cache and the SiLU gate run in `pgw_fast` (`layer.rs`, `attn.rs`) in a fixed order
+  of IEEE operations (no FMA, no libm `exp`; AVX2 and baseline builds give the same bits), one native call
+  between consecutive linears. Every output row depends only on its own inputs and the cache prefix: the bits do
+  not depend on the ISA, torch's thread count or the rows in a pass (speculative verify rows equal decode rows by
+  construction). RMSNorm, attention and SiLU differ from torch in the last bits (RoPE and residual adds are
+  torch's bits), so the gateway and its plaintext reference must both select it; the HF closeness tests pass with
+  it (`tests/engine/test_native_float.py`, plus the existing suites run under `PGW_FLOAT_OPS=native`). The final
+  norm and the LM head are unchanged. Library default stays `torch` (no golden changed); the co-located Modal demo
+  now defaults to it (`launch.py --float-ops native`, reference via `plaintext_reference(float_ops=)`) after an
+  exact e2e. Privacy unchanged: local gateway math only.
+- Per decoded token now (about 50 ms): trips 13 ms, local linears about 10 ms, mask prepare/finish about 8-10 ms,
+  LM head 4 ms, float ops and engine Python about 8-10 ms (from about 20). Not reached: 30 tokens/s.
+
 ## Update 2026-11-22: gateway GPU and pinned float threads (package T2)
 
 Goal 30-40 tokens/s for one Qwen2.5-0.5B chat co-located; reached **13.3-13.6 tokens/s** (warm and back to back,
