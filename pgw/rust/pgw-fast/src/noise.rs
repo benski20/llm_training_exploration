@@ -2,9 +2,10 @@
 //! the duplicate-row (mask reuse) fingerprints of a packed wire payload in one call (`noise_dup_keys`),
 //! replacing about twenty small numpy operations per trip. Bit-identical to `_packed_columns` +
 //! `_dup_fold`'s key computation (wrapping uint64 arithmetic, the same splitmix64 finalizer); the
-//! duplicate bookkeeping (seen set, history) stays in Python.
+//! duplicate bookkeeping (seen set, history) stays in Python, or with the native decode driver in
+//! [`DupHistory`] (shared by both).
 
-use numpy::{PyArray1, PyArray2, PyArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -12,7 +13,89 @@ use pyo3::types::PyBytes;
 /// Add this module's functions to `pgw_fast`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(noise_dup_keys, m)?)?;
+    m.add_class::<DupHistory>()?;
     Ok(())
+}
+
+/// The duplicate-row history of the outbound-noise monitor (`OutboundNoiseMonitor._dup_record`) in
+/// native code, shared by the monitor's Python path and the native decode driver (`decode.rs`), which
+/// records a payload's fingerprints before it is sent, with the GIL released. Same bookkeeping as the
+/// Python set + deque: a row of which any key was seen is a duplicate (and adds nothing); otherwise
+/// every key of the row is added (group order); then the oldest keys beyond `limit` are dropped.
+#[pyclass(module = "pgw_fast", frozen)]
+pub struct DupHistory {
+    inner: std::sync::Mutex<DupState>,
+}
+
+#[derive(Default)]
+struct DupState {
+    seen: std::collections::HashSet<u64>,
+    order: std::collections::VecDeque<u64>,
+}
+
+impl DupHistory {
+    /// Record `rows` rows of `groups` keys (row-major); returns the duplicate rows.
+    pub(crate) fn record_raw(&self, keys: &[u64], rows: usize, groups: usize, limit: usize) -> usize {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let st = &mut *g;
+        let mut dups = 0usize;
+        for t in 0..rows {
+            let row = &keys[t * groups..(t + 1) * groups];
+            if row.iter().any(|k| st.seen.contains(k)) {
+                dups += 1;
+                continue;
+            }
+            for &k in row {
+                st.seen.insert(k);
+                st.order.push_back(k);
+            }
+        }
+        while st.order.len() > limit {
+            if let Some(k) = st.order.pop_front() {
+                st.seen.remove(&k);
+            }
+        }
+        dups
+    }
+}
+
+#[pymethods]
+impl DupHistory {
+    #[new]
+    fn new() -> Self {
+        DupHistory { inner: std::sync::Mutex::new(DupState::default()) }
+    }
+
+    /// ``record(keys, limit) -> duplicate rows``: ``keys`` uint64 ``(rows, groups)``.
+    fn record(&self, py: Python<'_>, keys: &Bound<'_, PyArray2<u64>>, limit: usize) -> PyResult<usize> {
+        let ro = keys.try_readonly().map_err(|e| PyValueError::new_err(format!("keys: {e}")))?;
+        let (rows, groups) = (ro.shape()[0], ro.shape()[1]);
+        let ks = ro.as_slice().map_err(|_| PyValueError::new_err("keys must be C-contiguous"))?;
+        Ok(py.allow_threads(|| self.record_raw(ks, rows, groups, limit)))
+    }
+
+    /// Replace the history with ``order`` (oldest first).
+    fn load(&self, order: Vec<u64>) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.seen.clear();
+        g.order.clear();
+        for k in order {
+            g.seen.insert(k);
+            g.order.push_back(k);
+        }
+    }
+
+    /// Forget everything.
+    fn clear(&self) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.seen.clear();
+        g.order.clear();
+    }
+
+    /// Keys held (with repeats, as the Python deque).
+    fn __len__(&self) -> usize {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).order.len()
+    }
 }
 
 #[inline(always)]

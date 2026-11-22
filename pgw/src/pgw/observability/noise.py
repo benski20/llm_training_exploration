@@ -278,6 +278,8 @@ class OutboundNoiseMonitor:
         )
         self._dup_seen: set[int] = set()
         self._dup_order: deque[int] = deque()
+        #: The native duplicate history (:meth:`native_dup_history`), when a native caller asked for it.
+        self._dup_native: Any | None = None
         self._dup_cols_cache: dict[int, np.ndarray] = {}
         #: :meth:`guard_packed`'s fingerprints in one native call (``PGW_NOISE_NATIVE=0``: numpy).
         self._native_keys = _native_dup_keys()
@@ -657,9 +659,14 @@ class OutboundNoiseMonitor:
 
     def _dup_record(self, keys: np.ndarray, t: int, groups: int, reasons: list[str]) -> None:
         """Count rows whose fingerprint (any group's key, uint64 ``(t, groups)``) was seen before."""
+        limit = self.config.duplicate_history_rows * groups
+        hist = self._dup_native
+        if hist is not None:  # the native history (same bookkeeping), shared with the native decode driver
+            dups = int(hist.record(np.ascontiguousarray(keys, dtype=np.uint64), int(limit)))
+            self._dup_counted(t, dups, reasons)
+            return
         keys_per_group = keys.T.tolist()
         seen, order = self._dup_seen, self._dup_order
-        limit = self.config.duplicate_history_rows * groups
         dups = 0
         for row_keys in zip(*keys_per_group, strict=True):
             if any(k in seen for k in row_keys):
@@ -670,12 +677,61 @@ class OutboundNoiseMonitor:
                 order.append(k)
         while len(order) > limit:
             seen.discard(order.popleft())
+        self._dup_counted(t, dups, reasons)
+
+    def _dup_counted(self, t: int, dups: int, reasons: list[str]) -> None:
         self._rows_checked += t
         if dups:
             self._duplicates += dups
             reasons.append(
                 f"duplicate outbound rows detected ({dups} in a call of {t} rows): possible mask reuse"
             )
+
+    # ---- native duplicate history (the native decode driver, PGW_DECODE_NATIVE) -------------------------
+    def native_dup_history(self) -> Any | None:
+        """Move the duplicate-row history into a native ``pgw_fast.DupHistory`` (same bookkeeping, same
+        contents in the same order) and return it, so a native caller can record a payload's fingerprints
+        before it is sent without the GIL; every later record (this monitor's own paths included) goes
+        through it. ``None`` without the native extension or with duplicate detection off."""
+        with self._lock:
+            if self._dup_native is not None:
+                return self._dup_native
+            if not self.config.duplicate_check:
+                return None
+            try:
+                from pgw.core.native import fast
+            except Exception:  # pragma: no cover - no extension
+                return None
+            cls = getattr(fast, "DupHistory", None) if fast is not None else None
+            if cls is None:
+                return None
+            hist = cls()
+            hist.load(list(self._dup_order))
+            self._dup_native = hist
+            self._dup_seen = set()
+            self._dup_order = deque()
+            return hist
+
+    def record_native_dups(self, rows: int, dups: int, at_rows: int = 0) -> None:
+        """Account for fingerprints a native caller recorded in :meth:`native_dup_history` (``rows`` rows
+        checked, ``dups`` duplicates found in a call of ``at_rows`` rows): the same counters, alarm and
+        fail-closed behaviour as :meth:`guard_packed_keys`.
+
+        Raises:
+            IntegrityError: The monitor alarms (now or earlier) and ``fail_closed`` is set.
+        """
+        new_reasons: list[str] = []
+        with self._lock:
+            self._rows_checked += int(rows)
+            if dups:
+                self._duplicates += int(dups)
+                new_reasons.append(f"duplicate outbound rows detected ({int(dups)} in a call of {int(at_rows)} "
+                                   "rows): possible mask reuse")
+                self._set_alarm(new_reasons)
+        if new_reasons:
+            self._notify()
+        if self.fail_closed and self._alarm:
+            self._raise_blocked()
 
     # statistics --------------------------------------------------------------------------------
     def _inspect(self, x: torch.Tensor, xq: torch.Tensor | None, reasons: list[str]) -> None:

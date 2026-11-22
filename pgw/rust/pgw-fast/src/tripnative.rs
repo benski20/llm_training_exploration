@@ -556,7 +556,7 @@ impl TripLease {
             return Err(verr("x has no rows"));
         }
         let xs = xa.as_slice().map_err(|e| verr(e.to_string()))?;
-        if !xs.iter().fold(true, |ok, v| ok & v.is_finite()) {
+        if !all_finite(xs) {
             return Err(verr("nonfinite: non-finite activation values cannot be quantized"));
         }
         let uwa = if check { Some(RoRing::extract(self.uw.bind(py), "uw", self.prm.k)?) } else { None };
@@ -565,23 +565,184 @@ impl TripLease {
             Some((cols, shift, mult, groups, per)) => {
                 let ca = cols.try_readonly().map_err(|e| verr(format!("cols: {e}")))?;
                 let ma = mult.try_readonly().map_err(|e| verr(format!("mult: {e}")))?;
-                let ok = {
+                {
                     let cs = ca.as_slice().map_err(|_| verr("cols must be contiguous"))?;
                     let ms = ma.as_slice().map_err(|_| verr("mult must be contiguous"))?;
-                    *groups > 0
-                        && *per > 0
-                        && cs.len() >= groups * per
-                        && ms.len() >= groups * per
-                        && *shift < 64
-                        && cs.iter().take(groups * per).all(|&c| c >= 0 && (c as usize) < n)
-                };
-                if !ok {
-                    return Err(verr("bad fingerprint parameters"));
+                    if !DupIn::valid(cs, *shift, ms, *groups, *per, n) {
+                        return Err(verr("bad fingerprint parameters"));
+                    }
                 }
                 Some((ca, *shift, ma, *groups, *per))
             }
             None => None,
         };
+        if !self.ready(t) {
+            return Ok(None);
+        }
+        let nb = (self.prm.k / 8) as usize;
+        let plen = t * n * nb;
+        // SAFETY: a fresh, unshared bytes object of `plen` bytes; filled below before anyone sees it.
+        let payload: Bound<'py, PyBytes> = unsafe {
+            let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), plen as pyo3::ffi::Py_ssize_t);
+            Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked()
+        };
+        // SAFETY: exclusive (just created, not returned yet).
+        let pl: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(payload.as_bytes().as_ptr() as *mut u8, plen) };
+        let (xh_arr, xq_arr) = if sampled {
+            (Some(PyArray2::<i64>::zeros(py, [t, n], false)), Some(PyArray2::<i64>::zeros(py, [t, n], false)))
+        } else {
+            (None, None)
+        };
+        // SAFETY: fresh arrays, not shared with Python code until returned.
+        let xh: &mut [i64] = match &xh_arr {
+            Some(a) => unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?,
+            None => &mut [],
+        };
+        let xq: &mut [i64] = match &xq_arr {
+            Some(a) => unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?,
+            None => &mut [],
+        };
+        let keys_arr = dup_ro.as_ref().map(|(_, _, _, groups, _)| PyArray2::<u64>::zeros(py, [t, *groups], false));
+        // SAFETY: fresh array, not shared with Python code yet.
+        let keys: &mut [u64] = match &keys_arr {
+            Some(a) => unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?,
+            None => &mut [],
+        };
+        let uw_src = match &uwa {
+            Some(a) => Some(a.src("uw")?.0),
+            None => None,
+        };
+        let dup_in = match &dup_ro {
+            Some((ca, shift, ma, groups, per)) => Some(DupIn {
+                cols: ca.as_slice().map_err(|e| verr(e.to_string()))?,
+                shift: *shift,
+                mult: ma.as_slice().map_err(|e| verr(e.to_string()))?,
+                groups: *groups,
+                per: *per,
+            }),
+            None => None,
+        };
+        let res = py.allow_threads(|| {
+            self.prepare_core(xs, t, uw_src, threads, split, PrepIo { payload: pl, xh, xq, keys }, dup_in.as_ref())
+        });
+        match res {
+            Ok(None) => Ok(None),
+            Ok(Some(mut ticket)) => {
+                if check {
+                    ticket.u = Some(self.u.clone_ref(py));
+                }
+                Ok(Some((payload, ticket, xh_arr, xq_arr, keys_arr)))
+            }
+            Err(e) => Err(e.into_py()),
+        }
+    }
+}
+
+/// Why [`TripLease::prepare_core`] failed.
+pub(crate) enum CoreErr {
+    /// Non-finite activations (no row taken).
+    NonFinite,
+    /// The prepare kernel refused (row consumed, outputs zeroed).
+    Prep(PrepareError),
+    /// Anything else (row consumed when it happened after the take, outputs zeroed).
+    Msg(String),
+}
+
+impl CoreErr {
+    pub(crate) fn into_py(self) -> PyErr {
+        match self {
+            CoreErr::NonFinite => verr("nonfinite: non-finite activation values cannot be quantized"),
+            CoreErr::Prep(e) => e.into_py(),
+            CoreErr::Msg(m) => verr(m),
+        }
+    }
+}
+
+/// The outbound-noise monitor's duplicate-row fingerprint parameters (`noise_dup_keys`).
+pub(crate) struct DupIn<'a> {
+    pub(crate) cols: &'a [i64],
+    pub(crate) shift: u32,
+    pub(crate) mult: &'a [u64],
+    pub(crate) groups: usize,
+    pub(crate) per: usize,
+}
+
+impl DupIn<'_> {
+    pub(crate) fn valid(cols: &[i64], shift: u32, mult: &[u64], groups: usize, per: usize, n: usize) -> bool {
+        groups > 0
+            && per > 0
+            && cols.len() >= groups * per
+            && mult.len() >= groups * per
+            && shift < 64
+            && cols.iter().take(groups * per).all(|&c| c >= 0 && (c as usize) < n)
+    }
+}
+
+/// Output buffers of [`TripLease::prepare_core`]: the payload (`rows * n * K/8` bytes), with sampling
+/// `x_hat` and `xq` (`rows * n`, else empty), with fingerprints the keys (`rows * groups`, else empty).
+pub(crate) struct PrepIo<'a> {
+    pub(crate) payload: &'a mut [u8],
+    pub(crate) xh: &'a mut [i64],
+    pub(crate) xq: &'a mut [i64],
+    pub(crate) keys: &'a mut [u64],
+}
+
+pub(crate) fn all_finite(xs: &[f32]) -> bool {
+    xs.iter().fold(true, |ok, v| ok & v.is_finite())
+}
+
+impl TripLease {
+    pub(crate) fn n_in(&self) -> usize {
+        self.n
+    }
+    pub(crate) fn m_out(&self) -> usize {
+        self.m
+    }
+    pub(crate) fn k_bits(&self) -> u32 {
+        self.prm.k
+    }
+    pub(crate) fn uw_obj(&self) -> &Py<PyAny> {
+        &self.uw
+    }
+    pub(crate) fn u_obj(&self) -> &Py<PyAny> {
+        &self.u
+    }
+
+    /// The GIL-free core of `prepare` (the Python method and the decode driver, `decode.rs`):
+    /// finiteness (no row taken on failure), take `t` rows (consumed from then on), derive `r`,
+    /// quantize + mask + pack, the input half when `uw` is given, `x_hat`/`xq` when `io.xh` is
+    /// non-empty, the fingerprints when `dup` is given. `Ok(None)`: the lease cannot serve (nothing
+    /// taken). The returned ticket has no check vectors attached (`u`): the caller attaches them or
+    /// passes them to [`TripTicket::finish_core`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_core(
+        &self,
+        xs: &[f32],
+        t: usize,
+        uw: Option<Src<'_>>,
+        threads: usize,
+        split: usize,
+        io: PrepIo<'_>,
+        dup: Option<&DupIn<'_>>,
+    ) -> Result<Option<TripTicket>, CoreErr> {
+        let n = self.n;
+        let nb = (self.prm.k / 8) as usize;
+        let PrepIo { payload: pl, xh, xq, keys } = io;
+        if t == 0 || xs.len() != t * n || pl.len() != t * n * nb {
+            return Err(CoreErr::Msg(format!("prepare_core: shapes (t={t}, n={n})")));
+        }
+        if (!xh.is_empty() && (xh.len() != t * n || xq.len() != t * n)) || (xh.is_empty() && !xq.is_empty()) {
+            return Err(CoreErr::Msg("prepare_core: x_hat/xq buffers".into()));
+        }
+        if let Some(d) = dup {
+            if !DupIn::valid(d.cols, d.shift, d.mult, d.groups, d.per, n) || keys.len() != t * d.groups {
+                return Err(CoreErr::Msg("bad fingerprint parameters".into()));
+            }
+        }
+        if !all_finite(xs) {
+            return Err(CoreErr::NonFinite);
+        }
+        let check = uw.is_some();
         // ---- take the rows (consumed from here on, whatever happens below) ----
         let (row0, segs, mut key, pre) = {
             let mut g = self.core.lock();
@@ -626,44 +787,18 @@ impl TripLease {
             sx: vec![0f64; t],
             rhs: if check { vec![0u64; check_iface::rhs_len(t, c)] } else { Vec::new() },
             c: if check { c } else { 0 },
-            u: if check { Some(self.u.clone_ref(py)) } else { None },
+            u: None,
             done: false,
             field: self.field,
         };
-        let nb = (self.prm.k / 8) as usize;
-        let plen = t * n * nb;
-        // SAFETY: a fresh, unshared bytes object of `plen` bytes; filled below before anyone sees it.
-        let payload: Bound<'py, PyBytes> = unsafe {
-            let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), plen as pyo3::ffi::Py_ssize_t);
-            Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked()
-        };
-        // SAFETY: exclusive (just created, not returned yet).
-        let pl: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(payload.as_bytes().as_ptr() as *mut u8, plen) };
-        let (xh_arr, xq_arr) = if sampled {
-            (Some(PyArray2::<i64>::zeros(py, [t, n], false)), Some(PyArray2::<i64>::zeros(py, [t, n], false)))
-        } else {
-            (None, None)
-        };
-        // SAFETY: fresh arrays, not shared with Python code until returned.
-        let xh: &mut [i64] = match &xh_arr {
-            Some(a) => unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?,
-            None => &mut [],
-        };
-        let xq: &mut [i64] = match &xq_arr {
-            Some(a) => unsafe { a.as_slice_mut() }.map_err(|e| verr(e.to_string()))?,
-            None => &mut [],
-        };
-        let half = match &uwa {
-            Some(a) => Some(check_iface::input_half(a.src("uw")?.0, c)),
-            None => None,
-        };
+        let half = uw.map(|s| check_iface::input_half(s, c));
         let prm = self.prm;
         let slot = self.slot0 + row0 as u64;
         let field = if check { self.field } else { 0 };
-        let sx: &mut [f64] = &mut ticket.sx;
-        let rhs: &mut [u64] = &mut ticket.rhs;
         let mut pre = pre;
-        let res: Result<(), PyErr> = py.allow_threads(|| {
+        let res: Result<(), CoreErr> = {
+            let sx: &mut [f64] = &mut ticket.sx;
+            let rhs: &mut [u64] = &mut ticket.rhs;
             R_SCRATCH.with(|cell| {
                 let mut r = cell.borrow_mut();
                 let have = pre.is_some();
@@ -676,21 +811,21 @@ impl TripLease {
                         &mut r[..t * n]
                     }
                 };
-                let out = (|| -> Result<(), PyErr> {
+                let out = (|| -> Result<(), CoreErr> {
                     if !have {
                         if split >= 2 {
                             crate::trip::split::fill_ring_split(&key, slot * n as u64, rs, prm.k, split)
-                                .map_err(verr)?;
+                                .map_err(|e| CoreErr::Msg(e.to_string()))?;
                         } else {
-                            fill_ring(&key, slot * n as u64, rs, prm.k).map_err(verr)?;
+                            fill_ring(&key, slot * n as u64, rs, prm.k).map_err(|e| CoreErr::Msg(e.to_string()))?;
                         }
                     }
-                    let po = PrepOut { payload: pl, sx, xhat: xh, rhs };
+                    let po = PrepOut { payload: &mut *pl, sx, xhat: &mut *xh, rhs };
                     if split >= 2 {
                         crate::trip::split::prepare_split(xs, rs, n, prm, half, field, po, split)
-                            .map_err(PrepareError::into_py)?;
+                            .map_err(CoreErr::Prep)?;
                     } else {
-                        prepare_into_field(xs, rs, n, prm, half, field, po, threads).map_err(PrepareError::into_py)?;
+                        prepare_into_field(xs, rs, n, prm, half, field, po, threads).map_err(CoreErr::Prep)?;
                     }
                     if !xq.is_empty() {
                         let mask: u64 = if prm.k == 64 { u64::MAX } else { (1u64 << prm.k) - 1 };
@@ -705,8 +840,13 @@ impl TripLease {
                 wipe(rs); // one-time pad: never kept
                 out
             })
-        });
+        };
         key.zeroize();
+        let res = res.and_then(|()| match dup {
+            Some(d) => crate::noise::dup_keys(pl, t, n, nb, d.cols, d.shift, d.mult, d.groups, d.per, keys)
+                .map_err(CoreErr::Msg),
+            None => Ok(()),
+        });
         if let Err(e) = res {
             wipe(pl);
             wipe(xh);
@@ -714,28 +854,7 @@ impl TripLease {
             ticket.wipe_all(); // the rows stay consumed; their W r is zeroed now
             return Err(e);
         }
-        let keys = match &dup_ro {
-            Some((ca, shift, ma, groups, per)) => {
-                let arr = PyArray2::<u64>::zeros(py, [t, *groups], false);
-                let done = {
-                    // SAFETY: fresh array, not shared with Python code yet.
-                    let out = unsafe { arr.as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
-                    let cs = ca.as_slice().map_err(|e| verr(e.to_string()))?;
-                    let ms = ma.as_slice().map_err(|e| verr(e.to_string()))?;
-                    crate::noise::dup_keys(pl, t, n, nb, cs, *shift, ms, *groups, *per, out)
-                };
-                if let Err(e) = done {
-                    wipe(pl);
-                    wipe(xh);
-                    wipe(xq);
-                    ticket.wipe_all();
-                    return Err(verr(e));
-                }
-                Some(arr)
-            }
-            None => None,
-        };
-        Ok(Some((payload, ticket, xh_arr, xq_arr, keys)))
+        Ok(Some(ticket))
     }
 }
 
@@ -772,7 +891,7 @@ pub struct TripTicket {
 
 impl TripTicket {
     /// Zero this trip's `W r` rows in the chunk, `sx` and `rhs`; release the chunk.
-    fn wipe_all(&mut self) {
+    pub(crate) fn wipe_all(&mut self) {
         let nb = (self.k / 8) as usize;
         for sg in self.segs.drain(..) {
             let a = sg.elem_off * nb;
@@ -906,7 +1025,6 @@ impl TripTicket {
         threads: usize,
         split: usize,
     ) -> PyResult<(u8, usize, Bound<'py, PyArray2<f32>>, Option<TripCheck>)> {
-        let threads = if split >= 2 { split } else { threads };
         if self.done {
             return Err(verr("trip ticket already finished or wiped (single use)"));
         }
@@ -959,13 +1077,7 @@ impl TripTicket {
             self.wipe_all();
             return Err(verr(format!("scale/bias must have {m} entries")));
         }
-        if self.segs.iter().map(|s| s.rows).sum::<usize>() != rows {
-            self.wipe_all();
-            return Err(verr("trip ticket has no W r rows"));
-        }
-        let segs = std::mem::take(&mut self.segs);
         let mut pending: Option<TripCheck> = None;
-        let mut rhs = std::mem::take(&mut self.rhs);
         let c = self.c;
         let ua = match &self.u {
             Some(u) => Some(RoRing::extract(u.bind(py), "u", k)?),
@@ -973,11 +1085,16 @@ impl TripTicket {
         };
         let prime = c > 0 && check_iface::sync_only(self.field);
         let defer = defer && !prime;
+        let mut mode = FinishMode::Sync;
         if c > 0 && defer {
             let u = self.u.as_ref().map(|u| u.bind(py).clone());
             if let Some(u) = u {
+                let mut rhs = std::mem::take(&mut self.rhs);
                 match check_iface::submit(py, &yb, &u, &mut rhs, rows, c, k) {
-                    Ok(p) => pending = Some(p),
+                    Ok(p) => {
+                        pending = Some(p);
+                        mode = FinishMode::Submitted;
+                    }
                     Err(e) => {
                         wipe(&mut rhs);
                         self.wipe_all();
@@ -990,100 +1107,194 @@ impl TripTicket {
             Some(a) => Some(a.src("u")?.0),
             None => None,
         };
-        let check = match (c > 0 && !defer && !prime, u_src) {
+        // SAFETY: a fresh array, not shared with Python until returned.
+        let os: &mut [f32] = unsafe { out.as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
+        let res = py.allow_threads(|| self.finish_core(ys, u_src, sc, bs, bound, mode, threads, split, os));
+        self.u = None;
+        match res {
+            // a failed status with a pending check: the caller waits for it before raising
+            Ok((status, bad, _none)) => Ok((status, bad, out, pending)),
+            Err(FinishErr::Msg(e)) => {
+                drop(pending);
+                Err(verr(e))
+            }
+            Err(FinishErr::Internal) => {
+                drop(pending);
+                Err(PyRuntimeError::new_err("TripTicket.finish: internal error in a finish worker (outputs zeroed)"))
+            }
+        }
+    }
+}
+
+/// How [`TripTicket::finish_core`] runs the Freivalds output half of a checked trip.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FinishMode {
+    /// Synchronously (ring: fused in the finish kernel; prime: before the unmask).
+    Sync,
+    /// Ring checks on the native helper thread ([`crate::trip::freivalds_submit_raw`]); prime: sync.
+    NativeDefer,
+    /// The caller already submitted the output half (the Python `TripCheck`): no check here.
+    Submitted,
+}
+
+/// Why [`TripTicket::finish_core`] failed (the ticket is wiped, the outputs zeroed).
+pub(crate) enum FinishErr {
+    Msg(String),
+    Internal,
+}
+
+impl TripTicket {
+    pub(crate) fn is_checked(&self) -> bool {
+        self.c > 0
+    }
+    pub(crate) fn attach_u(&mut self, u: Py<PyAny>) {
+        if self.c > 0 {
+            self.u = Some(u);
+        }
+    }
+
+    /// The GIL-free core of `finish`: unmask `ys` (`rows * m * K/8` bytes) with this trip's `W r`,
+    /// range check, Freivalds per `mode` (`u`: the lease's check vectors, required when checked),
+    /// rescale + bias into `os` (`rows * m`, zeros unless the status is 0); `W r`, `sx`, `rhs` zeroed.
+    /// Returns `(status, bad_rows, pending)` (`pending`: [`FinishMode::NativeDefer`] on a checked ring
+    /// trip; it reads `ys` and `u`, which must stay valid until it was waited for or dropped).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finish_core(
+        &mut self,
+        ys: &[u8],
+        u: Option<Src<'_>>,
+        sc: &[f32],
+        bs: Option<&[f32]>,
+        bound: u64,
+        mode: FinishMode,
+        threads: usize,
+        split: usize,
+        os: &mut [f32],
+    ) -> Result<(u8, usize, Option<crate::trip::RawPending>), FinishErr> {
+        let threads = if split >= 2 { split } else { threads };
+        if self.done {
+            wipe(os);
+            return Err(FinishErr::Msg("trip ticket already finished or wiped (single use)".into()));
+        }
+        let (rows, m, k) = (self.rows, self.m, self.k);
+        let nb = (k / 8) as usize;
+        if self.core.closed() {
+            self.wipe_all();
+            wipe(os);
+            return Ok((3, 0, None));
+        }
+        if ys.len() != rows * m * nb || os.len() != rows * m {
+            self.wipe_all();
+            wipe(os);
+            return Err(FinishErr::Msg(format!("ring payload has {} bytes, expected {}", ys.len(), rows * m * nb)));
+        }
+        if sc.len() != m || bs.is_some_and(|b| b.len() != m) {
+            self.wipe_all();
+            wipe(os);
+            return Err(FinishErr::Msg(format!("scale/bias must have {m} entries")));
+        }
+        if self.segs.iter().map(|s| s.rows).sum::<usize>() != rows {
+            self.wipe_all();
+            wipe(os);
+            return Err(FinishErr::Msg("trip ticket has no W r rows".into()));
+        }
+        let c = self.c;
+        let prime = c > 0 && check_iface::sync_only(self.field);
+        if c > 0 && mode != FinishMode::Submitted && u.is_none() {
+            self.wipe_all();
+            wipe(os);
+            return Err(FinishErr::Msg("trip ticket lost its check vectors".into()));
+        }
+        let segs = std::mem::take(&mut self.segs);
+        let mut rhs = std::mem::take(&mut self.rhs);
+        let mut pending = None;
+        if c > 0 && mode == FinishMode::NativeDefer && !prime {
+            if let Some(us) = u {
+                // SAFETY: the caller keeps `ys` and `u` alive and unchanged until the handle is done.
+                pending = Some(unsafe { crate::trip::freivalds_submit_raw(ys, us, std::mem::take(&mut rhs), c, m, k) });
+            }
+        }
+        let check = match (c > 0 && mode == FinishMode::Sync && !prime, u) {
             (true, Some(us)) => check_iface::split(us, &rhs, c),
             _ => CheckMode::Off,
         };
         // prime format: the output half reads W r before the finish kernel unmasks (and wipes) it
-        let prime_u = if prime { u_src } else { None };
-        if prime && prime_u.is_none() {
-            self.wipe_all();
-            return Err(verr("trip ticket lost its check vectors"));
-        }
+        let prime_u = if prime && mode != FinishMode::Submitted { u } else { None };
         let sx = std::mem::take(&mut self.sx);
         let direct = self.direct && segs.len() == 1;
-        // SAFETY: a fresh array, not shared with Python until returned.
-        let os: &mut [f32] = unsafe { out.as_slice_mut() }.map_err(|e| verr(e.to_string()))?;
-        let res = py.allow_threads(|| {
-            WR_SCRATCH.with(|cell| {
-                let mut scratch = cell.borrow_mut();
-                let n_el = rows * m;
-                let wrb = if direct {
-                    // SAFETY: the ticket's rows of the held chunk, 4-byte aligned u32 words (K = 32),
-                    // read and zeroed only by this call.
-                    unsafe { WrBuf::new(segs[0].hold.ptr.add(segs[0].elem_off * 4), n_el, false, true) }
-                } else {
-                    if scratch.len() < n_el {
-                        scratch.resize(n_el, 0);
-                    }
-                    let mut d0 = 0usize;
-                    for sg in &segs {
-                        let cnt = sg.rows * m;
-                        let base = sg.elem_off * nb;
-                        for (i, d) in scratch[d0..d0 + cnt].iter_mut().enumerate() {
-                            let mut w = [0u8; 8];
-                            for (j, wb) in w.iter_mut().enumerate().take(nb) {
-                                // SAFETY: in bounds of the held chunk (validated at lease creation);
-                                // only this ticket touches these bytes.
-                                let p = unsafe { sg.hold.ptr.add(base + i * nb + j) };
-                                *wb = unsafe { std::ptr::read(p) };
-                                unsafe { std::ptr::write_volatile(p, 0) };
-                            }
-                            *d = u64::from_le_bytes(w);
-                        }
-                        d0 += cnt;
-                    }
-                    // SAFETY: the scratch is exclusively ours for this call; zeroed by the kernel.
-                    unsafe { WrBuf::new(scratch.as_mut_ptr().cast::<u8>(), n_el, true, true) }
-                };
-                let args = FinishArgs { y_hat: ys, wr: wrb, sx: &sx, scale: sc, bias: bs, k, bound, check };
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if let Some(us) = prime_u {
-                        let wsrc = if direct {
-                            // SAFETY: the same n_el aligned u32 words WrBuf reads below; nothing writes
-                            // them until this read-only view is gone.
-                            Src::U32(unsafe {
-                                std::slice::from_raw_parts(
-                                    segs[0].hold.ptr.add(segs[0].elem_off * 4).cast::<u32>(),
-                                    n_el,
-                                )
-                            })
-                        } else {
-                            // SAFETY: the scratch words filled above (n_el of them), read only here.
-                            Src::U64(unsafe { std::slice::from_raw_parts(scratch.as_ptr(), n_el) })
-                        };
-                        let (st, bad) = check_iface::prime_output(ys, wsrc, us, &rhs, c, m, k, bound, split);
-                        if st != crate::finish::STATUS_OK {
-                            // never unmasked: zero W r and the outputs (fail closed)
-                            wrb.wipe_all();
-                            wipe(os);
-                            return (st, bad);
-                        }
-                    }
-                    finish_into(&args, os, threads)
-                }));
-                if r.is_err() {
-                    wipe(os);
-                    wrb.wipe_all();
+        let res = WR_SCRATCH.with(|cell| {
+            let mut scratch = cell.borrow_mut();
+            let n_el = rows * m;
+            let wrb = if direct {
+                // SAFETY: the ticket's rows of the held chunk, 4-byte aligned u32 words (K = 32),
+                // read and zeroed only by this call.
+                unsafe { WrBuf::new(segs[0].hold.ptr.add(segs[0].elem_off * 4), n_el, false, true) }
+            } else {
+                if scratch.len() < n_el {
+                    scratch.resize(n_el, 0);
                 }
-                if !direct {
-                    wipe(&mut scratch[..n_el]);
+                let mut d0 = 0usize;
+                for sg in &segs {
+                    let cnt = sg.rows * m;
+                    let base = sg.elem_off * nb;
+                    for (i, d) in scratch[d0..d0 + cnt].iter_mut().enumerate() {
+                        let mut w = [0u8; 8];
+                        for (j, wb) in w.iter_mut().enumerate().take(nb) {
+                            // SAFETY: in bounds of the held chunk (validated at lease creation);
+                            // only this ticket touches these bytes.
+                            let p = unsafe { sg.hold.ptr.add(base + i * nb + j) };
+                            *wb = unsafe { std::ptr::read(p) };
+                            unsafe { std::ptr::write_volatile(p, 0) };
+                        }
+                        *d = u64::from_le_bytes(w);
+                    }
+                    d0 += cnt;
                 }
-                r
-            })
+                // SAFETY: the scratch is exclusively ours for this call; zeroed by the kernel.
+                unsafe { WrBuf::new(scratch.as_mut_ptr().cast::<u8>(), n_el, true, true) }
+            };
+            let args = FinishArgs { y_hat: ys, wr: wrb, sx: &sx, scale: sc, bias: bs, k, bound, check };
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let Some(us) = prime_u {
+                    let wsrc = if direct {
+                        // SAFETY: the same n_el aligned u32 words WrBuf reads below; nothing writes
+                        // them until this read-only view is gone.
+                        Src::U32(unsafe {
+                            std::slice::from_raw_parts(segs[0].hold.ptr.add(segs[0].elem_off * 4).cast::<u32>(), n_el)
+                        })
+                    } else {
+                        // SAFETY: the scratch words filled above (n_el of them), read only here.
+                        Src::U64(unsafe { std::slice::from_raw_parts(scratch.as_ptr(), n_el) })
+                    };
+                    let (st, bad) = check_iface::prime_output(ys, wsrc, us, &rhs, c, m, k, bound, split);
+                    if st != crate::finish::STATUS_OK {
+                        // never unmasked: zero W r and the outputs (fail closed)
+                        wrb.wipe_all();
+                        wipe(&mut *os);
+                        return (st, bad);
+                    }
+                }
+                finish_into(&args, &mut *os, threads)
+            }));
+            if r.is_err() {
+                wipe(&mut *os);
+                wrb.wipe_all();
+            }
+            if !direct {
+                wipe(&mut scratch[..n_el]);
+            }
+            r
         });
         let mut sx = sx;
         wipe(&mut sx);
         wipe(&mut rhs);
         drop(segs); // our rows were zeroed by the kernel (or copied out and zeroed above)
         self.done = true;
-        self.u = None;
         match res {
-            // a failed status with a pending check: the caller waits for it before raising
-            Ok((status, bad)) => Ok((status, bad, out, pending)),
+            Ok((status, bad)) => Ok((status, bad, pending)),
             Err(_) => {
                 drop(pending);
-                Err(PyRuntimeError::new_err("TripTicket.finish: internal error in a finish worker (outputs zeroed)"))
+                Err(FinishErr::Internal)
             }
         }
     }

@@ -1192,6 +1192,67 @@ impl Drop for TripCheck {
     }
 }
 
+/// A deferred output half submitted from native code (the decode driver, `decode.rs`): the job reads
+/// borrowed buffers, so the handle waits for it in [`Drop`] (and [`RawPending::wait`]).
+pub(crate) struct RawPending {
+    state: Arc<CheckState>,
+}
+
+impl RawPending {
+    /// Block until the job ran; `(status, bad_rows)` as [`freivalds_output`].
+    pub(crate) fn wait(&self) -> (u8, usize) {
+        self.state.wait()
+    }
+}
+
+impl Drop for RawPending {
+    fn drop(&mut self) {
+        let _ = self.state.wait();
+    }
+}
+
+/// [`trip_freivalds_submit`] without Python objects: the output half of `rhs` (moved in, wiped by the
+/// job) on the helper thread.
+///
+/// # Safety
+/// `y_hat` and `u` must stay valid and unchanged until the returned handle was waited for or dropped.
+pub(crate) unsafe fn freivalds_submit_raw(y_hat: &[u8], u: Src<'_>, rhs: Vec<u64>, c: usize, m: usize, k: u32) -> RawPending {
+    let raw_u = match u {
+        Src::U64(s) => RawSrc::U64(s.as_ptr(), s.len()),
+        Src::U32(s) => RawSrc::U32(s.as_ptr(), s.len()),
+        Src::Bytes(_) => {
+            // not a check-vector layout: fail closed
+            let state = Arc::new(CheckState { res: Mutex::new(Some((STATUS_INTERNAL, 0))), cv: Condvar::new() });
+            let mut rhs = rhs;
+            wipe(&mut rhs);
+            return RawPending { state };
+        }
+    };
+    let job = RawJob { y: (y_hat.as_ptr(), y_hat.len()), u: raw_u };
+    let state = Arc::new(CheckState { res: Mutex::new(None), cv: Condvar::new() });
+    let st = Arc::clone(&state);
+    let run: Job = Box::new(move || {
+        let job = job;
+        let mut rhs_v = rhs;
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: the RawPending waits for this job before the caller releases the buffers.
+            let ys = unsafe { std::slice::from_raw_parts(job.y.0, job.y.1) };
+            let us = match job.u {
+                RawSrc::U64(p, l) => Src::U64(unsafe { std::slice::from_raw_parts(p, l) }),
+                RawSrc::U32(p, l) => Src::U32(unsafe { std::slice::from_raw_parts(p, l) }),
+            };
+            freivalds_output(ys, us, &rhs_v, c, m, k)
+        }));
+        wipe(&mut rhs_v);
+        st.set(res.unwrap_or((STATUS_INTERNAL, 0)));
+    });
+    let sent = helper().lock().unwrap_or_else(|e| e.into_inner()).send(run);
+    if let Err(e) = sent {
+        (e.0)();
+    }
+    RawPending { state }
+}
+
 // ---- Python bindings -----------------------------------------------------------------------------
 
 fn verr(msg: impl Into<String>) -> PyErr {

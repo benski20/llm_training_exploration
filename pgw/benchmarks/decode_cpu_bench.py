@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import cProfile
 import io
 import json
@@ -178,7 +179,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             return self._answer(req)
 
     noise = None if args.no_noise else OutboundNoiseMonitor(ring, sample_rate=0.05, fail_closed=True)
-    backend = MaskedBackend(pack, None, StubLane(), ring, pack.fingerprint, min_soundness_bits=20,
+    client: Any = StubLane()
+    lane_proc = None
+    if args.lane_proc:  # a native-channel lane to a stub server in another process (its CPU is not ours)
+        from pgw.wire.lane import LaneComputeClient, LaneConfig
+
+        lane_proc = _LaneProc(pack, ring, args.service_delay_ms, work)
+        client = LaneComputeClient(_ProcLaneClient(StubLane(), lane_proc),
+                                   LaneConfig(native=None, spin_us=args.spin_us))
+    backend = MaskedBackend(pack, None, client, ring, pack.fingerprint, min_soundness_bits=20,
                             noise_monitor=noise, **({"prime_check": True} if args.prime else {}))
     if args.wnorm_frac > 0:
         set_wnorm(backend, pack, args.wnorm_frac)
@@ -332,6 +341,20 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 for ct, nc, tt, name in sorted(rows_c, reverse=True)[:18]:
                     print(f"   {1e3 * ct / ntok:8.3f} cum {1e3 * tt / ntok:8.3f} own  {nc / ntok:6.1f}/tok  {name}",
                           file=sys.stderr)
+    if lane_proc is not None:
+        result["lane"] = {"trips": client.lane_stats.trips,
+                          "fallbacks": dict(client.lane_stats.fallback_reasons)}
+        result["decode_native"] = bool(getattr(backend, "decode_native", False))
+        nd = getattr(model, "_native_decode", None)
+        if nd is not None:
+            calls, trips, local_ns, lane_ns, run_cpu = nd.totals
+            result["decode_native_totals"] = {
+                "calls": calls, "trips": trips,
+                "native_local_us_per_trip": round(local_ns / 1e3 / max(1, trips), 1),
+                "lane_us_per_trip": round(lane_ns / 1e3 / max(1, trips), 1),
+                "run_thread_cpu_us_per_trip": round(run_cpu * 1e6 / max(1, trips), 1)}
+        client.close()
+        lane_proc.close()
     model.close()
     store.close()
     if not args.keep_store:
@@ -339,6 +362,97 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
         shutil.rmtree(store_dir, ignore_errors=True)
     return result
+
+
+def _lane_server_main(conn: Any, fp: str, ring_name: str, linears: list[tuple[str, int, int]], nb: int,
+                      delay_ms: float, path: str) -> None:
+    """The stub lane server process: all-zero answers (zero weights) after ``delay_ms`` (sleep)."""
+    from pgw.wire import LinearInfo
+    from pgw.wire.lane import LaneStubServer
+
+    zeros: dict[int, bytes] = {}
+
+    def compute(li: Any, rows: int, _ring: str, _x: bytes) -> bytes:
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1e3)
+        n = rows * li.out_features * nb
+        z = zeros.get(n)
+        if z is None:
+            z = zeros[n] = bytes(n)
+        return z
+
+    srv = LaneStubServer(compute, fingerprint=fp, rings=(ring_name,),
+                         linears=tuple(LinearInfo(k, m, n) for k, m, n in linears), transport="uds", path=path,
+                         record=False, max_connections=64, ttl_ms=3_600_000)
+    conn.send("ready")
+    while True:
+        msg = conn.recv()
+        if msg is None:
+            break
+        conn.send(srv.issue_ticket(msg))
+    srv.close()
+
+
+class _LaneProc:
+    """A :class:`pgw.wire.lane.LaneStubServer` in a child process (tickets over a pipe)."""
+
+    def __init__(self, pack: Any, ring: Any, delay_ms: float, work: Path):
+        import multiprocessing as mp
+
+        ctx = mp.get_context("spawn")
+        self.conn, child = ctx.Pipe()
+        linears = [(sp.id.key, sp.out_features, sp.in_features) for sp in pack.linear_specs()]
+        self.dir = tempfile.mkdtemp(prefix="pgwl")  # short: AF_UNIX paths are limited to ~100 bytes
+        path = os.path.join(self.dir, "lane.sock")
+        self.proc = ctx.Process(target=_lane_server_main,
+                                args=(child, pack.fingerprint, ring.name, linears, ring.k // 8, delay_ms, path),
+                                daemon=True)
+        self.proc.start()
+        assert self.conn.recv() == "ready"
+
+    def ticket(self, req: Any) -> Any:
+        self.conn.send(req)
+        return self.conn.recv()
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.conn.send(None)
+        self.proc.join(5)
+        if self.proc.is_alive():
+            self.proc.kill()
+
+
+class _ProcLaneClient:
+    """The wrapped client of the lane: the stub's regular path, tickets from the lane process."""
+
+    def __init__(self, stub: Any, proc: _LaneProc):
+        from types import SimpleNamespace
+
+        self.stub = stub
+        self.proc = proc
+        self.config = SimpleNamespace(base_url="http://127.0.0.1:9", request_timeout_s=10.0)
+
+    def compute_sync(self, req: Any) -> Any:
+        return self.stub.compute_sync(req)
+
+    async def compute(self, req: Any) -> Any:
+        return self.stub._answer(req)
+
+    def _ticket(self, fp: str, ring: str, transports: Any, lane_versions: Any) -> Any:
+        import uuid
+
+        from pgw.wire.messages import LaneOpenRequest
+
+        return self.proc.ticket(LaneOpenRequest(uuid.uuid4().hex, fp, ring, tuple(transports), tuple(lane_versions)))
+
+    def lane_open_sync(self, fp: str, ring: str, *, transports: Any = ("uds",), lane_versions: Any = (1,)) -> Any:
+        return self._ticket(fp, ring, transports, lane_versions)
+
+    async def lane_open(self, fp: str, ring: str, *, transports: Any = ("uds",), lane_versions: Any = (1,)) -> Any:
+        return self._ticket(fp, ring, transports, lane_versions)
+
+    def close(self) -> None:
+        pass
 
 
 def set_wnorm(backend: Any, pack: Any, frac: float) -> None:
@@ -453,6 +567,10 @@ def main() -> None:
     ap.add_argument("--wnorm-frac", type=float, default=0.0,
                     help="realistic weight-row norm for the zero synthetic weights (0.3 ~ Qwen2.5; 0 = true norm)")
     ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
+    ap.add_argument("--spin-us", type=int, default=50, help="--lane-proc: the native channel's reply busy-poll (us)")
+    ap.add_argument("--lane-proc", action="store_true",
+                    help="the service as a lane stub server in a child process, reached over the native UDS channel "
+                         "(LaneComputeClient; the stub's regular path stays the fallback)")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--profile-prefill", action="store_true", help="with --profile: profile the prefill runs instead")
     ap.add_argument("--profile-dump", default=None, help="with --profile: write the pstats file here")
