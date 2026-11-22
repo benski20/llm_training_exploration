@@ -180,6 +180,18 @@ plaintext quantized reference, none shows the provider anything new):
   request reserves `prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)` mask slots. Requests of
   one API key (and OpenAI `user` value) are one conversation: each starts after the previous one's
   dummy passes. `spec_rows` without `spec_strict_passes` is refused.
+* `"spec_mask_rows"` C (with `spec_rows`; optional `"spec_mask_credit"` B): filler rows and dummy
+  passes become padding rows (no mask; Freivalds-checked like real rows) and every decode pass charges
+  the public schedule `prompt + j + min(B, floor((C - 1) j))` mask slots (j = pass index), so a request
+  reserves `prompt + (max_tokens - 1) + min(B, floor((C - 1) (max_tokens - 1)))` slots and takes about C
+  (or 1 + B/L) per generated token instead of `spec_rows`. The store is asked for slots only on that
+  schedule, padded calls are one item each and cost the gateway the same work whatever their split, so
+  the provider learns nothing more than with masked fillers. A dummy call takes one mask row (zero
+  activations; a slot the schedule charged anyway), so every call makes the same store take; the remaining
+  residual is the per-row cost of a store take versus a padding row (copying `W r` out of the store versus a
+  zero row), which depends on how many drafts a pass carries: about 3% per call (review, 0.5B, CPU) with an in-memory
+  reservation, not yet measured with the mask ring or segment store. Re-measure per-call timing with your
+  store before enabling it in production. Needs `freivalds_rate` 1.0 (padding rows are not range-checked). Needs the native `pgw_fast` trip kernels.
 * `"float_threads"`: torch threads of the gateway's decode float ops (`1` saved 2-5 ms per token on a
   4-vCPU host); enabled only if a start-up self-check gives the same bits (`PGW_FLOAT_THREADS` does
   the same for every model). Default `1` on CPU engines; `null` keeps the process thread count.

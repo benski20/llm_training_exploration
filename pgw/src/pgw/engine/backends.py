@@ -606,6 +606,28 @@ class _Filler:
 
 
 @dataclass
+class _FixedItem:
+    """A padded or dummy call on the fixed-structure path (L3, ``MaskedBackend.fixed_pad``): one wire item of
+    ``rows`` = real + padding rows, prepared by ONE ``trip_prepare_into`` over all rows (padding rows: zero
+    activations masked with fresh ChaCha20 ``r``) and finished by the same kernel invocations whatever the
+    split, so the gateway's work per call depends on the public row count only."""
+
+    call_index: int
+    lid: LinearId
+    real: int  # real rows (masks taken from the reservation), first
+    rows: int  # real + padding (the wire item's rows)
+    out_rows: int  # rows of the call's result (real rows, or the call's own rows for a dummy call)
+    payload: bytes
+    sx: np.ndarray  # float64 (rows,)
+    wr: np.ndarray  # int64 (rows, m): real rows' W r, zeros for padding rows
+    parts: list[tuple[int, Any, Any]]  # (rows, u, uw) per extent of the real rows (u None: unchecked)
+    dummy: bool = False  # a dummy call: its one taken row (``real``) carries zero activations; result zeros
+
+    def wipe(self) -> None:
+        self.wr.fill(0)
+
+
+@dataclass
 class _PendingCheck:
     """A Freivalds output half running on the native helper thread (deferred check)."""
 
@@ -753,9 +775,16 @@ class _Prepared:
     #: ``("c", chunk index)`` or ``("f", filler index)``; ``None`` = one item per chunk, in order.
     fillers: list[_Filler] = field(default_factory=list)
     items_map: list[tuple[str, int]] | None = None
+    #: ``("g", group index)`` items: chunks of one padded call merged into one wire item (chunk indices,
+    #: consecutive, in row order; the padding rows follow the last chunk's rows).
+    groups: list[list[int]] = field(default_factory=list)
+    #: ``("x", index)`` items: calls on the fixed-structure padding path (L3).
+    fixed: list[_FixedItem] = field(default_factory=list)
 
     def wipe(self) -> None:
         """Zero the ``W r`` buffers (secret-derived) of every chunk; idempotent."""
+        for fx in self.fixed:
+            fx.wipe()
         for ch in self.chunks:
             if not ch.wr_wiped:
                 _wipe(ch.wr)
@@ -875,6 +904,7 @@ class MaskedBackend(LinearBackend):
         #: Reservations whose ring and fingerprint were validated (weak: never keeps one alive).
         self._res_ok: weakref.WeakValueDictionary[int, Any] = weakref.WeakValueDictionary()
         self._native_prepare = native_available("quantize_mask_pack")
+        self._fixed_pad_ok: bool | None = None
         self._native_finish = native_available("finish_chunk")
         self._native_group = native_available("finish_group")
         #: Several wire items of one round trip go through one native ``quantize_mask_pack_many``
@@ -1222,8 +1252,12 @@ class MaskedBackend(LinearBackend):
         if self._pending or self._failed:
             self._join_pending(calls)
         if any(c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta) for c in calls):
-            prep = self._prepare_padded(calls)
-            real = [c for c in calls if not _is_dummy(c)]
+            if self.fixed_pad:
+                prep = self._prepare_fixed(calls)
+                real = [c for c in calls if not (c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta))]
+            else:
+                prep = self._prepare_padded(calls)
+                real = [c for c in calls if not _is_dummy(c)]
         else:
             prep = self._prepare_core(calls)
             real = calls  # type: ignore[assignment]
@@ -1614,9 +1648,18 @@ class MaskedBackend(LinearBackend):
 
     # ---- speculation padding rows -------------------------------------------------------------------
     def _random_r(self, rows: int, n: int) -> np.ndarray:
-        """Fresh uniform ring elements ``(rows, n)`` from the OS CSPRNG (never a store mask)."""
-        raw = np.frombuffer(os.urandom(rows * n * 8), dtype=np.uint64).reshape(rows, n)
-        return (raw & np.uint64(self.ring.mask)).astype(np.int64)
+        """Fresh ring elements ``(rows, n)``, never a store mask: the ChaCha20 stream of a fresh OS-random key,
+        read exactly as the store reads a mask's ``r`` (:meth:`SeedExpander.ring_uniform_rows_with_key`). Same
+        distribution as real ``r`` (each is the low K bits of a ChaCha20 stream under a secret key) and the
+        same expansion cost per row, so a padding row's prepare time does not stand out from a real row's
+        (L3: the gateway's turnaround per trip must not depend on how many rows are padding)."""
+        from pgw.core.prng import SeedExpander
+
+        key = bytearray(os.urandom(32))
+        try:
+            return SeedExpander.ring_uniform_rows_with_key(key, n, self.ring.k, 0, rows).numpy()
+        finally:
+            key[:] = bytes(32)
 
     def _filler_payload(self, x: np.ndarray | None, rows: int, meta: _MaskedMeta) -> bytes:
         """Payload of padding rows: ``x`` (zeros for padding rows of a real call) quantized and masked
@@ -1706,18 +1749,31 @@ class MaskedBackend(LinearBackend):
             sxs: list[np.ndarray] = [np.zeros(0, dtype=np.float64) for _ in calls]
             for j, i in enumerate(real_idx):
                 sxs[i] = core.sx[j]
+            groups: list[list[int]] = []
             for i, c in enumerate(calls):
                 own = by_call.get(i, [])
                 if own and pads[i] and not _is_dummy(c):
                     own[-1].pad = pads[i]
                     own[-1].pad_payload = fill_payload[i]
-                for ch in own:
-                    items_map.append(("c", len(chunks)))
-                    chunks.append(ch)
+                if len(own) > 1 and not _is_dummy(c):
+                    # A padded call whose real rows span mask extents (segment or window boundaries) goes out
+                    # as ONE item: where its rows split depends on how many masks the session used so far,
+                    # which (with padding) depends on the drafts; the item size is the public R.
+                    idx = []
+                    for ch in own:
+                        idx.append(len(chunks))
+                        chunks.append(ch)
+                    items_map.append(("g", len(groups)))
+                    groups.append(idx)
+                else:
+                    for ch in own:
+                        items_map.append(("c", len(chunks)))
+                        chunks.append(ch)
                 if pads[i] and not own:  # dummy, or padding of a call without real rows
-                    checks = None
-                    if not _is_dummy(c):
-                        checks = self._filler_checks(c)
+                    # Verified like real rows (the reservation's current check vectors, at the same rate):
+                    # an unverified dummy would let a provider that corrupts results learn which passes
+                    # are dummies (no integrity failure) and so how many passes were real.
+                    checks = self._filler_checks(c)
                     items_map.append(("f", len(fillers)))
                     fillers.append(_Filler(i, c.id, pads[i], fill_payload[i], checks))
             request = None
@@ -1725,13 +1781,18 @@ class MaskedBackend(LinearBackend):
                 from pgw.wire.messages import ComputeItem, ComputeRequest
 
                 items = []
+                def body_of(ch: _Chunk) -> bytes:
+                    b = ch.payload if ch.payload is not None else pack_ring(ch.x_hat, self.ring)  # type: ignore[arg-type]
+                    return bytes(b) + ch.pad_payload if ch.pad else b  # type: ignore[operator]
+
                 for kind, j in items_map:
                     if kind == "c":
                         ch = chunks[j]
-                        body = ch.payload if ch.payload is not None else pack_ring(ch.x_hat, self.ring)  # type: ignore[arg-type]
-                        if ch.pad:
-                            body = bytes(body) + ch.pad_payload  # type: ignore[operator]
-                        items.append(ComputeItem(ch.lid.key, ch.rows + ch.pad, body))
+                        items.append(ComputeItem(ch.lid.key, ch.rows + ch.pad, body_of(ch)))
+                    elif kind == "g":
+                        part = [chunks[x] for x in groups[j]]
+                        items.append(ComputeItem(part[0].lid.key, sum(ch.rows + ch.pad for ch in part),
+                                                 b"".join(bytes(body_of(ch)) for ch in part)))
                     else:
                         f = fillers[j]
                         items.append(ComputeItem(f.lid.key, f.rows, f.payload))
@@ -1749,13 +1810,280 @@ class MaskedBackend(LinearBackend):
                     if res is not None:
                         reservations.append(res)
             prep = _Prepared(calls, chunks, sxs, metas_all, request, core.t_prepare + time.perf_counter() - t0,
-                             trip=core.trip, reservations=tuple(reservations), fillers=fillers, items_map=items_map)
+                             trip=core.trip, reservations=tuple(reservations), fillers=fillers, items_map=items_map,
+                             groups=groups)
         except BaseException:
             core.wipe()
             raise
         self.stats.add(pad_rows=sum(p for p, c in zip(pads, calls, strict=True) if not _is_dummy(c)),
                        dummy_calls=sum(1 for c in calls if _is_dummy(c)))
         return prep
+
+    @property
+    def fixed_pad(self) -> bool:
+        """Padded and dummy calls take the fixed-structure path (L3): needs the native trip kernels."""
+        ok = self._fixed_pad_ok
+        if ok is None:
+            ok = self._fixed_pad_ok = bool(
+                self.ring.k % 8 == 0 and self.ring.k <= 56 and native_available("trip_prepare_into")
+                and native_available("trip_finish_into"))
+        return ok
+
+    @property
+    def dummy_takes_row(self) -> bool:
+        """A dummy call takes one mask row (zero activations) on the fixed-structure path, so its store take
+        matches a real call's (L3 timing); the public charge schedule always holds that slot."""
+        return self.fixed_pad
+
+    @property
+    def supports_fixed_pad(self) -> bool:
+        """Engine hook (``TransformerModel.supports_pad_rows``): padding rows cost the same gateway work as real
+        rows here, so strict padded speculation may use this backend."""
+        return self.fixed_pad
+
+    def _prepare_fixed(self, calls: Sequence[LinearCall]) -> _Prepared:
+        """Calls with ``meta[PAD_ROWS]`` / ``meta[DUMMY]`` on the fixed-structure path, the others as usual.
+
+        Per fixed call the work is the same whatever its split into real and padding rows: one prepare kernel
+        over all its rows (padding rows: zero activations, fresh ChaCha20 ``r`` read like a store mask), one
+        Freivalds pass over all its rows (the reservation's current check vectors; drawn at the normal rate),
+        one finish of the real rows and one of the padding rows (together: all rows). The provider gets one item
+        of all the rows. The generator keeps a pass's real rows inside one mask extent; if they still span two,
+        each extent's rows are checked against their own vectors (one more check pass, never a weaker check).
+        """
+        fixed_idx = [i for i, c in enumerate(calls) if c.meta and (PAD_ROWS in c.meta or DUMMY in c.meta)]
+        fset = set(fixed_idx)
+        normal_idx = [i for i in range(len(calls)) if i not in fset]
+        metas_all: list[_MaskedMeta] = []
+        for c in calls:
+            meta: _MaskedMeta = self._meta.get(c.id)
+            if c.x.ndim != 2 or c.x.shape[1] != meta.in_features:
+                raise ShapeError(f"{c.id}: x must be (T, {meta.in_features}), got {tuple(c.x.shape)}")
+            metas_all.append(meta)
+        # validate the fixed calls' activations and reservations before any mask row is taken
+        xs: dict[int, np.ndarray] = {}
+        for i in fixed_idx:
+            c = calls[i]
+            dummy = _is_dummy(c)
+            if dummy:
+                # a dummy call takes ONE mask row (zero activations), like the pending token's row of a real
+                # call: the per-call store take then happens on every call, real or dummy (L3 timing). The
+                # public charge schedule always leaves this row (each pass charges >= 1 slot and dummy passes
+                # come after the real ones), so it costs the factory nothing: the slot is charged either way.
+                need = 1 if int(c.x.shape[0]) + _pad_rows(c) >= 1 and (
+                    c.session is not None or self.mask_source is not None) else 0
+            else:
+                need = int(c.x.shape[0])
+            if need:
+                # the same conversion and finiteness check as a real row (a dummy's row is zeros)
+                xsrc = self._zero_row(metas_all[i].in_features) if dummy else c.x
+                xn = xsrc.detach().to("cpu", torch.float32).numpy()
+                if not np.isfinite(xn).all():
+                    raise RingOverflowError("non-finite activation values cannot be quantized")
+                xs[i] = xn
+            if need:
+                res = self._reservation(c)
+                ensure = getattr(res, "ensure", None)
+                if ensure is not None:
+                    ensure(c.id, need)
+                if int(res.remaining(c.id)) < need:
+                    raise MaskExhaustedError("session mask reservation exhausted",
+                                             details={"linear": c.id.key, "needed": need})
+        core = self._prepare_core([calls[i] for i in normal_idx]) if normal_idx else \
+            _Prepared([], [], [], [], None, 0.0)
+        fixed: list[_FixedItem] = []
+        try:
+            t0 = time.perf_counter()
+            for i in fixed_idx:
+                fixed.append(self._fixed_item(i, calls[i], metas_all[i], xs.get(i)))
+            pos = {j: i for j, i in enumerate(normal_idx)}
+            by_call: dict[int, list[int]] = {}
+            for ci, ch in enumerate(core.chunks):
+                ch.call_index = pos[ch.call_index]
+                by_call.setdefault(ch.call_index, []).append(ci)
+            sxs: list[np.ndarray] = [np.zeros(0, dtype=np.float64) for _ in calls]
+            for j, i in enumerate(normal_idx):
+                sxs[i] = core.sx[j]
+            fpos = {fx.call_index: k for k, fx in enumerate(fixed)}
+            items_map: list[tuple[str, int]] = []
+            for i in range(len(calls)):
+                if i in fpos:
+                    items_map.append(("x", fpos[i]))
+                else:
+                    items_map.extend(("c", ci) for ci in by_call.get(i, []))
+            from pgw.wire.messages import ComputeItem, ComputeRequest
+
+            items = []
+            for kind, j in items_map:
+                if kind == "x":
+                    fx = fixed[j]
+                    items.append(ComputeItem(fx.lid.key, fx.rows, fx.payload))
+                else:
+                    ch = core.chunks[j]
+                    body = ch.payload if ch.payload is not None else pack_ring(ch.x_hat, self.ring)  # type: ignore[arg-type]
+                    items.append(ComputeItem(ch.lid.key, ch.rows, body))
+            request = ComputeRequest(
+                request_id=core.request.request_id if core.request is not None else uuid.uuid4().hex,
+                fingerprint=self.fingerprint, ring=self.ring.name, items=tuple(items), deadline_ms=self.deadline_ms,
+            ) if items else None
+            reservations = list(core.reservations)
+            for i in fixed_idx:
+                res = calls[i].session if calls[i].session is not None else self.mask_source
+                if res is not None:
+                    reservations.append(res)
+            prep = _Prepared(calls, core.chunks, sxs, metas_all, request, core.t_prepare + time.perf_counter() - t0,
+                             trip=core.trip, reservations=tuple(reservations), items_map=items_map, fixed=fixed)
+        except BaseException:
+            core.wipe()
+            for fx in fixed:
+                fx.wipe()
+            raise
+        self.stats.add(pad_rows=sum(fx.rows - (0 if fx.dummy else fx.real) for fx in fixed),
+                       dummy_calls=sum(1 for i in fixed_idx if _is_dummy(calls[i])))
+        return prep
+
+    def _zero_row(self, n: int) -> torch.Tensor:
+        """A cached ``(1, n)`` float32 zero row: a dummy call's activations (read only)."""
+        cache = self.__dict__.setdefault("_zero_rows", {})
+        z = cache.get(n)
+        if z is None:
+            z = cache[n] = torch.zeros((1, n), dtype=torch.float32)
+        return z
+
+    def _fixed_item(self, i: int, c: LinearCall, meta: _MaskedMeta, xn: np.ndarray | None) -> _FixedItem:
+        n_in, m = meta.in_features, meta.out_features
+        own = int(c.x.shape[0])
+        dummy = _is_dummy(c)
+        lid = c.id
+        res = c.session if c.session is not None else self.mask_source
+        rows = own + _pad_rows(c)
+        # a dummy call takes one mask row (zero activations; see _prepare_fixed), so it runs a real call's take
+        real = (1 if rows >= 1 and res is not None else 0) if dummy else own
+        check = self._should_check()
+        want = check or self.min_soundness_bits > 0
+        r_all = np.empty((rows, n_in), dtype=np.int64)
+        wr_all = np.zeros((rows, m), dtype=np.int64)
+        parts: list[tuple[int, Any, Any]] = []
+        try:
+            got = 0
+            while got < real:
+                n, r, wr, chk = self._take(res, lid, real - got, want)
+                try:
+                    r_all[got:got + n] = r.numpy()
+                    wr_all[got:got + n] = wr.numpy()
+                finally:
+                    _wipe(r)
+                    _wipe(wr)
+                u = uw = None
+                if chk is not None:
+                    token, u, uw = chk
+                    self._check_soundness(lid, n_in, u, token)
+                parts.append((n, u if check else None, uw if check else None))
+                got += n
+            if not parts:  # no row taken (no reservation): the current vectors (the same draw and lookup)
+                u = uw = None
+                if want and res is not None:
+                    try:
+                        token, u, uw = self._current_checks(res, lid)
+                        self._check_soundness(lid, n_in, u, token)
+                    except (MaskStoreError, MaskReuseError):
+                        raise
+                    except Exception:  # no vectors (closed or checks = 0): nothing to check against
+                        u = uw = None
+                parts.append((0, u if check else None, uw if check else None))
+                # ballast for the take a call with real rows makes (one row of r and W r): the gateway's work
+                # per call should not tell a dummy pass from a real one
+                ballast = self._random_r(1, n_in)
+                np.copyto(ballast[:, :1], wr_all[:1, :1])
+                ballast.fill(0)
+            # padding rows do a real row's per-row work too: expand r (ChaCha20, as a take does), copy a W r
+            # row (zeros) and wipe both, so the per-call cost does not grow with the number of real rows
+            pr = self._random_r(rows - real, n_in)
+            pw = np.zeros((rows - real, m), dtype=np.int64)
+            r_all[real:] = pr
+            wr_all[real:] = pw
+            pr.fill(0)
+            pw.fill(0)
+            x_all = np.zeros((rows, n_in), dtype=np.float32)
+            if real and xn is not None:
+                x_all[:real] = xn
+            nb = self.ring.k // 8
+            buf = np.empty(rows * n_in * nb, dtype=np.uint8)
+            sx = np.empty(rows, dtype=np.float64)
+            ring = self.ring
+            try:
+                native.fast.trip_prepare_into(x_all, r_all, ring.k, ring.a, int(ring.cap or 0),
+                                              float(meta.wnorm or 0.0), buf, sx)
+            except ValueError as exc:
+                if str(exc).startswith("ring_overflow"):
+                    raise RingOverflowError(str(exc).split(":", 1)[-1].strip()) from exc
+                raise ShapeError(str(exc)) from exc
+            payload = buf.tobytes()
+            guard = getattr(self.noise_monitor, "guard_packed", None) if self.noise_monitor is not None else None
+            if guard is not None:
+                guard(payload, rows, n_in)
+        except BaseException:
+            wr_all.fill(0)
+            raise
+        finally:
+            r_all.fill(0)
+        return _FixedItem(i, lid, real, rows, own, payload, sx, wr_all, parts, dummy)
+
+    def _finish_fixed(self, fx: _FixedItem, meta: _MaskedMeta, y_hat: Any) -> torch.Tensor:
+        """Verify every row (Freivalds against the item's vectors), then unmask + range-check the real rows and
+        run the same finish on the padding rows (verdict dropped): the same kernel work whatever the split."""
+        m = meta.out_features
+        nb = self.ring.k // 8
+        yb = np.frombuffer(y_hat, dtype=np.uint8) if not isinstance(y_hat, np.ndarray) else y_hat
+        if len(yb) != fx.rows * m * nb:
+            raise ProtocolError("compute response item is malformed: wrong y_hat size")
+        scale, bias, bound = self._consts(fx.lid, meta)
+        fin = native.fast.trip_finish_into
+        full = 1 << (self.ring.k - 1)  # never out of range: this pass only verifies
+        scratch = np.empty((fx.rows, m), dtype=np.float32)
+        xrow = meta.in_features * nb
+        row0 = 0
+        try:
+            for n, u, uw in fx.parts:
+                # the last part also covers the padding rows (they use the current, i.e. last, vectors)
+                cnt = n if (row0 + n) < fx.real else fx.rows - row0
+                a, b = row0, row0 + cnt
+                ys = yb[a * m * nb: b * m * nb]
+                xs = fx.payload if (a, b) == (0, fx.rows) else fx.payload[a * xrow: b * xrow]
+                try:
+                    if u is not None and uw is not None:
+                        status, bad = fin(ys, fx.wr[a:b], fx.sx[a:b], scale, bias, self.ring.k, full, scratch[a:b],
+                                          x_hat=xs, u=u, uw=uw, wipe_wr=False)
+                    else:
+                        status, bad = fin(ys, fx.wr[a:b], fx.sx[a:b], scale, bias, self.ring.k, full, scratch[a:b],
+                                          wipe_wr=False)
+                except ValueError as exc:
+                    raise ProtocolError(f"compute response item is malformed: {exc}") from exc
+                if u is not None and (status == 3 or _vacuous(u, status)):
+                    raise MaskReuseError("mask reservation closed during a compute call")
+                if status == 1:
+                    raise IntegrityError("compute service result failed the Freivalds check",
+                                         details={"linear": fx.lid.key, "bad_rows": int(bad), "rows": cnt})
+                row0 = b
+            scratch.fill(0)
+            r = fx.real
+            out = np.empty((r, m), dtype=np.float32)
+            pad_out = np.empty((fx.rows - r, m), dtype=np.float32)
+            st_r, _ = fin(yb[: r * m * nb], fx.wr[:r], fx.sx[:r], scale, bias, self.ring.k, bound, out)
+            fin(yb[r * m * nb:], fx.wr[r:], fx.sx[r:], scale, bias, self.ring.k, bound, pad_out)
+            pad_out.fill(0)
+            if st_r == 2:
+                raise IntegrityError(
+                    "decoded linear output outside the representable range (corrupt or tampered result)",
+                    details={"bound": bound, "ring": self.ring.name})
+            if st_r not in (0, 2):
+                self._raise_status(int(st_r), 0, fx.lid, r, bound)
+        finally:
+            fx.wipe()
+        if fx.real == 0 or fx.dummy:
+            out.fill(0)
+            return torch.from_numpy(np.zeros((fx.out_rows, m), dtype=np.float32))
+        return torch.from_numpy(out)
 
     def _filler_checks(self, call: LinearCall) -> tuple[Any, Any] | None:
         """Current check vectors of the call's reservation (padding of a call without real rows)."""
@@ -1828,6 +2156,37 @@ class MaskedBackend(LinearBackend):
         pad_bytes = 0
         assert prep.items_map is not None
         for (kind, j), res in zip(prep.items_map, results, strict=True):
+            if kind == "x":
+                fx = prep.fixed[j]
+                if res.linear != fx.lid.key or int(res.rows) != fx.rows:
+                    raise ProtocolError("compute response item does not match the request",
+                                        details={"expected": fx.lid.key, "got": str(res.linear)})
+                outs[fx.call_index].append(self._finish_fixed(fx, prep.metas[fx.call_index], res.y_hat))
+                pad_bytes += len(res.y_hat)
+                continue
+            if kind == "g":
+                part = [prep.chunks[x] for x in prep.groups[j]]
+                total = sum(ch.rows + ch.pad for ch in part)
+                if res.linear != part[0].lid.key or int(res.rows) != total:
+                    raise ProtocolError("compute response item does not match the request",
+                                        details={"expected": part[0].lid.key, "got": str(res.linear)})
+                meta_g: _MaskedMeta = prep.metas[part[0].call_index]
+                row_b = meta_g.out_features * nb
+                yg = memoryview(res.y_hat)
+                if len(yg) != total * row_b:
+                    raise ProtocolError("compute response item is malformed: wrong y_hat size")
+                off = 0
+                for ch in part:
+                    end = off + ch.rows * row_b
+                    real.append(ComputeResult(res.linear, ch.rows, bytes(yg[off:end])))
+                    off = end
+                    if ch.pad:
+                        pend = off + ch.pad * row_b
+                        chk_g = (ch.u, ch.uw) if ch.u is not None else None
+                        self._dummy_finish(ch.lid, meta_g, bytes(yg[off:pend]), ch.pad, ch.pad_payload or b"", chk_g)
+                        pad_bytes += pend - off
+                        off = pend
+                continue
             if kind == "c":
                 ch = prep.chunks[j]
                 if res.linear != ch.lid.key or int(res.rows) != ch.rows + ch.pad:
@@ -2445,7 +2804,9 @@ class MaskedBackend(LinearBackend):
         request = None
         if chunks:
             request = ComputeRequest(
-                request_id=os.urandom(16).hex(),  # 32 random hex digits, as uuid4().hex (cheaper)
+                # uuid4 like every other compute request (filler-only and Python-path trips too): a
+                # different id format per path would tell the provider which trips carry real rows
+                request_id=uuid.uuid4().hex,
                 fingerprint=self.fingerprint,
                 ring=self.ring.name,
                 items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]
@@ -2670,7 +3031,12 @@ class MaskedBackend(LinearBackend):
             dev = call.x.device
             result.append(y if dev.type == "cpu" else y.to(dev))
         bytes_up = sum(len(it.x_hat) for it in req.items) if req is not None else 0
-        rows = sum(ch.rows for ch in prep.chunks)
+        rows = sum(ch.rows for ch in prep.chunks) + sum(fx.rows for fx in prep.fixed)
+        for fx in prep.fixed:  # fixed-structure padding items (L3): one check per item when drawn
+            if any(u is not None for _, u, _ in fx.parts):
+                checked += 1
+            else:
+                skipped += 1
         self.stats.add_many(
             len(prep.calls),
             rows,

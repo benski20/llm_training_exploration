@@ -96,6 +96,9 @@ reference) and nothing sent to the provider changes (bytes, sizes, counts, sched
   thread waits in `recv`. Same rows, same order, same consumption (`PGW_PREFETCH_DECODE` overrides).
 - Small: no logits copy in the sampler without penalties; request ids from `os.urandom(16).hex()` (same
   format); the deferred-check decision memoized per linear.
+- Small: no logits copy in the sampler without penalties; the deferred-check decision memoized per
+  linear. (Request ids stay `uuid4().hex` on every path: a review dropped an `os.urandom` id for the
+  native path, whose missing version nibble would have told real trips from filler-only trips.)
 
 Measured here (4 shared vCPUs at load 20-40 from other jobs, so medians of calling-thread CPU; GPU box
 numbers pending, see the L2 report):
@@ -107,6 +110,28 @@ numbers pending, see the L2 report):
 | noise `guard_packed` per trip, n = 896 ... 18944 | 17-21 us | 2.6-4.2 us |
 | one 0.5B decode trip, gate_up / down (`trip_cpu_bench.py`, gateway thread CPU) | 175-231 / 281-350 us | 137-168 / 205-244 us |
 | local linears in the decode loop (`decode_cpu_bench.py`, 0.5B, 4 layers, wall per token) | 12.0 ms | 2.6 ms |
+## Update 2026-11-22: strict speculation at a public mask charge (L3, off by default)
+
+`spec_mask_rows` C (+ `spec_mask_credit` B), research and numbers in
+[research/plans/speculation-no-compromise.md](research/plans/speculation-no-compromise.md): strict speculation's
+filler rows and dummy passes are padding rows (no mask) and every decode pass charges the public schedule
+`prompt + j + min(B, floor((C-1) j))`, so masks per generated token drop from R to about C (or 1 + B/L) while the
+provider's view (rows, items, pass count, mask demand, per-call gateway work) stays independent of the drafts.
+Exact: bit-identical to the plaintext reference in the new tests (greedy, seeded sampling, penalties, stop strings,
+R 2/4, C 2/R, fractional C, credit caps, mask extents ending mid-pass).
+
+- Four distinguishers of the existing padding-row code were found and closed before enabling it: item splits at
+  mask-extent boundaries (now one item per padded call, and real rows kept within one extent), unverified dummy
+  items (an active provider could learn which passes were dummies; now Freivalds-checked), a gateway turnaround
+  that depended on the real/padding split (measured 466 / 529 / 654 us per call for dummy / real / mixed at R = 4;
+  now one fixed-structure path in which a dummy call also takes one charged mask row, so every call makes the same store take; a dummy call is now within 0.5% of a 1-real-row call; the per-row take-versus-padding residual (4 real vs 1 real + 3 padding rows) is about 3% per call (~12 us on the 0.5B down linear, so ~0.5 ms per pass) with an in-memory reservation, reveals how many drafts a pass carries, and must be re-measured with the real mask store before production use), and window extension, ahead reservation and part retirement driven by
+  mask use (`WindowedReservation(public=True)`: extensions only by `charge_to` on the schedule).
+- Simulated on the Kaggle run 28 exact answers (`benchmarks/spec_charge_sim.py`): 1.5B target with the 0.5B draft at
+  R = 4, C = 4, B = 160 keeps today's 2.84 tokens per pass at 2.50 masks per token instead of 3.96; the 0.5B with
+  prompt lookup at C = 1.5 keeps its 1.08 tokens per pass at 1.48 instead of 3.96. Not measured on a GPU or Modal
+  (commands in the plan, section 7; Modal: `launch.py --spec-mask C[/B]`).
+- Pre-existing strict-mode timing residuals are documented, not fixed (attention cost grows with context during the
+  answer and is flat during the dummy passes; the drafter's catch-up step).
 
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 

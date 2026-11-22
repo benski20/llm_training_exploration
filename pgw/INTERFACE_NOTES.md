@@ -571,3 +571,23 @@ Behaviour changes other components and operators must know about:
 - Impact: none on the wire, mask consumption or outputs. Benches: `benchmarks/decode_cpu_bench.py`,
   `trip_cpu_bench.py`, `local_linear_bench.py`.
 - Status: done
+## 2026-11-22 engine (L3 speculation) -> gateway, maskstore owners: padded strict speculation with a public mask charge
+- What (all additive, default off):
+  - `SequenceInput.pad_rows` (trailing padding rows) and `SequenceInput.fixed_item` (one wire item per remote linear);
+    `TransformerModel.supports_pad_rows` (standard layer and head, and a backend with `supports_fixed_pad`).
+  - `MaskedBackend`: calls with `meta[PAD_ROWS]` / `meta[DUMMY]` take a fixed-structure path when the native trip
+    kernels are present (`fixed_pad`): one item of real + padding rows, one prepare over all rows, Freivalds over all
+    rows, real and padding finishes. **Behaviour change:** dummy calls with a session are now Freivalds-checked
+    against the reservation's current vectors (they were unchecked), and a padded call whose real rows span two mask
+    extents is one item (it was one item per extent). Padding `r` now comes from a fresh-key ChaCha20 stream (it was
+    `os.urandom`).
+  - `Generator(spec_mask_rows=C, spec_mask_credit=B)`, `Generator.charge_target(prompt, j)`; the generator calls
+    `session.charge_to(target)` before every decode pass when the session has it.
+  - `WindowedReservation(public=True)` + `charge_to(target)`: extensions only on the charge schedule, `ensure()` never
+    extends (fails closed), no part retired before `close()`. Maskstore/ring owners: a public-mode session keeps its
+    parts (slabs) until it ends; ring capacity must cover the concurrent sessions' charged slots.
+  - Gateway settings `spec_mask_rows`, `spec_mask_credit` (SETUP_MODEL_OPTION_KEYS); Modal `launch.py --spec-mask`.
+- Why: strict speculation at C (or about 1 + B/L) masks per token instead of R, with mask demand, item sizes and the
+  gateway's per-call work independent of the drafts (`research/plans/speculation-no-compromise.md`).
+- Impact: backwards compatible; existing `spec_rows` configs keep masked filler rows.
+- Status: done (this branch)
