@@ -57,6 +57,7 @@ from pgw.core.errors import (
     ServiceUnavailableError,
     ShapeError,
 )
+from pgw.core.factory_yield import note_activity as _note_activity
 from pgw.core.freivalds import checks_to_u64, freivalds_check_u64
 from pgw.core.masking import mask_activations, mask_pack_u32, unmask_outputs_u32, unmask_outputs_u64
 from pgw.core.native import native_available
@@ -1296,6 +1297,7 @@ class MaskedBackend(LinearBackend):
         return True
 
     def _prepare(self, calls: Sequence[LinearCall]) -> _Prepared:
+        _note_activity()  # PGW_FACTORY_YIELD_FILE: the gateway's factory steps aside while passes run
         # Deferred checks of these sessions are joined first: no mask row is taken and no payload
         # is built (so nothing is sent) before the previous trip's results proved correct.
         if self._noise_pending is not None:

@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 
+from pgw.core import factory_yield
 from pgw.core.errors import (
     ConfigError,
     ErrorCode,
@@ -866,6 +867,9 @@ class ModelRuntime:
             if avail == 0:
                 log.warning("no mask slots available for model %s (%s %s)",
                             self.name, short_fingerprint(self.fingerprint), self.ring.name)
+            yfile = os.environ.get(factory_yield.ENV_FILE)
+            if yfile and getattr(self, "_factory_yield", None) is None:  # opt-in (pgw.core.factory_yield)
+                self._factory_yield = factory_yield.YieldWriter(yfile, self._available_slots).start()
             await asyncio.to_thread(self._check_mask_cache_budget)
             self._finish_engine(pack, tokenizer)
         except BaseException:
@@ -1107,6 +1111,10 @@ class ModelRuntime:
                 await self.generator.wait_closed()
             if self.model is not None:
                 await asyncio.to_thread(self.model.close)
+            yw = getattr(self, "_factory_yield", None)
+            if yw is not None:
+                yw.stop()
+                self._factory_yield = None
             backend_close = getattr(self.backend, "close", None)
             if callable(backend_close):  # stops the mask prefetch thread
                 backend_close()

@@ -557,7 +557,7 @@ class LaneManager:
 
     def _install_device_locks(self) -> None:  # pragma: no cover - GPU only
         """Make the lane and the Python path share one lock per device (one call per device)."""
-        from pgw.service.gpu_exec import device_executor, trip_stream
+        from pgw.service.gpu_exec import device_executor
 
         for dev in {str(k.device) for m in self.state.registry.models() for k in m.kernels.values()}:
             d = torch.device(dev)
@@ -665,7 +665,7 @@ def capture_lane_graphs(mgr: LaneManager, *, inject_mismatch: bool = False,
 def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[int, int, int, Any, RingParams]],
                     rows_list: list[int], rep: GraphReport, inject_mismatch: bool) -> None:  # pragma: no cover - GPU
     from pgw.core.triton_gemv import max_rows, ring_gemv
-    from pgw.service.gpu_exec import device_executor
+    from pgw.service.gpu_exec import device_executor, trip_stream
 
     ex = device_executor(device)
     rmax = max(rows_list)

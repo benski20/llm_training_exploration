@@ -30,6 +30,7 @@ import numpy as np
 import torch
 
 from pgw.core.errors import ConfigError, IntegrityError
+from pgw.core.factory_yield import wait_if_yielding
 from pgw.core.prng import new_seed
 from pgw.core.ring import RingParams
 from pgw.hemask.fastmm import engine, to_planes
@@ -338,7 +339,7 @@ class HEMaskBackend:
         self.engine = (f"device:{dev}" if dev is not None else
                        f"ntt_dev:{self._ntt_dev.dev}" if self._ntt_dev is not None else engine())
         self.stats = {"groups": 0, "encrypt_s": 0.0, "remote_s": 0.0, "decrypt_s": 0.0, "wall_s": 0.0,
-                      "passes": 0, "max_inflight": 0, "jobs": 0}
+                      "passes": 0, "max_inflight": 0, "jobs": 0, "yield_s": 0.0}
         self._stats_lock = threading.Lock()
         self._dev_lock = threading.Lock()  # the device passes are not used from two threads at once
         self._busy = 0  # submitted jobs not finished yet (wall_s counts the time with at least one)
@@ -695,6 +696,9 @@ class HEMaskBackend:
                 self.stats["wall_s"] += time.perf_counter() - self._busy_t0
 
     def _timed_remote(self, linear: str, b: np.ndarray) -> np.ndarray:
+        waited = wait_if_yielding()  # PGW_FACTORY_YIELD_FILE: the gateway is decoding with ample stock
+        if waited:
+            self._add_stats(yield_s=waited)
         with self._stats_lock:  # requests with the provider at once (the serial path counts submitted ones)
             self._remote_now += 1
             self.stats["max_inflight"] = max(self.stats["max_inflight"], self._remote_now)
@@ -744,6 +748,11 @@ class HEMaskBackend:
         end: BaseException | None = None
         try:
             for s0 in range(0, rows, step):
+                if job.aborted.is_set():
+                    break
+                waited = wait_if_yielding(job.aborted)  # PGW_FACTORY_YIELD_FILE (pgw.core.factory_yield)
+                if waited:
+                    self._add_stats(yield_s=waited)
                 if job.aborted.is_set():
                     break
                 t0 = time.perf_counter()
@@ -879,6 +888,9 @@ class HEMaskBackend:
 
         try:
             for s0, s1 in batches:
+                waited = wait_if_yielding()  # PGW_FACTORY_YIELD_FILE (pgw.core.factory_yield)
+                if waited:
+                    self.stats["yield_s"] += waited
                 t0 = time.perf_counter()
                 cts = self._encrypt(rn[s0:s1], n)  # overlaps the requests in flight
                 b = np.concatenate([ct.b for ct in cts], axis=1)

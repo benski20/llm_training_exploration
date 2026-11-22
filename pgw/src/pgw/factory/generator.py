@@ -135,6 +135,8 @@ def format_stats(stats: GenerationStats) -> str:
         s += (f"; he: {int(he.get('groups', 0))} groups, encrypt {he.get('encrypt_s', 0.0):.2f}s, "
               f"provider {he.get('remote_s', 0.0):.2f}s, decrypt {he.get('decrypt_s', 0.0):.2f}s, "
               f"wall {he.get('wall_s', 0.0):.2f}s")
+        if he.get("yield_s"):
+            s += f", yielded to decode {he['yield_s']:.2f}s"
         if x.get("he_pipeline_depth"):
             s += f", overlapped (depth {x['he_pipeline_depth']}, {int(he.get('jobs', 0))} jobs)"
     return s
