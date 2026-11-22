@@ -531,10 +531,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="bake the Qwen2.5-0.5B draft model into the customer image (deploy time; needs --spec-rows "
                          "and a --model larger than the 0.5B; PGW_MODAL_DRAFT=1). On a CPU customer it runs on the "
                          "gateway's CPU, with --customer-gpu on its GPU")
-    ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="auto",
+    ap.add_argument("--local-linears", choices=["off", "attention", "attention_down", "auto", "auto_kinds"],
+                    default="auto",
                     help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
-                         "(the tunnel: yes); 'attention' = always; 'off' = every linear on the provider")
+                         "(the tunnel: yes); 'attention' = always; 'attention_down' = also down (one round trip per layer); "
+                         "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
     args = ap.parse_args(argv)
     try:
         env_placement = os.environ.get("PGW_MODAL_PLACEMENT") or None
