@@ -648,6 +648,9 @@ def test_colocated_gateway_env_skips_only_fixed_local_kinds() -> None:
     env = boot.colocated_gateway_env("attention_down")  # prompt-pass settings of the co-located demo
     assert env["PGW_PROMPT_PREFETCH"] == "1" and env["PGW_PIPELINE_BLOCKS"] == "1"
     assert boot.GATEWAY_GPU_FACTORY_ENV["PGW_LOCAL_GPU_PREFILL_ROWS"] == "64"
+    # --gateway-gpu: the factory's HE stays on the CPU unless a run opts in (gpu_ntt)
+    gg = boot.GATEWAY_GPU_FACTORY_ENV
+    assert "PGW_FACTORY_HE_DECRYPT" not in gg and gg["PGW_HEMASK_ENGINE"] == "cpu_int8"
     assert env["PGW_FACTORY_YIELD_FILE"].startswith("/srv/pgw/home/") and int(env["PGW_FACTORY_YIELD_MIN_SLOTS"]) > 0
     assert boot.COLOCATED_PROVIDER_ENV == {"PGW_SERVICE_TRIP_STREAM_PRIORITY": "high"}
     with pytest.raises(ValueError):

@@ -15,6 +15,18 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: factory HE on the gateway GPU (opt-in)
+
+`PGW_FACTORY_HE_ENCRYPT=gpu_ntt` / `PGW_FACTORY_HE_DECRYPT=gpu_ntt` (library and demo default off) run the encrypted
+factory's encryption/decryption on the gateway's own GPU (`pgw.hemask.gpuntt`), self-tested and cross-checked bit for
+bit against the CPU paths at start-up, CPU fallback on any mismatch or error. Two exact co-located Modal runs
+(`--gateway-gpu`, 240 s back to back): factory 2.0 -> 0.9 gateway cores, sustained decode 30.8-31.3 tok/s
+token-weighted (median 31.3-31.6, min 25.5-25.7; 1-2 chats below 26 tok/s), keep-up unchanged (consumption 50-51
+vs commit-to-commit 46-48 slots/s, stock min 3836-4028). Not the demo default: while the factory runs unyielded its
+kernels time-slice with the decode graphs (separate processes; stream priorities do not help across contexts):
+local linear 79 -> 108-119 us/call, warm single chat 25-27 tok/s during the stock ramp. The customer target is now
+GPU-free, so this stays an opt-in. Details: `deploy/modal/README.md`, "Factory HE on the gateway GPU".
+
 ## Update 2026-11-22: mask factory keeps up with back-to-back chats (package S5)
 
 The S4 demo ran out of masks after 130 s of back-to-back chats (HTTP 503 `mask_exhausted`): all-or-nothing yield

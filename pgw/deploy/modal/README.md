@@ -590,10 +590,45 @@ committed production reads a little below consumption (the stock starts above it
 rate and the slope (-1.1 slots/s over 300 s, +422 slots over the second half) show steady state. Decode with the
 factory's duty cycle: 30.6-32.4 tokens/s token-weighted (run 3 ran at 29-31 for its middle 100 s on that host); a few chats dip to 17-25 tokens/s (2-3 per 150 s). Factory 2.0-2.1 cores.
 
-Not done (lever 3): moving the factory's encryption/decryption to the gateway's T4 (`ntt_dev`, `gpuntt`). The factory
-uses about 2 gateway cores at nice 10 and the provider's maskgen is the larger share of its wall time; a factory
-kernel on the gateway's GPU would queue ahead of the 1-row local-linear graphs (79 µs each) without a priority
-stream there. Left for a measured follow-up.
+Lever 3 (the factory's HE on the gateway's T4) is measured in the next section: opt-in, not the demo default.
+
+### Factory HE on the gateway GPU (2026-11-22, opt-in)
+
+* `PGW_FACTORY_HE_ENCRYPT=gpu_ntt`, `PGW_FACTORY_HE_DECRYPT=gpu_ntt` (each independent; library and demo default off):
+  `HEMaskBackend` runs encryption and/or decryption on `pgw.hemask.gpuntt.GpuNTTHE` (A in NTT form on the device,
+  hint byte planes cached on the device, fused Triton kernels). Start-up: the engine's float64 self-test, then a
+  bit-for-bit cross-check against the backend's own CPU paths on public random data (encryption with fixed public
+  test seeds vs `ntt_pre`; decryption of a partial and a full group vs the int8-engine dense path); any mismatch or
+  error keeps the CPU paths, and a GPU call that fails is redone on the CPU (CPU from then on). Device work on its
+  own lowest-priority stream under one lock; secrets and noise sampled on the CPU as before; every secret-dependent
+  device temporary zeroed (as in devmm/gpuntt; a failed GPU encryption also wipes its earlier passes' secrets). A GPU
+  decryption pass also waits on the factory yield, like encryption and the provider requests. The provider sees the
+  same ciphertexts; every decrypted row still goes through the factory's Freivalds check.
+* `PGW_LOCAL_GPU_STREAM_PRIORITY=high` (default 0): the gateway's local-linear graphs and LM head on the GPU's
+  highest-priority stream. **Caveat:** stream priorities order work inside one CUDA context; the factory is a
+  separate process, so the GPU time-slices the two contexts and the priority does not protect decode from it.
+* `PGW_THREAD_NAMES=1` (default off): the factory's stage threads carry kernel thread names; `--sustain-s` now reports
+  `sustain.threads.factory` (cores per stage) and the busiest gateway threads; the segment log names the HE engine.
+
+Measured (T4:2, `--gateway-gpu`, factory capped 3 threads / nice 10, sustain window from 6500 slots, 240 s, 41-token
+prompt + 52 tokens; both runs logprobs bit-identical, text equal, stream identical, all sustain chats identical;
+the self-test and cross-check passed, every segment on `gpu_ntt:cuda`):
+
+| run | sustained decode tok/s median / token-weighted / min | chats < 26 tok/s | consumption vs factory (window / seg-to-seg) | stock min / end | factory cores (stages) | warm stream |
+|---|---|---|---|---|---|---|
+| S5 run 3 (CPU factory, earlier host) | 30.6 / 30.6 / 22.4 | 2-3 per 150 s | 49.3 vs 42.5 / 47.4 | 3766 / 4922 | 2.0-2.1 | 31.6 |
+| A: gpu_ntt both, no yield on decryption | 31.3 / 30.8 / 25.7 | 1 of 113 | 49.7 vs 42.9 / 46.2 | 4028 / 4922 | 0.88 (remote 0.30, decrypt 0.10, encrypt 0.09) | 26.5 (37.7 ms) |
+| B: + decryption waits on the yield | 31.6 / 31.3 / 25.5 | 2 of 117 | 51.1 vs 42.6 / 48.4 | 3836 / 5674 | 0.92 (remote 0.36, decrypt 0.16, encrypt 0.05) | 25.3 (39.5 ms) |
+
+In-run A/B of run B (3 streamed 32-token chats per phase while the stock ramps, i.e. the factory unyielded):
+factory paused 28.9-29.3 ms/token, local linear 79 µs/call; factory running 30.6-38.2 ms/token, local linear
+108-119 µs/call, 1-row trip 0.27 -> 0.30 ms. So with its HE on the GPU the factory costs about 1 gateway core less,
+sustained decode is unchanged within host noise (fewer slow chats), keep-up is unchanged (the yield policy and the
+provider's maskgen set production, not the gateway's HE), but whenever the factory runs unyielded (stock ramp,
+refill below the yield band) its kernels time-slice with the 1-row local-linear graphs (+30-40 µs per call, +2-9 ms
+per token); the warm single chat ran during such a ramp in both runs. A same-day CPU-factory A/B run was not made
+(spend cap), so the CPU factory's cost in the same unyielded phases is from S4 (36 -> 32 ms/token, older config).
+The largest remaining factory stage is the provider-request thread (TLS receive of the replies, 0.3-0.36 cores).
 
 ## Trip latency and the `--max-trip-ms` gate
 

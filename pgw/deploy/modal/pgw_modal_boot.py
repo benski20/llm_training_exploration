@@ -524,7 +524,10 @@ COLOCATED_PROVIDER_ENV = {"PGW_SERVICE_TRIP_STREAM_PRIORITY": "high"}
 
 
 #: The gateway party's environment when it has its own GPU (``split_gpus``): its encrypted mask factory stays on the
-#: CPU (it keeps up there, and a factory GEMM on the GPU would queue ahead of the latency-bound local linears).
+#: CPU by default. Opt-in per run (measured exact, deploy/modal/README.md, "Factory HE on the gateway GPU"):
+#: PGW_FACTORY_HE_ENCRYPT=gpu_ntt and PGW_FACTORY_HE_DECRYPT=gpu_ntt (the factory's HE on the gateway's GPU, about 2
+#: -> 0.9 gateway cores; the GPU time-slices it with the decode graphs while the factory runs unyielded),
+#: PGW_LOCAL_GPU_STREAM_PRIORITY=high, PGW_THREAD_NAMES=1 (per-thread factory cores in the sustain report).
 #: ``PGW_LOCAL_GPU_PREFILL_ROWS``: a prompt pass's local linears through one captured digit-GEMM graph per linear on
 #: 64-row blocks (exact, self-checked per linear; about 145 ms to 85 ms for 41 rows on a T4).
 GATEWAY_GPU_FACTORY_ENV = {"PGW_HEMASK_ENGINE": "cpu_int8", "PGW_FACTORY_DEVICE": "cpu",

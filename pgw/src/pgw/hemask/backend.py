@@ -257,7 +257,8 @@ class HEMaskBackend:
     this backend's own CPU paths on public random data; otherwise, and after any error in a GPU call (that
     call is redone on the CPU), the CPU paths run (``ntt_pre`` or ``dense`` encryption, ``auto`` decryption,
     which are also built as the reference). The device work runs on its own CUDA stream of the lowest
-    priority, serialised by one lock; secrets and noise are sampled on the CPU as before and every device
+    priority, serialised by one lock (a GPU decryption pass also waits on the factory yield, as encryption and
+    the provider requests do); secrets and noise are sampled on the CPU as before and every device
     temporary holding a secret-dependent value is zeroed after use. Same ciphertexts (distribution, sizes,
     schedule) and the same decrypted bits as the CPU paths; every decrypted row still goes through the
     factory's Freivalds self-check.
@@ -546,6 +547,12 @@ class HEMaskBackend:
         """
         hint = self.hints.hint(linear)
         if self._gpu_dec and hint.ndim == 3:
+            # PGW_FACTORY_YIELD_FILE: a GPU pass also waits while the gateway decodes with ample stock, so its kernels
+            # (another CUDA context on the gateway's GPU: time-sliced, not prioritised) stay out of the decode windows
+            # the yield gives back. Timing only, from the same signal as the encryption and request waits.
+            waited = wait_if_yielding()
+            if waited:
+                self._add_stats(yield_s=waited)
             try:
                 with self._on_gpu():
                     self._gpu.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
