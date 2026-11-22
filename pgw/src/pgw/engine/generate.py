@@ -20,20 +20,23 @@ import torch
 
 from pgw.core.errors import ConfigError, MaskExhaustedError, PGWError
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
-from pgw.engine.model import SequenceInput, TransformerModel
-from pgw.engine.sampling import Sampler, SamplingParams
+from pgw.engine.model import SequenceInput, TransformerModel, rms_norm
+from pgw.engine.sampling import Sampler, SamplingParams, fast_topk
 from pgw.engine.tokenizer import ChatTokenizer, IncrementalDecoder
 
 __all__ = [
     "BuiltinDrafter",
     "DraftJob",
     "Drafter",
+    "FeatureHeadDrafter",
     "FinishReason",
     "GenerationResult",
     "Generator",
     "PipelinedDrafter",
     "SessionFactory",
     "TokenEvent",
+    "TreeTopology",
+    "tree_topology",
 ]
 
 log = logging.getLogger(__name__)
@@ -127,6 +130,8 @@ class _SeqState:
     conv: str | None = None  # conversation key (strict mode queues a follow-up turn behind the dummy passes)
     conv_held: bool = False
     t_lane: float = 0.0  # when the sequence joined the prefill lane queue
+    feature: torch.Tensor | None = None  # target's final hidden state at the row that produced the pending token
+    last_input: Any = None
 
     @property
     def done(self) -> bool:
@@ -211,6 +216,61 @@ def _lookup_drafts_fixed(seq: Sequence[int], k: int, max_n: int, min_n: int = 3)
     return [int(t) for t in arr[i + n : min(i + n + k, w)]]
 
 
+@dataclass(frozen=True)
+class TreeTopology:
+    """A public token-tree shape for strict tree speculation (``Generator(spec_tree=...)``).
+
+    Node 0 is the pending token; draft node ``i`` (1..R-1) is the ``rank[i]``-th choice of the draft at its
+    parent ``parents[i]`` (``< i``; rank 0 is the draft's own pick, coupled to the request's sampler for
+    sampled requests; rank r >= 1 the next most likely tokens). Nodes are in node order, so any prefix of
+    them is a tree (credit-limited passes send a prefix as real rows, the rest as padding).
+
+    Attributes:
+        parents: Parent node per node, ``parents[0] = -1``.
+        ranks: Choice rank per node (``ranks[0] = 0``, unused).
+        depths: Depth per node (node 0: 0).
+        children: Child nodes per node, in node order.
+        levels: Draft steps after the catch-up step: level ``t`` (0-based) lists the nodes of depth ``t + 1``
+            that have children, in node order (the draft feeds them as tree rows to get their choices).
+    """
+
+    parents: tuple[int, ...]
+    ranks: tuple[int, ...]
+    depths: tuple[int, ...]
+    children: tuple[tuple[int, ...], ...]
+    levels: tuple[tuple[int, ...], ...]
+
+    @property
+    def size(self) -> int:
+        return len(self.parents)
+
+
+def tree_topology(nodes: Sequence[Sequence[int]]) -> TreeTopology:
+    """Validate ``[(parent, rank), ...]`` for draft nodes 1..R-1 and build the :class:`TreeTopology`."""
+    parents, ranks, depths = [-1], [0], [0]
+    seen: set[tuple[int, int]] = set()
+    for i, nd in enumerate(nodes, start=1):
+        if len(nd) != 2:
+            raise ConfigError("spec_tree entries are (parent, rank)")
+        par, rank = int(nd[0]), int(nd[1])
+        if not 0 <= par < i:
+            raise ConfigError(f"spec_tree node {i}: parent must be in [0, {i})")
+        if not 0 <= rank < 8:
+            raise ConfigError(f"spec_tree node {i}: rank must be in [0, 8)")
+        if (par, rank) in seen:
+            raise ConfigError(f"spec_tree node {i}: duplicate (parent, rank)")
+        seen.add((par, rank))
+        parents.append(par)
+        ranks.append(rank)
+        depths.append(depths[par] + 1)
+    children = tuple(tuple(c for c in range(len(parents)) if parents[c] == n) for n in range(len(parents)))
+    top = max(depths)
+    levels = tuple(tuple(n for n in range(1, len(parents)) if depths[n] == d and children[n])
+                   for d in range(1, top))
+    levels = tuple(lv for lv in levels if lv)
+    return TreeTopology(tuple(parents), tuple(ranks), tuple(depths), children, levels)
+
+
 @dataclass
 class DraftJob:
     """One sequence's draft request in a fixed-row speculative pass (see :class:`Drafter`).
@@ -234,6 +294,13 @@ class DraftJob:
     sampler: Sampler | None = None
     generated: list[int] = field(default_factory=list)
     out: list[int] = field(default_factory=list)
+    #: Tree speculation: the public topology; ``out`` then holds one token per draft node (node order, ``-1``
+    #: for none) instead of a chain.
+    tree: TreeTopology | None = None
+    #: Drafters with ``uses_features``: the target's final hidden state (after the final norm) at the row that
+    #: produced the pending token (the last accepted node of the previous pass; the prompt's last row after
+    #: the prefill). Plaintext on the gateway, which computes the residual stream between round trips.
+    feature: torch.Tensor | None = None
 
 
 @runtime_checkable
@@ -359,6 +426,9 @@ class BuiltinDrafter:
         return found
 
     def propose(self, jobs: Sequence[DraftJob]) -> None:
+        if any(j.tree is not None for j in jobs):
+            self._propose_tree(jobs)
+            return
         seeds = [self._lookup(j.context, j.k) for j in jobs]
         for job, seed in zip(jobs, seeds, strict=True):
             job.out = list(seed[: job.k])
@@ -445,6 +515,157 @@ class BuiltinDrafter:
                 if len(job.out) >= job.k:
                     p["stopped"] = True
 
+    #: Tree mode is supported (``DraftJob.tree``; needs the draft model, no prompt lookup).
+    supports_tree = True
+
+    def _propose_tree(self, jobs: Sequence[DraftJob]) -> None:
+        """Token-tree drafting with a fixed amount of work per pass: the catch-up step (context tokens the
+        draft has not seen, ending with the pending token), then one step per topology level feeding that
+        level's internal nodes as tree rows (``SequenceInput.tree_parents``; a node whose token is not
+        available is fed as a filler token), then the tree rows are dropped from the draft cache. Every
+        internal node makes the same picks (one coupled draw for its rank-0 child when sampled, a top-k for
+        the others) whatever the tokens."""
+        assert self.model is not None
+        live = [j for j in jobs if isinstance(j.state, _BuiltinState) and j.state.cache is not None
+                and j.tree is not None and j.k > 0]
+        for j in jobs:
+            j.out = [-1] * (j.tree.size - 1 if j.tree is not None else 0)
+        if not live:
+            return
+        t0 = time.perf_counter()
+        try:
+            self._tree_steps(live)
+        except Exception:
+            log.warning("draft model failed; model drafts disabled for %d sequence(s)", len(live), exc_info=True)
+            for job in live:
+                self.close(job.state)
+                job.out = [-1] * (job.tree.size - 1)  # type: ignore[union-attr]
+        finally:
+            self.stats["calls"] += 1
+            self.stats["ms"] += (time.perf_counter() - t0) * 1e3
+
+    def _tree_steps(self, live: Sequence[DraftJob]) -> None:
+        assert self.model is not None
+        tv = self.target_vocab
+        info: list[dict[str, Any]] = []
+        feeds: list[SequenceInput] = []
+        for job in live:  # catch-up step (as the chain drafter's), the last row is the tree's root
+            st: _BuiltinState = job.state
+            cache = st.cache
+            assert cache is not None
+            ctx = job.context
+            n = min(len(st.fed), len(ctx))
+            lcp = min(st.ok, n)
+            while lcp < n and st.fed[lcp] == ctx[lcp]:
+                lcp += 1
+            lcp = min(lcp, len(ctx) - 1)
+            cache.truncate(lcp)
+            del st.fed[lcp:]
+            new = [int(x) for x in ctx[lcp:]]
+            st.fed.extend(new)
+            st.ok = len(ctx) - 1
+            topo = job.tree
+            assert topo is not None
+            # fixed catch-up work: the unseen tokens (the accepted path and the pending token, at most R) padded
+            # with filler rows to R rows; the filler rows are dropped again (their logits are not used)
+            pad = max(0, topo.size - len(new))
+            feeds.append(SequenceInput(self._din(new + [self._filler() for _ in range(pad)]), cache,
+                                       all_logits=True))
+            assert topo is not None
+            toks = [int(ctx[-1])] + [-1] * (topo.size - 1)
+            info.append({"job": job, "topo": topo, "toks": toks, "base": 0, "region": [], "rpar": [], "new": len(new),
+                         "forks": {0: job.sampler}})
+        outs = self.model.forward_batch(feeds)
+        self.stats["steps"] += 1
+        for inf, lg in zip(info, outs, strict=True):
+            st = inf["job"].state
+            st.cache.truncate(len(st.fed))  # drop the filler rows
+            inf["base"] = st.cache.length
+            self._tree_children(inf, 0, lg[inf["new"] - 1], tv)  # the root: the last unseen token
+        nlev = max(len(inf["topo"].levels) for inf in info)
+        for t in range(nlev):
+            feeds, owners = [], []
+            for inf in info:
+                levels = inf["topo"].levels
+                if t >= len(levels):
+                    continue
+                nodes = levels[t]
+                region: list[int] = inf["region"]
+                pos = {nd: i for i, nd in enumerate(region)}
+                ids = []
+                for nd in nodes:
+                    tok = inf["toks"][nd]
+                    ids.append(tok if tok >= 0 else self._filler())
+                    par = inf["topo"].parents[nd]
+                    inf["rpar"].append(pos[par] if par > 0 else -1)
+                    region.append(nd)
+                feeds.append(SequenceInput(self._din(ids), inf["job"].state.cache, all_logits=True,
+                                           tree_parents=list(inf["rpar"]), tree_base=inf["base"]))
+                owners.append((inf, nodes))
+            if not feeds:
+                break
+            outs = self.model.forward_batch(feeds)
+            self.stats["steps"] += 1
+            for (inf, nodes), lg in zip(owners, outs, strict=True):
+                for r, nd in enumerate(nodes):
+                    self._tree_children(inf, nd, lg[r], tv)
+        for inf in info:  # drop the tree rows: the draft cache holds the context only
+            job = inf["job"]
+            job.state.cache.truncate(inf["base"])
+            del job.state.fed[inf["base"]:]
+            job.out = [int(x) for x in inf["toks"][1:]]
+
+    def _tree_children(self, inf: dict[str, Any], node: int, lg: torch.Tensor, tv: int | None) -> None:
+        """Pick the tokens of ``node``'s children from the draft logits at ``node`` (same work for any
+        tokens; children of an unavailable node stay unavailable)."""
+        topo: TreeTopology = inf["topo"]
+        kids = topo.children[node]
+        if not kids:
+            return
+        toks: list[int] = inf["toks"]
+        job: DraftJob = inf["job"]
+        want = max(topo.ranks[c] for c in kids) + 1
+        lgv = lg.reshape(-1).to(torch.float32)
+        if tv is not None and lgv.numel() > tv:
+            lgv = lgv[:tv]
+        top = [int(i) for i, _ in fast_topk(lgv, min(want + 1, int(lgv.numel())))]
+        forks: dict[int, Any] = inf["forks"]
+        base_fork = forks.get(topo.depths[node])
+        if base_fork is not None and job.sampler is not None:
+            fk = base_fork.fork()
+            path: list[int] = []
+            n = node
+            while n > 0:
+                path.append(toks[n])
+                n = topo.parents[n]
+            first = self._pick_with(fk, job, lgv, job.generated + path[::-1])
+            if all(topo.ranks[x] == 0 for x in self._path_nodes(topo, node)):  # the main chain keeps the fork
+                forks[topo.depths[node] + 1] = fk
+        else:
+            first = top[0]
+        alts = [t for t in top if t != first]
+        ok = node == 0 or toks[node] >= 0
+        for c in kids:
+            r = topo.ranks[c]
+            tok = first if r == 0 else (alts[r - 1] if r - 1 < len(alts) else -1)
+            if not ok or tok < 0 or (tv is not None and tok >= tv):
+                tok = -1
+            toks[c] = tok
+
+    @staticmethod
+    def _path_nodes(topo: TreeTopology, node: int) -> list[int]:
+        out = []
+        while node > 0:
+            out.append(node)
+            node = topo.parents[node]
+        return out
+
+    def _pick_with(self, fk: Any, job: DraftJob, lg: torch.Tensor, gen: list[int]) -> int:
+        tv = self.target_vocab
+        if tv is not None and lg.numel() != tv:
+            lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
+        return int(fk.propose(lg, gen))
+
     def _pick(self, job: DraftJob, lg: torch.Tensor) -> int:
         fk = job.sampler
         if fk is None:
@@ -453,6 +674,132 @@ class BuiltinDrafter:
         if tv is not None and lg.numel() != tv:  # align with the target's vocabulary (RNG draws)
             lg = lg[:tv] if lg.numel() > tv else torch.cat([lg, lg.new_full((tv - lg.numel(),), float("-inf"))])
         return fk.propose(lg, job.generated + job.out)
+
+
+class FeatureHeadDrafter(BuiltinDrafter):
+    """Target-feature draft head (EAGLE-style; research/plans/tree-speculation.md section 3): drafts from the
+    target's own final hidden state ``f`` and token ``x``, autoregressively over its predicted features::
+
+        z = W_in [f ; E[x]] + b_in;  z = z + W_2 silu(W_1 z + b_1) + b_2;  f' = W_out z;  logits_V = (E_V W_out) z
+
+    ``E`` is the target's embedding table (already on the gateway for the embedding lookup), ``V`` a reduced
+    vocabulary (tokens outside it are never proposed). A draft step reads only the head (``W_in``, ``W_1``,
+    ``W_2``, ``W_out``, ``U = E_V W_out``): a few MB, against ~0.5 GB for a 0.5B draft model.
+
+    Work per pass is fixed by the topology (chain of ``k`` or ``DraftJob.tree``): one batched head step per
+    level with one row per internal node of that level (the root at level 0), each making the same picks; no
+    catch-up step (the target's feature replaces the draft's own context). Needs the generator to hand over
+    the target feature (``uses_features``)."""
+
+    needs_prefill = False
+    uses_features = True
+    supports_tree = True
+
+    def __init__(self, weights: dict[str, torch.Tensor], embed: torch.Tensor, vocab: Sequence[int], *,
+                 target_vocab: int | None = None):
+        f32 = torch.float32
+        self.w_in = weights["w_in"].to(f32)
+        self.b_in = weights["b_in"].to(f32)
+        self.w1 = weights["w1"].to(f32)
+        self.b1 = weights["b1"].to(f32)
+        self.w2 = weights["w2"].to(f32)
+        self.b2 = weights["b2"].to(f32)
+        self.w_out = weights["w_out"].to(f32)
+        self.embed = embed
+        self.vocab = torch.tensor([int(t) for t in vocab], dtype=torch.long)
+        self.u = (embed[self.vocab].to(f32) @ self.w_out).contiguous()  # (V, d)
+        self.model = None
+        self.lookup = 0
+        self.lookup_min_n = 3
+        self.target_vocab = target_vocab if target_vocab is not None else int(embed.shape[0])
+        self.draft_vocab = None
+        self.stats = {"calls": 0.0, "steps": 0.0, "ms": 0.0}
+
+    def nbytes_per_step(self, bytes_per_weight: int = 1) -> int:
+        """Weights read by one draft step (int8: 1 byte per weight)."""
+        n = sum(int(t.numel()) for t in (self.w_in, self.b_in, self.w1, self.b1, self.w2, self.b2, self.w_out,
+                                         self.u))
+        return n * bytes_per_weight
+
+    def open(self, prompt: Sequence[int], max_len: int) -> _BuiltinState:
+        return _BuiltinState(None)
+
+    def prefill(self, states: Sequence[Any], prompts: Sequence[Sequence[int]]) -> None:
+        return None
+
+    def close(self, state: Any) -> None:
+        return None
+
+    def _step(self, f: torch.Tensor, toks: Sequence[int]) -> tuple[torch.Tensor, torch.Tensor]:
+        e = self.embed[torch.tensor([int(t) for t in toks], dtype=torch.long)].to(torch.float32)
+        z = torch.cat([f, e], dim=1) @ self.w_in.T + self.b_in
+        z = z + torch.nn.functional.silu(z @ self.w1.T + self.b1) @ self.w2.T + self.b2
+        return z @ self.w_out.T, z @ self.u.T
+
+    def _full(self, lv: torch.Tensor) -> torch.Tensor:
+        out = torch.full((int(self.target_vocab),), float("-inf"))
+        keep = self.vocab < out.numel()
+        out[self.vocab[keep]] = lv[keep]
+        return out
+
+    def propose(self, jobs: Sequence[DraftJob]) -> None:
+        live = [j for j in jobs if j.k > 0]
+        for j in jobs:
+            topo = j.tree if j.tree is not None else tree_topology([(i, 0) for i in range(j.k)])
+            j.out = [-1] * (topo.size - 1)
+        if not live:
+            return
+        t0 = time.perf_counter()
+        try:
+            self._head_steps(live)
+        except Exception:
+            log.warning("draft head failed; no drafts for %d sequence(s)", len(live), exc_info=True)
+            for j in live:
+                j.out = [-1] * len(j.out)
+        finally:
+            self.stats["calls"] += 1
+            self.stats["ms"] += (time.perf_counter() - t0) * 1e3
+
+    def _head_steps(self, live: Sequence[DraftJob]) -> None:
+        tv = self.target_vocab
+        hidden = int(self.w_out.shape[0])
+        info: list[dict[str, Any]] = []
+        for job in live:
+            topo = job.tree if job.tree is not None else tree_topology([(i, 0) for i in range(job.k)])
+            f = job.feature
+            f = torch.zeros(hidden) if f is None else f.reshape(-1).to(torch.float32)
+            info.append({"job": job, "topo": topo, "toks": [int(job.context[-1])] + [-1] * (topo.size - 1),
+                         "feat": {0: f}, "forks": {0: job.sampler}})
+        # level 0: the roots; level t: the internal nodes of depth t
+        nlev = 1 + max(len(inf["topo"].levels) for inf in info)
+        for t in range(nlev):
+            rows: list[tuple[dict[str, Any], int]] = []
+            for inf in info:
+                topo = inf["topo"]
+                if t == 0:
+                    if topo.children[0]:
+                        rows.append((inf, 0))
+                elif t - 1 < len(topo.levels):
+                    rows.extend((inf, nd) for nd in topo.levels[t - 1])
+            if not rows:
+                continue
+            fs = torch.stack([inf["feat"][topo_parent_feat(inf, nd)] for inf, nd in rows])
+            toks = [inf["toks"][nd] if inf["toks"][nd] >= 0 else self._filler() for inf, nd in rows]
+            fp, lv = self._step(fs, toks)
+            self.stats["steps"] += 1
+            for r, (inf, nd) in enumerate(rows):
+                inf["feat"][nd + 1_000_000] = fp[r]  # predicted feature after node nd (for its children)
+                self._tree_children(inf, nd, self._full(lv[r]), tv)
+        for inf in info:
+            inf["job"].out = [int(x) for x in inf["toks"][1:]]
+
+
+def topo_parent_feat(inf: dict[str, Any], node: int) -> int:
+    """Key of the feature a head step at ``node`` reads: the target's feature for the root, else the head's
+    predicted feature after the node's parent."""
+    if node == 0:
+        return 0
+    return inf["topo"].parents[node] + 1_000_000
 
 
 @dataclass
@@ -860,6 +1207,13 @@ class Generator:
             none), so a long answer costs about ``1 + B / L`` masks per token. ``None``: no cap.
         drafter: Custom :class:`Drafter` for fixed-row speculation (default: :class:`BuiltinDrafter` over
             ``draft`` and ``lookup``).
+        spec_tree: Token-tree speculation (``research/plans/tree-speculation.md``; ``None``, the default: a
+            chain). ``[(parent, rank), ...]`` for the ``spec_rows - 1`` draft nodes (:func:`tree_topology`):
+            a fixed public tree shape verified in one pass with tree attention. Every pass still carries
+            exactly ``spec_rows`` rows (and the strict pass count), the rows are in node order, and the
+            output is still the target's own sample at each position: a node is kept while the sampled token
+            equals one of its children's tokens, so outputs are bit-identical to plain decoding (greedy and
+            seeded). Needs a drafter with ``supports_tree`` (the builtin one with a draft model, no lookup).
         prefill_lane: Run prompt prefills in a lane of their own, concurrently with the decode steps of
             running streams (off by default), so a long prompt does not freeze them for its whole prefill.
             Waiting prompts are taken shortest first with aging (a prompt's length minus
@@ -905,6 +1259,7 @@ class Generator:
         spec_mask_rows: float | None = None,
         spec_mask_credit: int | None = None,
         drafter: Drafter | None = None,
+        spec_tree: Sequence[Sequence[int]] | None = None,
         prefill_lane: bool = False,
         prefill_lane_min_tokens: int = 16,
         prefill_lane_rows: int = 2048,
@@ -1023,6 +1378,22 @@ class Generator:
                 self._pad_ok = True
                 self.spec_mask_rows = charge
             self.spec_stats.update({"dummy_passes": 0.0, "fill_rows": 0.0, "pad_rows": 0.0, "charged_rows": 0.0})
+        self.spec_tree: TreeTopology | None = None
+        if spec_tree is not None:
+            if self.spec_rows is None:
+                raise ConfigError("spec_tree needs spec_rows")
+            topo = tree_topology(spec_tree)
+            if topo.size != self.spec_rows:
+                raise ConfigError("spec_tree needs spec_rows - 1 draft nodes")
+            if not getattr(self._drafter, "supports_tree", False):
+                raise ConfigError("spec_tree needs a drafter that drafts trees (the builtin draft model)")
+            if type(self._drafter) is BuiltinDrafter and (self._drafter.model is None or self._drafter.lookup):
+                raise ConfigError("spec_tree needs the draft model without prompt lookup")
+            if getattr(model, "schedule", None) is not None:
+                raise ConfigError("spec_tree needs the standard layer schedule")
+            self.spec_tree = topo
+        #: The drafter reads the target's final hidden state (``FeatureHeadDrafter``).
+        self._features = bool(getattr(self._drafter, "uses_features", False)) and self.spec_rows is not None
         tv_fill = self._target_vocab if self._target_vocab is not None else getattr(model, "vocab_size", None)
         self._fill_vocab = int(tv_fill) if tv_fill is not None else 1
         #: Serializes the draft model between the decode loop and draft prefills in worker threads (the
@@ -1598,7 +1969,9 @@ class Generator:
             st.rows = rows
             if k > 0 and st.dstate is not None:
                 fork = None if st.params.greedy else st.sampler.fork()
-                jobs.append(DraftJob(st.dstate, st.ctx + st.pending, k, fork, list(st.generated)))
+                tree = self.spec_tree if rows == self.spec_rows else None
+                jobs.append(DraftJob(st.dstate, st.ctx + st.pending, k, fork, list(st.generated), tree=tree,
+                                     feature=st.feature))
                 owners.append(st)
         if jobs and self._drafter is not None:
             if self._draft_lock.acquire(blocking=False):  # busy: a prefill-lane draft prefill (public event)
@@ -1678,6 +2051,23 @@ class Generator:
         return lid
 
     def _input_fixed(self, st: _SeqState) -> SequenceInput:
+        inp = self._input_fixed_rows(st)
+        if self._features:  # the drafter reads the target's last hidden state (every pass: fixed work)
+            inp.capture_hidden = (self.model.num_layers - 1,)
+            st.last_input = inp
+        return inp
+
+    def _take_feature(self, st: _SeqState, row: int) -> None:
+        """Final-norm hidden state of ``row`` of this pass (the row that produced the pending token)."""
+        inp = st.last_input
+        st.last_input = None
+        if inp is None or not inp.hidden:
+            st.feature = None
+            return
+        h = inp.hidden[self.model.num_layers - 1]
+        st.feature = rms_norm(h[row : row + 1], self.model.final_norm, self.model.eps).to(torch.float32)[0]
+
+    def _input_fixed_rows(self, st: _SeqState) -> SequenceInput:
         if not st.passes or st.rows <= 1:  # prefill pass, or a 1-row step
             if self._pad_ok and st.passes:  # a decode pass: the same backend path real or dummy
                 return SequenceInput(st.pending, st.cache, st.session, pad_rows=st.pad, fixed_item=True)
@@ -1686,10 +2076,12 @@ class Generator:
             return SequenceInput(st.pending, st.cache, st.session)
         ids = st.pending + st.drafts + st.fill
         n = len(ids)
+        tree = list(self.spec_tree.parents) if self.spec_tree is not None and n == self.spec_tree.size else None
+        tail = 0 if tree is not None else n - 1  # tree rows are computed one path at a time anyway
         if self._pad_ok:  # one wire item per linear, however many of the rows are real
-            return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1,
-                                 pad_rows=st.pad, fixed_item=True)
-        return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1)
+            return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=tail,
+                                 pad_rows=st.pad, fixed_item=True, tree_parents=tree)
+        return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=tail, tree_parents=tree)
 
     def _dummy_samples(self, st: _SeqState, logits: Any, start: int, rows: int) -> None:
         """Sample rows ``start..rows-1`` with a throw-away fork of the request's sampler: the same work
@@ -1709,6 +2101,8 @@ class Generator:
         if first or (st.rows <= 1 and not st.dummy):  # prefill pass, or a 1-row decode pass
             st.masks += len(pending) - st.pad
             st.ctx.extend(pending)
+            if self._features:
+                self._take_feature(st, len(pending) - 1)
             return [self._consume(st, logits)]
         rows = st.rows
         base = st.cache.length - rows
@@ -1718,6 +2112,8 @@ class Generator:
         stats["fill_rows"] += len(st.fill)
         stats["pad_rows"] += st.pad
         if st.dummy:  # no output; the cache goes back to where it was
+            if self._features:
+                self._take_feature(st, 0)
             self._dummy_samples(st, logits, 0, rows)
             st.cache.set_length(base)
             st.pending = []
@@ -1726,14 +2122,38 @@ class Generator:
         drafts = st.drafts
         events: list[TokenEvent] = []
         i = 0
-        for i in range(len(drafts) + 1):
-            st.cache.set_length(base + len(pending) + i)  # the cache holds pending + drafts[:i]
-            events.append(self._consume(st, logits[i]))
-            if st.done or i == len(drafts) or st.generated[-1] != drafts[i]:
-                break
-        self._dummy_samples(st, logits, i + 1, rows)
-        st.ctx.extend(pending)
-        st.ctx.extend(drafts[:i])
+        topo = self.spec_tree if self.spec_tree is not None and rows == self.spec_tree.size else None
+        if topo is not None:  # walk the tree: keep the child whose token is the target's own sample
+            path = [0]
+            while True:
+                st.cache.set_length(base + len(path))
+                events.append(self._consume(st, logits[path[-1]]))
+                if st.done:
+                    break
+                y = st.generated[-1]
+                nxt = next((c for c in topo.children[path[-1]] if c <= len(drafts) and drafts[c - 1] == y), None)
+                if nxt is None:
+                    break
+                path.append(nxt)
+            i = len(path) - 1
+            st.cache.keep_path(base, path, rows - 1)  # accepted nodes to base, base + 1, ... (fixed work)
+            if self._features:
+                self._take_feature(st, path[-1])
+            st.cache.set_length(base + len(path))
+            self._dummy_samples(st, logits, len(path), rows)
+            st.ctx.extend(pending)
+            st.ctx.extend(drafts[c - 1] for c in path[1:])
+        else:
+            for i in range(len(drafts) + 1):
+                st.cache.set_length(base + len(pending) + i)  # the cache holds pending + drafts[:i]
+                events.append(self._consume(st, logits[i]))
+                if st.done or i == len(drafts) or st.generated[-1] != drafts[i]:
+                    break
+            self._dummy_samples(st, logits, i + 1, rows)
+            if self._features:
+                self._take_feature(st, i)
+            st.ctx.extend(pending)
+            st.ctx.extend(drafts[:i])
         st.spec_passes += 1
         st.spec_proposed += len(drafts)
         st.spec_accepted += i
