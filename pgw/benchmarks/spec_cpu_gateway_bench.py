@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         kw: dict[str, Any] = {}
         drafter: Any = None
         if cfg != "plain":
-            parts = cfg[4:].split("/")
+            parts = cfg.removeprefix("pipe").removeprefix("seq").split("/")
             r, c = int(parts[0]), float(parts[1])
             kw = {"spec_rows": r, "spec_strict": True, "spec_mask_rows": c}
             if cfg.startswith("pipe"):

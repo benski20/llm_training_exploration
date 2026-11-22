@@ -18,6 +18,7 @@ pass count, mask demand, gateway turnaround) independent of the acceptance; new 
 | draft on CPU | new `NativeInt8DraftBackend` + `native_int8_lm_head` (`pgw_fast.local_linear_into`, int8 weights resident, columns over the native pool), gateway `draft_backend = "native_int8"`. Qwen2.5-0.5B: **75 ms per draft token on 1 core, 46-54 ms on the 4 shared vCPUs** vs 350-390 / 106-112 ms with today's torch weight-only int8 (3.5-5x faster); same bits for any thread count (tested). Memory-bound (0.49 GB of int8 per token): about 10-12 ms per token expected on 16 server cores (~50 GB/s), 20 ms if half that. |
 | pipelining | new `PipelinedDrafter` (gateway `spec_pipeline_steps = m`): drafts the next block in a background thread while the pass is in flight, assuming full acceptance and the draft's own bonus guess; exactly m draft steps between passes whether the guess held or not, so the gap the provider sees does not depend on the acceptance (tested: same step counts and rows fed, hit or miss). m = 0 takes the draft off the critical path at a lower tokens-per-pass. |
 | masks | the public charge schedule is unchanged by pipelining (it depends only on the pass index): **R = 4, C = 4, B = 160: 2.50 slots per generated token** (2.84 tokens per pass, 1.5B/0.5B simulation of L3); C = 3, B = 96: 1.91 slots per token at 2.22 tokens per pass. |
+| 25 tokens/s target (section 7) | smallest config with margin: **R = 2, C = 2, pipelined m = 0 at 0.3 ms trips: 29.3-31.7 tokens/s (alpha 0.70-0.78), <= 2 slots per token**, robust to a 20 ms draft step; 0.4 ms trips need R = 3 (26-30); 0.5 ms trips reach 25 only at alpha ~0.78. |
 | 7B tokens/s (model, section 5) | at 0.3 ms trips on a 16-core gateway with a 12 ms draft step: plain 21.9; sequential drafting R = 4: 28.6-32.3; **pipelined R = 4, m = 0: 33.0-38.6** (alpha 0.70-0.78). At 0.5 ms trips: 22.8-28.4. On this 4-vCPU box the draft (50 ms per step) makes speculation slower than plain. |
 
 ## 1. Exactness with every linear remote and native float ops
@@ -178,23 +179,59 @@ CPU-only gateway (no speculation) is capped at ~22 tokens/s at 0.3 ms trips even
 `benchmarks/spec_cpu_gateway_bench.py`: the real `Generator`, padded strict mode, `MaskedBackend` with
 `local_linears = off`, native float ops, in-process provider (its GEMMs on the same 4 vCPUs), the 0.5B as its
 own native-int8 draft (the only Qwen2.5 checkpoint at or below the target here, so its acceptance is an
-upper bound and its cost equals the target's: this run shows mechanics, not a speed-up). Results in
-section 6.1 (filled from the run in this branch).
+upper bound and its cost equals the target's: this run shows mechanics, not a speed-up). Two chat prompts,
+24 greedy tokens each, load 15-18 from other agents:
 
-## 7. Recommended configuration (7B, CPU-only gateway)
+| config | identical to plain | tokens / real pass | answer tok/s | ms / real pass | draft ms between passes | pipelined: hit rate, block ms, wait ms | drain |
+|---|---|---|---|---|---|---|---|
+| plain | yes | 1.00 | 3.03 | 330 | 0 | | 0 |
+| sequential R = 2, C = 2 | yes | 1.85 | 3.63 | 529 | 77 | | 11.2 s |
+| pipelined R = 2, C = 2, m = 0 | yes | 1.85 | 3.43 | 559 | 3.9 (bookkeeping) | 0.48, 229, 0.0 | 11.5 s |
+| sequential R = 4, C = 4 | yes | 3.20 | 4.54 | 779 | 173 | | 22.2 s |
+| pipelined R = 4, C = 4, m = 0 | yes | 2.67 | 4.68 | 615 | 2.3 | 0.26, 369, 0.0 | 18.8 s |
+
+Every run is token-identical to plain decoding and the provider saw 48 passes in each (L, strict). The
+pipelined drafter removed the draft from the critical path (77 -> 4 ms and 173 -> 2 ms between passes) and
+its block always finished under the pass (wait 0), but here the block competes for the same 4 vCPUs as the
+gateway and the in-process provider, so the pass itself slowed by about as much as was saved (R = 2) or
+somewhat less (R = 4: 615 vs 779 ms per pass at 2.67 vs 3.20 tokens per pass). The hit rates (0.48 at R = 2
+over answer and dummy passes; dummy passes on random filler always miss) and the drop in tokens per pass at
+R = 4 match the two-state model. The gain needs spare cores and memory bandwidth for the draft, i.e. the
+16-core gateway of section 5; on a 4-vCPU box sharing its CPU with the provider it is a wash.
+
+## 7. Recommended configuration (7B, CPU-only gateway, target 25 tokens/s streaming)
+
+The target is 25 tokens/s (~40 ms per generated token). Plain decoding cannot reach it on a CPU-only gateway
+(21.9 at 0.3 ms trips even with the native trip path), so strict speculation is needed; the smallest R
+(fewest rows per trip and fewest mask slots) that clears it with ~10% margin (27.5) is chosen
+(`spec_7b_cpu_gateway_model.py`, second table):
+
+| trip | 16-core gateway, draft step 12 ms (20 ms) | alpha 0.70 | alpha 0.78 |
+|---|---|---|---|
+| 0.3 ms | sequential R = 2 | 28.4 (25.0) | 29.7 (26.2) |
+| 0.3 ms | **pipelined R = 2, m = 0** | **29.3 (29.3)** | **31.7 (31.7)** |
+| 0.4 ms | pipelined R = 3, m = 0 | 26.2 (26.2) | 29.7 (29.7) |
+| 0.5 ms | pipelined R = 3 / R = 5, m = 0 | below 25 | 25.1 / 28.0 |
+
+R = 2 at 0.3 ms trips is the recommendation: one draft row per pass, the pipelined block is only 2 draft
+steps (24-40 ms) and fits under a ~46 ms pass even with a slow draft, so the margin does not depend on the
+draft's speed. Mask cost: C = 2 (every pass may carry its draft; L3 simulation 1.78 tokens per pass at 1.98
+slots per token for R = 2 masked fillers, the same charge with padding), no credit cap needed: **<= 2 slots
+per generated token** (12.3 MB of `W r` per token at 7B, 310 MB/s at 25 tokens/s).
 
 ```json
 {"device": "cpu", "local_linears": "off", "float_ops": "native",
  "draft_pack_path": "<Qwen2.5-0.5B-Instruct pack>", "draft_backend": "native_int8",
- "spec_rows": 4, "spec_strict_passes": true, "spec_mask_rows": 4, "spec_mask_credit": 160,
+ "spec_rows": 2, "spec_strict_passes": true, "spec_mask_rows": 2,
  "spec_pipeline_steps": 0, "freivalds_rate": 1.0}
 ```
 
-plus the masked LM head (library opt-in, `pgw.engine.masked_head`) and, when it lands, the native per-trip
-path; a gateway with at least 16 cores (the draft needs ~40-80 GB/s of memory bandwidth next to the trip
-work). Use `spec_pipeline_steps = 1` (or sequential drafting) if the draft step is below ~8 ms; use
-`spec_mask_rows = 3, spec_mask_credit = 96` when the mask supply binds (1.91 slots per token). Everything
-stays opt-in; defaults unchanged.
+plus the masked LM head (library opt-in, `pgw.engine.masked_head`), the native per-trip path when it lands,
+and a gateway of at least 16 cores (the draft needs ~40-80 GB/s of memory bandwidth next to the trip work).
+If trips are 0.4 ms: `spec_rows = 3, spec_mask_rows = 3, spec_mask_credit = 96` (pipelined m = 0; about
+1.9 slots per token by the L3 simulation of C = 3, B = 96). At 0.5 ms trips 25 tokens/s needs alpha near
+0.78 and R = 5 (no margin at alpha 0.70); R = 4, C = 4, B = 160 (2.50 slots per token) is the strongest
+setting there. Everything stays opt-in; defaults unchanged.
 
 ## 8. Open items
 

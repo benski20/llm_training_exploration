@@ -81,6 +81,16 @@ def scenario(trip_ms: float, gateway: str, draft_ms: float, alpha: float, rows: 
     return {"pass_ms": pass_ms, "tau": tau, "tok_s": 1000.0 * tau / pass_ms, "draft_crit_ms": crit}
 
 
+def smallest(trip: float, gw: str, dm: float, alpha: float, goal: float, mode: str) -> str:
+    """The smallest R (then m) whose tokens/s reach ``goal``, as text ('-' if none up to R = 8)."""
+    for r in range(2, 9):
+        for m in ([0] if mode == "seq" else range(0, r)):
+            s = scenario(trip, gw, dm, alpha, r, mode, m)
+            if s["tok_s"] >= goal:
+                return f"R={r}" + (f" m={m}" if mode == "pipe" else "") + f" {s['tok_s']:.1f}"
+    return "-"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=None)
@@ -110,9 +120,28 @@ def main() -> None:
                     print(f"{trip:>5} {gw:>8} {dn:>13} {alpha:>5}  {plain['tok_s']:>6.1f}  "
                           f"{seqs[bs]['tok_s']:>7.1f} (R={bs})  {seqs[4]['tok_s']:>8.1f}  "
                           f"{pipes[bp]['tok_s']:>7.1f} (R={bp[0]}, m={bp[1]})  {pipes[(4, 0)]['tok_s']:>12.1f}")
+    print()
+    print(f"smallest R (fewest rows and masks) reaching {TARGET} tok/s (and {MARGIN} with 10% margin):")
+    print(f"{'trip':>5} {'gateway':>8} {'draft':>13} {'alpha':>5}  {'sequential':>22}  {'pipelined':>26}")
+    for trip in (0.3, 0.4, 0.5):
+        for gw, drafts in (("box", ("box4",)), ("server16", ("server16", "server16_slow"))):
+            for dn in drafts:
+                dm = DRAFT_MS[dn]
+                for alpha in (0.70, 0.78):
+                    a = (trip, gw, dm, alpha)
+                    rec = {"trip_ms": trip, "gateway": gw, "draft": dn, "alpha": alpha,
+                           "seq_25": smallest(*a, TARGET, "seq"), "seq_margin": smallest(*a, MARGIN, "seq"),
+                           "pipe_25": smallest(*a, TARGET, "pipe"), "pipe_margin": smallest(*a, MARGIN, "pipe")}
+                    out.append(rec)
+                    print(f"{trip:>5} {gw:>8} {dn:>13} {alpha:>5}  {rec['seq_25']:>10} / {rec['seq_margin']:>10}"
+                          f"  {rec['pipe_25']:>12} / {rec['pipe_margin']:>12}")
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(out, fh, indent=2)
+
+
+TARGET = 25.0  # tokens/s streaming (~40 ms per generated token), the user's 7B goal
+MARGIN = 27.5
 
 
 if __name__ == "__main__":

@@ -319,6 +319,23 @@ numbers pending, see the L2 report):
 | noise `guard_packed` per trip, n = 896 ... 18944 | 17-21 us | 2.6-4.2 us |
 | one 0.5B decode trip, gate_up / down (`trip_cpu_bench.py`, gateway thread CPU) | 175-231 / 281-350 us | 137-168 / 205-244 us |
 | local linears in the decode loop (`decode_cpu_bench.py`, 0.5B, 4 layers, wall per token) | 12.0 ms | 2.6 ms |
+## Update 2026-11-22: strict speculation on a CPU-only gateway (off by default)
+
+Details: [research/plans/strict-speculation-cpu-gateway.md](research/plans/strict-speculation-cpu-gateway.md).
+Every linear remote + `float_ops = native` + padded strict speculation with a draft on the gateway CPU.
+
+- Exact: verify rows of R = 2/4/8 passes (with padding rows) equal single-row decoding bit for bit (masked,
+  all remote, native ops; also at real 0.5B shapes with both float paths); spec == plain bit for bit for five
+  draft sources incl. the pipelined drafter; R rows per pass and L passes on the wire. The GPU refusal is
+  about a CUDA target and does not touch this configuration (`float_ops = native` is CPU-only).
+- `draft_backend = "native_int8"` (`NativeInt8DraftBackend`, `pgw_fast.local_linear_into`): Qwen2.5-0.5B
+  draft 75 ms/token on 1 core, 46-54 on 4 shared vCPUs (torch int8: 390 / 112); memory-bound, ~10-20 ms
+  expected on 16 cores.
+- `spec_pipeline_steps = m` (`PipelinedDrafter`): the next block is drafted in the background during the
+  pass; exactly m draft steps between passes hit or miss (no acceptance timing signal; tested).
+- 7B model (`benchmarks/spec_7b_cpu_gateway_model.py`): 25 tokens/s target met with margin by R = 2, C = 2,
+  m = 0 at 0.3 ms trips on a 16-core gateway (29-32 tok/s, <= 2 mask slots per token); 0.4 ms needs R = 3;
+  0.5 ms only at high acceptance. Plain CPU-only decoding tops out near 22. No 7B acceptance measured.
 ## Update 2026-11-22: strict speculation at a public mask charge (L3, off by default)
 
 `spec_mask_rows` C (+ `spec_mask_credit` B), research and numbers in
