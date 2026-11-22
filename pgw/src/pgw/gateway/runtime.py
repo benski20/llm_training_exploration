@@ -1028,6 +1028,8 @@ class ModelRuntime:
                 spec["drafter"] = PipelinedDrafter(
                     self.draft_model, post_steps=c.spec_pipeline_steps,
                     target_vocab=getattr(self.model.arch, "vocab_size", None))
+        #: the pipelined drafter (``spec_pipeline_steps``), for its counters in the admin speed status
+        self.spec_drafter = spec.get("drafter")
         self.generator = Generator(
             self.model, tokenizer, max_batch=c.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=c.spec_tokens, lookup=c.spec_lookup,
@@ -1465,6 +1467,15 @@ class ModelRuntime:
             "spec_mask_credit": c.spec_mask_credit,
         }
         out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
+        gen = getattr(self, "generator", None)
+        if c.spec_rows is not None and gen is not None:
+            # gateway-local counters (admin status only; nothing here reaches the provider): verify passes, draft
+            # rows, accepted drafts, dummy passes, draft time; the pipelined drafter's hits/misses and step times
+            out["spec_stats"] = {k: round(float(v), 3) for k, v in dict(getattr(gen, "spec_stats", {}) or {}).items()}
+            drafter = getattr(self, "spec_drafter", None)
+            if drafter is not None:
+                out["drafter_stats"] = {k: round(float(v), 3)
+                                        for k, v in dict(getattr(drafter, "stats", {}) or {}).items()}
         prof = getattr(self.model, "prefill_profile", None)
         if prof is not None:
             out["prefill_profile"] = prof

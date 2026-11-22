@@ -145,6 +145,8 @@ class PackBuildJob(_Job):
 
         m = self.model
         try:
+            if self._reuse_existing():
+                return
             repo = m.get("hf_repo")
             if not repo:
                 raise ConfigError("the service did not say which open-weight checkpoint this model uses; ask your "
@@ -185,6 +187,35 @@ class PackBuildJob(_Job):
                     self.on_done(self.status())
                 except Exception:  # pragma: no cover - defensive
                     log.exception("pack job callback failed")
+
+    def _reuse_existing(self) -> bool:
+        """``PGW_SETUP_REUSE_PACK=1`` (off by default): a pack already in ``out_dir`` (e.g. restored from a
+        deployment's cache of public packs) is used without downloading when its full verification (every tensor,
+        the tokenizer and the linears hashed) gives the enrolled fingerprint; otherwise it is deleted and the model
+        is downloaded and packed as usual. The fingerprint is what the service serves, so a reused pack is the
+        same model a fresh build would give."""
+        from pgw.modelpack import ModelPack
+
+        if os.environ.get("PGW_SETUP_REUSE_PACK", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        if not (self.out_dir / "manifest.json").is_file():
+            return False
+        self.update(phase="verifying", message="Checking the prepared model against the service's fingerprint")
+        try:
+            with ModelPack.open(self.out_dir, verify="full") as p:
+                fp = p.fingerprint
+        except Exception as exc:  # unreadable or tampered: build from the checkpoint instead
+            log.warning("prepared pack in %s is not usable (%s): building it from the checkpoint", self.out_dir, exc)
+            fp = None
+        if fp != self.model["fingerprint"]:
+            if fp is not None:
+                log.warning("prepared pack in %s has fingerprint %s, not the enrolled %s: building it from the "
+                            "checkpoint", self.out_dir, str(fp)[:12], str(self.model["fingerprint"])[:12])
+            shutil.rmtree(self.out_dir, ignore_errors=True)
+            return False
+        log.info("reusing the prepared pack in %s (full verification: fingerprint %s)", self.out_dir, fp[:12])
+        self.update(phase="done", message="Model ready", finished_at=time.time(), fingerprint=fp)
+        return True
 
 
 class HintBuildJob(_Job):

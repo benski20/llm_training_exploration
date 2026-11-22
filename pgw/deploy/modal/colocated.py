@@ -88,6 +88,23 @@ GATEWAY_CPUS = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
 #: encryption hint through the page cache (48 GiB). A request, not a limit.
 MEMORY_MIB = (16384 + 49152 if MODEL_NAME == "qwen2.5-7b-instruct"
               else 6144 + (16384 if DRAFT or MODEL_NAME != "qwen2.5-0.5b-instruct" else 8192))
+#: ``launch.py --gateway-mem-gib`` / ``--provider-mem-gib`` (deploy time): explicit sizes (a request, not a limit), e.g.
+#: the CPU-only 7B gateway with the draft, a large mask stock and several factory workers (hint pages, segments).
+if os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB") or os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB"):
+    MEMORY_MIB = 1024 * (int(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB")
+                             or (16 if MODEL_NAME == "qwen2.5-7b-instruct" else 6))
+                         + int(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB")
+                               or (48 if MODEL_NAME == "qwen2.5-7b-instruct" else 16 if DRAFT else 8)))
+#: ``launch.py --gateway-cache`` (deploy time, ``PGW_MODAL_GATEWAY_CACHE=1``; off by default): a Modal Volume of the
+#: gateway side's public set-up artefacts (the model pack and the encrypted-mask hint ``H = W8 A``), mounted at
+#: ``/cache`` (root only; the parties never see it): restored into the gateway's data directory before it starts and
+#: filled after a run, so the 7B's ~20 min CPU hint build and its pack build happen once (``prepare_cache`` below
+#: builds both on a cheap GPU container ahead of an expensive run). Contents and why they hold no customer secret:
+#: deploy/modal/README.md, "Gateway cache".
+GATEWAY_CACHE = os.environ.get("PGW_MODAL_GATEWAY_CACHE", "0") == "1"
+CACHE_VOLUME = os.environ.get("PGW_MODAL_CACHE_VOLUME") or "pgw-gateway-cache"
+CACHE_ROOT = Path("/cache")
+cache_volume = modal.Volume.from_name(CACHE_VOLUME, create_if_missing=True) if GATEWAY_CACHE else None
 #: Disk: Modal's default ephemeral disk (at least 512 GiB, the smallest request it accepts) holds the 7B's
 #: checkpoint (15 GB), two packs (7.6 GB each), the encryption hint (34 GB) and the mask store (4.2 MB per slot).
 #: One Unix user per party (``pgw_modal_boot.PROVIDER_USER`` / ``CUSTOMER_USER``; created in the image).
@@ -112,6 +129,7 @@ RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT el
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0",
                "PGW_MODAL_GATEWAY_GPU": "1" if GATEWAY_GPU else "0",
                "PGW_MODAL_GPU_NODE_OWNERS": os.environ.get("PGW_MODAL_GPU_NODE_OWNERS", "1"),
+               "PGW_MODAL_GATEWAY_CACHE": "1" if GATEWAY_CACHE else "0", "PGW_MODAL_CACHE_VOLUME": CACHE_VOLUME,
                **({"PGW_MODAL_APP_SUFFIX": APP_SUFFIX} if APP_SUFFIX else {})}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: The provider's TCP+TLS trip lane (``launch.py --lane tls``; 127.0.0.1 only, like the service port).
@@ -163,7 +181,8 @@ app = modal.App("pgw-colocated" + APP_SUFFIX, image=image)
 
 
 @app.function(gpu=GPU_SPEC, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
-              max_containers=1, min_containers=0, retries=0, region=REGION)
+              max_containers=1, min_containers=0, retries=0, region=REGION,
+              volumes={str(CACHE_ROOT): cache_volume} if cache_volume is not None else {})
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
          spec_rows: int = 0, lane: str = "stream", gateway_env: dict | None = None,
          provider_env: dict | None = None, sustain_s: float = 0.0) -> dict:
@@ -210,6 +229,20 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         gsplit = boot.split_gpus(puser, cuser)
         result["gpu_split"] = gsplit.get("report")
         boot.log(f"GPU split: {gsplit.get('report')}")
+    genv = dict(gateway_env or {})
+    if GATEWAY_CACHE:  # --gateway-cache: the pack and hint from the gateway side's cache (public artefacts)
+        try:
+            CACHE_ROOT.chmod(0o700)
+        except OSError:
+            pass
+        t_c = time.time()
+        try:
+            result["cache_restore"] = boot.restore_cache(CACHE_ROOT, MODEL_NAME, croot / "data")
+        except Exception as exc:  # a cache problem never stops the run: the wizard builds everything itself
+            result["cache_restore"] = {"error": f"{type(exc).__name__}: {exc}"}
+        result["cache_restore_s"] = round(time.time() - t_c, 1)
+        boot.log(f"gateway cache restore: {result['cache_restore']}")
+        genv.setdefault("PGW_SETUP_REUSE_PACK", "1")  # the wizard uses the restored pack iff it verifies
     try:
         # ---- provider: own user, own directory, loopback listener only (pgw_modal_boot.start_provider_party)
         # launch.py --lane tls: the service also serves its native trip lane over TLS on LANE_PORT (opt-in)
@@ -234,7 +267,13 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             gurl = tunnel.url
             # launch.py --spec-rows: strict speculation (prompt lookup; plus the image's draft with --spec-draft,
             # on the CPU: the gateway's process sees no GPU)
-            spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)
+            # --draft-backend / --spec-pipeline-steps / --spec-mask (run time, carried as PGW_MODAL_* in gateway_env)
+            pipe = genv.get("PGW_MODAL_SPEC_PIPELINE_STEPS", "")
+            spec = boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None,
+                                     draft_backend=genv.get("PGW_MODAL_DRAFT_BACKEND") or None,
+                                     pipeline_steps=int(pipe) if pipe.strip() else None,
+                                     spec_mask=genv.get("PGW_MODAL_SPEC_MASK"))
+            result["spec_options"] = spec
             # with its own GPU (gsplit), the gateway's exact local linears run there (self-checked, else the CPU)
             # and its LM head too (the CPU kernel's fixed summation order as one GPU kernel: the same logits bit
             # for bit, self-checked at start-up, else the CPU; PGW_LM_HEAD_DEVICE=cpu via --gateway-env turns it off)
@@ -248,7 +287,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                  extra_env={**boot.colocated_gateway_env(local_linears,
                                                                                         MODEL_NAME),
                                                             **gsplit.get("gateway", {}),
-                                                            **boot.checked_env(gateway_env)})
+                                                            **boot.checked_env(genv)})
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,
@@ -259,6 +298,7 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 import e2e_driver
 
                 sampler = boot.CpuSampler()
+                private: dict = {}  # the API key, admin token and first answer, for an in-run plain phase
 
                 result["e2e"] = e2e_driver.run(live, run_id, gurl, token, deadline,
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
@@ -271,12 +311,44 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                # --gateway-env PGW_MODAL_SUSTAIN_MIN_STOCK=N: the sustain window
                                                # starts once N mask slots are in stock (at most 240 s of waiting)
                                                sustain_min_stock=int((gateway_env or {}).get(
-                                                   "PGW_MODAL_SUSTAIN_MIN_STOCK") or 0))
+                                                   "PGW_MODAL_SUSTAIN_MIN_STOCK") or 0),
+                                               private=private)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
                     sus["keep_up"] = boot.keep_up(sus, sus["factory"])
                     sus["cores"] = sampler.cores(sus["t0"], sus["t1"])
+                    boot.per_trip_cpu(sus)
+                # --ab-plain: the same run without speculation (gateway restarted on the same store and keys)
+                ab_plain = genv.get("PGW_MODAL_AB_PLAIN", "").strip()
+                if ab_plain and spec_rows and private:
+                    models_file = croot / "config" / "models.json"
+                    holder = {"gw": gw}
+
+                    def restart() -> dict:
+                        rep = {"dropped": boot.drop_speculation(models_file)}
+                        old = holder["gw"]
+                        holder["gw"] = boot.restart_gateway(old, GATEWAY_PORT, LOGS)
+                        procs[procs.index(old)] = holder["gw"]
+                        return rep
+
+                    try:
+                        pp = e2e_driver.plain_phase(
+                            f"http://127.0.0.1:{GATEWAY_PORT}", private["api_key"], private["admin"],
+                            result["e2e"]["model"], private["ref_out"], restart, sustain_s=float(ab_plain),
+                            sustain_min_stock=int(genv.get("PGW_MODAL_SUSTAIN_MIN_STOCK") or 0),
+                            sampler_path=genv.get("PGW_STACK_SAMPLER"))
+                        psus = pp.get("sustain")
+                        if psus:
+                            psus["factory"] = boot.factory_segments(LOGS / "gateway.log", psus["t0"], psus["t1"])
+                            psus["keep_up"] = boot.keep_up(psus, psus["factory"])
+                            psus["cores"] = sampler.cores(psus["t0"], psus["t1"])
+                            boot.per_trip_cpu(psus)
+                        result["e2e"]["plain"] = pp
+                    except Exception as exc:
+                        result["e2e"]["plain"] = {"error": f"{type(exc).__name__}: {exc}",
+                                                  "traceback": traceback.format_exc()[-2000:]}
+                    gw = holder["gw"]
                 # every factory segment of the run (rates while alone, during the chats; yielded seconds)
                 result["e2e"]["factory_all"] = boot.factory_segments(LOGS / "gateway.log", t_boot, time.time())
                 w = result["e2e"].get("warm_window")
@@ -291,7 +363,11 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                 and result["e2e"].get("stream_identical") is not False
                                 and all(r.get("identical", True) for r in result["e2e"].get("ab") or [])
                                 # --sustain-s: every back-to-back chat gave the same streamed answer
-                                and (result["e2e"].get("sustain") or {}).get("identical") is not False)
+                                and (result["e2e"].get("sustain") or {}).get("identical") is not False
+                                # --ab-plain: the plain phase gave the same answer (and its sustain chats too)
+                                and (result["e2e"].get("plain") or {}).get("identical", True) is not False
+                                and (((result["e2e"].get("plain") or {}).get("sustain") or {}).get("identical")
+                                     is not False))
                 reason = "e2e finished"
             else:
                 while time.time() < deadline:
@@ -311,6 +387,16 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         result["traceback"] = traceback.format_exc()[-3000:]
         reason = "error"
     boot.log(f"shutting down: {reason}")
+    if GATEWAY_CACHE and genv.get("PGW_MODAL_CACHE_SAVE", "1") != "0":
+        # public artefacts the cache lacks (first run of a target): copied after the run, before the parties stop
+        try:
+            t_c = time.time()
+            result["cache_save"] = boot.save_cache(CACHE_ROOT, MODEL_NAME, croot / "data")
+            if result["cache_save"]:
+                cache_volume.commit()
+            result["cache_save_s"] = round(time.time() - t_c, 1)
+        except Exception as exc:
+            result["cache_save"] = {"error": f"{type(exc).__name__}: {exc}"}
     for p in reversed(procs):
         p.terminate()
         try:
@@ -330,3 +416,53 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     if pinfo and (live.get("provider") or {}).get("run_id") == run_id:
         live["provider"] = {**pinfo, "stopped_at": time.time(), "stop_reason": reason, "code": "(expired)"}
     return result
+
+
+@app.function(gpu="T4", cpu=8.0, memory=32768 if MODEL_NAME == "qwen2.5-7b-instruct" else 16384, timeout=60 * 60,
+              max_containers=1, min_containers=0, retries=0, region=REGION,
+              volumes={str(CACHE_ROOT): cache_volume} if cache_volume is not None else {})
+def prepare_cache(force: bool = False) -> dict:
+    """Fill the gateway side's cache (``launch.py --prepare-cache``; needs ``--gateway-cache``) on a cheap T4
+    container, before an expensive run: the target's pack (from this image: public weights; the wizard reuses it
+    only if it verifies in full to the enrolled fingerprint) and the encrypted-mask hint ``H = W8 A`` built with a
+    fresh customer-side seed for ``A`` on the T4 (``PGW_HINT_DEVICE=cuda``: the CPU path's bits, self-checked first;
+    213 s for the 7B against about 20 min on 16 vCPUs). No provider process runs here."""
+    import shutil
+    import sys
+
+    sys.path.insert(0, "/opt/pgw-modal")
+    import pgw_modal_boot as boot
+
+    from pgw.gateway.setup_jobs import HintBuildJob
+
+    if cache_volume is None:
+        raise RuntimeError("deploy with --gateway-cache (PGW_MODAL_GATEWAY_CACHE=1)")
+    t0 = time.time()
+    paths = boot.cache_paths(CACHE_ROOT, MODEL_NAME)
+    out: dict = {"model": MODEL_NAME}
+    if force:
+        shutil.rmtree(paths["pack"].parent, ignore_errors=True)
+    if not (paths["pack"] / "manifest.json").is_file():
+        paths["pack"].parent.mkdir(parents=True, exist_ok=True)
+        out["pack"] = boot.copy_tree(Path(PACK), paths["pack"])
+    import tempfile
+
+    work = Path(tempfile.mkdtemp(prefix="pgw-hint-"))
+    if not any(d.is_dir() and (d / "meta.json").is_file() for d in paths["hemask"].glob("*")):
+        os.environ["PGW_HINT_DEVICE"] = "cuda"
+        job = HintBuildJob(Path(PACK), boot.RING, work)
+        t_h = time.time()
+        job.run()
+        st = job.status()
+        out["hint_build"] = {"phase": st.get("phase"), "error": st.get("error"), "seconds": round(time.time() - t_h, 1)}
+        if st.get("phase") != "done":
+            raise RuntimeError(f"hint build failed: {st.get('error')}")
+        for d in work.glob("*"):
+            if d.is_dir() and (d / "meta.json").is_file():
+                paths["hemask"].mkdir(parents=True, exist_ok=True)
+                out[f"hint {d.name}"] = boot.copy_tree(d, paths["hemask"] / d.name)
+    cache_volume.commit()
+    out["seconds"] = round(time.time() - t0, 1)
+    out["cache"] = {str(p.relative_to(CACHE_ROOT)): sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                    for p in (paths["pack"], paths["hemask"]) if p.exists()}
+    return out

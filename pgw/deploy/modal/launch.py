@@ -154,6 +154,25 @@ def cost_per_h(gpu: str | None, cpus: float | None = None) -> dict[str, float]:
     return {APPS[0]: prov + provider_gib() * GIB_H, APPS[1]: cust}
 
 
+def colocated_cost_per_h(gpu: str | None, model: str | None = None) -> dict[str, float]:
+    """Hourly list price of the co-located container as ``colocated.py`` sizes it (deploy-time environment):
+    the provider's GPU (two with ``--gateway-gpu``), provider + gateway cores and memory."""
+    model = (model or os.environ.get("PGW_MODAL_MODEL") or DEFAULT_MODEL).strip().lower()
+    big = model in COLOCATED_ONLY_MODELS
+    draft = os.environ.get("PGW_MODAL_DRAFT", "0") == "1"
+    pcpu = provider_cpus(gpu)
+    gcpu = float(os.environ.get("PGW_MODAL_GATEWAY_CPUS") or 12.0)
+    pmem = float(os.environ.get("PGW_MODAL_PROVIDER_MEM_GIB") or (16 if big else 6))
+    gmem = float(os.environ.get("PGW_MODAL_GATEWAY_MEM_GIB")
+                 or (48 if big else 16 if draft or model != DEFAULT_MODEL else 8))
+    ngpu = 2 if gpu and os.environ.get("PGW_MODAL_GATEWAY_GPU", "0") == "1" else 1
+    gp = (GPU_PRICE_H[gpu] * ngpu) if gpu else 0.0
+    out = {"gpu": gp, "cores": (pcpu + gcpu) * CORE_H, "memory": (pmem + gmem) * GIB_H}
+    out["total"] = sum(out.values())
+    out.update(provider_cpus=pcpu, gateway_cpus=gcpu, memory_gib=pmem + gmem)
+    return out
+
+
 def normalize_gpu(value: str | None) -> str | None:
     """``--gpu`` / ``PGW_MODAL_GPU`` to a tier of :data:`GPU_PRICE_H` (case-insensitive), ``None`` for
     none/empty. Raises ``ValueError`` for L4, a GPU count (``T4:2``) or an unknown name."""
@@ -492,6 +511,21 @@ def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
 
     colocated_only = (getattr(args, "model", DEFAULT_MODEL) in COLOCATED_ONLY_MODELS
                       or os.environ.get("PGW_MODAL_DEPLOY_COLOCATED_ONLY", "0") == "1")
+    # CPU-only gateway + strict speculation (README "CPU-only 7B gateway with strict speculation"): run-time
+    # model options and gateway settings, carried to colocated.py as PGW_MODAL_* / PGW_* gateway variables
+    if getattr(args, "draft_backend", None):
+        genv["PGW_MODAL_DRAFT_BACKEND"] = args.draft_backend
+    if getattr(args, "spec_pipeline_steps", None) is not None:
+        genv["PGW_MODAL_SPEC_PIPELINE_STEPS"] = str(int(args.spec_pipeline_steps))
+    if (getattr(args, "spec_mask", "") or "").strip():
+        genv.setdefault("PGW_MODAL_SPEC_MASK", args.spec_mask.strip())
+    if getattr(args, "trip_native", False):  # one native call per side of each trip (with PGW_TRIP_FAST, on co-located)
+        genv.setdefault("PGW_TRIP_NATIVE", "1")
+    if getattr(args, "prime_check", False):  # one-vector Freivalds check over F_p: factory format + gateway acceptance
+        genv.setdefault("PGW_FACTORY_CHECK_FIELD", "p31")
+        genv.setdefault("PGW_GATEWAY_PRIME_CHECK", "true")
+    if getattr(args, "ab_plain", None) is not None:  # in-run A/B: the same run again without speculation
+        genv["PGW_MODAL_AB_PLAIN"] = f"{float(args.ab_plain):g}"
     if getattr(args, "he_bulk", False):  # --he-bulk: the provider's bulk maskgen channel, used by the factory
         penv.setdefault("PGW_SERVICE_MASKGEN_BULK_PORT", str(HE_BULK_PORT))
         genv.setdefault("PGW_FACTORY_HE_BULK_PORT", str(HE_BULK_PORT))
@@ -545,6 +579,10 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
         if pair.note:
             print(f"note: {pair.note}")
         _print_latency(res, pair)
+        _print_ab_plain(res)
+        for k in ("cache_restore", "cache_restore_s", "cache_save", "cache_save_s"):
+            if k in res:
+                print(f"{k}: {res[k]}", flush=True)
         verdict, why = e2e_verdict(res, args.max_trip_ms)
         print(f"attempt {attempt}/{tries}: {verdict}: {why}", flush=True)
         if verdict == "ok":
@@ -566,6 +604,48 @@ def run_e2e(live: Any, args: argparse.Namespace, ttl_s: int) -> int:
     stop()
     print(f"elapsed {time.time() - t_all:.0f}s")
     return code
+
+
+def prepare_cache(force: bool = False) -> dict[str, Any]:
+    """Run ``colocated.py``'s ``prepare_cache`` (a T4 container, no provider process): fill the gateway side's
+    cache Volume with the deployed target's pack and encrypted-mask hint, so the next co-located run with
+    ``--gateway-cache`` restores them instead of building them (README "Gateway cache")."""
+    fn = modal.Function.from_name(COLOCATED_FUNCTION[0], "prepare_cache")
+    t0 = time.time()
+    out = dict(fn.remote(force))
+    out["wall_s"] = round(time.time() - t0, 1)
+    print(json.dumps(out, indent=1, default=str), flush=True)
+    return out
+
+
+def _print_ab_plain(res: dict[str, Any]) -> None:
+    """One summary of the in-run A/B (``--ab-plain``): speculative vs plain decode, trips and the factory."""
+    e = res.get("e2e") or {}
+    sp = e.get("speed") or {}
+    pl = e.get("plain")
+    if not pl and not sp.get("stream_spec"):
+        return
+    ss = sp.get("stream_spec") or {}
+    print(f"speculative phase: warm stream decode {sp.get('warm_stream_decode_tokens_per_s')} tok/s, TTFT "
+          f"{sp.get('warm_stream_ttft_s')} s, tokens/pass {ss.get('tokens_per_pass')}, drafter hit rate "
+          f"{ss.get('drafter_hit_rate')}, draft ms per background step {ss.get('draft_ms_per_bg_step')}", flush=True)
+    for name, sus in (("speculative", e.get("sustain")), ("plain", (pl or {}).get("sustain"))):
+        if not sus:
+            continue
+        d = sus.get("derived") or {}
+        print(f"{name} sustain: decode token-weighted {sus.get('decode_tokens_per_s_overall')} tok/s (median "
+              f"{sus.get('decode_tokens_per_s_median')}, min {sus.get('decode_tokens_per_s_min')}), TTFT median "
+              f"{sus.get('ttft_s_median')} s, identical {sus.get('identical')}; trips "
+              f"{(sus.get('trips') or {}).get('rows_1_mean_ms')} ms (1-row mean), {d.get('trips_per_token')} "
+              f"trips/token, "
+              f"gateway CPU {d.get('gateway_cpu_ms_per_trip')} ms/trip; {d.get('slots_per_token')} slots/token; "
+              f"factory {d.get('factory_vs_consumption')}; tokens/pass "
+              f"{(sus.get('spec') or {}).get('tokens_per_pass')}",
+              flush=True)
+    if pl:
+        print(f"plain phase: restart {pl.get('restart_s')} s, decode {pl.get('decode_tokens_per_s')} tok/s, TTFT "
+              f"{pl.get('ttft_s')} s, identical {pl.get('identical')}, trips {pl.get('trips')}, "
+              f"{pl.get('trips_per_token')} trips/token {pl.get('error') or ''}", flush=True)
 
 
 def show(live: Any) -> None:
@@ -679,6 +759,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--he-bulk-split", type=int, default=2,
                     help="with --he-bulk: a multi-group maskgen request goes out as up to N concurrent whole-group "
                          "requests (PGW_FACTORY_HE_BULK_SPLIT; default 2)")
+    ap.add_argument("--draft-backend", choices=("auto", "native_int8", "torch_int8", "float"), default=None,
+                    help="--spec-draft: the draft model's CPU kernels (run time; GatewayModelConfig.draft_backend). "
+                         "'native_int8' = the native exact int8 kernels on the gateway's cores (3-5x torch int8)")
+    ap.add_argument("--spec-pipeline-steps", type=int, default=None, metavar="M",
+                    help="--spec-draft: pipelined drafting (run time; spec_pipeline_steps): the next block is drafted "
+                         "while the pass is in flight, M draft steps between passes whatever the acceptance (0 = none "
+                         "on the critical path); turns prompt lookup off")
+    ap.add_argument("--trip-native", action="store_true",
+                    help="--placement colocated: the native per-trip path (PGW_TRIP_NATIVE=1 next to the demo's "
+                         "PGW_TRIP_FAST=1; library default off)")
+    ap.add_argument("--prime-check", action="store_true",
+                    help="--placement colocated: one-vector Freivalds check over F_p (factory "
+                         "PGW_FACTORY_CHECK_FIELD=p31, gateway PGW_GATEWAY_PRIME_CHECK). Not with --spec-mask: padding "
+                         "rows refuse prime extents")
+    ap.add_argument("--ab-plain", type=float, default=None, metavar="SUSTAIN_S",
+                    help="--e2e --placement colocated --spec-rows: after the speculative phase, restart the gateway "
+                         "without speculation (same pack, mask store, keys) and measure plain decoding in the same "
+                         "container: 3 streamed chats, then SUSTAIN_S seconds back to back (0 = chats only)")
+    ap.add_argument("--gateway-cpus", type=float, default=None,
+                    help="--placement colocated: the gateway party's cores (deploy time; PGW_MODAL_GATEWAY_CPUS, "
+                         "default 12)")
+    ap.add_argument("--provider-cpus", type=float, default=None,
+                    help="the provider's cores (deploy time; PGW_MODAL_PROVIDER_CPUS; default 2 with a GPU, 4 without)")
+    ap.add_argument("--gateway-mem-gib", type=int, default=None,
+                    help="--placement colocated: the gateway party's memory (deploy time; default 8/16, 48 for the 7B)")
+    ap.add_argument("--provider-mem-gib", type=int, default=None,
+                    help="--placement colocated: the provider party's memory (deploy time; default 6, 16 for the 7B)")
+    ap.add_argument("--gateway-cache", action="store_true",
+                    default=os.environ.get("PGW_MODAL_GATEWAY_CACHE", "0") == "1",
+                    help="--placement colocated: the gateway side's cache Volume of public set-up artefacts (the "
+                         "target's pack and encrypted-mask hint), restored before the wizard and filled after a run "
+                         "(deploy time; PGW_MODAL_GATEWAY_CACHE=1). See README 'Gateway cache'")
+    ap.add_argument("--prepare-cache", action="store_true",
+                    help="with --gateway-cache: fill the cache for the deployed target on a T4 container (pack + "
+                         "hint built on its GPU), then exit; run it once before an expensive co-located run")
+    ap.add_argument("--allow-self-draft", action="store_true",
+                    help="plumbing tests only: allow --spec-draft with the 0.5B target (the draft is the target "
+                         "itself, so acceptance is near 1 and nothing is learned about speed)")
     args = ap.parse_args(argv)
     try:
         parse_env_pairs(args.gateway_env)
@@ -760,10 +878,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             ap.error("--spec-mask: use C or C/B, e.g. 4/160")
         if not 1 <= c_v <= args.spec_rows or b_v < 0:
             ap.error("--spec-mask: need 1 <= C <= --spec-rows and B >= 0")
-    if args.spec_draft and args.model == DEFAULT_MODEL:
+    if args.spec_draft and args.model == DEFAULT_MODEL and not args.allow_self_draft:
         # the target itself as its own draft: the gateway would compute the whole model in plaintext
         ap.error("--spec-draft drafts with the 0.5B itself: use a larger --model (the draft must be much cheaper "
                  "than the target, or the provider computes nothing the gateway does not)")
+    if (args.draft_backend or args.spec_pipeline_steps is not None) and not args.spec_draft:
+        ap.error("--draft-backend / --spec-pipeline-steps need --spec-draft (the draft model)")
+    if args.spec_pipeline_steps is not None and not 0 <= args.spec_pipeline_steps <= max(0, args.spec_rows - 1):
+        ap.error("--spec-pipeline-steps must be in [0, --spec-rows - 1]")
+    colo_only = {"--trip-native": args.trip_native, "--prime-check": args.prime_check,
+                 "--ab-plain": args.ab_plain is not None, "--gateway-cache": args.gateway_cache,
+                 "--gateway-cpus": args.gateway_cpus is not None, "--gateway-mem-gib": args.gateway_mem_gib is not None,
+                 "--provider-mem-gib": args.provider_mem_gib is not None}
+    for flag, on in colo_only.items():
+        if on and args.placement != "colocated":
+            ap.error(f"{flag} needs --placement colocated")
+    if args.prime_check and args.spec_mask:
+        ap.error("--prime-check with --spec-mask: padding rows refuse prime-field extents (fail closed); use the "
+                 "ring check with padded speculation")
+    if args.ab_plain is not None and (not args.e2e or not args.spec_rows or args.ab_plain < 0):
+        ap.error("--ab-plain needs --e2e and --spec-rows (it measures the same run without speculation), and >= 0")
+    if args.prepare_cache and not args.gateway_cache:
+        ap.error("--prepare-cache needs --gateway-cache")
     return args
 
 
@@ -773,7 +909,13 @@ def main(argv: list[str] | None = None) -> None:
     for var, val in (("PGW_MODAL_MODEL", args.model if args.model != DEFAULT_MODEL else None),
                      ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None),
                      ("PGW_MODAL_GATEWAY_GPU", "1" if args.gateway_gpu else None),
-                     ("PGW_MODAL_SPEC_MASK", args.spec_mask.strip() or None)):
+                     ("PGW_MODAL_SPEC_MASK", args.spec_mask.strip() or None),
+                     ("PGW_MODAL_GATEWAY_CACHE", "1" if args.gateway_cache else None),
+                     ("PGW_MODAL_GATEWAY_CPUS", f"{args.gateway_cpus:g}" if args.gateway_cpus else None),
+                     ("PGW_MODAL_PROVIDER_CPUS", f"{args.provider_cpus:g}" if args.provider_cpus
+                      else os.environ.get("PGW_MODAL_PROVIDER_CPUS")),
+                     ("PGW_MODAL_GATEWAY_MEM_GIB", str(args.gateway_mem_gib) if args.gateway_mem_gib else None),
+                     ("PGW_MODAL_PROVIDER_MEM_GIB", str(args.provider_mem_gib) if args.provider_mem_gib else None)):
         if val:
             os.environ[var] = val
         else:
@@ -784,9 +926,20 @@ def main(argv: list[str] | None = None) -> None:
               f"generated token (the e2e chat reserves {b['spec']} slots instead of {b['plain']}); pass max_tokens "
               "explicitly: a request reserves prompt + max_tokens + (max_tokens - 1) x (spec_rows - 1) slots",
               flush=True)
+    if args.placement == "colocated":
+        c = colocated_cost_per_h(args.gpu, args.model)
+        print(f"co-located container: {args.gpu or 'no GPU'}, {c['provider_cpus']:g} + {c['gateway_cpus']:g} cores, "
+              f"{c['memory_gib']:g} GiB: about ${c['total']:.2f}/h at list prices (GPU ${c['gpu']:.2f}, cores "
+              f"${c['cores']:.2f}, memory ${c['memory']:.2f}); at most ${c['total'] * min(args.ttl_min, 85) / 60:.2f} "
+              f"for --ttl-min {args.ttl_min:g}", flush=True)
     if args.deploy_only:
         deploy(args.gpu, args.customer_gpu, args.placement, args.region, args.model, args.spec_draft)
         print("deployed; start a pair later with --no-deploy")
+        return
+    if args.prepare_cache:
+        if not args.no_deploy:
+            deploy(args.gpu, args.customer_gpu, args.placement, args.region, args.model, args.spec_draft)
+        prepare_cache()
         return
     if args.stop:
         stop()

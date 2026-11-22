@@ -552,7 +552,7 @@ def test_colocated_serves_the_chosen_model_and_draft(monkeypatch: pytest.MonkeyP
     fn = next(n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == "pair")
     src = ast.get_source_segment(text, fn) or ""
     assert "spec_rows: int = 0" in src
-    assert "boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None)" in src and "**spec" in src
+    assert "boot.spec_options(spec_rows, DRAFT_PACK if DRAFT else None, None," in src and "**spec" in src
     assert "spec_rows=spec_rows" in src
 
 
@@ -719,3 +719,35 @@ def test_factory_segments_and_keep_up(tmp_path: Path) -> None:
     ku = boot.keep_up(sus, f)
     assert ku["produced_slots"] == 4096 and ku["consumption_slots_per_s"] == pytest.approx(40.96)
     assert ku["keeps_up"] and ku["production_slots_per_s"] == pytest.approx(40.96)
+
+
+def test_cpu_gateway_speculation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The H100 / CPU-only-gateway flags reach colocated.py as gateway variables; invalid combinations refuse."""
+    for var in ("PGW_MODAL_PLACEMENT", "PGW_MODAL_GPU", "PGW_MODAL_MODEL", "PGW_MODAL_DRAFT", "PGW_MODAL_SPEC_MASK",
+                "PGW_MODAL_GATEWAY_CPUS"):
+        monkeypatch.delenv(var, raising=False)
+    launch = _load("launch")
+    argv = ["--e2e", "--placement", "colocated", "--gpu", "H100", "--model", "qwen2.5-7b-instruct",
+            "--local-linears", "off", "--spec-rows", "2", "--spec-mask", "2", "--spec-draft",
+            "--draft-backend", "native_int8", "--spec-pipeline-steps", "0", "--trip-native", "--ab-plain", "60",
+            "--gateway-cpus", "24", "--gateway-cache"]
+    a = launch.parse_args(argv)
+    calls: list = []
+    monkeypatch.setattr(launch, "spawn_pair", lambda *x, **kw: calls.append(kw))
+    launch._spawner(a)({}, "colocated", 600, True)
+    genv = calls[-1]["gateway_env"]
+    assert genv["PGW_MODAL_DRAFT_BACKEND"] == "native_int8" and genv["PGW_MODAL_SPEC_PIPELINE_STEPS"] == "0"
+    assert genv["PGW_TRIP_NATIVE"] == "1" and genv["PGW_MODAL_AB_PLAIN"] == "60"
+    assert genv["PGW_MODAL_SPEC_MASK"] == "2"
+    for bad in (["--prime-check"], ["--spec-pipeline-steps", "2"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args([*argv, *bad])
+    with pytest.raises(SystemExit):  # the pipelined drafter needs the draft model
+        launch.parse_args(["--placement", "colocated", "--spec-rows", "2", "--spec-pipeline-steps", "0"])
+    with pytest.raises(SystemExit):  # the 0.5B drafting itself only with the plumbing switch
+        launch.parse_args(["--placement", "colocated", "--spec-rows", "2", "--spec-draft"])
+    assert launch.parse_args(["--placement", "colocated", "--spec-rows", "2", "--spec-draft",
+                              "--allow-self-draft"]).spec_draft
+    monkeypatch.setenv("PGW_MODAL_GATEWAY_CPUS", "24")
+    c = launch.colocated_cost_per_h("H100", "qwen2.5-7b-instruct")
+    assert c["gpu"] == launch.GPU_PRICE_H["H100"] and c["gateway_cpus"] == 24.0

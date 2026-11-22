@@ -27,7 +27,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0, sustain_s: float = 0.0,
         sampler_path: str | None = None, float_threads: int | None = None,
         float_ops: str | None = None, ab: list[tuple[str, Any]] | None = None,
-        ab_cleanup: Any = None, ab_chats: int = 3, sustain_min_stock: int = 0) -> dict[str, Any]:
+        ab_cleanup: Any = None, ab_chats: int = 3, sustain_min_stock: int = 0,
+        private: dict[str, Any] | None = None) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
@@ -63,6 +64,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
 
     s0 = snap()
     out = wiz.chat(url, key, model_name, PROMPT, 32)
+    if private is not None:  # an in-run plain phase (colocated.py --ab-plain) reuses these; never in the result
+        private.update(api_key=key, admin=adm, ref_out=out)
     # Strict speculation: the dummy passes of the first chat run after its answer, and the next request of the
     # same conversation (this API key) waits for them; wait here so the warm window holds one chat's passes.
     drain_s = wiz.wait_idle(local_url, adm, model_name) if spec_rows else 0.0
@@ -82,13 +85,20 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     out3 = wiz.chat(local_url, key, model_name, PROMPT, 32) if not spec_rows else None
     # Streamed on loopback (twice; the second is the warm figure): time to first token and the decode rate
     # (n-1)/(t_last - t_first), next to the wall-time figures above. Same answer required (stream_identical).
+    # Strict speculation: each stream starts once the previous answer's dummy passes have drained (they would
+    # otherwise count as time to first token: a conversation's next request waits for them).
+    idle = _idle_fn(local_url, adm, model_name, spec_rows)
     streams: list[dict[str, Any]] = []
-    if not spec_rows:
-        for _ in range(2):
-            try:
-                streams.append(wiz.chat_stream(local_url, key, model_name, PROMPT, 32))
-            except Exception as exc:  # report, never fail the exactness result
-                streams.append({"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+    spec0 = _spec_stats(local_url, adm, model_name) if spec_rows else None
+    for _ in range(2):
+        try:
+            drain = idle()
+            streams.append(wiz.chat_stream(local_url, key, model_name, PROMPT, 32))
+            if spec_rows:
+                streams[-1]["drain_before_s"] = round(drain, 2)
+        except Exception as exc:  # report, never fail the exactness result
+            streams.append({"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+    stream_spec = _spec_delta(spec0, _spec_stats(local_url, adm, model_name)) if spec_rows else None
     def ab_snap() -> tuple[str, dict, dict]:  # trip counters and the local-linear timing (gateway, loopback)
         m, ct = snap()
         try:
@@ -98,8 +108,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
             sp0 = {}
         return m, ct, dict(sp0.get("local_linear_timing") or {})
 
-    ab_out = (_ab_streams(local_url, key, model_name, out, ab, ab_cleanup, ab_chats, ab_snap)
-              if ab and not spec_rows else None)
+    ab_out = (_ab_streams(local_url, key, model_name, out, ab, ab_cleanup, ab_chats, ab_snap, idle=idle)
+              if ab else None)
     st = json.loads((config_dir / "setup" / "state.json").read_text())
     t = time.time()
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32,
@@ -108,7 +118,8 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     cmp = wiz.compare(out, ref)
     sustain: dict[str, Any] | None = None
     if sustain_s > 0:  # chats back to back (launch.py --sustain-s): tokens/s and factory keep-up under decode load
-        sustain = _sustain(local_url, key, adm, model_name, out, sustain_s, sampler_path, sustain_min_stock)
+        sustain = _sustain(local_url, key, adm, model_name, out, sustain_s, sampler_path, sustain_min_stock,
+                           probe=snap, spec_rows=spec_rows)
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
     model_status = next((m for m in status.get("models", []) if m.get("name") == model_name), {})
@@ -130,6 +141,7 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         speed["warm_stream_wall_s"] = round(ws["_wall_s"], 3)
     if spec_rows:
         speed["spec_drain_wait_s"] = round(drain_s, 1)
+        speed["stream_spec"] = stream_spec
         if warm_tokens:
             speed["warm_answer_tokens_per_s"] = round(warm_tokens / max(1e-9, out2["_wall_s"]), 2)
     return {
@@ -156,8 +168,101 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     }
 
 
+def _idle_fn(local_url: str, adm: str, model_name: str, spec_rows: int, quiet_s: float = 1.5) -> Any:
+    """``() -> seconds``: with strict speculation, wait until the previous answer's dummy passes are done (the
+    model's round-trip counters still for ``quiet_s``); without it, nothing to wait for (0)."""
+    if not spec_rows:
+        return lambda: 0.0
+    return lambda: wiz.wait_idle(local_url, adm, model_name, quiet_s=quiet_s, poll_s=0.25)
+
+
+def _spec_stats(local_url: str, adm: str, model_name: str) -> dict[str, Any] | None:
+    """The gateway's speculation counters (``spec_stats``, ``drafter_stats`` of ``/admin/status``; local)."""
+    try:
+        st = wiz.admin_get(local_url, adm, "/admin/status")
+        sp = next((x for x in st.get("models", []) if x.get("name") == model_name), {}).get("speed") or {}
+        return {"spec": dict(sp.get("spec_stats") or {}), "drafter": dict(sp.get("drafter_stats") or {})}
+    except Exception:
+        return None
+
+
+def _spec_delta(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Speculation counters between two :func:`_spec_stats` snapshots: verify passes with a real answer row
+    (``spec_passes``), accepted drafts, tokens per verify pass ((accepted + passes) / passes: each pass yields its
+    accepted drafts plus the target's own token), dummy passes, draft-model ms per planning call and the
+    pipelined drafter's hit rate, foreground/background steps and wait."""
+    if not a or not b:
+        return None
+    d = {k: round(float(b["spec"].get(k, 0.0)) - float(a["spec"].get(k, 0.0)), 3) for k in b["spec"]}
+    out: dict[str, Any] = {"counters": d}
+    if d.get("spec_passes"):
+        out["tokens_per_pass"] = round((d.get("spec_accepted", 0.0) + d["spec_passes"]) / d["spec_passes"], 3)
+        out["draft_rows_per_pass"] = round(d.get("spec_rows", 0.0) / d["spec_passes"], 3)
+    if d.get("draft_calls"):
+        out["draft_ms_per_call"] = round(d.get("draft_ms", 0.0) / d["draft_calls"], 2)
+    if b.get("drafter"):
+        dd = {k: round(float(b["drafter"].get(k, 0.0)) - float((a.get("drafter") or {}).get(k, 0.0)), 3)
+              for k in b["drafter"]}
+        out["drafter"] = dd
+        n = dd.get("hits", 0.0) + dd.get("misses", 0.0)
+        if n:
+            out["drafter_hit_rate"] = round(dd.get("hits", 0.0) / n, 3)
+        if dd.get("bg_steps"):
+            out["draft_ms_per_bg_step"] = round(dd.get("bg_ms", 0.0) / dd["bg_steps"], 2)
+        if dd.get("calls"):
+            out["drafter_wait_ms_per_call"] = round(dd.get("wait_ms", 0.0) / dd["calls"], 2)
+            out["drafter_fg_ms_per_call"] = round(dd.get("ms", 0.0) / dd["calls"], 2)
+    return out
+
+
+def plain_phase(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[str, Any],
+                restart: Any, chats: int = 3, sustain_s: float = 0.0, sustain_min_stock: int = 0,
+                sampler_path: str | None = None) -> dict[str, Any]:
+    """In-run A/B (``launch.py --ab-plain``): ``restart()`` restarts the gateway without speculation (same pack,
+    mask store, keys, service and speed settings; returns a report), then ``chats`` streamed chats on loopback
+    (each must give the reference answer: plain and strict speculative decoding are both exact) with their trip
+    latency, and optionally a back-to-back window (:func:`_sustain`) of ``sustain_s`` seconds."""
+    out: dict[str, Any] = {"phase": "plain"}
+    t0 = time.time()
+    out["restart"] = restart()
+    wiz.wait_gateway_ready(local_url, timeout_s=1200)
+    out["restart_s"] = round(time.time() - t0, 1)
+
+    def snap() -> tuple[str, dict]:
+        try:
+            return (wiz.metrics_text(local_url, adm),
+                    wiz.client_timing(wiz.admin_get(local_url, adm, "/admin/status"), model_name))
+        except Exception:
+            return "", {}
+
+    want_text = ref_out["choices"][0]["message"]["content"]
+    want_lp = [y["logprob"] for y in ref_out["choices"][0]["logprobs"]["content"]]
+    runs: list[dict[str, Any]] = []
+    try:
+        runs.append(wiz.chat_stream(local_url, key, model_name, PROMPT, 32))  # warm-up after the restart
+        p0 = snap()
+        runs += [wiz.chat_stream(local_url, key, model_name, PROMPT, 32) for _ in range(chats)]
+        p1 = snap()
+        lat = trip_gate.trip_latency(p0[0], p1[0], p0[1], p1[1])
+        out["trips"] = {k: lat.get(k) for k in ("trips", "mean_ms", "p50_ms", "rows_1_mean_ms",
+                                                "rows_1_service_ms", "rows_1_wire_ms")}
+        toks = sum(max(0, int(r["tokens"])) for r in runs[1:])
+        if toks and lat.get("trips"):
+            out["trips_per_token"] = round(lat["trips"] / toks, 2)
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    out["identical"] = bool(runs) and all(r["text"] == want_text and r["logprobs"] == want_lp for r in runs)
+    out["decode_tokens_per_s"] = [r["decode_tokens_per_s"] for r in runs[1:]]
+    out["decode_ms_per_token"] = [r["decode_ms_per_token"] for r in runs[1:]]
+    out["ttft_s"] = [r["ttft_s"] for r in runs[1:]]
+    if sustain_s > 0 and "error" not in out:
+        out["sustain"] = _sustain(local_url, key, adm, model_name, ref_out, sustain_s, sampler_path,
+                                  sustain_min_stock, probe=snap, spec_rows=0)
+    return out
+
+
 def _ab_streams(local_url: str, key: str, model_name: str, ref_out: dict[str, Any], phases: list[tuple[str, Any]],
-                cleanup: Any, chats: int, probe: Any = None) -> list[dict[str, Any]]:
+                cleanup: Any, chats: int, probe: Any = None, idle: Any = None) -> list[dict[str, Any]]:
     """Diagnostics (``PGW_MODAL_AB``): per phase, apply its action (re-pin or pause a party process, see
     ``pgw_modal_boot.ab_phases``), then ``chats`` streamed chats on loopback; each must give the reference answer."""
     want_text = ref_out["choices"][0]["message"]["content"]
@@ -171,7 +276,11 @@ def _ab_streams(local_url: str, key: str, model_name: str, ref_out: dict[str, An
                 time.sleep(0.5)
                 p0 = probe() if probe is not None else None
                 a, t0 = boot.thread_cpu("gateway"), time.time()
-                runs = [wiz.chat_stream(local_url, key, model_name, PROMPT, 32) for _ in range(chats)]
+                runs = []
+                for _ in range(chats):
+                    if idle is not None:
+                        idle()
+                    runs.append(wiz.chat_stream(local_url, key, model_name, PROMPT, 32))
                 row["gateway_threads"] = boot.thread_deltas(a, boot.thread_cpu("gateway"), time.time() - t0)
                 if p0 is not None:
                     p1 = probe()
@@ -207,7 +316,7 @@ def _stock(local_url: str, adm: str, model_name: str) -> int | None:
 
 
 def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[str, Any], sustain_s: float,
-             sampler_path: str | None, min_stock: int) -> dict[str, Any]:
+             sampler_path: str | None, min_stock: int, probe: Any = None, spec_rows: int = 0) -> dict[str, Any]:
     """Streamed greedy chats back to back on loopback for ``sustain_s``: per-chat decode rate, exactness (every
     chat must equal the first one, and its first tokens the exactness-checked chat), and the mask stock every 2 s
     (``stock``: ``[seconds since t0, slots]``) so the factory's keep-up is visible (colocated.py adds the
@@ -225,6 +334,11 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
     series: list[list[float]] = []
     stop = threading.Event()
     fac0, gw0 = boot.thread_cpu("factory"), boot.thread_cpu("gateway")
+    # trip counters and speculation counters over the window (gateway-local, loopback)
+    p0 = probe() if probe is not None else None
+    spec0 = _spec_stats(local_url, adm, model_name) if spec_rows else None
+    idle = _idle_fn(local_url, adm, model_name, spec_rows, quiet_s=1.0)
+    drain_total = 0.0
     t0 = time.time()
 
     def sample() -> None:
@@ -247,8 +361,12 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
     identical = True
     err = None
     while time.time() - t0 < sustain_s:
-        starts.append(round(time.time() - t0, 1))
         try:
+            # strict speculation: the previous answer's dummy passes first (else they count as time to first token)
+            drain_total += idle()
+            if time.time() - t0 >= sustain_s:
+                break
+            starts.append(round(time.time() - t0, 1))
             o = wiz.chat_stream(local_url, key, model_name, PROMPT, 64)
         except Exception as exc:  # e.g. masks ran out: report, never fail the exactness result
             err = f"{type(exc).__name__}: {str(exc)[:300]}"
@@ -267,6 +385,13 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
         if o.get("ttft_s") is not None:
             ttfts.append(float(o["ttft_s"]))
     t1 = time.time()
+    p1 = probe() if probe is not None else None
+    trips: dict[str, Any] | None = None
+    if p0 is not None and p1 is not None:
+        lat = trip_gate.trip_latency(p0[0], p1[0], p0[1], p1[1])
+        trips = {k: lat.get(k) for k in ("trips", "mean_ms", "p50_ms", "p90_ms", "rows_1_mean_ms",
+                                         "rows_1_service_ms", "rows_1_wire_ms")}
+    spec_d = _spec_delta(spec0, _spec_stats(local_url, adm, model_name)) if spec_rows else None
     threads = {"factory": boot.comm_deltas(fac0, boot.thread_cpu("factory"), t1 - t0),
                "gateway_top": boot.thread_deltas(gw0, boot.thread_cpu("gateway"), t1 - t0, top=6)}
     stop.set()
@@ -283,4 +408,5 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
             "decode_tokens_per_s_overall": round(dec_n / dec_s, 2) if dec_s else None, "ttft_s_median": sorted(ttfts)[len(ttfts) // 2] if ttfts else None,
             "threads": threads, "stock": series, "stock_start": series[0][1] if series else None,
             "stock_end": series[-1][1] if series else None,
-            "stock_min": min(x[1] for x in series) if series else None}
+            "stock_min": min(x[1] for x in series) if series else None,
+            "trips": trips, "spec": spec_d, "spec_drain_s": round(drain_total, 1) if spec_rows else None}

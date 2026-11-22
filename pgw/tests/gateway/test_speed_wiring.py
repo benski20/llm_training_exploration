@@ -618,6 +618,12 @@ async def test_cpu_only_gateway_strict_speculation_native(tiny_pack_dir: Path, t
     assert isinstance(rt.draft_model.backend, NativeInt8DraftBackend)
     assert isinstance(rt.generator._drafter, PipelinedDrafter) == (pipeline is not None)
     assert rt.generator.spec_stats["spec_accepted"] > 0  # the tiny model drafts for itself
+    # the admin speed status carries the gateway-local speculation counters (and the pipelined drafter's)
+    sp = rt._speed_status()
+    assert sp["spec_stats"]["spec_accepted"] == round(rt.generator.spec_stats["spec_accepted"], 3)
+    assert ("drafter_stats" in sp) == (pipeline is not None)
+    if pipeline is not None:
+        assert sp["drafter_stats"]["calls"] > 0
 
 
 # ---- configuration -----------------------------------------------------------------------------------------

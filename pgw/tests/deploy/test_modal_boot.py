@@ -259,3 +259,78 @@ def test_spec_mask_preset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     cfg = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
                              service_url="https://compute.example.net:8443", **opts)
     assert cfg.spec_mask_rows == 4.0 and cfg.spec_mask_credit == 160
+
+
+def test_spec_options_cpu_gateway_presets_validate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--draft-backend / --spec-pipeline-steps / run-time --spec-mask reach the wizard as valid model options;
+    the pipelined drafter turns prompt lookup off (the config refuses both)."""
+    from pgw.gateway.config import SETUP_MODEL_OPTION_KEYS, GatewayModelConfig
+
+    boot = _boot()
+    monkeypatch.delenv("PGW_MODAL_SPEC_MASK", raising=False)
+    o = boot.spec_options(2, "/opt/packs/draft", None, draft_backend="native_int8", pipeline_steps=0, spec_mask="2")
+    assert o == {"spec_rows": 2, "spec_strict_passes": True, "spec_lookup": 0, "spec_mask_rows": 2.0,
+                 "draft_pack_path": "/opt/packs/draft", "draft_backend": "native_int8", "spec_pipeline_steps": 0}
+    assert set(o) <= SETUP_MODEL_OPTION_KEYS
+    GatewayModelConfig(name="m", pack_path=Path("/p"), mode="plain", **o)  # validates the combination
+    assert "spec_pipeline_steps" not in boot.spec_options(4, "/d", None)
+    with pytest.raises(ValueError):
+        boot.spec_options(2, "/d", None, pipeline_steps=2)  # > spec_rows - 1
+    with pytest.raises(ValueError):
+        boot.spec_options(2, None, None, draft_backend="native_int8")  # no draft model
+    monkeypatch.setenv("PGW_MODAL_SPEC_MASK", "4/160")
+    assert boot.spec_options(4, None, None)["spec_mask_credit"] == 160  # the deploy-time default still applies
+    assert "spec_mask_rows" not in boot.spec_options(4, None, None, spec_mask="")
+
+
+def test_drop_speculation_keeps_the_rest(tmp_path: Path) -> None:
+    boot = _boot()
+    f = tmp_path / "models.json"
+    entry = {"name": "m", "pack_path": "/p", "fingerprint": "ab", "local_linears": "off", "spec_rows": 2,
+             "spec_strict_passes": True, "spec_mask_rows": 2.0, "spec_lookup": 0, "draft_pack_path": "/d",
+             "draft_backend": "native_int8", "spec_pipeline_steps": 0}
+    f.write_text(json.dumps([entry]))
+    os.chmod(f, 0o600)
+    gone = boot.drop_speculation(f)
+    assert set(gone) == set(entry) - {"name", "pack_path", "fingerprint", "local_linears"}
+    assert json.loads(f.read_text()) == [{"name": "m", "pack_path": "/p", "fingerprint": "ab",
+                                          "local_linears": "off"}]
+    assert (f.stat().st_mode & 0o777) == 0o600
+
+
+def test_gateway_cache_round_trip(tmp_path: Path) -> None:
+    """save_cache copies the pack and finished hints (never masks or state); restore_cache puts them back where
+    the wizard looks (packs/<model>, hemask/<fp16>-r<rank>...)."""
+    boot = _boot()
+    data = tmp_path / "data"
+    (data / "packs" / "qwen2.5-0.5b-instruct" / "sub").mkdir(parents=True)
+    (data / "packs" / "qwen2.5-0.5b-instruct" / "manifest.json").write_text("{}")
+    (data / "packs" / "qwen2.5-0.5b-instruct" / "sub" / "w.bin").write_bytes(b"x" * 1000)
+    hint = data / "hemask" / "0123456789abcdef-r16-q56"
+    hint.mkdir(parents=True)
+    (hint / "meta.json").write_text("{}")
+    (hint / "0.qkv.npy").write_bytes(b"h" * 100)
+    (data / "hemask" / "0123456789abcdef-r16-q56.building-7").mkdir()  # unfinished: never cached
+    (data / "hemask" / "0123456789abcdef-r16-q56.building-7" / "meta.json").write_text("{}")
+    (data / "masks").mkdir()
+    (data / "masks" / "seg").write_bytes(b"secret")
+    cache = tmp_path / "cache"
+    rep = boot.save_cache(cache, "qwen2.5-0.5b-instruct", data)
+    assert set(rep) == {"pack", "hint 0123456789abcdef-r16-q56"}
+    assert not list(cache.rglob("seg")) and not list(cache.rglob("*.building-*"))
+    assert boot.save_cache(cache, "qwen2.5-0.5b-instruct", data) == {}  # already cached
+    new = tmp_path / "new"
+    rep = boot.restore_cache(cache, "qwen2.5-0.5b-instruct", new)
+    assert rep["pack"]["files"] == 2 and rep["hint 0123456789abcdef-r16-q56"]["bytes"] == 102
+    assert (new / "packs" / "qwen2.5-0.5b-instruct" / "sub" / "w.bin").read_bytes() == b"x" * 1000
+    assert (new / "hemask" / "0123456789abcdef-r16-q56" / "0.qkv.npy").read_bytes() == b"h" * 100
+    assert boot.restore_cache(tmp_path / "empty", "m", tmp_path / "n2") == {}
+
+
+def test_per_trip_cpu_derived_figures() -> None:
+    boot = _boot()
+    sus = {"seconds": 100.0, "tokens": 2000, "trips": {"trips": 50000}, "cores": {"gateway": 5.0},
+           "keep_up": {"consumption_slots_per_s": 40.0, "production_slots_per_s": 30.0}}
+    d = boot.per_trip_cpu(sus)
+    assert d["gateway_cpu_ms_per_trip"] == 10.0 and d["slots_per_token"] == 2.0 and d["trips_per_token"] == 25.0
+    assert sus["derived"]["factory_vs_consumption"]["factory_window_slots_per_s"] == 30.0

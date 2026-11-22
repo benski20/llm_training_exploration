@@ -400,7 +400,13 @@ def spec_mask_options(value: str) -> dict[str, Any]:
     return out
 
 
-def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None) -> dict[str, Any]:
+#: ``launch.py --draft-backend`` choices (``GatewayModelConfig.draft_backend``).
+DRAFT_BACKENDS = ("auto", "native_int8", "torch_int8", "float")
+
+
+def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None, *,
+                 draft_backend: str | None = None, pipeline_steps: int | None = None,
+                 spec_mask: str | None = None) -> dict[str, Any]:
     """Strict-speculation presets for the wizard's ``models.json`` (``launch.py --spec-rows``; ``{}`` when off).
 
     Every decode pass then carries exactly ``spec_rows`` masked rows per sequence (the pending token, the
@@ -417,12 +423,152 @@ def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: st
     if not 2 <= r <= 8:
         raise ValueError("spec_rows must be 0 (off) or in [2, 8]")
     out: dict[str, Any] = {"spec_rows": r, "spec_strict_passes": True, "spec_lookup": SPEC_LOOKUP}
-    out.update(spec_mask_options(os.environ.get("PGW_MODAL_SPEC_MASK", "")))
+    # spec_mask: a run-time ``C[/B]`` (launch.py --spec-mask, passed with the run); None = the deploy-time setting
+    out.update(spec_mask_options(os.environ.get("PGW_MODAL_SPEC_MASK", "") if spec_mask is None else spec_mask))
     if draft_pack:
         out["draft_pack_path"] = str(draft_pack)
         if draft_device:
             out["draft_device"] = draft_device
+        if draft_backend:  # launch.py --draft-backend (e.g. native_int8: the CPU draft on the native kernels)
+            if draft_backend not in DRAFT_BACKENDS:
+                raise ValueError(f"draft_backend must be one of {DRAFT_BACKENDS}, got {draft_backend!r}")
+            out["draft_backend"] = draft_backend
+        if pipeline_steps is not None:  # launch.py --spec-pipeline-steps m: the pipelined drafter (no prompt lookup)
+            m = int(pipeline_steps)
+            if not 0 <= m <= r - 1:
+                raise ValueError("spec pipeline steps must be in [0, spec_rows - 1]")
+            out["spec_pipeline_steps"] = m
+            out["spec_lookup"] = 0
+    elif draft_backend or pipeline_steps is not None:
+        raise ValueError("draft_backend / spec pipeline steps need the draft model (launch.py --spec-draft)")
     return out
+
+
+#: Model options a plain (non-speculative) gateway does not carry: removed from ``models.json`` for the in-run
+#: plain phase (``launch.py --ab-plain``), which restarts the gateway process on the same configuration otherwise.
+SPEC_MODEL_KEYS = ("spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup",
+                   "spec_lookup_min_n", "spec_tokens", "draft_pack_path", "draft_device", "draft_backend",
+                   "spec_pipeline_steps")
+
+
+def drop_speculation(models_file: Path) -> list[str]:
+    """Remove :data:`SPEC_MODEL_KEYS` from every entry of the wizard's ``models.json`` (in place: same owner and
+    mode). Returns the keys removed. The rest (pack, fingerprint, service, credentials, speed settings) is kept."""
+    entries = json.loads(models_file.read_text())
+    gone: set[str] = set()
+    for e in entries if isinstance(entries, list) else [entries]:
+        for k in SPEC_MODEL_KEYS:
+            if k in e:
+                gone.add(k)
+                del e[k]
+    with open(models_file, "r+") as fh:  # rewrite in place: keeps the gateway user's ownership and 0600
+        fh.seek(0)
+        fh.write(json.dumps(entries, indent=2) + "\n")
+        fh.truncate()
+    return sorted(gone)
+
+
+def restart_gateway(proc: subprocess.Popen[bytes], port: int, log_dir: Path,
+                    timeout_s: float = 900.0) -> subprocess.Popen[bytes]:
+    """Stop the gateway process ``proc`` (SIGTERM: it drains, closes its mask store and stops its factory) and
+    start ``pgw gateway serve`` again with the same environment, user and working directory (it then runs in
+    normal mode from the finished wizard's configuration: same mask store, keys and credentials). Returns the new
+    process once ``/healthz`` answers; the model may still be loading (wait for ``/readyz``)."""
+    env, kw, cwd = proc.pgw_env, proc.pgw_user_kw, proc.pgw_cwd  # type: ignore[attr-defined]
+    proc.terminate()
+    try:
+        proc.wait(180)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(30)
+    # the supervised factory child exits with the gateway; make sure none is left (it would hold the store lock)
+    for pid in group_pids().get("factory", []):
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
+    t_end = time.time() + 60
+    while group_pids().get("factory") and time.time() < t_end:
+        time.sleep(0.5)
+    new = start_logged([sys.executable, "-m", "pgw.cli", "gateway", "serve"], env, log_dir / "gateway.log",
+                       redact=re.compile(rb"pgw-setup-[A-Za-z0-9_-]{8,}"), user_kw=kw, cwd=cwd)
+    new.pgw_env, new.pgw_user_kw, new.pgw_cwd = env, kw, cwd  # type: ignore[attr-defined]
+    wait_ready(f"http://127.0.0.1:{port}/healthz", new, timeout_s=timeout_s)
+    return new
+
+
+# ------------------------------------------------------------------------------------------------
+# Gateway-side cache of public set-up artefacts (``launch.py --gateway-cache``; a Modal Volume)
+# ------------------------------------------------------------------------------------------------
+#: Layout under the cache root: ``<model>/pack`` (the model pack: public weights, verified in full against the
+#: enrolled fingerprint before use, ``PGW_SETUP_REUSE_PACK``) and ``<model>/hemask/<fp16>-r<rank>[-q<q>]`` (the
+#: encrypted-mask hint ``H = W8 A``: the public int8 weights times the public matrix ``A``, whose seed the customer
+#: side chose; no secret, see deploy/modal/README.md "Gateway cache").
+def cache_paths(cache_root: Path, model: str) -> dict[str, Path]:
+    base = Path(cache_root) / model
+    return {"pack": base / "pack", "hemask": base / "hemask"}
+
+
+def copy_tree(src: Path, dst: Path, threads: int = 8) -> dict[str, Any]:
+    """Copy directory ``src`` to ``dst`` (files in parallel; written under ``dst.partial`` and renamed, so ``dst``
+    is complete or absent). Returns bytes, files and seconds."""
+    import shutil
+    from concurrent.futures import ThreadPoolExecutor
+
+    t0 = time.time()
+    tmp = dst.with_name(dst.name + ".partial")
+    shutil.rmtree(tmp, ignore_errors=True)
+    files = [p for p in src.rglob("*") if p.is_file()]
+    for d in {p.parent for p in files}:
+        (tmp / d.relative_to(src)).mkdir(parents=True, exist_ok=True)
+
+    def one(p: Path) -> int:
+        shutil.copyfile(p, tmp / p.relative_to(src))
+        return p.stat().st_size
+
+    with ThreadPoolExecutor(max(1, threads)) as ex:
+        nbytes = sum(ex.map(one, files))
+    if dst.exists():
+        shutil.rmtree(dst)
+    tmp.rename(dst)
+    return {"bytes": nbytes, "files": len(files), "seconds": round(time.time() - t0, 1),
+            "gb_per_s": round(nbytes / 1e9 / max(1e-9, time.time() - t0), 2)}
+
+
+def restore_cache(cache_root: Path, model: str, data_dir: Path) -> dict[str, Any]:
+    """Before the gateway starts: copy the cached pack to ``<data_dir>/packs/<model>`` (the wizard's pack
+    directory; used only if it verifies to the enrolled fingerprint) and every cached hint to
+    ``<data_dir>/hemask`` (the wizard's hint step finds it by fingerprint, rank and q). Missing entries: nothing."""
+    from pgw.enroll.client import _safe_dirname
+
+    paths = cache_paths(cache_root, model)
+    rep: dict[str, Any] = {}
+    if (paths["pack"] / "manifest.json").is_file():
+        rep["pack"] = copy_tree(paths["pack"], data_dir / "packs" / _safe_dirname(model))
+    hints = [d for d in sorted(paths["hemask"].glob("*")) if d.is_dir() and (d / "meta.json").is_file()]
+    for d in hints:
+        (data_dir / "hemask").mkdir(parents=True, exist_ok=True)
+        rep[f"hint {d.name}"] = copy_tree(d, data_dir / "hemask" / d.name)
+    return rep
+
+
+def save_cache(cache_root: Path, model: str, data_dir: Path) -> dict[str, Any]:
+    """After a run: copy the gateway's pack and hints into the cache where it has none yet (public artefacts
+    only: the pack and ``H = W8 A``; never the mask store, keys, tokens or the factory's state)."""
+    from pgw.enroll.client import _safe_dirname
+
+    paths = cache_paths(cache_root, model)
+    rep: dict[str, Any] = {}
+    pack = data_dir / "packs" / _safe_dirname(model)
+    if (pack / "manifest.json").is_file() and not (paths["pack"] / "manifest.json").is_file():
+        paths["pack"].parent.mkdir(parents=True, exist_ok=True)
+        rep["pack"] = copy_tree(pack, paths["pack"])
+    for d in sorted((data_dir / "hemask").glob("*")):
+        if (d.is_dir() and ".building" not in d.name and (d / "meta.json").is_file()
+                and not (paths["hemask"] / d.name / "meta.json").is_file()):
+            paths["hemask"].mkdir(parents=True, exist_ok=True)
+            rep[f"hint {d.name}"] = copy_tree(d, paths["hemask"] / d.name)
+    return rep
 
 
 def gateway_env(config_dir: Path, data_dir: Path, port: int,
@@ -708,6 +854,35 @@ def keep_up(sustain: dict[str, Any], factory: dict[str, Any]) -> dict[str, Any]:
             "keeps_up": prod / span >= cons or s1 >= s0}
 
 
+def per_trip_cpu(sustain: dict[str, Any]) -> dict[str, Any]:
+    """Derived figures of a sustain window (in place, ``sustain["derived"]``): gateway process CPU per round trip
+    (its cores x seconds / trips: decode, float ops, LM head, draft and Python, the factory excluded: a separate
+    process), mask slots consumed per generated token (``keep_up`` consumption x span / tokens: prompts, decode
+    charges and burned reservations) and the factory's production against that consumption."""
+    secs = float(sustain.get("seconds") or 0.0)
+    trips = int(((sustain.get("trips") or {}).get("trips")) or 0)
+    cores = sustain.get("cores") or {}
+    ku = sustain.get("keep_up") or {}
+    toks = int(sustain.get("tokens") or 0)
+    d: dict[str, Any] = {}
+    if trips and secs and cores.get("gateway") is not None:
+        d["gateway_cpu_ms_per_trip"] = round(1e3 * float(cores["gateway"]) * secs / trips, 3)
+        d["trips_per_s"] = round(trips / secs, 1)
+    if toks and ku.get("consumption_slots_per_s") is not None and secs:
+        d["slots_per_token"] = round(float(ku["consumption_slots_per_s"]) * secs / toks, 3)
+        d["tokens_per_s_window"] = round(toks / secs, 2)
+    if trips and toks:
+        d["trips_per_token"] = round(trips / toks, 2)
+    if ku.get("consumption_slots_per_s") is not None:
+        d["factory_vs_consumption"] = {"consumption_slots_per_s": ku.get("consumption_slots_per_s"),
+                                       "factory_window_slots_per_s": ku.get("production_slots_per_s"),
+                                       "factory_commit_to_commit_slots_per_s":
+                                           ku.get("production_commit_to_commit_slots_per_s"),
+                                       "stock_slope_slots_per_s": ku.get("stock_slope_slots_per_s")}
+    sustain["derived"] = d
+    return d
+
+
 # ------------------------------------------------------------------------------------------------
 # which network path a service URL takes (reported next to every RTT figure)
 # ------------------------------------------------------------------------------------------------
@@ -862,6 +1037,7 @@ def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Pat
     kw = as_user(env, user, root / "home")
     party_dir(log_dir, None)
     gw, token = start_gateway(env, log_dir / "gateway.log", user_kw=kw, cwd=root)
+    gw.pgw_env, gw.pgw_user_kw, gw.pgw_cwd = env, kw, root  # type: ignore[attr-defined]  # restart_gateway
     wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
     log(f"gateway in setup mode on :{port} (user {user or 'same'})")
     return gw, token
