@@ -83,7 +83,7 @@ def test_native_fingerprints_equal_numpy(ring: RingParams, n: int) -> None:
     for i, rows in enumerate((1, 2, 9)):
         payload = pack_ring(_uniform(rows, n, ring, 200 + i), ring)
         a.guard_packed(payload, rows, n)
-        b.guard_packed(bytearray(payload) if i == 1 else payload, rows, n)
+        b.guard_packed((payload, bytearray(payload), memoryview(bytearray(payload)))[i], rows, n)
     assert a._dup_seen == b._dup_seen and list(a._dup_order) == list(b._dup_order)
     assert a.report().rows_checked == b.report().rows_checked == 12
     with pytest.raises(IntegrityError):

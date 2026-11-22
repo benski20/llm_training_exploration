@@ -425,7 +425,10 @@ class OutboundNoiseMonitor:
                             c = int(cols.size)
                             groups = _DUP_GROUPS if c >= 2 * self._dup_cols_per_group else 1
                             per = c // groups
-                            keys = fast(payload, rows, n, nb, cols, k - self._dup_bits, self._dup_mult, groups, per)
+                            # bytes and uint8 arrays are read in place; any other buffer (bytearray,
+                            # memoryview) goes as a zero-copy uint8 view (pyo3 would copy it per element)
+                            buf = payload if type(payload) is bytes else np.frombuffer(payload, dtype=np.uint8)
+                            keys = fast(buf, rows, n, nb, cols, k - self._dup_bits, self._dup_mult, groups, per)
                             self._dup_record(keys, rows, groups, new_reasons)
                         else:
                             vals = _packed_columns(payload, rows, n, nb, cols)
