@@ -86,6 +86,28 @@ ONE_ROW_CONFIGS: dict[str, dict[tuple[int, int], tuple[int, int, int, int]]] = {
 }
 
 
+def gateway_stream_priority() -> int:
+    """``PGW_LOCAL_GPU_STREAM_PRIORITY`` (default ``0``; ``high``): the CUDA stream priority of the gateway's
+    latency-bound GPU work (the local linears' graphs and the LM head). ``high`` maps to the device's greatest
+    priority, so their kernels are dispatched ahead of lower-priority work of this process (in particular a
+    mask factory engine on the lowest-priority stream, ``pgw.hemask.backend``). Scheduling only: same kernels,
+    same bits. Stream priorities order work inside one CUDA context; separate processes time-slice the GPU."""
+    v = (os.environ.get("PGW_LOCAL_GPU_STREAM_PRIORITY") or "0").strip().lower()
+    if v in ("", "0", "off", "default", "false", "no"):
+        return 0
+    if v in ("high", "1", "on", "true", "yes"):
+        return -100
+    raise ValueError(f"PGW_LOCAL_GPU_STREAM_PRIORITY must be 0 or high, got {v!r}")
+
+
+def gateway_stream(device: torch.device) -> Any:
+    """A new CUDA stream on ``device`` at :func:`gateway_stream_priority`."""
+    prio = gateway_stream_priority()
+    if prio:
+        return torch.cuda.Stream(device, priority=prio)  # type: ignore[no-untyped-call]
+    return torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+
+
 def _env_configs() -> dict[tuple[int, int], tuple[int, int, int, int]]:
     out: dict[tuple[int, int], tuple[int, int, int, int]] = {}
     for item in os.environ.get("PGW_LOCAL_GPU_GEMV", "").split(";"):
@@ -136,7 +158,7 @@ class LocalGpuProducts:
         self._lin: dict[str, _Linear] = {}
         r = self.staging_rows
         with torch.cuda.device(device):
-            self._stream = torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+            self._stream = gateway_stream(device)  # PGW_LOCAL_GPU_STREAM_PRIORITY (default: normal priority)
             self._pool = torch.cuda.graph_pool_handle()
             self._event = torch.cuda.Event()
             self._h_in = torch.zeros(r * max_n, dtype=torch.int32, pin_memory=True)

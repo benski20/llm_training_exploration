@@ -153,7 +153,12 @@ class GpuLmHead:
         pin = device.type == "cuda" and not self.interpret
         self._h_host = torch.zeros((self.max_rows, self.d), dtype=torch.float32, pin_memory=pin)
         self._out_host = torch.zeros((self.max_rows, self.v), dtype=torch.float32, pin_memory=pin)
-        self._stream = torch.cuda.Stream(device) if device.type == "cuda" else None  # type: ignore[no-untyped-call]
+        if device.type == "cuda":  # PGW_LOCAL_GPU_STREAM_PRIORITY (pgw.engine.local_gpu; default: normal priority)
+            from pgw.engine.local_gpu import gateway_stream
+
+            self._stream: Any = gateway_stream(device)
+        else:
+            self._stream = None
         self.calls = 0
         #: calls and wall seconds of :meth:`logits` (live; the gateway's status shows it)
         self.stats: dict[str, float] = {"calls": 0, "s": 0.0}

@@ -138,19 +138,23 @@ class FactorySettings(PGWSettings):
         "profile's acknowledgement string (rank 12: pgw.hemask.mlwe_ring.R12_ACK). See "
         "research/plans/he-structured-encryption.md",
     )
-    he_encrypt: Literal["dense", "ntt_pre", "ntt_dev"] = Field(
+    he_encrypt: Literal["dense", "ntt_pre", "ntt_dev", "gpu_ntt"] = Field(
         "dense", description="Gateway encryption product: 'dense' (byte-plane GEMM on the int8 engine), 'ntt_pre' "
         "(public matrix kept in NTT form, pgw.hemask.mlwe_ring; same ciphertexts bit for bit, ~10x+ fewer CPU "
         "operations; needs pgw_ntt) or 'ntt_dev' (the same NTT product, and decryption's hint product, on the "
-        "gateway GPU, pgw.hemask.ntt_dev; self-tested at start-up, falls back to the CPU)",
+        "gateway GPU, pgw.hemask.ntt_dev; self-tested at start-up, falls back to the CPU) or 'gpu_ntt' (the gateway's "
+        "own GPU, pgw.hemask.gpuntt: A in NTT form on the device, fused kernels on a low-priority stream; "
+        "self-tested and cross-checked bit for bit against the CPU path at start-up, else 'ntt_pre' on the CPU)",
     )
-    he_decrypt: Literal["auto", "dense", "ntt", "ntt_pre"] = Field(
+    he_decrypt: Literal["auto", "dense", "ntt", "ntt_pre", "gpu_ntt"] = Field(
         "auto", description="Gateway decryption product on the CPU (pgw.hemask.backend.HEMaskBackend): 'dense' "
         "(byte-plane GEMM on the int8 engine plus the native combine), 'ntt' (fused native NTT decryption on the "
         "stored hint, no extra memory), 'ntt_pre' ('ntt' with the hints of the linears that fit he_hint_ntt_gb "
         "kept in NTT form in RAM), 'auto' (default: hints in NTT form within he_hint_ntt_gb, else per pass size "
         "the faster of 'dense' and 'ntt' as measured at start-up on public random data, 'ntt' only if both gave "
-        "the same bits). Same bits in every mode; a native NTT error falls back to 'dense'",
+        "the same bits), 'gpu_ntt' (on the gateway's own GPU, pgw.hemask.gpuntt, hint planes cached on the device; "
+        "self-tested and cross-checked bit for bit against the CPU path at start-up, else 'auto'). Same bits in "
+        "every mode; a native NTT error falls back to 'dense', a GPU error to the CPU",
     )
     he_hint_ntt_gb: float = Field(
         0.0, ge=0, description="RAM (GB) for hints kept in NTT form ('ntt_pre' / 'auto'): 12 bytes per coefficient, "

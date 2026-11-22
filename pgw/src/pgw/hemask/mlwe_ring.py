@@ -42,6 +42,7 @@ import numpy as np
 
 from pgw.core.errors import ConfigError
 from pgw.core.prng import new_seed
+from pgw.core.proc_tuning import os_thread_name
 from pgw.hemask.lwe import DEGREE, HEParams, MaskCiphertext, sample_noise, sample_secret
 
 __all__ = [
@@ -67,7 +68,8 @@ def _pool() -> ThreadPoolExecutor:
     with _POOL_LOCK:
         if _POOL is None:
             _POOL = ThreadPoolExecutor(max_workers=max(1, min(4, os.cpu_count() or 1)),
-                                       thread_name_prefix="pgw-hemask-combine")
+                                       thread_name_prefix="pgw-hemask-combine",
+                                       initializer=os_thread_name)
         return _POOL
 
 # ---------------------------------------------------------------------------------------------

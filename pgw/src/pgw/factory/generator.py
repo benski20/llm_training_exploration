@@ -45,6 +45,7 @@ from pgw.core import native
 from pgw.core.errors import ConfigError, IntegrityError, PGWError
 from pgw.core.fingerprint import short_fingerprint
 from pgw.core.prng import MAX_STREAM_BYTES, SEED_BYTES, SeedExpander, max_stream_rows, new_seed
+from pgw.core.proc_tuning import os_thread_name
 from pgw.core.ring import RingParams
 from pgw.core.settings import ring_from_setting
 from pgw.core.types import LinearId, LinearSpec
@@ -139,6 +140,8 @@ def format_stats(stats: GenerationStats) -> str:
             s += f", yielded to decode {he['yield_s']:.2f}s"
         if x.get("he_pipeline_depth"):
             s += f", overlapped (depth {x['he_pipeline_depth']}, {int(he.get('jobs', 0))} jobs)"
+        if x.get("he_engine"):
+            s += f", on {x['he_engine']}"
     return s
 
 
@@ -580,6 +583,8 @@ class MaskGenerator:
         he_depth = self.he_pipeline_depth()
         he_budget = int(getattr(self.remote, "pipeline_bytes", 1 << 30))
         stats.extra["he_pipeline_depth"] = he_depth
+        if he0 is not None:
+            stats.extra["he_engine"] = str(getattr(self.remote, "engine", "") or "")
 
         def make_r(task: tuple[int, int, int]) -> torch.Tensor:
             i, start, rows = task
@@ -592,7 +597,8 @@ class MaskGenerator:
             rng_time[0] += time.perf_counter() - t0
             return r
 
-        pool = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-factory-rng")
+        pool = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-factory-rng",
+                                     initializer=os_thread_name)
                 if self.pipeline and dev_prng is None else None)
         stream: _gp.DeviceRingStream | None = None
         pending: Future[torch.Tensor] | None = None
@@ -912,6 +918,7 @@ class MaskGenerator:
         failure: list[BaseException] = []
 
         def worker() -> None:
+            os_thread_name()
             while True:
                 item = q.get()
                 if item is _Stop:

@@ -599,6 +599,8 @@ def checked_env(extra: dict[str, Any] | None) -> dict[str, str]:
 _SEGMENT_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) .*segment \S+: .*?(\d+) slots in ([\d.]+)s "
                          r"\(([\d.]+) slots/s")
 _YIELDED_RE = re.compile(r"yielded to decode ([\d.]+)s")
+_HE_STAGES_RE = re.compile(r"encrypt ([\d.]+)s, provider ([\d.]+)s, decrypt ([\d.]+)s")
+_HE_ENGINE_RE = re.compile(r", on (\S+)")
 
 
 def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
@@ -623,6 +625,12 @@ def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
         row = {"slots": slots, "seconds": secs, "slots_per_s": float(m.group(5)),
                "start_offset_s": round(end - secs - t0, 1), "end_offset_s": round(end - t0, 1),
                "yielded_s": float(y.group(1)) if y else 0.0}
+        st = _HE_STAGES_RE.search(line)
+        if st:
+            row.update(encrypt_s=float(st.group(1)), provider_s=float(st.group(2)), decrypt_s=float(st.group(3)))
+        eng = _HE_ENGINE_RE.search(line)
+        if eng:
+            row["engine"] = eng.group(1)  # type: ignore[assignment]
         if t0 <= end <= t1 + 1.0:
             committed.append(row)
         if end - secs >= t0 - 1.0 and end <= t1 + 1.0:
@@ -968,6 +976,17 @@ def thread_cpu(group: str) -> dict[str, tuple[str, float]]:
             f = stat.rsplit(")", 1)[1].split()
             out[f"{pid}/{tid}"] = (comm, (int(f[11]) + int(f[12])) / tick)
     return out
+
+
+def comm_deltas(a: dict[str, tuple[str, float]], b: dict[str, tuple[str, float]], seconds: float) -> dict[str, float]:
+    """Cores per thread name (``comm``; trailing worker digits dropped) between two :func:`thread_cpu` snapshots,
+    busiest first (``PGW_THREAD_NAMES=1`` names the encrypted factory's stage threads, see
+    ``pgw.core.proc_tuning.os_thread_name``; native pool threads inherit their creator's name)."""
+    out: dict[str, float] = {}
+    for k, v in b.items():
+        name = v[0].rstrip("0123456789").rstrip("_-") or v[0]
+        out[name] = out.get(name, 0.0) + (v[1] - a.get(k, (v[0], 0.0))[1]) / max(1e-9, seconds)
+    return {k: round(x, 3) for k, x in sorted(out.items(), key=lambda kv: -kv[1]) if x >= 0.005}
 
 
 def thread_deltas(a: dict[str, tuple[str, float]], b: dict[str, tuple[str, float]], seconds: float,

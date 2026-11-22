@@ -32,6 +32,7 @@ import torch
 from pgw.core.errors import ConfigError, IntegrityError
 from pgw.core.factory_yield import wait_if_yielding
 from pgw.core.prng import new_seed
+from pgw.core.proc_tuning import os_thread_name
 from pgw.core.ring import RingParams
 from pgw.hemask.fastmm import engine, to_planes
 from pgw.hemask.lwe import (
@@ -164,8 +165,11 @@ class HintStore:
 
 #: Most 256-slot groups decrypted in one pass over a linear's hint (``E2``: fewer hint reads).
 MAX_GROUPS_PER_PASS = 16
-#: CPU decryption modes of :class:`HEMaskBackend` (``decrypt=``; ``PGW_FACTORY_HE_DECRYPT``).
-DECRYPT_MODES = ("auto", "dense", "ntt", "ntt_pre")
+#: Decryption modes of :class:`HEMaskBackend` (``decrypt=``; ``PGW_FACTORY_HE_DECRYPT``): the CPU modes and
+#: ``gpu_ntt`` (:mod:`pgw.hemask.gpuntt` on the gateway's GPU, self-tested; else ``auto``).
+DECRYPT_MODES = ("auto", "dense", "ntt", "ntt_pre", "gpu_ntt")
+#: Encryption modes (``encrypt=``; ``PGW_FACTORY_HE_ENCRYPT``).
+ENCRYPT_MODES = ("dense", "ntt_pre", "ntt_dev", "gpu_ntt")
 #: Hint rows of the ``auto`` calibration (public random data; the cost per row does not depend on m).
 _CAL_ROWS = 256
 #: Most maskgen requests in flight per backend (``E6``: fills the link on high-latency paths).
@@ -245,6 +249,18 @@ class HEMaskBackend:
             (exact products; every decrypted row is also checked by the factory's Freivalds self-check);
             an error in a native NTT call falls back to ``"dense"`` for the rest of the backend's life.
         hint_ntt_bytes: RAM budget for hints held in NTT form (``"ntt_pre"`` / ``"auto"``); 0 = none.
+
+    ``encrypt="gpu_ntt"`` / ``decrypt="gpu_ntt"`` (each opt-in, independently): encryption and/or decryption
+    on the gateway's own GPU with :class:`pgw.hemask.gpuntt.GpuNTTHE` (``A`` in NTT form on the device, the
+    hint as byte planes cached on the device, fused Triton kernels). Before first use the engine must pass
+    :func:`pgw.hemask.gpuntt.self_test` (float64 reference) and :meth:`_gpu_cross_check`, bit for bit against
+    this backend's own CPU paths on public random data; otherwise, and after any error in a GPU call (that
+    call is redone on the CPU), the CPU paths run (``ntt_pre`` or ``dense`` encryption, ``auto`` decryption,
+    which are also built as the reference). The device work runs on its own CUDA stream of the lowest
+    priority, serialised by one lock; secrets and noise are sampled on the CPU as before and every device
+    temporary holding a secret-dependent value is zeroed after use. Same ciphertexts (distribution, sizes,
+    schedule) and the same decrypted bits as the CPU paths; every decrypted row still goes through the
+    factory's Freivalds self-check.
     """
 
     #: Fused device passes (:mod:`pgw.hemask.devmm`), or ``None`` (the CPU / per-call fastmm engines).
@@ -256,16 +272,27 @@ class HEMaskBackend:
     _ntt_broken: bool = False
     #: Self-tested device NTT (``encrypt="ntt_dev"``, :mod:`pgw.hemask.ntt_dev`), or ``None``.
     _ntt_dev: Any = None
+    #: Self-tested GPU NTT engine (``encrypt``/``decrypt="gpu_ntt"``, :mod:`pgw.hemask.gpuntt`), or ``None``.
+    _gpu: Any = None
+    _gpu_enc: bool = False
+    _gpu_dec: bool = False
 
     def __init__(self, pack: Any, ring: RingParams, hints: HintStore,
                  remote: Callable[[str, np.ndarray], np.ndarray], *, groups_per_call: int = 4,
                  max_inflight: int = 2, groups_per_pass: int = MAX_GROUPS_PER_PASS, pass_bytes: int = 1 << 30,
                  encrypt: str = "dense", device: str | None = "auto", pipeline_depth: int = 0,
                  pipeline_bytes: int = 1 << 30, decrypt: str = "auto", hint_ntt_bytes: int = 0):
-        if encrypt not in ("dense", "ntt_pre", "ntt_dev"):
-            raise ConfigError(f"encrypt must be 'dense', 'ntt_pre' or 'ntt_dev', got {encrypt!r}")
+        if encrypt not in ENCRYPT_MODES:
+            raise ConfigError(f"encrypt must be one of {ENCRYPT_MODES}, got {encrypt!r}")
         if decrypt not in DECRYPT_MODES:
             raise ConfigError(f"decrypt must be one of {DECRYPT_MODES}, got {decrypt!r}")
+        gpu_enc, gpu_dec = encrypt == "gpu_ntt", decrypt == "gpu_ntt"
+        if gpu_enc:  # the CPU path stays built: the cross-check's reference and the fallback
+            from pgw.hemask import ntt as _ntt
+
+            encrypt = "ntt_pre" if _ntt.available() else "dense"
+        if gpu_dec:
+            decrypt = "auto"
         if int(hint_ntt_bytes) < 0:
             raise ConfigError("hint_ntt_bytes must be >= 0")
         self.decrypt_mode = decrypt
@@ -305,6 +332,8 @@ class HEMaskBackend:
 
         dev: torch.device | None = device_for(self.params) if device == "auto" else (
             None if device is None else torch.device(device))
+        if gpu_enc or gpu_dec:
+            dev = None  # the GPU NTT engine replaces the dense device passes; the CPU paths are the fallback
         self._ntt_dev = None
         if encrypt == "ntt_dev":
             encrypt, self._ntt_dev = _device_ntt(self.params, device)
@@ -328,7 +357,6 @@ class HEMaskBackend:
             self._planes = dev is not None or engine() != "cpu_f64"
             self._a = self._a_planes(a) if self._planes else a
         self.encrypt_mode = encrypt
-        del a
         self._dev = None
         if dev is not None:
             from pgw.hemask.devmm import DeviceHE
@@ -349,7 +377,112 @@ class HEMaskBackend:
         self._stage_pools_lock = threading.Lock()
         log.info("encrypted mask factory: encryption/decryption on %s%s", self.engine,
                  f" (hint cache {self._dev.cache.budget / 2**30:.1f} GiB)" if self._dev is not None else "")
-        self._pool = ThreadPoolExecutor(max_workers=self.max_inflight, thread_name_prefix="pgw-hemask-remote")
+        self._pool = ThreadPoolExecutor(max_workers=self.max_inflight, thread_name_prefix="pgw-hemask-remote",
+                                        initializer=os_thread_name)
+        self._gpu: Any = None
+        self._gpu_stream: Any = None
+        self._gpu_lock = threading.Lock()
+        self._gpu_enc = self._gpu_dec = False
+        if gpu_enc or gpu_dec:
+            self._start_gpu(a, device, gpu_enc, gpu_dec)
+        del a
+
+    # ---- GPU NTT engine (encrypt/decrypt="gpu_ntt") ---------------------------------------------------
+    def _start_gpu(self, a: np.ndarray, device: str | None, enc: bool, dec: bool) -> None:
+        """Start :class:`pgw.hemask.gpuntt.GpuNTTHE` (self-test, then :meth:`_gpu_cross_check`); on any failure
+        the CPU paths built in ``__init__`` serve (logged)."""
+        from pgw.hemask import gpuntt
+
+        want = "auto" if device in (None, "auto") else device
+        try:
+            dev = torch.device("cuda") if want == "auto" else torch.device(want)
+            stream = None
+            if dev.type == "cuda":
+                if not torch.cuda.is_available():
+                    raise ConfigError("no CUDA device")
+                # the lowest priority (0): any higher-priority stream of this process is dispatched first
+                stream = torch.cuda.Stream(dev, priority=0)  # type: ignore[no-untyped-call]
+            ctx = torch.cuda.stream(stream) if stream is not None else _null_ctx()
+            with ctx:
+                eng = gpuntt.gpu_ntt_for(a, self.params, str(dev),
+                                         groups_per_pass=min(16, max(1, self.groups_per_call)),
+                                         **({"hint_budget": _gpu_hint_budget()} if _gpu_hint_budget() is not None
+                                            else {}))
+                if eng is None:
+                    raise ConfigError("GPU NTT engine failed its self-test or could not start")
+                self._gpu, self._gpu_stream = eng, stream
+                why = self._gpu_cross_check(a, enc, dec)
+            if why:
+                raise ConfigError(why)
+        except Exception as exc:
+            self._gpu = self._gpu_stream = None
+            log.error("encrypted mask factory: GPU NTT engine not used (%s: %s); encryption on %s, decryption on "
+                      "the CPU (%s)", type(exc).__name__, str(exc)[:300], self.encrypt_mode, self.decrypt_mode)
+            return
+        self._gpu_enc, self._gpu_dec = enc, dec
+        self.engine = f"gpu_ntt:{dev}" + ("" if enc and dec else (" (encrypt)" if enc else " (decrypt)"))
+        log.info("encrypted mask factory: %s%s on the GPU NTT engine (%s, %s kernels, low-priority stream; A in "
+                 "NTT form %.0f MB, hint cache %.1f GiB); cross-checked bit for bit against the CPU paths",
+                 "encryption" if enc else "", " and decryption" if enc and dec else ("decryption" if dec else ""),
+                 dev, eng.kernel, eng.nbytes / 1e6, eng.cache.budget / 2**30)
+
+    def _on_gpu(self) -> Any:
+        """The GPU lock and the engine's low-priority stream (a context manager)."""
+        stream = self._gpu_stream
+        return _GpuSection(self._gpu_lock, stream)
+
+    def _gpu_failed(self, what: str, exc: BaseException) -> None:
+        """A GPU call failed: that call is redone on the CPU, and the CPU serves from now on."""
+        with self._gpu_lock:
+            self._gpu_enc = self._gpu_dec = False
+        log.error("encrypted mask factory: GPU NTT %s failed (%s: %s); using the CPU paths from now on", what,
+                  type(exc).__name__, str(exc)[:300])
+
+    def _gpu_cross_check(self, a: np.ndarray, enc: bool, dec: bool) -> str:
+        """The GPU engine against this backend's CPU paths on public random data at the real ``dim`` (``""`` when
+        bit-identical, else why not). Encryption: fixed public seeds (test only; production seeds are fresh),
+        two groups (one partial), ``n = min(n_max, 512)`` rows of ``A``. Decryption: random hint planes, secrets
+        and replies, two items (one partial group), against :meth:`_decrypt_dense` (the int8-engine path)."""
+        from pgw.hemask.lwe import secret_matrix
+
+        p = self.params
+        rng = np.random.default_rng()  # public test data: nothing secret is involved
+        if enc:
+            n = min(int(a.shape[0]), 512)
+            rows = DEGREE + 9
+            r = rng.integers(0, 1 << self.ring.k, size=(rows, n), dtype=np.int64)
+            seeds = [bytes(rng.integers(0, 256, size=32, dtype=np.uint8)) for _ in range(2)]
+            got = self._gpu.encrypt(r, _seeds=seeds)
+            if self._fast is not None:
+                ref = self._fast.encrypt(r, _seeds=seeds)
+            else:
+                ref = [encrypt_masks(r[i * DEGREE:(i + 1) * DEGREE], a[:n], p, _seed=s) for i, s in enumerate(seeds)]
+            same = (len(got) == len(ref) and all(np.array_equal(x.b, y.b) and np.array_equal(x.secret, y.secret)
+                                                 and x.rows == y.rows for x, y in zip(got, ref, strict=True)))
+            for ct in (*got, *ref):
+                ct.wipe()
+            if not same:
+                return "GPU encryption differs from the CPU path"
+        if dec:
+            npl = p.q // 8 - 1
+            m = 96
+            hint = rng.integers(-128, 128, size=(m, npl, p.dim), dtype=np.int8)
+            cts = [MaskCiphertext(b=_NO_B, secret=secret_matrix(rng.integers(-1, 2, size=(p.rank, DEGREE))),
+                                  rows=rws) for rws in (DEGREE, DEGREE, 100)]
+            y = rng.integers(0, 1 << 63, size=(m, DEGREE * 3), dtype=np.uint64)
+            items = [(y[:, :DEGREE], cts[:1], 0), (y[:, DEGREE:], cts[1:], DEGREE)]
+            rows = DEGREE * 2 + 100
+            out_gpu = np.zeros((rows, m), dtype=np.int64)
+            out_cpu = np.zeros((rows, m), dtype=np.int64)
+            self._gpu.decrypt_into("__crosscheck__", hint, items, out_gpu, p.delta_bits, self.ring.k)
+            self._gpu.cache.pop("__crosscheck__")
+            self._decrypt_dense(hint, items, out_cpu)
+            same = bool(np.array_equal(out_gpu, out_cpu))
+            for ct in cts:
+                ct.wipe()
+            if not same:
+                return "GPU decryption differs from the CPU path"
+        return ""
 
     def _a_planes(self, a: np.ndarray, block: int = 1024) -> np.ndarray:
         npl = a_plane_count(self.params)
@@ -368,6 +501,14 @@ class HEMaskBackend:
 
     def _encrypt(self, rn: np.ndarray, n: int) -> list[MaskCiphertext]:
         """The 256-slot groups of ``rn``, encrypted (on the device: one GEMM for all of them)."""
+        if self._gpu_enc:
+            try:
+                with self._on_gpu():
+                    gout: list[MaskCiphertext] = self._gpu.encrypt(rn)
+                self._count_path("gpu_ntt_encrypt")
+                return gout
+            except Exception as exc:  # e.g. out of device memory: this call and the later ones on the CPU
+                self._gpu_failed("encryption", exc)
         if self._fast is not None:
             out: list[MaskCiphertext] = self._fast.encrypt(rn)
             return out
@@ -404,6 +545,14 @@ class HEMaskBackend:
         at output row ``s0``. Wipes nothing but its own copies (the caller wipes the ciphertexts).
         """
         hint = self.hints.hint(linear)
+        if self._gpu_dec and hint.ndim == 3:
+            try:
+                with self._on_gpu():
+                    self._gpu.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
+                self._count_path("gpu_ntt")
+                return
+            except Exception as exc:  # the CPU pass below rewrites every row of this pass
+                self._gpu_failed("decryption", exc)
         if self._dev is not None and hint.ndim == 3:
             with self._dev_lock:
                 self._dev.decrypt_into(linear, hint, items, out, self.params.delta_bits, self.ring.k)
@@ -672,8 +821,10 @@ class HEMaskBackend:
     def _pools(self) -> tuple[ThreadPoolExecutor, ThreadPoolExecutor]:
         with self._stage_pools_lock:
             if self._stage_pools is None:
-                self._stage_pools = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-encrypt"),
-                                     ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-decrypt"))
+                self._stage_pools = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-encrypt",
+                                                        initializer=os_thread_name),
+                                     ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-decrypt",
+                                                        initializer=os_thread_name))
             return self._stage_pools
 
     def job_bytes(self, linear: str, rows: int) -> int:
@@ -928,6 +1079,48 @@ class HEMaskBackend:
 
 
 _NO_B = np.empty((0, DEGREE), dtype=np.uint64)
+
+
+class _null_ctx:  # noqa: N801 - a tiny contextlib.nullcontext without the import
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class _GpuSection:
+    """``with``: the backend's GPU lock, then its low-priority CUDA stream as the current stream (if any)."""
+
+    def __init__(self, lock: threading.Lock, stream: Any):
+        self.lock = lock
+        self.stream = stream
+        self._ctx: Any = None
+
+    def __enter__(self) -> None:
+        self.lock.acquire()
+        if self.stream is not None:
+            try:
+                self._ctx = torch.cuda.stream(self.stream)
+                self._ctx.__enter__()
+            except BaseException:
+                self.lock.release()
+                raise
+
+    def __exit__(self, *exc: object) -> None:
+        try:
+            if self._ctx is not None:
+                self._ctx.__exit__(*exc)
+                self._ctx = None
+        finally:
+            self.lock.release()
+
+
+def _gpu_hint_budget() -> int | None:
+    """``PGW_HEMASK_GPU_NTT_HINT_MB``: device memory for cached hint planes of the GPU NTT engine (MiB); unset:
+    the engine's default (as :mod:`pgw.hemask.devmm`, minus a reserve)."""
+    raw = os.environ.get("PGW_HEMASK_GPU_NTT_HINT_MB", "").strip()
+    return None if not raw else max(0, int(float(raw) * (1 << 20)))
 
 
 def _ntt_dev_decrypt() -> bool:

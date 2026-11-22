@@ -514,14 +514,19 @@ class GpuNTTHE(DeviceHE):
             raise ConfigError(f"need {groups} seeds, got {len(_seeds)}")
         out: list[MaskCiphertext] = []
         gp = self.groups_per_pass
-        for p0 in range(0, groups, gp):
-            p1 = min(groups, p0 + gp)
-            seeds = list(_seeds[p0:p1]) if _seeds is not None else [new_seed() for _ in range(p0, p1)]
-            try:
-                out.extend(self._encrypt_pass(r[p0 * DEGREE:min(rows, p1 * DEGREE)], n, seeds))
-            finally:
-                for i in range(len(seeds)):
-                    seeds[i] = b""
+        try:
+            for p0 in range(0, groups, gp):
+                p1 = min(groups, p0 + gp)
+                seeds = list(_seeds[p0:p1]) if _seeds is not None else [new_seed() for _ in range(p0, p1)]
+                try:
+                    out.extend(self._encrypt_pass(r[p0 * DEGREE:min(rows, p1 * DEGREE)], n, seeds))
+                finally:
+                    for i in range(len(seeds)):
+                        seeds[i] = b""
+        except BaseException:
+            for ct in out:  # the groups of earlier passes hold their secrets: never handed out
+                ct.wipe()
+            raise
         return out
 
     def _encrypt_pass(self, r: np.ndarray, n: int, seeds: list[bytes]) -> list[MaskCiphertext]:

@@ -12,7 +12,11 @@
   transports and timers on the request path), else the standard asyncio loop.
   ``PGW_UVLOOP=0`` forces the standard loop. Use it as ``asyncio.run(main(), loop_factory=new_event_loop)``.
 
-Neither changes any computed value: they only change how memory is obtained and how the event loop
+* :func:`os_thread_name` (``PGW_THREAD_NAMES=1``, default off): copies the calling Python thread's name
+  into the kernel's thread name (``/proc/<pid>/task/<tid>/comm``, 15 bytes), so per-thread CPU time can be
+  attributed to a stage (diagnostics: the encrypted factory's stage threads call it).
+
+None of these changes any computed value: they only change how memory is obtained and how the event loop
 dispatches callbacks.
 """
 
@@ -34,6 +38,7 @@ __all__ = [
     "glibc_version",
     "loop_name",
     "new_event_loop",
+    "os_thread_name",
 ]
 
 log = logging.getLogger(__name__)
@@ -147,3 +152,25 @@ def new_event_loop() -> asyncio.AbstractEventLoop:
 def loop_name() -> str:
     """``"uvloop"`` or ``"asyncio"``: what :func:`new_event_loop` returns in this process."""
     return "uvloop" if _uvloop_factory() is not None else "asyncio"
+
+
+_PR_SET_NAME = 15
+
+
+def os_thread_name(name: str | None = None) -> bool:
+    """With ``PGW_THREAD_NAMES=1``: set the kernel name of the calling thread to ``name`` (default: the Python
+    thread's name, shortened: ``pgw-`` dropped, ``hemask-`` -> ``he-``, ``factory-`` -> ``fac-``, the last 15
+    bytes kept). Diagnostics only; returns whether it was set."""
+    if os.environ.get("PGW_THREAD_NAMES", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return False
+    import threading
+
+    short = (name or threading.current_thread().name).removeprefix("pgw-").replace("hemask-", "he-")
+    raw = short.replace("factory-", "fac-").encode(errors="replace")[-15:]
+    lib = _libc()
+    if lib is None:  # pragma: no cover - unusual platforms
+        return False
+    try:
+        return int(lib.prctl(_PR_SET_NAME, ctypes.c_char_p(raw), 0, 0, 0)) == 0
+    except (AttributeError, OSError):  # pragma: no cover - no prctl (not Linux)
+        return False

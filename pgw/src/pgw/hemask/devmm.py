@@ -51,6 +51,7 @@ import numpy as np
 import torch
 
 from pgw.core.prng import new_seed
+from pgw.core.proc_tuning import os_thread_name
 from pgw.hemask.lwe import (
     DEGREE,
     HEParams,
@@ -219,6 +220,13 @@ class _HintCache:
             freed += self._size(t)
         return freed
 
+    def pop(self, key: str) -> None:
+        """Drop ``key`` (if cached)."""
+        t = self._d.pop(key, None)
+        self._last.pop(key, None)
+        if t is not None:
+            self.used -= self._size(t)
+
     def clear(self) -> None:
         self._d.clear()
         self._last.clear()
@@ -318,7 +326,8 @@ class DeviceHE:
             self._stage2_ev = [None, None]
         bufs, evs = self._stage2, self._stage2_ev
         if self._prefetch is None:
-            self._prefetch = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-hint")
+            self._prefetch = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pgw-hemask-hint",
+                                                initializer=os_thread_name)
         starts = list(range(0, m, block))
 
         def fill(i: int) -> torch.Tensor:

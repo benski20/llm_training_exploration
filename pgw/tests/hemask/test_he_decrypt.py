@@ -199,7 +199,7 @@ def test_calibration_refuses_differing_bits(tiny_pack: Any, tmp_path: Path, monk
 def test_mode_validation(tiny_pack: Any, tmp_path: Path) -> None:
     ring = RingParams.from_name("K32A12C27")
     hints = HintStore.open_or_build(tmp_path / "hints", tiny_pack, rank=8, q_bits=56)
-    assert DECRYPT_MODES == ("auto", "dense", "ntt", "ntt_pre")
+    assert DECRYPT_MODES == ("auto", "dense", "ntt", "ntt_pre", "gpu_ntt")
     with pytest.raises(Exception, match="decrypt must be one of"):
         HEMaskBackend(tiny_pack, ring, hints, _Provider(tiny_pack), decrypt="fast")
     with pytest.raises(Exception, match="hint_ntt_bytes"):

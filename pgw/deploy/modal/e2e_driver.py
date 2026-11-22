@@ -224,6 +224,7 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
         Path(sampler_path + ".reset").touch()
     series: list[list[float]] = []
     stop = threading.Event()
+    fac0, gw0 = boot.thread_cpu("factory"), boot.thread_cpu("gateway")
     t0 = time.time()
 
     def sample() -> None:
@@ -266,6 +267,8 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
         if o.get("ttft_s") is not None:
             ttfts.append(float(o["ttft_s"]))
     t1 = time.time()
+    threads = {"factory": boot.comm_deltas(fac0, boot.thread_cpu("factory"), t1 - t0),
+               "gateway_top": boot.thread_deltas(gw0, boot.thread_cpu("gateway"), t1 - t0, top=6)}
     stop.set()
     th.join(5)
     ts = sorted(dec_rates)
@@ -278,6 +281,6 @@ def _sustain(local_url: str, key: str, adm: str, model_name: str, ref_out: dict[
             "decode_tokens_per_s_all": dec_rates, "chat_start_s": starts[:len(dec_rates)],
             # all decoded tokens after each chat's first over all decode time (token-weighted)
             "decode_tokens_per_s_overall": round(dec_n / dec_s, 2) if dec_s else None, "ttft_s_median": sorted(ttfts)[len(ttfts) // 2] if ttfts else None,
-            "stock": series, "stock_start": series[0][1] if series else None,
+            "threads": threads, "stock": series, "stock_start": series[0][1] if series else None,
             "stock_end": series[-1][1] if series else None,
             "stock_min": min(x[1] for x in series) if series else None}
