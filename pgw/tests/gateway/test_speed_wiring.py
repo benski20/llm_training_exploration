@@ -3,7 +3,7 @@ quantized reference (masked mode, tiny model), the provider sees nothing new, an
 deferred checks.
 
 Settings covered: ``local_linears`` (attention / auto), ``lane`` (auto without a service lane, auto and
-required with the service's real UDS lane), ``spec_rows`` + ``spec_strict_passes``, ``float_threads``, and the
+required with the service's real UDS lane, tls with the service's TCP+TLS lane and without one), ``spec_rows`` + ``spec_strict_passes``, ``float_threads``, and the
 prefill ``pipeline_blocks`` the TripEngine asks for.
 """
 
@@ -59,9 +59,10 @@ def reference(tiny_pack_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> 
 
 
 async def _masked(tiny_pack_dir: Path, tmp_path: Path, store: Any, transport: Any, keys: ApiKeyStore, key: str,
-                  model_kw: dict[str, Any], req: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any],
-                                                                                          Any]:
-    app = create_app(masked_settings(tiny_pack_dir, tmp_path, model_kw=model_kw), mask_store=store,
+                  model_kw: dict[str, Any], req: dict[str, Any] | None = None,
+                  settings_kw: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    app = create_app(masked_settings(tiny_pack_dir, tmp_path, model_kw=model_kw, **(settings_kw or {})),
+                     mask_store=store,
                      transports={MODEL: transport}, key_store=keys)
     async with gateway(app) as c:
         r = await c.post("/v1/chat/completions", json=req or CHAT, headers=auth(key))
@@ -359,6 +360,126 @@ async def test_lane_over_the_service_uds_lane_is_bit_identical(tiny_pack_dir: Pa
     assert status["backend"]["integrity_failures"] == 0 and status["backend"]["freivalds_checked"] > 0
     # decode trips took the lane; prefill (more rows than the lane serves) the stream channel
     assert set(sp["lane_fallbacks"]) <= {"ineligible:rows", "ineligible:items", "off", "busy:pool"}
+
+
+@pytest.fixture(scope="module")
+def lane_pki(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    from tests.service.test_lane_tls import _ca, _leaf, _pem
+
+    d = tmp_path_factory.mktemp("gw-lane-pki")
+    ca = _ca("svc-ca")
+    cert, key = _leaf(ca, "127.0.0.1", server=True)
+    out = {"ca": d / "ca.pem", "cert": d / "server.pem", "key": d / "server.key"}
+    out["ca"].write_bytes(_pem(ca[0]))
+    out["cert"].write_bytes(cert)
+    out["key"].write_bytes(key)
+    return out
+
+
+def _tls_lane_service(tiny_pack_dir: Path, pki: dict[str, Path], lane: str = "tcp") -> Any:
+    from pgw.core.settings import TLSConfig
+    from pgw.service import ServiceSettings
+    from pgw.service import create_app as service_app
+
+    kw: dict[str, Any] = {"lane": lane, "lane_port": 0} if lane == "tcp" else {"lane": "off"}
+    return service_app(ServiceSettings(packs=[tiny_pack_dir], device="cpu", verify_packs="fingerprint", warmup=False,
+                                       rings=[DEFAULT_RING.name], host="127.0.0.1", allow_unauthenticated=True,
+                                       tls=TLSConfig(cert_file=pki["cert"], key_file=pki["key"]), **kw))
+
+
+@pytest.mark.parametrize("service_lane", ["tcp", "off"])
+async def test_lane_tls_over_the_service_tcp_lane_is_bit_identical(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                                   make_store: Any, keys: ApiKeyStore, key: str,
+                                                                   reference: dict[str, Any],
+                                                                   lane_pki: dict[str, Path], service_lane: str) -> None:
+    """``lane = "tls"``: decode trips over the service's TCP+TLS lane (native channel, server verified against the
+    pinned CA); against a service without it, every call takes the stream path. Both bit-identical."""
+    from pgw.service.lane import lane_native_available
+    from pgw.wire.lane import native_channel_class
+
+    native = native_channel_class()
+    if not lane_native_available() or native is None or not hasattr(native, "connect_service_tls"):
+        pytest.skip("pgw_fast without the TCP+TLS trip lane")
+    svc_app = _tls_lane_service(tiny_pack_dir, lane_pki, service_lane)
+    async with svc_app.router.lifespan_context(svc_app):
+        out, status, _rt = await _masked(
+            tiny_pack_dir, tmp_path, make_store(200), httpx.ASGITransport(app=svc_app), keys, key,
+            {"lane": "tls", "local_linears": "attention", "float_threads": 1,
+             "service_url": "https://127.0.0.1:18443", "service_ca_file": lane_pki["ca"]},
+            settings_kw=_lane_egress(svc_app))
+        lane_requests = svc_app.state.pgw.handler.lane_requests
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    sp = status["speed"]
+    assert status["backend"]["integrity_failures"] == 0 and status["backend"]["freivalds_checked"] > 0
+    if service_lane == "tcp":
+        assert sp["lane_state"] == "open" and sp["lane_stats"]["trips"] > 0 and sp["lane_stats"]["native"]
+        assert lane_requests == sp["lane_stats"]["trips"]
+        assert set(sp["lane_fallbacks"]) <= {"ineligible:rows", "ineligible:items", "off", "busy:pool"}
+    else:
+        assert sp["lane_state"] == "stream" and sp["lane_stats"]["trips"] == 0 and lane_requests == 0
+
+
+async def test_lane_tls_seeded_sampling_bit_identical(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                      make_store: Any, keys: ApiKeyStore, key: str,
+                                                      lane_pki: dict[str, Path]) -> None:
+    from pgw.wire.lane import native_channel_class
+
+    native = native_channel_class()
+    if native is None or not hasattr(native, "connect_service_tls"):
+        pytest.skip("pgw_fast without the TCP+TLS trip lane")
+    req = {**CHAT, "temperature": 0.9, "top_p": 0.95, "seed": 1234}
+    base, _, _ = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="b"), InProcessService(gw_pack).transport,
+                               keys, key, {}, req)
+    svc_app = _tls_lane_service(tiny_pack_dir, lane_pki)
+    async with svc_app.router.lifespan_context(svc_app):
+        out, status, _ = await _masked(
+            tiny_pack_dir, tmp_path, make_store(400, name="t"), httpx.ASGITransport(app=svc_app), keys, key,
+            {"lane": "tls", "service_url": "https://127.0.0.1:18443", "service_ca_file": lane_pki["ca"]}, req,
+            settings_kw=_lane_egress(svc_app))
+    assert status["speed"]["lane_stats"]["trips"] > 0
+    assert out == base
+
+
+async def test_lane_tls_port_off_the_egress_allowlist_is_not_used(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                                  make_store: Any, keys: ApiKeyStore, key: str,
+                                                                  reference: dict[str, Any],
+                                                                  lane_pki: dict[str, Path]) -> None:
+    """The gateway connects to a TCP lane port only when it is on its egress allowlist for the service host
+    (the service names the port): otherwise no lane connection is made and every call takes the stream path."""
+    from pgw.wire.lane import native_channel_class
+
+    native = native_channel_class()
+    if native is None or not hasattr(native, "connect_service_tls"):
+        pytest.skip("pgw_fast without the TCP+TLS trip lane")
+    svc_app = _tls_lane_service(tiny_pack_dir, lane_pki)
+    async with svc_app.router.lifespan_context(svc_app):
+        out, status, _ = await _masked(
+            tiny_pack_dir, tmp_path, make_store(200), httpx.ASGITransport(app=svc_app), keys, key,
+            {"lane": "tls", "local_linears": "attention", "float_threads": 1,
+             "service_url": "https://127.0.0.1:18443", "service_ca_file": lane_pki["ca"]})
+        connections = svc_app.state.pgw.lane.svc.connections()
+        unspent = svc_app.state.pgw.lane.svc.pending_tickets()
+        lane_requests = svc_app.state.pgw.handler.lane_requests
+    assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+    sp = status["speed"]
+    assert sp["lane_state"] == "stream" and sp["lane_stats"]["trips"] == 0
+    assert lane_requests == 0 and connections == 0 and unspent >= 1  # tickets issued, none spent
+
+
+def _lane_egress(svc_app: Any) -> dict[str, Any]:
+    """Gateway settings allowing the service's TCP lane port (egress allowlist, as an operator would)."""
+    lane = svc_app.state.pgw.lane
+    return {"egress_allowlist": [f"https://127.0.0.1:{lane.svc.port}"]} if lane is not None else {}
+
+
+def test_native_service_status_map_matches_python() -> None:
+    from pgw.wire import service_lane as bridge
+
+    fast = pytest.importorskip("pgw_fast")
+    if not hasattr(fast, "lane_map_service_status"):
+        pytest.skip("pgw_fast without the service-lane client")
+    for code in range(0, 40):
+        assert fast.lane_map_service_status(code) == bridge.map_service_status(code), code
 
 
 def test_service_lane_bridge_mirrors_the_service_wire_format() -> None:

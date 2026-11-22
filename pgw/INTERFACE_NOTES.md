@@ -537,3 +537,24 @@ Behaviour changes other components and operators must know about:
 - Impact: backwards compatible; `workers` defaults to 1 (the classic single-process factory). The ring tier
   (gateway child factory) is unchanged and single-writer.
 - Status: done
+## 2026-11-21 speed L1 (trip lane) -> service, wire, gateway, lead architect: TCP+TLS service lane
+- What (additive; defaults unchanged):
+  - `pgw_fast.LaneService(path, ..., tls_addr=None, tls_cert_pem=None, tls_key_pem=None, tls_client_ca_pem=None,
+    require_client_cert=False)`: with `tls_addr` ("ip:port", port 0 = any) the listener is TCP + TLS 1.3 instead of
+    the UDS (`path` unused, `""`); new getter `port`; `add_ticket(ticket, tenant, model, ttl_s, cert_der=None)` binds
+    a ticket to the SHA-256 of a DER client certificate (TLS connections only). `rust/pgw-lane`: `server::TlsListen`,
+    `ServerConfig::tls`, `LaneServer::{add_bound_ticket, local_addr}`, module `tls`.
+  - `pgw_fast.TripChannel.connect_service_uds(path, ticket, timeout_s, max_rows, spin_us=50)` and
+    `connect_service_tls(host, port, server_name, ca_pem, ticket, timeout_s, max_rows, spin_us=50,
+    client_cert_pem=None, client_key_pem=None)`: the native client speaks the service lane's frames (`PGWL` 48-byte
+    requests, 40-byte replies) and maps its statuses to the client statuses
+    (`pgw_fast.lane_map_service_status` = `pgw.wire.service_lane.map_service_status`).
+  - Service `lane = "tcp"` is built: `lane/open` answers `{"transport": "tcp", "port", "alpn"}` and binds the ticket to
+    the request's verified client certificate (refuses with `unavailable` when a certificate subject is known but
+    the certificate itself is not). `ServiceHandler.lane_compute_inline` (sync, on the loop) serves lane calls
+    without a graph inline on an idle device.
+  - `pgw.wire.service_lane.build_lane_client(..., transports=("uds",), spin_us=50, native=False)`; gateway
+    `lane = "tls"` (TCP lane over the blocking stream lane).
+- Why: per-trip latency (package L1): Python framing and `ssl` dominate a loopback trip, not TLS itself.
+- Impact: backwards compatible; `lane = "auto"/"required"` still take UDS tickets only and keep the Python channel.
+- Status: [done] (SPEC 9.4a updated)

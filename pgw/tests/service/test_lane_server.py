@@ -23,7 +23,6 @@ import pytest
 import torch
 
 from pgw.core import RingParams, pack_ring, unpack_ring
-from pgw.core.errors import ConfigError
 from pgw.service import ServiceSettings, create_app, hash_token
 from pgw.service.lane import (
     LANE_OPEN_PATH,
@@ -275,8 +274,13 @@ async def test_deadline_and_executor_errors(tiny_pack_dir: Path, sock_dir: Path,
             await asyncio.sleep(0.3)
             return await orig(*a)
 
-        handler.lane_compute = slow
         lane, _ = await _lane(app, pack_fp)
+        n0 = handler.lane_requests
+        h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body)  # idle device: inline on the loop
+        assert h.status == LaneStatus.OK and handler.lane_requests == n0 + 1
+        inline = handler.lane_compute_inline
+        handler.lane_compute_inline = lambda *a: None  # a busy device: the queued kernel path
+        handler.lane_compute = slow
         h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body, 50)
         assert h.status == LaneStatus.DEADLINE_EXCEEDED
         h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body)  # default deadline (service cap)
@@ -290,6 +294,16 @@ async def test_deadline_and_executor_errors(tiny_pack_dir: Path, sock_dir: Path,
         assert h.status == LaneStatus.INTERNAL and h.status.fallback
         handler.lane_compute = orig
         h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body)  # connection still usable
+        assert h.status == LaneStatus.OK
+
+        def broken_inline(*a: Any) -> bytes:
+            raise RuntimeError("boom")
+
+        handler.lane_compute_inline = broken_inline
+        h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body)
+        assert h.status == LaneStatus.INTERNAL
+        handler.lane_compute_inline = inline
+        h, _ = await asyncio.to_thread(lane.call, 0, 1, 0, body)
         assert h.status == LaneStatus.OK
         lane.close()
 
@@ -391,9 +405,11 @@ async def test_lane_off_and_tcp(tiny_pack_dir: Path, sock_dir: Path, pack_fp: st
         assert st == 503
     cert = tmp_path / "c.pem"
     cert.write_text("x")
-    with pytest.raises(ConfigError, match="not built"):
-        create_app(_settings(tiny_pack_dir, sock_dir, lane="tcp", lane_port=9555,
-                             tls={"cert_file": cert, "key_file": cert}))
+    # the TCP+TLS lane is built (tests/service/test_lane_tls.py); the manager is created, the listener starts
+    # with the app
+    app = create_app(_settings(tiny_pack_dir, sock_dir, lane="tcp", lane_port=9555,
+                               tls={"cert_file": cert, "key_file": cert}))
+    assert app.state.pgw.lane.transport == "tcp"
 
 
 def test_wire_mirror_matches_rust_layout() -> None:

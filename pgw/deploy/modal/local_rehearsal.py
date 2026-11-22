@@ -53,7 +53,11 @@ def main() -> None:
     ap.add_argument("--delay-ms", type=float, default=None, help="add this many ms per round trip (loopback proxy)")
     ap.add_argument("--json", help="write the end-to-end result here")
     ap.add_argument("--local-linears", choices=["off", "attention", "auto"], default="auto")
+    ap.add_argument("--lane", choices=list(boot.LANES), default="stream",
+                    help="gateway trip lane: stream (default) or tls (the service's TCP+TLS lane, as launch.py --lane)")
     args = ap.parse_args()
+    if args.lane == "tls" and args.delay_ms is not None:
+        ap.error("--lane tls goes straight to the service's lane port: it would bypass the --delay-ms proxy")
     work = Path(args.work).resolve()
     work.mkdir(parents=True, exist_ok=True)
     work.chmod(0o711)  # traversable by the party users, not listable
@@ -84,17 +88,21 @@ def main() -> None:
         proxy = DelayProxy(("127.0.0.1", port), one_way_s=args.delay_ms / 2e3)
         public_url = f"https://127.0.0.1:{proxy.start()}"
     procs = []
-    result: dict = {"device": args.device, "users": args.users, "delay_ms": args.delay_ms}
+    result: dict = {"device": args.device, "users": args.users, "delay_ms": args.delay_ms, "lane": args.lane}
+    lane_port = free_port() if args.lane == "tls" else None
     try:
         p = boot.start_provider_party(prov, pack, port, device=args.device, user=puser, log_dir=logs,
-                                      code_ttl="2h", note="local rehearsal", public_url=public_url)
+                                      code_ttl="2h", note="local rehearsal", public_url=public_url,
+                                      lane_port=lane_port)
         procs.append(p["proc"])
         code = p["code"]
         boot.log(f"enrollment code created (id {code['id']}) for {p['url']}")
         gport = free_port()
         gw, token = boot.start_gateway_party(cust, gport, user=cuser, log_dir=logs,
                                              model_options={**boot.GATEWAY_MODEL_OPTIONS,
-                                                            "local_linears": args.local_linears})
+                                                            "local_linears": args.local_linears,
+                                                            **boot.lane_options(args.lane)},
+                                             egress=boot.lane_egress(args.lane, lane_port))
         procs.append(gw)
         base = f"http://127.0.0.1:{gport}"
         if args.through == "admin":

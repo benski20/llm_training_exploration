@@ -166,7 +166,13 @@ plaintext quantized reference, none shows the provider anything new):
   everything else, or any call the lane refuses, byte-identically over the stream channel.
   `"required"` keeps the model `connecting` until the service grants a lane. `"lane_uds_dir"` accepts
   a lane socket in that directory when the service URL is not a loopback address;
-  `"lane_pool_wait_s"` bounds the wait for a free lane connection. There is no TCP lane.
+  `"lane_pool_wait_s"` bounds the wait for a free lane connection. `"tls"` uses the service's TCP trip
+  lane instead (`PGW_SERVICE_LANE=tcp`, `PGW_SERVICE_LANE_PORT`; any network): TLS 1.3 only, to the
+  `service_url` host on the port the service names, verified against `service_ca_file`, presenting the
+  client certificate when one is configured (the service binds the lane ticket to it). It needs an
+  `https` service URL with `service_ca_file` and an unencrypted client key; the lane port must be on the
+  gateway's `egress_allowlist` (`https://<service host>:<lane port>`; otherwise the gateway does not connect
+  to it and keeps the stream lane) and the egress firewall must allow it. Calls the lane cannot take go to the blocking stream lane (`"stream"`).
 * `"spec_rows"` with `"spec_strict_passes": true` (and `"spec_lookup"` or `"draft_pack_path"`): strict
   speculation. Every decode pass carries exactly `spec_rows` rows and, after the answer, dummy passes
   run until the provider has seen as many passes as tokens were generated, so it learns neither how

@@ -16,7 +16,7 @@ use pgw_lane::admission::{Admission, Limits, Refusal};
 use pgw_lane::cuda::{driver_status, GraphExecutor, GraphSpec};
 use pgw_lane::exec::{micros, Call, Chain, DeviceLock, Done, Executor, LinearEntry, ModelEntry, RingEntry};
 use pgw_lane::proto::{Status, TICKET_LEN};
-use pgw_lane::server::{LaneServer, ServerConfig};
+use pgw_lane::server::{LaneServer, ServerConfig, TlsListen};
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyTuple};
@@ -154,7 +154,8 @@ impl PyLaneService {
                         max_connections = 256, max_inflight = 256, tenant_max_inflight = None,
                         tenant_rows_per_s = None, tenant_burst_rows = None, retry_after_ms = 1000,
                         executor = None, use_graphs = false, spin_us = 50, poll_ms = 100,
-                        open_timeout_s = 10.0, stall_timeout_s = 30.0))]
+                        open_timeout_s = 10.0, stall_timeout_s = 30.0, tls_addr = None, tls_cert_pem = None,
+                        tls_key_pem = None, tls_client_ca_pem = None, require_client_cert = false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -174,7 +175,31 @@ impl PyLaneService {
         poll_ms: u64,
         open_timeout_s: f64,
         stall_timeout_s: f64,
+        tls_addr: Option<String>,
+        tls_cert_pem: Option<Vec<u8>>,
+        tls_key_pem: Option<Vec<u8>>,
+        tls_client_ca_pem: Option<Vec<u8>>,
+        require_client_cert: bool,
     ) -> PyResult<Self> {
+        // TCP lane: TLS 1.3 only (there is no plaintext TCP listener)
+        let tls = match tls_addr {
+            None => {
+                if tls_cert_pem.is_some() || tls_key_pem.is_some() || tls_client_ca_pem.is_some() {
+                    return Err(PyValueError::new_err("TLS material given without tls_addr"));
+                }
+                None
+            }
+            Some(a) => {
+                let addr: std::net::SocketAddr =
+                    a.parse().map_err(|_| PyValueError::new_err("tls_addr must be 'ip:port'"))?;
+                let (Some(cert), Some(key)) = (tls_cert_pem.as_deref(), tls_key_pem.as_deref()) else {
+                    return Err(PyValueError::new_err("the TCP lane needs tls_cert_pem and tls_key_pem"));
+                };
+                let config = pgw_lane::tls::server_config(cert, key, tls_client_ca_pem.as_deref(), require_client_cert)
+                    .map_err(PyValueError::new_err)?;
+                Some(TlsListen { addr, config })
+            }
+        };
         let admission = Arc::new(Admission::new(limits(
             max_inflight,
             tenant_max_inflight,
@@ -191,6 +216,7 @@ impl PyLaneService {
         let chain: Arc<dyn Executor> = Arc::new(Chain { primary, secondary });
         let cfg = ServerConfig {
             path,
+            tls,
             peer_uids,
             max_rows,
             deadline_cap_ms,
@@ -237,10 +263,20 @@ impl PyLaneService {
         self.server.remove_model(id);
     }
 
-    /// Accept a single-use 32-byte `ticket` for `tenant` and model `model` for `ttl_s` seconds.
-    fn add_ticket(&self, ticket: &[u8], tenant: &str, model: u32, ttl_s: f64) -> PyResult<()> {
+    /// TCP port of the TLS listener (`None` on the Unix domain socket).
+    #[getter]
+    fn port(&self) -> Option<u16> {
+        self.server.local_addr().map(|a| a.port())
+    }
+
+    /// Accept a single-use 32-byte `ticket` for `tenant` and model `model` for `ttl_s` seconds. With
+    /// `cert_der` (the DER client certificate that asked for it), the ticket opens only a TLS connection
+    /// presenting that certificate.
+    #[pyo3(signature = (ticket, tenant, model, ttl_s, cert_der = None))]
+    fn add_ticket(&self, ticket: &[u8], tenant: &str, model: u32, ttl_s: f64, cert_der: Option<&[u8]>) -> PyResult<()> {
         let t: [u8; TICKET_LEN] = ticket.try_into().map_err(|_| PyValueError::new_err("ticket must be 32 bytes"))?;
-        self.server.add_ticket(t, tenant, model, Duration::from_secs_f64(ttl_s.max(0.0)));
+        let cert = cert_der.map(pgw_lane::tls::cert_digest);
+        self.server.add_bound_ticket(t, tenant, model, Duration::from_secs_f64(ttl_s.max(0.0)), cert);
         Ok(())
     }
 

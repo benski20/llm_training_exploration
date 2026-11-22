@@ -1,7 +1,7 @@
 [package]
 name = "pgw-lane"
 version = "0.1.0"
-description = "Service trip lane of the PGW compute service (chat-speed plan WP-A1): binary-header listener on a Unix domain socket (peer uid and single-use ticket checks), admission shared with the Python service, per-(linear, rows) CUDA-graph replay through a dlopen'ed driver with a hybrid wait. Python bindings live in pgw-fast."
+description = "Service trip lane of the PGW compute service (chat-speed plan WP-A1): binary-header listener on a Unix domain socket (peer uid and single-use ticket checks) or on TCP with TLS 1.3 (rustls; client certificates verified and bound to the ticket), admission shared with the Python service, per-(linear, rows) CUDA-graph replay through a dlopen'ed driver with a hybrid wait. Python bindings live in pgw-fast."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,3 +13,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 libc = "0.2"
+# tls.rs: the TCP lane is TLS 1.3 only (rustls with the `ring` provider, as pgw-fast's lane client; no
+# aws-lc / cmake). `ring` also hashes the client certificate a ticket is bound to.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+ring = "0.17"

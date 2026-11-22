@@ -62,7 +62,9 @@ from typing import Any
 
 FP = "ab" * 32
 RING = "K32A12C27"
-SHAPES = {"qkv": (4608, 3584), "o": (3584, 3584), "gate_up": (37888, 3584), "down": (3584, 18944)}
+SHAPES_7B = {"qkv": (4608, 3584), "o": (3584, 3584), "gate_up": (37888, 3584), "down": (3584, 18944)}
+SHAPES_05B = {"qkv": (1152, 896), "o": (896, 896), "gate_up": (9728, 896), "down": (896, 4864)}
+SHAPES = dict(SHAPES_05B if os.environ.get("PGW_BENCH_PRESET") == "0.5b" else SHAPES_7B)
 LAYERS = 2
 
 
@@ -185,6 +187,11 @@ def _server(port: int, token_file: str | None, profile: str | None) -> None:
         from pgw.core.settings import TLSConfig
 
         kw["tls"] = TLSConfig(cert_file=Path(tls_dir) / "server.pem", key_file=Path(tls_dir) / "server.key")
+    lane = os.environ.get("PGW_BENCH_SERVICE_LANE", "off")
+    if lane == "tcp":
+        kw.update(lane="tcp", lane_port=int(os.environ["PGW_BENCH_LANE_PORT"]))
+    elif lane == "uds":
+        kw.update(lane="uds", lane_socket=Path(os.environ["PGW_BENCH_LANE_DIR"]) / "lane.sock")
     if os.environ.get("PGW_BENCH_NODELAY_REPORT"):
         _report_nodelay_on_signal()
     settings = ServiceSettings(host="127.0.0.1", port=port, server="uvicorn", batch_window_ms=0.0, **kw)
@@ -326,6 +333,104 @@ async def _client(port: int, args: argparse.Namespace, token: str | None, server
             "tls": ca_file is not None, "delay_ms": args.delay_ms, "client_nodelay": nodelay}
 
 
+def _client_sync(port: int, args: argparse.Namespace, token: str | None, server_pid: int, rows: int,
+                 variant: str, ca_file: Path | None = None) -> dict[str, Any]:
+    """Blocking calls (``compute_sync``) as the gateway's decode path makes them: ``--sync regular`` (the
+    client's private loop), ``stream`` (the blocking stream lane), ``lane`` (the service's trip lane through
+    :func:`pgw.wire.service_lane.build_lane_client`; native channel when available)."""
+    import numpy as np
+    from pydantic import SecretStr
+
+    from pgw.wire.client import ClientConfig, ComputeClient
+    from pgw.wire.messages import ComputeItem, ComputeRequest
+
+    scheme = "https" if ca_file is not None else "http"
+    cfg = ClientConfig(base_url=f"{scheme}://127.0.0.1:{port}", http2=False, stream=True,
+                       token=SecretStr(token) if token else None, ca_file=ca_file)
+    base = ComputeClient(cfg)
+    for _ in range(300):
+        try:
+            if base._run_sync(base.ready()):
+                break
+        except Exception:  # noqa: S110 - service still starting
+            pass
+        time.sleep(0.1)
+    base.connect_sync(FP, RING)
+    client: Any = base
+    if args.sync == "stream":
+        from pgw.wire.sync_stream import build_sync_stream_client
+
+        client = build_sync_stream_client(base)
+    elif args.sync == "lane":
+        from pgw.wire.service_lane import build_lane_client
+
+        inner: Any = base
+        if args.lane_fallback == "stream":  # as the gateway's lane = "tls": lane, then the blocking stream lane
+            from pgw.wire.sync_stream import build_sync_stream_client
+
+            inner = build_sync_stream_client(base)
+        transports = ("tcp",) if args.service_lane == "tcp" else ("uds",)
+        client = build_lane_client(inner, spin_us=args.spin_us, transports=transports, native=None)
+        if not client.open_sync(FP, RING):
+            raise SystemExit("the service granted no lane ticket")
+    rng = np.random.default_rng(0)
+    payloads = {k: rng.integers(0, 1 << 32, size=(rows, n), dtype=np.uint64).astype("<u4").tobytes()
+                for k, (_m, n) in SHAPES.items()}
+    order = [f"{layer}.{k}" for layer in range(LAYERS) for k in SHAPES]
+
+    def run(n: int, lat: list[float] | None) -> None:
+        for i in range(n):
+            lid = order[i % len(order)]
+            req = ComputeRequest(uuid.uuid4().hex, FP, RING, (ComputeItem(lid, rows, payloads[lid.split(".")[1]]),),
+                                 deadline_ms=10_000)
+            t0 = time.perf_counter()
+            client.compute_sync(req)
+            if lat is not None:
+                lat.append((time.perf_counter() - t0) * 1e6)
+
+    import threading
+
+    stop = threading.Event()
+
+    def gil_load() -> None:  # pure-Python work 1 ms on, 1 ms off (other gateway threads holding the GIL)
+        while not stop.is_set():
+            end = time.perf_counter() + 1e-3
+            while time.perf_counter() < end:
+                sum(range(200))
+            time.sleep(1e-3)
+
+    loaders = [threading.Thread(target=gil_load, daemon=True) for _ in range(args.gil_load)]
+    for t in loaders:
+        t.start()
+    run(200, None)
+    lat: list[float] = []
+    (c0, cf0), (s0, sf0) = _proc_stat(os.getpid()), _proc_stat(server_pid)
+    t0 = time.perf_counter()
+    run(args.calls, lat)
+    wall = time.perf_counter() - t0
+    (c1, cf1), (s1, sf1) = _proc_stat(os.getpid()), _proc_stat(server_pid)
+    stop.set()
+    for t in loaders:
+        t.join()
+    lane_stats = getattr(client, "lane_stats", None) or getattr(client, "sync_stream_stats", None)
+    client.close()
+    lat.sort()
+
+    def pct(p: float) -> float:
+        return round(lat[min(len(lat) - 1, int(p * len(lat)))], 1)
+
+    out = {"transport": f"sync-{args.sync}", "service_lane": args.service_lane, "variant": variant, "rows": rows,
+           "preset": args.preset, "calls": len(lat), "p50_us": pct(0.5), "p90_us": pct(0.9), "p99_us": pct(0.99),
+           "mean_us": round(statistics.fmean(lat), 1), "wall_us_per_call": round(wall / len(lat) * 1e6, 1),
+           "client_cpu_us_per_call": round((c1 - c0 + cf1 - cf0) / len(lat) * 1e6, 1),
+           "server_cpu_us_per_call": round((s1 - s0 + sf1 - sf0) / len(lat) * 1e6, 1),
+           "tls": ca_file is not None, "spin_us": args.spin_us, "gil_load": args.gil_load}
+    if lane_stats is not None:
+        out["lane_stats"] = {k: v for k, v in vars(lane_stats).items() if isinstance(v, int | float | bool | str)}
+        out["lane_fallbacks"] = dict(getattr(lane_stats, "fallback_reasons", {}) or {})
+    return out
+
+
 _MALLOC_VARS = ("MALLOC_TRIM_THRESHOLD_", "MALLOC_TOP_PAD_", "MALLOC_MMAP_THRESHOLD_")
 
 
@@ -365,11 +470,24 @@ def main() -> None:
                     help="route through a delay proxy adding this many ms per round trip (0: proxy hop only)")
     ap.add_argument("--check-nodelay", action="store_true",
                     help="report TCP_NODELAY of the client socket and of the service's accepted sockets")
+    ap.add_argument("--preset", default="7b", choices=["7b", "0.5b"], help="stub shapes (Qwen2.5-7B or -0.5B)")
+    ap.add_argument("--sync", choices=["regular", "stream", "lane"],
+                    help="blocking compute_sync calls (the gateway's decode path) on this client path")
+    ap.add_argument("--service-lane", default="off", choices=["off", "tcp", "uds"],
+                    help="the service's trip lane (tcp = TLS on its own port; needs --tls)")
+    ap.add_argument("--spin-us", type=int, default=50, help="native lane client: busy-poll before blocking")
+    ap.add_argument("--lane-fallback", default="stream", choices=["stream", "regular"],
+                    help="--sync lane: what a lane miss falls back to")
+    ap.add_argument("--gil-load", type=int, default=0,
+                    help="client process: this many extra Python threads doing pure-Python work (a busy gateway)")
     ap.add_argument("--profile-client")
     ap.add_argument("--profile-server")
     ap.add_argument("--serve", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--token-file", help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if not args.serve:
+        SHAPES.clear()
+        SHAPES.update(SHAPES_05B if args.preset == "0.5b" else SHAPES_7B)
     if args.serve:
         _server(args.serve, args.token_file, args.profile_server)
         return
@@ -414,6 +532,14 @@ def _one_run(args: argparse.Namespace, rows: int, variant: str) -> dict[str, Any
             env["PGW_BENCH_TLS_DIR"] = td
         if args.check_nodelay:
             env["PGW_BENCH_NODELAY_REPORT"] = "1"
+        env["PGW_BENCH_PRESET"] = args.preset
+        env["PGW_BENCH_SERVICE_LANE"] = args.service_lane
+        if args.service_lane == "tcp":
+            with socket.socket() as s2:
+                s2.bind(("127.0.0.1", 0))
+                env["PGW_BENCH_LANE_PORT"] = str(s2.getsockname()[1])
+        elif args.service_lane == "uds":
+            env["PGW_BENCH_LANE_DIR"] = td
         proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE if args.check_nodelay else None)  # noqa: S603
         proxy = None
         target = port
@@ -423,7 +549,10 @@ def _one_run(args: argparse.Namespace, rows: int, variant: str) -> dict[str, Any
             proxy = DelayProxy(("127.0.0.1", port), one_way_s=args.delay_ms / 2e3)
             target = proxy.start()
         try:
-            res = dict(_run(_client(target, args, token, proc.pid, rows, variant, ca_file), args.client_loop))
+            if args.sync:
+                res = _client_sync(target, args, token, proc.pid, rows, variant, ca_file)
+            else:
+                res = dict(_run(_client(target, args, token, proc.pid, rows, variant, ca_file), args.client_loop))
             if args.check_nodelay:
                 res["server_nodelay"] = _read_server_nodelay(proc)
             return res

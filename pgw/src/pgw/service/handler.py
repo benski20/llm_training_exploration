@@ -518,6 +518,28 @@ class ServiceHandler:
             if self.inflight == 0:
                 self._idle.set()
 
+    def lane_compute_inline(self, fingerprint: str, linear: str, ring: RingParams, rows: int,
+                            body: bytes) -> bytes | None:
+        """:meth:`lane_compute` run synchronously on the event loop when the batcher would run the call inline
+        (idle device, few rows; what the stream channel's frame lane does), else ``None`` (the caller then
+        awaits :meth:`lane_compute`). Same kernel call, same bytes; saves the task and its scheduling."""
+        if not self.batcher.can_run_inline(fingerprint, ring, linear, rows):
+            return None
+        self.inflight += 1
+        self._idle.clear()
+        try:
+            m, n = self.registry.get(fingerprint).linear_dims[linear]
+            x = unpack_ring(body, (rows, n), ring)
+            y, _bt = self.batcher.run_inline(fingerprint, ring, linear, x, compact=True)
+            if y.shape != (rows, m):  # pragma: no cover - kernel contract
+                raise PGWError("kernel returned a wrong shape", code=ErrorCode.INTERNAL)
+            self.lane_requests += 1
+            return pack_ring(y, ring)
+        finally:
+            self.inflight -= 1
+            if self.inflight == 0:
+                self._idle.set()
+
     # ---- internals -----------------------------------------------------------------------
     def _admit(self, tenant: str, rows: int, *, enter: bool = False) -> Any:
         """Admission: draining, global and tenant in-flight caps, tenant row bucket. Raises on refusal.
