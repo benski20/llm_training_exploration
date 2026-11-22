@@ -15,7 +15,6 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
-<<<<<<< HEAD
 ## Update 2026-11-22: Qwen2.5-32B co-located Modal run prepared (CPU-only gateway, H100 provider; not run)
 
 `launch.py --model qwen2.5-32b-instruct` (H100 only, `--gateway-cache` required): the provider's 37.5 GB pack from a
@@ -27,7 +26,6 @@ pack in the page cache), slot 18.6 MB, keep-up divisor 16; plaintext reference's
 (`PGW_MODAL_REF_INT_THREADS`, same bits); `--mask-source gpu-service` hook for the GPU mask service (refused until
 wired); `--dry-run`. Commands, sizes and cost (prep about $1-2 once, short plain e2e about $1.5-2.5 at $7.51/h, TTL 30
 min; expected plain 3.5-5 tok/s): `deploy/modal/README.md`, "Qwen2.5-32B co-located".
-=======
 ## Update 2026-11-22: provider for 32B/70B-class: output-row TP, persistent trip worker, lane coalescing (opt-in, CPU-tested)
 
 Provider side of the scaling plan (targets 3-4); what the provider computes and sees is unchanged (masked `x_hat` in,
@@ -61,7 +59,6 @@ Provider side of the scaling plan (targets 3-4); what the provider computes and 
   --rows 1,2 --iters 400 --json /tmp/provider_scale.json"` (4 x H100, about $16/h plus CPU; ~10-15 min, ~$3-4).
   A 1-GPU subset (`--target h100_c16 --tp 1`) is ~$1. Reports per preset, TP and rows: kernel / graph / persistent
   service time per trip, the GEMV device floor and the overhead above it (target <= 15-25 us; gather <= 5 us).
->>>>>>> worktree-agent-ac30f94dac099cb67
 
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
