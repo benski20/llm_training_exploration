@@ -557,7 +557,7 @@ class LaneManager:
 
     def _install_device_locks(self) -> None:  # pragma: no cover - GPU only
         """Make the lane and the Python path share one lock per device (one call per device)."""
-        from pgw.service.gpu_exec import device_executor
+        from pgw.service.gpu_exec import device_executor, trip_stream
 
         for dev in {str(k.device) for m in self.state.registry.models() for k in m.kernels.values()}:
             d = torch.device(dev)
@@ -678,7 +678,7 @@ def _capture_device(mgr: LaneManager, device: torch.device, entries: list[tuple[
     n_max = max(int(k.in_features) for *_, k, _ in entries)
     m_max = max(int(k.out_features) for *_, k, _ in entries)
     with torch.cuda.device(device):
-        stream = torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+        stream = trip_stream(device)  # PGW_SERVICE_TRIP_STREAM_PRIORITY=high: above maskgen's streams
         pool = torch.cuda.graph_pool_handle()
         h_in = torch.zeros(rmax * n_max, dtype=torch.int32, pin_memory=True)
         h_out = torch.zeros(rmax * m_max, dtype=torch.int32, pin_memory=True)

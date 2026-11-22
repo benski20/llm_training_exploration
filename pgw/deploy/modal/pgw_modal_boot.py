@@ -805,3 +805,117 @@ class CpuSampler:
             return {}
         (ta, a), (tb, b) = inside[0], inside[-1]
         return {k: round((b.get(k, 0.0) - a.get(k, 0.0)) / max(1e-9, tb - ta), 2) for k in b}
+
+
+# ------------------------------------------------------------------------------------------------
+# Co-located A/B diagnostics (``--gateway-env PGW_MODAL_AB=...``): re-pin or pause the party processes between
+# streamed chats of one run, so host-to-host variance does not hide a difference. Root only; diagnostics, never
+# part of the product path (nothing the parties compute or send changes; a paused factory only stops refilling).
+# ------------------------------------------------------------------------------------------------
+def group_pids() -> dict[str, list[int]]:
+    """``{group: [pid, ...]}`` for :data:`_PROC_GROUPS` (the factory may have several processes)."""
+    out: dict[str, list[int]] = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            cmd = Path(f"/proc/{d}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            continue
+        name = next((g for g, pat in _PROC_GROUPS if pat in cmd), None)
+        if name is not None:
+            out.setdefault(name, []).append(int(d))
+    return out
+
+
+def _tids(pid: int) -> list[int]:
+    try:
+        return [int(t) for t in os.listdir(f"/proc/{pid}/task")]
+    except OSError:
+        return []
+
+
+def pin_groups(layout: dict[str, set[int] | None]) -> dict[str, Any]:
+    """Set the CPU affinity of every thread of each group's processes (``None``: all CPUs again); returns
+    what the kernel reports back for the group's first process."""
+    rep: dict[str, Any] = {}
+    pids = group_pids()
+    every = set(range(os.cpu_count() or 1))
+    for g, cpus in layout.items():
+        n, err = 0, None
+        for pid in pids.get(g, []):
+            for tid in _tids(pid):
+                try:
+                    os.sched_setaffinity(tid, cpus if cpus is not None else every)
+                    n += 1
+                except OSError as exc:
+                    err = f"{type(exc).__name__}: {exc}"
+        got = None
+        if pids.get(g):
+            try:
+                got = sorted(os.sched_getaffinity(pids[g][0]))
+            except OSError:
+                pass
+        rep[g] = {"threads": n, "cpus": got, "error": err}
+    return rep
+
+
+def signal_group(group: str, sig: int) -> int:
+    """Send ``sig`` (e.g. ``signal.SIGSTOP`` / ``SIGCONT``) to every process of ``group``; returns how many got it."""
+    n = 0
+    for pid in group_pids().get(group, []):
+        try:
+            os.kill(pid, sig)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def thread_cpu(group: str) -> dict[str, tuple[str, float]]:
+    """``{"pid/tid": (comm, cpu_s)}`` of every thread of ``group``'s processes (for per-thread deltas)."""
+    tick = os.sysconf("SC_CLK_TCK")
+    out: dict[str, tuple[str, float]] = {}
+    for pid in group_pids().get(group, []):
+        for tid in _tids(pid):
+            try:
+                stat = Path(f"/proc/{pid}/task/{tid}/stat").read_text()
+            except OSError:
+                continue
+            comm = stat[stat.find("(") + 1:stat.rfind(")")]
+            f = stat.rsplit(")", 1)[1].split()
+            out[f"{pid}/{tid}"] = (comm, (int(f[11]) + int(f[12])) / tick)
+    return out
+
+
+def thread_deltas(a: dict[str, tuple[str, float]], b: dict[str, tuple[str, float]], seconds: float,
+                  top: int = 8) -> list[tuple[str, str, float]]:
+    """The ``top`` busiest threads between two :func:`thread_cpu` snapshots, in cores."""
+    rows = [(k, v[0], round((v[1] - a.get(k, (v[0], 0.0))[1]) / max(1e-9, seconds), 3)) for k, v in b.items()]
+    return sorted(rows, key=lambda r: -r[2])[:top]
+
+
+#: ``PGW_MODAL_AB`` layouts (30 visible CPUs on Modal's T4:2 hosts, 14 of them by quota): the gateway's decode
+#: process, the provider's service and the factory on disjoint cores.
+PIN_LAYOUT: dict[str, set[int] | None] = {"gateway": set(range(0, 6)), "service": set(range(6, 9)),
+                                          "factory": set(range(9, 14))}
+UNPIN_LAYOUT: dict[str, set[int] | None] = {"gateway": None, "service": None, "factory": None}
+
+
+def ab_phases(spec: str) -> list[tuple[str, Any]]:
+    """``PGW_MODAL_AB`` (comma list of ``base``, ``pin``, ``unpin``, ``nofactory``, ``factory``): the phases of
+    :func:`e2e_driver.run`'s ``ab`` streams, each ``(label, action)``; actions are cumulative, the driver
+    resumes the factory and unpins at the end."""
+    import signal
+
+    acts = {"base": lambda: None, "pin": lambda: pin_groups(PIN_LAYOUT), "unpin": lambda: pin_groups(UNPIN_LAYOUT),
+            "nofactory": lambda: signal_group("factory", signal.SIGSTOP),
+            "factory": lambda: signal_group("factory", signal.SIGCONT)}
+    return [(p.strip(), acts[p.strip()]) for p in spec.split(",") if p.strip() in acts]
+
+
+def ab_cleanup() -> None:
+    import signal
+
+    signal_group("factory", signal.SIGCONT)
+    pin_groups(UNPIN_LAYOUT)

@@ -404,6 +404,17 @@ def _print_speed(res: dict[str, Any]) -> None:
           f"{sp.get('spec_rows') or 'off'}; {sp.get('warm_trips_per_token', '?')} round trips per token "
           f"(warm chat), {sp.get('warm_tokens_per_s', '?')} tokens/s (warm chat wall time; "
           f"{sp.get('warm_loopback_tokens_per_s', '?')} sent on loopback, without Modal's HTTPS edge)", flush=True)
+    if sp.get("warm_stream_decode_tokens_per_s") is not None:
+        print(f"streamed warm chat (loopback): time to first token {sp.get('warm_stream_ttft_s')} s, decode "
+              f"{sp.get('warm_stream_decode_tokens_per_s')} tokens/s ({sp.get('warm_stream_decode_ms_per_token')} "
+              f"ms/token after the first), wall {sp.get('warm_stream_wall_s')} s; stream identical "
+              f"{(res.get('e2e') or {}).get('stream_identical')}", flush=True)
+    for row in (res.get("e2e") or {}).get("ab") or []:  # --gateway-env PGW_MODAL_AB=...: in-run A/B diagnostics
+        print(f"A/B {row.get('phase')}: decode ms/token {row.get('decode_ms_per_token')}, TTFT s "
+              f"{row.get('ttft_s')}, identical {row.get('identical')}; 1-row trip "
+              f"{(row.get('trips') or {}).get('rows_1_mean_ms')} ms (service "
+              f"{(row.get('trips') or {}).get('rows_1_service_ms')}), local linear "
+              f"{row.get('local_decode_us_per_call')} us/call {row.get('error') or ''}", flush=True)
     if sp.get("spec_rows"):
         print(f"strict speculation: warm answer {sp.get('warm_answer_tokens_per_s', '?')} tokens/s; dummy passes "
               f"after the first chat took {sp.get('spec_drain_wait_s', '?')} s", flush=True)

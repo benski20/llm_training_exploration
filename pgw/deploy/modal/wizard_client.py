@@ -142,6 +142,44 @@ def chat(base_url: str, api_key: str, model: str, messages: list[dict[str, str]]
         return out
 
 
+def chat_stream(base_url: str, api_key: str, model: str, messages: list[dict[str, str]],
+                max_tokens: int) -> dict[str, Any]:
+    """The same greedy chat as :func:`chat` with ``stream=true``: the text, the per-token logprobs and the
+    arrival time of each token chunk, so the caller can split time to first token from the decode rate
+    (``ttft_s``; ``decode_tokens_per_s`` = (n-1)/(t_last - t_first) over the n token chunks)."""
+    body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0, "logprobs": True,
+            "top_logprobs": 0, "stream": True}
+    import json as _json
+    text, lps, times = [], [], []
+    with httpx.Client(base_url=base_url, timeout=900.0, trust_env=True) as c:
+        t = time.time()
+        with c.stream("POST", "/v1/chat/completions", json=body,
+                      headers={"Authorization": f"Bearer {api_key}"}) as r:
+            if r.status_code >= 400:
+                r.read()
+                raise WizardError(f"chat stream: HTTP {r.status_code}: {r.text[:800]}")
+            for line in r.iter_lines():
+                if not line.startswith("data: ") or line == "data: [DONE]":
+                    continue
+                ev = _json.loads(line[6:])
+                if "error" in ev:
+                    raise WizardError(f"chat stream: {str(ev['error'])[:800]}")
+                for ch in ev.get("choices") or []:
+                    lp = ((ch.get("logprobs") or {}).get("content")) or []
+                    if lp:
+                        times.append(time.time() - t)
+                        lps.extend(x["logprob"] for x in lp)
+                    text.append((ch.get("delta") or {}).get("content") or "")
+        wall = time.time() - t
+    n = len(times)
+    dec = (times[-1] - times[0]) if n > 1 else 0.0
+    return {"text": "".join(text), "logprobs": lps, "token_times_s": [round(x, 4) for x in times],
+            "_wall_s": wall, "tokens": n, "ttft_s": round(times[0], 4) if n else None,
+            "decode_s": round(dec, 4),
+            "decode_tokens_per_s": round((n - 1) / dec, 2) if dec > 0 else None,
+            "decode_ms_per_token": round(1000 * dec / (n - 1), 2) if n > 1 else None}
+
+
 def admin_get(base_url: str, admin_token: str, path: str) -> Any:
     with httpx.Client(base_url=base_url, timeout=60.0, trust_env=True) as c:
         return _check(c.get(path, headers={"Authorization": f"Bearer {admin_token}"}), path)

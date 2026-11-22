@@ -130,6 +130,34 @@ def from_compact(y: torch.Tensor, k: int) -> torch.Tensor:
     return y.to(torch.int64) & ((1 << k) - 1)
 
 
+#: ``PGW_SERVICE_TRIP_STREAM_PRIORITY`` (default ``0`` = off): ``high`` captures the decode graphs (the lane's
+#: per-linear graphs and the executor's bucket graphs) on a stream of the device's highest priority, so a
+#: 1-row trip's kernels are dispatched ahead of queued encrypted-maskgen GEMM blocks (CUDA cannot put maskgen
+#: below the default priority, so decode goes above it). Scheduling only: the same kernels, inputs and outputs.
+ENV_TRIP_STREAM_PRIORITY = "PGW_SERVICE_TRIP_STREAM_PRIORITY"
+
+
+def trip_stream_priority() -> int:
+    """The CUDA stream priority for decode graphs: ``0`` (default) or a large negative number (``high``:
+    torch maps it to the device's greatest priority)."""
+    import os
+
+    v = (os.environ.get(ENV_TRIP_STREAM_PRIORITY) or "0").strip().lower()
+    if v in ("", "0", "off", "default", "false", "no"):
+        return 0
+    if v in ("high", "1", "on", "true", "yes"):
+        return -100
+    raise ConfigError(f"{ENV_TRIP_STREAM_PRIORITY} must be 0 or high, got {v!r}")
+
+
+def trip_stream(device: torch.device) -> Any:  # pragma: no cover - GPU only
+    """A new CUDA stream for decode graph capture and replay (:func:`trip_stream_priority`)."""
+    prio = trip_stream_priority()
+    if prio:
+        return torch.cuda.Stream(device, priority=prio)  # type: ignore[no-untyped-call]
+    return torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+
+
 def eager_capturer(body: Callable[[], None]) -> Callable[[], None]:
     """A "capturer" that records nothing: runs ``body`` once and replays by calling it (CPU tests)."""
     body()
@@ -145,7 +173,7 @@ def cuda_graph_capturer(device: torch.device) -> Capturer:
     """
     with torch.cuda.device(device):  # pragma: no cover - GPU only
         pool = torch.cuda.graph_pool_handle()
-        stream = torch.cuda.Stream(device)  # type: ignore[no-untyped-call]
+        stream = trip_stream(device)
 
     def capture(body: Callable[[], None]) -> Callable[[], None]:  # pragma: no cover - GPU only
         with torch.cuda.device(device):

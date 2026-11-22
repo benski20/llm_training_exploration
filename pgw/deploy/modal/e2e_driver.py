@@ -26,7 +26,8 @@ PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pad
 def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url: str,
         config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0, sustain_s: float = 0.0,
         sampler_path: str | None = None, float_threads: int | None = None,
-        float_ops: str | None = None) -> dict[str, Any]:
+        float_ops: str | None = None, ab: list[tuple[str, Any]] | None = None,
+        ab_cleanup: Any = None, ab_chats: int = 3) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
@@ -79,6 +80,26 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     # The same warm chat sent to the gateway on loopback (no Modal HTTPS edge on the way): what the
     # gateway itself delivers; reported next to the edge figure, never instead of it. Same answer required.
     out3 = wiz.chat(local_url, key, model_name, PROMPT, 32) if not spec_rows else None
+    # Streamed on loopback (twice; the second is the warm figure): time to first token and the decode rate
+    # (n-1)/(t_last - t_first), next to the wall-time figures above. Same answer required (stream_identical).
+    streams: list[dict[str, Any]] = []
+    if not spec_rows:
+        for _ in range(2):
+            try:
+                streams.append(wiz.chat_stream(local_url, key, model_name, PROMPT, 32))
+            except Exception as exc:  # report, never fail the exactness result
+                streams.append({"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+    def ab_snap() -> tuple[str, dict, dict]:  # trip counters and the local-linear timing (gateway, loopback)
+        m, ct = snap()
+        try:
+            st0 = wiz.admin_get(local_url, adm, "/admin/status")
+            sp0 = next((x for x in st0.get("models", []) if x.get("name") == model_name), {}).get("speed") or {}
+        except Exception:
+            sp0 = {}
+        return m, ct, dict(sp0.get("local_linear_timing") or {})
+
+    ab_out = (_ab_streams(local_url, key, model_name, out, ab, ab_cleanup, ab_chats, ab_snap)
+              if ab and not spec_rows else None)
     st = json.loads((config_dir / "setup" / "state.json").read_text())
     t = time.time()
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32,
@@ -116,6 +137,12 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     if out3 is not None and out3.get("_wall_s"):
         t3 = int(((out3.get("usage") or {}).get("completion_tokens")) or 0)
         speed["warm_loopback_tokens_per_s"] = round(t3 / float(out3["_wall_s"]), 2)
+    if streams and "error" not in streams[-1]:
+        ws = streams[-1]
+        speed["warm_stream_ttft_s"] = ws["ttft_s"]
+        speed["warm_stream_decode_tokens_per_s"] = ws["decode_tokens_per_s"]
+        speed["warm_stream_decode_ms_per_token"] = ws["decode_ms_per_token"]
+        speed["warm_stream_wall_s"] = round(ws["_wall_s"], 3)
     if spec_rows:
         speed["spec_drain_wait_s"] = round(drain_s, 1)
         if warm_tokens:
@@ -133,7 +160,53 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
             out3["choices"][0]["message"]["content"] == out["choices"][0]["message"]["content"]
             and [x["logprob"] for x in out3["choices"][0]["logprobs"]["content"]]
             == [x["logprob"] for x in out["choices"][0]["logprobs"]["content"]]),
+        "stream_identical": None if not streams else all(
+            "error" not in x and x["text"] == out["choices"][0]["message"]["content"]
+            and x["logprobs"] == [y["logprob"] for y in out["choices"][0]["logprobs"]["content"]] for x in streams),
+        "streams": [{k: v for k, v in x.items() if k not in ("text", "logprobs")} for x in streams],
         "reference_text": ref["text"], "reference_s": ref_s, "compare": cmp,
         "admin_status": status, "admin_masks": masks, "trip_latency": trips, "speed": speed,
+        "ab": ab_out,
         "network_path": path, "sustain": sustain, "warm_window": [tw0, tw1],
     }
+
+
+def _ab_streams(local_url: str, key: str, model_name: str, ref_out: dict[str, Any], phases: list[tuple[str, Any]],
+                cleanup: Any, chats: int, probe: Any = None) -> list[dict[str, Any]]:
+    """Diagnostics (``PGW_MODAL_AB``): per phase, apply its action (re-pin or pause a party process, see
+    ``pgw_modal_boot.ab_phases``), then ``chats`` streamed chats on loopback; each must give the reference answer."""
+    want_text = ref_out["choices"][0]["message"]["content"]
+    want_lp = [y["logprob"] for y in ref_out["choices"][0]["logprobs"]["content"]]
+    rows: list[dict[str, Any]] = []
+    try:
+        for label, act in phases:
+            row: dict[str, Any] = {"phase": label}
+            try:
+                row["action"] = act()
+                time.sleep(0.5)
+                p0 = probe() if probe is not None else None
+                a, t0 = boot.thread_cpu("gateway"), time.time()
+                runs = [wiz.chat_stream(local_url, key, model_name, PROMPT, 32) for _ in range(chats)]
+                row["gateway_threads"] = boot.thread_deltas(a, boot.thread_cpu("gateway"), time.time() - t0)
+                if p0 is not None:
+                    p1 = probe()
+                    lat = trip_gate.trip_latency(p0[0], p1[0], p0[1], p1[1])
+                    row["trips"] = {k: lat.get(k) for k in ("trips", "mean_ms", "p50_ms", "rows_1_mean_ms",
+                                                            "rows_1_service_ms", "rows_1_wire_ms")}
+                    dc = int(p1[2].get("decode_calls", 0)) - int(p0[2].get("decode_calls", 0))
+                    if dc > 0:
+                        row["local_decode_us_per_call"] = round(
+                            1e6 * (float(p1[2].get("decode_s", 0.0)) - float(p0[2].get("decode_s", 0.0))) / dc, 1)
+                row["identical"] = all(r["text"] == want_text and r["logprobs"] == want_lp for r in runs)
+                row["decode_ms_per_token"] = [r["decode_ms_per_token"] for r in runs]
+                row["ttft_s"] = [r["ttft_s"] for r in runs]
+            except Exception as exc:
+                row["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            rows.append(row)
+    finally:
+        if cleanup is not None:
+            try:
+                cleanup()
+            except Exception:  # noqa: S110 - best effort; the run's shutdown terminates the parties anyway
+                pass
+    return rows

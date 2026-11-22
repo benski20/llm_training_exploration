@@ -255,7 +255,10 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
                                                spec_rows=spec_rows, sustain_s=sustain_s,
                                                sampler_path=(gateway_env or {}).get("PGW_STACK_SAMPLER"),
-                                               float_threads=pin, float_ops=float_ops)
+                                               float_threads=pin, float_ops=float_ops,
+                                               # --gateway-env PGW_MODAL_AB=base,pin,...: in-run A/B diagnostics
+                                               ab=boot.ab_phases((gateway_env or {}).get("PGW_MODAL_AB", "")),
+                                               ab_cleanup=boot.ab_cleanup)
                 if sustain_s and result["e2e"].get("sustain"):
                     sus = result["e2e"]["sustain"]
                     sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
@@ -268,7 +271,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                 if spath and Path(spath).exists():  # --gateway-env PGW_STACK_SAMPLER=...: the sampled stacks
                     result["stack_sample"] = json.loads(Path(spath).read_text())
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
-                                and result["e2e"]["compare"]["text_equal"])
+                                and result["e2e"]["compare"]["text_equal"]
+                                and result["e2e"].get("stream_identical") is not False
+                                and all(r.get("identical", True) for r in result["e2e"].get("ab") or []))
                 reason = "e2e finished"
             else:
                 while time.time() < deadline:
