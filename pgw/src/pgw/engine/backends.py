@@ -558,6 +558,111 @@ class Int8DraftBackend(LinearBackend):
         return _grouped_forward(self, calls)
 
 
+def _native_int8_linear(w8: torch.Tensor, scale: torch.Tensor, bias: torch.Tensor | None, ring: RingParams,
+                        threads: int) -> Callable[[torch.Tensor], torch.Tensor]:
+    """``x -> dequant(quant(x) @ w8^T)`` through ``pgw_fast.local_linear_into`` (the exact local-linear
+    kernel: the target's quantizer, an exact int16 x int8 product, columns spread over the native pool).
+
+    Its outputs are a deterministic function of ``x`` whatever the thread count (exact integer sums) and
+    each row depends only on its own input row. ``threads``: 0 = the native pool, 1 = calling thread.
+    """
+    from pgw.modelpack.loader import row_norm_sq_max
+
+    n, m = int(w8.shape[1]), int(w8.shape[0])
+    ring.check_in_features(n)
+    w8t = w8.to(torch.int8).t().contiguous().numpy()
+    sc = np.ascontiguousarray(scale.to(torch.float32).numpy(), dtype=np.float32)
+    bs = None if bias is None else np.ascontiguousarray(bias.to(torch.float32).numpy(), dtype=np.float32)
+    wnorm = math.sqrt(float(row_norm_sq_max(w8))) if ring.cap else 0.0
+    bound = int(ring.output_bound(n))
+    fn = native.fast.local_linear_into
+    k, a, cap = ring.k, ring.a, int(ring.cap or 0)
+    block = 64  # the kernel's row limit
+
+    def run(x: torch.Tensor) -> torch.Tensor:
+        xf = np.ascontiguousarray(x.detach().to("cpu", torch.float32).numpy(), dtype=np.float32)
+        rows = int(xf.shape[0])
+        out = np.empty((rows, m), dtype=np.float32)
+        for r0 in range(0, rows, block):
+            r1 = min(rows, r0 + block)
+            sx = np.empty(r1 - r0, dtype=np.float64)
+            status = fn(xf[r0:r1], w8t, sc, bs, k, a, cap, wnorm, bound, sx, out[r0:r1], threads)
+            if status:
+                raise RingOverflowError(f"native int8 draft linear: status {status}")
+        return torch.from_numpy(out)
+
+    return run
+
+
+class NativeInt8DraftBackend(LinearBackend):
+    """Draft-model backend on the native exact local-linear kernel (``pgw_fast.local_linear_into``).
+
+    The pack's int8 weights (no float copy: 1 byte per weight resident) with the target ring's activation
+    quantizer and an exact integer product, the columns of every product spread over the native pool's
+    cores. A draft only proposes (the masked target decides every token), so the int8 activation
+    quantization is fine; what matters is that the draft's cost and its outputs do not depend on anything
+    but its inputs: the kernel runs over public sizes only and its sums are exact, so the drafts are the
+    same bits for any thread count (tested) and the work per step depends only on the rows fed.
+
+    Args:
+        pack: The draft model's pack.
+        ring: Ring whose quantizer and output bound are used (the target's ring is fine).
+        threads: 0 (default) = the native pool for products of at least ``pool_min_macs``; 1 = one core.
+    """
+
+    def __init__(self, pack: object, ring: RingParams, *, threads: int = 0, pool_min_macs: int = 1 << 16):
+        if not self.available():
+            raise ConfigError("NativeInt8DraftBackend needs pgw_fast with local_linear_into")
+        if ring.a > 15 or ring.k % 8 or not 8 <= ring.k <= 56:
+            raise ConfigError(f"NativeInt8DraftBackend needs A <= 15 and a byte-sized K, not {ring.name}")
+        self.pack = pack
+        self.ring = ring
+        self.device = torch.device("cpu")
+        self.stats = BackendStats()
+        self.threads = int(threads)
+
+        def conv(lw: Any, dev: torch.device) -> Any:
+            n, m = int(lw.w8.shape[1]), int(lw.w8.shape[0])
+            th = self.threads if (self.threads != 0 or n * m >= pool_min_macs) else 1
+            return _native_int8_linear(lw.w8, lw.scale, lw.bias, ring, th), n
+
+        self._weights = _WeightCache(pack, self.device, conv)
+
+    @staticmethod
+    def available() -> bool:
+        return native_available("local_linear_into")
+
+    def preload(self) -> None:
+        self._weights.preload()
+
+    def forward(self, call: LinearCall) -> torch.Tensor:
+        fn, n = self._weights.get(call.id)
+        x = call.x
+        if x.ndim != 2 or x.shape[1] != n:
+            raise ShapeError(f"{call.id}: x must be (T, {n}), got {tuple(x.shape)}")
+        y = fn(x)
+        self.stats.add(calls=1, rows=int(x.shape[0]))
+        return y.to(x.device)
+
+    def forward_many(self, calls: Sequence[LinearCall]) -> list[torch.Tensor]:
+        """One product per linear for all sequences (weights read once per batch)."""
+        return _grouped_forward(self, calls)
+
+
+def native_int8_lm_head(weight: torch.Tensor, ring: RingParams, *,
+                        threads: int = 0) -> Callable[[torch.Tensor], torch.Tensor] | None:
+    """A draft model's output layer ``h -> h @ weight^T`` as a per-row int8 weight on the native
+    local-linear kernel (``None`` without it): 1 byte per weight instead of 4, all cores."""
+    if not NativeInt8DraftBackend.available() or ring.a > 15:
+        return None
+    w = weight.to(torch.float32)
+    sc = w.abs().amax(dim=1) / 127.0
+    sc = torch.where(sc == 0, torch.ones_like(sc), sc)
+    w8 = torch.clamp(torch.round(w / sc[:, None]), -127, 127).to(torch.int8)
+    fn = _native_int8_linear(w8, sc, None, ring, threads)
+    return lambda h: fn(h.reshape(-1, h.shape[-1])).reshape(*h.shape[:-1], -1)
+
+
 def int8_lm_head(weight: torch.Tensor) -> Callable[[torch.Tensor], torch.Tensor] | None:
     """A weight-only int8 ``h -> h @ weight^T`` for a draft model's output layer (``None`` if unavailable)."""
     w = weight.to(torch.float32)

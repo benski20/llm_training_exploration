@@ -57,7 +57,7 @@ from pgw.engine import (
     TokenEvent,
     TransformerModel,
 )
-from pgw.engine.backends import Int8DraftBackend, int8_lm_head
+from pgw.engine.backends import Int8DraftBackend, NativeInt8DraftBackend, int8_lm_head, native_int8_lm_head
 from pgw.gateway.config import GatewayModelConfig, GatewaySettings, network_path, origin_of
 from pgw.gateway.egress import EgressGuardTransport
 from pgw.gateway.masks import WindowedReservation
@@ -1021,6 +1021,12 @@ class ModelRuntime:
         if c.spec_rows is not None:
             spec = {"spec_rows": c.spec_rows, "spec_strict": c.spec_strict_passes,
                     "spec_mask_rows": c.spec_mask_rows, "spec_mask_credit": c.spec_mask_credit}
+            if c.spec_pipeline_steps is not None and self.draft_model is not None:
+                from pgw.engine.generate import PipelinedDrafter
+
+                spec["drafter"] = PipelinedDrafter(
+                    self.draft_model, post_steps=c.spec_pipeline_steps,
+                    target_vocab=getattr(self.model.arch, "vocab_size", None))
         self.generator = Generator(
             self.model, tokenizer, max_batch=c.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=c.spec_tokens, lookup=c.spec_lookup,
@@ -1048,7 +1054,24 @@ class ModelRuntime:
 
         kind = "float32"
         on_cpu = torch.device(dev).type == "cpu"
-        if on_cpu and Int8DraftBackend.available() and Int8DraftBackend.faster_than_float(dpack):
+        choice = self.config.draft_backend
+        if on_cpu and choice == "native_int8":
+            if not NativeInt8DraftBackend.available():
+                raise ConfigError(f"model {self.name!r}: draft_backend='native_int8' needs pgw_fast with "
+                                  "local_linear_into")
+            nbe = NativeInt8DraftBackend(dpack, self.ring)
+            nbe.preload()  # int8 weights resident (1 byte per weight), loaded once at start-up
+            draft = TransformerModel(dpack, nbe, device=dev)
+            draft.lm_head_fn = native_int8_lm_head(draft.lm_head, self.ring)
+            from pgw.engine.model import native_float_available
+
+            if native_float_available():  # the draft's float ops on the native path (cheaper per step)
+                draft.set_float_ops("native")
+            kind = "native int8"
+        elif on_cpu and choice == "float":
+            draft = TransformerModel(dpack, FloatBackend(dpack, self.ring, device=dev, batch_rows=True), device=dev)
+        elif on_cpu and (choice == "torch_int8" or (choice == "auto" and Int8DraftBackend.available()
+                                                    and Int8DraftBackend.faster_than_float(dpack))):
             draft = TransformerModel(dpack, Int8DraftBackend(dpack, self.ring), device=dev)
             draft.lm_head_fn = int8_lm_head(draft.lm_head)
             kind = "int8"

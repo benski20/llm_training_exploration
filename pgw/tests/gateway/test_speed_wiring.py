@@ -587,11 +587,66 @@ async def test_session_end_releases_deferred_checks(tiny_pack_dir: Path, tmp_pat
     assert rt.backend.pending_checks == 0
 
 
+@pytest.mark.parametrize("pipeline", [None, 0, 1])
+async def test_cpu_only_gateway_strict_speculation_native(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                          make_store: Any, keys: ApiKeyStore, key: str,
+                                                          pipeline: int | None) -> None:
+    """The CPU-only, weight-light configuration (every linear remote, native float ops) with padded strict
+    speculation, a native int8 draft and optionally the pipelined drafter: the same bits as the same gateway
+    without speculation; the provider sees R rows per decode pass and the same pass count."""
+    from pgw.engine.backends import NativeInt8DraftBackend
+    from pgw.engine.generate import PipelinedDrafter
+    from pgw.engine.model import native_float_available
+
+    if not (native_float_available() and NativeInt8DraftBackend.available()):
+        pytest.skip("pgw_fast without the native float path or local_linear_into")
+    base_kw: dict[str, Any] = {"local_linears": "off", "float_ops": "native"}
+    svc0 = InProcessService(gw_pack)
+    ref, _, _ = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="ref"), svc0.transport, keys, key,
+                              base_kw)
+    kw: dict[str, Any] = {**base_kw, "draft_pack_path": str(tiny_pack_dir), "draft_backend": "native_int8",
+                          "spec_rows": 4, "spec_strict_passes": True, "spec_mask_rows": 4, "spec_mask_credit": 16}
+    if pipeline is not None:
+        kw["spec_pipeline_steps"] = pipeline
+    svc = InProcessService(gw_pack)
+    out, _status, rt = await _masked(tiny_pack_dir, tmp_path, make_store(400, name="spec"), svc.transport, keys,
+                                     key, kw)
+    assert out["message"] == ref["message"] and out["logprobs"] == ref["logprobs"]
+    passes0 = [int(x.shape[0]) for lid, x in svc0.received if lid == "0.qkv"]
+    passes = [int(x.shape[0]) for lid, x in svc.received if lid == "0.qkv"]
+    assert passes == [4 if rows == 1 else rows for rows in passes0]
+    assert isinstance(rt.draft_model.backend, NativeInt8DraftBackend)
+    assert isinstance(rt.generator._drafter, PipelinedDrafter) == (pipeline is not None)
+    assert rt.generator.spec_stats["spec_accepted"] > 0  # the tiny model drafts for itself
+
+
 # ---- configuration -----------------------------------------------------------------------------------------
 def _cfg(**kw: Any) -> GatewayModelConfig:
     base: dict[str, Any] = {"name": "m", "pack_path": Path("/nonexistent/pack"), "fingerprint": "ab" * 32,
                             "service_url": "https://compute.example.net:8443"}
     return GatewayModelConfig(**{**base, **kw})
+
+
+@pytest.mark.parametrize(("kw", "match"), [
+    ({"spec_pipeline_steps": 0}, "spec_pipeline_steps needs spec_rows"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_pipeline_steps": 0},
+     "spec_pipeline_steps needs spec_rows"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "draft_pack_path": "/x", "spec_pipeline_steps": 3},
+     "at most spec_rows - 1"),
+    ({"draft_backend": "fast"}, "draft_backend"),
+])
+def test_cpu_gateway_spec_validation(kw: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        _cfg(**kw)
+
+
+def test_cpu_only_strict_speculation_config_is_accepted() -> None:
+    """Every linear remote + native float ops + padded strict speculation with a CPU draft: valid (the GPU
+    refusal is about a GPU target's float kernels; ``float_ops = native`` runs only on a CPU model)."""
+    c = _cfg(local_linears="off", float_ops="native", device="cpu", draft_pack_path="/x",
+             draft_backend="native_int8", spec_rows=4, spec_strict_passes=True, spec_mask_rows=4,
+             spec_mask_credit=160, spec_pipeline_steps=0)
+    assert c.speculates and c.spec_pipeline_steps == 0
 
 
 def test_phase_a_settings_are_no_longer_pending() -> None:
