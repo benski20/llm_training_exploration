@@ -104,6 +104,8 @@ _NON_FIELD_ENV = {
     "PGW_SERVICE_MASKGEN_CONCURRENCY",  # env override read by pgw.service.handler (maskgen slots per device)
     "PGW_SERVICE_MASKGEN_FUSED",  # env switch read by pgw.service.maskgen_gpu (fused CUDA maskgen path)
     "PGW_SERVICE_MASKGEN_YIELD_MS",  # env knob read by pgw.service.maskgen_gpu (decode yield between blocks)
+    "PGW_HEMASK_HINT_PREFETCH",  # env switch read by pgw.hemask.devmm (double-buffered hint stream)
+    "PGW_HEMASK_GPU_HINT_STALE_S",  # env knob read by pgw.hemask.devmm (hint cache keeps hints in use)
 }
 
 
