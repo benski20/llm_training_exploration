@@ -1,0 +1,19 @@
+#cloud-config
+# Rendered by deploy/customer-cloud/aws (templatefile). No secrets here: the enrollment code and the courier token
+# are read from SSM SecureString parameters by the bootstrap script.
+package_update: false
+write_files:
+  - path: /etc/pgw/deploy.env
+    permissions: "0640"
+    owner: root:root
+    content: |
+%{ for k, v in env ~}
+      ${k}=${v}
+%{ endfor ~}
+  - path: /usr/local/sbin/pgw-bootstrap.sh
+    permissions: "0750"
+    owner: root:root
+    encoding: b64
+    content: ${base64encode(script)}
+runcmd:
+  - [/usr/local/sbin/pgw-bootstrap.sh]

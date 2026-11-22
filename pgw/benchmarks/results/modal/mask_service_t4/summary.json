@@ -1,0 +1,26 @@
+{
+ "what": "benchmarks/mask_service_bench.py on a Modal T4 (deploy/modal/gpu_bench.py, target t4_c4), 2026-11-22; synthetic layers of the public shapes, K32A12C27, cuda_int8 + Triton GPU PRNG; slots/s extrapolated to the full model by layer count",
+ "startup_check": "every run: all linears of the timed layers, 4 sampled W r rows each + full u W, ring and p31 formats, bit-identical to the CPU reference (gpu_prng=True)",
+ "gpu": "Tesla T4, 15360 MiB",
+ "run1_f64_vecmat": {
+  "note": "Freivalds precomputation u W8 in float64 on the GPU (before this change)",
+  "full_model_slots_per_s_1024_slot_segment": {
+   "qwen2.5-7b (2 layers)": {"ring_gen": 98.6, "ring_store": 106.3, "p31_gen": 92.5, "p31_store": 108.9},
+   "qwen2.5-32b (1 layer)": {"ring_gen": 23.6, "ring_store": 29.6, "p31_gen": 24.5, "p31_store": 27.0},
+   "qwen2.5-72b (1 layer)": {"ring_gen": 12.6, "ring_store": 13.8, "p31_gen": 12.1, "p31_store": 12.8}
+  },
+  "stage_seconds_per_layer_72b": {"gemm": 0.22, "check": 0.76}
+ },
+ "run2_kernel_vecmat": {
+  "note": "u W8 on the factory's int8 digit-plane kernel (ring_vecmat method 'kernel', CUDA default)",
+  "full_model_slots_per_s_1024_slot_segment": {
+   "qwen2.5-7b (2 layers)": {"ring_gen": 219.5, "ring_store": 163.7, "p31_gen": 174.2, "p31_store": 174.2},
+   "qwen2.5-32b (1 layer)": {"ring_gen": 61.9, "ring_store": 58.2, "p31_gen": 57.5, "p31_store": 54.9},
+   "qwen2.5-72b (1 layer)": {"ring_gen": 39.7, "ring_store": 40.4, "p31_gen": 29.4, "p31_store": 30.5}
+  },
+  "full_model_slots_per_s_4096_slot_segment_gen_only": {"qwen2.5-72b": {"ring": 47.2, "p31": 49.8}},
+  "stage_seconds_per_layer_72b_1024_slots": {"gemm": 0.22, "check": 0.05},
+  "gpu_tests": "tests/factory/test_kernels.py + tests/factory/test_mask_service.py on the T4: 83 passed"
+ },
+ "cost_usd_both_runs": "about 0.15 (T4 + 4 CPU, ~4 + ~4 min of container time, image builds)"
+}

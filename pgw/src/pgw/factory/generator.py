@@ -386,6 +386,9 @@ class MaskGenerator:
         self._dev_prng_lock = threading.Lock()
         self.last_stats = GenerationStats(backend=self.backend, device=str(self.device))
         self._lock = threading.Lock()  # one segment at a time per generator
+        #: After every segment, zero the device memory the caching allocator holds but no tensor uses
+        #: (:func:`pgw.factory.mask_service.scrub_device_memory`; set by the GPU mask service, off by default).
+        self.scrub_device = False
         log.info(
             "mask generator for %s (%s) ring %s on %s/%s, %d linears%s, %.2f MB/slot",
             getattr(pack, "name", "?"), short_fingerprint(self.fingerprint), self.ring.name, self.device,
@@ -908,6 +911,11 @@ class MaskGenerator:
                 except Exception as exc:  # pragma: no cover - best effort
                     log.error("aborting partial segment failed: %r", exc)
                 raise
+            finally:
+                if self.scrub_device:
+                    from pgw.factory.mask_service import scrub_device_memory
+
+                    scrub_device_memory(self.device)
             stats = self.last_stats
             stats.seconds = time.perf_counter() - t0
             stats.write_seconds = write_time[0]

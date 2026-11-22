@@ -88,6 +88,10 @@ def build_generators(settings: FactorySettings, packs: list[Any], throttle: Thro
             if g.key in gens:
                 raise ConfigError(f"duplicate pack/ring {pack.name}/{ring}")
             gens[g.key] = g
+    if settings.mask_service:  # bit-exact start-up check on the device; refuses to start on a mismatch
+        from pgw.factory.mask_service import prepare_mask_service
+
+        prepare_mask_service(settings, gens)
     return gens
 
 

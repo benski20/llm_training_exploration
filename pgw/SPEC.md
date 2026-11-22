@@ -352,6 +352,8 @@ CUDA factory) must reproduce them. The segment seed comes from `os.urandom(32)` 
 per slot, about 550k slots/h). Weight streaming covers models larger than device memory (70B on T4:
 0.047 s per slot at batch ≥1024). `FactoryScheduler` keeps every `(fingerprint, ring)` between
 `low_water_slots` and `target_slots`. Output goes to a local store or to exported files (partner).
+On CUDA the Freivalds precomputation `u·W8 mod 2^K` uses the same exact int8 digit-plane kernel as `W8·r`
+(on `W8^T`), not float64 GEMMs.
 
 ### 7.5 Single use (normative)
 - The store keeps `state.sqlite` (WAL) with, per segment, `next_slot` and `status`, plus a global
@@ -518,6 +520,36 @@ v2 reply    {"v":2,"type":"maskgen_result","id":str,"vs":[int]?,
   - v1: 7 B up and 5 B down, 12.77 MB in total.
   - v2 (53/35): 6.625 B up and 4.375 B down, 11.59 MB in total (−9.2%).
 
+### 7.10 GPU mask service (customer-cloud standard deployment for 32B+; opt-in `mask_service`)
+`pgw factory mask-service` (`PGW_FACTORY_MASK_SERVICE=true`; module `pgw.factory.mask_service`) is the plain
+factory of 7.4 run on a GPU **in the customer's own cloud account**, from the customer's own copy of the public
+pack: it computes `W8·r mod 2^K` and the check vectors itself (ring or `p31`, 5.1), with no hint, no ciphertexts and
+no provider involvement. Derivation (7.3), segment format (7.2) and delivery are unchanged. In addition:
+- **Start-up check (refuses to start).** Before the first segment, a throw-away segment with a fresh random seed and
+  `chunk_slots + 3` slots (a full production chunk and a partial one) is generated on the production device and
+  backend. For sampled linears (first and last layer plus evenly spaced ones; `mask_service_check_linears`, 0 = all)
+  the sampled rows of `W8·r` (first, last, both sides of the chunk boundary, random) and the full `u·W8` are compared
+  **bit for bit** with an independent CPU reference: `r` and `u` from the Python/OpenSSL expander, products with
+  exact numpy integer arithmetic (mod 2^64, or exact int64 then mod p for `p31`). Any difference raises
+  `IntegrityError` and no segment is produced. Every production chunk then passes the per-chunk output self-check
+  (7.4; required, `self_check_rows != 0`).
+- **Secrets stay in the process and device.** Seeds come from `os.urandom` per segment; `r`, digit planes, int32
+  products and the device copy of `W8·r` are zeroed after use (existing generator behaviour), and after every
+  segment and after the start-up check the GPU memory the caching allocator holds but no tensor uses is overwritten
+  with zeros and released (`scrub_device_memory`; best effort for fragmented caches).
+- **Refused configurations:** encrypted generation (`he_service_url`), `self_check_rows = 0`, a CPU device unless
+  `mask_service_allow_cpu`, and export without `partner_signing_key_file`, `destination_store_id` or the recipient key.
+- **Delivery.** Same host: `output = store` into the gateway's store. Another VM: `output = export` (7.7: HPKE-sealed
+  to the gateway store's recipient key, Ed25519-signed, bound to the destination store id) and a courier
+  (`pgw.factory.courier`): `pgw factory outbox-serve` lists, serves and (after import) deletes signed outbox files
+  over HTTPS with a bearer token; `pgw maskstore pull --from URL` downloads segment + signature, imports them with
+  the unchanged `import_segment` checks, deletes the local copy and then the remote one (a `mask_reuse` refusal is
+  retired too), and stops pulling while the store holds `--max-available-slots`. Confidentiality and integrity do not
+  depend on the channel; the token only stops other hosts from listing or deleting files.
+- **Why privacy holds.** The provider never receives `r`, seeds or `u`; `W8` is the provider's public model already
+  (pinned by the enrolled fingerprint). The mask service VM has no route to the provider. Deployment:
+  `deploy/customer-cloud` (13).
+
 ## 8. Model pack
 
 ### 8.1 Layout
@@ -674,7 +706,7 @@ inventory, integrity and noise status.
 
 ## 12. CLI and configuration
 `pgw version | doctor [--role] [--pack] [--ring] [--maskstore --key-file] [--service-url ...] [--strict] [--json] |
-inspect PACK | pack SRC OUT | factory generate|run|status|benchmark | maskstore init|status|import|gc|rotate-key |
+inspect PACK | pack SRC OUT | factory generate|run|mask-service|outbox-serve|status|benchmark | maskstore init|status|import|pull|gc|rotate-key |
 maskstore recipient-key create|show | maskstore partner-key create|show | service serve |
 service token create|hash | gateway serve | gateway keys create|list|revoke | bench ring|factory|service |
 config show ROLE | config render TEMPLATE OUT`. `python -m pgw.cli` is equivalent to `pgw`.
@@ -690,7 +722,9 @@ center (container or VM; Docker image `pgw-gateway`). The service runs in our cl
 over the internet or a dedicated link. Masks come from the customer's own GPU factory or a partner
 (7.7). Expect RTT of 10–30 ms, which gives 1.3–4 s per token for 8B at 128 rounds unless sessions are batched.
 
-**B. Gateway in the customer's cloud account.** We ship Helm charts (Terraform modules planned, not in v0.1), and the customer deploys
+**B. Gateway in the customer's cloud account (standard).** We ship Helm charts and a Terraform module
+(`deploy/customer-cloud/aws`: a CPU-only gateway VM, plus for 32B+ a GPU mask service VM, 7.10; premises run only a
+thin client), and the customer deploys
 it into their VPC in the same region as our service, over PrivateLink or PSC (RTT about 1 ms, so the
 round-trip floor is about 0.13 s per token for 8B). The mask store uses an encrypted volume with
 `kms` key provider and the customer's KMS key. A customer-account GPU instance can run the factory.

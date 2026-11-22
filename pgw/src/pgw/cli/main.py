@@ -7,7 +7,7 @@
     pgw pack SRC OUT                      HF checkpoint -> int8 model pack
     pgw inspect PACK                      manifest summary, rings, mask bytes per slot
     pgw factory generate|run|status|benchmark      (pgw.factory.cli)
-    pgw maskstore init|status|import|gc|rotate-key
+    pgw maskstore init|status|import|pull|gc|rotate-key
     pgw service serve | service token create|hash | service enroll create|list|revoke
     pgw gateway enroll CODE --config-dir DIR   (pgw.gateway.cli)
     pgw gateway serve | gateway keys create|list|revoke  (pgw.gateway.cli)
@@ -302,6 +302,47 @@ def maskstore_import(root: Path | None, key_file: Path | None, keep_source: bool
     if failed:
         click.echo(f"error: {len(failed)} of {len(results)} file(s) failed to import", err=True)
         sys.exit(EXIT_ERROR)
+
+
+@maskstore.command("pull")
+@_root_opt
+@_key_opt
+@click.option("--from", "from_url", required=True, help="Mask service outbox URL, e.g. https://10.0.2.15:8470")
+@click.option("--token-file", type=click.Path(path_type=Path, exists=True, dir_okay=False), required=True)
+@click.option("--ca-file", type=click.Path(path_type=Path, exists=True, dir_okay=False), default=None,
+              help="CA of the outbox server's TLS certificate")
+@click.option("--inbox", type=click.Path(path_type=Path), required=True, help="Private download directory")
+@click.option("--max-available-slots", type=int, default=None,
+              help="Do not pull while the store holds this many available slots for the model and ring")
+@click.option("--loop", "interval_s", type=float, default=None, help="Repeat every N seconds (default: once)")
+@handle_errors
+def maskstore_pull(root: Path | None, key_file: Path | None, from_url: str, token_file: Path, ca_file: Path | None,
+                   inbox: Path, max_available_slots: int | None, interval_s: float | None) -> None:
+    """Pull signed, HPKE-sealed segments from a GPU mask service in the same VPC and import them.
+
+    Each segment is verified and imported exactly like 'pgw maskstore import' (trusted partner key, destination
+    store id, every chunk's AEAD), then deleted locally and on the mask service."""
+    import time
+
+    from pgw.factory.courier import pull_once
+
+    while True:
+        try:
+            results = pull_once(from_url, token_file, inbox, ca_file=ca_file,
+                                max_available_slots=max_available_slots,
+                                store_overrides=_store_overrides(root, key_file))
+        except Exception as exc:
+            if interval_s is None:
+                raise
+            click.echo(f"pull failed: {exc!r}", err=True)
+            results = []
+        if results or interval_s is None:
+            echo_json(results)
+        if interval_s is None:
+            if any(not r.get("ok") for r in results):
+                sys.exit(EXIT_ERROR)
+            return
+        time.sleep(interval_s)
 
 
 @maskstore.command("gc")

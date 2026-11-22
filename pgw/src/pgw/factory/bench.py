@@ -75,6 +75,9 @@ MODEL_PRESETS: dict[str, ModelShape] = {
     "qwen2.5-0.5b": ModelShape("qwen2.5-0.5b", 896, 4864, 14, 2, 64, 24),
     "qwen2.5-1.5b": ModelShape("qwen2.5-1.5b", 1536, 8960, 12, 2, 128, 28),
     "qwen2.5-7b": ModelShape("qwen2.5-7b", 3584, 18944, 28, 4, 128, 28),
+    "qwen2.5-14b": ModelShape("qwen2.5-14b", 5120, 13824, 40, 8, 128, 48),
+    "qwen2.5-32b": ModelShape("qwen2.5-32b", 5120, 27648, 40, 8, 128, 64),
+    "qwen2.5-72b": ModelShape("qwen2.5-72b", 8192, 29568, 64, 8, 128, 80),
     "llama3-8b": ModelShape("llama3-8b", 4096, 14336, 32, 8, 128, 32),
     "llama3-70b": ModelShape("llama3-70b", 8192, 28672, 64, 8, 128, 80),
 }

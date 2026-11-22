@@ -59,6 +59,48 @@ Provider side of the scaling plan (targets 3-4); what the provider computes and 
   --rows 1,2 --iters 400 --json /tmp/provider_scale.json"` (4 x H100, about $16/h plus CPU; ~10-15 min, ~$3-4).
   A 1-GPU subset (`--target h100_c16 --tp 1`) is ~$1. Reports per preset, TP and rows: kernel / graph / persistent
   service time per trip, the GEMV device floor and the overhead above it (target <= 15-25 us; gather <= 5 us).
+## Update 2026-11-22: standard deployment in the customer's cloud account; GPU mask service (opt-in)
+
+Decision: the standard deployment runs, in the **customer's own cloud account in the provider's region**, a CPU-only
+gateway VM and, for 32B+, a small GPU "mask service" VM that computes the masks `W8 r` itself from the public
+weights (no HE, no hint). Up to 14B the CPU-only encrypted factory stays the default. Premises run only a thin client.
+
+- **`pgw factory mask-service`** (`PGW_FACTORY_MASK_SERVICE`, default off; SPEC 7.10; `pgw.factory.mask_service`):
+  the existing plain factory (cuda_int8, GPU ChaCha20, per-chunk self-check) plus a **start-up check** (a throw-away
+  segment on the production device and chunk size; sampled `W8 r` rows and the full `u W8` of sampled linears
+  compared bit for bit with an independent CPU reference; any difference refuses start-up), **device scrubbing**
+  after every segment, and refusals (encrypted generation, no self-check, CPU without `mask_service_allow_cpu`,
+  unsigned or unbound export). Delivery: the gateway's store on the same host, or the partner export channel (HPKE +
+  Ed25519 + destination store) over a small courier, `pgw factory outbox-serve` / `pgw maskstore pull` (unchanged
+  import checks; delete local then remote; back-pressure).
+- **Freivalds precomputation on the int8 kernel on CUDA** (`ring_vecmat(method="kernel")`, the CUDA default): `u W8`
+  through the same digit-plane GEMM as `W8 r` instead of float64 GEMMs (1/32-1/64 rate on T4/L4/A10G). Same bits
+  (tests; the start-up check compared `u W8` on the T4); the factory's per-segment check stage at 72B fell from
+  0.76 to 0.05 s per layer (ring).
+- **Exactness evidence**: CPU tests (rings K32/K40/K48, p31, device-PRNG emulation, corrupted `W r` / `u W` refused,
+  buffers wiped, same-host store and export -> pull -> import -> reserve exact); on a Modal **T4** every start-up
+  check passed (all linears of the timed layers, ring and p31, `gpu_prng=True`), and the CUDA kernel/mask service
+  tests passed (83). Spend about $0.15.
+- **Rates** (full model, extrapolated from synthetic layers, 1024-slot segments into an encrypted store; T4): 7B
+  164-174, **32B 55-58, 72B 30-40 slots/s** (72B 47-50 with 4096-slot segments, generation only; before the vecmat
+  change 32B 27-30, 72B 13-14). Estimated L4/A10G (1.5-1.9x T4 int8): 32B 85-110, 72B 60-90 slots/s vs decode
+  demand 33-40 and with-prompts ~90 (scaling plan section 6). This box (4 shared vCPUs, load average ~40) as the CPU
+  fallback, Qwen2.5-0.5B pack, cpu_int8, p31: 12-29 slots/s (34 slots per CPU-second); start-up check 200-245 s here
+  (one 259-slot throw-away segment over all 96 linears at this box's rate).
+- **`deploy/customer-cloud`**: Terraform module for AWS (region/zone, VPC or existing subnet, PrivateLink endpoint to
+  the provider, gateway and GPU instance types, model sizing presets, mask supply `cpu_encrypted` / `separate_vm` /
+  `same_host`, enrollment code as a sensitive variable in an SSM SecureString read once), security groups (client
+  API TLS 8443 from given CIDRs only; gateway -> provider endpoint; gateway -> mask service 8470; no SSH; IMDSv2;
+  encrypted volumes; separate counter volume), first-boot scripts (enroll, build the public pack, exchange only
+  public keys and certificates via SSM, start containers), sizing and cost table (7B ~$0.85/h CPU-only; 32B ~$2.95/h
+  with an L4; 72B ~$5.10/h), "Onboarding in about an hour", GPU-quota and region notes, teardown. `terraform fmt` and
+  `validate` pass (Terraform 1.9.8, aws 6.73); `tests/deploy/test_customer_cloud_template.py` checks the contract
+  statically. Not applied to any cloud account.
+- **Privacy**: unchanged guarantees, now with everything secret in customer-controlled VMs: the provider never gets
+  `r`, seeds or `u`; the weights the mask service uses are the provider's public model already; the mask service has
+  no route to the provider.
+- Not done: the gateway's in-memory mask ring is not fed by the mask service directly (segments go through the
+  encrypted store, whose volume bandwidth binds at 72B); no real GPU instance (L4/A10G) measured; no cloud apply.
 
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
