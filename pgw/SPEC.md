@@ -549,6 +549,16 @@ sends the service anything it does not already see (`docs/operations/install-on-
   the pass count equals the generated length, so neither row counts nor pass counts depend on the text
   (closes the speculation leak of 3.4). The reservation is `prompt + max_tokens + (max_tokens-1)(spec_rows-1)`.
   Requests of one API key and OpenAI `user` run as one conversation (each after the previous one's dummy passes).
+- `spec_mask_rows` C (+ optional `spec_mask_credit` B; needs `spec_rows` + `spec_strict_passes`; L3,
+  `research/plans/speculation-no-compromise.md`): filler rows and dummy passes are padding rows (ChaCha20 ring
+  elements read like a mask's `r`, no mask taken, Freivalds-checked against the item's vectors like real rows) and
+  every decode pass, dummy passes included, charges the public schedule `prompt + j + min(B, floor((C-1) j))`
+  (j = pass index): the reservation is extended only on that schedule (`WindowedReservation(public=True).charge_to`;
+  no on-demand extension, no early part retirement) and drafts use at most the charged credit. Padded and dummy calls
+  take a fixed-structure backend path (one prepare over all R rows, one Freivalds pass over all R rows, real and
+  padding finishes together R rows; needs the native trip kernels), and every padded call is one wire item whatever
+  mask extents its real rows span, so item sizes, mask demand and the gateway's work per call do not depend on the
+  drafts. Masks per token: about `1 + B/L` (or C without a cap) instead of R.
 - `float_threads`: decode float ops on that many torch threads, enabled only after a bit-identity self-check.
 - Ending or aborting a session waits for and drops its deferred checks (`release_session_checks`) before
   the reservation is burned; a deferred-check failure is an integrity failure (9.5) and the session and its

@@ -354,6 +354,20 @@ def e2e_min_masks(spec_rows: int, prompt_tokens: int = 64, max_tokens: int = 32,
     return per_chat * int(chats)
 
 
+def spec_mask_options(value: str) -> dict[str, Any]:
+    """``launch.py --spec-mask C[/B]`` (deploy time, ``PGW_MODAL_SPEC_MASK``): padded strict speculation with a
+    public mask charge of C slots per decode pass, the draft credit capped at B (L3,
+    ``research/plans/speculation-no-compromise.md``). ``""``: masked filler rows (``spec_rows`` slots per pass)."""
+    v = (value or "").strip()
+    if not v:
+        return {}
+    c, _, b = v.partition("/")
+    out: dict[str, Any] = {"spec_mask_rows": float(c)}
+    if b.strip():
+        out["spec_mask_credit"] = int(b)
+    return out
+
+
 def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: str | None = None) -> dict[str, Any]:
     """Strict-speculation presets for the wizard's ``models.json`` (``launch.py --spec-rows``; ``{}`` when off).
 
@@ -371,6 +385,7 @@ def spec_options(spec_rows: int, draft_pack: str | None = None, draft_device: st
     if not 2 <= r <= 8:
         raise ValueError("spec_rows must be 0 (off) or in [2, 8]")
     out: dict[str, Any] = {"spec_rows": r, "spec_strict_passes": True, "spec_lookup": SPEC_LOOKUP}
+    out.update(spec_mask_options(os.environ.get("PGW_MODAL_SPEC_MASK", "")))
     if draft_pack:
         out["draft_pack_path"] = str(draft_pack)
         if draft_device:

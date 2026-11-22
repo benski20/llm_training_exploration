@@ -15,6 +15,29 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: strict speculation at a public mask charge (L3, off by default)
+
+`spec_mask_rows` C (+ `spec_mask_credit` B), research and numbers in
+[research/plans/speculation-no-compromise.md](research/plans/speculation-no-compromise.md): strict speculation's
+filler rows and dummy passes are padding rows (no mask) and every decode pass charges the public schedule
+`prompt + j + min(B, floor((C-1) j))`, so masks per generated token drop from R to about C (or 1 + B/L) while the
+provider's view (rows, items, pass count, mask demand, per-call gateway work) stays independent of the drafts.
+Exact: bit-identical to the plaintext reference in the new tests (greedy, seeded sampling, penalties, stop strings,
+R 2/4, C 2/R, fractional C, credit caps, mask extents ending mid-pass).
+
+- Four distinguishers of the existing padding-row code were found and closed before enabling it: item splits at
+  mask-extent boundaries (now one item per padded call, and real rows kept within one extent), unverified dummy
+  items (an active provider could learn which passes were dummies; now Freivalds-checked), a gateway turnaround
+  that depended on the real/padding split (measured 466 / 529 / 654 us per call for dummy / real / mixed at R = 4;
+  now one fixed-structure path, within noise), and window extension, ahead reservation and part retirement driven by
+  mask use (`WindowedReservation(public=True)`: extensions only by `charge_to` on the schedule).
+- Simulated on the Kaggle run 28 exact answers (`benchmarks/spec_charge_sim.py`): 1.5B target with the 0.5B draft at
+  R = 4, C = 4, B = 160 keeps today's 2.84 tokens per pass at 2.50 masks per token instead of 3.96; the 0.5B with
+  prompt lookup at C = 1.5 keeps its 1.08 tokens per pass at 1.48 instead of 3.96. Not measured on a GPU or Modal
+  (commands in the plan, section 7; Modal: `launch.py --spec-mask C[/B]`).
+- Pre-existing strict-mode timing residuals are documented, not fixed (attention cost grows with context during the
+  answer and is flat during the dummy passes; the drafter's catch-up step).
+
 ## Update 2026-11-20: chat-speed phase A wired into the gateway
 
 The phase-A packages now run on the gateway's production path (all per-model settings, off by default;

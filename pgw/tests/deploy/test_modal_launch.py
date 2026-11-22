@@ -607,3 +607,14 @@ def test_container_reimport_keeps_deploy_choices(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setenv(var, val)
     prov2, cust2 = _load("provider"), _load("customer")
     assert prov2.MODEL_NAME == "qwen2.5-0.5b-instruct" and cust2.DRAFT is False and cust2.CUSTOMER_GPU is None
+
+
+def test_spec_mask_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_SPEC_MASK", raising=False)
+    assert launch.parse_args([]).spec_mask == ""
+    assert launch.parse_args(["--spec-rows", "4", "--spec-mask", "4/160"]).spec_mask == "4/160"
+    assert launch.parse_args(["--spec-rows", "2", "--spec-mask", "1.5"]).spec_mask == "1.5"
+    for bad in (["--spec-mask", "2"], ["--spec-rows", "4", "--spec-mask", "5"],
+                ["--spec-rows", "4", "--spec-mask", "x"], ["--spec-rows", "4", "--spec-mask", "0.5"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args(bad)

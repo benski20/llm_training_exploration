@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from pgw.core import native
 from pgw.core.errors import ConfigError, ShapeError
 from pgw.core.types import LinearId, LinearKind, ModelArch
-from pgw.engine.backends import LinearBackend, LinearCall
+from pgw.engine.backends import DUMMY, PAD_ROWS, LinearBackend, LinearCall
 from pgw.engine.kv_cache import ContextOverflowError, KVCache
 from pgw.engine.lm_head import compact_head, lm_head_logits, native_lm_head
 from pgw.engine.pack import linear_split_sizes
@@ -55,6 +55,20 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+def _meta_pad(c: LinearCall) -> int | None:
+    """Padding rows a call carries on the wire (``meta[PAD_ROWS]``), or None for an unpadded call."""
+    meta = c.meta
+    if not meta or PAD_ROWS not in meta:
+        return None
+    v = meta[PAD_ROWS]
+    return v if isinstance(v, int) else 0
+
+
+def _wire_rows(c: LinearCall) -> int:
+    """Rows a call puts on the wire: its own rows plus its padding rows (a public count)."""
+    return int(c.x.shape[0]) + (_meta_pad(c) or 0)
+
 
 _T = TypeVar("_T")
 
@@ -89,6 +103,14 @@ class SequenceInput:
             ``(T, hidden)`` for the new positions, before the final norm) are kept for a drafter;
             ``-1`` is the embedding output. Empty (default): nothing is kept.
         hidden: Filled by the forward pass when ``capture_hidden`` is set: ``{layer: tensor}``.
+        pad_rows: Speculation padding (L3, ``research/plans/speculation-no-compromise.md``): the last
+            ``pad_rows`` new positions are padding. Their rows go to the provider as uniform random ring
+            elements that take no mask (``backends.PAD_ROWS``; all rows: a mask-free dummy call), their
+            linear outputs are zeros and their logits are meaningless. Rows before them are exact.
+            Linears the backend computes locally see every row (the same work whatever ``pad_rows``).
+        fixed_item: Each remote linear of this sequence goes to the provider as one wire item of all its
+            rows, whatever mask extents its real rows span (a padded call merges its chunks), so the
+            item sizes never reveal how many masks the session used. Implied by ``pad_rows > 0``.
     """
 
     input_ids: torch.Tensor | Sequence[int]
@@ -99,6 +121,8 @@ class SequenceInput:
     serial_tail: int = 0
     capture_hidden: Sequence[int] = ()
     hidden: dict[int, torch.Tensor] | None = None
+    pad_rows: int = 0
+    fixed_item: bool = False
 
 
 def _sdpa_gqa_supported() -> bool:
@@ -718,6 +742,13 @@ class TransformerModel:
         )
 
     @property
+    def supports_pad_rows(self) -> bool:
+        """Speculation padding rows (``SequenceInput.pad_rows`` / ``fixed_item``) are available: the
+        standard layer and head (a :class:`Schedule` or :class:`HeadMode` hook has its own call layout)."""
+        return (self.schedule is None and self.head_mode is None
+                and bool(getattr(self.backend, "supports_fixed_pad", True)))
+
+    @property
     def lm_head(self) -> torch.Tensor:
         """The LM head ``(vocab, hidden)``.
 
@@ -951,8 +982,11 @@ class TransformerModel:
         if capture:
             self._capture(capture, st, -1)
         sched = self.schedule
+        pads = self._pad_plan(seqs, ids)
         for layer in range(self.num_layers):
-            if sched is None:
+            if pads is not None:
+                yield from self._padded(self._layer_standard(layer, st), pads)
+            elif sched is None:
                 yield from self._layer_standard(layer, st)
             else:
                 yield from sched.layer(self, layer, st)
@@ -965,6 +999,63 @@ class TransformerModel:
         if self.head_mode is None:
             return self._logits(seqs, st.hs)
         return (yield from self.head_mode.steps(self, seqs, st.hs))
+
+    def _pad_plan(self, seqs: Sequence[SequenceInput], ids: Sequence[torch.Tensor]) -> list[tuple[int, bool]] | None:
+        """``[(pad rows, fixed item)]`` per sequence, or None when no sequence pads or asks for a fixed item."""
+        plan: list[tuple[int, bool]] = []
+        for s, t in zip(seqs, ids, strict=True):
+            p = int(getattr(s, "pad_rows", 0) or 0)
+            if p < 0 or p > t.numel():
+                raise ShapeError(f"pad_rows must be in [0, {t.numel()}], got {p}")
+            plan.append((p, bool(p) or bool(getattr(s, "fixed_item", False))))
+        if not any(f for _, f in plan):
+            return None
+        if not self.supports_pad_rows:
+            raise ConfigError("padding rows need the standard layer and head (no schedule or head-mode hook)")
+        return plan
+
+    def _padded(self, inner: PyGenerator[list[LinearCall], list[torch.Tensor], None],
+                pads: Sequence[tuple[int, bool]]) -> PyGenerator[list[LinearCall], list[torch.Tensor], None]:
+        """Run a layer's calls with speculation padding (``SequenceInput.pad_rows`` / ``fixed_item``).
+
+        A remote call of a sequence with ``p`` padding rows out of ``T`` sends its ``T - p`` real rows plus
+        ``meta[PAD_ROWS] = p`` (``p = T``: a ``DUMMY`` call of all its rows); its result gets ``p`` zero rows
+        back, so the layer sees ``T`` rows. A local linear (computed on the gateway) gets every row unchanged,
+        so its work does not depend on ``p``. The layer's calls hold one call per sequence, in order.
+        """
+        is_local = getattr(self.backend, "local_linear", None)
+        rows_ok = getattr(self.backend, "local_rows_ok", None)
+        value: list[torch.Tensor] | None = None
+        while True:
+            try:
+                calls = next(inner) if value is None else inner.send(value)
+            except StopIteration:
+                return
+            if len(calls) != len(pads):  # pragma: no cover - the standard layer yields one call per sequence
+                raise ShapeError(f"padded layer step has {len(calls)} calls for {len(pads)} sequences")
+            local = bool(calls) and callable(is_local) and is_local(calls[0].id) and (
+                rows_ok is None or rows_ok(sum(int(c.x.shape[0]) for c in calls)))
+            if local:
+                value = yield calls
+                continue
+            sent: list[LinearCall] = []
+            for c, (p, fixed) in zip(calls, pads, strict=True):
+                t = int(c.x.shape[0])
+                if not fixed:
+                    sent.append(c)
+                elif p >= t:
+                    sent.append(LinearCall(c.id, c.x, c.session, {DUMMY: True}))
+                else:
+                    sent.append(LinearCall(c.id, c.x[: t - p], c.session, {PAD_ROWS: p}))
+            got = yield sent
+            value = []
+            for y, c, (p, fixed) in zip(got, calls, pads, strict=True):
+                t = int(c.x.shape[0])
+                if fixed and 0 < p < t:
+                    y = torch.cat([y, y.new_zeros((p, int(y.shape[1])))], dim=0)
+                elif fixed and p >= t and int(y.shape[0]) != t:  # pragma: no cover - backends return T rows
+                    y = y.new_zeros((t, int(y.shape[1])))
+                value.append(y)
 
     @staticmethod
     def _capture(capture: dict[int, tuple[frozenset[int], dict[int, torch.Tensor]]], st: PassState,
@@ -1256,20 +1347,33 @@ class TransformerModel:
     def _split_blocks(calls: Sequence[LinearCall], blocks: int) -> tuple[list[list[LinearCall]], list[list[int]]]:
         """Calls of 2+ rows split in ``blocks`` row ranges (``n*j//blocks``; 2 blocks: ``n//2``, as the
         halves always were); 1-row calls wholly in block 0. Returns the non-empty blocks and, per block,
-        the position in ``calls`` of each of its items."""
+        the position in ``calls`` of each of its items.
+
+        A padded call (``meta[PAD_ROWS]``) is split by its wire rows (real + padding, a public count): each
+        block gets the real rows and the padding rows of its range, so the blocks' item sizes do not depend
+        on how many of the rows are real."""
         parts: list[list[LinearCall]] = [[] for _ in range(blocks)]
         where: list[list[int]] = [[] for _ in range(blocks)]
         for i, c in enumerate(calls):
-            n = int(c.x.shape[0])
+            real = int(c.x.shape[0])
+            pad = _meta_pad(c)
+            n = real + (pad or 0)
             if n < 2:
                 parts[0].append(c)
                 where[0].append(i)
                 continue
             for j in range(blocks):
                 a, b = n * j // blocks, n * (j + 1) // blocks
-                if b > a:
+                if b <= a:
+                    continue
+                if pad is None:
                     parts[j].append(LinearCall(c.id, c.x[a:b], c.session, c.meta))
-                    where[j].append(i)
+                else:
+                    ra, rb = min(a, real), min(b, real)
+                    meta = dict(c.meta)
+                    meta[PAD_ROWS] = (b - a) - (rb - ra)
+                    parts[j].append(LinearCall(c.id, c.x[ra:rb], c.session, meta))
+                where[j].append(i)
         keep = [j for j in range(blocks) if parts[j]]
         return [parts[j] for j in keep], [where[j] for j in keep]
 
@@ -1316,7 +1420,7 @@ class TransformerModel:
                 return True, out
             # Calls of 2+ rows are split in blocks; 1-row calls (decode next to prefills) go wholly
             # into the first block. Pipelined only when the split rows are many enough to pay.
-            if big and sum(n for n in (int(c.x.shape[0]) for c in out) if n >= 2) >= big:
+            if big and sum(n for n in (_wire_rows(c) for c in out) if n >= 2) >= big:
                 return False, ("split", out)
             return False, prepare(out)
 

@@ -198,3 +198,22 @@ def test_customer_memory_matches_boot() -> None:
     assert m is not None
     assert (int(m.group(1)), m.group(2), int(m.group(3))) == (
         boot.CUSTOMER_MEMORY_MIB["large"], boot.MODEL_NAME, boot.CUSTOMER_MEMORY_MIB["default"])
+
+
+def test_spec_mask_preset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``launch.py --spec-mask C/B`` (PGW_MODAL_SPEC_MASK): padded strict speculation presets that the wizard's
+    preset check and GatewayModelConfig accept; unset = masked filler rows (no new keys)."""
+    from pgw.gateway.config import GatewayModelConfig, GatewaySettings
+
+    boot = _boot()
+    monkeypatch.delenv("PGW_MODAL_SPEC_MASK", raising=False)
+    assert "spec_mask_rows" not in boot.spec_options(4)
+    assert boot.spec_mask_options("") == {}
+    assert boot.spec_mask_options("1.5") == {"spec_mask_rows": 1.5}
+    monkeypatch.setenv("PGW_MODAL_SPEC_MASK", "4/160")
+    opts = boot.spec_options(4)
+    assert opts["spec_mask_rows"] == 4.0 and opts["spec_mask_credit"] == 160
+    GatewaySettings(setup_model_options=opts)  # the wizard's preset check accepts them
+    cfg = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
+                             service_url="https://compute.example.net:8443", **opts)
+    assert cfg.spec_mask_rows == 4.0 and cfg.spec_mask_credit == 160

@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import secrets
 import threading
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -549,6 +551,22 @@ class Generator:
             passes ``conversation=`` (the gateway must, before strict mode is enabled there).
         spec_nonstrict_for_tests: Allow ``spec_rows`` without ``spec_strict`` (tests and benchmarks only;
             never for served traffic).
+        spec_mask_rows: Padded strict speculation with a public mask charge (L3,
+            ``research/plans/speculation-no-compromise.md``; ``None``, the default: filler rows are masked rows,
+            ``spec_rows`` masks per pass). Needs ``spec_rows`` and a model with padding rows
+            (``supports_pad_rows``). Filler rows and dummy passes are padding (uniform random ring elements,
+            no mask); every decode pass, dummy passes included, *charges* ``spec_mask_rows`` (C, a number in
+            ``[1, spec_rows]``, fractions allowed, e.g. 1.25) mask slots: before decode pass ``j`` the session
+            holds at least ``prompt + floor(C * j)`` slots (``charge_to``, a window extension on a public
+            schedule) and the real rows (pending token plus drafts) never use more than that, so drafts spend
+            the credit of earlier passes that used fewer rows. What the store hands out, when, and what is
+            burned at the end depend only on the prompt length, the pass count (= the generated length, public
+            in strict mode) and C; the reservation is ``prompt + floor(C * (max_tokens - 1))``. C = 1 leaves no
+            room for drafts.
+        spec_mask_credit: With ``spec_mask_rows``: cap the draft credit charged in total at this many slots
+            (B): the target becomes ``prompt + j + min(B, floor((C - 1) * j))``. A high C with a cap front-loads
+            the draft budget into the first passes (where the answer is; the dummy passes come last and need
+            none), so a long answer costs about ``1 + B / L`` masks per token. ``None``: no cap.
         drafter: Custom :class:`Drafter` for fixed-row speculation (default: :class:`BuiltinDrafter` over
             ``draft`` and ``lookup``).
         prefill_lane: Run prompt prefills in a lane of their own, concurrently with the decode steps of
@@ -593,6 +611,8 @@ class Generator:
         spec_rows: int | None = None,
         spec_strict: bool = False,
         spec_nonstrict_for_tests: bool = False,
+        spec_mask_rows: float | None = None,
+        spec_mask_credit: int | None = None,
         drafter: Drafter | None = None,
         prefill_lane: bool = False,
         prefill_lane_min_tokens: int = 16,
@@ -670,7 +690,18 @@ class Generator:
         self.spec_strict = False
         self._drafter: Drafter | None = None
         #: Filler rows are padding (random payload, no masks): the model passes ``pad_rows`` to its backend.
+        #: Only with ``spec_mask_rows`` (the public per-pass mask charge); never inferred from the model alone.
         self._pad_ok = False
+        self.spec_mask_rows: Fraction | None = None
+        self.spec_mask_credit: int | None = None
+        if spec_mask_rows is not None and spec_rows is None:
+            raise ConfigError("spec_mask_rows needs spec_rows")
+        if spec_mask_credit is not None:
+            if spec_mask_rows is None:
+                raise ConfigError("spec_mask_credit needs spec_mask_rows")
+            if int(spec_mask_credit) < 0:
+                raise ConfigError("spec_mask_credit must be >= 0")
+            self.spec_mask_credit = int(spec_mask_credit)
         if spec_rows is not None:
             if not 2 <= int(spec_rows) <= 8:
                 raise ConfigError("spec_rows must be in [2, 8]")
@@ -691,9 +722,16 @@ class Generator:
             self.spec_tokens = self.spec_rows - 1
             self.spec_min_tokens = self.spec_tokens
             self.draft_confidence = 0.0
-            self._pad_ok = bool(getattr(model, "supports_pad_rows", False)) and "pad_rows" in getattr(
-                SequenceInput, "__dataclass_fields__", {})
-            self.spec_stats.update({"dummy_passes": 0.0, "fill_rows": 0.0, "pad_rows": 0.0})
+            if spec_mask_rows is not None:
+                charge = Fraction(str(spec_mask_rows)).limit_denominator(64)
+                if not 1 <= charge <= self.spec_rows:
+                    raise ConfigError("spec_mask_rows must be in [1, spec_rows]")
+                if not (bool(getattr(model, "supports_pad_rows", False)) and "pad_rows" in getattr(
+                        SequenceInput, "__dataclass_fields__", {})):
+                    raise ConfigError("spec_mask_rows needs a model with padding rows (no schedule or head hook)")
+                self._pad_ok = True
+                self.spec_mask_rows = charge
+            self.spec_stats.update({"dummy_passes": 0.0, "fill_rows": 0.0, "pad_rows": 0.0, "charged_rows": 0.0})
         tv_fill = self._target_vocab if self._target_vocab is not None else getattr(model, "vocab_size", None)
         self._fill_vocab = int(tv_fill) if tv_fill is not None else 1
         #: Serializes the draft model between the decode loop and draft prefills in worker threads (the
@@ -756,7 +794,7 @@ class Generator:
             if session is None and self.session_factory is not None:
                 session = self.session_factory(need)
                 own = session is not None
-            if fixed is not None and not self._pad_ok and session is not None:
+            if fixed is not None and session is not None:
                 self._check_fixed_reservation(session, need)
             stop_ids = set(params.stop_token_ids)
             if not params.ignore_eos:
@@ -784,15 +822,39 @@ class Generator:
 
     def mask_rows_needed(self, prompt_tokens: int, max_tokens: int) -> int:
         """Mask rows a request's reservation must hold: ``prompt + max_tokens`` (as without speculation:
-        speculation only uses spare rows), or, with ``spec_rows`` on a model without padding rows (filler
-        rows are masked rows), ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)``: every pass
-        after the prefill then takes ``spec_rows`` rows (strict-mode dummy passes too)."""
+        speculation only uses spare rows), or, with ``spec_rows`` and masked filler rows,
+        ``prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1)``: every pass after the prefill then takes
+        ``spec_rows`` rows (strict-mode dummy passes too); with ``spec_mask_rows`` = C (padding rows),
+        ``prompt + C * (max_tokens - 1)``: every decode pass charges C (:meth:`charge_target`)."""
         base = int(prompt_tokens) + int(max_tokens)
-        if self.spec_rows is None or self._pad_ok:
+        if self.spec_rows is None:
             return base
         ctx = int(self.model.arch.max_position_embeddings)
         passes = max(0, min(int(max_tokens), ctx - int(prompt_tokens)) - 1)  # decode (and dummy) passes
+        if self.spec_mask_rows is not None:
+            return self.charge_target(prompt_tokens, passes)
         return base + passes * (self.spec_rows - 1)
+
+    def charge_target(self, prompt_tokens: int, decode_passes: int) -> int:
+        """``spec_mask_rows`` mode: mask slots a session holds before its decode pass ``j = decode_passes``:
+        ``prompt + j + min(B, floor((C - 1) * j))`` (no cap: ``prompt + floor(C * j)``), a function of public
+        quantities only (prompt length, pass index, C, B)."""
+        assert self.spec_mask_rows is not None
+        j = int(decode_passes)
+        extra = math.floor((self.spec_mask_rows - 1) * j)  # exact (a fraction)
+        if self.spec_mask_credit is not None:
+            extra = min(extra, self.spec_mask_credit)
+        return int(prompt_tokens) + j + extra
+
+    def _charge(self, st: _SeqState) -> None:
+        """Public mask schedule: before decode pass ``j`` (dummy passes too) the session holds
+        :meth:`charge_target` slots. ``charge_to`` (a growing reservation) extends by windows on this schedule
+        only, never on demand; a fixed reservation already holds everything (no call)."""
+        target = self.charge_target(len(st.prompt), st.passes)
+        fn = getattr(st.session, "charge_to", None)
+        if callable(fn):
+            fn(target)
+        self.spec_stats["charged_rows"] = float(target - len(st.prompt))
 
     @staticmethod
     def _check_fixed_reservation(session: object, need: int) -> None:
@@ -1238,6 +1300,8 @@ class Generator:
             if not st.passes:  # prefill pass: the prompt rows only (a public length)
                 st.rows = len(st.pending)
                 continue
+            if self._pad_ok:
+                self._charge(st)
             if st.dummy:
                 st.pending = [self._filler()]
             st.rows = rows
@@ -1273,7 +1337,7 @@ class Generator:
             prop = prop[:cut]
             if st.dummy:
                 n_real = 0
-            elif self._pad_ok:  # drafts take masks, padding does not: only spare rows, never past the budget
+            elif self._pad_ok:  # drafts take masks, padding does not: only charged credit, never past the budget
                 n_real = min(len(prop), self._spare_rows(st))
             else:  # every row is a masked row anyway (reserved up front)
                 n_real = len(prop)
@@ -1283,31 +1347,57 @@ class Generator:
                 st.pad = len(st.fill) + (1 if st.dummy else 0)
 
     def _spare_rows(self, st: _SeqState) -> int:
-        """Pad-capable models: drafts this pass may use (mask rows not needed to finish without drafts,
-        already held by the reservation; positions inside the token budget and the context)."""
+        """``spec_mask_rows`` mode: drafts this pass may use. The pass's charge target minus the mask rows the
+        sequence used so far (prompt and earlier real rows), minus the pending token's row (credit from earlier
+        passes that used fewer than C rows); positions inside the token budget and the context. The schedule
+        guarantees the pending token a row on every pass (C >= 1 per pass), so no rows are kept back for
+        finishing. The session's held rows bound it too (a safety net; never binding with ``charge_to``)."""
         left = st.params.max_tokens - len(st.generated)
-        cap = min(left - 1, st.limit - st.cache.length - len(st.pending))
-        remaining = getattr(st.session, "remaining", None)
-        if callable(remaining):
+        cap = min(left - 1, st.limit - st.cache.length - len(st.pending),
+                  self.charge_target(len(st.prompt), st.passes) - st.masks - len(st.pending))
+        lid = self._masked_linear() or _FIRST_LINEAR
+        reserved = getattr(st.session, "reserved_rows", None)
+        if callable(reserved):
             try:
-                rows = int(remaining(_FIRST_LINEAR))
-                reserved = getattr(st.session, "reserved_rows", None)
-                held = int(reserved(_FIRST_LINEAR)) if callable(reserved) else rows
+                cap = min(cap, int(reserved(lid)) - len(st.pending))
             except Exception:
                 return 0
-            cap = min(cap, rows - (len(st.pending) + left - 1), held - len(st.pending))
+        # keep the pass's real rows inside one mask extent: one take and one set of check vectors per call,
+        # so the backend's work does not reveal where the used masks cross a segment or window boundary
+        until = getattr(st.session, "rows_until_boundary", None)
+        if callable(until):
+            try:
+                left_in_extent = int(until(lid))
+            except Exception:
+                return 0
+            if left_in_extent > 0:
+                cap = min(cap, left_in_extent - len(st.pending))
         return max(0, cap)
+
+    def _masked_linear(self) -> Any:
+        """The first linear whose rows are taken from the reservation (not computed on the gateway)."""
+        lid = getattr(self, "_masked_lid", None)
+        if lid is None:
+            lids = getattr(self.model, "_lids", None)
+            if not lids:
+                return None
+            is_local = getattr(getattr(self.model, "backend", None), "local_linear", None)
+            lid = next((x for x in lids[0] if not (callable(is_local) and is_local(x))), lids[0][0])
+            self._masked_lid = lid
+        return lid
 
     def _input_fixed(self, st: _SeqState) -> SequenceInput:
         if not st.passes or st.rows <= 1:  # prefill pass, or a 1-row step
+            if self._pad_ok and st.passes:  # a decode pass: the same backend path real or dummy
+                return SequenceInput(st.pending, st.cache, st.session, pad_rows=st.pad, fixed_item=True)
             if st.pad:
-                return SequenceInput(st.pending, st.cache, st.session, pad_rows=st.pad)  # type: ignore[call-arg]
+                return SequenceInput(st.pending, st.cache, st.session, pad_rows=st.pad)
             return SequenceInput(st.pending, st.cache, st.session)
         ids = st.pending + st.drafts + st.fill
         n = len(ids)
-        if self._pad_ok:
-            return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1,  # type: ignore[call-arg]
-                                 pad_rows=st.pad)
+        if self._pad_ok:  # one wire item per linear, however many of the rows are real
+            return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1,
+                                 pad_rows=st.pad, fixed_item=True)
         return SequenceInput(ids, st.cache, st.session, last_logits=n, serial_tail=n - 1)
 
     def _dummy_samples(self, st: _SeqState, logits: Any, start: int, rows: int) -> None:

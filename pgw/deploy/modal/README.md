@@ -379,10 +379,15 @@ R = 4 is the default choice: R = 5 gains about 5% at 17 ms, loses at 2 ms and ta
   encrypted factory supplied about 2 slots/s for the 0.5B, which suggests about 1 slot/s for the 1.5B. At R = 4
   that is about 0.25 generated tokens per second of supply. So **the mask supply, not the round trips, limits a
   sustained chat**: one 128-token answer with a 50-token prompt reserves 559 slots, about 10 minutes of supply.
-  The scripted `--e2e` waits for both chats' slots before chatting (`pgw_modal_boot.e2e_min_masks`). Filler rows
-  without masks (padding) would cut this to about R / (tokens per pass) slots per token. They are not used:
-  with the encrypted factory on the provider, the slots taken would then reveal how many passes the answer
-  took.
+  The scripted `--e2e` waits for both chats' slots before chatting (`pgw_modal_boot.e2e_min_masks`).
+* `--spec-mask C[/B]` (deploy time, `PGW_MODAL_SPEC_MASK`; off by default; L3,
+  `research/plans/speculation-no-compromise.md`): filler rows and dummy passes become padding rows (no mask,
+  Freivalds-checked like real rows) and every decode pass charges a public `C` slots, the draft credit capped at
+  `B`: the store is asked for `prompt + j + min(B, floor((C - 1) j))` slots by pass j, whatever the text, so the
+  factory's requests still reveal nothing. Simulated on the run 28 answers: 1.5B with the draft at `--spec-rows 4
+  --spec-mask 4/160` keeps 2.84 tokens per pass at 2.5 slots per token instead of 3.96 (1.6x the chat per slot of
+  supply); the 0.5B with lookup at `--spec-mask 1.5` keeps its 1.08 tokens per pass at 1.5 slots per token. Not
+  measured on Modal yet.
 * The dummy passes run after the answer has streamed: one full pass (drafter included) for every token the
   drafts saved, i.e. about two thirds of the answer's tokens at R = 4. The next request of the same
   conversation (API key) waits for them: about 110 s after a 128-token answer of the 1.5B at 17 ms per trip

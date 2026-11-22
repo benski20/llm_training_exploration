@@ -140,7 +140,10 @@ def test_padding_across_an_extent_boundary(qwen_pack: InMemoryPack, path: str) -
     x = _x(3, n, 5)
     y = be.forward(LinearCall(QKV, x, res, {PAD_ROWS: 4}))
     assert torch.equal(y, PlainBackend(qwen_pack, DEFAULT_RING).forward(LinearCall(QKV, x)))
-    assert [x.shape[0] for _, x in client.received[-2:]] == [2, 1 + 4]  # padding joins the last chunk's item
+    # L3: one item of real + padding rows; where the real rows cross the extent (it depends on how many masks
+    # the session used, which with padding depends on the drafts) is not visible on the wire
+    assert [x.shape[0] for _, x in client.received[-1:]] == [3 + 4]
+    assert res.boundaries_seen[-2:] == [2, 1]  # the masks still came from both extents
     assert res.remaining(QKV) == 10 - 3
 
 
@@ -162,7 +165,8 @@ def test_wrong_result_on_a_padding_row_fails(qwen_pack: InMemoryPack, path: str)
     with pytest.raises(IntegrityError) as ei:
         be.forward(LinearCall(QKV, _x(2, n, 1), res, {PAD_ROWS: 3}))
         be.join_checks()
-    assert ei.value.details.get("padding") is True
+    # L3 fixed-structure path: one Freivalds pass over all rows; the error does not say which rows were padding
+    assert ei.value.details.get("linear") == QKV.key
     assert be.stats.integrity_failures == 1
 
 

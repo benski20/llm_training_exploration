@@ -41,7 +41,8 @@ log = logging.getLogger(__name__)
 SETUP_MODEL_OPTION_KEYS: frozenset[str] = frozenset({
     "lane", "lane_uds_dir", "lane_pool_wait_s", "local_linears", "local_linears_device", "local_rtt_ms",
     "local_max_rows", "float_threads",
-    "spec_rows", "spec_strict_passes", "spec_lookup", "spec_lookup_min_n", "spec_tokens", "inline_max_rows",
+    "spec_rows", "spec_strict_passes", "spec_mask_rows", "spec_mask_credit", "spec_lookup", "spec_lookup_min_n",
+    "spec_tokens", "inline_max_rows",
     "batch_lm_head", "engine_pingpong", "max_concurrent_sessions", "draft_pack_path", "draft_device",
 })
 #: Draft sources among the presets: a preset that enables one must also enable strict fixed-row speculation
@@ -267,6 +268,22 @@ class GatewayModelConfig(BaseModel):
         "reserves prompt + max_tokens + (max_tokens - 1) * (spec_rows - 1) mask slots. None (default) = today's "
         "variable-row speculation (1 + the drafts of that pass) when spec_lookup / draft_pack_path is set",
     )
+    spec_mask_rows: float | None = Field(
+        None, ge=1, le=8, description="Padded strict speculation with a public mask charge (L3; needs spec_rows and "
+        "spec_strict_passes): filler rows and dummy passes are padding rows (ChaCha20 ring elements like a mask's r, "
+        "no mask, Freivalds-checked like real rows; the gateway's work per call depends only on the row count) and "
+        "every decode pass, dummy passes included, charges C = this many mask slots (1 <= C <= spec_rows, "
+        "fractions allowed, e.g. 1.25); drafts spend the credit earlier passes left. Masks per generated token: C "
+        "instead of spec_rows. The store is asked for slots on a public schedule only (prompt + floor(C x pass "
+        "index)), so mask demand reveals nothing about the drafts; a request reserves prompt + floor(C x "
+        "(max_tokens - 1)) slots. None (default) = masked filler rows (spec_rows masks per pass)",
+    )
+    spec_mask_credit: int | None = Field(
+        None, ge=0, le=1 << 20, description="With spec_mask_rows: cap of the draft credit charged per request (B "
+        "slots): the schedule becomes prompt + j + min(B, floor((C - 1) x j)), so a high C front-loads the draft "
+        "budget into the answer's passes and a long answer costs about 1 + B / L masks per token. Public, like C. "
+        "None (default) = no cap",
+    )
     spec_strict_passes: bool = Field(
         False, description="Strict-pass speculation (needs spec_rows): after the answer, dummy passes on random "
         "data run the real code path until the provider has seen as many passes as tokens generated, so the pass "
@@ -348,6 +365,13 @@ class GatewayModelConfig(BaseModel):
                                  "(spec_lookup or draft_pack_path)")
             if self.spec_tokens == 0:
                 raise ValueError(f"model {self.name!r}: spec_rows needs spec_tokens > 0 (0 disables speculation)")
+        if self.spec_mask_rows is not None:
+            if self.spec_rows is None:
+                raise ValueError(f"model {self.name!r}: spec_mask_rows needs spec_rows and spec_strict_passes")
+            if self.spec_mask_rows > self.spec_rows:
+                raise ValueError(f"model {self.name!r}: spec_mask_rows must be at most spec_rows")
+        if self.spec_mask_credit is not None and self.spec_mask_rows is None:
+            raise ValueError(f"model {self.name!r}: spec_mask_credit needs spec_mask_rows")
         if self.speculates and self.device.split(":", 1)[0].strip().lower() != "cpu":
             # Verify passes are bit-identical to plain decoding only with the CPU float path: on a GPU the
             # float kernels' results depend on how many rows a pass carries (Kaggle T4, 2026-11-21: greedy

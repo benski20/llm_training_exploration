@@ -58,9 +58,17 @@ class WindowedReservation:
         ahead: Reserve the next window in a background thread once fewer than ``window / 2`` reserved
             rows are left (at the start of a step), so a fail-fast extension (in-memory mask ring)
             rarely has to happen inside a batch step.
+        public: Public schedule (strict speculation with ``spec_mask_rows``, L3): the store is asked for
+            slots only by :meth:`charge_to`, whose targets depend on public quantities alone (prompt length,
+            pass index), never on how many rows were taken. :meth:`ensure` then never extends (a step that
+            would need more than the charged slots fails closed), the ahead reservation is started from
+            :meth:`charge_to` (charged minus reserved slots, public), and no part is retired before
+            :meth:`close` (when a part runs out depends on the drafts; closing it early frees store or ring
+            capacity at a data-dependent time).
     """
 
-    def __init__(self, first: Any, reserve: Reserve, *, cap: int, window: int, ahead: bool = False):
+    def __init__(self, first: Any, reserve: Reserve, *, cap: int, window: int, ahead: bool = False,
+                 public: bool = False):
         if window < 1:
             raise ValueError("window must be >= 1")
         self._parts: list[Any] = [first]
@@ -85,6 +93,9 @@ class WindowedReservation:
         self._pending = 0  #: slots being reserved ahead in the background
         self._ahead_thread: threading.Thread | None = None
         self.ahead_reservations = 0
+        self.public = bool(public)
+        #: Public mode: the highest charge target so far (slots the schedule entitles the session to).
+        self.charged = 0
 
     def __repr__(self) -> str:
         return f"WindowedReservation(parts={len(self._parts)}, slots={self.slots}, cap={self.cap})"
@@ -152,6 +163,14 @@ class WindowedReservation:
         with self._lock:
             if self._closed:
                 raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            if self.public:  # slots come from charge_to only (public schedule)
+                have = self._reserved_left(lid)
+                if have < rows:
+                    raise MaskExhaustedError(
+                        "session mask reservation exhausted (public schedule)",
+                        details={"linear": str(lid), "needed": rows, "remaining": have},
+                    )
+                return
             step_start = self._step_key is not None and self._k(lid) == self._step_key
             if step_start:
                 self._retire_locked()
@@ -183,6 +202,42 @@ class WindowedReservation:
             self._parts.append(part)
             self.extensions += 1
             log.debug("extended mask reservation by %d slots (%d parts)", n, len(self._parts))
+
+    def charge_to(self, target: int) -> None:
+        """Public schedule: make the session hold at least ``min(target, cap)`` slots in total.
+
+        Extends by whole windows (``max(window, missing)``, at most up to ``cap``), where ``missing`` is the
+        target minus the slots reserved so far: both are public, so when the store is asked and for how much
+        never depends on how many rows were taken. With ``ahead``, the next window is reserved in the
+        background once the reserved slots exceed the target by less than half a window (also public).
+
+        Raises:
+            MaskExhaustedError: the store has no slots left. MaskReuseError: the reservation is closed.
+        """
+        target = min(int(target), self.cap)
+        with self._lock:
+            if self._closed:
+                raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            self.charged = max(self.charged, target)
+            if self.slots >= target:
+                if self.ahead and self.slots - target < max(1, self.window // 2):
+                    self._start_ahead_locked()
+                return
+            pending = self._ahead_thread
+        if pending is not None:
+            pending.join()
+        with self._lock:
+            if self._closed:
+                raise MaskReuseError("mask reservation is closed; its unused rows were burned")
+            missing = target - self.slots
+            if missing <= 0:
+                return
+            room = self.cap - self.slots - self._pending
+            n = min(room, max(missing, self.window))
+            part = self._reserve(n)
+            self._parts.append(part)
+            self.extensions += 1
+            log.debug("charged mask reservation to %d slots (%d parts)", self.slots, len(self._parts))
 
     def _start_ahead_locked(self) -> None:
         room = self.cap - self.slots - self._pending

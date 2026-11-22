@@ -89,6 +89,7 @@ SEPARATE_USERS = os.environ.get("PGW_MODAL_COLOCATED_USERS", "1") != "0"
 #: the deploy shell's environment, so MODEL_NAME / PACK would fall back to the 0.5B there and DRAFT to False (the
 #: baked draft never used); the image's environment carries them instead (as RUNTIME_ENV in customer.py).
 RUNTIME_ENV = {"PGW_MODAL_MODEL": MODEL_NAME, "PGW_MODAL_DRAFT": "1" if DRAFT else "0",
+               "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", ""),
                "PGW_MODAL_COLOCATED_USERS": "1" if SEPARATE_USERS else "0"}
 SERVICE_PORT, GATEWAY_PORT = 8443, 8080
 #: Both parties' logs, written by the (root) parent process: 0700 root, files 0600.

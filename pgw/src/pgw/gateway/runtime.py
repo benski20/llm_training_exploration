@@ -952,7 +952,8 @@ class ModelRuntime:
         self.draft_model = self._load_draft()
         spec: dict[str, Any] = {}
         if c.spec_rows is not None:
-            spec = {"spec_rows": c.spec_rows, "spec_strict": c.spec_strict_passes}
+            spec = {"spec_rows": c.spec_rows, "spec_strict": c.spec_strict_passes,
+                    "spec_mask_rows": c.spec_mask_rows, "spec_mask_credit": c.spec_mask_credit}
         self.generator = Generator(
             self.model, tokenizer, max_batch=c.max_concurrent_sessions, batching=True,
             draft=self.draft_model, spec_tokens=c.spec_tokens, lookup=c.spec_lookup,
@@ -1279,7 +1280,10 @@ class ModelRuntime:
                 return reserve_ext(fp, ring, slots, session_id=rid)
             return store.reserve(fp, ring, slots, session_id=rid)
 
-        return WindowedReservation(res, extend, cap=cap, window=window, ahead=reserve_ext is not None), first
+        # spec_mask_rows (L3): the store is asked for slots on the public charge schedule only (charge_to)
+        public = self.config.spec_rows is not None and self.config.spec_mask_rows is not None
+        return WindowedReservation(res, extend, cap=cap, window=window, ahead=reserve_ext is not None,
+                                   public=public), first
 
     async def generate(self, prompt_ids: Sequence[int], params: SamplingParams) -> GenerationResult:
         """Admit, run and close (convenience)."""
@@ -1354,7 +1358,8 @@ class ModelRuntime:
             "sync_decode": bool(getattr(self.model, "sync_decode", False)),
             "pipeline_blocks": getattr(self.model, "pipeline_blocks", None),
             "float_threads": getattr(self.model, "float_threads", None),
-            "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes,
+            "spec_rows": c.spec_rows, "spec_strict_passes": c.spec_strict_passes, "spec_mask_rows": c.spec_mask_rows,
+            "spec_mask_credit": c.spec_mask_credit,
         }
         out["local_linears"]["kinds"] = list(out["local_linears"].get("kinds", ()))
         stats = getattr(self.client, "lane_stats", None)

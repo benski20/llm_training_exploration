@@ -527,6 +527,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="strict speculation with this many masked rows per decode pass (2-8; default 0 = off): "
                          "prompt lookup, plus the draft model with --spec-draft. Exact; the provider sees fixed rows "
                          "and the same pass count. Uses spec-rows mask slots per generated token")
+    ap.add_argument("--spec-mask", default=os.environ.get("PGW_MODAL_SPEC_MASK", ""),
+                    help="with --spec-rows: padded strict speculation with a public mask charge, 'C' or 'C/B' (deploy "
+                         "time; PGW_MODAL_SPEC_MASK): filler rows and dummy passes are padding (no masks) and every "
+                         "decode pass charges C mask slots (1 <= C <= spec-rows), the draft credit capped at B slots. "
+                         "Default '' = masked filler rows (spec-rows slots per token)")
     ap.add_argument("--spec-draft", action="store_true", default=os.environ.get("PGW_MODAL_DRAFT", "0") == "1",
                     help="bake the Qwen2.5-0.5B draft model into the customer image (deploy time; needs --spec-rows "
                          "and a --model larger than the 0.5B; PGW_MODAL_DRAFT=1). On a CPU customer it runs on the "
@@ -577,6 +582,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--spec-rows must be 0 (off) or in [2, 8]")
     if args.spec_draft and not args.spec_rows:
         ap.error("--spec-draft needs --spec-rows (the draft is only used by strict speculation)")
+    if args.spec_mask:
+        if not args.spec_rows:
+            ap.error("--spec-mask needs --spec-rows")
+        c_s, _, b_s = args.spec_mask.strip().partition("/")
+        try:  # the same parsing as pgw_modal_boot.spec_mask_options (in the container)
+            c_v, b_v = float(c_s), int(b_s) if b_s.strip() else 0
+        except ValueError:
+            ap.error("--spec-mask: use C or C/B, e.g. 4/160")
+        if not 1 <= c_v <= args.spec_rows or b_v < 0:
+            ap.error("--spec-mask: need 1 <= C <= --spec-rows and B >= 0")
     if args.spec_draft and args.model == DEFAULT_MODEL:
         # the target itself as its own draft: the gateway would compute the whole model in plaintext
         ap.error("--spec-draft drafts with the 0.5B itself: use a larger --model (the draft must be much cheaper "
@@ -588,7 +603,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     # the deploy-time choices also drive the cost estimate (customer memory) in this process
     for var, val in (("PGW_MODAL_MODEL", args.model if args.model != DEFAULT_MODEL else None),
-                     ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None)):
+                     ("PGW_MODAL_DRAFT", "1" if args.spec_draft else None),
+                     ("PGW_MODAL_SPEC_MASK", args.spec_mask.strip() or None)):
         if val:
             os.environ[var] = val
         else:
