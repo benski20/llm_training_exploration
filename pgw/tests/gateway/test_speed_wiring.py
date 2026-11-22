@@ -256,6 +256,32 @@ async def test_strict_speculation_with_local_linears_is_exact(tiny_pack_dir: Pat
         assert rt.generator.spec_stats["spec_accepted"] > 0 and rt.generator.spec_stats["dummy_passes"] > 0
 
 
+@pytest.mark.parametrize("local", [False, True])
+async def test_padded_strict_speculation_public_charge(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
+                                                       make_store: Any, keys: ApiKeyStore, key: str,
+                                                       reference: dict[str, Any], local: bool) -> None:
+    """L3 ``spec_mask_rows``: same bits as the reference, the provider sees the same items as with masked filler
+    rows (R rows per decode pass, the same pass count), and the store hands out the public charge, not R per pass."""
+    base_kw: dict[str, Any] = {"draft_pack_path": str(tiny_pack_dir), "spec_rows": 4, "spec_strict_passes": True}
+    if local:
+        base_kw["local_linears"] = "attention"
+    views, used = [], []
+    for extra in ({}, {"spec_mask_rows": 2, "spec_mask_credit": 3}):
+        svc = InProcessService(gw_pack)
+        store = make_store(400, name=f"m{len(views)}")
+        before = sum(i.slots_available for i in store.inventory(gw_pack.fingerprint, DEFAULT_RING))
+        out, status, rt = await _masked(tiny_pack_dir, tmp_path, store, svc.transport, keys, key, {**base_kw, **extra})
+        assert out["message"] == reference["message"] and out["logprobs"] == reference["logprobs"]
+        views.append([(lid, int(x.shape[0])) for lid, x in svc.received])
+        used.append(before - sum(i.slots_available for i in store.inventory(gw_pack.fingerprint, DEFAULT_RING)))
+        prompt = len(rt.encode_chat(CHAT["messages"]))
+    assert views[0] == views[1]
+    assert status["speed"]["spec_mask_rows"] == 2 and status["speed"]["spec_mask_credit"] == 3
+    assert rt.generator._pad_ok and rt.generator.spec_stats["dummy_passes"] > 0
+    assert used[0] == prompt + 8 + 7 * 3  # masked fillers: R per decode pass
+    assert used[1] <= used[0] and used[1] >= prompt + 7 + 3  # the charge (window-rounded), not R per pass
+
+
 async def test_strict_speculation_orders_a_conversation(tiny_pack_dir: Path, tmp_path: Path, gw_pack: Any,
                                                         make_store: Any, keys: ApiKeyStore, key: str) -> None:
     """Requests of one API key carry one conversation key; the engine gets it (dummy passes first)."""
@@ -585,6 +611,12 @@ def test_phase_a_settings_are_no_longer_pending() -> None:
     ({"spec_rows": 3, "spec_strict_passes": True}, "needs a draft source"),
     ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_tokens": 0}, "spec_tokens > 0"),
     ({"spec_rows": 9, "spec_strict_passes": True, "spec_lookup": 3}, "less than or equal to 8"),
+    ({"spec_mask_rows": 2}, "spec_mask_rows needs spec_rows"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 4}, "at most spec_rows"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_credit": 4}, "needs spec_mask_rows"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 0.5}, "greater than or equal"),
+    ({"spec_rows": 3, "spec_strict_passes": True, "spec_lookup": 3, "spec_mask_rows": 2, "freivalds_rate": 0.5},
+     "freivalds_rate = 1.0"),
     ({"lane": "tcp"}, "lane"),
     ({"lane": "auto", "mode": "plain", "service_url": None}, "lane needs masked mode"),
     ({"local_linears": "always"}, "local_linears"),

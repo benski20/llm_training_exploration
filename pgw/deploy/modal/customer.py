@@ -61,7 +61,9 @@ MEMORY_MIB = 16384 if DRAFT or MODEL != "qwen2.5-0.5b-instruct" else 8192
 #: Modal re-imports this file inside the container without the deploy shell's environment, so without these in
 #: the image's environment DRAFT would read False there and the draft would never be used.
 RUNTIME_ENV = {"PGW_MODAL_DRAFT": "1" if DRAFT else "0", "PGW_MODAL_CUSTOMER_GPU": CUSTOMER_GPU or "",
-               "PGW_MODAL_MODEL": MODEL}
+               "PGW_MODAL_MODEL": MODEL,
+               # launch.py --spec-mask (L3 padded strict speculation; read by pgw_modal_boot.spec_options)
+               "PGW_MODAL_SPEC_MASK": os.environ.get("PGW_MODAL_SPEC_MASK", "")}
 
 image = (
     modal.Image.debian_slim(python_version="3.13")

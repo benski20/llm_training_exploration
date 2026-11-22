@@ -222,3 +222,22 @@ def test_lane_tls_options_validate_against_the_gateway_config(tmp_path: Path) ->
 
     gs = GatewaySettings(egress_allowlist=boot.lane_egress("tls", 8444), models=[c], admin_token="x" * 32)
     assert ("https", "127.0.0.1", 8444) in gs.egress_origins()
+
+
+def test_spec_mask_preset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``launch.py --spec-mask C/B`` (PGW_MODAL_SPEC_MASK): padded strict speculation presets that the wizard's
+    preset check and GatewayModelConfig accept; unset = masked filler rows (no new keys)."""
+    from pgw.gateway.config import GatewayModelConfig, GatewaySettings
+
+    boot = _boot()
+    monkeypatch.delenv("PGW_MODAL_SPEC_MASK", raising=False)
+    assert "spec_mask_rows" not in boot.spec_options(4)
+    assert boot.spec_mask_options("") == {}
+    assert boot.spec_mask_options("1.5") == {"spec_mask_rows": 1.5}
+    monkeypatch.setenv("PGW_MODAL_SPEC_MASK", "4/160")
+    opts = boot.spec_options(4)
+    assert opts["spec_mask_rows"] == 4.0 and opts["spec_mask_credit"] == 160
+    GatewaySettings(setup_model_options=opts)  # the wizard's preset check accepts them
+    cfg = GatewayModelConfig(name="m", pack_path=tmp_path, fingerprint="ab" * 32,
+                             service_url="https://compute.example.net:8443", **opts)
+    assert cfg.spec_mask_rows == 4.0 and cfg.spec_mask_credit == 160

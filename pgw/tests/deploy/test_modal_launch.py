@@ -627,3 +627,14 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     assert log[-1][2][-2:] == ("auto", 0)
     p = launch.spawn_pair(FakeDict(), "colocated", 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
     assert log[-1][2] == (p.run_id, 600, False, "auto", 0)  # --lane stream: the call is unchanged
+
+
+def test_spec_mask_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGW_MODAL_SPEC_MASK", raising=False)
+    assert launch.parse_args([]).spec_mask == ""
+    assert launch.parse_args(["--spec-rows", "4", "--spec-mask", "4/160"]).spec_mask == "4/160"
+    assert launch.parse_args(["--spec-rows", "2", "--spec-mask", "1.5"]).spec_mask == "1.5"
+    for bad in (["--spec-mask", "2"], ["--spec-rows", "4", "--spec-mask", "5"],
+                ["--spec-rows", "4", "--spec-mask", "x"], ["--spec-rows", "4", "--spec-mask", "0.5"]):
+        with pytest.raises(SystemExit):
+            launch.parse_args(bad)

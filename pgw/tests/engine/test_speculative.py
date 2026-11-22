@@ -872,28 +872,30 @@ class _CountingSession:
 @pytest.mark.parametrize("strict", [False, True])
 def test_padding_rows_keep_r_rows_at_mask_exhaustion(qwen_pack: InMemoryPack, tiny_tokenizer: ChatTokenizer,
                                                      monkeypatch: pytest.MonkeyPatch, strict: bool) -> None:
-    """On a pad-capable model the reservation needs only prompt + max_tokens rows: drafts use spare rows,
-    the rest of the R rows are padding. When the spare rows run out every pass still has R rows (padding,
-    not fewer rows); dummy passes are all padding (mask-free)."""
+    """With ``spec_mask_rows`` = C on a pad-capable model the reservation needs prompt + C * (max_tokens - 1)
+    rows: drafts use the charged credit, the rest of the R rows are padding. Every pass has R rows whatever
+    the credit (padding, never fewer rows); dummy passes are all padding (mask-free)."""
     target = _plain(qwen_pack)
     params = SamplingParams(max_tokens=20, temperature=0.0, ignore_eos=True, logprobs=1)
     base = Generator(target, tiny_tokenizer).generate(PROMPT, params)
     model = _pad_capable(monkeypatch, target)
+    assert not Generator(model, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4, spec_strict=strict,
+                         spec_nonstrict_for_tests=True)._pad_ok  # padding only with an explicit mask charge
     gen = Generator(model, tiny_tokenizer, draft=_plain(qwen_pack), spec_rows=4, spec_strict=strict,
-                    spec_nonstrict_for_tests=True)
+                    spec_nonstrict_for_tests=True, spec_mask_rows=2)
     assert gen._pad_ok
     need = gen.mask_rows_needed(len(PROMPT), params.max_tokens)
-    assert need == len(PROMPT) + params.max_tokens
+    assert need == len(PROMPT) + 2 * (params.max_tokens - 1)
     sess = _CountingSession(need)
     out = gen.generate(PROMPT, params, session=sess)
     assert out.token_ids == base.token_ids and out.logprobs == base.logprobs
     assert model.seen[0] == (len(PROMPT), 0)
     assert all(rows == 4 for rows, _ in model.seen[1:])
     assert out.masks_consumed == need - sess.left
-    assert any(pad == 3 for _, pad in model.seen[1:])  # spare rows ran out: all-padding fill
+    assert all(pad >= 2 for _, pad in model.seen[1:])  # at most C = 2 real rows per pass here (no spare credit)
     if strict:
         assert len(model.seen) == params.max_tokens
-        assert any(pad == 4 for _, pad in model.seen)  # a dummy pass: mask-free
+        assert any(pad == 4 for _, pad in model.seen)  # a dummy pass (this mock backend takes no row for it)
 
 
 def test_fixed_rows_async_streams_identical(qwen_pack: InMemoryPack, other_draft_pack: InMemoryPack,
