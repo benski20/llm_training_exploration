@@ -15,6 +15,28 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: weight-free CPU gateway at 7B shapes (package W1, local only)
+
+Write-up: [research/plans/weight-free-cpu-gateway-7b.md](research/plans/weight-free-cpu-gateway-7b.md). Not reached:
+<= 8 ms of gateway CPU per 7B token. All four linears remote plus a masked head (113 trips per token), measured on
+the 4-vCPU dev box with a stub provider: about 2 ms of gateway time per layer (Python path), 57-65 ms per token
+extrapolated, 9.5 tokens/s at a 0.25 ms round trip; the native kernels alone are ~16 ms main core + ~7 ms helper core
+per token (66.6 MB of Freivalds vectors and 6.7 MB of r keystream per token dominate).
+
+- **Masked remote LM head (opt-in)**: `pgw.engine.masked_head` (`MaskedHeadPack`, `enable_masked_head`), linear
+  `"<L>.lm_head"` (new `LinearKind.LM_HEAD`, never in `LINEAR_ORDER`), int8 per-row head, domain-separated
+  fingerprint, every row range- and Freivalds-checked (synchronously: the last linear). New pinned reference
+  (int8 head); masked == plain bit for bit in `tests/engine/test_masked_head.py`. Library API only (service, factory
+  CLI and gateway runtime not wired).
+- AVX2 Freivalds output half (identical results): gate_up 140 -> 47 us, 7B head 668 -> 470 us per call.
+- `PGW_EMBED_COMPACT=1` (opt-in): bfloat16-exact embedding table kept in bfloat16 (2.18 -> 1.09 GB RAM at 7B).
+- Storage at 7B (K32): 0 linear weights, 1.09 GB embeddings, 6.17 MB of `W r` per token (185 MB/s at 30 tokens/s;
+  a 10 s RAM ring is 1.85 GB), ~38 GB of hints only with a gateway-side encrypted factory, KV 115 KB per token.
+- Next levers (not done): a native per-trip path, a one-vector Freivalds check over a prime field (66.6 -> 9.5 MB of
+  check vectors per token), r derived off the critical path, `W r` stored mod 2^29 (-9.4%).
+- Bench fix: zero synthetic weights made the width selection evaluate all 11 widths (prepare ~2x too slow in earlier
+  zero-weight benches); `--wnorm-frac 0.3` gives real norms.
+
 ## Update 2026-11-22: mask factory keeps up with back-to-back chats (package S5)
 
 The S4 demo ran out of masks after 130 s of back-to-back chats (HTTP 503 `mask_exhausted`): all-or-nothing yield

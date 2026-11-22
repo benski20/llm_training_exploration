@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from pgw.core import RING_K32_A8, RING_K40_A12, LinearKind, RingParams
+from pgw.core import LINEAR_ORDER, RING_K32_A8, RING_K40_A12, LinearKind, RingParams
 from pgw.core.errors import ConfigError, FingerprintMismatchError, RingOverflowError, ShapeError
 from pgw.modelpack import MANIFEST_FILE, PLAIN_FILE, Manifest, ModelPack
 from pgw.modelpack.st_io import read_safetensors_header
@@ -212,7 +212,7 @@ def test_iterators_and_layers(tiny_pack):
     layers = list(tiny_pack.iter_layers())
     assert [i for i, _ in layers] == [0, 1]
     l0 = layers[0][1]
-    assert set(l0) == set(LinearKind)
+    assert set(l0) == set(LINEAR_ORDER)  # the four per-layer kinds (LM_HEAD is never a layer linear)
     assert l0[LinearKind.GATE_UP].w8.shape == (256, 64)
     assert l0[LinearKind.DOWN].spec.in_features == 128
     assert [i for i, _ in tiny_pack.iter_layers(layers=[1])] == [1]

@@ -917,7 +917,32 @@ pub fn freivalds_output(y_hat: &[u8], u: Src<'_>, rhs: &[u64], c: usize, m: usiz
     }
 }
 
+/// [`fo_body`] compiled for AVX2 when the CPU has it (wrapping integer arithmetic: identical
+/// results on every ISA; the u32 dot products of K <= 32 become `vpmulld`/`vpaddd`).
 fn fo_run<W: Word, const NB: usize>(y_hat: &[u8], u: Src<'_>, rhs: &[u64], c: usize, m: usize, k: u32) -> (u8, usize) {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: the CPU supports AVX2 (checked above).
+        return unsafe { fo_body_avx2::<W, NB>(y_hat, u, rhs, c, m, k) };
+    }
+    fo_body::<W, NB>(y_hat, u, rhs, c, m, k)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn fo_body_avx2<W: Word, const NB: usize>(
+    y_hat: &[u8],
+    u: Src<'_>,
+    rhs: &[u64],
+    c: usize,
+    m: usize,
+    k: u32,
+) -> (u8, usize) {
+    fo_body::<W, NB>(y_hat, u, rhs, c, m, k)
+}
+
+#[inline(always)]
+fn fo_body<W: Word, const NB: usize>(y_hat: &[u8], u: Src<'_>, rhs: &[u64], c: usize, m: usize, k: u32) -> (u8, usize) {
     if c == 0 {
         return (STATUS_OK, 0);
     }

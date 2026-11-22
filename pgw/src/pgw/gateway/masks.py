@@ -133,9 +133,18 @@ class WindowedReservation:
     def _current(self, lid: LinearId | str) -> Any:
         return self._parts[self._current_index(lid)]
 
-    def _reserved_left(self, lid: LinearId | str) -> int:
+    def _reserved_left(self, lid: LinearId | str, limit: int | None = None) -> int:
+        """Rows of ``lid`` reserved and not yet taken; with ``limit``, the sum may stop early once it
+        reaches ``limit`` (a value ``>= limit`` then only says "at least ``limit``")."""
         i = self._current_index(lid)
-        return sum(int(p.remaining(lid)) for p in self._parts[i:])
+        if limit is None:
+            return sum(int(p.remaining(lid)) for p in self._parts[i:])
+        total = 0
+        for p in self._parts[i:]:
+            total += int(p.remaining(lid))
+            if total >= limit:
+                break
+        return total
 
     # ---- engine interface ----------------------------------------------------------------------
     def remaining(self, lid: LinearId | str) -> int:
@@ -174,7 +183,9 @@ class WindowedReservation:
             step_start = self._step_key is not None and self._k(lid) == self._step_key
             if step_start:
                 self._retire_locked()
-            have = self._reserved_left(lid)
+            # the decode hot path: both decisions below only need to know whether ``have`` reaches
+            # ``rows + max(1, window // 2)``, so the per-part sum stops there (same decisions)
+            have = self._reserved_left(lid, rows + max(1, self.window // 2))
             if have >= rows:
                 if step_start and self.ahead and have - rows < max(1, self.window // 2):
                     self._start_ahead_locked()
