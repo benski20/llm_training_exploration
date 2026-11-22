@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -113,6 +114,17 @@ class SequenceInput:
         fixed_item: Each remote linear of this sequence goes to the provider as one wire item of all its
             rows, whatever mask extents its real rows span (a padded call merges its chunks), so the
             item sizes never reveal how many masks the session used. Implied by ``pad_rows > 0``.
+        tree_parents: Tree attention (token-tree speculation, ``research/plans/tree-speculation.md``).
+            The cache positions from ``tree_base`` on, followed by this pass's new rows, are the nodes of a
+            token tree stored in node order; ``tree_parents[i]`` is node ``i``'s parent node (``< i``) or
+            ``-1`` (the node follows position ``tree_base - 1`` directly). Its length is
+            ``cache.length - tree_base + len(input_ids)``. Each new row is computed exactly as plain
+            one-row decoding of its root-to-node path would compute it (RoPE position ``tree_base + depth``,
+            attention over the prefix and its ancestors only); afterwards node ``i``'s keys and values are at
+            position ``tree_base + i`` (:meth:`KVCache.keep_path` moves an accepted path into place).
+            ``None`` (default): ordinary causal rows.
+        tree_base: First cache position of the tree (``-1``: the cache length, i.e. the tree is this
+            pass's new rows only).
     """
 
     input_ids: torch.Tensor | Sequence[int]
@@ -125,6 +137,55 @@ class SequenceInput:
     hidden: dict[int, torch.Tensor] | None = None
     pad_rows: int = 0
     fixed_item: bool = False
+    tree_parents: Sequence[int] | None = None
+    tree_base: int = -1
+
+
+@dataclass
+class _Tree:
+    """Tree attention plan of one sequence of a pass (see ``SequenceInput.tree_parents``).
+
+    ``chains``: ``(lo, hi, depth, ancestors)`` per run of new rows ``lo..hi-1`` where each row's parent is
+    the row before it; ``ancestors`` are the tree nodes (region indices) on the path above row ``lo``.
+    Everything here is a function of the parent array (a public topology in strict mode), never of tokens.
+    """
+
+    base: int
+    n_old: int
+    depths: list[int]
+    chains: list[tuple[int, int, int, list[int]]]
+
+
+def _tree_plan(parents: Sequence[int], base: int, start: int, rows: int) -> _Tree:
+    n_old = start - base
+    total = n_old + rows
+    if base < 0 or n_old < 0 or len(parents) != total:
+        raise ShapeError(f"tree_parents must cover {total} nodes from tree_base {base} (cache length {start})")
+    par = [int(p) for p in parents]
+    depths: list[int] = []
+    for i, p in enumerate(par):
+        if not -1 <= p < i:
+            raise ShapeError(f"tree parent of node {i} must be in [-1, {i})")
+        depths.append(0 if p < 0 else depths[p] + 1)
+
+    def path(i: int) -> list[int]:
+        out: list[int] = []
+        while i >= 0:
+            out.append(i)
+            i = par[i]
+        return out[::-1]
+
+    chains: list[tuple[int, int, int, list[int]]] = []
+    j = 0
+    while j < rows:
+        lo = j
+        node = n_old + j
+        j += 1
+        while j < rows and par[n_old + j] == n_old + j - 1:
+            j += 1
+        anc = path(par[node]) if par[node] >= 0 else []
+        chains.append((lo, j, depths[node], anc))
+    return _Tree(base, n_old, depths, chains)
 
 
 def _sdpa_gqa_supported() -> bool:
@@ -629,7 +690,7 @@ class PassState:
         ops: The pass's float ops.
     """
 
-    __slots__ = ("caches", "hs", "ids", "normed", "ops", "rope", "rope_np", "seqs", "sessions", "starts")
+    __slots__ = ("caches", "hs", "ids", "normed", "ops", "rope", "rope_np", "seqs", "sessions", "starts", "trees")
 
     def __init__(self, seqs: Sequence[SequenceInput], ids: list[torch.Tensor], caches: list[KVCache],
                  starts: list[int], rope: list[tuple[torch.Tensor, torch.Tensor]], hs: list[torch.Tensor],
@@ -646,6 +707,8 @@ class PassState:
         #: residual add (its input norm, fused), and the RoPE tables as numpy views.
         self.normed: tuple[int, list[torch.Tensor]] | None = None
         self.rope_np: list[tuple[Any, Any]] | None = None
+        #: Tree attention plans per sequence (``None``: causal rows); see ``SequenceInput.tree_parents``.
+        self.trees: list[_Tree | None] = [None] * len(seqs)
 
 
 def _norm_rows(h: torch.Tensor, norm: torch.Tensor, eps: float) -> torch.Tensor:
@@ -1072,8 +1135,22 @@ class TransformerModel:
                 )
             c.reserve(c.length + t.numel())
         rope = [self.rope.cos_sin(st, t.numel(), self.dtype) for st, t in zip(starts, ids, strict=True)]
+        trees: list[_Tree | None] = [None] * len(seqs)
+        for si, s in enumerate(seqs):
+            if getattr(s, "tree_parents", None) is None:
+                continue
+            if self.schedule is not None:
+                raise ConfigError("tree attention needs the standard layer schedule")
+            base = starts[si] if s.tree_base < 0 else int(s.tree_base)
+            tr = _tree_plan(s.tree_parents, base, starts[si], int(ids[si].numel()))
+            trees[si] = tr
+            dep = tr.depths[tr.n_old:]
+            cos, sin = self.rope.cos_sin(base, max(dep) + 1, self.dtype)
+            at = torch.tensor(dep, dtype=torch.long)
+            rope[si] = (cos[at].contiguous(), sin[at].contiguous())  # each row at position base + depth
         st = PassState(seqs, ids, caches, starts, rope, [self._embed(t) for t in ids],
                        self.float_ops or _TORCH_OPS)
+        st.trees = trees
         # hidden states for drafters: {sequence index: (wanted layers, captured)}
         capture: dict[int, tuple[frozenset[int], dict[int, torch.Tensor]]] = {
             si: (frozenset(int(x) for x in s.capture_hidden), {}) for si, s in enumerate(seqs) if s.capture_hidden}
@@ -1192,6 +1269,10 @@ class TransformerModel:
             q, k = qk[:, :nh], qk[:, nh:]
             if not q.is_contiguous():
                 q = q.contiguous()
+            tr = st.trees[si]
+            if tr is not None:
+                attn_out.append(self._tree_attention(ops, tr, caches[si], layer, q, k, v))
+                continue
             k_all, v_all = caches[si].append(layer, k, v)
             tail = min(int(seqs[si].serial_tail), rows)
             if tail <= 0:
@@ -1247,7 +1328,11 @@ class TransformerModel:
             out = torch.empty((rows, nh * self.head_dim), dtype=f32)
             kc, vc = caches[si].numpy_views()
             cos, sin = rope_np[si]
-            fast.float_rope_attend(_np32(y), cos, sin, kc, vc, layer, starts[si], nh, self.scale, out.numpy())
+            tr = st.trees[si]
+            if tr is None:
+                fast.float_rope_attend(_np32(y), cos, sin, kc, vc, layer, starts[si], nh, self.scale, out.numpy())
+            else:
+                self._tree_attend_native(fast, tr, kc, vc, layer, _np32(y), cos, sin, out.numpy())
             attn_out.append(out)
         o = yield [LinearCall(lid_o, x, sess) for x, sess in zip(attn_out, sessions, strict=True)]
         hs2, normed = [], []
@@ -1278,6 +1363,65 @@ class TransformerModel:
         st.hs = hs3
         if nxt is not None:
             st.normed = (nxt, normed)
+
+    def _tree_attention(self, ops: FloatOps, tr: _Tree, cache: KVCache, layer: int, q: torch.Tensor,
+                        k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """Tree attention, torch float path: each new row alone (as one-row decoding of its path would run
+        it) over the prefix and its ancestors, which are copied into positions ``base..base+depth-1`` of the
+        cache first; at the end the tree's nodes are stored in node order from ``base``. The work depends
+        only on the parent array and the row count."""
+        kl, vl = cache.layer_storage(layer)
+        b, n_old = tr.base, tr.n_old
+        rows = int(q.shape[0])
+        total = n_old + rows
+        bk = torch.empty((total, *kl.shape[1:]), dtype=kl.dtype)
+        bv = torch.empty_like(bk)
+        bk[:n_old] = kl[b : b + n_old]
+        bv[:n_old] = vl[b : b + n_old]
+        bk[n_old:] = k.to(kl.dtype)
+        bv[n_old:] = v.to(vl.dtype)
+        parts: list[torch.Tensor] = []
+        for lo, hi, d0, anc in tr.chains:
+            if anc:
+                idx = torch.tensor(anc, dtype=torch.long)
+                kl[b : b + d0] = bk[idx]
+                vl[b : b + d0] = bv[idx]
+            p0 = b + d0
+            kl[p0 : p0 + hi - lo] = bk[n_old + lo : n_old + hi]
+            vl[p0 : p0 + hi - lo] = bv[n_old + lo : n_old + hi]
+            for j in range(lo, hi):
+                pos = p0 + j - lo
+                parts.append(ops.attention(self, q[j : j + 1], kl[: pos + 1], vl[: pos + 1], pos))
+        kl[b : b + total] = bk
+        vl[b : b + total] = bv
+        return torch.cat(parts, dim=0)
+
+    def _tree_attend_native(self, fast: Any, tr: _Tree, kc: Any, vc: Any, layer: int, y: Any, cos: Any,
+                            sin: Any, out: Any) -> None:
+        """Tree attention on the native float path: ``float_rope_attend`` once per chain of rows (each row
+        is computed on its own over positions ``[0, pos]``, so a chain at ``base + depth`` with its
+        ancestors copied into ``base..base+depth-1`` is exactly one-row decoding of each row's path)."""
+        b, n_old = tr.base, tr.n_old
+        rows = int(y.shape[0])
+        total = n_old + rows
+        kl, vl = kc[layer], vc[layer]
+        bk = np.empty((total, *kl.shape[1:]), dtype=kl.dtype)
+        bv = np.empty_like(bk)
+        bk[:n_old] = kl[b : b + n_old]
+        bv[:n_old] = vl[b : b + n_old]
+        for lo, hi, d0, anc in tr.chains:
+            if anc:
+                kl[b : b + d0] = bk[anc]
+                vl[b : b + d0] = bv[anc]
+            p0 = b + d0
+            o = out[lo:hi]
+            fast.float_rope_attend(np.ascontiguousarray(y[lo:hi]), np.ascontiguousarray(cos[lo:hi]),
+                                   np.ascontiguousarray(sin[lo:hi]), kc, vc, layer, p0, self.num_heads,
+                                   self.scale, o)
+            bk[n_old + lo : n_old + hi] = kl[p0 : p0 + hi - lo]
+            bv[n_old + lo : n_old + hi] = vl[p0 : p0 + hi - lo]
+        kl[b : b + total] = bk
+        vl[b : b + total] = bv
 
     def _logits(self, seqs: Sequence[SequenceInput], hs: list[torch.Tensor]) -> list[Any]:
         """Final norm and LM head of a step: per sequence the last row's logits ``(vocab,)``, all rows'

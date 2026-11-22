@@ -118,6 +118,32 @@ class KVCache:
         self._v[layer, self._len : end] = v.to(self.dtype)
         return self._k[layer, :end], self._v[layer, :end]
 
+    def layer_storage(self, layer: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(k, v)`` views ``(capacity, kvh, hd)`` of one layer's whole storage (tree attention writes
+        ancestors and node rows into it directly). Valid until :meth:`reserve` grows the storage."""
+        if not 0 <= layer < self.num_layers:
+            raise ConfigError(f"layer {layer} out of range [0, {self.num_layers})")
+        return self._k[layer], self._v[layer]
+
+    def keep_path(self, base: int, nodes: list[int], copies: int = 0) -> None:
+        """Token-tree speculation: after a tree pass stored node ``i`` at ``base + i``, move the accepted
+        root-to-leaf path ``nodes`` (increasing node indices) to ``base, base + 1, ...`` in every layer.
+        The caller then sets the length to ``base + len(nodes)``. ``copies``: make exactly this many
+        position copies (at least ``len(nodes) - 1``; the rest copy a position onto itself), so the work does
+        not depend on how long the accepted path is."""
+        prev = -1
+        top = max(self._hi, self._len)
+        for e, n in enumerate(nodes):
+            n = int(n)
+            if n < e or n <= prev or base + n >= top:
+                raise ConfigError(f"keep_path: bad node {n} at depth {e}")
+            prev = n
+        total = max(int(copies), len(nodes) - 1)
+        for e in range(1, total + 1):
+            n = int(nodes[e]) if e < len(nodes) else min(e, top - 1 - base)
+            self._k[:, base + e] = self._k[:, base + n]
+            self._v[:, base + e] = self._v[:, base + n]
+
     def advance(self, tokens: int) -> None:
         """Commit ``tokens`` new positions after all layers appended."""
         if tokens < 0 or self._len + tokens > self.max_len:
