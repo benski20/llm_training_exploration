@@ -446,6 +446,28 @@ def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300, us
     return proc, found[0]
 
 
+#: Linear kinds whose masks the factory need not make, per fixed ``local_linears`` mode (the gateway computes
+#: them itself on every step: the demo sets no ``local_max_rows``). ``auto`` modes decide at start-up: none.
+SKIP_KINDS_BY_LOCAL = {"attention": "qkv,o", "attention_down": "qkv,o,down"}
+
+
+def colocated_gateway_env(local_linears: str) -> dict[str, str]:
+    """Gateway-party environment of the co-located demo (measured on Modal, see deploy/modal/README.md):
+
+    * ``PGW_FACTORY_SKIP_LINEAR_KINDS``: with a fixed ``local_linears`` the encrypted mask factory makes masks
+      only for the linears the gateway sends (attention_down: gate_up, 52% of the mask bytes); the gateway
+      retires any segment lacking a linear it sends (``MaskStore.require_linears``), so this is exact and
+      changes nothing the provider sees in decode. 138 slots/s on 2.5 cores while a chat decodes.
+    * ``PGW_POOL_SPIN_US`` / ``PGW_POOL_WORKERS``: the native pool's workers stay awake 2 ms between jobs
+      (a futex wake-up under Modal's gVisor costs more than a decode step's gap between local linears) and
+      are capped at 4, leaving cores to the factory and the service.
+    """
+    env = {"PGW_POOL_SPIN_US": "2000", "PGW_POOL_WORKERS": "4"}
+    if local_linears in SKIP_KINDS_BY_LOCAL:
+        env["PGW_FACTORY_SKIP_LINEAR_KINDS"] = SKIP_KINDS_BY_LOCAL[local_linears]
+    return env
+
+
 #: Variable prefixes a run may add to a party's environment (``launch.py --gateway-env`` / ``--provider-env``).
 EXTRA_ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
 

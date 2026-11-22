@@ -613,10 +613,13 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     monkeypatch.delenv("PGW_MODAL_I6PN", raising=False)
     monkeypatch.delenv("PGW_MODAL_PLACEMENT", raising=False)
     monkeypatch.delenv("PGW_MODAL_CUSTOMER_GPU", raising=False)
-    assert launch.parse_args([]).lane == "stream"  # default unchanged
+    assert launch.parse_args([]).lane == "stream"  # default unchanged off the co-located placement
+    assert launch.parse_args([]).local_linears == "auto"
+    co = launch.parse_args(["--placement", "colocated"])  # co-located defaults (measured on Modal)
+    assert (co.lane, co.local_linears) == ("tls", "attention_down")
     with pytest.raises(SystemExit):  # the provider's lane port is on its loopback only
         launch.parse_args(["--lane", "tls"])
-    args = launch.parse_args(["--placement", "colocated", "--lane", "tls"])
+    args = launch.parse_args(["--placement", "colocated", "--lane", "tls", "--local-linears", "auto"])
     assert args.lane == "tls"
     log: list[tuple[str, str, tuple[Any, ...]]] = []
     monkeypatch.setattr(launch.modal.Function, "from_name", lambda app, name: FakeFunction(app, name, log))
@@ -627,3 +630,21 @@ def test_lane_tls_is_colocated_only_and_reaches_the_pair(monkeypatch: pytest.Mon
     assert log[-1][2][-2:] == ("auto", 0)
     p = launch.spawn_pair(FakeDict(), "colocated", 600, False, lookup=lambda app, name: FakeFunction(app, name, log))
     assert log[-1][2] == (p.run_id, 600, False, "auto", 0)  # --lane stream: the call is unchanged
+
+
+def test_colocated_gateway_env_skips_only_fixed_local_kinds() -> None:
+    boot = _load("pgw_modal_boot")
+    assert boot.colocated_gateway_env("attention_down")["PGW_FACTORY_SKIP_LINEAR_KINDS"] == "qkv,o,down"
+    assert boot.colocated_gateway_env("attention")["PGW_FACTORY_SKIP_LINEAR_KINDS"] == "qkv,o"
+    for mode in ("auto", "auto_kinds", "off"):  # decided at start-up or nothing local: every linear's masks
+        assert "PGW_FACTORY_SKIP_LINEAR_KINDS" not in boot.colocated_gateway_env(mode)
+    with pytest.raises(ValueError):
+        boot.checked_env({"LD_PRELOAD": "x"})
+    assert boot.checked_env({"PGW_X": 1}) == {"PGW_X": "1"}
+
+
+def test_env_pairs_parse_and_refuse() -> None:
+    assert launch.parse_env_pairs(["PGW_A=1", "OMP_NUM_THREADS=2"]) == {"PGW_A": "1", "OMP_NUM_THREADS": "2"}
+    for bad in (["PATH=/x"], ["PGW_A"]):
+        with pytest.raises(ValueError):
+            launch.parse_env_pairs(bad)

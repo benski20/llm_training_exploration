@@ -211,7 +211,7 @@ fn gemv(
         gemv_cols(xq, rows, n, w8t, m, 0, m, a, y);
         return true;
     }
-    if rows <= KSPLIT_MAX_ROWS && n >= 2 * KSPLIT_UNIT {
+    if rows <= ksplit_max_rows() && n >= 2 * KSPLIT_UNIT {
         return gemv_ksplit(xq, rows, n, w8t, m, a, y, max_t, parts);
     }
     if m < 2 * PAR_UNIT {
@@ -237,6 +237,14 @@ fn gemv(
 
 /// Rows (tokens) up to which [`gemv`] splits the input features instead of the columns.
 const KSPLIT_MAX_ROWS: usize = 8;
+
+/// [`KSPLIT_MAX_ROWS`], or `PGW_LOCAL_KSPLIT_MAX_ROWS` (read once; measurements).
+fn ksplit_max_rows() -> usize {
+    static V: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PGW_LOCAL_KSPLIT_MAX_ROWS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(KSPLIT_MAX_ROWS)
+    })
+}
 /// Input features per feature-split unit (even, a multiple of the register pass `IB`).
 const KSPLIT_UNIT: usize = 32;
 

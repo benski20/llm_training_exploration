@@ -81,6 +81,23 @@ def build_pack(work: Path, preset: str, layers: int) -> Path:
     return pk
 
 
+def _thread_cpu() -> dict[str, tuple[str, float]]:
+    """``{tid: (thread name, CPU seconds)}`` of this process's threads (Linux ``/proc``; ``{}`` elsewhere)."""
+    out: dict[str, tuple[str, float]] = {}
+    tick = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    base = Path("/proc/self/task")
+    if not base.is_dir():
+        return out
+    for t in base.iterdir():
+        try:
+            name = (t / "comm").read_text().strip()
+            f = (t / "stat").read_text().rsplit(")", 1)[1].split()
+            out[t.name] = (name.rstrip("0123456789-_") or name, (int(f[11]) + int(f[12])) / tick)
+        except OSError:
+            continue
+    return out
+
+
 def _cpu_s() -> float:
     ru = resource.getrusage(resource.RUSAGE_SELF)
     return ru.ru_utime + ru.ru_stime
@@ -171,6 +188,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     prof = cProfile.Profile() if args.profile and not args.profile_prefill else None
     outs = []
+    thr0 = _thread_cpu()
     for _ in range(args.repeat):
         st0 = backend.stats.snapshot()
         if prof:
@@ -187,6 +205,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "backend_ms_per_token": 1e3 * (st1["local_seconds"] - st0["local_seconds"]) / toks,
             "round_trips_per_token": (st1["round_trips"] - st0["round_trips"]) / toks,
         })
+    thr1 = _thread_cpu()
+    ntk = max(1, args.repeat * args.tokens)
+    by_name: dict[str, float] = {}
+    for tid, (name, c1) in thr1.items():
+        c0 = thr0.get(tid, (name, 0.0))[1]
+        by_name[name] = by_name.get(name, 0.0) + (c1 - c0)
+    thread_cpu = {k: round(1e3 * v / ntk, 2) for k, v in sorted(by_name.items(), key=lambda kv: -kv[1]) if v > 0}
     # prefill (+ the first token): the prompt's pass alone, a few times (time to first token on the gateway)
     pre_rows: list[float] = []
     pre_timers: dict[str, Any] = {}
@@ -234,6 +259,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "outputs_repeat_identical": all(o == outs[0] for o in outs),
         "prompt_len": prompt_len,
+        "thread_cpu_ms_per_token": thread_cpu,
         "prefill_ms": round(sorted(pre_rows)[1], 2),
         **({"prefill_breakdown_ms": pre_timers} if pre_timers else {}),
         **({"breakdown_ms_per_token": {k: {"wall": round(1e3 * v[0] / ntok, 3),
@@ -245,6 +271,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if prof:
         s = io.StringIO()
         st = pstats.Stats(prof, stream=s).sort_stats(args.profile_sort)
+        if args.profile_dump:
+            prof.dump_stats(args.profile_dump)
         st.print_stats(args.profile_top)
         print(s.getvalue(), file=sys.stderr)
         ntok = 3 if args.profile_prefill else max(1, args.repeat * args.tokens)
@@ -337,6 +365,7 @@ def main() -> None:
     ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--profile-prefill", action="store_true", help="with --profile: profile the prefill runs instead")
+    ap.add_argument("--profile-dump", default=None, help="with --profile: write the pstats file here")
     ap.add_argument("--breakdown", action="store_true", help="per-stage wall and thread CPU per token")
     ap.add_argument("--profile-top", type=int, default=30)
     ap.add_argument("--profile-sort", default="tottime")

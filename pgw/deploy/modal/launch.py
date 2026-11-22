@@ -560,15 +560,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "and a --model larger than the 0.5B; PGW_MODAL_DRAFT=1). On a CPU customer it runs on the "
                          "gateway's CPU, with --customer-gpu on its GPU")
     ap.add_argument("--local-linears", choices=["off", "attention", "attention_down", "auto", "auto_kinds"],
-                    default="auto",
-                    help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
+                    default=None,
+                    help="exact local linears (E2) of the customer gateway (default: 'attention_down' co-located, "
+                         "measured fastest there; 'auto' otherwise): 'auto' = qkv and o on the "
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
                          "(the tunnel: yes); 'attention' = always; 'attention_down' = also down "
                          "(one round trip per layer); "
                          "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
-    ap.add_argument("--lane", choices=["stream", "tls"], default="stream",
-                    help="customer gateway's trip lane: 'stream' (default) = the blocking stream lane (WebSocket, "
-                         "msgpack, Python TLS); 'tls' (--placement colocated only) = the provider also serves its "
+    ap.add_argument("--lane", choices=["stream", "tls"], default=None,
+                    help="customer gateway's trip lane (default: 'tls' co-located, 'stream' otherwise): 'stream' = "
+                         "the blocking stream lane (WebSocket, msgpack, Python TLS); 'tls' (--placement colocated "
+                         "only) = the provider also serves its "
                          "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
                          "header, GIL released per trip; same masked bytes, request ids and schedule; misses fall "
                          "back to the stream lane). Exact; the e2e comparison still applies")
@@ -619,6 +621,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ap.error("--schedule-timeout-min must be positive")
     if args.max_trip_ms is not None and not args.e2e:
         ap.error("--max-trip-ms needs --e2e (the latency is measured on the scripted chat)")
+    if args.local_linears is None:
+        args.local_linears = "attention_down" if args.placement == "colocated" else "auto"
+    if args.lane is None:
+        args.lane = "tls" if args.placement == "colocated" else "stream"
     if args.lane == "tls" and args.placement != "colocated":
         ap.error("--lane tls needs --placement colocated (the provider's lane port is on its loopback only)")
     if args.max_trip_ms is not None and args.max_trip_ms <= 0:
