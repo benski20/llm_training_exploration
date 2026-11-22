@@ -101,9 +101,9 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     work.mkdir(parents=True, exist_ok=True)
     pack = ModelPack.open(build_pack(work, args.preset, args.layers))
     ring = RingParams.from_name(args.ring)
-    prompt_len = 8
+    prompt_len = int(args.prompt_len)
     per = prompt_len + args.tokens
-    slots = (per + args.window) * (args.repeat + 1) + 32
+    slots = (per + args.window) * (args.repeat + 1) + 32 + 4 * (prompt_len + 1 + args.window)
     kp = FileKeyProvider(work / "kek", create=True)
     store_dir = work / f"store-{time.time_ns()}"
     store = MaskStore.open(store_dir, kp, fsync=False,
@@ -169,7 +169,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
     if timers is not None:
         timers.clear()
     rows: list[dict[str, Any]] = []
-    prof = cProfile.Profile() if args.profile else None
+    prof = cProfile.Profile() if args.profile and not args.profile_prefill else None
     outs = []
     for _ in range(args.repeat):
         st0 = backend.stats.snapshot()
@@ -187,6 +187,28 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "backend_ms_per_token": 1e3 * (st1["local_seconds"] - st0["local_seconds"]) / toks,
             "round_trips_per_token": (st1["round_trips"] - st0["round_trips"]) / toks,
         })
+    # prefill (+ the first token): the prompt's pass alone, a few times (time to first token on the gateway)
+    pre_rows: list[float] = []
+    pre_timers: dict[str, Any] = {}
+    dec_timers: dict[str, list[float]] = {}
+    if timers is not None:
+        dec_timers = {k: list(v) for k, v in timers.items()}
+        timers.clear()
+    pparams = SamplingParams(max_tokens=1, temperature=args.temperature, seed=7, ignore_eos=True,
+                             logprobs=args.logprobs)
+    if args.profile_prefill:
+        prof = cProfile.Profile()
+    for _ in range(3):
+        if prof is not None and args.profile_prefill:
+            prof.enable()
+        t = time.perf_counter()
+        await gen.agenerate(prompt, pparams)
+        pre_rows.append(1e3 * (time.perf_counter() - t))
+        if prof is not None and args.profile_prefill:
+            prof.disable()
+    if timers is not None:
+        pre_timers = {k: {"wall": round(1e3 * v[0] / 3, 3), "calls": round(v[2] / 3, 1)}
+                      for k, v in sorted(timers.items())}
     await gen.aclose()
     ntok = args.repeat * args.tokens
     best = min(rows, key=lambda r: r["cpu_ms_per_token"])
@@ -211,10 +233,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             "backend_ms_per_token": round(med["backend_ms_per_token"] * full / lay, 2),
         },
         "outputs_repeat_identical": all(o == outs[0] for o in outs),
+        "prompt_len": prompt_len,
+        "prefill_ms": round(sorted(pre_rows)[1], 2),
+        **({"prefill_breakdown_ms": pre_timers} if pre_timers else {}),
         **({"breakdown_ms_per_token": {k: {"wall": round(1e3 * v[0] / ntok, 3),
                                            "thread_cpu": round(1e3 * v[1] / ntok, 3),
                                            "calls_per_token": round(v[2] / ntok, 2)}
-                                       for k, v in sorted(timers.items())}} if timers is not None else {}),
+                                       for k, v in sorted(dec_timers.items())}} if timers is not None else {}),
         "first_tokens": outs[0][0][:8],
     }
     if prof:
@@ -222,7 +247,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         st = pstats.Stats(prof, stream=s).sort_stats(args.profile_sort)
         st.print_stats(args.profile_top)
         print(s.getvalue(), file=sys.stderr)
-        ntok = max(1, args.repeat * args.tokens)
+        ntok = 3 if args.profile_prefill else max(1, args.repeat * args.tokens)
         for want in args.callees:  # compact callee table, microseconds per generated token
             for key, val in st.stats.items():  # type: ignore[attr-defined]
                 if key[2] != want:
@@ -300,6 +325,7 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=4)
     ap.add_argument("--tokens", type=int, default=32)
     ap.add_argument("--window", type=int, default=16)
+    ap.add_argument("--prompt-len", type=int, default=8, help="prompt tokens (prefill_ms: prompt pass + 1 token)")
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--ring", default="K32A12C27")
     ap.add_argument("--workdir", default=None)
@@ -310,6 +336,7 @@ def main() -> None:
     ap.add_argument("--no-noise", action="store_true")
     ap.add_argument("--service-delay-ms", type=float, default=0.0, help="stub round-trip latency (sleep, GIL free)")
     ap.add_argument("--profile", action="store_true")
+    ap.add_argument("--profile-prefill", action="store_true", help="with --profile: profile the prefill runs instead")
     ap.add_argument("--breakdown", action="store_true", help="per-stage wall and thread CPU per token")
     ap.add_argument("--profile-top", type=int, default=30)
     ap.add_argument("--profile-sort", default="tottime")

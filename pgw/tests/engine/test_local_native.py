@@ -52,7 +52,8 @@ def test_native_local_wide_shapes_and_threads() -> None:
     fast = B.native.fast
     rng = np.random.default_rng(3)
     for rows, n, m, ring in [(1, 1031, 517, RingParams(32, 15, 29)), (2, 4097, 2600, DEFAULT_RING),
-                             (1, 2048, 4096, DEFAULT_RING), (5, 33, 16, RingParams(32, 12))]:
+                             (1, 2048, 4096, DEFAULT_RING), (5, 33, 16, RingParams(32, 12)),
+                             (12, 900, 1152, DEFAULT_RING), (41, 640, 300, DEFAULT_RING)]:
         w8 = rng.integers(-128, 128, size=(m, n), dtype=np.int8)
         w8t = np.ascontiguousarray(w8.T)
         wnorm = float(np.sqrt((w8.astype(np.float64) ** 2).sum(axis=1)).max())

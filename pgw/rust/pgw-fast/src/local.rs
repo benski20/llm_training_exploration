@@ -185,21 +185,45 @@ unsafe fn block_avx2<const C: usize>(xr: &[i16], base: *const i8, m: usize, i0: 
     }
 }
 
-/// Exact product over every column, on the pool when large (column blocks of whole 64-column units;
-/// each output is the same integer sum whichever task computes it, so the split changes no bit).
-fn gemv(xq: &[i16], rows: usize, n: usize, w8t: &[i8], m: usize, a: u32, y: &mut [i64], threads: usize) -> bool {
+/// Exact product over every column, on the pool when large. Every output is the same exact integer sum
+/// whichever task computes which part of it, so neither split changes a bit:
+///
+/// * up to [`KSPLIT_MAX_ROWS`] rows (decode): the **input features** are split into contiguous blocks, one
+///   task each, so every task streams one contiguous block of weight rows from DRAM; each task writes its
+///   own int64 partial products into `parts` and the caller adds them (int64, no overflow:
+///   `|y| < 2^(A-1) * 2^7 * n`);
+/// * more rows: the columns are split in 64-column units (one cache line of every weight row).
+#[allow(clippy::too_many_arguments)]
+fn gemv(
+    xq: &[i16],
+    rows: usize,
+    n: usize,
+    w8t: &[i8],
+    m: usize,
+    a: u32,
+    y: &mut [i64],
+    threads: usize,
+    parts: &mut Vec<i64>,
+) -> bool {
     let p = pool::global();
     let max_t = if threads == 0 { p.workers() + 1 } else { threads };
-    if max_t <= 1 || n * m < PAR_MIN_MACS || p.workers() == 0 || m < 2 * PAR_UNIT {
+    if max_t <= 1 || n * m < PAR_MIN_MACS || p.workers() == 0 {
+        gemv_cols(xq, rows, n, w8t, m, 0, m, a, y);
+        return true;
+    }
+    if rows <= KSPLIT_MAX_ROWS && n >= 2 * KSPLIT_UNIT {
+        return gemv_ksplit(xq, rows, n, w8t, m, a, y, max_t, parts);
+    }
+    if m < 2 * PAR_UNIT {
         gemv_cols(xq, rows, n, w8t, m, 0, m, a, y);
         return true;
     }
     let units = m.div_ceil(PAR_UNIT);
-    let parts = (max_t * 2).min(units);
-    let per = units.div_ceil(parts);
+    let nparts = (max_t * 2).min(units);
+    let per = units.div_ceil(nparts);
     let yp = SendPtr(y.as_mut_ptr());
     let ylen = y.len();
-    p.run(parts, &|pi| {
+    p.run(nparts, &|pi| {
         let j0 = (pi * per * PAR_UNIT).min(m);
         let j1 = ((pi + 1) * per * PAR_UNIT).min(m);
         if j0 >= j1 {
@@ -209,6 +233,69 @@ fn gemv(xq: &[i16], rows: usize, n: usize, w8t: &[i8], m: usize, a: u32, y: &mut
         let ys = unsafe { std::slice::from_raw_parts_mut(yp.get(), ylen) };
         gemv_cols(xq, rows, n, w8t, m, j0, j1, a, ys);
     })
+}
+
+/// Rows (tokens) up to which [`gemv`] splits the input features instead of the columns.
+const KSPLIT_MAX_ROWS: usize = 8;
+/// Input features per feature-split unit (even, a multiple of the register pass `IB`).
+const KSPLIT_UNIT: usize = 32;
+
+/// [`gemv`]'s feature split: task `p` computes `xq[:, i0..i1] @ w8t[i0..i1, :]` into `parts[p]`, then the
+/// partial products are added into `y` in task order. `parts` is wiped before returning.
+#[allow(clippy::too_many_arguments)]
+fn gemv_ksplit(
+    xq: &[i16],
+    rows: usize,
+    n: usize,
+    w8t: &[i8],
+    m: usize,
+    a: u32,
+    y: &mut [i64],
+    max_t: usize,
+    parts: &mut Vec<i64>,
+) -> bool {
+    let units = n.div_ceil(KSPLIT_UNIT);
+    let per = units.div_ceil(max_t.min(units));
+    let nparts = units.div_ceil(per);
+    let stride = rows * m;
+    if parts.len() < nparts * stride {
+        parts.resize(nparts * stride, 0);
+    }
+    let pp = SendPtr(parts.as_mut_ptr());
+    let plen = parts.len();
+    let ok = pool::global().run(nparts, &|pi| {
+        let i0 = (pi * per * KSPLIT_UNIT).min(n);
+        let i1 = ((pi + 1) * per * KSPLIT_UNIT).min(n);
+        // SAFETY: task `pi` writes only `parts[pi * stride .. (pi + 1) * stride]`; `parts` outlives `run`.
+        let all = unsafe { std::slice::from_raw_parts_mut(pp.get(), plen) };
+        let ys = &mut all[pi * stride..(pi + 1) * stride];
+        if i0 >= i1 {
+            ys.fill(0);
+            return;
+        }
+        let nn = i1 - i0;
+        let wsub = &w8t[i0 * m..i1 * m];
+        if rows == 1 {
+            gemv_cols(&xq[i0..i1], 1, nn, wsub, m, 0, m, a, ys);
+        } else {
+            let mut xs = vec![0i16; rows * nn];
+            for t in 0..rows {
+                xs[t * nn..(t + 1) * nn].copy_from_slice(&xq[t * n + i0..t * n + i1]);
+            }
+            gemv_cols(&xs, rows, nn, wsub, m, 0, m, a, ys);
+            wipe(&mut xs);
+        }
+    });
+    if ok {
+        y[..stride].copy_from_slice(&parts[..stride]);
+        for pi in 1..nparts {
+            for (yv, &pv) in y[..stride].iter_mut().zip(&parts[pi * stride..(pi + 1) * stride]) {
+                *yv += pv;
+            }
+        }
+    }
+    wipe(&mut parts[..nparts * stride]);
+    ok
 }
 
 #[derive(Clone, Copy)]
@@ -228,11 +315,19 @@ struct Scratch {
     xhat: Vec<i64>,
     xq: Vec<i16>,
     y: Vec<i64>,
+    parts: Vec<i64>,
 }
 
 thread_local! {
     static SCRATCH: RefCell<Scratch> =
-        const { RefCell::new(Scratch { zeros: Vec::new(), payload: Vec::new(), xhat: Vec::new(), xq: Vec::new(), y: Vec::new() }) };
+        const { RefCell::new(Scratch {
+            zeros: Vec::new(),
+            payload: Vec::new(),
+            xhat: Vec::new(),
+            xq: Vec::new(),
+            y: Vec::new(),
+            parts: Vec::new(),
+        }) };
 }
 
 /// Outcome of [`local_linear`].
@@ -309,7 +404,7 @@ pub fn local_linear(f: &LocalArgs<'_>, sx: &mut [f64], out: &mut [f32], threads:
             *q = ((v << sh) >> sh) as i16;
         }
         wipe(&mut s.xhat);
-        let ok = gemv(&s.xq, rows, n, f.w8t, m, prm.a, &mut s.y, threads);
+        let ok = gemv(&s.xq, rows, n, f.w8t, m, prm.a, &mut s.y, threads, &mut s.parts);
         wipe(&mut s.xq);
         if !ok {
             wipe(&mut s.y);
@@ -455,7 +550,8 @@ mod tests {
     fn pooled_gemv_matches_one_thread() {
         // column splits in 64-column units over the pool (m not a multiple of 64 or 16 included)
         let mut seed = 11u64;
-        for &(rows, n, m) in &[(1, 896, 1152), (1, 4864, 896), (3, 600, 1000), (2, 2048, 130), (1, 1024, 4100)] {
+        for &(rows, n, m) in &[(1, 896, 1152), (1, 4864, 896), (3, 600, 1000), (2, 2048, 130), (1, 1024, 4100),
+                               (9, 700, 512), (1, 100, 3000), (4, 4100, 70)] {
             let lim = (1i64 << 11) - 1;
             let xq: Vec<i16> = (0..rows * n).map(|_| ((lcg(&mut seed) as i64 % (2 * lim + 1)) - lim) as i16).collect();
             let w: Vec<i8> = (0..n * m).map(|_| (lcg(&mut seed) % 256) as u8 as i8).collect();
@@ -463,7 +559,9 @@ mod tests {
             gemv_cols(&xq, rows, n, &w, m, 0, m, 12, &mut one);
             for threads in [0usize, 2, 3] {
                 let mut par = vec![-1i64; rows * m];
-                assert!(gemv(&xq, rows, n, &w, m, 12, &mut par, threads));
+                let mut parts = Vec::new();
+                assert!(gemv(&xq, rows, n, &w, m, 12, &mut par, threads, &mut parts));
+                assert!(parts.iter().all(|&v| v == 0), "partial products wiped");
                 assert_eq!(par, one, "rows={rows} n={n} m={m} threads={threads}");
             }
         }

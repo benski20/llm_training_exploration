@@ -2164,9 +2164,14 @@ class MaskedBackend(LinearBackend):
     #: Decode-sized local calls (at most this many rows) take :meth:`_local_fast` when its one-time
     #: self-check per linear shape passed (0 disables; ``PGW_LOCAL_FAST=0`` too).
     local_fast_max_rows = 8
+    #: With the native kernel (``pgw_fast.local_linear_into``): calls of any row count take it, in blocks of at
+    #: most this many rows (its limit). Each output row depends only on its own input row (per-row activation
+    #: scale, exact integer product), so the blocks give the reference's bits (self-checked with 1, 3 and 12
+    #: rows); a prompt (prefill) pass of local linears no longer goes through the two-digit int8 GEMM.
+    local_native_block_rows = 64
 
     def _local_fast_ok(self, meta: _MaskedMeta, w: _IntWeight, rows: int, lid: LinearId) -> bool:
-        if not 0 < rows <= self.local_fast_max_rows:
+        if rows <= 0 or (rows > self.local_fast_max_rows and not (self._local_native and self.local_fast_max_rows)):
             return False
         on = self._local_fast_on
         if on is None:
@@ -2177,7 +2182,7 @@ class MaskedBackend(LinearBackend):
             on = self._local_fast_on = (_env_flag("PGW_LOCAL_FAST", True) and native_available("trip_prepare_into")
                                         and ring.a <= 15
                                         and (native_ok or (ring.k == 32 and cpu_int8_fast())))
-        if not on:
+        if not on or (rows > self.local_fast_max_rows and not self._local_native):
             return False
         key = (meta.in_features, meta.out_features, float(meta.wnorm or 0.0), id(w))
         hit = self._local_fast_checked.get(key)
@@ -2194,8 +2199,11 @@ class MaskedBackend(LinearBackend):
         x[1, int(rng.integers(0, meta.in_features))] = 50.0
         x[2] = 0.0
         tiny = (rng.standard_normal((1, meta.in_features)) * 1e-30).astype(np.float32)
+        cases = [x[:1], x, tiny]
+        if self._local_native:  # the native kernel's many-row path (columns split instead of features)
+            cases.append(np.concatenate([x, (rng.standard_normal((9, meta.in_features)) * 2).astype(np.float32)]))
         try:
-            for xs in (x[:1], x, tiny):
+            for xs in cases:
                 ref = self._local_reference(torch.from_numpy(xs.copy()), meta, w, lid)
                 got = self._local_fast(np.ascontiguousarray(xs), meta, w, lid)
                 if ref.dtype != got.dtype or ref.shape != got.shape or not torch.equal(ref, got):
@@ -2277,7 +2285,11 @@ class MaskedBackend(LinearBackend):
             xn = np.ascontiguousarray(x.detach().to(torch.float32).numpy())
             if not np.isfinite(xn).all():
                 raise RingOverflowError("non-finite activation values cannot be quantized")
-            return self._local_fast(xn, meta, w, call.id)
+            blk = int(self.local_native_block_rows)
+            if xn.shape[0] <= blk or not self._local_native:
+                return self._local_fast(xn, meta, w, call.id)
+            return torch.cat([self._local_fast(np.ascontiguousarray(xn[i : i + blk]), meta, w, call.id)
+                              for i in range(0, xn.shape[0], blk)])
         return self._local_reference(x, meta, w, call.id)
 
     def _local_reference(self, x: torch.Tensor, meta: _MaskedMeta, w: _IntWeight, lid: LinearId) -> torch.Tensor:

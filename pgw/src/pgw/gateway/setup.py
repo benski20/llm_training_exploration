@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -360,9 +361,12 @@ class SetupController:
             "PGW_FACTORY_HE_TOKEN_FILE": files["token"],
             "PGW_FACTORY_HE_HINT_DIR": str(self.data_dir / "hemask"),
             "PGW_FACTORY_STATE_DIR": str(self.data_dir / "factory"),
-            "PGW_FACTORY_LOW_WATER_SLOTS": str(FACTORY_LOW_WATER_SLOTS),
-            "PGW_FACTORY_TARGET_SLOTS": str(FACTORY_TARGET_SLOTS),
-            "PGW_FACTORY_FIRST_SEGMENT_SLOTS": str(FACTORY_FIRST_SEGMENT_SLOTS),
+            # the gateway's own environment may size the buffer (e.g. a demo that keeps the factory busy)
+            "PGW_FACTORY_LOW_WATER_SLOTS": (os.environ.get("PGW_FACTORY_LOW_WATER_SLOTS")
+                                            or str(FACTORY_LOW_WATER_SLOTS)),
+            "PGW_FACTORY_TARGET_SLOTS": os.environ.get("PGW_FACTORY_TARGET_SLOTS") or str(FACTORY_TARGET_SLOTS),
+            "PGW_FACTORY_FIRST_SEGMENT_SLOTS": (os.environ.get("PGW_FACTORY_FIRST_SEGMENT_SLOTS")
+                                                or str(FACTORY_FIRST_SEGMENT_SLOTS)),
         }
         if files.get("ca"):
             env["PGW_FACTORY_HE_CA_FILE"] = files["ca"]

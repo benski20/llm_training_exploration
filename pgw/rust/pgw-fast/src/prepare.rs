@@ -524,8 +524,18 @@ pub mod pool {
     /// Upper bound on worker threads (the gateway also runs the event loop and the wire client).
     const MAX_WORKERS: usize = 7;
     /// Workers poll for the next job this long before sleeping on the condvar (a condvar wake-up
-    /// costs 10-50 us; jobs of one step come back to back).
-    const SPIN: Duration = Duration::from_micros(50);
+    /// costs 10-50 us natively, more in a gVisor sandbox; jobs of one step come back to back).
+    /// `PGW_POOL_SPIN_US` (read once) overrides it, e.g. to keep the workers awake across a decode
+    /// step's float work and round trips.
+    const SPIN_DEFAULT_US: u64 = 50;
+
+    fn spin() -> Duration {
+        static SPIN: OnceLock<Duration> = OnceLock::new();
+        *SPIN.get_or_init(|| {
+            let us = std::env::var("PGW_POOL_SPIN_US").ok().and_then(|v| v.trim().parse::<u64>().ok());
+            Duration::from_micros(us.unwrap_or(SPIN_DEFAULT_US).min(1_000_000))
+        })
+    }
 
     /// Lifetime-erased task function. Only called for task indices `< n`, while the submitting
     /// caller waits in [`Pool::run`], so the borrow it points to is alive at every call.
@@ -576,9 +586,10 @@ pub mod pool {
 
     fn worker(shared: Arc<Shared>) {
         let mut seen = 0u64;
+        let spin = spin();
         loop {
             let t0 = Instant::now();
-            while shared.generation.load(Ordering::Acquire) == seen && t0.elapsed() < SPIN {
+            while shared.generation.load(Ordering::Acquire) == seen && t0.elapsed() < spin {
                 std::hint::spin_loop();
             }
             let job = {
@@ -663,12 +674,17 @@ pub mod pool {
     }
 
     /// The process-wide pool: `min(available_parallelism, 8) - 1` workers (`available_parallelism`
-    /// honours the cgroup CPU quota), started on first use.
+    /// honours the cgroup CPU quota), started on first use. `PGW_POOL_WORKERS` (read once) lowers the
+    /// worker count (e.g. to leave cores to a co-located mask factory).
     pub fn global() -> &'static Pool {
         static POOL: OnceLock<Pool> = OnceLock::new();
         POOL.get_or_init(|| {
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
-            Pool::new(cpus.min(MAX_WORKERS + 1).saturating_sub(1))
+            let mut workers = cpus.min(MAX_WORKERS + 1).saturating_sub(1);
+            if let Some(w) = std::env::var("PGW_POOL_WORKERS").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+                workers = workers.min(w);
+            }
+            Pool::new(workers)
         })
     }
 
