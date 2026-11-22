@@ -473,7 +473,64 @@ Measured (T4, `attention_down`, native float ops, factory capped `PGW_FACTORY_CP
 | UDS, new paths on | 0.44-0.47 ms | 11.9 | 13.6 | 52.8, 52.9 |
 
 The UDS lane saves about 0.1 ms per trip (2.6 ms per token at 26 trips) but the runs land on different hosts, and
-host-to-host variance (10-20%) hides it in tokens/s; `--lane tls` stays the default.
+host-to-host variance (10-20%) hides it in tokens/s; `--lane tls` stayed the default then (now `uds`, see below).
+
+### Decode rate, contention and the factory yield (2026-11-22, package S4)
+
+* **Decode-rate metric.** The e2e now also streams the warm chat twice on loopback (`wizard_client.chat_stream`)
+  and reports `speed.warm_stream_ttft_s`, `warm_stream_decode_tokens_per_s` = (n-1)/(t_last - t_first) over the
+  token chunks, `warm_stream_decode_ms_per_token` and `warm_stream_wall_s` (`streams` has both); the streamed
+  answers must equal the first chat's text and logprobs (`stream_identical`, part of `ok`). Existing fields
+  unchanged.
+* **In-run A/B** (`--gateway-env PGW_MODAL_AB=base,nofactory,factory,pin,unpin,...`, diagnostics): between
+  streamed chats of one run, root pauses (`SIGSTOP`/`SIGCONT`) or re-pins the party processes; each phase reports
+  decode ms/token, TTFT, the 1-row trip split, local-linear µs per call and the busiest gateway threads. This
+  removes the 10-20% host-to-host noise from comparisons.
+* **Core pinning is not possible on Modal**: `sched_setaffinity` on any party thread fails with `EPERM` even
+  as root (gVisor), so the `pin` phases ran unpinned (36 ms/token either way).
+* **The factory was the contention**: with the factory paused, decode went from 35.8-36.3 to 31.8-33.3 ms per
+  token in the same container (twice, in alternation), TTFT 0.5-0.9 -> 0.44-0.51 s. The factory's encrypted
+  maskgen keeps the provider's GPU busy (provider request time 110 s per 44 s segment, 2.5 requests in flight)
+  and moves gigabytes of ciphertext through loopback TLS (5.4-5.9 cores in the factory process while a chat
+  decodes).
+* `PGW_SERVICE_TRIP_STREAM_PRIORITY=high` (provider; library default `0`): the decode graphs (the lane's
+  per-linear graphs, the executor's bucket graphs) are captured on a stream of the GPU's highest priority, so a
+  trip's kernels are dispatched ahead of queued maskgen GEMM blocks. Scheduling only: same kernels and bytes.
+* `PGW_FACTORY_YIELD_FILE` (+ `_MIN_SLOTS`, `_HOLD_S`, `_MAX_S`; library default unset = off;
+  `pgw.core.factory_yield`): the gateway refreshes the file every 50 ms while masked passes run (decode and
+  prompt passes) and the mask stock is at least `PGW_FACTORY_YIELD_MIN_SLOTS`; the encrypted factory waits before
+  each encrypted batch and each provider request while the file is fresher than 0.25 s (at most 30 s at a
+  time). Below the stock threshold it never yields, so its capacity (about 120 slots/s, 4x a 30 tokens/s chat)
+  is unchanged; between chats it runs at full speed. Same masks, requests and bytes; the provider already sees
+  every decode trip, so the pauses tell it nothing new. The factory log reports `yielded to decode N s`.
+* Co-located demo defaults now (all measured exact below): `--lane uds`, `COLOCATED_PROVIDER_ENV`
+  (trip stream priority high) and in `colocated_gateway_env` the factory yield at 1000 slots
+  (`--lane tls`, `--provider-env PGW_SERVICE_TRIP_STREAM_PRIORITY=0`, `--gateway-env PGW_FACTORY_YIELD_FILE=`
+  restore the previous settings).
+
+Measured (T4:2, `--gateway-gpu`, factory capped `PGW_FACTORY_CPU_THREADS=3`, `PGW_FACTORY_NICE=10`, target 8000;
+32-token chats, 41-token prompt; every run logprobs bit-identical, text equal, repeat identical, stream identical;
+decode = streamed (n-1)/(t_last - t_first), three chats per phase):
+
+| run | phase | decode ms/token | TTFT s | 1-row trip (service / wire) | factory cores |
+|---|---|---|---|---|---|
+| 1: TLS lane, before (e4198eb+metric) | base | 35.8, 36.3, 35.7 | 0.52-0.78 | 0.44 ms (0.16 / 0.28) | 5.9 |
+| | factory paused | 33.3, 32.0, 31.8 / 33.1, 31.8, 31.8 | 0.44-0.51 | - | 0 |
+| | pin (EPERM: no change) | 36.1, 35.6, 36.7 | 0.53-0.91 | - | - |
+| 2: UDS + trip priority + factory yield | base | 31.1, 30.3, 29.7 / 30.5, 28.6, 30.4 | 0.36-0.61 | 0.29 ms (0.105 / 0.18) | 0.15 |
+| | factory paused | 29.4, 30.7, 29.3 | 0.38-0.44 | 0.28 ms (0.105 / 0.17) | 0 |
+| 3: new demo defaults, merged with the prompt-pass work (1aa41dc) | base | 31.9, 30.4, 29.7 / 30.7, 30.7, 29.4 | 0.38-0.60 | 0.29 ms (0.106 / 0.18) | 0 |
+
+Run 3 (no extra flags beyond the factory cap): warm stream 29.9 ms per decoded token = 33.4 tokens/s after the first
+token, TTFT 0.41 s; warm 32-token chat 24.8 tokens/s wall through Modal's edge (24.8 on loopback).
+
+Run 2's warm stream: 30.3 ms per decoded token = 33.0 tokens/s after the first token, TTFT 0.46 s (warm chat
+wall 24.4 tokens/s through Modal's edge, 24.6 on loopback; run 1: 27.9 tokens/s streamed, 19.9 / 15.7 wall). With
+the yield, pausing the factory changes nothing measurable any more (base and paused phases overlap). The factory
+still made 73.7 slots/s in the segment that overlapped the e2e's back-to-back chats (22 s yielded), 2.4x the
+decode demand during continuous chatting, and full speed otherwise. Local linears on the gateway GPU stay at
+about 79 µs per call (factory paused or not): that part is not contention. The lane client's Python per trip is
+7 µs (`LaneComputeClient.compute_into` with an instant fake channel), not worth trimming.
 
 ## Trip latency and the `--max-trip-ms` gate
 

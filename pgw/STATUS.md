@@ -15,6 +15,23 @@ SLA pilot. Three reasons:
 2. The HSM, KMS and TPM integrations have never run against real hardware or cloud services.
 3. There has been no external security audit.
 
+## Update 2026-11-22: decode at 30 ms per token co-located (package S4)
+
+Reached in the co-located demo: 29.9-30.3 ms per decoded token (33 tokens/s after the first, streamed), from 36,
+exact. The remaining contention was the encrypted mask factory (its maskgen on the provider's GPU and its
+ciphertext traffic), measured by pausing it inside one run (36 -> 32 ms per token). Details:
+`deploy/modal/README.md`, "Decode rate, contention and the factory yield".
+
+- `PGW_FACTORY_YIELD_FILE` (library default off; co-located demo on at 1000 slots): the factory waits before
+  each encrypted batch and provider request while the gateway runs masked passes and the stock is above the
+  threshold; below it, full speed. Same masks, requests and bytes; nothing new for the provider.
+- `PGW_SERVICE_TRIP_STREAM_PRIORITY=high` (provider, library default off; demo on): decode graphs on the GPU's
+  highest-priority stream. Scheduling only.
+- `--lane uds` is now the co-located default (1-row trip 0.29 ms vs 0.44 ms on TLS in the combined config).
+- The e2e reports TTFT and the streamed decode rate (`warm_stream_*`); `PGW_MODAL_AB` runs in-run A/B phases.
+- Core pinning is impossible on Modal (`sched_setaffinity` EPERM under gVisor). Local GPU linears stay at about
+  79 us per call with or without the factory: not contention.
+
 ## Update 2026-11-22: lean per-trip gateway path and the co-located UDS lane (package T3b)
 
 Not reached: 30 tokens/s. Three exact Modal runs the same hour (T4, attention_down, native float ops, factory
