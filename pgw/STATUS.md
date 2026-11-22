@@ -172,6 +172,58 @@ limit after turn 4 (each turn took 2-2.5 min on this box), so four turns are rep
   load (about 17 s per decode pass: 24 layers of call overhead plus the 151936-row LM head); with the provider, the
   saved rows also save masks taken, service GEMM rows and wire bytes of the prompt pass. Absolute times are not
   representative of an idle host.
+## Update 2026-11-22: multi-core per-trip kernels for 32B/72B vectors (`PGW_TRIP_SPLIT`, opt-in, local CPU)
+
+Component target 1 of [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md) (prepare/finish of one trip
+over many cores), first part. Default off; exact; no format change.
+
+- **Split prepare** (`rust/pgw-fast/src/trip/split.rs`; `TripLease.prepare(..., split=c)`, `trip_prepare_into(...,
+  split=c)`): each row is cut into a fixed partition of 2048-column blocks (depends on `n` only) over `c` tasks of the
+  persistent pool, in three passes (max/sum x^2; exact integer sum of q^2 per candidate width; quantize with the
+  selected width + mask + pack + x_hat + input-half partials). Merges on the calling thread in block order: max, the
+  float `sum x^2` (window start only), wrapping integer sums, ring input half mod 2^K, prime input half mod p. Payload,
+  `sx`, `x_hat`, `rhs` are bit-identical to the one-thread kernel for every `c` (plans with the float sum of squares,
+  `n < 4096` or `c > 16` vectors run the one-thread kernel). The `r` keystream of a split call is filled over the same
+  tasks (`fill_ring_split`, same bits).
+- **Split checks**: the prime output half (`prime::output_half_split`, `TripTicket.finish(..., split=c)`,
+  `trip_prime_output(..., split=c)`) by fixed 8192-column units, reduced partials summed mod p; the unmask/finish uses
+  the existing column split of the pool with `c` tasks (exact).
+- **r ahead for any rows**: a lease now derives the next trip's `r` for as many rows as the current trip (was 1-row
+  trips only), on `PGW_TRIP_R_HELPERS` helper threads (default 1); single use (used only by the trip that takes
+  exactly those rows, else zeroed; wiped on detach/close). Measured (`TripLease.prepare` wall, 300 us between trips, min of 38 trips, 72B
+  shapes): down R = 1 220 -> 152 us, R = 2 433 -> 252 us; gate_up R = 1 57 -> 32 us, R = 2 108 -> 57 us (r is ~40%
+  of a prepare). Medians on this overloaded box were not better (the helper is not scheduled in time).
+- Wiring: `PGW_TRIP_SPLIT=c`, `PGW_TRIP_SPLIT_MIN_ELEMS` (default 8192) on the native per-trip path in `backends.py`.
+- **Native lane + finish per trip** (`PGW_TRIP_DRIVER=1`, with `PGW_TRIP_NATIVE` and a lane client; default off):
+  `TripTicket.lane_finish` sends the payload on the native `TripChannel` and reads the reply straight into the finish
+  (one GIL-free native call after `lease.prepare`; no response objects, no zero-filled reply buffer, no copy), via
+  `LaneComputeClient.trip_ticket` (same eligibility, pool, refusal/error handling and statistics; a call the lane does
+  not serve goes to the wrapped client with the same request, the ticket untouched). Noise-monitor every-call checks
+  stay inline between the two calls; sampled statistics unchanged. Test: `test_native_driver_over_the_lane` (masked ==
+  plain, byte-identical payloads and noise statistics with/without it, refusals and a dropped connection fall back).
+- Benchmarks: `native_trip_floor_bench.py --preset 7b|32b|72b --rows R --cores c [--r-offcore] [--stat min]`,
+  `trip_native_bench.py --rows R --split c --r-ahead 0|1` (payload hashes compared across runs); presets for Qwen2.5-32B
+  (64 L, 5120/27648, 40/8 heads) and Qwen2.5-72B (80 L, 8192/29568, 64/8), vocab 152064 (`PGW_BENCH_VOCAB` shrinks the
+  vocabulary of the synthetic pack for disk).
+- Tests: `tests/native/test_trip_split.py` (identical bits for c = 2, 3, 4, 7 vs one thread, ring and p31, genuine
+  replies pass, tampered replies fail identically with zeroed outputs, r ahead for 1- and 2-row trips identical and
+  single use, non-finite before any row, ticket single use), `test_native_split_equals_plain_and_bytes_identical`
+  (engine: masked == plain, byte-identical payloads and noise statistics), cargo `trip::split::tests`.
+- Measured single-core kernel cost per 72B trip (min of 150, K32A12C27, 4 vCPU dev box): gate_up R = 2 prepare 39 us,
+  finish 79-84 us, p31 output half 41 us; down R = 2 prepare 143-172 us, finish 12 us; qkv R = 2 prepare 41-44 us,
+  finish 15 us. Kernel floor per token on one core (r off-core, R = 2): 7B 12.9 ms, 32B 48 ms, 72B 61-64 ms; R = 1:
+  8.4 / 30 / 34 ms. `r` (8 bytes of ChaCha20 per element, format-fixed) at 72B R = 2 is about 36 ms per token of helper
+  time, so 72B needs about one dedicated helper core for `r` at 25 tok/s.
+- **Not reached**: the multi-core speed-up could not be measured here: the box ran at load average 40-57 on 4 vCPUs
+  (other jobs), the pool workers were rarely scheduled in time (the calling thread took ~80% of the tasks: 100 vs 121
+  us of its own CPU for a 72B down prepare at c = 4) and wall times did not improve. Needs a quiet many-core VM
+  (with `PGW_POOL_SPIN_US` raised so the workers stay awake between trips). The <= 20 us Python per trip target is
+  not reached: profiled at 0.5B shapes over the in-process reference lane (`trip_native_bench.py --lane --driver
+  --profile`), Python self time is still ~50-60 us per trip on this loaded box, mostly `_prepare_trip_lease` /
+  `forward_many` / `_finish_lease` bookkeeping, and the driver did not lower main-thread CPU measurably (1.80 vs 1.94 ms
+  per 8 trips, noise). A per-layer native driver (prepare -> lane -> finish for consecutive linears with no Python
+  in between) was not built.
+
 ## Update 2026-11-22: scaling design for Qwen2.5-32B and 70B-class targets (model only, local)
 
 Write-up: [research/plans/scaling-32b-70b.md](research/plans/scaling-32b-70b.md); model

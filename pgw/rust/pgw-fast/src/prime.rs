@@ -74,6 +74,13 @@ fn finish_dot(acc: u64, acc_u: u64) -> u64 {
     reduce(reduce(acc) + (P31 - reduce(acc_u)))
 }
 
+/// [`finish_dot`] for split callers: `acc`, `acc_u` are sums of reduced block partials of
+/// [`dot_lazy`] (each sum below `2^63`). Returns `sum u v mod p`.
+#[inline]
+pub fn finish_dot_pub(acc: u64, acc_u: u64) -> u64 {
+    finish_dot(acc, acc_u)
+}
+
 #[inline(always)]
 fn dot_body(u: &[u32], v: &[i32]) -> (u64, u64) {
     dot_i32(u, v)
@@ -355,6 +362,215 @@ pub fn output_half(
         return unsafe { output_half_avx2(y_hat, wr, u, rhs, c, m, k, bound) };
     }
     output_half_any(y_hat, wr, u, rhs, c, m, k, bound)
+}
+
+/// Columns per task unit of [`output_half_split`] (a multiple of `BLOCK`; public).
+const SPLIT_COLS: usize = 4 * BLOCK;
+
+/// [`output_half`] with the columns split over `cores` tasks of the persistent pool (`PGW_TRIP_SPLIT`):
+/// each task returns its reduced lazy sums and range flag for a fixed column range, merged here (sums
+/// mod `p`: exact, so the verdict does not depend on the partition or the thread count). Same statuses as
+/// [`output_half`]. Falls back to it for small `m` or one core.
+#[allow(clippy::too_many_arguments)]
+pub fn output_half_split(
+    y_hat: &[u8],
+    wr: Src<'_>,
+    u: &[u32],
+    rhs: &[u64],
+    c: usize,
+    m: usize,
+    k: u32,
+    bound: u64,
+    cores: usize,
+) -> (u8, usize) {
+    let pool = crate::prepare::pool::global();
+    let units = m.div_ceil(SPLIT_COLS);
+    if cores < 2 || units < 2 || pool.workers() == 0 {
+        return output_half(y_hat, wr, u, rhs, c, m, k, bound);
+    }
+    assert!(c >= 1 && m <= MAX_LEN && u.len() == c * m && rhs.len() % c == 0, "bad check shapes");
+    let rows = rhs.len() / c;
+    let nb = (k / 8) as usize;
+    assert!(y_hat.len() == rows * m * nb && wr.elems(nb) == rows * m, "bad chunk shapes");
+    assert!(!matches!(wr, Src::Bytes(_)), "W r must be words");
+    assert!(matches!(k, 8 | 16 | 24 | 32), "the prime check needs K in {{8, 16, 24, 32}}");
+    if all_zero(u) {
+        return (STATUS_U_ZERO, 0);
+    }
+    let tasks = cores.min(units);
+    type Part = (Vec<u64>, Vec<u64>, u64);
+    let slots: Vec<std::sync::Mutex<Option<Part>>> = (0..tasks).map(|_| std::sync::Mutex::new(None)).collect();
+    let ok = pool.run(tasks, &|i| {
+        let (ua, ub) = (units * i / tasks, units * (i + 1) / tasks);
+        let (j0, j1) = ((ua * SPLIT_COLS).min(m), (ub * SPLIT_COLS).min(m));
+        let mut acc = vec![0u64; rows * c];
+        let mut acc_u = vec![0u64; rows * c];
+        let oor = range_dispatch(y_hat, wr, u, rows, c, m, k, bound, j0, j1, &mut acc, &mut acc_u);
+        *slots[i].lock().unwrap_or_else(|e| e.into_inner()) = Some((acc, acc_u, oor));
+    });
+    let mut parts: Vec<Part> =
+        slots.into_iter().filter_map(|s| s.into_inner().unwrap_or_else(|e| e.into_inner())).collect();
+    if !ok || parts.len() != tasks {
+        for p in parts.iter_mut() {
+            wipe(&mut p.0);
+            wipe(&mut p.1);
+        }
+        return (STATUS_FREIVALDS, rows); // internal failure: fail closed
+    }
+    let mut acc = vec![0u64; rows * c];
+    let mut acc_u = vec![0u64; rows * c];
+    let mut out_of_range = 0u64;
+    for p in parts.iter_mut() {
+        for x in 0..rows * c {
+            acc[x] += p.0[x]; // reduced partials (< 2^31 each): no overflow for any task count used
+            acc_u[x] += p.1[x];
+        }
+        out_of_range |= p.2;
+        wipe(&mut p.0);
+        wipe(&mut p.1);
+    }
+    let mut bad = 0usize;
+    for t in 0..rows {
+        let row_bad = (0..c).fold(false, |a, i| {
+            let x = t * c + i;
+            a | (finish_dot(acc[x], acc_u[x]) != reduce(rhs[x]))
+        });
+        bad += usize::from(row_bad);
+    }
+    wipe(&mut acc);
+    wipe(&mut acc_u);
+    if out_of_range != 0 {
+        return (STATUS_RANGE, 0);
+    }
+    if bad > 0 {
+        (STATUS_FREIVALDS, bad)
+    } else {
+        (STATUS_OK, 0)
+    }
+}
+
+/// Columns `[j0, j1)` of the output half: reduced lazy sums into `acc` / `acc_u` (`rows x c`) and the
+/// range flag (1 if any `|yq| > bound`).
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn range_k<const NB: usize>(
+    y_hat: &[u8],
+    wr: Src<'_>,
+    u: &[u32],
+    rows: usize,
+    c: usize,
+    m: usize,
+    k: u32,
+    bound: u64,
+    j0: usize,
+    j1: usize,
+    acc: &mut [u64],
+    acc_u: &mut [u64],
+) -> u64 {
+    let shift = 32 - k;
+    let mut ybuf = [0u32; BLOCK];
+    let mut wbuf = [0u32; BLOCK];
+    let mut qbuf = [0i32; BLOCK];
+    let bound = bound.min(i64::MAX as u64) as i64;
+    let mut oor = 0u64;
+    let mut b0 = j0;
+    while b0 < j1 {
+        let b1 = (b0 + BLOCK).min(j1);
+        let len = b1 - b0;
+        for t in 0..rows {
+            let yb = &mut ybuf[..len];
+            decode::<u32, NB>(&y_hat[(t * m + b0) * NB..(t * m + b1) * NB], yb);
+            let wb = &mut wbuf[..len];
+            wr_fill(wr, t * m + b0, t * m + b1, wb);
+            let qb = &mut qbuf[..len];
+            let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+            for j in 0..len {
+                let yq = ((yb[j].wrapping_sub(wb[j]) << shift) as i32) >> shift;
+                lo = lo.min(yq);
+                hi = hi.max(yq);
+                qb[j] = yq;
+            }
+            oor |= u64::from(i64::from(hi) > bound) | u64::from(i64::from(lo) < -bound);
+            for i in 0..c {
+                let (a, au) = dot_lazy(&u[i * m + b0..i * m + b1], qb);
+                let x = t * c + i;
+                acc[x] = reduce(reduce(acc[x]) + reduce(a));
+                acc_u[x] = reduce(reduce(acc_u[x]) + reduce(au));
+            }
+        }
+        b0 = b1;
+    }
+    wipe(&mut ybuf);
+    wipe(&mut wbuf);
+    wipe(&mut qbuf);
+    oor
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn range_any(
+    y_hat: &[u8],
+    wr: Src<'_>,
+    u: &[u32],
+    rows: usize,
+    c: usize,
+    m: usize,
+    k: u32,
+    bound: u64,
+    j0: usize,
+    j1: usize,
+    acc: &mut [u64],
+    acc_u: &mut [u64],
+) -> u64 {
+    match k {
+        8 => range_k::<1>(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u),
+        16 => range_k::<2>(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u),
+        24 => range_k::<3>(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u),
+        _ => range_k::<4>(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn range_avx2(
+    y_hat: &[u8],
+    wr: Src<'_>,
+    u: &[u32],
+    rows: usize,
+    c: usize,
+    m: usize,
+    k: u32,
+    bound: u64,
+    j0: usize,
+    j1: usize,
+    acc: &mut [u64],
+    acc_u: &mut [u64],
+) -> u64 {
+    range_any(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn range_dispatch(
+    y_hat: &[u8],
+    wr: Src<'_>,
+    u: &[u32],
+    rows: usize,
+    c: usize,
+    m: usize,
+    k: u32,
+    bound: u64,
+    j0: usize,
+    j1: usize,
+    acc: &mut [u64],
+    acc_u: &mut [u64],
+) -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    if isa() != Isa::Scalar {
+        // SAFETY: AVX2 is available whenever isa() is not Scalar.
+        return unsafe { range_avx2(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u) };
+    }
+    range_any(y_hat, wr, u, rows, c, m, k, bound, j0, j1, acc, acc_u)
 }
 
 #[allow(clippy::too_many_arguments)]

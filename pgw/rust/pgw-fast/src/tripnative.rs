@@ -127,9 +127,10 @@ mod check_iface {
         m: usize,
         k: u32,
         bound: u64,
+        split: usize,
     ) -> (u8, usize) {
         match u {
-            Src::U32(us) => crate::prime::output_half(y_hat, wr, us, rhs, c, m, k, bound),
+            Src::U32(us) => crate::prime::output_half_split(y_hat, wr, us, rhs, c, m, k, bound, split),
             // validated at lease creation (uint32 vectors): unreachable; fail closed
             _ => (crate::finish::STATUS_FREIVALDS, rhs.len() / c.max(1)),
         }
@@ -226,30 +227,42 @@ impl LeaseState {
 
 type RJob = Box<dyn FnOnce() + Send + 'static>;
 
-/// The `r` helper thread (one persistent thread, jobs in order): derives a lease's next row ahead.
+/// The `r` helper threads (persistent; `PGW_TRIP_R_HELPERS`, read once, default 1, at most 8; jobs
+/// taken in submission order): derive the `r` of a lease's next trip ahead.
 fn r_helper() -> &'static Mutex<std::sync::mpsc::Sender<RJob>> {
     static TX: std::sync::OnceLock<Mutex<std::sync::mpsc::Sender<RJob>>> = std::sync::OnceLock::new();
     TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<RJob>();
-        std::thread::Builder::new()
-            .name("pgw-trip-r".into())
-            .spawn(move || {
-                while let Ok(job) = rx.recv() {
-                    job();
-                }
-            })
-            .expect("cannot start the trip r thread");
+        let rx = Arc::new(Mutex::new(rx));
+        let helpers = std::env::var("PGW_TRIP_R_HELPERS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(1)
+            .clamp(1, 8);
+        for i in 0..helpers {
+            let rx = Arc::clone(&rx);
+            std::thread::Builder::new()
+                .name(format!("pgw-trip-r{i}"))
+                .spawn(move || loop {
+                    let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    match job {
+                        Ok(job) => job(),
+                        Err(_) => return,
+                    }
+                })
+                .expect("cannot start a trip r thread");
+        }
         Mutex::new(tx)
     })
 }
 
 /// Derive `r` of lease row `row` (segment slot `slot`) on the helper thread; it is stored only if
 /// that row is still the lease's next one when it is ready (else zeroed).
-fn schedule_ahead(core: &Arc<LeaseCore>, key: &[u8; 32], row: usize, slot: u64, n: usize, k: u32) {
+fn schedule_ahead(core: &Arc<LeaseCore>, key: &[u8; 32], row: usize, slot: u64, n: usize, t: usize, k: u32) {
     let core = Arc::clone(core);
     let key = Zeroizing::new(*key);
     let job: RJob = Box::new(move || {
-        let mut v = vec![0i64; n];
+        let mut v = vec![0i64; n * t];
         let ok = fill_ring(&key, slot * n as u64, &mut v, k).is_ok();
         drop(key);
         let mut g = core.lock();
@@ -509,7 +522,7 @@ impl TripLease {
     /// groups, per)`` (``noise_dup_keys``): the fingerprints of the payload are then computed in this call
     /// and returned as a fifth element (uint64 ``(rows, groups)``, else ``None``); the caller records them
     /// (the monitor's every-call check) before the payload is sent.
-    #[pyo3(signature = (x, check, sampled = false, threads = 1, dup = None))]
+    #[pyo3(signature = (x, check, sampled = false, threads = 1, dup = None, split = 0))]
     #[allow(clippy::type_complexity)]
     fn prepare<'py>(
         &self,
@@ -519,6 +532,7 @@ impl TripLease {
         sampled: bool,
         threads: usize,
         dup: Option<(Bound<'py, PyArray1<i64>>, u32, Bound<'py, PyArray1<u64>>, usize, usize)>,
+        split: usize,
     ) -> PyResult<
         Option<(
             Bound<'py, PyBytes>,
@@ -595,8 +609,9 @@ impl TripLease {
                 }
                 None => None,
             };
-            if self.r_ahead && t == 1 && g.pos < self.rows {
-                schedule_ahead(&self.core, &g.key, g.pos, self.slot0 + g.pos as u64, n, self.prm.k);
+            // the next trip of this lease (assumed to take as many rows) gets its r derived ahead
+            if self.r_ahead && g.pos + t <= self.rows {
+                schedule_ahead(&self.core, &g.key, g.pos, self.slot0 + g.pos as u64, n, t, self.prm.k);
             }
             (row0, segs, Zeroizing::new(*g.key), pre)
         };
@@ -663,10 +678,20 @@ impl TripLease {
                 };
                 let out = (|| -> Result<(), PyErr> {
                     if !have {
-                        fill_ring(&*key, slot * n as u64, rs, prm.k).map_err(verr)?;
+                        if split >= 2 {
+                            crate::trip::split::fill_ring_split(&key, slot * n as u64, rs, prm.k, split)
+                                .map_err(verr)?;
+                        } else {
+                            fill_ring(&key, slot * n as u64, rs, prm.k).map_err(verr)?;
+                        }
                     }
                     let po = PrepOut { payload: pl, sx, xhat: xh, rhs };
-                    prepare_into_field(xs, rs, n, prm, half, field, po, threads).map_err(PrepareError::into_py)?;
+                    if split >= 2 {
+                        crate::trip::split::prepare_split(xs, rs, n, prm, half, field, po, split)
+                            .map_err(PrepareError::into_py)?;
+                    } else {
+                        prepare_into_field(xs, rs, n, prm, half, field, po, threads).map_err(PrepareError::into_py)?;
+                    }
                     if !xq.is_empty() {
                         let mask: u64 = if prm.k == 64 { u64::MAX } else { (1u64 << prm.k) - 1 };
                         let half_mod: u64 = 1u64 << (prm.k - 1);
@@ -783,6 +808,79 @@ impl TripTicket {
         self.c > 0
     }
 
+    /// The lane call and the finish of this trip in one call (``PGW_TRIP_DRIVER``, opt-in): send
+    /// ``body`` (this trip's payload) with the A1 header on ``channel`` (a ``pgw_fast.TripChannel`` the
+    /// caller acquired), read the reply straight into a fresh bytes object (no zero-fill, no copy) and run
+    /// :meth:`finish` on it, the GIL released for both.
+    ///
+    /// Returns ``(lane_status, compute_us, error, result)``. ``result`` is ``finish``'s tuple when the lane
+    /// served the trip (``lane_status == 0``); otherwise it is ``None``, the ticket is untouched and the
+    /// caller sends the same payload through its fallback client and finishes with :meth:`finish`
+    /// (``lane_status``: the lane's refusal status, or 255 with ``error`` naming a channel error, after
+    /// which the channel is closed).
+    #[cfg(unix)]
+    #[pyo3(signature = (channel, ring, linear, request_id, deadline_ms, body, timeout_s, scale, bias, bound,
+                        defer = false, threads = 1, split = 0))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn lane_finish<'py>(
+        &mut self,
+        py: Python<'py>,
+        channel: &Bound<'py, crate::lane::TripChannel>,
+        ring: u8,
+        linear: u16,
+        request_id: &[u8],
+        deadline_ms: u32,
+        body: &Bound<'py, PyBytes>,
+        timeout_s: f64,
+        scale: &Bound<'py, PyAny>,
+        bias: Option<&Bound<'py, PyAny>>,
+        bound: u64,
+        defer: bool,
+        threads: usize,
+        split: usize,
+    ) -> PyResult<(u8, u32, Option<&'static str>, Option<(u8, usize, Bound<'py, PyArray2<f32>>, Option<TripCheck>)>)>
+    {
+        if self.done {
+            return Err(verr("trip ticket already finished or wiped (single use)"));
+        }
+        let rid: [u8; 16] = request_id.try_into().map_err(|_| verr("request_id must be 16 bytes"))?;
+        if !(timeout_s.is_finite() && timeout_s > 0.0 && timeout_s < 1e7) {
+            return Err(verr("timeout_s must be a positive number of seconds"));
+        }
+        let rows = u16::try_from(self.rows).map_err(|_| verr("too many rows for the lane"))?;
+        let src = body.as_bytes();
+        let body_len = u32::try_from(src.len()).map_err(|_| verr("body too large"))?;
+        let olen = self.rows * self.m * (self.k / 8) as usize;
+        // SAFETY: a fresh, unshared bytes object; written by the channel below before anyone sees it (on a
+        // failed trip it is dropped unseen).
+        let reply: Bound<'py, PyBytes> = unsafe {
+            let p = pyo3::ffi::PyBytes_FromStringAndSize(std::ptr::null(), olen as pyo3::ffi::Py_ssize_t);
+            Bound::from_owned_ptr_or_err(py, p)?.downcast_into_unchecked()
+        };
+        // SAFETY: exclusive (just created, not returned yet); `src` is another object (an immutable payload).
+        let dst: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(reply.as_bytes().as_ptr() as *mut u8, olen) };
+        let h = crate::lane::RequestHeader { ring, linear, rows, deadline_ms, body_len, request_id: rid };
+        let to = std::time::Duration::from_secs_f64(timeout_s);
+        let ch = channel.get();
+        let res = py.allow_threads(|| ch.trip_raw(&h, src, dst, to));
+        match res {
+            Ok((0, cus)) => {
+                let fin = self.finish(py, reply.as_any(), scale, bias, bound, defer, threads, split)?;
+                Ok((0, cus, None, Some(fin)))
+            }
+            Ok((st, cus)) => Ok((st, cus, None, None)),
+            Err(e) => {
+                let name = match e {
+                    crate::lane::LaneError::Io(_) => "OSError",
+                    crate::lane::LaneError::Protocol(_) => "ProtocolError",
+                    crate::lane::LaneError::Refused(_) => "Refused",
+                    crate::lane::LaneError::Closed => "Closed",
+                };
+                Ok((255, 0, Some(name), None))
+            }
+        }
+    }
+
     /// Zero everything this ticket holds (a trip that will not be finished). Idempotent.
     fn wipe(&mut self) {
         self.wipe_all();
@@ -795,7 +893,7 @@ impl TripTicket {
     /// Returns ``(status, bad_rows, out, pending)`` with the statuses of ``trip_finish_into`` (3:
     /// the reservation closed during the trip); ``out`` is float32 ``(rows, m)`` (zeros unless the
     /// status is 0) and ``pending`` the deferred check's ``TripCheck`` (or ``None``).
-    #[pyo3(signature = (y_hat, scale, bias, bound, defer = false, threads = 1))]
+    #[pyo3(signature = (y_hat, scale, bias, bound, defer = false, threads = 1, split = 0))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn finish<'py>(
         &mut self,
@@ -806,7 +904,9 @@ impl TripTicket {
         bound: u64,
         defer: bool,
         threads: usize,
+        split: usize,
     ) -> PyResult<(u8, usize, Bound<'py, PyArray2<f32>>, Option<TripCheck>)> {
+        let threads = if split >= 2 { split } else { threads };
         if self.done {
             return Err(verr("trip ticket already finished or wiped (single use)"));
         }
@@ -943,13 +1043,16 @@ impl TripTicket {
                             // SAFETY: the same n_el aligned u32 words WrBuf reads below; nothing writes
                             // them until this read-only view is gone.
                             Src::U32(unsafe {
-                                std::slice::from_raw_parts(segs[0].hold.ptr.add(segs[0].elem_off * 4).cast::<u32>(), n_el)
+                                std::slice::from_raw_parts(
+                                    segs[0].hold.ptr.add(segs[0].elem_off * 4).cast::<u32>(),
+                                    n_el,
+                                )
                             })
                         } else {
                             // SAFETY: the scratch words filled above (n_el of them), read only here.
                             Src::U64(unsafe { std::slice::from_raw_parts(scratch.as_ptr(), n_el) })
                         };
-                        let (st, bad) = check_iface::prime_output(ys, wsrc, us, &rhs, c, m, k, bound);
+                        let (st, bad) = check_iface::prime_output(ys, wsrc, us, &rhs, c, m, k, bound, split);
                         if st != crate::finish::STATUS_OK {
                             // never unmasked: zero W r and the outputs (fail closed)
                             wrb.wipe_all();

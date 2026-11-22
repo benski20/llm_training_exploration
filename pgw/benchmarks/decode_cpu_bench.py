@@ -45,6 +45,10 @@ PRESETS: dict[str, dict[str, int]] = {
              "num_key_value_heads": 2, "full_layers": 24, "vocab": 151936},
     "7b": {"hidden_size": 3584, "intermediate_size": 18944, "num_attention_heads": 28,
            "num_key_value_heads": 4, "full_layers": 28, "vocab": 152064},
+    "32b": {"hidden_size": 5120, "intermediate_size": 27648, "num_attention_heads": 40,
+            "num_key_value_heads": 8, "full_layers": 64, "vocab": 152064},
+    "72b": {"hidden_size": 8192, "intermediate_size": 29568, "num_attention_heads": 64,
+            "num_key_value_heads": 8, "full_layers": 80, "vocab": 152064},
 }
 
 
@@ -53,7 +57,10 @@ def build_pack(work: Path, preset: str, layers: int) -> Path:
 
     from pgw.modelpack import pack_checkpoint
 
-    p = PRESETS[preset]
+    p = dict(PRESETS[preset])
+    if os.environ.get("PGW_BENCH_VOCAB"):  # a small vocabulary: per-layer shapes only (disk, RAM)
+        p["vocab"] = int(os.environ["PGW_BENCH_VOCAB"])
+        preset = f"{preset}-v{p['vocab']}"
     ck_root = Path(os.environ.get("PGW_BENCH_CKPT_DIR", str(work)))  # e.g. /dev/shm: the transient checkpoint
     ck, pk = ck_root / f"ckpt-{preset}-{layers}", work / f"pack-{preset}-{layers}"
     if (pk / "manifest.json").exists():

@@ -1282,7 +1282,7 @@ fn trip_width_window(n: usize, a: u32, cap: u32, wnorm: f64) -> PyResult<u32> {
 /// ``ValueError("ring_overflow: ...")``), but every row evaluates the same public number of widths.
 /// On error every output buffer is zeroed. The GIL is released while computing.
 #[pyfunction]
-#[pyo3(signature = (x, r, k, a, cap, wnorm, payload, sx, xhat = None, uw = None, rhs = None, threads = 1, field = 0))]
+#[pyo3(signature = (x, r, k, a, cap, wnorm, payload, sx, xhat = None, uw = None, rhs = None, threads = 1, field = 0, split = 0))]
 #[allow(clippy::too_many_arguments)]
 fn trip_prepare_into<'py>(
     py: Python<'py>,
@@ -1299,6 +1299,7 @@ fn trip_prepare_into<'py>(
     rhs: Option<&Bound<'py, PyAny>>,
     threads: usize,
     field: u64,
+    split: usize,
 ) -> PyResult<()> {
     let prm = PrepareParams { k, a, cap, wnorm };
     prm.validate().map_err(PrepareError::into_py)?;
@@ -1371,7 +1372,14 @@ fn trip_prepare_into<'py>(
         None => &mut [],
     };
     let out = PrepOut { payload: pls, sx: sxs, xhat: xhs, rhs: rhs_s };
-    py.allow_threads(|| prepare_into_field(xs, rs, n, prm, half, field, out, threads)).map_err(PrepareError::into_py)
+    py.allow_threads(|| {
+        if split >= 2 {
+            split::prepare_split(xs, rs, n, prm, half, field, out, split)
+        } else {
+            prepare_into_field(xs, rs, n, prm, half, field, out, threads)
+        }
+    })
+    .map_err(PrepareError::into_py)
 }
 
 /// Fused finish of one chunk into a caller-owned output (the TripEngine's finish).
@@ -1647,6 +1655,8 @@ pub(crate) fn trip_freivalds_submit<'py>(
 /// range, 3 ``u`` all zero. Exact modular arithmetic (AVX-512 / AVX2 / portable builds give the same
 /// integers); the GIL is released.
 #[pyfunction]
+#[pyo3(signature = (y_hat, wr, u, rhs, k, bound, split = 0))]
+#[allow(clippy::too_many_arguments)]
 fn trip_prime_output<'py>(
     py: Python<'py>,
     y_hat: &Bound<'py, PyAny>,
@@ -1655,6 +1665,7 @@ fn trip_prime_output<'py>(
     rhs: &Bound<'py, PyAny>,
     k: u32,
     bound: u64,
+    split: usize,
 ) -> PyResult<(u8, usize)> {
     if !matches!(k, 8 | 16 | 24 | 32) {
         return Err(verr(format!("the prime check needs K in {{8, 16, 24, 32}}, got {k}")));
@@ -1690,8 +1701,10 @@ fn trip_prime_output<'py>(
     }
     let us = c_ro(&ua).ok_or_else(|| verr("u must be C-contiguous"))?;
     let rs = c_ro(&ra).ok_or_else(|| verr("rhs must be C-contiguous"))?;
-    Ok(py.allow_threads(|| crate::prime::output_half(ys, ws, us, rs, c, m, k, bound)))
+    Ok(py.allow_threads(|| crate::prime::output_half_split(ys, ws, us, rs, c, m, k, bound, split)))
 }
+
+pub mod split;
 
 #[cfg(test)]
 mod tests;

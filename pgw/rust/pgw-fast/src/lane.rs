@@ -841,6 +841,18 @@ mod chan {
             let max_rows = ch.max_rows();
             TripChannel { inner: Mutex::new(ch), max_rows }
         }
+
+        /// One trip for crate callers (the native per-trip driver, `tripnative.rs`): [`Channel::trip`]
+        /// under the channel's lock. Call without the GIL. Any error closes the channel.
+        pub(crate) fn trip_raw(
+            &self,
+            h: &RequestHeader,
+            body: &[u8],
+            out: &mut [u8],
+            timeout: Duration,
+        ) -> Result<(u8, u32), LaneError> {
+            self.inner.lock().unwrap_or_else(|p| p.into_inner()).trip(h, body, out, timeout)
+        }
     }
 
     #[pymethods]
