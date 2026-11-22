@@ -630,6 +630,75 @@ per token); the warm single chat ran during such a ramp in both runs. A same-day
 (spend cap), so the CPU factory's cost in the same unyielded phases is from S4 (36 -> 32 ms/token, older config).
 The largest remaining factory stage is the provider-request thread (TLS receive of the replies, 0.3-0.36 cores).
 
+### Larger targets: Qwen2.5-1.5B and 7B co-located (2026-11-22, package L1)
+
+`--model qwen2.5-1.5b-instruct` and `--model qwen2.5-7b-instruct` now run the co-located demo end to end. Fixes and
+additions (all exact; library defaults unchanged):
+
+* **Enrollment listed the 0.5B whatever the target** (`create_enrollment_code` used the module's default name), so
+  a 1.5B/7B co-located pair failed with `none of the models of this enrollment code is served`. The code now lists
+  the deployed target (`PGW_MODAL_MODEL`).
+* **7B sizing** (`colocated.py`, co-located only; `launch.py` refuses the 7B elsewhere and deploys only
+  `colocated.py` for it, no tunnel fallback): 16 GiB provider + 48 GiB gateway (a request, not a limit); Modal's
+  default ephemeral disk (at least 512 GiB) holds the checkpoint, both packs, the 34 GB hint and the mask store.
+  `PGW_MODAL_DEPLOY_COLOCATED_ONLY=1` does the same for any target (faster deploys for experiments).
+* **Factory keep-up per target** (`pgw_modal_boot.factory_keep_up`): the S5 slot counts divided by 2 (1.5B) or 4
+  (3B, 7B), since a slot is 2-6x the 0.5B's bytes (segments land in about the same time).
+* **Bulk maskgen channel on in the demo** (`--he-bulk`, default on co-located, `--no-he-bulk` = HTTP only): the
+  provider serves `PGW_SERVICE_MASKGEN_BULK_PORT=8445` on 127.0.0.1 and the factory uses it
+  (`PGW_FACTORY_HE_BULK_PORT`, split 2). The service now has **one** `ByteBudget` (thread-safe) shared by the compute
+  routes, `POST /pgw/v1/maskgen` (which had none) and the bulk channel (reserved before a body is read, released after
+  the reply; a body that does not fit gets `unavailable` and the connection is closed). Library default stays off.
+* **Encryption hint on the gateway's GPU** (`PGW_HINT_DEVICE=cuda`, library default off; on with `--gateway-gpu`):
+  `pgw.hemask.hint_gpu` computes `to_planes(W8 A mod 2^64)` with int8 byte-plane GEMMs (exact int32 sums, wrapping
+  int64 recombination), self-checked against the CPU path on the pack's linear shapes first. Same files bit for bit
+  (tested). 7B: 213 s on a T4 vs about 20 min on 16 vCPUs (the CPU-only run below); 1.5B: 74 s.
+* The e2e reports every factory segment of the run (`e2e.factory_all`: alone before the chats, and during them).
+
+Measured (Modal, `--region any`, every run logprobs bit-identical, text equal, repeat identical, stream identical,
+all sustain chats identical; 41-token prompt, 32/52-token answers; bulk channel on; factory threads 6-8, nice 10):
+
+| run | placement | decode tok/s (warm stream / sustain token-weighted) | ms/token | TTFT s | trips/token | 1-row trip (service / wire) ms |
+|---|---|---|---|---|---|---|
+| 1.5B, 2xT4, `--gateway-gpu`, attention_down | gateway GPU | 20.0 / 19.0 | 50.0 | 0.81 | 28 | 0.51 (0.28 / 0.23) |
+| 7B, 2xT4, `--gateway-gpu`, attention_down | gateway GPU | 10.0 / 9.8 | 99.7 | 1.49 | 28 | 1.24 (0.99 / 0.25) |
+| 1.5B, 1xT4, CPU gateway, `--local-linears off`, 2 factory workers | CPU-only customer | 9.5 / 9.7 | 104.8 | 1.72 | 112 | 0.34 (0.14 / 0.20) |
+| 7B, 1xT4, CPU gateway, `--local-linears off` | CPU-only customer | 5.0 / 4.7 | 198.6 | 3.1 | 112 | 0.97 (0.57 / 0.40) |
+
+Per decoded token (gateway GPU runs): 1.5B = trips 14.2 ms + local qkv/o/down 11.9 ms (84 calls, 142 us each) +
+LM head 2.2 ms + mask prepare/finish, float ops and Python 21.7 ms; 7B = trips 34.8 ms (the provider T4's gate_up
+GEMV is 0.99 ms of each) + local 31.4 ms (374 us per call: 2.7 GB of int8 per token on the gateway T4) + LM head
+4.6 ms + the rest 29 ms. Both T4s are bandwidth-bound: about 3.8 GB per token on each side.
+
+Mask factory (encrypted, CPU decryption, bulk channel):
+
+| run | slot (bytes) | alone (no chats) | during back-to-back chats | consumption | stock |
+|---|---|---|---|---|---|
+| 1.5B, gate_up only | 2.0 MB | 118-142 slots/s (1024-slot segments) | 42-58 slots/s (yielding 14-30 s per segment), segment-to-segment 43.2 | 43.6 slots/s | 4499 -> 2321 over 122 s (band 1250-3000) |
+| 7B, gate_up only | 4.2 MB | 39-46.5 slots/s (512-slot segments) | 18.1-18.7 slots/s (yielding 23-27 s of 28 s), segment-to-segment 18.5 | 18.6 slots/s | 1939 -> 1165 over 124 s |
+| 1.5B, all linears, 2 workers | 2.6 MB | about 57 slots/s (two workers' overlapping segments, 22.9-54.5 each) | 8-30 slots/s (yielding 30-35 s per segment) | 22.8 slots/s | 3475 -> 1664 over 125 s |
+| 7B, all linears, 1 worker | 5.6 MB | 17.9-18.2 slots/s (512-slot segments; provider maskgen 37 s and the every-row check 27 s per segment, overlapped) | 9.7-13.4 slots/s while yielding | 9.1 slots/s | 2451 -> 1611 over 93 s |
+
+During chats the factory is held back by the keep-up yield (S5) while the stock is above its band, not by capacity:
+alone it makes 2.4x (7B gate_up) to 3x (1.5B) the consumption. The earlier Kaggle 7B figure over HTTP was 6.36 slots/s
+for every linear; the bulk channel was not A/B-tested against HTTP on Modal here (no budget left), so the gain is
+not isolated from the host and skip-kind differences.
+
+**CPU-only customer gateway** (the two `--local-linears off` rows: no gateway GPU, every linear on the provider, LM head
+and float ops on the gateway's CPU, `--gpu T4` for the provider only; container about $1.4/h for the 1.5B, $1.8/h for the
+7B). Per decoded token of the 7B: 112 trips x 0.97 ms = 109 ms (the provider's 1-row GEMV 0.57 ms, wire 0.40 ms) and
+about 90 ms of gateway CPU, i.e. about 0.6-0.8 ms per trip at 7B vector sizes (mask prepare/finish over 3584-37888
+outputs, the native float ops) plus the bfloat16 LM head (1.09 GB read per token on the CPU). The warm chat ran while
+the factory used 15 of 16 gateway cores. 1.5B: 112 x 0.34 ms = 38 ms of trips and 67 ms of gateway CPU. The fleet
+(`PGW_FACTORY_WORKERS=2`) ran in the 1.5B run (two workers' segments interleaved, about 57 slots/s alone).
+
+What the customer stores, 7B (CPU-only gateway as run): checkpoint download 15.2 GB (deletable after packing), int8
+pack 7.6 GB (used by the hint build and the Freivalds keys; not by decode with `local_linears = "off"`), bfloat16
+embedding and LM head 2.2 GB, encryption hint 34.2 GB (24.6 KB per output row of every linear: rank 16 x 256 x 6
+bytes), masks 5.56 MB per slot (only `W r` mod 2^32 is stored; `r` already comes from a per-segment seed), so the
+demo's 2048-slot target is 11.4 GB. The audit log also shows 25-33 reserved slots burned per chat (reserved for
+`max_tokens`, not used): 24-31% of the supply in these chats.
+
 ## Trip latency and the `--max-trip-ms` gate
 
 `--e2e` now also reports the gateway's **client-reported round-trip latency** (`trip_latency` in the

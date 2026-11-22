@@ -47,6 +47,26 @@ per token (66.6 MB of Freivalds vectors and 6.7 MB of r keystream per token domi
   check vectors per token), r derived off the critical path, `W r` stored mod 2^29 (-9.4%).
 - Bench fix: zero synthetic weights made the width selection evaluate all 11 widths (prepare ~2x too slow in earlier
   zero-weight benches); `--wnorm-frac 0.3` gives real norms.
+## Update 2026-11-22: Qwen2.5-1.5B and 7B co-located, measured (package L1)
+
+Both larger targets now run the co-located demo end to end, exact in every run (logprobs bit-identical, text equal,
+repeat, stream and all sustain chats identical). Details and tables: `deploy/modal/README.md`, "Larger targets".
+
+| config (Modal) | decode tok/s | TTFT | trips/token | factory alone / consumption |
+|---|---|---|---|---|
+| 1.5B, 2xT4, gateway GPU, attention_down | 20.0 | 0.81 s | 28 | 118-142 / 43.6 slots/s |
+| 7B, 2xT4, gateway GPU, attention_down | 10.0 | 1.49 s | 28 | 39-46 / 18.6 slots/s |
+| 1.5B, 1xT4, CPU-only gateway, all linears remote | 9.5 | 1.72 s | 112 | about 57 (2 workers) / 22.8 slots/s |
+| 7B, 1xT4, CPU-only gateway, all linears remote | 5.0 | 3.1 s | 112 | 18 / 9.1 slots/s |
+
+- Fixed: the co-located enrollment code listed the 0.5B whatever the target (1.5B/7B pairs could not enroll).
+- One thread-safe `ByteBudget` per service now covers the compute routes, `/pgw/v1/maskgen` (which had none) and the
+  bulk maskgen channel; the demo uses the bulk channel by default (library default off).
+- `PGW_HINT_DEVICE=cuda` (library default off): the one-time encryption hint on the gateway's GPU, same bits,
+  self-checked; 7B 213 s vs about 20 min on 16 vCPUs.
+- 7B customer storage as run: hint 34.2 GB, int8 pack 7.6 GB, embedding + LM head 2.2 GB, masks 5.56 MB per slot.
+- Not reached: 30 tokens/s at 7B. The T4s are bandwidth-bound (about 3.8 GB per token on each side with a gateway
+  GPU); the CPU-only gateway pays 112 trips of about 1 ms plus about 0.8 ms of gateway CPU per trip.
 
 ## Update 2026-11-22: mask factory keeps up with back-to-back chats (package S5)
 

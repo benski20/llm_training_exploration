@@ -400,7 +400,8 @@ def _start_maskgen_bulk(settings: ServiceSettings, state: Any, loop: asyncio.Abs
     elif settings.host.strip("[]") not in _LOOPBACK_HOSTS:  # pragma: no cover - rejected by ServiceSettings
         raise ConfigError("maskgen_bulk_port without TLS is only allowed on a loopback host")
     srv = MaskgenBulkServer(state.handler, loop, ctx, host=settings.host, port=settings.maskgen_bulk_port,
-                            verify_peer=_needs_peer_identity(settings), max_conns=settings.maskgen_bulk_max_conns)
+                            verify_peer=_needs_peer_identity(settings), max_conns=settings.maskgen_bulk_max_conns,
+                            body_budget=getattr(state, "body_budget", None))
     srv.start()
     return srv
 

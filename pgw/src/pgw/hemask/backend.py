@@ -98,8 +98,12 @@ class HintStore:
         return cls(path, meta)
 
     @classmethod
-    def build(cls, root: Path, pack: Any, rank: int, *, q_bits: int = 64, log_every_s: float = 30.0) -> HintStore:
-        """Compute ``W8 A`` for every linear of ``pack`` (minutes for 7B on CPU; done once per pack)."""
+    def build(cls, root: Path, pack: Any, rank: int, *, q_bits: int = 64, log_every_s: float = 30.0,
+              planes_fn: Any = None) -> HintStore:
+        """Compute ``W8 A`` for every linear of ``pack`` (minutes for 7B on CPU; done once per pack).
+
+        ``planes_fn(w, a)``: an exact replacement for ``to_planes(matmul_mod64(w, a))`` (e.g.
+        :class:`pgw.hemask.hint_gpu.GpuHintPlanes` on the gateway's GPU, self-checked by the caller)."""
         params = HEParams(k=16, rank=rank, q_bits=q_bits)  # the hint depends on q and rank, not on K
         planes = q_bits // 8 - 1  # bytes 1 .. q/8 - 1 of H mod 2^q
         final = cls.dir_for(root, pack.fingerprint, rank, q_bits)
@@ -123,8 +127,9 @@ class HintStore:
                 out = np.lib.format.open_memmap(tmp / f"{key}.npy", mode="w+", dtype=np.int8,
                                                 shape=(m, planes, params.dim))
                 for c0 in range(0, params.dim, _BUILD_COLS):
-                    out[:, :, c0:c0 + _BUILD_COLS] = to_planes(
-                        matmul_mod64(w, a[:n, c0:c0 + _BUILD_COLS]))[:, 1:1 + planes]
+                    blk = a[:n, c0:c0 + _BUILD_COLS]
+                    pl = planes_fn(w, blk) if planes_fn is not None else to_planes(matmul_mod64(w, blk))
+                    out[:, :, c0:c0 + _BUILD_COLS] = pl[:, 1:1 + planes]
                 out.flush()
                 del out
                 done += m
