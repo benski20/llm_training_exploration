@@ -8,6 +8,7 @@ identical segments (same seeds), so the same reservations exist in both; every r
 from __future__ import annotations
 
 import dataclasses
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -40,8 +41,10 @@ class RecordingClient:
     def __init__(self, pack: Any):
         self.inner = LocalComputeClient(pack)
         self.items: list[tuple[str, int, bytes]] = []
+        self.ids: list[str] = []
 
     def compute_sync(self, request: Any) -> Any:
+        self.ids.append(request.request_id)
         self.items.extend((it.linear, it.rows, bytes(it.x_hat)) for it in request.items)
         return self.inner.compute_sync(request)
 
@@ -179,6 +182,8 @@ def test_single_session_decode_prefetch_is_byte_identical(twin: Any, tiny_pack: 
     assert outs[0].token_ids == outs[1].token_ids
     assert outs[0].logprobs == outs[1].logprobs
     assert ca.items == cb.items  # the provider sees exactly the same bytes
+    # request ids are uuid4 on every path (filler-only trips use uuid4 too): no per-path id format
+    assert ca.ids and all(uuid.UUID(hex=i).version == 4 and uuid.UUID(hex=i).hex == i for i in ca.ids + cb.ids)
     assert bb.wait_prefetch(10.0) and bb.prefetched_rows > 0
     for key in sessions[0].linear_keys:
         assert sessions[0].taken(key) == sessions[1].taken(key)

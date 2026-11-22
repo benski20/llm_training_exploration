@@ -32,8 +32,9 @@ reference) and nothing sent to the provider changes (bytes, sizes, counts, sched
 - **Decode mask prefetch overlap**: with synchronous trips (lane `stream`/`uds`) a single session's 1-row
   decode stages its next 8 rows per (reservation, linear) on the prefetch thread, i.e. while the gateway
   thread waits in `recv`. Same rows, same order, same consumption (`PGW_PREFETCH_DECODE` overrides).
-- Small: no logits copy in the sampler without penalties; request ids from `os.urandom(16).hex()` (same
-  format); the deferred-check decision memoized per linear.
+- Small: no logits copy in the sampler without penalties; the deferred-check decision memoized per
+  linear. (Request ids stay `uuid4().hex` on every path: a review dropped an `os.urandom` id for the
+  native path, whose missing version nibble would have told real trips from filler-only trips.)
 
 Measured here (4 shared vCPUs at load 20-40 from other jobs, so medians of calling-thread CPU; GPU box
 numbers pending, see the L2 report):

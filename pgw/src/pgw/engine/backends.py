@@ -2422,7 +2422,9 @@ class MaskedBackend(LinearBackend):
         request = None
         if chunks:
             request = ComputeRequest(
-                request_id=os.urandom(16).hex(),  # 32 random hex digits, as uuid4().hex (cheaper)
+                # uuid4 like every other compute request (filler-only and Python-path trips too): a
+                # different id format per path would tell the provider which trips carry real rows
+                request_id=uuid.uuid4().hex,
                 fingerprint=self.fingerprint,
                 ring=self.ring.name,
                 items=tuple(ComputeItem(ch.lid.key, ch.rows, ch.payload) for ch in chunks),  # type: ignore[arg-type]
