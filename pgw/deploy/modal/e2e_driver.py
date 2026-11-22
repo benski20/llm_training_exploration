@@ -24,7 +24,7 @@ PROMPT = [{"role": "user", "content": "Explain in two sentences why one-time pad
 
 
 def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url: str,
-        config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0) -> dict[str, Any]:
+        config_dir: Path = Path("/srv/pgw/config"), spec_rows: int = 0, sustain_s: float = 0.0) -> dict[str, Any]:
     """Wizard + two chats + exactness check; see the module docstring.
 
     ``spec_rows`` (launch.py --spec-rows): the gateway runs strict speculation with that many rows per pass, so
@@ -64,7 +64,9 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     # same conversation (this API key) waits for them; wait here so the warm window holds one chat's passes.
     drain_s = wiz.wait_idle(local_url, adm, model_name) if spec_rows else 0.0
     s1 = snap()
+    tw0 = time.time()
     out2 = wiz.chat(url, key, model_name, PROMPT, 32)  # second run: determinism + warm timing
+    tw1 = time.time()
     s2 = snap()
     # The warm chat (the second one) decides launch.py's --max-trip-ms gate; both chats are reported too.
     trips: dict[str, Any] = {"warm": trip_gate.trip_latency(s1[0], s2[0], s1[1], s2[1]),
@@ -77,6 +79,22 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
     ref = wiz.plaintext_reference(st["model"]["pack_path"], st["model"].get("ring") or boot.RING, PROMPT, 32)
     ref_s = time.time() - t
     cmp = wiz.compare(out, ref)
+    sustain: dict[str, Any] | None = None
+    if sustain_s > 0:  # chats back to back (launch.py --sustain-s): tokens/s and factory rate under decode load
+        t0, toks, n, wall, err = time.time(), 0, 0, 0.0, None
+        while time.time() - t0 < sustain_s:
+            try:
+                o = wiz.chat(local_url, key, model_name, PROMPT, 64)
+            except Exception as exc:  # e.g. masks ran out: report, never fail the exactness result
+                err = f"{type(exc).__name__}: {str(exc)[:300]}"
+                break
+            toks += int(((o.get("usage") or {}).get("completion_tokens")) or 0)
+            wall += float(o["_wall_s"])
+            n += 1
+        t1 = time.time()
+        sustain = {"t0": t0, "t1": t1, "chats": n, "tokens": toks, "seconds": round(t1 - t0, 2),
+                   "tokens_per_s": round(toks / max(1e-9, t1 - t0), 2),
+                   "tokens_per_s_in_chats": round(toks / max(1e-9, wall), 2), "error": err}
     status = wiz.admin_get(url, res["admin_token"], "/admin/status")
     masks = wiz.admin_get(url, res["admin_token"], "/admin/masks")
     model_status = next((m for m in status.get("models", []) if m.get("name") == model_name), {})
@@ -102,5 +120,5 @@ def run(live: Any, run_id: str, url: str, token: str, deadline: float, local_url
         == [x["logprob"] for x in out2["choices"][0]["logprobs"]["content"]],
         "reference_text": ref["text"], "reference_s": ref_s, "compare": cmp,
         "admin_status": status, "admin_masks": masks, "trip_latency": trips, "speed": speed,
-        "network_path": path,
+        "network_path": path, "sustain": sustain, "warm_window": [tw0, tw1],
     }

@@ -265,7 +265,8 @@ class Pair:
 
 def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
                lookup: Callable[[str, str], Any] | None = None, *, local_linears: str = "auto",
-               spec_rows: int = 0, lane: str = "stream") -> Pair:
+               spec_rows: int = 0, lane: str = "stream", gateway_env: dict[str, str] | None = None,
+               provider_env: dict[str, str] | None = None, sustain_s: float = 0.0) -> Pair:
     """Clear the per-run Dict keys and spawn the pair in the chosen placement (two calls, or one
     co-located call; ``placement`` may be the legacy ``i6pn`` bool)."""
     lookup = lookup or modal.Function.from_name
@@ -274,7 +275,9 @@ def spawn_pair(live: Any, placement: str | bool, ttl_s: int, e2e: bool,
     for k in RUN_KEYS:
         live.pop(k, None)
     if placement == "colocated":
-        extra = (lane,) if lane != "stream" else ()  # --lane tls: the provider's TCP+TLS trip lane
+        extra: tuple[Any, ...] = (lane,) if lane != "stream" else ()  # --lane tls: the provider's TCP+TLS lane
+        if gateway_env or provider_env or sustain_s:  # --gateway-env / --provider-env / --sustain-s (colocated)
+            extra = (lane, dict(gateway_env or {}), dict(provider_env or {}), float(sustain_s))
         call = lookup(*COLOCATED_FUNCTION).spawn(run_id, ttl_s, e2e, local_linears, spec_rows, *extra)
         print(f"run {run_id} (colocated): spawned both parties in one container ({call.object_id})", flush=True)
         return Pair(run_id, placement, call, call, time.time())
@@ -421,16 +424,37 @@ def _print_latency(res: dict[str, Any], pair: Pair) -> None:
           f"rest {lat.get('rows_1_wire_ms')}", flush=True)
 
 
+#: Variable prefixes ``--gateway-env`` / ``--provider-env`` may set (PGW settings and thread-count knobs only).
+ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
+
+
+def parse_env_pairs(items: list[str]) -> dict[str, str]:
+    """``["KEY=VALUE", ...]`` -> dict; keys must start with one of :data:`ENV_PREFIXES`."""
+    out: dict[str, str] = {}
+    for it in items:
+        key, sep, val = it.partition("=")
+        key = key.strip()
+        if not sep or not key.startswith(ENV_PREFIXES):
+            raise ValueError(f"environment setting {it!r}: use KEY=VALUE with KEY starting with {ENV_PREFIXES}")
+        out[key] = val
+    return out
+
+
 def _spawner(args: argparse.Namespace) -> Callable[..., Pair]:
     """:func:`spawn_pair` with the customer gateway's ``--local-linears`` and ``--spec-rows`` choices."""
     local = getattr(args, "local_linears", "auto")
     spec_rows = int(getattr(args, "spec_rows", 0) or 0)
     lane = getattr(args, "lane", "stream") or "stream"
+    genv = parse_env_pairs(getattr(args, "gateway_env", None) or [])
+    penv = parse_env_pairs(getattr(args, "provider_env", None) or [])
+    sustain = float(getattr(args, "sustain_s", 0.0) or 0.0)
 
     def spawn(live: Any, placement: str | bool, ttl_s: int, e2e: bool) -> Pair:
         # a tunnel fallback of a co-located --lane tls run uses the stream lane (no provider lane port there)
-        return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows,
-                          lane=lane if normalize_placement(placement) == "colocated" else "stream")
+        if normalize_placement(placement) != "colocated":
+            return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows, lane="stream")
+        return spawn_pair(live, placement, ttl_s, e2e, local_linears=local, spec_rows=spec_rows, lane=lane,
+                          gateway_env=genv, provider_env=penv, sustain_s=sustain)
 
     return spawn
 
@@ -539,7 +563,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     default="auto",
                     help="exact local linears (E2) of the customer gateway: 'auto' (default) = qkv and o on the "
                          "gateway when its start-up round-trip measurement says they are cheaper than two trips "
-                         "(the tunnel: yes); 'attention' = always; 'attention_down' = also down (one round trip per layer); "
+                         "(the tunnel: yes); 'attention' = always; 'attention_down' = also down "
+                         "(one round trip per layer); "
                          "'auto_kinds' = each kind local iff cheaper than a trip; 'off' = every linear on the provider")
     ap.add_argument("--lane", choices=["stream", "tls"], default="stream",
                     help="customer gateway's trip lane: 'stream' (default) = the blocking stream lane (WebSocket, "
@@ -547,7 +572,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                          "native trip lane over TLS 1.3 on 127.0.0.1:8444 and the gateway uses it (rustls, binary "
                          "header, GIL released per trip; same masked bytes, request ids and schedule; misses fall "
                          "back to the stream lane). Exact; the e2e comparison still applies")
+    ap.add_argument("--gateway-env", action="append", default=[], metavar="KEY=VALUE",
+                    help="--placement colocated: extra environment of the customer gateway party (and the mask "
+                         "factory it starts), e.g. PGW_FACTORY_SKIP_LINEAR_KINDS=qkv,o,down; PGW_/OMP_/MKL_ keys only")
+    ap.add_argument("--provider-env", action="append", default=[], metavar="KEY=VALUE",
+                    help="--placement colocated: extra environment of the provider's service (PGW_/OMP_/MKL_ keys)")
+    ap.add_argument("--sustain-s", type=float, default=0.0,
+                    help="--e2e --placement colocated: after the exactness check, chat back to back for this many "
+                         "seconds and report tokens/s and the mask factory's segments finished meanwhile (slots/s "
+                         "while a chat decodes)")
     args = ap.parse_args(argv)
+    try:
+        parse_env_pairs(args.gateway_env)
+        parse_env_pairs(args.provider_env)
+    except ValueError as exc:
+        ap.error(str(exc))
     try:
         env_placement = os.environ.get("PGW_MODAL_PLACEMENT") or None
         if args.placement is None:

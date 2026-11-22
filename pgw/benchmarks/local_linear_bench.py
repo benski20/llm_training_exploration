@@ -15,6 +15,7 @@ import argparse
 import json
 import statistics
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -27,8 +28,15 @@ def main() -> None:
     ap.add_argument("--reps", type=int, default=200)
     ap.add_argument("--torch-threads", type=int, default=1)
     ap.add_argument("--threads", type=int, default=0, help="native: 1 = calling thread, 0 = pool when large")
+    ap.add_argument("--cold-layers", type=int, default=0,
+                    help="decode sweep: this many layers of distinct weights per shape (DRAM-cold, as in a decode "
+                         "step), each layer's shapes in order; reports ms per sweep for threads 1 and 0")
+    ap.add_argument("--gap-us", type=float, default=0.0, help="cold sweep: busy gap between calls (float glue)")
     args = ap.parse_args()
     torch.set_num_threads(args.torch_threads)
+    if args.cold_layers:
+        cold_sweep(args)
+        return
     from pgw.core import native
     from pgw.core.ring import DEFAULT_RING
     from pgw.core.ringmm import int8_digit_gemm
@@ -82,6 +90,52 @@ def main() -> None:
             row[f"{name}_us_wall"] = round(1e6 * statistics.median(wall), 1)
         out[shp] = row
     print(json.dumps({"rows": args.rows, "torch_threads": args.torch_threads, "shapes": out}, indent=1))
+
+
+def cold_sweep(args: argparse.Namespace) -> None:
+    """Every layer's local linears once per sweep over ``--cold-layers`` distinct weight sets (DRAM-bound)."""
+    from pgw.core import native
+    from pgw.core.ring import DEFAULT_RING
+
+    ring = DEFAULT_RING
+    rng = np.random.default_rng(0)
+    shapes = [tuple(int(v) for v in shp.split("x")) for shp in args.shapes.split(",")]
+    layers = []
+    for _ in range(args.cold_layers):
+        row = []
+        for n, m in shapes:
+            w8t = rng.integers(-128, 128, size=(n, m), dtype=np.int8)
+            wnorm = float(np.sqrt((w8t.astype(np.float64) ** 2).sum(axis=0)).max())
+            scale = rng.random(m, dtype=np.float32) * np.float32(1e-3)
+            row.append((n, m, w8t, wnorm, scale, int(ring.output_bound(n)), np.empty((args.rows, m), np.float32)))
+        layers.append(row)
+    xs = {n: rng.standard_normal((args.rows, n)).astype(np.float32) for n, _ in shapes}
+    sx = np.empty(args.rows, dtype=np.float64)
+    total_mb = sum(n * m for n, m in shapes) * args.cold_layers / 1e6
+
+    def gap() -> None:
+        if args.gap_us > 0:
+            t = time.perf_counter() + args.gap_us / 1e6
+            while time.perf_counter() < t:
+                pass
+
+    res: dict[str, Any] = {"layers": args.cold_layers, "shapes": args.shapes, "weights_mb": round(total_mb, 1),
+                           "gap_us": args.gap_us}
+    for threads in (1, 0):
+        times = []
+        for rep in range(max(3, args.reps // 20)):
+            t0 = time.perf_counter()
+            for row in layers:
+                for n, _m, w8t, wnorm, scale, bound, out in row:
+                    native.fast.local_linear_into(xs[n], w8t, scale, None, ring.k, ring.a, ring.cap, wnorm, bound,
+                                                  sx, out, threads)
+                    gap()
+            if rep:
+                times.append(time.perf_counter() - t0)
+        ms = 1e3 * statistics.median(times)
+        res[f"threads{threads}_ms_per_sweep"] = round(ms, 3)
+        res[f"threads{threads}_gb_s"] = round(total_mb / ms, 2)
+    print(json.dumps(res, indent=1))
 
 
 if __name__ == "__main__":

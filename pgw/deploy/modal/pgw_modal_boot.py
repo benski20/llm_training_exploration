@@ -446,6 +446,50 @@ def start_gateway(env: dict[str, str], logfile: Path, timeout_s: float = 300, us
     return proc, found[0]
 
 
+#: Variable prefixes a run may add to a party's environment (``launch.py --gateway-env`` / ``--provider-env``).
+EXTRA_ENV_PREFIXES = ("PGW_", "OMP_", "MKL_")
+
+
+def checked_env(extra: dict[str, Any] | None) -> dict[str, str]:
+    """``extra`` as strings, refusing keys outside :data:`EXTRA_ENV_PREFIXES` (no PATH, LD_PRELOAD, ...)."""
+    out: dict[str, str] = {}
+    for k, v in (extra or {}).items():
+        if not isinstance(k, str) or not k.startswith(EXTRA_ENV_PREFIXES):
+            raise ValueError(f"extra environment key {k!r} not allowed (prefixes {EXTRA_ENV_PREFIXES})")
+        out[k] = str(v)
+    return out
+
+
+_SEGMENT_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) .*segment \S+: .*?(\d+) slots in ([\d.]+)s "
+                         r"\(([\d.]+) slots/s")
+
+
+def factory_segments(logfile: Path, t0: float, t1: float) -> dict[str, Any]:
+    """Mask factory segments (``segment ...: N slots in Ss (R slots/s ...``) in ``logfile`` that ran entirely
+    inside ``[t0, t1]`` (epoch seconds; log times are local time), with their summed rate: what the factory
+    produced while the chats of that window decoded."""
+    inside: list[dict[str, float]] = []
+    other = 0
+    try:
+        lines = logfile.read_text(errors="replace").splitlines()
+    except OSError:
+        return {"segments": [], "error": "no log"}
+    for line in lines:
+        m = _SEGMENT_RE.search(line)
+        if not m:
+            continue
+        end = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) + int(m.group(2)) / 1e3
+        slots, secs = int(m.group(3)), float(m.group(4))
+        if end - secs >= t0 - 1.0 and end <= t1 + 1.0:
+            inside.append({"slots": slots, "seconds": secs, "slots_per_s": float(m.group(5)),
+                           "start_offset_s": round(end - secs - t0, 1)})
+        else:
+            other += 1
+    tot_s = sum(x["seconds"] for x in inside)
+    return {"segments": inside, "segments_outside_window": other,
+            "slots_per_s": round(sum(x["slots"] for x in inside) / tot_s, 2) if tot_s else None}
+
+
 # ------------------------------------------------------------------------------------------------
 # which network path a service URL takes (reported next to every RTT figure)
 # ------------------------------------------------------------------------------------------------
@@ -494,7 +538,8 @@ def ensure_user(name: str) -> None:
 
 def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user: str | None, log_dir: Path,
                          tenant: str = "customer-demo", code_ttl: str = "90m", note: str = "co-located demo",
-                         public_url: str | None = None, lane_port: int | None = None) -> dict[str, Any]:
+                         public_url: str | None = None, lane_port: int | None = None,
+                         extra_env: dict[str, str] | None = None) -> dict[str, Any]:
     """The provider's compute service on ``127.0.0.1:port`` only (TLS, a fresh PKI for 127.0.0.1), run as
     ``user`` in ``work`` (0700, owned by that user once its PKI and state files exist), plus a fresh
     single-use enrollment code. ``public_url`` (default ``https://127.0.0.1:port``) is the URL the code
@@ -510,6 +555,7 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
     if lane_port is not None:
         env["PGW_SERVICE_LANE"] = "tcp"
         env["PGW_SERVICE_LANE_PORT"] = str(int(lane_port))
+    env.update(extra_env or {})
     party_dir(work, user)  # everything below is the provider's from here on
     kw = as_user(env, user, work / "home")
     party_dir(log_dir, None)
@@ -526,7 +572,8 @@ def start_provider_party(work: Path, pack: Path, port: int, *, device: str, user
 
 def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Path,
                         model_options: dict[str, Any] | None = None,
-                        hide_gpu: bool = True, egress: list[str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
+                        hide_gpu: bool = True, egress: list[str] | None = None,
+                        extra_env: dict[str, str] | None = None) -> tuple[subprocess.Popen[bytes], str]:
     """The customer's gateway in setup mode as ``user`` in ``root`` (0700), without the provider's GPU
     (``hide_gpu``). ``egress``: extra allowed outbound origins (the gateway's ``egress_allowlist``; e.g. the
     provider's TCP+TLS lane port, :func:`lane_egress`). Returns the process and its one-time setup token."""
@@ -538,9 +585,67 @@ def start_gateway_party(root: Path, port: int, *, user: str | None, log_dir: Pat
     if hide_gpu:
         env["CUDA_VISIBLE_DEVICES"] = ""  # the provider's GPU is not the customer's
     env.setdefault("OMP_WAIT_POLICY", "PASSIVE")  # as in customer.py's image
+    env.update(extra_env or {})
     kw = as_user(env, user, root / "home")
     party_dir(log_dir, None)
     gw, token = start_gateway(env, log_dir / "gateway.log", user_kw=kw, cwd=root)
     wait_ready(f"http://127.0.0.1:{port}/healthz", gw)
     log(f"gateway in setup mode on :{port} (user {user or 'same'})")
     return gw, token
+
+
+
+# ------------------------------------------------------------------------------------------------
+# CPU use per party process (co-located runs: who takes the container's cores while a chat decodes)
+# ------------------------------------------------------------------------------------------------
+_PROC_GROUPS = (("factory", "factory run"), ("service", "service serve"), ("gateway", "gateway serve"))
+
+
+def _proc_cpu() -> dict[str, float]:
+    """CPU seconds (user + system) per process group (:data:`_PROC_GROUPS`) from ``/proc``."""
+    tick = os.sysconf("SC_CLK_TCK")
+    out: dict[str, float] = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            cmd = Path(f"/proc/{d}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            stat = Path(f"/proc/{d}/stat").read_text()
+        except OSError:
+            continue
+        name = next((g for g, pat in _PROC_GROUPS if pat in cmd), None)
+        if name is None:
+            continue
+        f = stat.rsplit(")", 1)[1].split()
+        out[name] = out.get(name, 0.0) + (int(f[11]) + int(f[12])) / tick
+    return out
+
+
+class CpuSampler:
+    """Samples :func:`_proc_cpu` every ``period_s`` in a daemon thread; :meth:`cores` gives the mean cores
+    each group used between two times."""
+
+    def __init__(self, period_s: float = 0.5):
+        self.period_s = period_s
+        self.samples: list[tuple[float, dict[str, float]]] = []
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, name="cpu-sampler", daemon=True)
+        self._t.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.samples.append((time.time(), _proc_cpu()))
+            except Exception:  # noqa: S110 - best effort (a process gone between listdir and read)
+                pass
+            self._stop.wait(self.period_s)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def cores(self, t0: float, t1: float) -> dict[str, float]:
+        inside = [s for s in self.samples if t0 <= s[0] <= t1]
+        if len(inside) < 2:
+            return {}
+        (ta, a), (tb, b) = inside[0], inside[-1]
+        return {k: round((b.get(k, 0.0) - a.get(k, 0.0)) / max(1e-9, tb - ta), 2) for k in b}

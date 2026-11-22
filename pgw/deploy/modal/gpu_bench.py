@@ -60,8 +60,11 @@ def _run(cmd: str, timeout_min: float) -> dict:
     for tok in shlex.split(cmd):
         if tok.endswith(".json") and Path(tok).is_file():
             files[tok] = json.loads(Path(tok).read_text())
-    gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-                         capture_output=True, text=True).stdout.strip()
+    try:
+        gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+                             capture_output=True, text=True).stdout.strip()
+    except FileNotFoundError:  # CPU-only targets
+        gpu = "none"
     return {"cmd": cmd, "rc": rc, "wall_s": round(time.time() - t, 1), "cpus": os.cpu_count(), "gpu": gpu,
             "stdout_tail": out[-6000:], "stderr_tail": err[-3000:], "json": files}
 
@@ -79,6 +82,20 @@ def t4_c16(cmd: str, timeout_min: float = 40) -> dict:
     return _run(cmd, timeout_min)
 
 
+# CPU only (gateway-side profiling, e.g. benchmarks/decode_cpu_bench.py with its stub service): no GPU charge.
+_KW_CPU = {**_KW, "memory": 8192}
+
+
+@app.function(cpu=8.0, **_KW_CPU)
+def c8(cmd: str, timeout_min: float = 40) -> dict:
+    return _run(cmd, timeout_min)
+
+
+@app.function(cpu=16.0, **_KW_CPU)
+def c16(cmd: str, timeout_min: float = 40) -> dict:
+    return _run(cmd, timeout_min)
+
+
 @app.function(gpu="H100", cpu=16.0, **_KW)
 def h100_c16(cmd: str, timeout_min: float = 40) -> dict:
     return _run(cmd, timeout_min)
@@ -86,7 +103,7 @@ def h100_c16(cmd: str, timeout_min: float = 40) -> dict:
 
 @app.local_entrypoint()
 def main(cmd: str, target: str = "t4_c16", timeout_min: float = 40, out: str = "") -> None:
-    fn = {"t4_c4": t4_c4, "t4_c16": t4_c16, "h100_c16": h100_c16}[target]
+    fn = {"t4_c4": t4_c4, "t4_c16": t4_c16, "h100_c16": h100_c16, "c8": c8, "c16": c16}[target]
     res = fn.remote(cmd, timeout_min)
     text = json.dumps(res, indent=1)
     if out:

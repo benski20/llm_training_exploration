@@ -673,6 +673,14 @@ def _env_flag(name: str, default: bool) -> bool:
     return default
 
 
+def _env_int_default(name: str, default: int) -> int:
+    """Integer environment setting (unset, empty or unparsable: ``default``)."""
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
 #: Native trip kernels the TripEngine needs (chat-speed WP-A4a).
 _TRIP_FUNCS = ("trip_prepare_into", "trip_finish_into", "trip_freivalds_submit")
 
@@ -974,8 +982,11 @@ class MaskedBackend(LinearBackend):
         self._local_native = _env_flag("PGW_LOCAL_NATIVE", True) and native_available("local_linear_into")
         #: ``lid.key -> (w8t tensor, its numpy view)``; the tensor is held so the identity check is sound.
         self._local_w8n: dict[str, tuple[torch.Tensor, np.ndarray]] = {}
-        #: ``n * m`` from which a native local linear spreads its columns over the native pool.
-        self.local_pool_min_macs = 4 << 20
+        #: ``n * m`` from which a native local linear spreads its columns over the native pool. A decode step
+        #: reads every local weight once from DRAM (the model's int8 weights do not stay in cache between
+        #: tokens), so even the 0.5B's 1 MB qkv gains from several cores' bandwidth (``PGW_LOCAL_POOL_MIN_MACS``;
+        #: the column split changes no bit: every output is the same exact integer sum).
+        self.local_pool_min_macs = max(1, _env_int_default("PGW_LOCAL_POOL_MIN_MACS", 1 << 19))
         #: The local-linear decision and its calibration inputs (public configuration; logged at start).
         self.local_policy: dict[str, Any] = {"mode": "off", "kinds": ()}
         if local_max_rows is not None and int(local_max_rows) < 1:

@@ -457,9 +457,9 @@ def test_colocated_app_definition(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PGW_MODAL_PROVIDER_CPUS", raising=False)
     mod = _load("colocated")
     assert hasattr(mod, launch.COLOCATED_FUNCTION[1]) and mod.app.name == launch.COLOCATED_FUNCTION[0]
-    assert mod.PROVIDER_CPUS + mod.GATEWAY_CPUS == 14.0 and mod.PROVIDER_USER != mod.CUSTOMER_USER
+    assert mod.PROVIDER_CPUS + mod.GATEWAY_CPUS == 16.0 and mod.PROVIDER_USER != mod.CUSTOMER_USER
     monkeypatch.setenv("PGW_MODAL_GPU", "T4")
-    assert _load("colocated").PROVIDER_CPUS == 2.0
+    assert _load("colocated").PROVIDER_CPUS == 2.0  # with a GPU: 2 + 12 = 14 cores in all
     monkeypatch.setenv("PGW_MODAL_GPU", "L4")
     with pytest.raises(ValueError, match="L4"):
         _load("colocated")

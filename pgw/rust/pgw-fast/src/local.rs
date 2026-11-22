@@ -31,12 +31,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/// Columns per accumulator tile (int32, per row: 1 KiB).
-const TILE: usize = 256;
 /// Largest rows (tokens) per call.
 pub const MAX_ROWS: usize = 64;
-/// `n * m` from which the columns are spread over the persistent pool (when `threads != 1`).
-const PAR_MIN_MACS: usize = 4 << 20;
+/// `n * m` from which the columns are spread over the persistent pool (when `threads != 1`; the caller
+/// decides above this floor: a decode step reads each weight once, from DRAM, so even 1 MB weights gain).
+const PAR_MIN_MACS: usize = 1 << 18;
+/// Columns per pool task unit: one 64-byte cache line of every int8 weight row.
+const PAR_UNIT: usize = 64;
 
 /// Input features summed in int32 before a flush to int64: `R * 2^(A-1) * 2^7 < 2^31`.
 pub fn flush_rows(a: u32) -> usize {
@@ -184,22 +185,23 @@ unsafe fn block_avx2<const C: usize>(xr: &[i16], base: *const i8, m: usize, i0: 
     }
 }
 
-/// Exact product over every column, on the pool when large (column blocks of whole tiles).
+/// Exact product over every column, on the pool when large (column blocks of whole 64-column units;
+/// each output is the same integer sum whichever task computes it, so the split changes no bit).
 fn gemv(xq: &[i16], rows: usize, n: usize, w8t: &[i8], m: usize, a: u32, y: &mut [i64], threads: usize) -> bool {
     let p = pool::global();
     let max_t = if threads == 0 { p.workers() + 1 } else { threads };
-    if max_t <= 1 || n * m < PAR_MIN_MACS || p.workers() == 0 || m < 2 * TILE {
+    if max_t <= 1 || n * m < PAR_MIN_MACS || p.workers() == 0 || m < 2 * PAR_UNIT {
         gemv_cols(xq, rows, n, w8t, m, 0, m, a, y);
         return true;
     }
-    let tiles = m.div_ceil(TILE);
-    let parts = (max_t * 2).min(tiles);
-    let per = tiles.div_ceil(parts);
+    let units = m.div_ceil(PAR_UNIT);
+    let parts = (max_t * 2).min(units);
+    let per = units.div_ceil(parts);
     let yp = SendPtr(y.as_mut_ptr());
     let ylen = y.len();
     p.run(parts, &|pi| {
-        let j0 = (pi * per * TILE).min(m);
-        let j1 = ((pi + 1) * per * TILE).min(m);
+        let j0 = (pi * per * PAR_UNIT).min(m);
+        let j1 = ((pi + 1) * per * PAR_UNIT).min(m);
         if j0 >= j1 {
             return;
         }
@@ -446,6 +448,24 @@ mod tests {
             let w: Vec<i8> = vec![-128; n * m];
             gemv_cols(&xq, rows, n, &w, m, 0, m, a, &mut y);
             assert!(y.iter().all(|&v| v == lim * 128 * n as i64));
+        }
+    }
+
+    #[test]
+    fn pooled_gemv_matches_one_thread() {
+        // column splits in 64-column units over the pool (m not a multiple of 64 or 16 included)
+        let mut seed = 11u64;
+        for &(rows, n, m) in &[(1, 896, 1152), (1, 4864, 896), (3, 600, 1000), (2, 2048, 130), (1, 1024, 4100)] {
+            let lim = (1i64 << 11) - 1;
+            let xq: Vec<i16> = (0..rows * n).map(|_| ((lcg(&mut seed) as i64 % (2 * lim + 1)) - lim) as i16).collect();
+            let w: Vec<i8> = (0..n * m).map(|_| (lcg(&mut seed) % 256) as u8 as i8).collect();
+            let mut one = vec![0i64; rows * m];
+            gemv_cols(&xq, rows, n, &w, m, 0, m, 12, &mut one);
+            for threads in [0usize, 2, 3] {
+                let mut par = vec![-1i64; rows * m];
+                assert!(gemv(&xq, rows, n, &w, m, 12, &mut par, threads));
+                assert_eq!(par, one, "rows={rows} n={n} m={m} threads={threads}");
+            }
         }
     }
 }

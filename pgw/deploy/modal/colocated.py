@@ -140,7 +140,8 @@ app = modal.App("pgw-colocated", image=image)
 @app.function(gpu=GPU, cpu=PROVIDER_CPUS + GATEWAY_CPUS, memory=MEMORY_MIB, timeout=MAX_LIFETIME_S,
               max_containers=1, min_containers=0, retries=0, region=REGION)
 def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: str = "auto",
-         spec_rows: int = 0, lane: str = "stream") -> dict:
+         spec_rows: int = 0, lane: str = "stream", gateway_env: dict | None = None,
+         provider_env: dict | None = None, sustain_s: float = 0.0) -> dict:
     """Provider service and customer gateway in this container, over loopback TLS (module docstring)."""
     import sys
 
@@ -156,7 +157,9 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
     deadline = t_boot + min(ttl_s, MAX_LIFETIME_S - 120)
     gpu = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
     boot.log(f"co-located pair: torch {torch.__version__}, GPU {gpu}")
-    result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS, "lane": lane}
+    result: dict = {"run_id": run_id, "placement": "colocated", "separate_users": SEPARATE_USERS, "lane": lane,
+                    "gateway_env": dict(gateway_env or {}), "provider_env": dict(provider_env or {}),
+                    "cpus": os.cpu_count()}
     puser, cuser = (PROVIDER_USER, CUSTOMER_USER) if SEPARATE_USERS else (None, None)
     if not SEPARATE_USERS:
         boot.log("PGW_MODAL_COLOCATED_USERS=0: both parties run as root (separate processes and directories)")
@@ -172,7 +175,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
         # launch.py --lane tls: the service also serves its native trip lane over TLS on LANE_PORT (opt-in)
         prov = boot.start_provider_party(pwork, Path(PACK), SERVICE_PORT, device="auto", user=puser,
                                          log_dir=LOGS, note=f"modal co-located demo {run_id}",
-                                         lane_port=LANE_PORT if lane == "tls" else None)
+                                         lane_port=LANE_PORT if lane == "tls" else None,
+                                         extra_env=boot.checked_env(provider_env))
         svc = prov["proc"]
         procs.append(svc)
         url, code = prov["url"], prov["code"]
@@ -192,7 +196,8 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
                                                  model_options={**boot.GATEWAY_MODEL_OPTIONS,
                                                                 "local_linears": local_linears, **spec,
                                                                 **boot.lane_options(lane)},
-                                                 egress=boot.lane_egress(lane, LANE_PORT))
+                                                 egress=boot.lane_egress(lane, LANE_PORT),
+                                                 extra_env=boot.checked_env(gateway_env))
             procs.append(gw)
             info = {"run_id": run_id, "console_url": gurl.rstrip("/") + "/console/", "base_url": gurl,
                     "setup_token": token, "started_at": time.time(), "expires_at": deadline,
@@ -202,9 +207,19 @@ def pair(run_id: str, ttl_s: int = 80 * 60, e2e: bool = False, local_linears: st
             if e2e:
                 import e2e_driver
 
+                sampler = boot.CpuSampler()
+
                 result["e2e"] = e2e_driver.run(live, run_id, gurl, token, deadline,
                                                f"http://127.0.0.1:{GATEWAY_PORT}", croot / "config",
-                                               spec_rows=spec_rows)
+                                               spec_rows=spec_rows, sustain_s=sustain_s)
+                if sustain_s and result["e2e"].get("sustain"):
+                    sus = result["e2e"]["sustain"]
+                    sus["factory"] = boot.factory_segments(LOGS / "gateway.log", sus["t0"], sus["t1"])
+                    sus["cores"] = sampler.cores(sus["t0"], sus["t1"])
+                w = result["e2e"].get("warm_window")
+                if w:
+                    result["e2e"]["warm_cores"] = sampler.cores(w[0] - 0.6, w[1] + 0.6)
+                sampler.stop()
                 result["ok"] = (result["e2e"]["compare"]["logprobs_bit_identical"]
                                 and result["e2e"]["compare"]["text_equal"])
                 reason = "e2e finished"
